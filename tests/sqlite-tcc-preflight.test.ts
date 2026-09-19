@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process'
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -11,23 +12,43 @@ import { assertDatabaseReadable, isBlockedDatabaseError, probeDatabaseBlocked } 
 const SLEEPS_FOREVER = 'setTimeout(() => {}, 1e9)'
 const groupContainerPath = (name: string) =>
   join(homedir(), 'Library', 'Group Containers', '2BBY89MBSN.dev.warp.test', name)
+const normalDir = () => mkdtempSync(join(tmpdir(), 'codeburn-tcc-'))
 
 describe('Group Container preflight', () => {
-  it('gives up on a child that never exits', () => {
+  // A readable file exits 0 whatever directory it lives in, so its verdict does
+  // not depend on the Group Container prefix; the real protected dir cannot be
+  // written to in a test, so a normal readable file stands in for both.
+  it('passes a readable file', () => {
+    const file = join(normalDir(), 'warp.sqlite')
+    writeFileSync(file, 'x')
+    expect(probeDatabaseBlocked(file)).toBe(false)
+  })
+
+  it('blocks a hang on a Group Container path', () => {
     const started = Date.now()
     expect(probeDatabaseBlocked(groupContainerPath('hang.sqlite'), SLEEPS_FOREVER)).toBe(true)
     expect(Date.now() - started).toBeLessThan(10_000)
   })
 
-  it('passes a readable file', () => {
-    const file = join(mkdtempSync(join(tmpdir(), 'codeburn-tcc-')), 'warp.sqlite')
-    writeFileSync(file, 'x')
-    expect(probeDatabaseBlocked(file)).toBe(false)
+  // mkfifo has no Windows equivalent, so this hang can only be reproduced on POSIX.
+  it.skipIf(process.platform === 'win32')('blocks a hanging open (FIFO) on a normal path', () => {
+    const fifo = join(normalDir(), 'warp.fifo')
+    execFileSync('mkfifo', [fifo])
+    const started = Date.now()
+    // The default probe opens argv[1] for read; a FIFO with no writer blocks it
+    // exactly like a TCC-wedged open, and the timeout kill classifies as blocked.
+    expect(probeDatabaseBlocked(fifo)).toBe(true)
+    expect(Date.now() - started).toBeLessThan(10_000)
   })
 
-  it('does not blame the file when the probe itself cannot run', () => {
+  it('fails closed on a Group Container path the probe could not run for', () => {
     const missingNode = join(tmpdir(), 'codeburn-no-such-node')
-    expect(probeDatabaseBlocked(groupContainerPath('spawn-fail.sqlite'), SLEEPS_FOREVER, missingNode)).toBe(false)
+    expect(probeDatabaseBlocked(groupContainerPath('spawn-fail.sqlite'), SLEEPS_FOREVER, missingNode)).toBe(true)
+  })
+
+  it('does not blame a normal-path file when the probe itself cannot run', () => {
+    const missingNode = join(tmpdir(), 'codeburn-no-such-node')
+    expect(probeDatabaseBlocked(join(normalDir(), 'spawn-fail.sqlite'), SLEEPS_FOREVER, missingNode)).toBe(false)
   })
 
   it('warns once per run and leaves the error marked as blocked', () => {

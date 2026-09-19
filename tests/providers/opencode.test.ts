@@ -1227,33 +1227,76 @@ skipUnlessSqlite('opencode provider - v2 generation (session_v2 + session_messag
     expect(calls[0]!.inputTokens).toBe(11)
   })
 
-  it('prefers the v2 generation on an upgraded database with both table sets', async () => {
+  it('unions un-migrated legacy sessions on an upgraded DB, v2 winning on collision (#1293)', async () => {
     const dbPath = createV2TestDb(tmpDir, { withLegacy: true })
     withTestDb(dbPath, (db) => {
+      // Live v2 session.
       insertV2Session(db, 'ses_v2_live')
       insertV2Message(db, 'msg_1', 'ses_v2_live', 'assistant', 1, 1700000000000, {
         model: { id: 'glm-5.3-flash', providerID: 'opencode' },
         content: [{ type: 'text', text: 'live v2 turn' }],
         tokens: { input: 100, output: 50, reasoning: 0, cache: { read: 0, write: 0 } },
       })
-      // Frozen pre-upgrade session still in the legacy table.
-      insertSession(db, 'ses_legacy_frozen', { title: 'frozen' })
-      insertMessage(db, 'lmsg_1', 'ses_legacy_frozen', 1690000000000, {
-        role: 'assistant', modelID: 'opencode/old', tokens: { input: 1, output: 1, reasoning: 0, cache: { read: 0, write: 0 } },
+
+      // Three frozen pre-upgrade sessions that never migrated into session_v2 —
+      // these were silently dropped before the union fix.
+      for (const [i, id] of ['ses_frozen_1', 'ses_frozen_2', 'ses_frozen_3'].entries()) {
+        insertSession(db, id, { title: `frozen ${i + 1}` })
+        insertMessage(db, `lmsg_${id}`, id, 1690000000000 + i, {
+          role: 'assistant', modelID: 'opencode/old',
+          tokens: { input: (i + 1) * 10, output: 1, reasoning: 0, cache: { read: 0, write: 0 } },
+        })
+      }
+
+      // A session present in BOTH generations: v2 must win, and it must be
+      // counted once (not double-listed by discovery).
+      insertV2Session(db, 'ses_both')
+      insertV2Message(db, 'msg_both_v2', 'ses_both', 'assistant', 1, 1700000000500, {
+        model: { id: 'glm-5.3-flash', providerID: 'opencode' },
+        content: [{ type: 'text', text: 'v2 wins' }],
+        tokens: { input: 500, output: 10, reasoning: 0, cache: { read: 0, write: 0 } },
+      })
+      insertSession(db, 'ses_both', { title: 'stale legacy copy' })
+      insertMessage(db, 'lmsg_both', 'ses_both', 1690000000500, {
+        role: 'assistant', modelID: 'opencode/old',
+        tokens: { input: 999, output: 1, reasoning: 0, cache: { read: 0, write: 0 } },
       })
     })
 
     const provider = createOpenCodeProvider(tmpDir)
     const sessions = await provider.discoverSessions()
-    // v2 wins: the frozen legacy session is not surfaced.
-    expect(sessions.map((s) => s.path)).toEqual([`${dbPath}:ses_v2_live`])
+    // v2 sessions plus the three un-migrated legacy sessions; ses_both listed once.
+    expect(sessions.map((s) => s.path).sort()).toEqual(
+      [
+        `${dbPath}:ses_both`,
+        `${dbPath}:ses_frozen_1`,
+        `${dbPath}:ses_frozen_2`,
+        `${dbPath}:ses_frozen_3`,
+        `${dbPath}:ses_v2_live`,
+      ].sort(),
+    )
 
-    const v2Calls = await collectCalls(provider, dbPath, 'ses_v2_live')
-    expect(v2Calls).toHaveLength(1)
-    expect(v2Calls[0]!.inputTokens).toBe(100)
+    // Aggregate across every discovered session, as a real scan would.
+    const seen = new Set<string>()
+    let totalInput = 0
+    let totalCalls = 0
+    for (const s of sessions) {
+      const id = s.path.split(':').pop()!
+      for (const call of await collectCalls(provider, dbPath, id, seen)) {
+        totalInput += call.inputTokens
+        totalCalls++
+      }
+    }
+    // 100 (v2) + 500 (v2 wins on ses_both) + 10 + 20 + 30 (legacy) = 660; the
+    // stale legacy 999 for ses_both is never counted. Before the fix the three
+    // frozen sessions were dropped: total was 600 over 2 calls.
+    expect(totalCalls).toBe(5)
+    expect(totalInput).toBe(660)
 
-    const legacyCalls = await collectCalls(provider, dbPath, 'ses_legacy_frozen')
-    expect(legacyCalls).toHaveLength(0)
+    // ses_both resolves to v2, not the stale legacy row.
+    const bothCalls = await collectCalls(provider, dbPath, 'ses_both')
+    expect(bothCalls).toHaveLength(1)
+    expect(bothCalls[0]!.inputTokens).toBe(500)
   })
 
   it('falls back to session_v2 rollups when v2 messages carry no tokens', async () => {

@@ -1,12 +1,33 @@
 import { useMemo, useRef, useState } from 'react'
 
+import { t } from '../i18n'
 import { formatUsd } from '../lib/format'
 import type { MenubarPayload } from '../lib/types'
 
 type Timeline = NonNullable<MenubarPayload['history']['timeline']>
 
-const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
-const WEEKDAYS_FULL = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+function weekdays(): string[] {
+  return [
+    t('shared.weekday.mon'),
+    t('shared.weekday.tue'),
+    t('shared.weekday.wed'),
+    t('shared.weekday.thu'),
+    t('shared.weekday.fri'),
+    t('shared.weekday.sat'),
+    t('shared.weekday.sun'),
+  ]
+}
+function weekdaysFull(): string[] {
+  return [
+    t('shared.weekdayFull.mon'),
+    t('shared.weekdayFull.tue'),
+    t('shared.weekdayFull.wed'),
+    t('shared.weekdayFull.thu'),
+    t('shared.weekdayFull.fri'),
+    t('shared.weekdayFull.sat'),
+    t('shared.weekdayFull.sun'),
+  ]
+}
 const HOURS = Array.from({ length: 24 }, (_, h) => h)
 
 type Cell = { cost: number; covered: boolean }
@@ -49,31 +70,32 @@ export function Punchcard({ timeline }: { timeline: Timeline }) {
 
   const hourResolved = timeline.bucketMinutes < 1440
   if (!hasBucket) {
-    return <div style={{ padding: '28px 0', textAlign: 'center', fontSize: 'var(--fs-meta)', color: 'var(--mut)' }}>No timestamped usage in this period.</div>
+    return <div style={{ padding: '28px 0', textAlign: 'center', fontSize: 'var(--fs-meta)', color: 'var(--mut)' }}>{t('shared.punchcard.noTimestamped')}</div>
   }
   if (!hourResolved) {
     return (
       <div style={{ padding: '24px 0', textAlign: 'center', fontSize: 'var(--fs-meta)', color: 'var(--mut)' }}>
-        Hour-of-day detail needs sub-daily buckets. Switch to Today or 7D to see the punchcard.
+        {t('shared.punchcard.hourlyNeeded')}
       </div>
     )
   }
 
   const hovered = hover ? grid[hover.wd]![hover.h]! : null
   const gridCols = { display: 'grid', gridTemplateColumns: '2.25rem repeat(24, minmax(0, 1fr))', alignItems: 'center' } as const
+  const weekdayLabels = weekdays()
 
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
         <span style={{ fontSize: 'var(--fs-micro)', fontWeight: 'var(--fw-medium)' as never, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--mut)' }}>
-          {timeline.bucketMinutes >= 60 ? 'Hourly buckets' : `${timeline.bucketMinutes}-minute buckets`} · local time
+          {timeline.bucketMinutes >= 60 ? t('shared.punchcard.hourlyBuckets') : t('shared.punchcard.minuteBuckets', { minutes: timeline.bucketMinutes })} · {t('shared.punchcard.localTime')}
         </span>
         <span style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 'var(--fs-micro)', color: 'var(--mut)' }}>
-          Less
-          {[0.12, 0.4, 0.7, 1].map(t => (
-            <span key={t} style={{ width: 5 + t * 7, height: 5 + t * 7, borderRadius: '50%', background: 'var(--accent)', opacity: 0.35 + t * 0.65 }} />
+          {t('shared.punchcard.less')}
+          {[0.12, 0.4, 0.7, 1].map(dot => (
+            <span key={dot} style={{ width: 5 + dot * 7, height: 5 + dot * 7, borderRadius: '50%', background: 'var(--accent)', opacity: 0.35 + dot * 0.65 }} />
           ))}
-          More
+          {t('shared.punchcard.more')}
         </span>
       </div>
       <div style={{ overflowX: 'auto' }}>
@@ -81,13 +103,13 @@ export function Punchcard({ timeline }: { timeline: Timeline }) {
           <div style={gridCols}>
             <span />
             {HOURS.map(h => (
-              <span key={h} style={{ paddingBottom: 3, textAlign: 'center', fontSize: 9.5, fontVariantNumeric: 'tabular-nums', color: 'var(--mut)' }}>
+              <span key={h} style={{ paddingBottom: 3, textAlign: 'center', fontSize: 'var(--fs-micro)', fontVariantNumeric: 'tabular-nums', color: 'var(--mut)' }}>
                 {h % 3 === 0 ? h : ''}
               </span>
             ))}
           </div>
-          {WEEKDAYS.map((wdLabel, wd) => (
-            <div key={wdLabel} style={gridCols}>
+          {weekdayLabels.map((wdLabel, wd) => (
+            <div key={wd} style={gridCols}>
               <span style={{ paddingRight: 8, textAlign: 'right', fontSize: 'var(--fs-micro)', fontVariantNumeric: 'tabular-nums', color: 'var(--mut)' }}>{wdLabel}</span>
               {HOURS.map(h => {
                 const cell = grid[wd]![h]!
@@ -129,7 +151,7 @@ export function Punchcard({ timeline }: { timeline: Timeline }) {
               borderRadius: 8, border: '1px solid var(--line)',
               background: 'var(--bg)', padding: '5px 10px', fontSize: 'var(--fs-meta)', boxShadow: 'var(--card-shadow)',
             }}>
-              <div style={{ fontWeight: 'var(--fw-medium)' as never, color: 'var(--ink)' }}>{WEEKDAYS_FULL[hover.wd]} {String(hover.h).padStart(2, '0')}:00</div>
+              <div style={{ fontWeight: 'var(--fw-medium)' as never, color: 'var(--ink)' }}>{weekdaysFull()[hover.wd]} {String(hover.h).padStart(2, '0')}:00</div>
               <div style={{ fontVariantNumeric: 'tabular-nums', color: 'var(--mut)' }}>{formatUsd(hovered.cost)}</div>
             </div>
           )}

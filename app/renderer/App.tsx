@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 
 import { isColdHydrating } from './components/CliErrorPanel'
 import { EmptyNote } from './components/EmptyState'
@@ -36,6 +36,7 @@ import {
 import { motionClass } from './lib/motion'
 import { clearOverviewHeadlines, readOverviewHeadline, writeOverviewHeadline } from './lib/overviewSnapshot'
 import { codeburn } from './lib/ipc'
+import { effectiveLocale, isLocaleChoice, LocaleContext, setCurrentLocale, t, type Locale, type LocaleChoice } from './i18n'
 import { trackEvent } from './lib/track'
 import { isMacPlatform, isModifierChord, shortcutLabel } from './lib/platform'
 import { localDateKey, PERIOD_LABELS } from './lib/period'
@@ -137,18 +138,22 @@ export function usageSnapshotProps(payload: MenubarPayload, modelCategories?: Ma
   }
 }
 
-const SECTION_TITLES: Record<Section, string> = {
-  overview: 'Overview',
-  sessions: 'Sessions',
-  pullRequests: 'Pull requests',
-  spend: 'Spend',
-  optimize: 'Optimize',
-  models: 'Models',
-  compare: 'Compare',
-  periods: 'Compare periods',
-  plans: 'Plans',
-  settings: 'Settings',
-  plugins: 'Plugins',
+// A function, not a module-level constant: it must re-read t() on every call so
+// a language switch (which remounts the app subtree, not the module) is reflected.
+function sectionTitles(): Record<Section, string> {
+  return {
+    overview: t('shell.nav.overview'),
+    sessions: t('shell.nav.sessions'),
+    pullRequests: t('shell.nav.pullRequests'),
+    spend: t('shell.nav.spend'),
+    optimize: t('shell.nav.optimize'),
+    models: t('shell.nav.models'),
+    compare: t('shell.nav.compare'),
+    periods: t('shell.nav.periods'),
+    plans: t('shell.nav.plans'),
+    settings: t('shell.nav.settings'),
+    plugins: t('shell.nav.plugins'),
+  }
 }
 
 const STANDARD_PERIODS: Period[] = ['today', 'week', '30days', 'month', 'all', 'lifetime']
@@ -252,16 +257,16 @@ function persistProjectFiltered(active: boolean): void {
 }
 
 export function refreshedLabel(lastSuccessAt: number | null, loading: boolean, now: number): string {
-  if (loading && lastSuccessAt === null) return 'refreshing…'
-  if (lastSuccessAt === null) return 'not refreshed yet'
+  if (loading && lastSuccessAt === null) return t('shell.refreshedAt.refreshing')
+  if (lastSuccessAt === null) return t('shell.refreshedAt.notYet')
   const seconds = Math.max(0, Math.floor((now - lastSuccessAt) / 1000))
-  if (seconds < 1) return 'refreshed just now'
-  if (seconds < 60) return `refreshed ${seconds}s ago`
+  if (seconds < 1) return t('shell.refreshedAt.justNow')
+  if (seconds < 60) return t('shell.refreshedAt.seconds', { count: seconds })
   const minutes = Math.floor(seconds / 60)
-  if (minutes < 60) return `refreshed ${minutes}m ago`
+  if (minutes < 60) return t('shell.refreshedAt.minutes', { count: minutes })
   const hours = Math.floor(minutes / 60)
-  if (hours < 24) return `refreshed ${hours}h ago`
-  return `refreshed ${Math.floor(hours / 24)}d ago`
+  if (hours < 24) return t('shell.refreshedAt.hours', { count: hours })
+  return t('shell.refreshedAt.days', { count: Math.floor(hours / 24) })
 }
 
 /** Provides the app-wide refresh cadence (read persisted at boot, applied live)
@@ -278,9 +283,44 @@ export function App() {
   )
   return (
     <RefreshCadenceContext.Provider value={cadence}>
-      <AppMain />
+      <LocaleProvider>
+        <AppMain />
+      </LocaleProvider>
     </RefreshCadenceContext.Provider>
   )
+}
+
+/**
+ * Resolves the active locale from the shared config `language` field (the same
+ * key the CLI uses) and, when that is System, the OS locale the preload exposes.
+ * Stage 1 renders English everywhere; this only wires the switch: it feeds the
+ * Intl formatters (setCurrentLocale) and the <html lang> attribute, and lets the
+ * Settings picker persist a new choice through the config-write IPC path.
+ */
+function LocaleProvider({ children }: { children: ReactNode }) {
+  const [choice, setChoiceState] = useState<LocaleChoice>('system')
+  useEffect(() => {
+    void codeburn.getLanguage?.().then(saved => {
+      if (saved && isLocaleChoice(saved)) setChoiceState(saved)
+    }).catch(() => {})
+  }, [])
+
+  const locale: Locale = effectiveLocale(choice, codeburn.appLocale)
+  useEffect(() => {
+    setCurrentLocale(locale)
+    document.documentElement.lang = locale
+  }, [locale])
+
+  const setChoice = useCallback((next: LocaleChoice) => {
+    setChoiceState(next)
+    void codeburn.setLanguage?.(next === 'system' ? null : next).catch(() => {})
+  }, [])
+
+  const value = useMemo(() => ({ locale, choice, setChoice }), [locale, choice, setChoice])
+  // Remount the subtree on locale change so components using bare t() re-read the
+  // active catalog. Switching language is a rare, deliberate action, so the brief
+  // reload of transient UI state is acceptable.
+  return <LocaleContext.Provider value={value}><Fragment key={locale}>{children}</Fragment></LocaleContext.Provider>
 }
 
 const NAV_SECTIONS = new Set<string>(['overview', 'sessions', 'pullRequests', 'spend', 'optimize', 'models', 'compare', 'plans', 'settings', 'plugins'])
@@ -521,7 +561,10 @@ function AppMain() {
     let saved: string | null = null
     try { saved = globalThis.localStorage?.getItem('codeburn.theme') ?? null } catch { /* storage can be unavailable */ }
     if (saved === 'light' || saved === 'dark') document.documentElement.setAttribute('data-theme', saved)
-    else document.documentElement.removeAttribute('data-theme')
+    // An explicit "system" choice still follows the OS; only a fresh install with no choice at
+    // all defaults to light rather than to the OS setting.
+    else if (saved === 'system') document.documentElement.removeAttribute('data-theme')
+    else document.documentElement.setAttribute('data-theme', 'light')
   }, [])
 
   useEffect(() => {
@@ -855,7 +898,7 @@ function AppMain() {
 
   const claudeConfigs = overview.data?.claudeConfigs
   const providerOptions = [
-    { value: 'all', label: 'All providers' },
+    { value: 'all', label: t('shell.provider.all') },
     ...visibleProviderEntries.map(entry => ({ value: entry.id, label: entry.label, muted: entry.idle })),
   ]
   const activeProviderLabel = selectedProviderEntry?.label ?? providerLabel(provider)
@@ -865,7 +908,7 @@ function AppMain() {
   // Combined scope reports unfiltered all-device usage, so the caption reads
   // "Combined" in place of the (forced-'all') provider label.
   const scopeCaption = scope === 'combined'
-    ? `${customRange ? rangeLabel(customRange) : PERIOD_LABELS[period]} · Combined`
+    ? `${customRange ? rangeLabel(customRange) : PERIOD_LABELS[period]} · ${t('shell.scope.combined')}`
     : `${customRange ? rangeLabel(customRange) : PERIOD_LABELS[period]} · ${activeProviderLabel}${activeConfigLabel ? ` · ${activeConfigLabel}` : ''}`
   const refreshing = usePolledInFlight() || overview.switching || (!!headlineSnapshot && overview.loading)
   const selectedReportKeys = selectedReportMemoKeys(section, period, provider, customRange, activeOverviewKey)
@@ -910,7 +953,7 @@ function AppMain() {
         ) : (
           <>
             <TopBar
-              title={SECTION_TITLES[section]}
+              title={sectionTitles()[section]}
               canBack={history.past.length > 0}
               canForward={history.future.length > 0}
               onBack={goBack}
@@ -950,7 +993,7 @@ function AppMain() {
               ) : section === 'periods' ? (
                 <PeriodCompare provider={provider} refreshToken={refreshToken} ready={ready} onInspectContribution={inspectContribution} />
               ) : (
-                <SectionPlaceholder title={SECTION_TITLES[section]} />
+                <SectionPlaceholder title={sectionTitles()[section]} />
               )}
             </div>
           </>
@@ -959,9 +1002,9 @@ function AppMain() {
         {section !== 'settings' && (
           <Hint
             items={[
-              { k: shortcutLabel('1-9'), label: 'Navigate' },
-              { k: shortcutLabel(','), label: 'Settings' },
-              { k: shortcutLabel('R'), label: 'Refresh' },
+              { k: shortcutLabel('1-9'), label: t('shell.hint.navigate') },
+              { k: shortcutLabel(','), label: t('shell.nav.settings') },
+              { k: shortcutLabel('R'), label: t('shell.action.refresh') },
             ]}
             right={<RefreshedAt lastSuccessAt={selectedLastSuccessAt} refreshing={refreshing} />}
           />
@@ -992,7 +1035,7 @@ function RefreshedAt({ lastSuccessAt, refreshing }: { lastSuccessAt: number | nu
 function RefreshMark({ refreshing, label }: { refreshing: boolean; label: string }) {
   return (
     <>
-      <span className="sr-only" role="status" aria-live="polite">{refreshing ? 'Refreshing' : ''}</span>
+      <span className="sr-only" role="status" aria-live="polite">{refreshing ? t('shell.status.refreshing') : ''}</span>
       <span>{label}</span>
       <Icon name="refresh-cw" className={refreshing ? 'refresh-mark spinning' : 'refresh-mark'} />
     </>
@@ -1007,16 +1050,16 @@ function StatusLine({ polled, snapshot }: { polled: ReturnType<typeof usePolled<
       </>
     )
   }
-  if (snapshot) return <>{snapshot.label} <b>{formatUsd(snapshot.cost)}</b> · updating</>
-  if (polled.error?.kind === 'not-found') return <>CLI not found</>
-  if (polled.loading) return <>scanning…</>
+  if (snapshot) return <>{snapshot.label} <b>{formatUsd(snapshot.cost)}</b> · {t('shell.status.updating')}</>
+  if (polled.error?.kind === 'not-found') return <>{t('shell.status.cliNotFound')}</>
+  if (polled.loading) return <>{t('shell.status.scanning')}</>
   return <>—</>
 }
 
 function SectionPlaceholder({ title }: { title: string }) {
   return (
     <Panel title={title}>
-      <EmptyNote>{title} lands in a later task. The shell, data bridge, and design system are in place.</EmptyNote>
+      <EmptyNote>{t('shell.placeholder.body', { title })}</EmptyNote>
     </Panel>
   )
 }
@@ -1030,14 +1073,14 @@ function IndexingBanner({ payload }: { payload: MenubarPayload | null }) {
   if (payload?.stale) {
     return (
       <div role="status" className="stale-banner">
-        Some sources could not be refreshed. Showing indexed data; recent activity may be missing.
+        {t('shell.indexing.stale')}
       </div>
     )
   }
   if (!hydration || hydration.complete || hydration.indexedFiles >= hydration.totalFiles) return null
   return (
     <div role="status" className="stale-banner">
-      Indexing history · {Math.min(hydration.indexedFiles, hydration.totalFiles)}/{hydration.totalFiles} files · You can keep using CodeBurn; totals update as indexing completes.
+      {t('shell.indexing.progress', { indexed: Math.min(hydration.indexedFiles, hydration.totalFiles), total: hydration.totalFiles })}
     </div>
   )
 }
@@ -1071,8 +1114,8 @@ function DailyBudgetBanner({ payload, provider }: { payload: MenubarPayload | nu
   const spent = budget.kind === 'usd' ? formatUsd(used) : formatCompact(used)
   const cap = budget.kind === 'usd' ? formatUsd(budget.value) : formatCompact(budget.value)
   const text = exceeded
-    ? `Daily budget exceeded: ${spent} of ${cap}`
-    : `Today's spend is at ${Math.floor(percent)}% of your daily budget`
+    ? t('shell.budget.exceeded', { spent, cap })
+    : t('shell.budget.warning', { percent: Math.floor(percent) })
 
   const dismiss = () => {
     try { globalThis.localStorage?.setItem('codeburn.dailyBudget.dismissed', todayKey) } catch { /* storage can be unavailable */ }
@@ -1082,7 +1125,7 @@ function DailyBudgetBanner({ payload, provider }: { payload: MenubarPayload | nu
   return (
     <div role="status" className={exceeded ? 'budget-banner exceeded' : 'budget-banner'}>
       <span>{text}</span>
-      <button type="button" className="set-text-button" onClick={dismiss}>Dismiss</button>
+      <button type="button" className="set-text-button" onClick={dismiss}>{t('shell.action.dismiss')}</button>
     </div>
   )
 }

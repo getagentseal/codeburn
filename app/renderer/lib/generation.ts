@@ -1,7 +1,11 @@
 import type { MenubarPayload, Period } from './types'
 
 export type PeriodTotals = NonNullable<MenubarPayload['periodTotals']>
-export type Generation = { at: number; totals: PeriodTotals }
+type TopModels = MenubarPayload['current']['topModels']
+// `period`/`models` record the view the generation was captured from, so the
+// models table can stand in with the same generation as the hero — but only when
+// the shown period matches the one the models belong to.
+export type Generation = { at: number; totals: PeriodTotals; period: Period | null; models: TopModels }
 
 /// Windows that nest, narrowest first. `month` is a calendar window rather than
 /// a suffix of history, so it is not comparable with the rest.
@@ -33,7 +37,7 @@ export function periodTotalsBreach(totals: PeriodTotals): string | null {
  */
 let current: Generation | null = null
 
-export function rememberGeneration(payload: MenubarPayload | null | undefined, at: number | null): Generation | null {
+export function rememberGeneration(payload: MenubarPayload | null | undefined, at: number | null, period: Period | null = null): Generation | null {
   const totals = payload?.periodTotals
   // A first paint the producer is still filling in is not a generation: its
   // windows are summed from the files indexed so far.
@@ -43,7 +47,7 @@ export function rememberGeneration(payload: MenubarPayload | null | undefined, a
       const breach = periodTotalsBreach(totals)
       if (breach) console.error(`codeburn: period totals are not nested: ${breach}`)
     }
-    current = { at, totals }
+    current = { at, totals, period, models: payload?.current?.topModels ?? [] }
   }
   return current
 }
@@ -61,6 +65,19 @@ export function rememberGeneration(payload: MenubarPayload | null | undefined, a
 export function generationHeadline(period: Period, payloadAt: number | null): NonNullable<PeriodTotals[keyof PeriodTotals]> | null {
   if (!current || payloadAt == null || current.at <= payloadAt) return null
   return current.totals[period as keyof PeriodTotals] ?? null
+}
+
+/**
+ * The models behind the generation headline, but only when the generation was
+ * captured from the period now on screen — so the models table stands in with the
+ * exact snapshot the hero does, never a mix. A generation captured from a
+ * different period carries the wrong models, so this returns null and the caller
+ * keeps both the hero and the table on the payload instead.
+ */
+export function generationModels(period: Period, payloadAt: number | null): TopModels | null {
+  if (!current || payloadAt == null || current.at <= payloadAt) return null
+  if (current.period !== period || current.models.length === 0) return null
+  return current.models
 }
 
 export function generationAt(): number | null {

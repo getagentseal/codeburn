@@ -137,7 +137,7 @@ cat > "${BUNDLE}/Contents/Info.plist" <<PLIST
 <dict>
     <key>CFBundleDevelopmentRegion</key><string>en</string>
     <!-- Keep in sync with package-app.sh and Package.swift's localizations. -->
-    <key>CFBundleLocalizations</key><array><string>en</string><string>zh-Hans</string></array>
+    <key>CFBundleLocalizations</key><array><string>en</string><string>fr</string><string>ja</string><string>ko</string><string>zh-Hans</string><string>zh-Hant</string></array>
     <key>CFBundleDisplayName</key><string>CodeBurn Menubar</string>
     <key>CFBundleExecutable</key><string>${EXE}</string>
     <key>CFBundleIconFile</key><string>AppIcon</string>

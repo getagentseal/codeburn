@@ -1,3 +1,4 @@
+import { t } from '../i18n'
 import type { MenubarPayload, ProviderName } from './types'
 
 export const PROVIDER_NAMES: Record<ProviderName, string> = {
@@ -7,6 +8,7 @@ export const PROVIDER_NAMES: Record<ProviderName, string> = {
   copilot: 'Copilot',
   antigravity: 'Antigravity',
   kimi: 'Kimi Code',
+  zcode: 'ZCode',
   grokbot: 'Grok Bot',
 }
 
@@ -18,6 +20,7 @@ export const PROVIDER_OWNERS: Record<ProviderName, string> = {
   copilot: 'GitHub',
   antigravity: 'Google',
   kimi: 'Moonshot AI',
+  zcode: 'Z.ai',
   // The weekly allowance is served by Cursor's dashboard, so Cursor is who
   // rate limits it.
   grokbot: 'Cursor',
@@ -70,7 +73,7 @@ export function detectedProviders(current: MenubarPayload['current'] | undefined
 
 /** Title-cases a lowercased provider key from the legacy providers map. */
 export function providerLabel(provider: string): string {
-  if (provider === 'all') return 'All providers'
+  if (provider === 'all') return t('shell.provider.all')
   return provider
     .split(/[-\s]+/)
     .filter(Boolean)

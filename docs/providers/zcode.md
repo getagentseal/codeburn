@@ -2,9 +2,9 @@
 
 ZCode CLI coding agent (z.ai), running GLM-5.2 over the z.ai start-plan.
 
-- **Source:** `src/providers/zcode.ts`
+- **Source:** `src/providers/zcode.ts` (usage), `src/quota/zcode.ts` + `app/electron/quota/zcode.ts` (plan quota)
 - **Loading:** lazy (`src/providers/index.ts`). Lazy because we read ZCode's SQLite database with `node:sqlite`.
-- **Test:** `tests/providers/zcode.test.ts` (3 tests, fixture-based)
+- **Test:** `tests/providers/zcode.test.ts` (usage, fixture-based), `tests/quota-zcode.test.ts` / `app/electron/quota/zcode.test.ts` (quota)
 
 ## Where it reads from
 
@@ -81,9 +81,42 @@ Per `zcode:<model_usage.id>` (`zcode.ts`). `model_usage.id` is the row primary k
 - **Timestamps are milliseconds.** Unlike Crush (seconds), ZCode stores epoch ms; the parser passes them straight to `Date`.
 - **Tools are attached per turn, not per request.** `tool_usage` links to a turn, not a specific `model_usage` row, so each turn's tools are attached to its first request to avoid double-counting. Bash command text is not stored, so `bashCommands` is always empty.
 
+## Plan quota (live)
+
+The Plans sidebar gauge reads the same usage endpoint the ZCode app's embedded
+coding-plan browser calls — the sibling of the `zai` quota provider, which
+serves the Pi CLI login; this one serves the ZCode desktop app's own login.
+
+| Source | Path / endpoint |
+|---|---|
+| Login token | `…/ZCode/session/Partitions/zcode-coding-plan/Local Storage/leveldb/*.log`, key `oauth:zai:access_token` (`ZCODE_DATA_DIR` overrides the app-data root) |
+| Quota | `GET https://api.z.ai/api/monitor/usage/quota/limit` with `Authorization: Bearer <token>` |
+
+- **Journal scan, not a leveldb reader.** The token is a single-byte (latin-1)
+  string run in the journal file(s): `key + varint length + 0x01 marker + value`.
+  We scan `*.log` newest-first (journal names are zero-padded counters) and keep
+  the last write of the key. Chromium owns the file's mode bits, so this is a
+  plain capped read — `readSecureFile` would reject its group-readable mode.
+- **No local expiry.** The stored JWT carries no `exp` claim; validity is
+  enforced server-side. A body-level `code: 401/403` on an HTTP 200 is the
+  expiry signal → `terminalFailure` with "Open the ZCode app and sign in
+  again" guidance (only the app can mint a new login).
+- **Compaction is the known blind spot.** When leveldb compacts the journal
+  into `.ldb` the records are snappy-compressed and invisible to the raw scan;
+  the gauge falls back to `disconnected` until the webview writes a fresh
+  journal entry.
+- **All surfaces.** The CLI reads it in `src/quota/zcode.ts`, the Electron app
+  in `app/electron/quota/zcode.ts`, and the native macOS menubar mirrors both in
+  `mac/Sources/CodeBurnMenubar/Data/ZcodeSubscriptionService.swift` (same journal
+  scan, same endpoint; catalog id `zcode`, live Capacity Dock adapter).
+- **Windows map** as in `zai.ts`: `unit 3 × number 5` → 5-hour,
+  `unit 6 × number 1` → Weekly; `percentage` is used percent (fallback
+  `currentValue / usage`); `data.level` is the plan label (`"pro"` → "Pro").
+
 ## When fixing a bug here
 
 1. Confirm the schema against a real ZCode install; copy `~/.zcode/cli/db/db.sqlite` to a temp file before querying so you do not lock the live db.
 2. If costs are $0, check that `GLM-5.2` (or the current model id) still resolves through `BUILTIN_ALIASES` to a priced model.
 3. If tokens look ~8x too high, someone likely removed the cache-subtraction in the input normalization; the row's `input_tokens` already includes cached tokens.
 4. New fixtures go under the inline schema in `tests/providers/zcode.test.ts`.
+5. If the quota gauge shows `disconnected` while the app is logged in, check whether the journal was compacted into `.ldb` (no usable `*.log` entry) and whether the key is still `oauth:zai:access_token`.

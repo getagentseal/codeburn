@@ -1,4 +1,5 @@
 import { ReactNode, useEffect, useState } from 'react'
+import { t } from '../i18n'
 import type { MenubarPayload } from '../lib/types'
 import { Icon } from './icons'
 
@@ -38,19 +39,19 @@ export function useTeamTabs(payload: MenubarPayload | null): TeamTabConfig[] {
         if (key === 'teams.week') {
           newTabs.push({
             id: 'teams.week',
-            label: 'Team Week',
+            label: t('shared.teamRegistry.tabWeek'),
             icon: <Icon name="circle-check" />,
           })
         } else if (key === 'teams.status') {
           newTabs.push({
             id: 'teams.status',
-            label: 'Team Status',
+            label: t('shared.teamRegistry.tabStatus'),
             icon: <Icon name="zap" />,
           })
         } else {
           newTabs.push({
             id: key,
-            label: `Unknown (${key})`,
+            label: t('shared.teamRegistry.tabUnknown', { key }),
             icon: <Icon name="circle" />,
           })
         }
@@ -70,7 +71,7 @@ export function TeamTabContent({ payload, tab }: { payload: MenubarPayload; tab:
   const tabData = pluginsRecord[tab]
 
   if (!tabData) {
-    return <div style={{ padding: '1rem', color: 'var(--mut)' }}>Team data not available</div>
+    return <div style={{ padding: '1rem', color: 'var(--mut)' }}>{t('shared.teamRegistry.dataNotAvailable')}</div>
   }
 
   if (tab === 'teams.week') {
@@ -84,7 +85,7 @@ export function TeamTabContent({ payload, tab }: { payload: MenubarPayload; tab:
             borderRadius: '8px',
             border: '1px solid var(--line)',
           }}>
-            <div style={{ fontSize: '0.875rem', color: 'var(--mut)', marginBottom: '0.5rem' }}>Total spend</div>
+            <div style={{ fontSize: '0.875rem', color: 'var(--mut)', marginBottom: '0.5rem' }}>{t('shared.teamRegistry.totalSpend')}</div>
             <div style={{ fontSize: '1.5rem', fontWeight: 600 }}>${tabData.spend?.toFixed(2) ?? '0.00'}</div>
           </div>
           <div style={{
@@ -94,7 +95,7 @@ export function TeamTabContent({ payload, tab }: { payload: MenubarPayload; tab:
             borderRadius: '8px',
             border: '1px solid var(--line)',
           }}>
-            <div style={{ fontSize: '0.875rem', color: 'var(--mut)', marginBottom: '0.5rem' }}>Sessions</div>
+            <div style={{ fontSize: '0.875rem', color: 'var(--mut)', marginBottom: '0.5rem' }}>{t('shared.teamRegistry.sessions')}</div>
             <div style={{ fontSize: '1.5rem', fontWeight: 600 }}>{tabData.sessions ?? 0}</div>
           </div>
           {Array.isArray(tabData.topWorkUnits) && (
@@ -105,10 +106,10 @@ export function TeamTabContent({ payload, tab }: { payload: MenubarPayload; tab:
               borderRadius: '8px',
               border: '1px solid var(--line)',
             }}>
-              <div style={{ fontSize: '0.875rem', color: 'var(--mut)', marginBottom: '0.75rem' }}>Top work units</div>
+              <div style={{ fontSize: '0.875rem', color: 'var(--mut)', marginBottom: '0.75rem' }}>{t('shared.teamRegistry.topWorkUnits')}</div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                 {tabData.topWorkUnits.slice(0, 3).map((unit: any, i: number) => (
-                  <div key={i} style={{ fontSize: '0.75rem', color: 'var(--ink)' }}>
+                  <div key={i} style={{ fontSize: 'var(--fs-meta)', color: 'var(--ink)' }}>
                     {unit.name}
                   </div>
                 ))}
@@ -118,7 +119,7 @@ export function TeamTabContent({ payload, tab }: { payload: MenubarPayload; tab:
         </div>
       )
     }
-    return <div style={{ padding: '1rem', color: 'var(--mut)' }}>Team week data not available</div>
+    return <div style={{ padding: '1rem', color: 'var(--mut)' }}>{t('shared.teamRegistry.weekDataNotAvailable')}</div>
   }
 
   if (tab === 'teams.status') {
@@ -143,25 +144,25 @@ export function TeamTabContent({ payload, tab }: { payload: MenubarPayload; tab:
               cursor: 'pointer',
             }}
           >
-            View team status
+            {t('shared.teamRegistry.viewStatus')}
           </a>
         </div>
       )
     }
-    return <div style={{ padding: '1rem', color: 'var(--mut)' }}>Team status not available</div>
+    return <div style={{ padding: '1rem', color: 'var(--mut)' }}>{t('shared.teamRegistry.statusNotAvailable')}</div>
   }
 
   if (typeof tabData === 'object' && tabData.schemaVersion && (tabData as any).schemaVersion > 1) {
     return (
       <div style={{ padding: '1.5rem', color: 'var(--warn)' }}>
-        Update CodeBurn Desktop to view this content. This plugin data requires a newer version of CodeBurn.
+        {t('shared.teamRegistry.needsUpdate')}
       </div>
     )
   }
 
   return (
     <div style={{ padding: '1rem', color: 'var(--mut)' }}>
-      Unknown team tab: {tab}
+      {t('shared.teamRegistry.unknownTab', { tab })}
     </div>
   )
 }

@@ -15,6 +15,7 @@ import {
 } from '../lib/cohortStats'
 import { formatCompact, formatCount, formatUsd, shortenProjectPath } from '../lib/format'
 import { Usd, tokensOf } from '../components/Usd'
+import { t } from '../i18n'
 import { codeburn } from '../lib/ipc'
 import { reportMemoKey } from '../lib/reportMemoKey'
 import { sessionFilters } from '../lib/investigation'
@@ -47,7 +48,7 @@ function fmtMetric(v: number | null, fn: 'cost' | 'number' | 'percent' | 'decima
 function RangeNote() {
   return (
     <p className="cmp-range-note" role="status">
-      Compare uses the selected period, custom dates are not supported yet.
+      {t('compare.classic.rangeNote')}
     </p>
   )
 }
@@ -74,11 +75,11 @@ export function Compare({
   if (mode === 'cohorts') {
     return (
       <div className="cmp-body">
-        <div className="cmp-picker" aria-label="Compare mode">
+        <div className="cmp-picker" aria-label={t('compare.mode.ariaLabel')}>
           <SegTabs
             options={[
-              { value: 'classic', label: 'Classic' },
-              { value: 'cohorts', label: 'Cohorts' },
+              { value: 'classic', label: t('compare.mode.classic') },
+              { value: 'cohorts', label: t('compare.mode.cohorts') },
             ]}
             value={mode}
             onChange={next => setMode(next as CompareMode)}
@@ -91,11 +92,11 @@ export function Compare({
 
   return (
     <div className="cmp-body">
-      <div className="cmp-picker" aria-label="Compare mode">
+      <div className="cmp-picker" aria-label={t('compare.mode.ariaLabel')}>
         <SegTabs
           options={[
-            { value: 'classic', label: 'Classic' },
-            { value: 'cohorts', label: 'Cohorts' },
+            { value: 'classic', label: t('compare.mode.classic') },
+            { value: 'cohorts', label: t('compare.mode.cohorts') },
           ]}
           value={mode}
           onChange={next => setMode(next as CompareMode)}
@@ -152,14 +153,14 @@ function ClassicCompare({
   }, [models.data])
 
   if (!models.data) {
-    if (models.error) return <CliErrorPanel error={models.error} subject="model comparisons" />
-    return <SectionSkeleton label="Scanning model usage…" rows={4} />
+    if (models.error) return <CliErrorPanel error={models.error} subject={t('compare.subject.modelComparisons')} />
+    return <SectionSkeleton label={t('compare.classic.scanning')} rows={4} />
   }
 
   if (models.data.length < 2) {
     return (
-      <Panel title="Compare">
-        <EmptyNote>Need at least two models with usage in this range to compare.</EmptyNote>
+      <Panel title={t('compare.classic.panelTitle')}>
+        <EmptyNote>{t('compare.classic.needTwoModels')}</EmptyNote>
       </Panel>
     )
   }
@@ -170,10 +171,10 @@ function ClassicCompare({
   return (
     <>
       {range && <RangeNote />}
-      <div className="cmp-picker" aria-label="Models being compared">
+      <div className="cmp-picker" aria-label={t('compare.classic.modelsAriaLabel')}>
         <Dropdown
           id="compare-first-model"
-          ariaLabel="First model"
+          ariaLabel={t('compare.classic.firstModel')}
           value={modelA ?? ''}
           options={modelRows.map(model => ({ value: model.model, label: `${model.model} · ${formatCount(model.calls, 'call')}` }))}
           onChange={next => {
@@ -181,10 +182,10 @@ function ClassicCompare({
             if (next === modelB) setModelB(nudgeDistinct(next))
           }}
         />
-        <span className="cmp-vs">vs</span>
+        <span className="cmp-vs">{t('compare.vs')}</span>
         <Dropdown
           id="compare-second-model"
-          ariaLabel="Second model"
+          ariaLabel={t('compare.classic.secondModel')}
           value={modelB ?? ''}
           options={modelRows.map(model => ({ value: model.model, label: `${model.model} · ${formatCount(model.calls, 'call')}` }))}
           onChange={next => {
@@ -233,8 +234,8 @@ function CompareReport({
   }, [report.error, onError])
 
   if (!report.data) {
-    if (report.error) return <CliErrorPanel error={report.error} subject="model comparisons" />
-    return <SectionSkeleton label="Comparing models…" rows={4} />
+    if (report.error) return <CliErrorPanel error={report.error} subject={t('compare.subject.modelComparisons')} />
+    return <SectionSkeleton label={t('compare.classic.comparingModels')} rows={4} />
   }
 
   const performance = report.data.metrics.filter(metric => metric.section === 'Performance')
@@ -243,12 +244,12 @@ function CompareReport({
   return (
     <div className="cmp-body">
       <div className="cmp-pair">
-        <MetricCard title="Performance" rows={performance} modelA={report.data.modelA.model} modelB={report.data.modelB.model} showWinners />
-        <MetricCard title="Efficiency" rows={efficiency} modelA={report.data.modelA.model} modelB={report.data.modelB.model} showWinners />
+        <MetricCard title={t('compare.classic.performance')} rows={performance} modelA={report.data.modelA.model} modelB={report.data.modelB.model} showWinners />
+        <MetricCard title={t('compare.classic.efficiency')} rows={efficiency} modelA={report.data.modelA.model} modelB={report.data.modelB.model} showWinners />
       </div>
       <CategoryCard report={report.data} />
       <div className="cmp-pair">
-        <MetricCard title="Working style" rows={report.data.workingStyle} modelA={report.data.modelA.model} modelB={report.data.modelB.model} />
+        <MetricCard title={t('compare.classic.workingStyle')} rows={report.data.workingStyle} modelA={report.data.modelA.model} modelB={report.data.modelB.model} />
         <ContextCard modelA={report.data.modelA} modelB={report.data.modelB} />
       </div>
     </div>
@@ -285,14 +286,14 @@ function MetricCard({
           )
         })}
       </div>
-      {showWinners && <div className="cmp-foot">Green = better on that metric.</div>}
+      {showWinners && <div className="cmp-foot">{t('compare.classic.greenBetter')}</div>}
       </div>
     </div>
   )
 }
 
 function MetricHeader({ modelA, modelB }: { modelA: string; modelB: string }) {
-  return <div className="cmp-metric-head"><span>Metric</span><span>{modelA}</span><span>{modelB}</span></div>
+  return <div className="cmp-metric-head"><span>{t('compare.classic.metricHeader')}</span><span>{modelA}</span><span>{modelB}</span></div>
 }
 
 /** A category is a head-to-head only when both models worked in it and both
@@ -307,10 +308,10 @@ function CategoryCard({ report }: { report: CompareJsonReport }) {
   const comparable = report.categories.some(isComparable)
   return (
     <div className="panel cmp-card">
-      <div className="cmp-head"><h3>Category head-to-head</h3><span className="cmp-head-note">One-shot rate · edit turns</span></div>
+      <div className="cmp-head"><h3>{t('compare.classic.categoryHeadToHead')}</h3><span className="cmp-head-note">{t('compare.classic.oneShotRateEditTurns')}</span></div>
       <div className="pbody">
       <div className="cmp-category-body">
-        {!comparable ? <EmptyNote>No categories with usage in this range to compare.</EmptyNote> : <>
+        {!comparable ? <EmptyNote>{t('compare.classic.noCategoriesToCompare')}</EmptyNote> : <>
         <div className="cmp-legend">
           <span className="cmp-legend-item"><span className="cmp-key" />{report.modelA.model}</span>
           <span className="cmp-legend-item"><span className="cmp-key cmp-key-b" />{report.modelB.model}</span>
@@ -352,18 +353,18 @@ function daysOfData(model: ModelStats): string {
 
 function ContextCard({ modelA, modelB }: { modelA: ModelStats; modelB: ModelStats }) {
   const rows: Array<[string, ReactNode, ReactNode]> = [
-    ['Calls', modelA.calls.toLocaleString(), modelB.calls.toLocaleString()],
-    ['Total cost', <Usd value={modelA.cost} tokens={tokensOf(modelA)} />, <Usd value={modelB.cost} tokens={tokensOf(modelB)} />],
-    ['Input tokens', formatCompact(modelA.inputTokens), formatCompact(modelB.inputTokens)],
-    ['Output tokens', formatCompact(modelA.outputTokens), formatCompact(modelB.outputTokens)],
-    ['Edit turns', modelA.editTurns.toLocaleString(), modelB.editTurns.toLocaleString()],
-    ['Self-corrections', modelA.selfCorrections.toLocaleString(), modelB.selfCorrections.toLocaleString()],
-    ['Cache hit rate', cacheHitRate(modelA), cacheHitRate(modelB)],
-    ['Days of data', daysOfData(modelA), daysOfData(modelB)],
+    [t('compare.classic.context.calls'), modelA.calls.toLocaleString(), modelB.calls.toLocaleString()],
+    [t('compare.classic.context.totalCost'), <Usd value={modelA.cost} tokens={tokensOf(modelA)} />, <Usd value={modelB.cost} tokens={tokensOf(modelB)} />],
+    [t('compare.classic.context.inputTokens'), formatCompact(modelA.inputTokens), formatCompact(modelB.inputTokens)],
+    [t('compare.classic.context.outputTokens'), formatCompact(modelA.outputTokens), formatCompact(modelB.outputTokens)],
+    [t('compare.classic.context.editTurns'), modelA.editTurns.toLocaleString(), modelB.editTurns.toLocaleString()],
+    [t('compare.classic.context.selfCorrections'), modelA.selfCorrections.toLocaleString(), modelB.selfCorrections.toLocaleString()],
+    [t('compare.classic.context.cacheHitRate'), cacheHitRate(modelA), cacheHitRate(modelB)],
+    [t('compare.classic.context.daysOfData'), daysOfData(modelA), daysOfData(modelB)],
   ]
   return (
     <div className="panel cmp-card">
-      <div className="cmp-head"><h3>Context</h3></div>
+      <div className="cmp-head"><h3>{t('compare.classic.context')}</h3></div>
       <div className="pbody">
       <div className="cmp-metrics">
         <MetricHeader modelA={modelA.model} modelB={modelB.model} />
@@ -382,12 +383,14 @@ function ContextCard({ modelA, modelB }: { modelA: ModelStats; modelB: ModelStat
 
 const SAMPLES_INITIAL_COUNT = 20
 
-type BandMeasureLabel = { value: VolumeMeasure; label: string }
+type BandMeasureLabel = { value: VolumeMeasure; labelKey: string }
 
+// Translated at render time (VolumeBandFilter), never at module scope, so a
+// language switch picks it up like everything else.
 const BAND_MEASURES: BandMeasureLabel[] = [
-  { value: 'output', label: 'Output tokens' },
-  { value: 'input', label: 'Input tokens' },
-  { value: 'contextProxy', label: 'Context proxy (input + cache read)' },
+  { value: 'output', labelKey: 'compare.cohort.band.outputTokens' },
+  { value: 'input', labelKey: 'compare.cohort.band.inputTokens' },
+  { value: 'contextProxy', labelKey: 'compare.cohort.band.contextProxy' },
 ]
 
 function CohortCompare({
@@ -439,14 +442,14 @@ function CohortCompare({
   )
 
   if (!facets.data) {
-    if (facets.error) return <CliErrorPanel error={facets.error} subject="model comparisons" />
-    return <SectionSkeleton label="Scanning model usage…" rows={4} />
+    if (facets.error) return <CliErrorPanel error={facets.error} subject={t('compare.subject.modelComparisons')} />
+    return <SectionSkeleton label={t('compare.classic.scanning')} rows={4} />
   }
 
   if (facets.data.models.length < 2) {
     return (
-      <Panel title="Cohorts">
-        <EmptyNote>Need at least two models with usage in this range to compare.</EmptyNote>
+      <Panel title={t('compare.cohort.panelTitle')}>
+        <EmptyNote>{t('compare.classic.needTwoModels')}</EmptyNote>
       </Panel>
     )
   }
@@ -457,10 +460,10 @@ function CohortCompare({
 
   return (
     <>
-      <div className="cmp-picker" aria-label="Cohort selection">
+      <div className="cmp-picker" aria-label={t('compare.cohort.selectionAriaLabel')}>
         <Dropdown
           id="cohort-first-model"
-          ariaLabel="Cohort first model"
+          ariaLabel={t('compare.cohort.firstModel')}
           value={modelA ?? ''}
           options={modelRows.map(model => ({ value: model.model, label: `${model.model} · ${formatCount(model.calls, 'call')}` }))}
           onChange={next => {
@@ -468,10 +471,10 @@ function CohortCompare({
             if (next === modelB) setModelB(nudgeDistinct(next))
           }}
         />
-        <span className="cmp-vs">vs</span>
+        <span className="cmp-vs">{t('compare.vs')}</span>
         <Dropdown
           id="cohort-second-model"
-          ariaLabel="Cohort second model"
+          ariaLabel={t('compare.cohort.secondModel')}
           value={modelB ?? ''}
           options={modelRows.map(model => ({ value: model.model, label: `${model.model} · ${formatCount(model.calls, 'call')}` }))}
           onChange={next => {
@@ -481,22 +484,21 @@ function CohortCompare({
         />
         <Dropdown
           id="cohort-project"
-          ariaLabel="Cohort project"
+          ariaLabel={t('compare.cohort.projectAriaLabel')}
           value={project}
-          options={[{ value: '', label: 'All projects' }, ...facets.data.projects.map(p => ({ value: p.id, label: shortenProjectPath(p.id) }))]}
+          options={[{ value: '', label: t('compare.cohort.allProjects') }, ...facets.data.projects.map(p => ({ value: p.id, label: shortenProjectPath(p.id) }))]}
           onChange={setProject}
         />
         <Dropdown
           id="cohort-category"
-          ariaLabel="Cohort activity category"
+          ariaLabel={t('compare.cohort.categoryAriaLabel')}
           value={category}
-          options={[{ value: '', label: 'All categories' }, ...facets.data.categories.map(c => ({ value: c.id, label: c.label }))]}
+          options={[{ value: '', label: t('compare.cohort.allCategories') }, ...facets.data.categories.map(c => ({ value: c.id, label: c.label }))]}
           onChange={setCategory}
         />
       </div>
       <p className="cmp-range-note" role="status">
-        Cohort interval: {intervalLabel}. One observation = one edit turn driven by exactly one
-        behavioral model; turns mixing models are excluded and counted below.
+        {t('compare.cohort.intervalNote', { interval: intervalLabel })}
       </p>
       {modelA && modelB && modelA !== modelB && (
         <CohortReport report={report} onInvestigate={onInvestigate} />
@@ -512,8 +514,8 @@ function CohortReport({ report, onInvestigate }: {
   const [band, setBand] = useState<VolumeBand | null>(null)
 
   if (!report.data) {
-    if (report.error) return <CliErrorPanel error={report.error} subject="model comparisons" />
-    return <SectionSkeleton label="Comparing cohorts…" rows={4} />
+    if (report.error) return <CliErrorPanel error={report.error} subject={t('compare.subject.modelComparisons')} />
+    return <SectionSkeleton label={t('compare.cohort.comparing')} rows={4} />
   }
 
   const data = report.data
@@ -530,8 +532,8 @@ function CohortReport({ report, onInvestigate }: {
         <CohortModelCard side={sideB} />
       </div>
       <div className="cmp-pair">
-        <VolumeCard title="Token volume (median · P90)" side={sideA} />
-        <VolumeCard title="Token volume (median · P90)" side={sideB} />
+        <VolumeCard title={t('compare.cohort.volume.title')} side={sideA} />
+        <VolumeCard title={t('compare.cohort.volume.title')} side={sideB} />
       </div>
       <div className="cmp-pair">
         <SampleInspector side={sideA} onInvestigate={onInvestigate} />
@@ -568,53 +570,51 @@ function PopulationCard({ data, sideA, sideB, band, onBandChange }: {
   return (
     <div className="panel cmp-card">
       <div className="cmp-head">
-        <h3>Population</h3>
-        <span className="cmp-head-note">Who is being compared, before any metric</span>
+        <h3>{t('compare.cohort.population.title')}</h3>
+        <span className="cmp-head-note">{t('compare.cohort.population.subtitle')}</span>
       </div>
       <div className="cmp-metrics">
-        <div className="cmp-metric-head"><span>Selection</span><span>{data.modelA.label}</span><span>{data.modelB.label}</span></div>
+        <div className="cmp-metric-head"><span>{t('compare.cohort.population.selectionHeader')}</span><span>{data.modelA.label}</span><span>{data.modelB.label}</span></div>
         <div className="cmp-metric">
-          <span className="cmp-label">Observations (edit turns, one model)</span>
+          <span className="cmp-label">{t('compare.cohort.population.observations')}</span>
           <span className="cmp-value">{sideA.stats.observationCount.toLocaleString()}</span>
           <span className="cmp-value">{sideB.stats.observationCount.toLocaleString()}</span>
         </div>
         <div className="cmp-metric">
-          <span className="cmp-label">Distinct sessions they come from</span>
+          <span className="cmp-label">{t('compare.cohort.population.distinctSessions')}</span>
           <span className="cmp-value">{sideA.stats.distinctSessionCount.toLocaleString()}</span>
           <span className="cmp-value">{sideB.stats.distinctSessionCount.toLocaleString()}</span>
         </div>
         <div className="cmp-metric">
-          <span className="cmp-label" title="Edit turns whose behavioral calls span 2+ models: attributed to nobody, cost shown so you can see what stays out">Excluded turns mixing models</span>
+          <span className="cmp-label" title={t('compare.cohort.population.excludedMixedTooltip')}>{t('compare.cohort.population.excludedMixedLabel')}</span>
           <span className="cmp-value">{data.modelA.exclusions.multiModelTurnCount.toLocaleString()} ({formatUsd(data.modelA.exclusions.combinedMultiModelCostUSD)})</span>
           <span className="cmp-value">{data.modelB.exclusions.multiModelTurnCount.toLocaleString()} ({formatUsd(data.modelB.exclusions.combinedMultiModelCostUSD)})</span>
         </div>
         <div className="cmp-metric">
-          <span className="cmp-label" title="Edit turns with no behavioral model call, so no model can own them">Excluded turns without a model</span>
+          <span className="cmp-label" title={t('compare.cohort.population.excludedNoModelTooltip')}>{t('compare.cohort.population.excludedNoModelLabel')}</span>
           <span className="cmp-value">{data.modelA.exclusions.noBehavioralModelTurns.toLocaleString()}</span>
           <span className="cmp-value">{data.modelB.exclusions.noBehavioralModelTurns.toLocaleString()}</span>
         </div>
         <div className="cmp-metric">
-          <span className="cmp-label" title="Observations priced at $0 on a model without a free-rate rule: unknown cost, kept for retry stats, kept out of cost stats">Unknown cost (not zero)</span>
+          <span className="cmp-label" title={t('compare.cohort.population.unknownCostTooltip')}>{t('compare.cohort.population.unknownCostLabel')}</span>
           <span className="cmp-value">{sideA.stats.unknownCostCount.toLocaleString()}</span>
           <span className="cmp-value">{sideB.stats.unknownCostCount.toLocaleString()}</span>
         </div>
         <div className="cmp-metric">
-          <span className="cmp-label">Projects / category in selection</span>
+          <span className="cmp-label">{t('compare.cohort.population.projectsCategoryLabel')}</span>
           <span className="cmp-value cmp-value-wide">{describeSelection(data)}</span>
         </div>
       </div>
       <VolumeBandFilter band={band} onChange={onBandChange} />
       {(bandExcludedTotal > 0 || missingMeasureTotal > 0) && (
         <div className="cmp-foot" role="status">
-          Volume band excludes {bandExcludedTotal.toLocaleString()} observation(s) outside the band
-          {missingMeasureTotal > 0 ? ` and ${missingMeasureTotal.toLocaleString()} without any token measure (never counted as small)` : ''}.
-          Rates below use the remaining declared population.
+          {t('compare.cohort.population.bandExcluded', { count: bandExcludedTotal.toLocaleString() })}
+          {missingMeasureTotal > 0 ? t('compare.cohort.population.bandExcludedMissing', { count: missingMeasureTotal.toLocaleString() }) : ''}.
+          {' '}{t('compare.cohort.population.ratesNote')}
         </div>
       )}
       <div className="cmp-foot">
-        Context proxy = input + cache-read tokens (a proxy, not a measured context window).
-        Percentiles use linear interpolation at position (N-1)·p. Outliers are never removed;
-        no winner is picked. This is a descriptive comparison.
+        {t('compare.cohort.population.conventionNote')}
       </div>
     </div>
   )
@@ -623,9 +623,9 @@ function PopulationCard({ data, sideA, sideB, band, onBandChange }: {
 function describeSelection(data: CohortComparisonReport): string {
   const projects = data.selection.projects
   const projectLabel = projects.length === 0
-    ? 'all'
-    : projects.length <= 2 ? projects.join(', ') : `${projects.length} projects`
-  const category = data.selection.category ?? 'all categories'
+    ? t('compare.cohort.selection.all')
+    : projects.length <= 2 ? projects.join(', ') : t('compare.cohort.selection.projectsCount', { count: projects.length })
+  const category = data.selection.category ?? t('compare.cohort.selection.allCategories')
   const interval = data.selection.from && data.selection.to ? `${data.selection.from} → ${data.selection.to}` : data.period.label
   return `${projectLabel} · ${category} · ${interval}`
 }
@@ -651,36 +651,36 @@ function VolumeBandFilter({ band, onChange }: { band: VolumeBand | null; onChang
   }
 
   return (
-    <div className="cmp-band" role="group" aria-label="Volume band filter">
-      <span className="cmp-band-label">Volume band</span>
+    <div className="cmp-band" role="group" aria-label={t('compare.cohort.band.filterAriaLabel')}>
+      <span className="cmp-band-label">{t('compare.cohort.band.label')}</span>
       <Dropdown
         id="cohort-band-measure"
-        ariaLabel="Volume band measure"
+        ariaLabel={t('compare.cohort.band.measureAriaLabel')}
         value={measure}
-        options={BAND_MEASURES.map(m => ({ value: m.value, label: m.label }))}
+        options={BAND_MEASURES.map(m => ({ value: m.value, label: t(m.labelKey) }))}
         onChange={next => push({ measure: next as VolumeMeasure })}
       />
       <input
         className="cmp-band-input"
-        aria-label="Volume band minimum"
+        aria-label={t('compare.cohort.band.minAriaLabel')}
         type="number"
         min={0}
-        placeholder="min"
+        placeholder={t('compare.cohort.band.minPlaceholder')}
         value={min}
         onChange={event => push({ min: event.target.value })}
       />
       <span className="cmp-band-sep">–</span>
       <input
         className="cmp-band-input"
-        aria-label="Volume band maximum"
+        aria-label={t('compare.cohort.band.maxAriaLabel')}
         type="number"
         min={0}
-        placeholder="max"
+        placeholder={t('compare.cohort.band.maxPlaceholder')}
         value={max}
         onChange={event => push({ max: event.target.value })}
       />
       {band && (
-        <button type="button" className="cmp-band-clear" onClick={() => onChange(null)}>Clear band</button>
+        <button type="button" className="cmp-band-clear" onClick={() => onChange(null)}>{t('compare.cohort.band.clear')}</button>
       )}
     </div>
   )
@@ -692,18 +692,18 @@ function CohortModelCard({ side }: { side: CohortSide }) {
   const maxCount = Math.max(1, ...histogram.counts)
   return (
     <div className="panel cmp-card">
-      <div className="cmp-head"><h3>Cost per edit turn</h3><span className="cmp-head-note">{side.model.label}</span></div>
+      <div className="cmp-head"><h3>{t('compare.cohort.model.costPerEditTurn')}</h3><span className="cmp-head-note">{side.model.label}</span></div>
       <div className="cmp-metrics">
-        <div className="cmp-metric"><span className="cmp-label">Median cost</span><span className="cmp-value">{fmtCost(stats.costMedian)}</span></div>
-        <div className="cmp-metric"><span className="cmp-label">P90 cost</span><span className="cmp-value">{fmtCost(stats.costP90)}</span></div>
-        <div className="cmp-metric"><span className="cmp-label">Mean cost</span><span className="cmp-value">{fmtCost(stats.costMean)}</span></div>
-        <div className="cmp-metric"><span className="cmp-label" title="One-shot = the edit turn produced no observed retry. Zero observed retries never proves code correctness.">One-shot rate</span><span className="cmp-value">{fmtMetric(stats.oneShotRate, 'percent')} <span className="cmp-turns">({stats.oneShotCount}/{stats.observationCount})</span></span></div>
-        <div className="cmp-metric"><span className="cmp-label" title="Observed retries per edit turn. Absence of observed retries does not prove correctness.">Retry rate</span><span className="cmp-value">{fmtMetric(stats.retryRate, 'decimal')} <span className="cmp-turns">({stats.retryCount})</span></span></div>
-        <div className="cmp-metric"><span className="cmp-label">Cost known for</span><span className="cmp-value">{stats.costKnownCount}/{stats.observationCount} observations</span></div>
+        <div className="cmp-metric"><span className="cmp-label">{t('compare.cohort.model.medianCost')}</span><span className="cmp-value">{fmtCost(stats.costMedian)}</span></div>
+        <div className="cmp-metric"><span className="cmp-label">{t('compare.cohort.model.p90Cost')}</span><span className="cmp-value">{fmtCost(stats.costP90)}</span></div>
+        <div className="cmp-metric"><span className="cmp-label">{t('compare.cohort.model.meanCost')}</span><span className="cmp-value">{fmtCost(stats.costMean)}</span></div>
+        <div className="cmp-metric"><span className="cmp-label" title={t('compare.cohort.model.oneShotTooltip')}>{t('compare.cohort.model.oneShotRateLabel')}</span><span className="cmp-value">{fmtMetric(stats.oneShotRate, 'percent')} <span className="cmp-turns">({stats.oneShotCount}/{stats.observationCount})</span></span></div>
+        <div className="cmp-metric"><span className="cmp-label" title={t('compare.cohort.model.retryTooltip')}>{t('compare.cohort.model.retryRateLabel')}</span><span className="cmp-value">{fmtMetric(stats.retryRate, 'decimal')} <span className="cmp-turns">({stats.retryCount})</span></span></div>
+        <div className="cmp-metric"><span className="cmp-label">{t('compare.cohort.model.costKnownFor')}</span><span className="cmp-value">{t('compare.cohort.model.observationsOf', { known: stats.costKnownCount, total: stats.observationCount })}</span></div>
       </div>
-      <div className="cmp-histogram" role="img" aria-label={`Cost distribution for ${side.model.label}`}>
+      <div className="cmp-histogram" role="img" aria-label={t('compare.cohort.model.costDistributionAria', { label: side.model.label })}>
         {histogram.edges.length === 0 && histogram.counts.length === 1 ? (
-          <div className="cmp-hist-note">All known costs ≈ $0 (free models).</div>
+          <div className="cmp-hist-note">{t('compare.cohort.model.allFreeCosts')}</div>
         ) : (
           histogram.counts.map((count, index) => (
             <div className="cmp-hist-row" key={index}>
@@ -731,25 +731,27 @@ function bucketLabel(edges: number[], index: number): string {
 
 function VolumeCard({ title, side }: { title: string; side: CohortSide }) {
   const volume = side.stats.volume
-  const rows = [
-    ['Output tokens', fmtVolume(volume.outputMedian), fmtVolume(volume.outputP90)],
-    ['Input tokens', fmtVolume(volume.inputMedian), fmtVolume(volume.inputP90)],
-    ['Context proxy (in + cache read)', fmtVolume(volume.contextProxyMedian), fmtVolume(volume.contextProxyP90)],
+  // id drives the tooltip lookup so it survives translation; the row's own
+  // English label can no longer be pattern-matched once it's localized.
+  const rows: Array<{ id: 'output' | 'input' | 'context'; labelKey: string; median: string; p90: string }> = [
+    { id: 'output', labelKey: 'compare.cohort.volume.outputTokensRow', median: fmtVolume(volume.outputMedian), p90: fmtVolume(volume.outputP90) },
+    { id: 'input', labelKey: 'compare.cohort.volume.inputTokensRow', median: fmtVolume(volume.inputMedian), p90: fmtVolume(volume.inputP90) },
+    { id: 'context', labelKey: 'compare.cohort.volume.contextProxyRow', median: fmtVolume(volume.contextProxyMedian), p90: fmtVolume(volume.contextProxyP90) },
   ]
   return (
     <div className="panel cmp-card">
       <div className="cmp-head"><h3>{title}</h3><span className="cmp-head-note">{side.model.label}</span></div>
       <div className="cmp-metrics">
-        <div className="cmp-metric-head"><span>Volume</span><span>Median</span><span>P90</span></div>
-        {rows.map(([label, median, p90]) => (
-          <div className="cmp-metric" key={label}>
-            <span className="cmp-label" title={label.startsWith('Context') ? 'input + cache-read tokens: a proxy for context size, not a measured context window' : undefined}>{label}</span>
-            <span className="cmp-value">{median}</span>
-            <span className="cmp-value">{p90}</span>
+        <div className="cmp-metric-head"><span>{t('compare.cohort.volume.columnHeader')}</span><span>{t('compare.cohort.volume.medianHeader')}</span><span>{t('compare.cohort.volume.p90Header')}</span></div>
+        {rows.map(row => (
+          <div className="cmp-metric" key={row.id}>
+            <span className="cmp-label" title={row.id === 'context' ? t('compare.cohort.volume.contextProxyTooltip') : undefined}>{t(row.labelKey)}</span>
+            <span className="cmp-value">{row.median}</span>
+            <span className="cmp-value">{row.p90}</span>
           </div>
         ))}
         <div className="cmp-metric">
-          <span className="cmp-label">Observations without token data</span>
+          <span className="cmp-label">{t('compare.cohort.volume.missingMeasureLabel')}</span>
           <span className="cmp-value" >{volume.missingMeasureCount.toLocaleString()}</span>
           <span className="cmp-value" />
         </div>
@@ -779,12 +781,12 @@ function SampleInspector({ side, onInvestigate }: {
   return (
     <div className="panel cmp-card">
       <div className="cmp-head">
-        <h3>Inspect samples</h3>
-        <span className="cmp-head-note">{side.model.label} · {side.stats.observationCount.toLocaleString()} of {side.model.stats.observationCount.toLocaleString()} in selection</span>
+        <h3>{t('compare.cohort.samples.title')}</h3>
+        <span className="cmp-head-note">{side.model.label} · {t('compare.cohort.samples.ofInSelection', { count: side.stats.observationCount.toLocaleString(), total: side.model.stats.observationCount.toLocaleString() })}</span>
       </div>
       {observations.length === 0 ? (
         <div className="cmp-category-body">
-          <EmptyNote>No observations match the current selection{side.band ? ' and volume band' : ''}. Nothing is compared.</EmptyNote>
+          <EmptyNote>{t('compare.cohort.samples.noObservations')}{side.band ? t('compare.cohort.samples.andVolumeBand') : ''}{t('compare.cohort.samples.nothingCompared')}</EmptyNote>
         </div>
       ) : (
         <div className="cmp-samples">
@@ -793,7 +795,7 @@ function SampleInspector({ side, onInvestigate }: {
           ))}
           {observations.length > SAMPLES_INITIAL_COUNT && (
             <button type="button" className="cmp-samples-more" onClick={() => setShowAll(current => !current)}>
-              {showAll ? 'Show fewer' : `Show all ${formatCount(observations.length, 'observation')}`}
+              {showAll ? t('compare.cohort.samples.showFewer') : t('compare.cohort.samples.showAll', { count: formatCount(observations.length, 'observation') })}
             </button>
           )}
         </div>
@@ -814,19 +816,19 @@ function SampleRow({ observation, onInvestigate }: {
   }
   return (
     <button type="button" className="cmp-sample" onClick={activate}
-      title={`Open session: ${observation.project}/${observation.sessionId}`}
-      aria-label={`Sample from ${shortenProjectPath(observation.project)} at ${observation.timestamp}`}>
+      title={t('compare.cohort.sample.openSession', { path: `${observation.project}/${observation.sessionId}` })}
+      aria-label={t('compare.cohort.sample.ariaLabel', { project: shortenProjectPath(observation.project), timestamp: observation.timestamp })}>
       <span className="cmp-sample-time">{observation.timestamp.slice(0, 16).replace('T', ' ')}</span>
       <span className="cmp-sample-project" title={observation.project}>{shortenProjectPath(observation.project)}</span>
       <span className="cmp-sample-session" title={observation.sessionId}>{observation.sessionId.slice(0, 10)}</span>
       <span className="cmp-sample-cat">{observation.category}</span>
-      <span className="cmp-sample-cost" title={observation.costKnown ? undefined : 'Unknown cost: this model has no pricing and no free-rate rule, so it is not counted as $0'}>
-        {observation.costKnown ? formatUsd(observation.costUSD) : 'unknown'}
+      <span className="cmp-sample-cost" title={observation.costKnown ? undefined : t('compare.cohort.sample.unknownCostTooltip')}>
+        {observation.costKnown ? formatUsd(observation.costUSD) : t('compare.cohort.sample.unknownCost')}
       </span>
-      <span className="cmp-sample-tokens" title="input / output / context proxy tokens">
-        {observation.tokensReported ? `${formatCompact(observation.inputTokens)} / ${formatCompact(observation.outputTokens)} / ${formatCompact(observation.contextProxyTokens)}` : 'no token data'}
+      <span className="cmp-sample-tokens" title={t('compare.cohort.sample.tokensTooltip')}>
+        {observation.tokensReported ? `${formatCompact(observation.inputTokens)} / ${formatCompact(observation.outputTokens)} / ${formatCompact(observation.contextProxyTokens)}` : t('compare.cohort.sample.noTokenData')}
       </span>
-      <span className="cmp-sample-retries">{observation.oneShot ? 'one-shot' : `${observation.retries} retry`}</span>
+      <span className="cmp-sample-retries">{observation.oneShot ? t('compare.cohort.sample.oneShot') : t('compare.cohort.sample.retryCount', { count: observation.retries })}</span>
     </button>
   )
 }

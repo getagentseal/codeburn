@@ -1,5 +1,6 @@
 import { useState } from 'react'
 
+import { t } from '../i18n'
 import { updateDownloadUrl, useUpdateStatus } from '../hooks/useUpdateStatus'
 import { codeburn } from '../lib/ipc'
 
@@ -31,10 +32,10 @@ export function UpdateBanner() {
   return (
     <div role="status" className="update-banner">
       <span>
-        Update available: CodeBurn {status.latestVersion} ·{' '}
-        <button type="button" className="set-text-button" onClick={() => { void codeburn.openExternal(updateDownloadUrl(tag)) }}>Download</button>
+        {t('shell.update.available', { version: status.latestVersion ?? '' })}{' '}
+        <button type="button" className="set-text-button" onClick={() => { void codeburn.openExternal(updateDownloadUrl(tag)) }}>{t('shell.action.download')}</button>
       </span>
-      <button type="button" className="set-text-button" onClick={dismiss}>Dismiss</button>
+      <button type="button" className="set-text-button" onClick={dismiss}>{t('shell.action.dismiss')}</button>
     </div>
   )
 }

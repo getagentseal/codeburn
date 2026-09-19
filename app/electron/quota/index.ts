@@ -10,6 +10,7 @@ import { fetchGrokbotQuota, grokbotInstalled } from './grokbot'
 import { fetchKimiQuota } from './kimi'
 import { atomicWriteSecureFile, readSecureFile, sanitizeError } from './security'
 import type { ProviderName, QuotaProvider } from './types'
+import { fetchZcodeQuota } from './zcode'
 
 export type { QuotaProvider, QuotaWindow } from './types'
 export { sanitizeError } from './security'
@@ -24,6 +25,7 @@ type QuotaDeps = {
   copilot: (options: FetcherOptions) => Promise<FetchResult>
   antigravity: (options: FetcherOptions) => Promise<FetchResult>
   kimi: (options: FetcherOptions) => Promise<FetchResult>
+  zcode: (options: FetcherOptions) => Promise<FetchResult>
   grokbot: (options: FetcherOptions) => Promise<FetchResult>
   grokbotInstalled: () => boolean
   statePath: string
@@ -33,7 +35,7 @@ type QuotaDeps = {
   refreshMs: number
 }
 
-const PROVIDERS: ProviderName[] = ['claude', 'codex', 'gemini', 'copilot', 'antigravity', 'kimi', 'grokbot']
+const PROVIDERS: ProviderName[] = ['claude', 'codex', 'gemini', 'copilot', 'antigravity', 'kimi', 'zcode', 'grokbot']
 
 const defaultDeps: QuotaDeps = {
   claude: fetchClaudeQuota,
@@ -44,6 +46,7 @@ const defaultDeps: QuotaDeps = {
   // no remote endpoints), so it ignores the abort/keychain options entirely.
   antigravity: async () => ({ quota: await fetchAntigravityQuota() }),
   kimi: fetchKimiQuota,
+  zcode: fetchZcodeQuota,
   grokbot: options => fetchGrokbotQuota({ signal: options.signal }),
   grokbotInstalled,
   statePath: path.join(os.homedir(), '.codeburn', 'quota-backoff.json'),

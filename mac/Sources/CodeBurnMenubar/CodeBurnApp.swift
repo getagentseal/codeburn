@@ -58,6 +58,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
     private var statusItemPlacementRecoveryTask: Task<Void, Never>?
     private var popover: NSPopover!
     private var capacityDockController: CapacityDockController?
+    private var remoteCommandObserver: DefaultsKeyObserver?
     private var rightClickMonitor: Any?
     private var lastContextMenuPresentedAt: Date = .distantPast
     /// Held only while the right-click menu is open. Cleared in menuDidClose so
@@ -162,6 +163,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
         setupWakeObservers()
         removeLegacyRefreshAgent()
         registerLoginItemIfNeeded()
+        observeRemoteCommands()
         observeSubscriptionDisconnect()
         observeCapacityDockProviderSettingsRequests()
         setupUpdateNotifications()
@@ -315,8 +317,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
         try? fm.removeItem(atPath: destPath)
     }
 
+    /// The one key the desktop app's Plugins card writes to ask this app to go away. Quitting
+    /// could be a signal, but dropping the login item cannot: `SMAppService.mainApp` only ever
+    /// speaks for the app that calls it, so the app has to unregister itself before it goes.
+    static let remoteCommandKey = "CodeBurnMenubarRemoteCommand"
+    static let loginItemRegisteredKey = "codeburn.loginItemRegistered"
+
+    private func observeRemoteCommands() {
+        remoteCommandObserver = DefaultsKeyObserver(defaults: .standard, key: Self.remoteCommandKey) { [weak self] in
+            Task { @MainActor [weak self] in self?.handleRemoteCommand() }
+        }
+        // A command written while this app was not running is answered at launch, not ignored.
+        handleRemoteCommand()
+    }
+
+    @MainActor
+    private func handleRemoteCommand() {
+        let defaults = UserDefaults.standard
+        guard let raw = defaults.string(forKey: Self.remoteCommandKey), !raw.isEmpty else { return }
+        // Cleared before acting, so a command that outlives this process cannot quit the next one.
+        defaults.removeObject(forKey: Self.remoteCommandKey)
+        guard let command = MenubarRemoteCommand(rawValue: raw) else { return }
+        if command.unregistersLoginItem {
+            do {
+                if SMAppService.mainApp.status == .enabled { try SMAppService.mainApp.unregister() }
+            } catch {
+                NSLog("CodeBurn: login item unregister failed: \(error.localizedDescription)")
+            }
+            defaults.removeObject(forKey: Self.loginItemRegisteredKey)
+        }
+        if command == .settings {
+            openSettings()
+            return
+        }
+        guard command.terminates else { return }
+        NSApp.terminate(nil)
+    }
+
     private func registerLoginItemIfNeeded() {
-        let key = "codeburn.loginItemRegistered"
+        let key = Self.loginItemRegisteredKey
         guard !UserDefaults.standard.bool(forKey: key) else { return }
 
         // Registers in-process. The old path told System Events to make the login

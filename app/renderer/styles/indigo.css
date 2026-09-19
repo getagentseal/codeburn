@@ -17,7 +17,21 @@
   --grad: linear-gradient(135deg, #5B8CFF, #8B7CF6);
   --grad-bar: linear-gradient(to top, rgba(91,140,255,.55), #6FA2FF 60%, #4DD8E6);
   --mono: ui-monospace, "SF Mono", "Berkeley Mono", Menlo, "Cascadia Mono", Consolas, monospace;
-  --sans: system-ui, -apple-system, "SF Pro Text", "Segoe UI", sans-serif;
+  --sans: system-ui, -apple-system, "SF Pro Text", "Segoe UI", "PingFang SC", "Hiragino Sans", "Yu Gothic", "Malgun Gothic", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+}
+/* Per-language font stacks: the CJK locales share Unicode with Simplified
+   Chinese, so a stack that lists "PingFang SC" first renders Japanese kanji and
+   Traditional characters in Simplified forms. <html lang> carries the active
+   locale, so reorder the stack to put each language's own faces first (macOS,
+   then Windows, then Linux fallbacks). zh-Hans/en/fr keep the base above. */
+:root:lang(ja) {
+  --sans: system-ui, -apple-system, "SF Pro Text", "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Yu Gothic", "Segoe UI", "Meiryo", "Noto Sans CJK JP", sans-serif;
+}
+:root:lang(zh-Hant), :root:lang(zh-TW) {
+  --sans: system-ui, -apple-system, "SF Pro Text", "PingFang TC", "Hiragino Sans CNS", "Segoe UI", "Microsoft JhengHei", "Noto Sans CJK TC", sans-serif;
+}
+:root:lang(ko) {
+  --sans: system-ui, -apple-system, "SF Pro Text", "Apple SD Gothic Neo", "Segoe UI", "Malgun Gothic", "Noto Sans CJK KR", sans-serif;
 }
 body {
   background:

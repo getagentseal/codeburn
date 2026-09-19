@@ -16,8 +16,9 @@ import { codeburn } from '../lib/ipc'
 import { contiguousDailyWindow, dataStartKey, localDateKey } from '../lib/period'
 import { reportMemoKey } from '../lib/reportMemoKey'
 import { projectFilters } from '../lib/investigation'
-import { formatSessionCount, SESSION_COUNT_HELP } from '../lib/session-count-label'
+import { formatSessionCount, sessionCountHelp } from '../lib/session-count-label'
 import type { CliError, DateRange, MenubarPayload, Period, SpendFlow } from '../lib/types'
+import { localeTag, t } from '../i18n'
 
 import type { InvestigateRequest } from './Overview'
 
@@ -30,13 +31,13 @@ function projectRowKey(project: Project, index: number): string {
 /** Date-only CLI strings ("2026-07-11") formatted at local noon so the calendar day never rolls across time zones. */
 function formatProjectDay(date: string): string {
   const d = new Date(`${date}T12:00:00`)
-  return Number.isNaN(d.getTime()) ? '—' : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+  return Number.isNaN(d.getTime()) ? '—' : d.toLocaleDateString(localeTag(), { month: 'short', day: 'numeric' })
 }
 
 const SPEND_CHART_DAYS = 15
 
 function providerLabel(provider: string): string {
-  if (provider === 'all') return 'All models'
+  if (provider === 'all') return t('spend.provider.allModels')
   return provider
     .split(/[-\s]+/)
     .filter(Boolean)
@@ -52,7 +53,7 @@ function SpendPunchcard({ period, provider, range }: { period: Period; provider:
   const timeline = payload.data?.history.timeline
   if (!timeline) return null
   return (
-    <Panel title="Spend punchcard" right="hour of day × weekday">
+    <Panel title={t('spend.punchcard.title')} right={t('spend.punchcard.right')}>
       <Punchcard timeline={timeline} />
     </Panel>
   )
@@ -92,8 +93,8 @@ export function SpendContent({
   )
 
   if (!overview.data) {
-    if (overview.error) return <CliErrorPanel error={overview.error} subject="spend" />
-    return <SectionSkeleton label="Scanning spend…" rows={3} chart />
+    if (overview.error) return <CliErrorPanel error={overview.error} subject={t('common.subject.spend')} />
+    return <SectionSkeleton label={t('spend.loading.scanning')} rows={3} chart />
   }
 
   const animateKey = `${period}|${provider}|${range?.from ?? ''}|${range?.to ?? ''}`
@@ -135,7 +136,7 @@ function SpendPage({
   const projects = data.current.topProjects
   const breakdowns = [
     {
-      title: 'Activity',
+      title: t('spend.breakdown.activity'),
       rows: [
         ...data.current.topActivities.map(row => ({
           key: `activity-${row.name}`,
@@ -146,13 +147,13 @@ function SpendPage({
         ...data.current.skills.map(row => ({
           key: `skill-${row.name}`,
           title: row.name,
-          sub: `${formatCount(row.turns, 'turn')} · skill`,
+          sub: t('spend.breakdown.skillSuffix', { turns: formatCount(row.turns, 'turn') }),
           value: formatUsd(row.cost),
         })),
       ],
     },
     {
-      title: 'Tools',
+      title: t('spend.breakdown.tools'),
       rows: data.current.tools.map(row => ({
         key: row.name,
         title: row.name,
@@ -161,7 +162,7 @@ function SpendPage({
       })),
     },
     {
-      title: 'MCP',
+      title: t('spend.breakdown.mcp'),
       rows: data.current.mcpServers.map(row => ({
         key: row.name,
         title: row.name,
@@ -170,7 +171,7 @@ function SpendPage({
       })),
     },
     {
-      title: 'Subagents',
+      title: t('spend.breakdown.subagents'),
       rows: data.current.subagents.map(row => ({
         key: row.name,
         title: row.name,
@@ -184,21 +185,21 @@ function SpendPage({
     <>
       {staleError && <StaleBanner error={staleError} />}
       <div className="spend-top-row">
-        <Panel title="Daily spend by model" className="spend-chart-panel">
-          {chartHasSpend ? <StackedBars daily={chartDaily} fallbackLabel={providerLabel(provider)} animateKey={animateKey} dataStart={dataStart} /> : <EmptyNote>No model spend in this range yet.</EmptyNote>}
+        <Panel title={t('spend.chart.title')} className="spend-chart-panel">
+          {chartHasSpend ? <StackedBars daily={chartDaily} fallbackLabel={providerLabel(provider)} animateKey={animateKey} dataStart={dataStart} /> : <EmptyNote>{t('spend.chart.empty')}</EmptyNote>}
         </Panel>
         <ProjectBreakdown projects={projects} onInvestigate={onInvestigate} />
       </div>
 
       <BranchBreakdown period={period} provider={provider} range={range} />
 
-      <Panel title="Cost flow · model → project" right="model → project flow for this range" className="scroll-x">
+      <Panel title={t('spend.flow.title')} right={t('spend.flow.right')} className="scroll-x">
         {flow.data && flow.data.links.length ? (
           <Sankey flow={flow.data} />
         ) : flow.error ? (
           <CliErrorText error={flow.error} />
         ) : (
-          <EmptyNote>{flow.loading ? 'Loading cost flow…' : 'No model-project flow in this range yet.'}</EmptyNote>
+          <EmptyNote>{flow.loading ? t('spend.flow.loading') : t('spend.flow.empty')}</EmptyNote>
         )}
       </Panel>
 
@@ -208,7 +209,7 @@ function SpendPage({
         {breakdowns.length ? (
           breakdowns.map(section => <RowsPanel key={section.title} title={section.title} rows={section.rows} />)
         ) : (
-          <EmptyNote>No activity, tool, MCP, or subagent data in this range yet.</EmptyNote>
+          <EmptyNote>{t('spend.breakdown.emptyAll')}</EmptyNote>
         )}
       </div>
     </>
@@ -219,7 +220,7 @@ function ProjectBreakdown({ projects, onInvestigate }: { projects: Project[]; on
   const [expanded, setExpanded] = useState<string | null>(null)
 
   return (
-    <Panel title="By project" right={projects.length ? `top ${projects.length}` : undefined} className="spend-scroll">
+    <Panel title={t('spend.project.title')} right={projects.length ? t('spend.project.top', { count: projects.length }) : undefined} className="spend-scroll">
       {projects.length ? (
         projects.map((project, i) => {
           const rowKey = projectRowKey(project, i)
@@ -229,13 +230,13 @@ function ProjectBreakdown({ projects, onInvestigate }: { projects: Project[]; on
               <ListRow
                 no={String(i + 1).padStart(2, '0')}
                 title={project.name}
-                sub={<span title={project.sessionCountBasis === 'identity' ? undefined : SESSION_COUNT_HELP}>{formatSessionCount(project.sessions, project.sessionCountBasis)}</span>}
+                sub={<span title={project.sessionCountBasis === 'identity' ? undefined : sessionCountHelp()}>{formatSessionCount(project.sessions, project.sessionCountBasis)}</span>}
                 value={formatUsd(project.cost)}
                 expanded={open}
                 onClick={() => setExpanded(current => current === rowKey ? null : rowKey)}
               />
               {open && (
-                <div className="spend-proj-detail" role="region" aria-label={`${project.name} sessions`}>
+                <div className="spend-proj-detail" role="region" aria-label={t('spend.project.sessionsAria', { name: project.name })}>
                   {/* Drill-through entry: canonical project id (the same one the
                       session rows carry), so the destination matches exactly. */}
                   {onInvestigate && (
@@ -244,7 +245,7 @@ function ProjectBreakdown({ projects, onInvestigate }: { projects: Project[]; on
                       type="button"
                       onClick={() => onInvestigate({ filters: projectFilters(project.id || project.name) })}
                     >
-                      View sessions for this project →
+                      {t('spend.project.viewSessions')}
                     </button>
                   )}
                   {project.sessionDetails.length ? (
@@ -257,7 +258,7 @@ function ProjectBreakdown({ projects, onInvestigate }: { projects: Project[]; on
                       </div>
                     ))
                   ) : (
-                    <div className="spend-proj-empty">No session detail for this project.</div>
+                    <div className="spend-proj-empty">{t('spend.project.noDetail')}</div>
                   )}
                 </div>
               )}
@@ -265,7 +266,7 @@ function ProjectBreakdown({ projects, onInvestigate }: { projects: Project[]; on
           )
         })
       ) : (
-        <EmptyNote>No project spend in this range yet.</EmptyNote>
+        <EmptyNote>{t('spend.project.empty')}</EmptyNote>
       )}
     </Panel>
   )

@@ -1,3 +1,5 @@
+import { t } from '../i18n'
+
 export type SeriesKey = 'flagship' | 'premium' | 'balanced' | 'fast' | 'other'
 
 export const SERIES_LABELS: Record<SeriesKey, string> = {
@@ -6,6 +8,11 @@ export const SERIES_LABELS: Record<SeriesKey, string> = {
   balanced: 'Balanced',
   fast: 'Fast',
   other: 'Other',
+}
+
+/** Localized spend-tier legend label. English matches SERIES_LABELS exactly. */
+export function seriesLabel(series: SeriesKey): string {
+  return t(`models.series.${series}`)
 }
 
 const SERIES_CSS_VAR: Record<SeriesKey, string> = {

@@ -11,6 +11,7 @@ import { ChartTip } from '../components/ChartTip'
 import { formatAxisMoney, niceTicks, ticksClearOfPeak } from '../lib/chartAxis'
 import { formatCompact, formatUsd, shortenProjectPath } from '../lib/format'
 import { Usd, tokensOf } from '../components/Usd'
+import { localeTag, t } from '../i18n'
 import { codeburn } from '../lib/ipc'
 import { reportMemoKey } from '../lib/reportMemoKey'
 import { trackEvent } from '../lib/track'
@@ -69,12 +70,12 @@ function localKey(d: Date): string {
 
 function formatDayShort(key: string): string {
   const [y, m, d] = key.split('-').map(Number)
-  return new Date(y, m - 1, d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+  return new Date(y, m - 1, d).toLocaleDateString(localeTag(), { month: 'short', day: 'numeric', year: 'numeric' })
 }
 
 function formatDayTerse(key: string): string {
   const [y, m, d] = key.split('-').map(Number)
-  return new Date(y, m - 1, d).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+  return new Date(y, m - 1, d).toLocaleDateString(localeTag(), { month: 'short', day: 'numeric' })
 }
 
 /// A column header has no room for two full dates. Drop the year, and the
@@ -121,7 +122,9 @@ function plural(count: number, one: string, many: string): string {
 
 function rangeLabel(range: PeriodRangeInfo): string {
   if (range.from === range.to) return formatDayShort(range.from)
-  return range.days === 7 ? `Week of ${formatDayShort(range.from)}` : `${formatDayShort(range.from)} to ${formatDayShort(range.to)}`
+  return range.days === 7
+    ? t('compare.periodCompare.rangeLabel.weekOf', { date: formatDayShort(range.from) })
+    : t('compare.periodCompare.rangeLabel.fromTo', { from: formatDayShort(range.from), to: formatDayShort(range.to) })
 }
 
 /// The second half of the lead sentence. Sessions moving hard while cost per
@@ -133,38 +136,42 @@ function secondClause(sessionsPct: number | null, per100Pct: number | null): str
   const callsDown = per100Pct < 0
   const together = sessionsDown === callsDown && Math.abs(per100Pct) >= Math.abs(sessionsPct)
   if (Math.abs(sessionsPct) > 30 && per100Pct !== 0 && !together) {
-    const sessions = sessionsDown ? 'Far fewer sessions' : 'Far more sessions'
-    const calls = callsDown ? 'cheaper' : 'more expensive'
-    const softener = sessionsDown === callsDown ? 'only ' : ''
-    return `${sessions}, and ${calls} calls: cost per call ${callsDown ? 'fell' : 'rose'} ${softener}${wholePct(per100Pct)}.`
+    const sessions = t(sessionsDown ? 'compare.periodCompare.second.farFewerSessions' : 'compare.periodCompare.second.farMoreSessions')
+    const calls = t(callsDown ? 'compare.periodCompare.second.cheaper' : 'compare.periodCompare.second.moreExpensive')
+    const softener = sessionsDown === callsDown ? t('compare.periodCompare.second.only') : ''
+    const direction = t(callsDown ? 'compare.periodCompare.second.fell' : 'compare.periodCompare.second.rose')
+    return t('compare.periodCompare.second.farClause', { sessions, calls, direction, softener, percent: wholePct(per100Pct) })
   }
-  const calls = per100Pct === 0 ? 'the same cost per call' : callsDown ? 'cheaper calls' : 'more expensive calls'
-  return `${sessionsDown ? 'Fewer' : 'More'} sessions and ${calls}.`
+  const calls = t(per100Pct === 0 ? 'compare.periodCompare.second.sameCostPerCall' : callsDown ? 'compare.periodCompare.second.cheaperCalls' : 'compare.periodCompare.second.moreExpensiveCalls')
+  const direction = t(sessionsDown ? 'compare.periodCompare.second.fewer' : 'compare.periodCompare.second.more')
+  return t('compare.periodCompare.second.simpleClause', { direction, calls })
 }
 
 /// The whole comparison in one sentence, built only from report numbers.
 export function leadSentence(report: PeriodDiffReport): string {
   const weeks = report.rangeA.days === 7 && report.rangeB.days === 7
-  const subject = weeks ? `The week of ${formatDayShort(report.rangeB.from)}` : `The ${rangeLabel(report.rangeB)} range`
-  const before = weeks ? 'the week before' : 'the range before'
+  const subject = weeks
+    ? t('compare.periodCompare.lead.subjectWeek', { date: formatDayShort(report.rangeB.from) })
+    : t('compare.periodCompare.lead.subjectRange', { range: rangeLabel(report.rangeB) })
+  const before = t(weeks ? 'compare.periodCompare.lead.beforeWeek' : 'compare.periodCompare.lead.beforeRange')
   const costA = formatUsd(report.totals.A.cost)
   const costB = formatUsd(report.totals.B.cost)
   const pct = report.totals.pct.cost
   const head = pct === null
-    ? `${subject} cost ${costB}, against ${costA} in ${before}.`
+    ? t('compare.periodCompare.lead.headNoPct', { subject, costB, costA, before })
     : Math.abs(pct) < 0.5
-      ? `${subject} cost the same as ${before}: ${costB} versus ${costA}.`
-      : `${subject} cost ${wholePct(pct)} ${pct < 0 ? 'less' : 'more'} than ${before}: ${costB} versus ${costA}.`
+      ? t('compare.periodCompare.lead.headFlat', { subject, before, costB, costA })
+      : t('compare.periodCompare.lead.headChanged', { subject, percent: wholePct(pct), direction: t(pct < 0 ? 'compare.periodCompare.lead.less' : 'compare.periodCompare.lead.more'), before, costB, costA })
   const tail = secondClause(report.totals.pct.sessions, report.normalized.per100Calls.pct)
   return tail ? `${head} ${tail}` : head
 }
 
-const STATUS_LABEL: Record<PeriodContribution['status'], string> = {
-  new: 'New',
-  gone: 'Gone',
-  up: 'Up',
-  down: 'Down',
-  flat: 'Flat',
+const STATUS_LABEL_KEY: Record<PeriodContribution['status'], string> = {
+  new: 'compare.periodCompare.status.new',
+  gone: 'compare.periodCompare.status.gone',
+  up: 'compare.periodCompare.status.up',
+  down: 'compare.periodCompare.status.down',
+  flat: 'compare.periodCompare.status.flat',
 }
 
 /// One lens row under a normalization view. Raw rows come straight from the
@@ -251,22 +258,22 @@ export function PeriodCompare({
   }, [])
 
   return (
-    <div className="pcmp" aria-label="Compare periods">
+    <div className="pcmp" aria-label={t('compare.periodCompare.rootAriaLabel')}>
       <div className="panel cmp-card pcmp-controls">
         <div className="pbody pcmp-controls-body">
         <div className="pcmp-controls-row">
           <SegTabs
-            options={[{ value: 'last7', label: 'Last 7 vs prior 7' }, { value: 'custom', label: 'Custom' }]}
+            options={[{ value: 'last7', label: t('compare.periodCompare.preset.last7') }, { value: 'custom', label: t('compare.periodCompare.preset.custom') }]}
             value={preset}
             onChange={pickPreset}
           />
-          <button type="button" className="pcmp-swap" onClick={swap} aria-label="Swap A and B">
-            <Icon name="arrow-left-right" className="pcmp-swap-icon" /> Swap
+          <button type="button" className="pcmp-swap" onClick={swap} aria-label={t('compare.periodCompare.controls.swapAriaLabel')}>
+            <Icon name="arrow-left-right" className="pcmp-swap-icon" /> {t('compare.periodCompare.controls.swap')}
           </button>
         </div>
         <div className="pcmp-ranges">
-          <RangeField label="A · reference" value={rangeA} onChange={setRangeA} />
-          <RangeField label="B · analyzed" value={rangeB} onChange={setRangeB} />
+          <RangeField label={t('compare.periodCompare.range.aLabel')} value={rangeA} onChange={setRangeA} />
+          <RangeField label={t('compare.periodCompare.range.bLabel')} value={rangeB} onChange={setRangeB} />
         </div>
         <RangeMeta rangeA={rangeA} rangeB={rangeB} />
         </div>
@@ -274,8 +281,8 @@ export function PeriodCompare({
 
       {!report.data
         ? report.error
-          ? <CliErrorPanel error={report.error} subject="period comparison" />
-          : <SectionSkeleton label="Comparing periods…" rows={5} />
+          ? <CliErrorPanel error={report.error} subject={t('compare.periodCompare.subject')} />
+          : <SectionSkeleton label={t('compare.periodCompare.comparing')} rows={5} />
         : (
             <>
               <SummaryCard report={report.data} />
@@ -293,7 +300,7 @@ export function PeriodCompare({
                 refreshToken={refreshToken}
               />
               <details className="panel cmp-card pcmp-fold">
-                <summary>All metrics</summary>
+                <summary>{t('compare.periodCompare.allMetrics')}</summary>
                 <div className="pcmp-fold-body">
                   <TotalsCard report={report.data} />
                   <NormalizedCard report={report.data} />
@@ -332,13 +339,13 @@ function RangeField({ label, value, onChange }: { label: string; value: DateRang
         className="pcmp-range-trigger"
         aria-haspopup="dialog"
         aria-expanded={open}
-        aria-label={`${label}: ${value.from} to ${value.to}`}
+        aria-label={`${label}: ${t('compare.periodCompare.rangeLabel.fromTo', { from: value.from, to: value.to })}`}
         onClick={() => setOpen(current => !current)}
       >
         {formatDayShort(value.from)} – {formatDayShort(value.to)}
       </button>
       {open && (
-        <AnchoredSurface anchor={triggerRef} surfaceRef={popoverRef} className="calendar-popover" role="dialog" aria-label={`${label} date range`}>
+        <AnchoredSurface anchor={triggerRef} surfaceRef={popoverRef} className="calendar-popover" role="dialog" aria-label={t('compare.periodCompare.range.dateRangeAriaLabel', { label })}>
           <RangeCalendar
             value={value}
             onSelect={range => {
@@ -370,12 +377,15 @@ function RangeMeta({ rangeA, rangeB }: { rangeA: DateRange; rangeB: DateRange })
   const overlapEnd = rangeA.to < rangeB.to ? rangeA.to : rangeB.to
   const overlap = overlapStart <= overlapEnd ? days({ from: overlapStart, to: overlapEnd }) : 0
   const delta = daysB - daysA
+  const unit = (n: number) => t(n === 1 ? 'compare.periodCompare.meta.day' : 'compare.periodCompare.meta.days')
   return (
     <p className="pcmp-meta" role="status">
-      A spans {daysA} {daysA === 1 ? 'day' : 'days'} · B spans {daysB} {daysB === 1 ? 'day' : 'days'}
-      {delta !== 0 && <> · duration differs by {delta > 0 ? '+' : '−'}{Math.abs(delta)} {Math.abs(delta) === 1 ? 'day' : 'days'}</>}
-      {overlap > 0 && <> · the ranges overlap on {overlap} {overlap === 1 ? 'day' : 'days'}, which count in both sides</>}
-      {' '}· all differences are B − A
+      {t('compare.periodCompare.meta.aSpans', { count: daysA, unit: unit(daysA) })}
+      {' · '}
+      {t('compare.periodCompare.meta.bSpans', { count: daysB, unit: unit(daysB) })}
+      {delta !== 0 && <> · {t('compare.periodCompare.meta.durationDiffers', { sign: delta > 0 ? '+' : '−', count: Math.abs(delta), unit: unit(Math.abs(delta)) })}</>}
+      {overlap > 0 && <> · {t('compare.periodCompare.meta.overlap', { count: overlap, unit: unit(overlap) })}</>}
+      {' · '}{t('compare.periodCompare.meta.allDiffs')}
     </p>
   )
 }
@@ -385,9 +395,9 @@ function SummaryCard({ report }: { report: PeriodDiffReport }) {
   // Only the two money tiles carry the cost semantics: more sessions is not a
   // bill going up, so the Sessions tile stays neutral.
   const tiles = [
-    { label: 'Total cost', value: <Usd value={report.totals.B.cost} tokens={tokensOf(report.totals.B)} />, change: signedUsd(report.totals.diff.cost), tone: diffClass(report.totals.diff.cost, 'cost'), pct: report.totals.pct.cost },
-    { label: 'Cost per 100 calls', value: per100.b === null ? '—' : formatUsd(per100.b), change: per100.diff === null ? '—' : signedUsd(per100.diff), tone: diffClass(per100.diff ?? 0, 'cost'), pct: per100.pct },
-    { label: 'Sessions', value: report.totals.B.sessions.toLocaleString('en-US'), change: signedCount(report.totals.diff.sessions), tone: '', pct: report.totals.pct.sessions },
+    { label: t('compare.periodCompare.summary.totalCost'), value: <Usd value={report.totals.B.cost} tokens={tokensOf(report.totals.B)} />, change: signedUsd(report.totals.diff.cost), tone: diffClass(report.totals.diff.cost, 'cost'), pct: report.totals.pct.cost },
+    { label: t('compare.periodCompare.summary.costPer100Calls'), value: per100.b === null ? '—' : formatUsd(per100.b), change: per100.diff === null ? '—' : signedUsd(per100.diff), tone: diffClass(per100.diff ?? 0, 'cost'), pct: per100.pct },
+    { label: t('compare.periodCompare.summary.sessions'), value: report.totals.B.sessions.toLocaleString('en-US'), change: signedCount(report.totals.diff.sessions), tone: '', pct: report.totals.pct.sessions },
   ]
   return (
     <div className="panel cmp-card pcmp-summary">
@@ -443,7 +453,7 @@ function DayBarsCard({ report }: { report: PeriodDiffReport }) {
   return (
     <div className="panel cmp-card">
       <div className="cmp-head">
-        <h3>Cost per day, both ranges side by side</h3>
+        <h3>{t('compare.periodCompare.dayBars.title')}</h3>
         <span className="cmp-head-note pcmp-legend">
           <span><i className="pcmp-swatch-a" />{labelA}</span>
           <span><i className="pcmp-swatch-b" />{labelB}</span>
@@ -458,7 +468,7 @@ function DayBarsCard({ report }: { report: PeriodDiffReport }) {
             ? <span className="chart-weekline" key={index} style={{ left: `${(index / span) * 100}%` }} />
             : null))}
         </div>
-        <div className="chart pcmp-days" style={{ gap: `${span > 45 ? 3 : span > 20 ? 6 : 10}px` }} aria-label="Cost per day in both ranges">
+        <div className="chart pcmp-days" style={{ gap: `${span > 45 ? 3 : span > 20 ? 6 : 10}px` }} aria-label={t('compare.periodCompare.dayBars.chartAriaLabel')}>
           {Array.from({ length: span }, (_, index) => (
             <button
               type="button"
@@ -485,12 +495,12 @@ function DayBarsCard({ report }: { report: PeriodDiffReport }) {
             // at that density anchoring it is invisible.
             const atEdge = span > 45 && index === span - 1
             return atEdge
-              ? <span key={index} className="pcmp-xax-end" style={{ right: 0 }}>Day {index + 1}</span>
-              : <span key={index} style={{ left: `${((index + 0.5) / span) * 100}%` }}>Day {index + 1}</span>
+              ? <span key={index} className="pcmp-xax-end" style={{ right: 0 }}>{t('compare.periodCompare.dayBars.dayLabel', { n: index + 1 })}</span>
+              : <span key={index} style={{ left: `${((index + 0.5) / span) * 100}%` }}>{t('compare.periodCompare.dayBars.dayLabel', { n: index + 1 })}</span>
           })}
         </div>
         </div>
-        <p className="pcmp-caption">Each pair is one day of A beside the same-numbered day of B.</p>
+        <p className="pcmp-caption">{t('compare.periodCompare.dayBars.caption')}</p>
       </div>
       {tip && (
         <ChartTip x={tip.x} y={tip.y}>
@@ -510,67 +520,37 @@ function DayBarsCard({ report }: { report: PeriodDiffReport }) {
   )
 }
 
-function TotalsCard({ report }: { report: PeriodDiffReport }) {
-  const rows: Array<{ label: string; get: (t: PeriodDiffReport['totals']['A']) => number }> = [
-    { label: 'API-equivalent cost', get: t => t.cost },
-    { label: 'API calls', get: t => t.calls },
-    { label: 'Sessions', get: t => t.sessions },
-    { label: 'Input tokens', get: t => t.inputTokens },
-    { label: 'Output tokens', get: t => t.outputTokens },
-    { label: 'Cache read tokens', get: t => t.cacheReadTokens },
-    { label: 'Cache write tokens', get: t => t.cacheWriteTokens },
-    { label: 'Local-model savings', get: t => t.savingsUSD },
-    { label: 'Estimated-price cost', get: t => t.estimatedCostUSD },
-  ]
-  const fmt = (label: string, value: number): string => {
-    if (label.includes('cost') || label.includes('savings')) return formatUsd(value)
-    if (label.includes('tokens')) return formatCompact(value)
-    return value.toLocaleString('en-US')
-  }
-  // A range whose sources aged off disk is explained by the durable daily
-  // history alone, which carries no session detail. That cost is real and it is
-  // NOT in these totals, so say so where the totals are read — not only in the
-  // Coverage card at the bottom of the page.
-  const carriedA = report.history?.aggregateOnly.A ?? 0
-  const carriedB = report.history?.aggregateOnly.B ?? 0
-  return (
-    <div className="cmp-card pcmp-block">
-      <div className="cmp-head"><h3>Totals</h3><span className="cmp-head-note">B − A · API-equivalent cost is not a subscription bill</span></div>
-      <div className="pbody">
-      {(carriedA > 0 || carriedB > 0) && (
-        <p className="pcmp-caption">
-          Session detail only. A further {formatUsd(carriedA)} (A) and {formatUsd(carriedB)} (B) comes from daily
-          history with no sessions behind it, so it is not in these totals. See what is counted, at the foot of the page.
-        </p>
-      )}
-      <div className="pcmp-table" role="table" aria-label="Totals difference">
-        <div className="pcmp-tr pcmp-th" role="row">
-          <span role="columnheader">Metric</span><span role="columnheader">A</span><span role="columnheader">B</span><span role="columnheader">Diff</span><span role="columnheader">%</span>
-        </div>
-        {rows.map(row => {
-          const a = row.get(report.totals.A)
-          const b = row.get(report.totals.B)
-          const diff = row.get(report.totals.diff)
-          const pct = report.totals.pct[rowLabelKey(row.label)]
-          return (
-            <div className="pcmp-tr" role="row" key={row.label}>
-              <span role="cell" className="pcmp-label">{row.label}</span>
-              <span role="cell">{fmt(row.label, a)}</span>
-              <span role="cell">{fmt(row.label, b)}</span>
-              <span role="cell" className={diffClass(diff, row.label)}>{signed(row, diff)}</span>
-              <span role="cell" className={diffClass(pct ?? 0, row.label)}>{signedPct(pct)}</span>
-            </div>
-          )
-        })}
-      </div>
-      </div>
-    </div>
-  )
+// The report's own field names double as ids: translating the display label
+// can no longer break the cost/tokens formatting or coloring lookups below.
+type TotalsRowId = keyof PeriodDiffReport['totals']['pct']
+
+const TOTALS_ROWS: Array<{ id: TotalsRowId; labelKey: string }> = [
+  { id: 'cost', labelKey: 'compare.periodCompare.totals.apiEquivalentCost' },
+  { id: 'calls', labelKey: 'compare.periodCompare.totals.apiCalls' },
+  { id: 'sessions', labelKey: 'compare.periodCompare.totals.sessions' },
+  { id: 'inputTokens', labelKey: 'compare.periodCompare.totals.inputTokens' },
+  { id: 'outputTokens', labelKey: 'compare.periodCompare.totals.outputTokens' },
+  { id: 'cacheReadTokens', labelKey: 'compare.periodCompare.totals.cacheReadTokens' },
+  { id: 'cacheWriteTokens', labelKey: 'compare.periodCompare.totals.cacheWriteTokens' },
+  { id: 'savingsUSD', labelKey: 'compare.periodCompare.totals.localModelSavings' },
+  { id: 'estimatedCostUSD', labelKey: 'compare.periodCompare.totals.estimatedPriceCost' },
+]
+
+const TOKEN_ROW_IDS: TotalsRowId[] = ['inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheWriteTokens']
+
+function isCostLikeRow(id: TotalsRowId): boolean {
+  return id === 'cost' || id === 'estimatedCostUSD'
 }
 
-function signed(row: { label: string }, diff: number): string {
-  if (row.label.includes('cost') || row.label.includes('savings')) return signedUsd(diff)
-  if (row.label.includes('tokens')) return signedCompact(diff)
+function fmtTotalsValue(id: TotalsRowId, value: number): string {
+  if (id === 'cost' || id === 'savingsUSD' || id === 'estimatedCostUSD') return formatUsd(value)
+  if (TOKEN_ROW_IDS.includes(id)) return formatCompact(value)
+  return value.toLocaleString('en-US')
+}
+
+function signed(id: TotalsRowId, diff: number): string {
+  if (id === 'cost' || id === 'savingsUSD' || id === 'estimatedCostUSD') return signedUsd(diff)
+  if (TOKEN_ROW_IDS.includes(id)) return signedCompact(diff)
   return signedCount(diff)
 }
 
@@ -586,28 +566,52 @@ function diffClass(value: number, label: string): string {
   return ''
 }
 
-// The totals diff table keys its percent column by display label; map back to
-// the PeriodTotalsRow keys the report uses.
-const PCT_KEY_BY_LABEL: Record<string, keyof PeriodDiffReport['totals']['pct']> = {
-  'API-equivalent cost': 'cost',
-  'API calls': 'calls',
-  'Sessions': 'sessions',
-  'Input tokens': 'inputTokens',
-  'Output tokens': 'outputTokens',
-  'Cache read tokens': 'cacheReadTokens',
-  'Cache write tokens': 'cacheWriteTokens',
-  'Local-model savings': 'savingsUSD',
-  'Estimated-price cost': 'estimatedCostUSD',
-}
-
-function rowLabelKey(label: string): keyof PeriodDiffReport['totals']['pct'] {
-  return PCT_KEY_BY_LABEL[label] ?? 'cost'
+function TotalsCard({ report }: { report: PeriodDiffReport }) {
+  // A range whose sources aged off disk is explained by the durable daily
+  // history alone, which carries no session detail. That cost is real and it is
+  // NOT in these totals, so say so where the totals are read — not only in the
+  // Coverage card at the bottom of the page.
+  const carriedA = report.history?.aggregateOnly.A ?? 0
+  const carriedB = report.history?.aggregateOnly.B ?? 0
+  return (
+    <div className="cmp-card pcmp-block">
+      <div className="cmp-head"><h3>{t('compare.periodCompare.totals.title')}</h3><span className="cmp-head-note">{t('compare.periodCompare.totals.subtitle')}</span></div>
+      <div className="pbody">
+      {(carriedA > 0 || carriedB > 0) && (
+        <p className="pcmp-caption">
+          {t('compare.periodCompare.totals.carriedCaption', { a: formatUsd(carriedA), b: formatUsd(carriedB) })}
+        </p>
+      )}
+      <div className="pcmp-table" role="table" aria-label={t('compare.periodCompare.totals.tableAriaLabel')}>
+        <div className="pcmp-tr pcmp-th" role="row">
+          <span role="columnheader">{t('compare.periodCompare.col.metric')}</span><span role="columnheader">{t('compare.periodCompare.col.a')}</span><span role="columnheader">{t('compare.periodCompare.col.b')}</span><span role="columnheader">{t('compare.periodCompare.col.diff')}</span><span role="columnheader">{t('compare.periodCompare.col.pct')}</span>
+        </div>
+        {TOTALS_ROWS.map(row => {
+          const a = report.totals.A[row.id]
+          const b = report.totals.B[row.id]
+          const diff = report.totals.diff[row.id]
+          const pct = report.totals.pct[row.id]
+          const costTone = isCostLikeRow(row.id) ? 'cost' : ''
+          return (
+            <div className="pcmp-tr" role="row" key={row.id}>
+              <span role="cell" className="pcmp-label">{t(row.labelKey)}</span>
+              <span role="cell">{fmtTotalsValue(row.id, a)}</span>
+              <span role="cell">{fmtTotalsValue(row.id, b)}</span>
+              <span role="cell" className={diffClass(diff, costTone)}>{signed(row.id, diff)}</span>
+              <span role="cell" className={diffClass(pct ?? 0, costTone)}>{signedPct(pct)}</span>
+            </div>
+          )
+        })}
+      </div>
+      </div>
+    </div>
+  )
 }
 
 function NormalizedCard({ report }: { report: PeriodDiffReport }) {
-  const metric = (label: string, m: { a: number | null; b: number | null; diff: number | null; pct: number | null }) => (
-    <div className="pcmp-tr" role="row" key={label}>
-      <span role="cell" className="pcmp-label">{label}</span>
+  const metric = (labelKey: string, m: { a: number | null; b: number | null; diff: number | null; pct: number | null }) => (
+    <div className="pcmp-tr" role="row" key={labelKey}>
+      <span role="cell" className="pcmp-label">{t(labelKey)}</span>
       <span role="cell">{m.a === null ? '—' : formatUsd(m.a)}</span>
       <span role="cell">{m.b === null ? '—' : formatUsd(m.b)}</span>
       <span role="cell" className={m.diff === null ? '' : diffClass(m.diff, 'cost')}>{m.diff === null ? '—' : signedUsd(m.diff)}</span>
@@ -616,17 +620,17 @@ function NormalizedCard({ report }: { report: PeriodDiffReport }) {
   )
   return (
     <div className="cmp-card pcmp-block">
-      <div className="cmp-head"><h3>Normalized</h3><span className="cmp-head-note">A dash means the denominator is zero or unknown.</span></div>
+      <div className="cmp-head"><h3>{t('compare.periodCompare.normalized.title')}</h3><span className="cmp-head-note">{t('compare.periodCompare.normalized.dashNote')}</span></div>
       <div className="pbody">
-      <div className="pcmp-table" role="table" aria-label="Normalized difference">
+      <div className="pcmp-table" role="table" aria-label={t('compare.periodCompare.normalized.tableAriaLabel')}>
         <div className="pcmp-tr pcmp-th" role="row">
-          <span role="columnheader">View</span><span role="columnheader">A</span><span role="columnheader">B</span><span role="columnheader">Diff</span><span role="columnheader">%</span>
+          <span role="columnheader">{t('compare.periodCompare.col.view')}</span><span role="columnheader">{t('compare.periodCompare.col.a')}</span><span role="columnheader">{t('compare.periodCompare.col.b')}</span><span role="columnheader">{t('compare.periodCompare.col.diff')}</span><span role="columnheader">{t('compare.periodCompare.col.pct')}</span>
         </div>
-        {metric('Cost / day', report.normalized.perDay)}
-        {metric('Cost / 100 calls', report.normalized.per100Calls)}
+        {metric('compare.periodCompare.normalized.costPerDay', report.normalized.perDay)}
+        {metric('compare.periodCompare.normalized.costPer100Calls', report.normalized.per100Calls)}
       </div>
       <p className="pcmp-caption">
-        Denominators: {report.normalized.denominators.perDay}; {report.normalized.denominators.per100Calls}.
+        {t('compare.periodCompare.normalized.denominatorsLabel')} {report.normalized.denominators.perDay}; {report.normalized.denominators.per100Calls}.
       </p>
       </div>
     </div>
@@ -662,51 +666,51 @@ function MoversCard({
     .sort((x, y) => Math.abs(y.norm.diff ?? 0) - Math.abs(x.norm.diff ?? 0))
   const shown = showAll ? ranked : ranked.slice(0, 5)
   const dimension = lens === 'projects' ? 'project' : 'model'
-  const unit = view === 'perDay' ? ' · per day' : view === 'per100Calls' ? ' · per 100 calls' : ''
+  const unit = view === 'perDay' ? t('compare.periodCompare.movers.perDayUnit') : view === 'per100Calls' ? t('compare.periodCompare.movers.per100CallsUnit') : ''
   return (
     <div className="panel cmp-card">
       <div className="cmp-head">
-        <h3>What changed, biggest movers</h3>
-        <span className="cmp-head-note">{view === 'raw' ? 'Raw' : view === 'perDay' ? 'Per day' : 'Per 100 calls'}</span>
+        <h3>{t('compare.periodCompare.movers.title')}</h3>
+        <span className="cmp-head-note">{t(view === 'raw' ? 'compare.periodCompare.view.raw' : view === 'perDay' ? 'compare.periodCompare.view.perDay' : 'compare.periodCompare.view.per100Calls')}</span>
         <span className="pcmp-controls-row">
-        <div role="group" aria-label="Contribution lens">
+        <div role="group" aria-label={t('compare.periodCompare.movers.lensAriaLabel')}>
           <SegTabs
-            options={[{ value: 'projects', label: 'By project' }, { value: 'models', label: 'By model' }]}
+            options={[{ value: 'projects', label: t('compare.periodCompare.lens.byProject') }, { value: 'models', label: t('compare.periodCompare.lens.byModel') }]}
             value={lens}
             onChange={value => { onLens(value as Lens); onDrill(null); setShowAll(false) }}
           />
         </div>
-        <div role="group" aria-label="Normalization view">
+        <div role="group" aria-label={t('compare.periodCompare.movers.viewAriaLabel')}>
           <SegTabs
-            options={[{ value: 'raw', label: 'Raw' }, { value: 'perDay', label: 'Per day' }, { value: 'per100Calls', label: 'Per 100 calls' }]}
+            options={[{ value: 'raw', label: t('compare.periodCompare.view.raw') }, { value: 'perDay', label: t('compare.periodCompare.view.perDay') }, { value: 'per100Calls', label: t('compare.periodCompare.view.per100Calls') }]}
             value={view}
             onChange={value => { onView(value as View); setShowAll(false) }}
           />
         </div>
         {ranked.length > 5 && (
           <button type="button" className="ov-link" onClick={() => setShowAll(current => !current)} aria-expanded={showAll}>
-            {showAll ? 'Show top five' : `Show all ${ranked.length}`}
+            {showAll ? t('compare.periodCompare.movers.showTopFive') : t('compare.periodCompare.movers.showAll', { count: ranked.length })}
           </button>
         )}
         </span>
       </div>
       <div className="pbody">
       {view === 'perDay' && (
-        <p className="pcmp-caption">Each side's cost divided by its own calendar days (A: {report.rangeA.days}, B: {report.rangeB.days}). Differences and percentages compare these daily averages. A row with no value on either side sorts last, so it can fall below the top five here.</p>
+        <p className="pcmp-caption">{t('compare.periodCompare.movers.perDayCaption', { daysA: report.rangeA.days, daysB: report.rangeB.days })}</p>
       )}
       {view === 'per100Calls' && (
-        <p className="pcmp-caption">Each side's cost per 100 of its own API calls. This is efficiency, not scale. A side with no calls has no cost per call, so it shows a dash and sorts last: a row that vanished can fall below the top five here.</p>
+        <p className="pcmp-caption">{t('compare.periodCompare.movers.per100Caption')}</p>
       )}
-      <div className="pcmp-table pcmp-movers" role="table" aria-label={`${lens} contributions`}>
+      <div className="pcmp-table pcmp-movers" role="table" aria-label={`${lens} ${t('compare.periodCompare.movers.contributionsAriaSuffix')}`}>
         <div className="pcmp-tr pcmp-th" role="row">
-          <span role="columnheader">{lens === 'projects' ? 'Project' : 'Model'}</span>
+          <span role="columnheader">{t(lens === 'projects' ? 'compare.periodCompare.col.project' : 'compare.periodCompare.col.model')}</span>
           <span role="columnheader">{terseRangeLabel(report.rangeA)}{unit}</span>
           <span role="columnheader">{terseRangeLabel(report.rangeB)}{unit}</span>
-          <span role="columnheader">Change</span>
-          <span role="columnheader">%</span>
+          <span role="columnheader">{t('compare.periodCompare.col.change')}</span>
+          <span role="columnheader">{t('compare.periodCompare.col.pct')}</span>
         </div>
         {ranked.length === 0 && (
-          <div className="pcmp-tr" role="row"><span role="cell"><EmptyNote>No usage in either range.</EmptyNote></span></div>
+          <div className="pcmp-tr" role="row"><span role="cell"><EmptyNote>{t('compare.periodCompare.movers.noUsage')}</EmptyNote></span></div>
         )}
         {shown.map(({ row, norm }) => {
           const selected = drill?.dimension === dimension && drill.key === row.key
@@ -717,15 +721,22 @@ function MoversCard({
               key={`${dimension}:${row.key}`}
               onClick={() => onDrill(selected ? null : { dimension, key: row.key })}
               aria-expanded={selected}
-              aria-label={`${row.key}: A ${norm.a === null ? 'none' : formatUsd(norm.a)}, B ${norm.b === null ? 'none' : formatUsd(norm.b)}, ${STATUS_LABEL[norm.status]}`}
+              aria-label={t('compare.periodCompare.movers.rowAriaLabel', {
+                key: row.key,
+                aLabel: t('compare.periodCompare.col.a'),
+                a: norm.a === null ? t('compare.periodCompare.movers.none') : formatUsd(norm.a),
+                bLabel: t('compare.periodCompare.col.b'),
+                b: norm.b === null ? t('compare.periodCompare.movers.none') : formatUsd(norm.b),
+                status: t(STATUS_LABEL_KEY[norm.status]),
+              })}
             >
               <span role="cell" className="pcmp-label pcmp-key" title={row.key}>{lens === 'projects' ? shortenProjectPath(row.key) : row.key}</span>
               <span role="cell">{norm.a === null ? '—' : formatUsd(norm.a)}</span>
               <span role="cell">{norm.b === null ? '—' : formatUsd(norm.b)}</span>
               <span role="cell" className={diffClass(norm.diff ?? 0, 'cost')}>{norm.diff === null ? '—' : signedUsd(norm.diff)}</span>
               <span role="cell">
-                {norm.status === 'new' && <span className="pcmp-badge new">new this period</span>}
-                {norm.status === 'gone' && <span className="pcmp-badge gone">not used this period</span>}
+                {norm.status === 'new' && <span className="pcmp-badge new">{t('compare.periodCompare.movers.newBadge')}</span>}
+                {norm.status === 'gone' && <span className="pcmp-badge gone">{t('compare.periodCompare.movers.goneBadge')}</span>}
                 {norm.status !== 'new' && norm.status !== 'gone' && signedPct(norm.pct)}
               </span>
             </button>
@@ -733,7 +744,7 @@ function MoversCard({
         })}
       </div>
       {report.rangeA.days !== report.rangeB.days && (
-        <p className="pcmp-caption">The ranges are different lengths, so per-day rows compare daily averages, not totals.</p>
+        <p className="pcmp-caption">{t('compare.periodCompare.movers.differentLengthsCaption')}</p>
       )}
       {drill && (
         <DrillPanel
@@ -747,7 +758,7 @@ function MoversCard({
           onClose={() => onDrill(null)}
         />
       )}
-      <p className="pcmp-caption">Click a row to see its sessions. Projects and models split the same difference two ways. Do not add them together.</p>
+      <p className="pcmp-caption">{t('compare.periodCompare.movers.footerCaption')}</p>
       </div>
     </div>
   )
@@ -784,26 +795,26 @@ function DrillPanel({
     { memoKey: reportMemoKey('periodcomparesessions-v2', 'week', provider, { from: rangeA.from, to: rangeA.to }, JSON.stringify([rangeB.from, rangeB.to, dimension, drillKey])) },
   )
   if (!report.data) {
-    if (report.error) return <CliErrorPanel error={report.error} subject="contribution sessions" />
-    return <SectionSkeleton label="Loading sessions…" rows={3} />
+    if (report.error) return <CliErrorPanel error={report.error} subject={t('compare.periodCompare.drill.subject')} />
+    return <SectionSkeleton label={t('compare.periodCompare.drill.loading')} rows={3} />
   }
   const sessions = report.data.sessions
   return (
-    <div className="pcmp-drill" aria-label={`Sessions behind ${drillKey}`}>
+    <div className="pcmp-drill" aria-label={t('compare.periodCompare.drill.ariaLabel', { key: drillKey })}>
       <div className="pcmp-drill-head">
-        <strong>{dimension === 'project' ? 'Project' : 'Model'}: {drillKey}</strong>
+        <strong>{t(dimension === 'project' ? 'compare.periodCompare.col.project' : 'compare.periodCompare.col.model')}: {drillKey}</strong>
         <span className="pcmp-drill-actions">
-          <button type="button" className="ov-link" onClick={() => onInspectContribution?.({ from: rangeA.from, to: rangeA.to }, dimension, drillKey)}>Open A in Sessions →</button>
-          <button type="button" className="ov-link" onClick={() => onInspectContribution?.({ from: rangeB.from, to: rangeB.to }, dimension, drillKey)}>Open B in Sessions →</button>
-          <button type="button" className="ov-link" onClick={onClose}>Close</button>
+          <button type="button" className="ov-link" onClick={() => onInspectContribution?.({ from: rangeA.from, to: rangeA.to }, dimension, drillKey)}>{t('compare.periodCompare.drill.openAInSessions')}</button>
+          <button type="button" className="ov-link" onClick={() => onInspectContribution?.({ from: rangeB.from, to: rangeB.to }, dimension, drillKey)}>{t('compare.periodCompare.drill.openBInSessions')}</button>
+          <button type="button" className="ov-link" onClick={onClose}>{t('compare.periodCompare.drill.close')}</button>
         </span>
       </div>
-      <div className="pcmp-table" role="table" aria-label="Session costs in A and B">
+      <div className="pcmp-table" role="table" aria-label={t('compare.periodCompare.drill.tableAriaLabel')}>
         <div className="pcmp-tr pcmp-th" role="row">
-          <span role="columnheader">Session</span><span role="columnheader">Provider</span><span role="columnheader">A</span><span role="columnheader">B</span><span role="columnheader">Diff</span>
+          <span role="columnheader">{t('compare.periodCompare.col.session')}</span><span role="columnheader">{t('compare.periodCompare.col.provider')}</span><span role="columnheader">{t('compare.periodCompare.col.a')}</span><span role="columnheader">{t('compare.periodCompare.col.b')}</span><span role="columnheader">{t('compare.periodCompare.col.diff')}</span>
         </div>
         {sessions.length === 0 && (
-          <div className="pcmp-tr" role="row"><span role="cell"><EmptyNote>No sessions behind this contribution in either range.</EmptyNote></span></div>
+          <div className="pcmp-tr" role="row"><span role="cell"><EmptyNote>{t('compare.periodCompare.drill.noSessions')}</EmptyNote></span></div>
         )}
         {sessions.map(session => (
           <div className="pcmp-tr" role="row" key={session.identity}>
@@ -818,7 +829,7 @@ function DrillPanel({
           </div>
         ))}
       </div>
-      <p className="pcmp-caption">A session that runs across both ranges appears once, with its cost in each range. Every call counts in the range its own timestamp falls in.</p>
+      <p className="pcmp-caption">{t('compare.periodCompare.drill.caption')}</p>
     </div>
   )
 }
@@ -834,25 +845,38 @@ function CoverageCard({ report }: { report: PeriodDiffReport }) {
   const aggregateOnly = carried ? carried.aggregateOnly.A + carried.aggregateOnly.B : 0
   return (
     <details className="panel cmp-card pcmp-fold">
-      <summary>What is counted{aggregateOnly > 0 && `: ${formatUsd(aggregateOnly)} has no session detail behind it`}</summary>
+      <summary>{t('compare.periodCompare.coverage.title')}{aggregateOnly > 0 && t('compare.periodCompare.coverage.noDetailSuffix', { amount: formatUsd(aggregateOnly) })}</summary>
       <div className="pbody">
       <ul className="pcmp-coverage">
-        <li>Share of calls with a known price. A: {report.coverage.pricingCoverageA === null ? 'unknown' : `${Math.round(report.coverage.pricingCoverageA * 100)}%`}, B: {report.coverage.pricingCoverageB === null ? 'unknown' : `${Math.round(report.coverage.pricingCoverageB * 100)}%`}.</li>
+        <li>{t('compare.periodCompare.coverage.shareKnownPrice', {
+          a: report.coverage.pricingCoverageA === null ? t('compare.periodCompare.coverage.unknown') : `${Math.round(report.coverage.pricingCoverageA * 100)}%`,
+          b: report.coverage.pricingCoverageB === null ? t('compare.periodCompare.coverage.unknown') : `${Math.round(report.coverage.pricingCoverageB * 100)}%`,
+        })}</li>
         {unpriced.length > 0 && (
           <li>
-            These models have no price, so their cost is unknown, not zero:{' '}
-            {unpriced.map(m => `${m.model} (${m.side}, ${plural(m.calls, 'call', 'calls')})`).join('; ')}.
+            {t('compare.periodCompare.coverage.noPriceModels', {
+              list: unpriced.map(m => t('compare.periodCompare.coverage.modelEntry', {
+                model: m.model,
+                side: m.side,
+                count: plural(m.calls, t('compare.periodCompare.coverage.call'), t('compare.periodCompare.coverage.calls')),
+              })).join('; '),
+            })}
           </li>
         )}
         {carried && carried.days.A.length === 0 && carried.days.B.length === 0 && (
-          <li>{carried.basis} Every day in both ranges has sessions behind it.</li>
+          <li>{carried.basis} {t('compare.periodCompare.coverage.everyDayHasSessions')}</li>
         )}
         {carried && (carried.days.A.length > 0 || carried.days.B.length > 0) && (
           <li>
-            Daily history with no sessions behind it. A: {formatUsd(carried.aggregateOnly.A)}{dayList(carried.days.A)}, B: {formatUsd(carried.aggregateOnly.B)}{dayList(carried.days.B)}. This cost is reported here only, never in the totals above.
+            {t('compare.periodCompare.coverage.dailyHistoryNote', {
+              aggA: formatUsd(carried.aggregateOnly.A),
+              listA: dayList(carried.days.A),
+              aggB: formatUsd(carried.aggregateOnly.B),
+              listB: dayList(carried.days.B),
+            })}
           </li>
         )}
-        <li>Every difference is B − A over all usage in each range. Nothing is sampled, guessed or written by a model.</li>
+        <li>{t('compare.periodCompare.coverage.everyDifference')}</li>
       </ul>
       </div>
     </details>

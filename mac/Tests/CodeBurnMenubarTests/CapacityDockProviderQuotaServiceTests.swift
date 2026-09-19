@@ -23,6 +23,10 @@ struct CapacityDockProviderQuotaServiceTests {
         Issue.record("Wrong adapter dispatched")
         return Self.summary()
     }
+    nonisolated private static let unusedZcode: @Sendable () async throws -> QuotaSummary = {
+        Issue.record("Wrong adapter dispatched")
+        return Self.summary()
+    }
 
     @Test("ClinePass dispatches with only its provider-scoped API key")
     func dispatchesClinePass() async throws {
@@ -36,7 +40,8 @@ struct CapacityDockProviderQuotaServiceTests {
             refreshCursor: Self.unusedCursor,
             refreshGrok: Self.unusedGrok,
             refreshGrokBot: Self.unusedGrokBot,
-            refreshZai: Self.unusedZai
+            refreshZai: Self.unusedZai,
+            refreshZcode: Self.unusedZcode
         ))
         let provider = try #require(CapacityDockProvider(rawValue: "clinepass"))
         let credential = CapacityDockProviderCredential(
@@ -66,7 +71,8 @@ struct CapacityDockProviderQuotaServiceTests {
             refreshZai: { apiKey in
                 if let apiKey { await capture.record(apiKey) }
                 return expected
-            }
+            },
+            refreshZcode: Self.unusedZcode
         ))
         let provider = try #require(CapacityDockProvider(rawValue: "zai"))
 
@@ -91,7 +97,8 @@ struct CapacityDockProviderQuotaServiceTests {
             refreshCursor: { expected },
             refreshGrok: Self.unusedGrok,
             refreshGrokBot: Self.unusedGrokBot,
-            refreshZai: Self.unusedZai
+            refreshZai: Self.unusedZai,
+            refreshZcode: Self.unusedZcode
         ))
         let provider = try #require(CapacityDockProvider(rawValue: "cursor"))
 
@@ -114,7 +121,8 @@ struct CapacityDockProviderQuotaServiceTests {
             refreshCursor: Self.unusedCursor,
             refreshGrok: { expected },
             refreshGrokBot: Self.unusedGrokBot,
-            refreshZai: Self.unusedZai
+            refreshZai: Self.unusedZai,
+            refreshZcode: Self.unusedZcode
         ))
         let provider = try #require(CapacityDockProvider(rawValue: "grok"))
 
@@ -137,9 +145,34 @@ struct CapacityDockProviderQuotaServiceTests {
             refreshCursor: Self.unusedCursor,
             refreshGrok: Self.unusedGrok,
             refreshGrokBot: { expected },
-            refreshZai: Self.unusedZai
+            refreshZai: Self.unusedZai,
+            refreshZcode: Self.unusedZcode
         ))
         let provider = try #require(CapacityDockProvider(rawValue: "grokbot"))
+
+        let result = try await service.fetch(
+            provider: provider,
+            credential: CapacityDockProviderCredential()
+        )
+
+        #expect(result == expected)
+    }
+
+    @Test("ZCode dispatches through passive ZCode app login discovery")
+    func dispatchesZcode() async throws {
+        let expected = Self.summary(percent: 0.27)
+        let service = CapacityDockProviderQuotaService(dependencies: .init(
+            refreshClinePass: { _ in
+                Issue.record("Wrong adapter dispatched")
+                return Self.summary()
+            },
+            refreshCursor: Self.unusedCursor,
+            refreshGrok: Self.unusedGrok,
+            refreshGrokBot: Self.unusedGrokBot,
+            refreshZai: Self.unusedZai,
+            refreshZcode: { expected }
+        ))
+        let provider = try #require(CapacityDockProvider(rawValue: "zcode"))
 
         let result = try await service.fetch(
             provider: provider,
@@ -159,7 +192,8 @@ struct CapacityDockProviderQuotaServiceTests {
             refreshCursor: Self.unusedCursor,
             refreshGrok: Self.unusedGrok,
             refreshGrokBot: Self.unusedGrokBot,
-            refreshZai: Self.unusedZai
+            refreshZai: Self.unusedZai,
+            refreshZcode: Self.unusedZcode
         ))
         let provider = try #require(CapacityDockProvider(rawValue: "clinepass"))
 
@@ -192,7 +226,8 @@ struct CapacityDockProviderQuotaServiceTests {
             refreshCursor: Self.unusedCursor,
             refreshGrok: Self.unusedGrok,
             refreshGrokBot: Self.unusedGrokBot,
-            refreshZai: Self.unusedZai
+            refreshZai: Self.unusedZai,
+            refreshZcode: Self.unusedZcode
         ))
         let provider = try #require(CapacityDockProvider(rawValue: "openrouter"))
 
@@ -216,7 +251,8 @@ struct CapacityDockProviderQuotaServiceTests {
             refreshCursor: Self.unusedCursor,
             refreshGrok: Self.unusedGrok,
             refreshGrokBot: Self.unusedGrokBot,
-            refreshZai: Self.unusedZai
+            refreshZai: Self.unusedZai,
+            refreshZcode: Self.unusedZcode
         ))
         let provider = try #require(CapacityDockProvider(rawValue: "clinepass"))
 
@@ -243,7 +279,8 @@ struct CapacityDockProviderQuotaServiceTests {
                 refreshCursor: Self.unusedCursor,
                 refreshGrok: Self.unusedGrok,
                 refreshGrokBot: Self.unusedGrokBot,
-                refreshZai: Self.unusedZai
+                refreshZai: Self.unusedZai,
+                refreshZcode: Self.unusedZcode
             ))
             do {
                 _ = try await service.fetch(
@@ -281,7 +318,44 @@ struct CapacityDockProviderQuotaServiceTests {
                 refreshCursor: Self.unusedCursor,
                 refreshGrok: { throw error },
                 refreshGrokBot: Self.unusedGrokBot,
-                refreshZai: Self.unusedZai
+                refreshZai: Self.unusedZai,
+                refreshZcode: Self.unusedZcode
+            ))
+            do {
+                _ = try await service.fetch(
+                    provider: provider,
+                    credential: CapacityDockProviderCredential()
+                )
+                Issue.record("Expected \(error) to fail")
+            } catch let failure as CapacityDockProviderFetchFailure {
+                #expect(failure.disposition == expectedDisposition)
+                #expect(failure.message == error.localizedDescription)
+            }
+        }
+    }
+
+    @Test("ZCode login failures stop retries while quota outages preserve the connection")
+    func classifiesZcodeFailures() async throws {
+        let provider = try #require(CapacityDockProvider(rawValue: "zcode"))
+        let cases: [(ZcodeSubscriptionService.FetchError, CapacityDockProviderFetchFailureDisposition)] = [
+            (.noCredentials, .terminal),
+            (.authenticationRejected, .terminal),
+            (.rateLimited, .transient),
+            (.providerUnavailable, .transient),
+            (.parseFailure, .transient),
+        ]
+
+        for (error, expectedDisposition) in cases {
+            let service = CapacityDockProviderQuotaService(dependencies: .init(
+                refreshClinePass: { _ in
+                    Issue.record("Wrong adapter dispatched")
+                    return Self.summary()
+                },
+                refreshCursor: Self.unusedCursor,
+                refreshGrok: Self.unusedGrok,
+                refreshGrokBot: Self.unusedGrokBot,
+                refreshZai: Self.unusedZai,
+                refreshZcode: { throw error }
             ))
             do {
                 _ = try await service.fetch(
@@ -314,7 +388,8 @@ struct CapacityDockProviderQuotaServiceTests {
             refreshCursor: Self.unusedCursor,
             refreshGrok: Self.unusedGrok,
             refreshGrokBot: Self.unusedGrokBot,
-            refreshZai: Self.unusedZai
+            refreshZai: Self.unusedZai,
+            refreshZcode: Self.unusedZcode
         ))
 
         let refresh = Task { await store.refreshCapacityDockProvider(provider) }

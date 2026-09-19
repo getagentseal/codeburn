@@ -15,16 +15,11 @@ import { codeburn } from '../lib/ipc'
 import { categoryFilters, modelFilters } from '../lib/investigation'
 import { reportMemoKey } from '../lib/reportMemoKey'
 import type { AuditRow, DateRange, ModelReportRow, Period } from '../lib/types'
+import { t } from '../i18n'
 import type { SettingsPane } from './Settings'
 import type { InvestigateRequest } from './Overview'
 
 type ModelsLens = 'model' | 'task' | 'audit'
-
-const LENSES = [
-  { value: 'model', label: 'By model' },
-  { value: 'task', label: 'By task' },
-  { value: 'audit', label: 'Audit' },
-]
 
 function fmtInt(n: number): string {
   return n.toLocaleString('en-US')
@@ -53,14 +48,19 @@ export function Models({
 }) {
   const [lens, setLens] = useState<ModelsLens>('model')
   const onAddAlias = () => onNavigate?.('settings', 'aliases')
-  const title = LENSES.find(entry => entry.value === lens)?.label ?? ''
+  const lenses = [
+    { value: 'model', label: t('models.lens.byModel') },
+    { value: 'task', label: t('models.lens.byTask') },
+    { value: 'audit', label: t('models.lens.audit') },
+  ]
+  const title = lenses.find(entry => entry.value === lens)?.label ?? ''
   // The lens picker and the compare shortcut live in the card header's right slot.
   const controls = (
     <span className="panel-controls">
-      <SegTabs options={LENSES} value={lens} onChange={value => setLens(value as ModelsLens)} />
+      <SegTabs options={lenses} value={lens} onChange={value => setLens(value as ModelsLens)} />
       {lens !== 'audit' && (
         <button type="button" className="btn btn-s" onClick={() => onNavigate?.('compare')}>
-          Compare…
+          {t('models.compareButton')}
         </button>
       )}
     </span>
@@ -118,8 +118,8 @@ function ModelsUsage({
   )
 
   if (!report.data) {
-    if (report.error) return <CliErrorPanel error={report.error} subject="model usage" />
-    return <SectionSkeleton label="Scanning model usage…" rows={5} />
+    if (report.error) return <CliErrorPanel error={report.error} subject={t('common.subject.modelUsage')} />
+    return <SectionSkeleton label={t('models.skeleton.scanning')} rows={5} />
   }
 
   return (
@@ -129,7 +129,7 @@ function ModelsUsage({
         {report.data.length ? (
           <ModelsTable rows={report.data} byTask={byTask} onAddAlias={onAddAlias} onInvestigate={onInvestigate} />
         ) : (
-          <EmptyNote>No model usage in this range yet.</EmptyNote>
+          <EmptyNote>{t('models.empty.noUsage')}</EmptyNote>
         )}
       </Panel>
     </>
@@ -168,8 +168,8 @@ function AuditLens({
   )
 
   if (!report.data) {
-    if (report.error) return <CliErrorPanel error={report.error} subject="the token audit" />
-    return <SectionSkeleton label="Auditing token usage…" rows={5} />
+    if (report.error) return <CliErrorPanel error={report.error} subject={t('common.subject.tokenAudit')} />
+    return <SectionSkeleton label={t('models.skeleton.auditing')} rows={5} />
   }
 
   return (
@@ -179,7 +179,7 @@ function AuditLens({
         {report.data.length ? (
           <AuditTable rows={report.data} />
         ) : (
-          <EmptyNote>No model usage to audit in this range yet.</EmptyNote>
+          <EmptyNote>{t('models.empty.noAudit')}</EmptyNote>
         )}
       </Panel>
     </>
@@ -191,15 +191,15 @@ function AuditTable({ rows }: { rows: AuditRow[] }) {
     <table className="audit-table">
       <thead>
         <tr>
-          <th>Model</th>
-          <th>Calls</th>
-          <th>Input</th>
-          <th>Output</th>
-          <th>Reasoning</th>
-          <th>Norm out</th>
-          <th>Cache wr</th>
-          <th>Cache rd</th>
-          <th>Cost</th>
+          <th>{t('models.headers.model')}</th>
+          <th>{t('models.headers.calls')}</th>
+          <th>{t('models.headers.input')}</th>
+          <th>{t('models.headers.output')}</th>
+          <th>{t('models.headers.reasoning')}</th>
+          <th>{t('models.headers.normOut')}</th>
+          <th>{t('models.headers.cacheWr')}</th>
+          <th>{t('models.headers.cacheRd')}</th>
+          <th>{t('models.headers.cost')}</th>
         </tr>
       </thead>
       <tbody>
@@ -228,7 +228,7 @@ function AuditTableRow({ row }: { row: AuditRow }) {
       <td>{formatCompact(row.displayed.cacheReadTokens)}</td>
       <td>
         {formatUsd(row.attributedCostUSD)}
-        {estimated ? <span className="est" title="Cost is estimated (no live pricing or derived rate)"> est</span> : null}
+        {estimated ? <span className="est" title={t('models.audit.estimatedTitle')}>{t('models.audit.estimatedSuffix')}</span> : null}
       </td>
     </tr>
   )
@@ -246,13 +246,13 @@ function ModelsTable({ rows, byTask, onAddAlias, onInvestigate }: {
     <table>
       <thead>
         <tr>
-          <th>Model</th>
-          <th>Calls</th>
-          <th>Input</th>
-          <th>Output</th>
-          <th>Cache read</th>
-          <th>Cost</th>
-          <th>Saved</th>
+          <th>{t('models.headers.model')}</th>
+          <th>{t('models.headers.calls')}</th>
+          <th>{t('models.headers.input')}</th>
+          <th>{t('models.headers.output')}</th>
+          <th>{t('models.headers.cacheRead')}</th>
+          <th>{t('models.headers.cost')}</th>
+          <th>{t('models.headers.saved')}</th>
         </tr>
       </thead>
       <tbody>
@@ -275,13 +275,13 @@ function ModelsByTaskTable({ rows, onAddAlias, onInvestigate }: {
     <table className="models-by-task">
       <thead>
         <tr>
-          <th>Task</th>
-          <th>Calls</th>
-          <th>Input</th>
-          <th>Output</th>
-          <th>Cache read</th>
-          <th>Cost</th>
-          <th>Saved</th>
+          <th>{t('models.headers.task')}</th>
+          <th>{t('models.headers.calls')}</th>
+          <th>{t('models.headers.input')}</th>
+          <th>{t('models.headers.output')}</th>
+          <th>{t('models.headers.cacheRead')}</th>
+          <th>{t('models.headers.cost')}</th>
+          <th>{t('models.headers.saved')}</th>
         </tr>
       </thead>
       {groups.map(group => (
@@ -318,12 +318,12 @@ function ModelTableRow({ row, onAddAlias, onInvestigate }: { row: ModelReportRow
       <td className={cellClass} title={row.model}>
         <span className="mdot" style={dotStyle} />
         {onInvestigate ? (
-          <button type="button" className="ov-link" title={`View sessions for ${row.modelDisplayName}`} onClick={() => onInvestigate({ filters: modelFilters(drillModelKeys) })}>{row.modelDisplayName}</button>
+          <button type="button" className="ov-link" title={t('models.viewSessionsFor', { name: row.modelDisplayName })} onClick={() => onInvestigate({ filters: modelFilters(drillModelKeys) })}>{row.modelDisplayName}</button>
         ) : row.modelDisplayName}
         {unpriced ? (
           <>
             {' '}
-            <button type="button" className="alias" onClick={onAddAlias}>add alias ›</button>
+            <button type="button" className="alias" onClick={onAddAlias}>{t('models.addAlias')}</button>
           </>
         ) : null}
         <span style={{ ...providerTagStyle, display: 'block', marginTop: 2, paddingLeft: 16 }}>{row.providerDisplayName}</span>
@@ -356,19 +356,19 @@ function ModelGroupRow({ rows, onAddAlias, onInvestigate }: { rows: ModelReportR
           />
           <span style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
             {onInvestigate ? (
-              <button type="button" className="model-group-name ov-link" title={`View sessions for ${model.modelDisplayName}`} onClick={() => onInvestigate({ filters: modelFilters(drillModelKeys) })}>{model.modelDisplayName}</button>
+              <button type="button" className="model-group-name ov-link" title={t('models.viewSessionsFor', { name: model.modelDisplayName })} onClick={() => onInvestigate({ filters: modelFilters(drillModelKeys) })}>{model.modelDisplayName}</button>
             ) : (
               <span className="model-group-name">{model.modelDisplayName}</span>
             )}
             <span style={providerTagStyle}>{model.providerDisplayName}</span>
           </span>
-          {unpriced ? <button type="button" className="alias" onClick={onAddAlias}>add alias ›</button> : null}
+          {unpriced ? <button type="button" className="alias" onClick={onAddAlias}>{t('models.addAlias')}</button> : null}
         </span>
       </td>
       <td>{fmtInt(calls)}</td>
-      <td aria-label="No aggregate input" />
-      <td aria-label="No aggregate output" />
-      <td aria-label="No aggregate cache read" />
+      <td aria-label={t('models.aggregate.noInput')} />
+      <td aria-label={t('models.aggregate.noOutput')} />
+      <td aria-label={t('models.aggregate.noCacheRead')} />
       <td className={unpriced ? 'dim' : undefined}>{unpriced ? '—' : formatUsd(costUSD)}</td>
       <td className={unpriced ? 'dim' : savingsUSD > 0 ? 'pos' : undefined}>{unpriced ? '—' : formatUsd(savingsUSD)}</td>
     </tr>
@@ -383,7 +383,7 @@ function ModelTaskRow({ row, onInvestigate }: { row: ModelReportRow; onInvestiga
     <tr className="model-task-row">
       <td className={cellClass}>
         {onInvestigate && row.category ? (
-          <button type="button" className="ov-link" title={`View ${row.category} sessions`} onClick={() => onInvestigate({ filters: categoryFilters(row.category!) })}>{row.category ?? 'general'}</button>
+          <button type="button" className="ov-link" title={t('models.viewCategorySessions', { category: row.category })} onClick={() => onInvestigate({ filters: categoryFilters(row.category!) })}>{row.category ?? 'general'}</button>
         ) : row.category ?? 'general'}
       </td>
       <td>{fmtInt(row.calls)}</td>

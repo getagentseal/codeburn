@@ -159,3 +159,72 @@ describe('codeburn models --unpriced public CLI', () => {
     // so this one needs more headroom than the 30s config default.
   }, 60_000)
 })
+
+describe('codeburn models default table — unpriced disclosure (#1420)', () => {
+  it('prints one line naming what the default floor dropped, not silence', async () => {
+    await withFixture([
+      userLine('2026-05-20T10:00:00.000Z'),
+      assistantLine('acme/unknown-alpha-1420', '2026-05-20T10:01:00.000Z', 'alpha', 1_000),
+      assistantLine('claude-opus-4-6', '2026-05-20T10:02:00.000Z', 'priced', 20_000),
+      assistantLine('acme/unknown-beta-1420', '2026-05-20T10:03:00.000Z', 'beta', 2_000),
+    ], home => {
+      const result = runCli(['models', ...range], home)
+      expect(result.status, result.stderr).toBe(0)
+      // The default flow shows friendly names; the raw ids appear via --unpriced.
+      expect(result.stdout).toContain('Opus 4.6')
+      // The $0 rows stay out of the table itself; the line says they exist.
+      expect(result.stdout).not.toContain('acme/unknown-alpha-1420')
+      expect(result.stdout).toContain('2 more models price at $0 (3.2K tok) — codeburn models --unpriced to see them')
+    })
+  })
+
+  it('says so even when the floor dropped every row and the table is empty', async () => {
+    await withFixture([
+      userLine('2026-05-20T10:00:00.000Z'),
+      assistantLine('acme/unknown-solo-1420', '2026-05-20T10:01:00.000Z', 'solo', 1_000),
+    ], home => {
+      const result = runCli(['models', ...range], home)
+      expect(result.status, result.stderr).toBe(0)
+      expect(result.stdout).toContain('No model usage found for the selected period.')
+      expect(result.stdout).toContain('1 more model prices at $0 (1.1K tok) — codeburn models --unpriced to see them')
+    })
+  })
+
+  it('stays silent when everything priced, or the floor was the user’s own', async () => {
+    const lines = [
+      userLine('2026-05-20T10:00:00.000Z'),
+      assistantLine('acme/unknown-alpha-1420', '2026-05-20T10:01:00.000Z', 'alpha', 1_000),
+      assistantLine('claude-opus-4-6', '2026-05-20T10:02:00.000Z', 'priced', 20_000),
+    ]
+    // priced-only fixture: no line
+    await withFixture([
+      userLine('2026-05-20T10:00:00.000Z'),
+      assistantLine('claude-opus-4-6', '2026-05-20T10:02:00.000Z', 'priced', 20_000),
+    ], home => {
+      const result = runCli(['models', ...range], home)
+      expect(result.status, result.stderr).toBe(0)
+      expect(result.stdout).not.toContain('price at $0')
+    })
+    // explicit --min-cost: the user chose the floor, no nagging
+    await withFixture(lines, home => {
+      const result = runCli(['models', '--min-cost', '0.01', ...range], home)
+      expect(result.status, result.stderr).toBe(0)
+      expect(result.stdout).not.toContain('price at $0')
+    })
+  })
+
+  it('keeps machine formats clean of the disclosure line', async () => {
+    await withFixture([
+      userLine('2026-05-20T10:00:00.000Z'),
+      assistantLine('acme/unknown-alpha-1420', '2026-05-20T10:01:00.000Z', 'alpha', 1_000),
+      assistantLine('claude-opus-4-6', '2026-05-20T10:02:00.000Z', 'priced', 20_000),
+    ], home => {
+      for (const format of ['json', 'csv', 'markdown']) {
+        const result = runCli(['models', '--format', format, ...range], home)
+        expect(result.status, `${format}: ${result.stderr}`).toBe(0)
+        expect(result.stdout).not.toContain('price at $0')
+        if (format === 'json') expect(Array.isArray(JSON.parse(result.stdout))).toBe(true)
+      }
+    })
+  }, 60_000)
+})

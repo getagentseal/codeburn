@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 
+import { localeTag, t } from '../i18n'
 import { useEscape } from '../hooks/useEscape'
 import type { ClaudeConfigSelector, DateRange } from '../lib/types'
 import { AnchoredSurface } from './AnchoredSurface'
@@ -12,15 +13,20 @@ import { SegTabs, type SegOption } from './SegTabs'
 /** Sentinel option value: no --claude-config-source flag (aggregate all configs). */
 const ALL_CONFIGS = ''
 
-/** The real CLI period vocabulary (`codeburn ... --period`, src/cli-date.ts). */
-export const PERIOD_OPTIONS: SegOption[] = [
-  { value: 'today', label: 'Today' },
-  { value: 'week', label: '7D' },
-  { value: '30days', label: '30D' },
-  { value: 'month', label: 'Month' },
-  { value: 'all', label: '6M' },
-  { value: 'lifetime', label: 'Life' },
-]
+/** The real CLI period vocabulary (`codeburn ... --period`, src/cli-date.ts).
+ *  A function, not a module-level constant: it must re-read t() on every call
+ *  so a language switch (which remounts the app subtree, not the module) is
+ *  reflected. */
+function periodOptions(): SegOption[] {
+  return [
+    { value: 'today', label: t('shell.period.today') },
+    { value: 'week', label: t('shell.period.week') },
+    { value: '30days', label: t('shell.period.30days') },
+    { value: 'month', label: t('shell.period.month') },
+    { value: 'all', label: t('shell.period.all') },
+    { value: 'lifetime', label: t('shell.period.lifetime') },
+  ]
+}
 
 /** Back/Forward history controls. Rendered on every screen so the title
  *  keeps one position; the sections without history show them disabled. */
@@ -31,12 +37,12 @@ export function BarNav({ canBack = false, canForward = false, onBack, onForward 
   onForward?: () => void
 }) {
   return (
-    <div className="bar-nav" role="group" aria-label="Navigation history">
+    <div className="bar-nav" role="group" aria-label={t('shell.topbar.historyGroup')}>
       <button
         type="button"
         className="bar-nav-btn"
-        aria-label="Back"
-        title="Back"
+        aria-label={t('shell.action.back')}
+        title={t('shell.action.back')}
         disabled={!canBack}
         onClick={() => { if (canBack) onBack?.() }}
       >
@@ -45,8 +51,8 @@ export function BarNav({ canBack = false, canForward = false, onBack, onForward 
       <button
         type="button"
         className="bar-nav-btn"
-        aria-label="Forward"
-        title="Forward"
+        aria-label={t('shell.action.forward')}
+        title={t('shell.action.forward')}
         disabled={!canForward}
         onClick={() => { if (canForward) onForward?.() }}
       >
@@ -103,7 +109,7 @@ export function TopBar({
       <h1 className="t">{title}</h1>
       {scope !== undefined && <span className="scope">{scope}</span>}
       <div className="sp" />
-      <SegTabs options={PERIOD_OPTIONS} value={customRange ? '' : period} onChange={onPeriodChange} />
+      <SegTabs options={periodOptions()} value={customRange ? '' : period} onChange={onPeriodChange} />
       <CalendarPop value={customRange} onSelect={onRangeSelect} />
       <ProviderPop value={provider} label={providerLabel} options={providerOptions} onSelect={onProviderSelect} />
       {claudeConfigs && <ConfigPicker configs={claudeConfigs} value={configSource} onSelect={onConfigSelect} />}
@@ -115,18 +121,18 @@ export function TopBar({
  * footer names the limit; the active label is also echoed in the scope line. */
 function ConfigPicker({ configs, value, onSelect }: { configs: ClaudeConfigSelector; value: string | null; onSelect: (id: string) => void }) {
   const options = [
-    { value: ALL_CONFIGS, label: 'All Claude configs' },
+    { value: ALL_CONFIGS, label: t('shell.config.all') },
     ...configs.options.map(option => ({ value: option.id, label: option.label })),
   ]
   return (
     <Dropdown
       id="claude-config-select"
-      ariaLabel="Claude config source"
+      ariaLabel={t('shell.config.ariaLabel')}
       value={value ?? ALL_CONFIGS}
       options={options}
       onChange={onSelect}
       width={168}
-      footer="Applies to the overview data. Manage config folders with the codeburn CLI."
+      footer={t('shell.config.footer')}
     />
   )
 }
@@ -136,8 +142,8 @@ function formatRange(range: DateRange): string {
   const to = new Date(`${range.to}T12:00:00`)
   const sameYear = from.getFullYear() === to.getFullYear()
   const sameMonth = sameYear && from.getMonth() === to.getMonth()
-  const left = from.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: sameYear ? undefined : 'numeric' })
-  const right = to.toLocaleDateString('en-US', { month: sameMonth ? undefined : 'short', day: 'numeric', year: sameYear ? undefined : 'numeric' })
+  const left = from.toLocaleDateString(localeTag(), { month: 'short', day: 'numeric', year: sameYear ? undefined : 'numeric' })
+  const right = to.toLocaleDateString(localeTag(), { month: sameMonth ? undefined : 'short', day: 'numeric', year: sameYear ? undefined : 'numeric' })
   return `${left} – ${right}`
 }
 
@@ -163,7 +169,7 @@ function CalendarPop({ value, onSelect }: { value: DateRange | null; onSelect: (
 
   useEscape(open, () => setOpen(false))
 
-  const label = value ? formatRange(value) : 'Choose date range'
+  const label = value ? formatRange(value) : t('shell.calendar.choose')
   return (
     <div className="calendar-wrap" ref={wrapRef}>
       <button
@@ -179,7 +185,7 @@ function CalendarPop({ value, onSelect }: { value: DateRange | null; onSelect: (
         {value && <span>{label}</span>}
       </button>
       {open && (
-        <AnchoredSurface anchor={triggerRef} surfaceRef={popoverRef} className="calendar-popover" role="dialog" aria-label="Choose date range">
+        <AnchoredSurface anchor={triggerRef} surfaceRef={popoverRef} className="calendar-popover" role="dialog" aria-label={t('shell.calendar.choose')}>
           <RangeCalendar
             value={value}
             onSelect={range => {

@@ -475,24 +475,32 @@ export function usePolled<T>(
 
   useEffect(() => {
     load()
-    // Data freshness is a product contract, including while the app is covered
-    // or minimized. The CLI resident process coalesces reads, so keep the cadence
-    // alive; purely visual animation remains visibility-gated elsewhere.
+    // Poll only while the window is visible. Each tick drives a CLI re-parse in
+    // the resident serve child, and on a machine with active agent sessions the
+    // watched roots change constantly, so every tick is a full-core parse. A
+    // minimized/occluded window has no viewer to keep fresh; letting it poll was
+    // the app's dominant idle energy drain. On return to visible the catch-up
+    // below refreshes immediately, so freshness while looking is unchanged.
     const tick = () => load()
     // Manual cadence (intervalMs == null) skips the interval entirely.
-    const id = intervalMs != null ? setInterval(tick, intervalMs) : null
+    let id: ReturnType<typeof setInterval> | null = null
+    const isVisible = () => typeof document === 'undefined' || document.visibilityState === 'visible'
+    const startTicking = () => { if (id == null && intervalMs != null) id = setInterval(tick, intervalMs) }
+    const stopTicking = () => { if (id != null) { clearInterval(id); id = null } }
+    if (isVisible()) startTicking()
     // On return to visible, if the last success is older than a full cadence,
-    // refresh once immediately instead of waiting up to intervalMs for the next
-    // tick. Manual cadence has no catch-up (the user drives refresh).
+    // refresh once immediately instead of waiting up to intervalMs; then resume
+    // ticking. On hide, stop ticking so no CLI work happens while unwatched.
     const onVisible = () => {
       if (intervalMs == null) return
-      if (typeof document === 'undefined' || document.visibilityState !== 'visible') return
+      if (!isVisible()) { stopTicking(); return }
       const last = lastSuccessRef.current
       if (last == null || Date.now() - last >= intervalMs) load()
+      startTicking()
     }
     if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVisible)
     return () => {
-      if (id != null) clearInterval(id)
+      stopTicking()
       if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisible)
       // Retire this generation so an in-flight fetch can't resolve into state
       // after unmount or a deps change.

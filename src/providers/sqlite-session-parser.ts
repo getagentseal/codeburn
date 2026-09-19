@@ -61,8 +61,11 @@ type V2MessageRow = {
  * OpenCode 2.x generations (issue #1293): v2 writes `session_v2` + `session_message`
  * (its FK points at `session_v2(id)`), while the legacy `session`/`message`/`part`
  * tables freeze at upgrade and stay frozen — a session created on 2.x has rows in
- * `session_message` and zero new rows in `message`. The generations are never
- * joined: whichever exists decides what is read, and v2 wins when present.
+ * `session_message` and zero new rows in `message`. This returns the DB's
+ * primary generation (v2 when present), but on an upgraded DB the frozen legacy
+ * rows are NOT dead: any legacy session whose id never made it into `session_v2`
+ * is real history and is unioned in (see `discoverSqliteSessions` and the
+ * per-session resolution in `parse`). v2 wins for any id present in both.
  */
 function detectGeneration(db: SqliteDatabase): 'v2' | 'legacy' | null {
   try {
@@ -74,6 +77,18 @@ function detectGeneration(db: SqliteDatabase): 'v2' | 'legacy' | null {
     if (isSqliteBusyError(err)) throw err
   }
   return validateSchemaDetailed(db).ok ? 'legacy' : null
+}
+
+/** True when `id` exists in `session_v2` (used to prefer v2 over a legacy row of
+ *  the same id, and to route a legacy-only session to the legacy reader). */
+function sessionInV2(db: SqliteDatabase, id: string): boolean {
+  try {
+    const rows = db.query<{ cnt: number }>('SELECT COUNT(*) as cnt FROM session_v2 WHERE id = ?', [id])
+    return (rows[0]?.cnt ?? 0) > 0
+  } catch (err) {
+    if (isSqliteBusyError(err)) throw err
+    return false
+  }
 }
 
 /**
@@ -257,10 +272,20 @@ export function createSqliteSessionParser(
           return
         }
 
+        // On an upgraded (v2 + legacy) DB, a session id that never migrated into
+        // session_v2 lives only in the frozen legacy tables and must be read as
+        // legacy — reading it from session_message would find nothing and drop
+        // its history. v2-only and legacy-only DBs resolve to `generation` as
+        // before.
+        const gen: 'v2' | 'legacy' =
+          generation === 'v2' && !sessionInV2(db, sessionId) && validateSchemaDetailed(db).ok
+            ? 'legacy'
+            : generation
+
         let messages: MessageRow[]
         let partsByMsg: Map<string, PartData[]>
 
-        if (generation === 'v2') {
+        if (gen === 'v2') {
           const rows = db.query<V2MessageRow>(
             `WITH RECURSIVE session_tree(id) AS (
               SELECT id FROM session_v2 WHERE id = ?
@@ -372,7 +397,7 @@ export function createSqliteSessionParser(
         }
 
         if (yieldCount === 0 && messages.length > 0) {
-          const sessionTokens = tryQuerySessionTokens(db, sessionId, generation)
+          const sessionTokens = tryQuerySessionTokens(db, sessionId, gen)
           if (sessionTokens && (sessionTokens.cost > 0 || sessionTokens.input > 0 || sessionTokens.output > 0)) {
             const dedupKey = `${config.providerName}:${sessionId}:session-level`
             if (!seenKeys.has(dedupKey)) {
@@ -461,6 +486,18 @@ export async function discoverSqliteSessions(
         `SELECT id, CAST(directory AS BLOB) AS directory, CAST(title AS BLOB) AS title, time_created
          FROM ${table} WHERE parent_id IS NULL ORDER BY time_created DESC`,
       )
+
+      // On an upgraded DB, also surface legacy top-level sessions that never
+      // migrated into session_v2 — their frozen history is otherwise dropped
+      // (#1293). Sessions present in both are excluded here so v2 wins.
+      if (generation === 'v2' && validateSchemaDetailed(db).ok) {
+        rows.push(...db.query<SessionRow>(
+          `SELECT id, CAST(directory AS BLOB) AS directory, CAST(title AS BLOB) AS title, time_created
+           FROM session
+           WHERE parent_id IS NULL AND id NOT IN (SELECT id FROM session_v2)
+           ORDER BY time_created DESC`,
+        ))
+      }
 
       for (const row of rows) {
         const dir = blobToText(row.directory)

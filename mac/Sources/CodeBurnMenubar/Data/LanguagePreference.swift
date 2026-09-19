@@ -15,7 +15,11 @@ import Foundation
 enum LanguagePreference: String, CaseIterable, Identifiable, Sendable {
     case system
     case english = "en"
+    case french = "fr"
+    case japanese = "ja"
+    case korean = "ko"
     case chineseSimplified = "zh-Hans"
+    case chineseTraditional = "zh-Hant"
 
     var id: String { rawValue }
 
@@ -25,7 +29,11 @@ enum LanguagePreference: String, CaseIterable, Identifiable, Sendable {
         // Each language names itself: a picker a user opens because the UI is
         // in a language they cannot read is no use in that language.
         case .english: "English"
+        case .french: "Français"
+        case .japanese: "日本語"
+        case .korean: "한국어"
         case .chineseSimplified: "简体中文"
+        case .chineseTraditional: "繁體中文"
         }
     }
 

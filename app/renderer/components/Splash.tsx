@@ -8,6 +8,7 @@ import { codeburn } from '../lib/ipc'
 import type { ScanProgressEvent } from '../lib/types'
 import { version } from '../../package.json'
 import loaderVideo from '../assets/splash-loader.webm'
+import { t } from '../i18n'
 
 const MIN_ON_SCREEN_MS = 600
 const CROSSFADE_MS = 250
@@ -73,7 +74,9 @@ function SplashStatus({ progress }: { progress: Progress }) {
   const counter = active === 'claude' && progress.claudeTotal > 0
     ? ` · ${progress.claudeDone.toLocaleString('en-US')}/${progress.claudeTotal.toLocaleString('en-US')}`
     : ''
-  const line = active ? `Indexing ${providerLabel(active)}${counter}` : 'Indexing your usage history…'
+  const line = active
+    ? t('onboarding.splash.indexingProvider', { provider: providerLabel(active), counter })
+    : t('onboarding.splash.indexingGeneric')
   return (
     <div className="splash-status">
       <div className="splash-status-line">{line}</div>
@@ -86,7 +89,7 @@ function SplashStatus({ progress }: { progress: Progress }) {
           ))}
         </div>
       )}
-      <div className="splash-status-note">One-time scan · future launches are instant</div>
+      <div className="splash-status-note">{t('onboarding.splash.oneTimeScanNote')}</div>
     </div>
   )
 }

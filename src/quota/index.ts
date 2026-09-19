@@ -18,6 +18,7 @@ import { fetchGrokbotQuota, grokbotInstalled } from './grokbot.js'
 import { fetchKimiQuota } from './kimi.js'
 import type { ProviderName, QuotaProvider } from './types.js'
 import { fetchZaiQuota } from './zai.js'
+import { fetchZcodeQuota } from './zcode.js'
 
 export type QuotaCommandWindow = { label: string; usedPct: number; resetsAt?: string }
 
@@ -48,6 +49,7 @@ const READERS: { id: ProviderName; name: string; read: ProviderReader }[] = [
   { id: 'kimi', name: 'Kimi', read: async signal => (await fetchKimiQuota({ signal })).quota },
   { id: 'cursor', name: 'Cursor', read: async signal => (await fetchCursorQuota({ signal })).quota },
   { id: 'zai', name: 'Z.ai', read: async signal => (await fetchZaiQuota({ signal })).quota },
+  { id: 'zcode', name: 'ZCode', read: async signal => (await fetchZcodeQuota({ signal })).quota },
   { id: 'grok', name: 'Grok', read: async signal => (await fetchGrokQuota({ signal })).quota },
   { id: 'grokbot', name: 'Grok Bot', read: async signal => (await fetchGrokbotQuota({ signal })).quota },
   { id: 'clinepass', name: 'ClinePass', read: async signal => (await fetchClinePassQuota({ signal })).quota },
@@ -118,6 +120,20 @@ export async function collectQuota(options: {
       clearTimeout(timer)
     }
   }))
+  // ZCode and Z.ai read the same endpoint and report the same plan numbers
+  // whenever both credentials belong to one z.ai account: showing both is a
+  // duplicate row. The deliberately configured Z.ai credential (Keychain,
+  // ZAI_API_KEY, Pi) wins and the ambient ZCode app login yields — but only
+  // while Z.ai is actually connected, so a rejected or stale Z.ai state never
+  // hides a working ZCode row.
+  const zaiRow = providers.find(row => row.id === 'zai')
+  if (zaiRow?.available) {
+    const zcodeIndex = providers.findIndex(row => row.id === 'zcode')
+    if (zcodeIndex !== -1 && providers[zcodeIndex].available) {
+      providers.splice(zcodeIndex, 1)
+      zaiRow.notes = [...(zaiRow.notes ?? []), 'A ZCode app login is also connected; it reads the same z.ai plan endpoint and is hidden as a duplicate.']
+    }
+  }
   return { providers }
 }
 

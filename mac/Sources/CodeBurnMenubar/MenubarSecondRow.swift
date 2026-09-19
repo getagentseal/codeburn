@@ -243,7 +243,7 @@ enum MenubarRowFormatter {
             figures += " · \(countdown)"
         }
         guard !quota.label.isEmpty else { return figures }
-        let label = abbreviate(quota.label, to: secondRowCharacterBudget - displayCells(figures) - 1)
+        let label = abbreviate(localizedWindowLabel(quota.label), to: secondRowCharacterBudget - displayCells(figures) - 1)
         return label.isEmpty ? figures : "\(label) \(figures)"
     }
 

@@ -1027,35 +1027,45 @@ describe('freshness: hidden-window polling', () => {
     __resetPolledMemo()
   })
 
-  // An open-but-occluded app still owes the configured freshness contract.
-  it('keeps interval refreshes running while hidden without a duplicate catch-up', async () => {
+  // A hidden/minimized window has no viewer to keep fresh; polling it was the
+  // app's dominant idle drain, so the interval stops while hidden and catches up
+  // on return.
+  it('stops interval refreshes while hidden and catches up on return', async () => {
     vi.useFakeTimers()
     try {
       setVisibility('visible')
       render(<App />)
-      // Boot + three visible 30s cadences: the overview section's yield poll (a
-      // pure usePolled interval, never prefetched) fires each cadence.
-      await act(async () => { await vi.advanceTimersByTimeAsync(3_000) })
-      await act(async () => { await vi.advanceTimersByTimeAsync(30_000 * 3) })
-      const visibleYield = mocks.getYield.mock.calls.length
-      expect(visibleYield).toBeGreaterThan(1) // polling while visible
+      // Boot and let the one-time provider prefetch warm queue fully drain, so
+      // the only remaining source of yield calls is the visible usePolled
+      // interval. Then measure its steady per-cadence rate as the baseline.
+      await act(async () => { await vi.advanceTimersByTimeAsync(30_000 * 8) })
+      const beforeCadence = mocks.getYield.mock.calls.length
+      await act(async () => { await vi.advanceTimersByTimeAsync(30_000) })
+      const perCadence = mocks.getYield.mock.calls.length - beforeCadence
+      expect(perCadence).toBeGreaterThan(0) // polling while visible
 
-      // Hidden for five cadences: data polling continues.
+      // Hidden: the interval stops, so no CLI re-parse fires while unwatched.
       setVisibility('hidden')
+      await act(async () => { document.dispatchEvent(new Event('visibilitychange')) })
       const atHideYield = mocks.getYield.mock.calls.length
       const atHideOverview = mocks.getOverview.mock.calls.length
       await act(async () => { await vi.advanceTimersByTimeAsync(30_000 * 5) })
-      expect(mocks.getYield.mock.calls.length).toBeGreaterThan(atHideYield)
-      expect(mocks.getOverview.mock.calls.length).toBeGreaterThan(atHideOverview)
+      expect(mocks.getYield.mock.calls.length).toBe(atHideYield)
+      expect(mocks.getOverview.mock.calls.length).toBe(atHideOverview)
 
-      // Back to visible: no extra catch-up is needed inside one cadence.
-      const beforeVisibleYield = mocks.getYield.mock.calls.length
-      const beforeVisibleOverview = mocks.getOverview.mock.calls.length
+      // Back to visible after well over one cadence hidden: an immediate catch-up
+      // refresh fires so the returning view is never stale.
       setVisibility('visible')
       await act(async () => { document.dispatchEvent(new Event('visibilitychange')) })
       await act(async () => { await vi.advanceTimersByTimeAsync(0) })
-      expect(mocks.getYield.mock.calls.length).toBe(beforeVisibleYield)
-      expect(mocks.getOverview.mock.calls.length).toBe(beforeVisibleOverview)
+      expect(mocks.getYield.mock.calls.length).toBeGreaterThan(atHideYield)
+      expect(mocks.getOverview.mock.calls.length).toBeGreaterThan(atHideOverview)
+
+      // The resumed timer is single: one cadence adds exactly the baseline count,
+      // proving the hide/show cycle did not stack a second interval.
+      const afterCatchup = mocks.getYield.mock.calls.length
+      await act(async () => { await vi.advanceTimersByTimeAsync(30_000) })
+      expect(mocks.getYield.mock.calls.length - afterCatchup).toBe(perCadence)
     } finally {
       setVisibility('visible')
       vi.useRealTimers()

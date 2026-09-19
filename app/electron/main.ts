@@ -6,6 +6,7 @@ import path from 'node:path'
 
 import { CliError, DESKTOP_COLD_TIMEOUT_MS, PROGRESS_LINE_PREFIX, reapOrphanServe, resolveCodeburnPath, shutdownAll, spawnCli, spawnCliAction, startServe, type ActionResult, type SpawnPriority } from './cli'
 import { MenubarCompanion, STARTUP_APPS_SETTINGS_URL, type CompanionStatus } from './menubar'
+import { MacMenubar, NO_MAC_MENUBAR, type InstallPhase } from './mac-menubar'
 import { getQuota, sanitizeError } from './quota'
 import { Telemetry } from './telemetry'
 import { createUpdateChecker, type UpdateChecker, type UpdateStatus } from './updates'
@@ -16,6 +17,7 @@ let telemetryInstance: Telemetry | null = null
 let updateChecker: UpdateChecker | null = null
 // The bundled tray app and its Capacity Dock (Windows only). Null under tests.
 let companion: MenubarCompanion | null = null
+let macMenubar: MacMenubar | null = null
 
 /** What the sidebar switches read on a platform that has no tray app to bundle. */
 export const NO_COMPANION: CompanionStatus = { supported: false, menuBar: false, sidebar: false, store: false }
@@ -93,6 +95,8 @@ export type Envelope<T = unknown> = { ok: true; value: T } | { ok: false; error:
 const WARMUP_TIMEOUT_MS = DESKTOP_COLD_TIMEOUT_MS
 // IPC channel carrying cold-start scan-progress events to the splash.
 export const PROGRESS_CHANNEL = 'codeburn:progress'
+/** Named steps of a running menubar install, pushed while the card waits on one. */
+export const MAC_MENUBAR_PROGRESS_CHANNEL = 'codeburn:macMenubarProgress'
 // IPC channel pushing update-availability status to open windows (launch + 24h).
 export const UPDATE_CHANNEL = 'codeburn:update'
 
@@ -246,6 +250,62 @@ export function writeProjectFilter(value: unknown): ProjectFilter {
   }
   appFilterCache = null
   return filter
+}
+
+// The shared CLI config. The desktop writes only its `language` key; the CLI
+// reads the same field. Path is fixed (os.homedir), matching src/config.ts.
+function configPath(): string {
+  return path.join(os.homedir(), '.config', 'codeburn', 'config.json')
+}
+
+/** The desktop's six locales; absent/other = follow the system. */
+const APP_LOCALES = new Set(['en', 'fr', 'ja', 'ko', 'zh-CN', 'zh-TW'])
+
+export function readConfigLanguage(): string | null {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(configPath(), 'utf8')) as { language?: unknown }
+    return typeof parsed.language === 'string' && APP_LOCALES.has(parsed.language) ? parsed.language : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Persist config `language` (null clears it), preserving every other key. Staged
+ * and renamed like writeProjectFilter, so a torn write never corrupts the shared
+ * config. A missing file starts fresh; any other read error aborts rather than
+ * clobber a config that is merely unreadable this instant.
+ */
+export function writeConfigLanguage(language: string | null): void {
+  const target = configPath()
+  let config: Record<string, unknown> = {}
+  try {
+    config = JSON.parse(fs.readFileSync(target, 'utf8')) as Record<string, unknown>
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+  }
+  if (language === null) delete config.language
+  else config.language = language
+  fs.mkdirSync(path.dirname(target), { recursive: true })
+  const tmpPath = `${target}.${randomBytes(8).toString('hex')}.tmp`
+  try {
+    fs.writeFileSync(tmpPath, JSON.stringify(config, null, 2) + '\n')
+    fs.renameSync(tmpPath, target)
+  } catch (error) {
+    fs.rmSync(tmpPath, { force: true })
+    throw error
+  }
+}
+
+/**
+ * The menu bar reads AppleLanguages and falls back to English for locales it
+ * lacks (it ships en + zh-Hans). Chinese maps to the script tags the .lproj
+ * uses; null (System) clears the override so the OS language decides.
+ */
+export function appleLanguageFor(language: string | null): string | null {
+  if (language === 'zh-CN') return 'zh-Hans'
+  if (language === 'zh-TW') return 'zh-Hant'
+  return language
 }
 
 // `--opt=value`, never `--opt value`: a pattern routinely starts with "-", and
@@ -414,6 +474,8 @@ type Deps = {
     MenubarCompanion,
     'status' | 'setMenuBarEnabled' | 'setSidebarEnabled' | 'trayPrefs' | 'setTrayAppPref' | 'setTrayDockPref' | 'setLaunchAtLogin'
   > | null
+  /** The macOS menubar app, as the Plugins page sees it; absent off darwin and under tests. */
+  macMenubar?: Pick<MacMenubar, 'status' | 'install' | 'open' | 'setDockEnabled' | 'setLanguage' | 'quit' | 'uninstall' | 'settings'> | null
 }
 
 type Handler = (...args: any[]) => Promise<Envelope>
@@ -432,7 +494,7 @@ type Handler = (...args: any[]) => Promise<Envelope>
 const EXPORT_SAVED_MARKER = 'Exported ('
 const EXPORT_NOTHING_WRITTEN = 'Nothing to export: no usage in the export window, or the project filter hides all of it.'
 
-export function createBridgeHandlers(deps: Deps = { spawnCli, spawnCliAction, resolveCodeburnPath, getQuota, emitProgress: broadcastProgress, telemetry: telemetryInstance, getUpdateStatus: () => updateChecker ? updateChecker.getStatus() : Promise.resolve(NO_UPDATE_STATUS), companion: companion }): Record<string, Handler> {
+export function createBridgeHandlers(deps: Deps = { spawnCli, spawnCliAction, resolveCodeburnPath, getQuota, emitProgress: broadcastProgress, telemetry: telemetryInstance, getUpdateStatus: () => updateChecker ? updateChecker.getStatus() : Promise.resolve(NO_UPDATE_STATUS), companion: companion, macMenubar: macMenubar }): Record<string, Handler> {
   const emitProgress = deps.emitProgress ?? (() => {})
   const telemetry = deps.telemetry ?? null
   // Flips true after the first overview fetch succeeds. Until then, every
@@ -699,6 +761,17 @@ export function createBridgeHandlers(deps: Deps = { spawnCli, spawnCliAction, re
     // out of "N projects hidden". `all` is capped at six months, so `lifetime`
     // is the only horizon that can answer for the whole filter.
     'codeburn:getUnfilteredProjects': run(() => ['report', '--format', 'json', '--period', 'lifetime']),
+    'codeburn:getLanguage': async () => ({ ok: true, value: readConfigLanguage() }),
+    'codeburn:setLanguage': async (language?: unknown) => {
+      try {
+        const lang = typeof language === 'string' && APP_LOCALES.has(language) ? language : null
+        writeConfigLanguage(lang)
+        if (deps.macMenubar) await deps.macMenubar.setLanguage(appleLanguageFor(lang))
+        return { ok: true, value: undefined }
+      } catch (err) {
+        return { ok: false, error: toEnvelopeError(err) }
+      }
+    },
     'codeburn:setCurrency': runAction((code: string) => ['currency', vCurrency(code)]),
     'codeburn:resetCurrency': runAction(() => ['currency', '--reset']),
     'codeburn:addAlias': runAction((from: string, to: string) => ['model-alias', vToken(from), vToken(to)]),
@@ -762,6 +835,21 @@ export function createBridgeHandlers(deps: Deps = { spawnCli, spawnCliAction, re
       ({ ok: true, value: deps.companion ? await deps.companion.setTrayDockPref(patch) : null }),
     'codeburn:setLaunchAtLogin': async (enabled?: boolean) =>
       ({ ok: true, value: deps.companion ? await deps.companion.setLaunchAtLogin(Boolean(enabled)) : null }),
+    // The macOS menubar app's card on the Plugins page. Every call answers with the whole
+    // status for the same reason the Windows switches do: the card renders what is on disk,
+    // never what it asked for.
+    'codeburn:macMenubarStatus': async () => ({ ok: true, value: deps.macMenubar ? await deps.macMenubar.status() : NO_MAC_MENUBAR }),
+    'codeburn:macMenubarInstall': async () =>
+      ({ ok: true, value: deps.macMenubar ? await deps.macMenubar.install() : { ok: false, error: 'The menu bar app is macOS only.', status: NO_MAC_MENUBAR } }),
+    'codeburn:macMenubarOpen': async () => ({ ok: true, value: deps.macMenubar ? await deps.macMenubar.open() : NO_MAC_MENUBAR }),
+    'codeburn:macMenubarSetDock': async (enabled?: boolean) =>
+      ({ ok: true, value: deps.macMenubar ? await deps.macMenubar.setDockEnabled(Boolean(enabled)) : NO_MAC_MENUBAR }),
+    'codeburn:macMenubarSettings': async () =>
+      ({ ok: true, value: deps.macMenubar ? await deps.macMenubar.settings() : { ok: false, error: 'The menu bar app is macOS only.', status: NO_MAC_MENUBAR } }),
+    'codeburn:macMenubarQuit': async () =>
+      ({ ok: true, value: deps.macMenubar ? await deps.macMenubar.quit() : { ok: false, error: 'The menu bar app is macOS only.', status: NO_MAC_MENUBAR } }),
+    'codeburn:macMenubarUninstall': async () =>
+      ({ ok: true, value: deps.macMenubar ? await deps.macMenubar.uninstall() : { ok: false, error: 'The menu bar app is macOS only.', status: NO_MAC_MENUBAR } }),
     // Plugin management reads (all return parsed JSON)
     'codeburn:pluginList': run(() => ['plugin', 'list', '--json']),
     'codeburn:pluginInfo': run((name: string) => ['plugin', 'info', vToken(name), '--json']),
@@ -1010,8 +1098,27 @@ function bootstrap(): void {
       env: process.env,
     })
     void companion.bootstrap().catch(err => console.error('menubar bootstrap failed:', err))
+    // No bootstrap: nothing is installed, moved or launched until the card asks.
+    macMenubar = new MacMenubar({
+      platform: process.platform,
+      // Electron sets this only in a Mac App Store build, where downloading an executable is
+      // against the rules, so the card offers the website instead of an Install button.
+      mas: (process as NodeJS.Process & { mas?: boolean }).mas === true,
+      runCli: spawnCliAction,
+      // So the menubar this installs can find a codeburn without one on PATH: the launcher is
+      // written into userData and recorded where the menubar looks first.
+      execPath: process.execPath,
+      bundledCli: process.env.CODEBURN_BUNDLED_CLI,
+      stateDir: app.getPath('userData'),
+      onPhase: (phase: InstallPhase) => {
+        for (const win of BrowserWindow.getAllWindows()) win.webContents.send(MAC_MENUBAR_PROGRESS_CHANNEL, phase)
+      },
+    })
     registerHandlers()
     installApplicationMenu()
+    // Seed the preload-readable app locale before any window loads. app.getLocale()
+    // needs the ready state, so this runs inside bootstrap's whenReady.
+    process.env.__CODEBURN_APP_LOCALE__ = app.getLocale()
     createWindow()
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow()

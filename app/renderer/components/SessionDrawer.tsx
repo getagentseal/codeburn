@@ -2,13 +2,14 @@ import { useEffect, useMemo, useRef } from 'react'
 
 import { Stat } from './Stat'
 import { useEscape } from '../hooks/useEscape'
-import { formatCompact, formatDayLong, formatDuration, formatUsd, shortenProjectPath } from '../lib/format'
+import { formatCompact, formatCount, formatDayLong, formatDuration, formatUsd, shortenProjectPath } from '../lib/format'
 import { DUR, useExitAnimation } from '../lib/motion'
 import { codeburn } from '../lib/ipc'
 import type { InvestigationFilters } from '../lib/investigation'
 import { contributeRow } from '../lib/investigation'
 import type { SessionDrillRow } from '../lib/types'
 import { Icon } from './icons'
+import { t } from '../i18n'
 
 /**
  * The drill-through side drawer: a plain-language read of one session, then the
@@ -80,7 +81,7 @@ export function SessionDrawer({ row, openKey, filters, medianCost, onClose }: {
         className={closing ? 'session-drawer closing' : 'session-drawer'}
         role="dialog"
         aria-modal="true"
-        aria-label={`Session details: ${row.title || shortenProjectPath(row.project)}`}
+        aria-label={t('sessions.drawer.ariaLabel', { title: row.title || shortenProjectPath(row.project) })}
         tabIndex={-1}
       >
         <div className="drawer-head">
@@ -94,71 +95,79 @@ export function SessionDrawer({ row, openKey, filters, medianCost, onClose }: {
               {row.durationMs > 0 && <> · {formatDuration(row.durationMs)}</>}
             </div>
           </div>
-          <button type="button" className="drawer-close" aria-label="Close session details" onClick={beginExit}><Icon name="x" /></button>
+          <button type="button" className="drawer-close" aria-label={t('sessions.drawer.closeAriaLabel')} onClick={beginExit}><Icon name="x" /></button>
         </div>
 
         <p className="drawer-lead">
-          {selectedCost === null ? 'This session cost ' : 'Your selection of this session cost '}
+          {selectedCost === null ? t('sessions.drawer.leadCost') : t('sessions.drawer.leadCostSelection')}
           <b>{formatUsd(leadCost)}</b>
-          {ratio === null ? '.' : ratio < 0.1 ? ', a fraction of your usual.' : <>, about <b>{formatRatio(ratio)}x</b> your usual.</>}
+          {ratio === null
+            ? '.'
+            : ratio < 0.1
+              ? t('sessions.drawer.leadFraction')
+              : <>{t('sessions.drawer.leadRatioPrefix')}<b>{formatRatio(ratio)}{t('sessions.drawer.ratioUnit')}</b>{t('sessions.drawer.leadRatioSuffix')}</>}
         </p>
 
         <div className="stats drawer-tiles">
           <Stat
-            label="Cost"
+            label={t('sessions.drawer.statCostLabel')}
             value={formatUsd(leadCost)}
             delta={selectedCost !== null
-              ? `of ${formatUsd(row.cost)} total`
+              ? t('sessions.drawer.deltaOfTotal', { total: formatUsd(row.cost) })
               : ratio === null
-                ? 'full session'
+                ? t('sessions.drawer.deltaFullSession')
                 : ratio < 0.1
-                  ? <span className="down">well below median</span>
-                  : <span className={ratio >= 1 ? 'up' : 'down'}>{formatRatio(ratio)}x your median</span>}
+                  ? <span className="down">{t('sessions.drawer.deltaBelowMedian')}</span>
+                  : <span className={ratio >= 1 ? 'up' : 'down'}>{t('sessions.drawer.deltaRatioMedian', { ratio: `${formatRatio(ratio)}${t('sessions.drawer.ratioUnit')}` })}</span>}
           />
-          <Stat label="Turns" value={row.turns.toLocaleString()} delta={`${row.calls.toLocaleString()} ${row.calls === 1 ? 'call' : 'calls'}`} />
+          <Stat label={t('sessions.drawer.statTurnsLabel')} value={row.turns.toLocaleString()} delta={formatCount(row.calls, 'call')} />
           {row.durationMs > 0
-            ? <Stat label="Duration" value={formatDuration(row.durationMs)} delta="wall clock" />
-            : <Stat label="Calls" value={row.calls.toLocaleString()} delta="API calls" />}
+            ? <Stat label={t('sessions.drawer.statDurationLabel')} value={formatDuration(row.durationMs)} delta={t('sessions.drawer.deltaWallClock')} />
+            : <Stat label={t('sessions.drawer.statCallsLabel')} value={row.calls.toLocaleString()} delta={t('sessions.drawer.deltaApiCalls')} />}
         </div>
 
         {row.isSidechain && row.parentSessionId && (
-          <p className="drawer-note">Subagent run of session <span className="mono">{row.parentSessionId.slice(0, 18)}</span>.</p>
+          <p className="drawer-note">{t('sessions.drawer.subagentPrefix')}<span className="mono">{row.parentSessionId.slice(0, 18)}</span>.</p>
         )}
 
-        <DrawerBreakdown label="Models" rows={breakdown.models} />
-        <DrawerBreakdown label="Task categories" rows={breakdown.categories} />
+        <DrawerBreakdown label={t('sessions.drawer.modelsLabel')} rows={breakdown.models} />
+        <DrawerBreakdown label={t('sessions.drawer.categoriesLabel')} rows={breakdown.categories} />
 
         <details className="drawer-fold">
           <summary>
-            Tokens: {formatCompact(row.inputTokens)} in, {formatCompact(row.outputTokens)} out,{' '}
-            {formatCompact(row.cacheWriteTokens)} written to cache, {cacheHit}% cache hits
+            {t('sessions.drawer.tokensSummary', {
+              inTok: formatCompact(row.inputTokens),
+              outTok: formatCompact(row.outputTokens),
+              cacheTok: formatCompact(row.cacheWriteTokens),
+              hitPct: cacheHit,
+            })}
           </summary>
           <div className="drawer-fold-body">
             <div className="stats">
-              <Stat label="Input" value={formatCompact(row.inputTokens)} delta="tokens sent" />
-              <Stat label="Output" value={formatCompact(row.outputTokens)} delta="tokens generated" />
-              <Stat label="Cache read" value={formatCompact(row.cacheReadTokens)} delta={`${cacheHit}% hit`} />
-              <Stat label="Cache write" value={formatCompact(row.cacheWriteTokens)} delta="tokens cached" />
+              <Stat label={t('sessions.drawer.statInputLabel')} value={formatCompact(row.inputTokens)} delta={t('sessions.drawer.deltaTokensSent')} />
+              <Stat label={t('sessions.drawer.statOutputLabel')} value={formatCompact(row.outputTokens)} delta={t('sessions.drawer.deltaTokensGenerated')} />
+              <Stat label={t('sessions.drawer.statCacheReadLabel')} value={formatCompact(row.cacheReadTokens)} delta={t('sessions.drawer.deltaCacheHit', { percent: cacheHit })} />
+              <Stat label={t('sessions.drawer.statCacheWriteLabel')} value={formatCompact(row.cacheWriteTokens)} delta={t('sessions.drawer.deltaTokensCached')} />
             </div>
           </div>
         </details>
 
         {foldLabel !== null && (
           <details className="drawer-fold">
-            <summary>Branches and pull requests: {foldLabel}</summary>
+            <summary>{t('sessions.drawer.branchesPrsSummary', { label: foldLabel })}</summary>
             <div className="drawer-fold-body">
-              <DrawerBreakdown label="Branches" rows={breakdown.branches} caption="Git branch carried across turns (Claude sessions only)." />
-              {breakdown.days.length > 1 && <DrawerBreakdown label="Days" rows={breakdown.days} />}
-              <DrawerBreakdown label="Pull requests" rows={breakdown.prs} caption="A turn that touched several PRs counts toward each of them, so the rows can add up to more than the total." link />
+              <DrawerBreakdown label={t('sessions.drawer.branchesLabel')} rows={breakdown.branches} caption={t('sessions.drawer.branchesCaption')} />
+              {breakdown.days.length > 1 && <DrawerBreakdown label={t('sessions.drawer.daysLabel')} rows={breakdown.days} />}
+              <DrawerBreakdown label={t('sessions.drawer.prsLabel')} rows={breakdown.prs} caption={t('sessions.drawer.prsCaption')} link />
               {breakdown.unattributedPrCost > 0 && (
-                <p className="drawer-note">Not tied to a specific PR: {formatUsd(breakdown.unattributedPrCost)}</p>
+                <p className="drawer-note">{t('sessions.drawer.notTiedToPr', { amount: formatUsd(breakdown.unattributedPrCost) })}</p>
               )}
             </div>
           </details>
         )}
 
         <p className="drawer-note">
-          {row.savingsUSD > 0 ? `Saved vs baseline: ${formatUsd(row.savingsUSD)}.` : 'Saved vs baseline: none this session.'}
+          {row.savingsUSD > 0 ? t('sessions.drawer.savedBaseline', { amount: formatUsd(row.savingsUSD) }) : t('sessions.drawer.savedBaselineNone')}
         </p>
       </aside>
     </>
@@ -174,9 +183,9 @@ function branchPrLabel({ branches, prs }: { branches: BreakdownRow[]; prs: Break
   // A lone `main` with no PRs is every session's default: nothing to unfold.
   if (branches.length > 0 && !(branches.length === 1 && branches[0]!.label === 'main' && prs.length === 0)) {
     const named = branches.slice(0, 2).map(entry => entry.label).join(', ')
-    parts.push(branches.length > 2 ? `${named}, +${branches.length - 2} more` : named)
+    parts.push(branches.length > 2 ? t('sessions.drawer.branchesMoreList', { named, count: branches.length - 2 }) : named)
   }
-  if (prs.length > 0) parts.push(`${prs.length} PR${prs.length === 1 ? '' : 's'}`)
+  if (prs.length > 0) parts.push(t(prs.length === 1 ? 'sessions.drawer.prCount.one' : 'sessions.drawer.prCount.other', { count: prs.length }))
   return parts.length > 0 ? parts.join(', ') : null
 }
 
@@ -222,7 +231,7 @@ function buildBreakdowns(row: SessionDrillRow): {
       .map(([key, cost]) => ({ key, label: key, cost }))
       .sort((a, b) => b.cost - a.cost)
   return {
-    models: toRows(models).map(entry => ({ ...entry, label: entry.key === '' ? 'Unknown model' : entry.key })),
+    models: toRows(models).map(entry => ({ ...entry, label: entry.key === '' ? t('sessions.drawer.unknownModel') : entry.key })),
     categories: toRows(categories),
     branches: toRows(branches).map(entry => ({ ...entry, label: entry.key })),
     days: toRows(days),
@@ -249,7 +258,7 @@ function DrawerBreakdown({ label, rows, caption, link = false }: {
   if (rows.length === 0) return null
   const max = rows[0]!.cost
   return (
-    <div className="drawer-breakdown" role="group" aria-label={`${label} breakdown`}>
+    <div className="drawer-breakdown" role="group" aria-label={t('sessions.drawer.breakdownAriaLabel', { label })}>
       <div className="drawer-breakdown-head">{label}</div>
       {rows.map(entry => (
         <div className="drawer-breakdown-row" key={entry.key}>

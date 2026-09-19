@@ -52,6 +52,25 @@ describe('Usd', () => {
     await user.keyboard('{Escape}')
     expect(screen.queryByRole('tooltip')).toBeNull()
   })
+
+  it('nested in an interactive row it is out of the tab order and hover-only', async () => {
+    const user = userEvent.setup()
+    render(<Usd value={12.5} tokens={TOKENS} nested />)
+    const trigger = screen.getByText('$12.50')
+    // Not its own tab stop, so it cannot swallow the row's Enter.
+    expect(trigger).toHaveAttribute('tabindex', '-1')
+
+    // Hover still reveals the breakdown.
+    await user.hover(trigger)
+    expect(screen.getByRole('tooltip')).toBeInTheDocument()
+    await user.unhover(trigger)
+    expect(screen.queryByRole('tooltip')).toBeNull()
+
+    // Tab lands elsewhere and focus never opens the popover.
+    await user.tab()
+    expect(trigger).not.toHaveFocus()
+    expect(screen.queryByRole('tooltip')).toBeNull()
+  })
 })
 
 describe('tokensOf / sumTokens', () => {

@@ -1090,6 +1090,11 @@ function looksLikeLocalModel(name: string): boolean {
   // one with no price must reach the unpriced list rather than be treated as
   // free local inference.
   if (/-v?\d+:\d+$/.test(name)) return false
+  // Bedrock provisioned-model / custom-model ARNs carry colons from the ARN
+  // structure (arn:aws:bedrock:<region>:<account>:provisioned-model/<id>), but
+  // they are metered Bedrock, not local: an unpriced one must reach the
+  // unpriced list rather than be hidden as free local inference.
+  if (/^arn:aws:bedrock:/i.test(name)) return false
   // Ollama and LM Studio tags include `:tag` (e.g. qwen3.6:35b-a3b-bf16).
   if (name.includes(':') && !name.startsWith('http')) return true
   // GGUF / quantized fingerprints commonly seen in local inference.

@@ -13,11 +13,20 @@ import { reportMemoKey } from '../lib/reportMemoKey'
 import { trackEvent } from '../lib/track'
 import type { DateRange, FindingClass, MenubarPayload, OptimizeJsonReport, Period, SessionYieldJson, WasteAction, YieldJsonReport } from '../lib/types'
 import { Icon, type IconName } from '../components/icons'
+import { t } from '../i18n'
 
 type OptimizeTab = 'waste' | 'reverts' | 'abandoned' | 'fixes'
 
-/** The card's header title: the tab the list below is showing. */
-const TAB_TITLES: Record<OptimizeTab, string> = { waste: 'Waste', reverts: 'Reverts', abandoned: 'Abandoned', fixes: 'Fixes' }
+/** The card's header title: the tab the list below is showing. Computed at
+ *  call time (not a module-level const) so it re-reads the current locale. */
+function tabTitle(tab: OptimizeTab): string {
+  return {
+    waste: t('spend.optimize.tabTitle.waste'),
+    reverts: t('spend.optimize.tabTitle.reverts'),
+    abandoned: t('spend.optimize.tabTitle.abandoned'),
+    fixes: t('spend.optimize.tabTitle.fixes'),
+  }[tab]
+}
 
 export function Optimize({ period, provider, range = null }: { period: Period; provider: string; range?: DateRange | null }) {
   const overview = usePolled<MenubarPayload>(
@@ -57,34 +66,34 @@ export function OptimizeContent({
   const [tab, setTab] = useState<OptimizeTab>('waste')
 
   if (!overview.data) {
-    if (overview.error) return <CliErrorPanel error={overview.error} subject="optimize findings" />
-    return <SectionSkeleton label="Scanning optimize findings…" rows={5} />
+    if (overview.error) return <CliErrorPanel error={overview.error} subject={t('common.subject.optimize')} />
+    return <SectionSkeleton label={t('spend.optimize.loading.scanning')} rows={5} />
   }
 
   const yieldData = yieldReport.error ? null : yieldReport.data
   const revertedTotal = yieldData ? formatUsd(yieldData.summary.reverted.costUSD) : '—'
   const abandonedTotal = yieldData ? formatUsd(yieldData.summary.abandoned.costUSD) : '—'
   const options = [
-    { value: 'waste', label: `Waste ${formatUsd(overview.data.optimize.savingsUSD)}` },
-    { value: 'reverts', label: `Reverts ${revertedTotal}` },
-    { value: 'abandoned', label: `Abandoned ${abandonedTotal}` },
+    { value: 'waste', label: t('spend.optimize.tabOption.waste', { amount: formatUsd(overview.data.optimize.savingsUSD) }) },
+    { value: 'reverts', label: t('spend.optimize.tabOption.reverts', { amount: revertedTotal }) },
+    { value: 'abandoned', label: t('spend.optimize.tabOption.abandoned', { amount: abandonedTotal }) },
     // The Fixes tab renders topFindings (capped list), so label the count that shows.
-    { value: 'fixes', label: `Fixes ${overview.data.optimize.topFindings.length.toLocaleString('en-US')}` },
+    { value: 'fixes', label: t('spend.optimize.tabOption.fixes', { count: overview.data.optimize.topFindings.length.toLocaleString('en-US') }) },
   ]
 
   return (
     <>
       {overview.error && <StaleBanner error={overview.error} />}
       <Panel
-        title={TAB_TITLES[tab]}
+        title={tabTitle(tab)}
         right={<SegTabs options={options} value={tab} onChange={value => setTab(value as OptimizeTab)} />}
       >
         {tab === 'waste' ? (
           <WasteRows report={optimizeReport} />
         ) : tab === 'reverts' ? (
-          <YieldRows report={yieldReport} category="reverted" empty="No reverted sessions in this range yet." />
+          <YieldRows report={yieldReport} category="reverted" empty={t('spend.optimize.reverts.empty')} />
         ) : tab === 'abandoned' ? (
-          <YieldRows report={yieldReport} category="abandoned" empty="No abandoned sessions in this range yet." />
+          <YieldRows report={yieldReport} category="abandoned" empty={t('spend.optimize.abandoned.empty')} />
         ) : (
           <FixesRows data={overview.data} />
         )}
@@ -95,14 +104,18 @@ export function OptimizeContent({
 
 function WasteRows({ report }: { report: Polled<OptimizeJsonReport> }) {
   if (!report.data) {
-    if (report.error) return <CliErrorPanel error={report.error} subject="optimize findings" />
-    return <EmptyNote>Scanning optimize findings…</EmptyNote>
+    if (report.error) return <CliErrorPanel error={report.error} subject={t('common.subject.optimize')} />
+    return <EmptyNote>{t('spend.optimize.waste.scanning')}</EmptyNote>
   }
 
   return (
     <div className="opt-waste">
       <div className="opt-summary">
-        {formatCount(report.data.summary.findingCount, 'finding')} · {formatUsd(report.data.summary.potentialSavingsCostUSD)} potential · health {report.data.summary.healthScore}/100
+        {t('spend.optimize.waste.summary', {
+          count: formatCount(report.data.summary.findingCount, 'finding'),
+          savings: formatUsd(report.data.summary.potentialSavingsCostUSD),
+          health: report.data.summary.healthScore,
+        })}
       </div>
       <ActionableFindingRows findings={report.data.findings} byClass={report.data.summary.byClass} />
       <AppliedFixRows fixes={report.data.appliedFixes ?? []} />
@@ -119,11 +132,14 @@ const VERDICT_GLYPH: Record<AppliedFix['verdict'], string> = {
   pending: '\u2026',
 }
 
-const VERDICT_LABEL: Record<AppliedFix['verdict'], string> = {
-  worked: 'worked',
-  partial: 'under estimate',
-  'no-effect': 'did not help',
-  pending: 'measuring',
+/** Computed at call time (not a module-level const) so it re-reads the current locale. */
+function verdictLabel(verdict: AppliedFix['verdict']): string {
+  return {
+    worked: t('spend.optimize.verdict.worked'),
+    partial: t('spend.optimize.verdict.partial'),
+    'no-effect': t('spend.optimize.verdict.noEffect'),
+    pending: t('spend.optimize.verdict.pending'),
+  }[verdict]
 }
 
 // Closes the loop after `optimize --apply`: what each applied fix actually
@@ -133,21 +149,21 @@ function AppliedFixRows({ fixes }: { fixes: AppliedFix[] }) {
 
   return (
     <div className="opt-findings opt-applied">
-      <div className="opt-group">Applied fixes</div>
+      <div className="opt-group">{t('spend.optimize.applied.header')}</div>
       {fixes.map(fix => (
         <div className={`opt-applied-row opt-applied-${fix.verdict}`} key={fix.id}>
           <span className="opt-applied-glyph" aria-hidden="true">{VERDICT_GLYPH[fix.verdict]}</span>
           <b className="opt-finding-title">{fix.findingId ?? fix.kind}</b>
-          <span className="opt-applied-verdict">{VERDICT_LABEL[fix.verdict]}</span>
+          <span className="opt-applied-verdict">{verdictLabel(fix.verdict)}</span>
           <span className="opt-finding-tokens">
             {fix.verdict === 'pending'
               ? '\u2014'
-              : `est. ${formatCompact(fix.estimatedTokens)} \u2192 ${formatCompact(fix.realizedTokens)}`}
+              : t('spend.optimize.applied.estimate', { est: formatCompact(fix.estimatedTokens), realized: formatCompact(fix.realizedTokens) })}
           </span>
         </div>
       ))}
       {fixes.some(fix => fix.verdict === 'no-effect') && (
-        <div className="opt-summary opt-applied-hint">Revert one that did not help: <code>{fixes.find(fix => fix.verdict === 'no-effect')!.undoCommand}</code></div>
+        <div className="opt-summary opt-applied-hint">{t('spend.optimize.applied.hint')}<code>{fixes.find(fix => fix.verdict === 'no-effect')!.undoCommand}</code></div>
       )}
     </div>
   )
@@ -161,10 +177,21 @@ const IMPACT_ICON: Record<'high' | 'medium' | 'low', IconName> = {
   low: 'arrow-down',
 }
 
-const CLASS_HEADERS: Record<FindingClass, string> = {
-  fix: 'Fix now (apply-able)',
-  nudge: 'Habits',
-  keep: 'FYI',
+/** Computed at call time (not a module-level const) so it re-reads the current locale. */
+function classHeader(cls: FindingClass): string {
+  return {
+    fix: t('spend.optimize.class.fix'),
+    nudge: t('spend.optimize.class.nudge'),
+    keep: t('spend.optimize.class.keep'),
+  }[cls]
+}
+
+function severityLabel(severity: 'high' | 'medium' | 'low'): string {
+  return {
+    high: t('spend.optimize.severity.high'),
+    medium: t('spend.optimize.severity.medium'),
+    low: t('spend.optimize.severity.low'),
+  }[severity]
 }
 
 function actionText(fix: WasteAction): string {
@@ -175,7 +202,7 @@ function ActionableFindingRows({ findings, byClass }: { findings: OptimizeFindin
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [copiedId, setCopiedId] = useState<string | null>(null)
 
-  if (!findings.length) return <EmptyNote>No waste findings in this range yet.</EmptyNote>
+  if (!findings.length) return <EmptyNote>{t('spend.optimize.waste.empty')}</EmptyNote>
 
   const copyFix = async (finding: OptimizeFinding) => {
     await navigator.clipboard.writeText(actionText(finding.fix))
@@ -198,7 +225,12 @@ function ActionableFindingRows({ findings, byClass }: { findings: OptimizeFindin
           <Fragment key={finding.id}>
             {showHeader && (
               <div className="opt-group">
-                {CLASS_HEADERS[finding.class]} · {formatCompact(byClass[finding.class].tokensSaved)} tokens · {formatUsd(byClass[finding.class].savingsUSD)} · {byClass[finding.class].count} {byClass[finding.class].count === 1 ? 'finding' : 'findings'}
+                {t('spend.optimize.class.summary', {
+                  header: classHeader(finding.class),
+                  tokens: formatCompact(byClass[finding.class].tokensSaved),
+                  savings: formatUsd(byClass[finding.class].savingsUSD),
+                  findings: formatCount(byClass[finding.class].count, 'finding'),
+                })}
               </div>
             )}
             <button
@@ -209,20 +241,20 @@ function ActionableFindingRows({ findings, byClass }: { findings: OptimizeFindin
             >
               <span className={`opt-impact opt-impact-${finding.severity}`}>
                 <Icon name={IMPACT_ICON[finding.severity]} className="opt-impact-mark" />
-                {finding.severity.charAt(0).toUpperCase() + finding.severity.slice(1)}
+                {severityLabel(finding.severity)}
               </span>
               <span className="opt-finding-titlewrap">
                 <b className="opt-finding-title">{finding.title}</b>
                 {finding.trend === 'improving' && (
-                  <span className="opt-trend opt-trend-improving">improving<Icon name="arrow-down" className="opt-impact-mark" /></span>
+                  <span className="opt-trend opt-trend-improving">{t('spend.optimize.trend.improving')}<Icon name="arrow-down" className="opt-impact-mark" /></span>
                 )}
               </span>
               <span className="opt-finding-savings">{formatUsd(finding.estimatedSavingsUSD)}</span>
-              <span className="opt-finding-tokens">{formatCompact(finding.tokensSaved)} tokens · {finding.basis}</span>
+              <span className="opt-finding-tokens">{t('spend.optimize.finding.tokensBasis', { tokens: formatCompact(finding.tokensSaved), basis: finding.basis })}</span>
               <span className="opt-finding-chevron" aria-hidden="true"><Icon name="chevron-right" /></span>
             </button>
             {expanded && (
-              <div className="opt-finding-detail" role="region" aria-label={`${finding.title} details`}>
+              <div className="opt-finding-detail" role="region" aria-label={t('spend.optimize.findingDetailsAria', { title: finding.title })}>
                 <p className="opt-explanation">{finding.explanation}</p>
                 <div className={`opt-fix opt-fix-${finding.fix.type}`}>
                   <div className="opt-fix-head">
@@ -231,7 +263,7 @@ function ActionableFindingRows({ findings, byClass }: { findings: OptimizeFindin
                       {finding.fix.type === 'file-content' && <span className="opt-fix-path">{finding.fix.path}</span>}
                     </div>
                     <button className="opt-copy" type="button" onClick={() => void copyFix(finding)}>
-                      {copiedId === finding.id ? 'Copied' : 'Copy'}
+                      {copiedId === finding.id ? t('spend.optimize.copy.done') : t('spend.optimize.copy.label')}
                     </button>
                   </div>
                   <pre className="opt-fix-code"><code>{actionText(finding.fix)}</code></pre>
@@ -258,7 +290,7 @@ function FindingRows({ findings, empty }: { findings: Finding[]; empty: string }
           <b className="opt-finding-title">{finding.title}</b>
           <span className={`opt-impact opt-impact-${finding.impact}`}>
             <Icon name={IMPACT_ICON[finding.impact]} className="opt-impact-mark" />
-            {finding.impact.charAt(0).toUpperCase() + finding.impact.slice(1)}
+            {severityLabel(finding.impact)}
           </span>
           <span className="opt-finding-savings">{formatUsd(finding.savingsUSD)}</span>
         </div>
@@ -276,7 +308,7 @@ function YieldRows({
   category: SessionYieldJson['category']
   empty: string
 }) {
-  if (report.error || !report.data) return <EmptyNote>Yield data is unavailable right now.</EmptyNote>
+  if (report.error || !report.data) return <EmptyNote>{t('spend.optimize.yield.unavailable')}</EmptyNote>
 
   const rows = report.data.details.filter(row => row.category === category)
   if (!rows.length) return <EmptyNote>{empty}</EmptyNote>
@@ -289,7 +321,9 @@ function YieldRows({
           <div className="lx">
             <b>{row.project}</b>
             <span>
-              {row.commitCount.toLocaleString('en-US')} {row.commitCount === 1 ? 'commit' : 'commits'} · {row.sessionId}
+              {row.commitCount === 1
+                ? t('spend.optimize.yield.commit.one', { count: row.commitCount.toLocaleString('en-US') })
+                : t('spend.optimize.yield.commit.other', { count: row.commitCount.toLocaleString('en-US') })} · {row.sessionId}
             </span>
           </div>
           <span className="val">{formatUsd(row.costUSD)}</span>
@@ -300,5 +334,5 @@ function YieldRows({
 }
 
 function FixesRows({ data }: { data: MenubarPayload }) {
-  return <FindingRows findings={data.optimize.topFindings} empty="No fixes in this range yet." />
+  return <FindingRows findings={data.optimize.topFindings} empty={t('spend.optimize.fixes.empty')} />
 }

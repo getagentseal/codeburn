@@ -1,3 +1,5 @@
+import { localeTag, t } from '../i18n'
+
 export type ActiveCurrency = { code: string; symbol: string; rate: number }
 
 // Single source of truth for display currency. App.tsx sets it from the overview
@@ -18,7 +20,7 @@ export function formatUsd(n: number): string {
  * persisted exact snapshot correct on its very first paint, before App's
  * global active-currency effect has had a chance to run. */
 export function formatUsdWithCurrency(n: number, currency: ActiveCurrency): string {
-  return `${currency.symbol}${(n * currency.rate).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+  return `${currency.symbol}${(n * currency.rate).toLocaleString(localeTag(), { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 }
 
 /**
@@ -26,7 +28,7 @@ export function formatUsdWithCurrency(n: number, currency: ActiveCurrency): stri
  * prefixes the active symbol and formats the magnitude — never re-applies the rate.
  */
 export function formatConverted(n: number): string {
-  return `${activeCurrency.symbol}${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+  return `${activeCurrency.symbol}${n.toLocaleString(localeTag(), { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 }
 
 /** Shorten filesystem and CLI-mangled project paths to their useful trailing segments. */
@@ -53,7 +55,11 @@ export function shortenProjectPath(value: string, maxSegments = 3): string {
 /** "1 session" / "2,048 sessions" — one count label for every count site, so the
  *  separator and the noun form never drift between screens. */
 export function formatCount(n: number, singular: string, plural = `${singular}s`): string {
-  return `${n.toLocaleString('en-US')} ${n === 1 ? singular : plural}`
+  const count = n.toLocaleString(localeTag())
+  const stem = singular.replace(/\s+/g, '_')
+  const template = t(`common.count.${stem}.${n === 1 ? 'one' : 'other'}`)
+  // Fall back to English when a noun has no catalog entry (templates carry {count}).
+  return template.includes('{count}') ? template.replace('{count}', count) : `${count} ${n === 1 ? singular : plural}`
 }
 
 /** Compact token/count formatting: 1_842 → "1.8K", 184_000 → "184K", 1_200_000 → "1.2M". */
@@ -76,13 +82,13 @@ function trim(v: number): string {
 /** "Jul 10" — short month + day, no year. */
 export function formatDayShort(iso: string): string {
   const d = new Date(iso)
-  return Number.isNaN(d.getTime()) ? '—' : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+  return Number.isNaN(d.getTime()) ? '—' : d.toLocaleDateString(localeTag(), { month: 'short', day: 'numeric' })
 }
 
 /** "Jul 10, 2026" — full date. */
 export function formatDayLong(iso: string): string {
   const d = new Date(iso)
-  return Number.isNaN(d.getTime()) ? '—' : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+  return Number.isNaN(d.getTime()) ? '—' : d.toLocaleDateString(localeTag(), { month: 'short', day: 'numeric', year: 'numeric' })
 }
 
 /** "12 days" / "2h 14m" / "47m" / "38s" from a duration in ms. */
@@ -91,6 +97,6 @@ export function formatDuration(ms: number): string {
   const totalMin = Math.floor(ms / 60_000)
   if (totalMin < 1) return `${Math.floor(ms / 1000)}s`
   if (totalMin < 60) return `${totalMin}m`
-  if (totalMin >= 2_880) return `${Math.round(totalMin / 1_440)} days`
+  if (totalMin >= 2_880) return t('common.duration.days', { count: Math.round(totalMin / 1_440) })
   return `${Math.floor(totalMin / 60)}h ${totalMin % 60}m`
 }

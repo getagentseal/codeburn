@@ -97,7 +97,8 @@ struct ZaiQuotaTests {
             QuotaSummary.Window(
                 label: "5-hour",
                 percent: 0.25,
-                resetsAt: Date(timeIntervalSince1970: 1_800_000_000)
+                resetsAt: Date(timeIntervalSince1970: 1_800_000_000),
+                windowSeconds: 5 * 3600
             ),
         ])
     }

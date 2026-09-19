@@ -35,7 +35,7 @@ export type QuotaWindow = {
 }
 
 export type QuotaProvider = {
-  provider: 'claude' | 'codex' | 'gemini' | 'copilot' | 'antigravity' | 'kimi' | 'grokbot'
+  provider: 'claude' | 'codex' | 'gemini' | 'copilot' | 'antigravity' | 'kimi' | 'zcode' | 'grokbot'
   connection: 'connected' | 'disconnected' | 'accessDenied' | 'loading' | 'stale' | 'transientFailure' | 'terminalFailure'
   primary: QuotaWindow | null
   details: QuotaWindow[]
@@ -43,6 +43,10 @@ export type QuotaProvider = {
   footerLines: string[]
   /** True when the provider is in a 429 backoff window (upstream rate limit). */
   rateLimited?: boolean
+  /** Set when the error is an auth expiry a (re)connect can fix (a 401/403 or an
+   *  expired token), or when a stuck "waiting" is capped to an actionable state,
+   *  so the card shows the Connect affordance. */
+  connectable?: boolean
 }
 
 export type ProviderName = QuotaProvider['provider']
@@ -1040,6 +1044,22 @@ export type CompanionStatus = {
   restartRequired?: boolean
 }
 
+/** The macOS menubar app (mac/) as the Plugins page sees it (app/electron/mac-menubar.ts). */
+export type MacMenubarStatus = {
+  supported: boolean
+  /** False in a Mac App Store build, which may not download an executable. */
+  canInstall: boolean
+  installed: boolean
+  path: string | null
+  version: string | null
+  running: boolean
+  dock: boolean
+  /** True for a menubar too old to be driven from here; the card offers Update instead. */
+  outdated: boolean
+}
+
+export type MacMenubarInstall = { ok: boolean; error: string | null; status: MacMenubarStatus }
+
 /** The tray app's own settings, from the two files it reads them from
  *  (windows-settings.json, windows-dock.json) plus the HKCU Run value. */
 export type TrayPrefs = {
@@ -1075,6 +1095,13 @@ export type ProjectRow = { name: string; path: string; cost: number; sessions: n
 export type ProjectsReport = { projects: ProjectRow[] }
 
 export interface CodeburnBridge {
+  /** The Electron app's own UI language tag (app.getLocale()), for the 'system'
+   *  locale choice. Absent on preloads that predate desktop localization. */
+  readonly appLocale?: string
+  /** The persisted shared config `language` (null/absent = follow the system). */
+  getLanguage?(): Promise<string | null>
+  /** Persist the config `language` (null clears it) and propagate to the menu bar. */
+  setLanguage?(language: string | null): Promise<void>
   /** Subscribe to cold-start scan progress; returns an unsubscribe fn. */
   onProgress(cb: (event: ScanProgressEvent) => void): () => void
   /** Read the cached update-availability status (launch + 24h background check). */
@@ -1153,6 +1180,17 @@ export interface CodeburnBridge {
   setTrayAppPref?(patch: Record<string, unknown>): Promise<TrayPrefs | null>
   setTrayDockPref?(patch: Record<string, unknown>): Promise<TrayPrefs | null>
   setLaunchAtLogin?(enabled: boolean): Promise<TrayPrefs | null>
+  /** The macOS menubar app. Optional so a preload that predates the card degrades to
+   *  "not supported" rather than throwing. */
+  macMenubarStatus?(): Promise<MacMenubarStatus>
+  macMenubarInstall?(): Promise<MacMenubarInstall>
+  macMenubarOpen?(): Promise<MacMenubarStatus>
+  macMenubarSetDock?(enabled: boolean): Promise<MacMenubarStatus>
+  macMenubarSettings?(): Promise<MacMenubarInstall>
+  macMenubarQuit?(): Promise<MacMenubarInstall>
+  macMenubarUninstall?(): Promise<MacMenubarInstall>
+  /** Named steps of a running install: Downloading, Verifying, Installing, Starting. */
+  onMacMenubarProgress?(cb: (phase: string) => void): () => void
   // Plugin management
   pluginList(): Promise<unknown>
   pluginInfo(name: string): Promise<unknown>

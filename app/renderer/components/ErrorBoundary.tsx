@@ -1,5 +1,7 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react'
 
+import { t } from '../i18n'
+
 type Props = { children: ReactNode }
 type State = { error: Error | null; stack: string | null }
 
@@ -27,11 +29,11 @@ export class ErrorBoundary extends Component<Props, State> {
     return (
       <div className="error-boundary">
         <div className="panel error-card">
-          <h3 className="error-title">This screen hit an error</h3>
+          <h3 className="error-title">{t('shell.errorBoundary.title')}</h3>
           <p className="error-msg">{error.message || String(error)}</p>
           {stack && <pre className="error-stack">{stack.trim()}</pre>}
           <button className="btn" type="button" onClick={() => window.location.reload()}>
-            Reload
+            {t('shell.errorBoundary.reload')}
           </button>
         </div>
       </div>

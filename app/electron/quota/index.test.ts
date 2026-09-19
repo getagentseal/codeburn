@@ -7,7 +7,7 @@ const quota = (provider: ProviderName): QuotaProvider => ({
   provider, connection: 'connected', primary: null, details: [], planLabel: null, footerLines: [],
 })
 
-// Every construction stubs all seven fetchers: a missing dep falls back to the
+// Every construction stubs all eight fetchers: a missing dep falls back to the
 // real fetcher, which would touch disk or the network inside a test. Grok Bot's
 // install check is stubbed too, so the row does not depend on the host machine.
 const noopFetchers = () => ({
@@ -17,6 +17,7 @@ const noopFetchers = () => ({
   copilot: vi.fn(async () => ({ quota: quota('copilot') })),
   antigravity: vi.fn(async () => ({ quota: quota('antigravity') })),
   kimi: vi.fn(async () => ({ quota: quota('kimi') })),
+  zcode: vi.fn(async () => ({ quota: quota('zcode') })),
   grokbot: vi.fn(async () => ({ quota: quota('grokbot') })),
 })
 
@@ -28,7 +29,7 @@ describe('QuotaService', () => {
       readFile: vi.fn(async () => null), writeFile: vi.fn(async () => undefined),
     })
     const results = await service.getQuota({ force: true })
-    expect(results.map(row => row.provider)).toEqual(['claude', 'codex', 'gemini', 'copilot', 'antigravity', 'kimi', 'grokbot'])
+    expect(results.map(row => row.provider)).toEqual(['claude', 'codex', 'gemini', 'copilot', 'antigravity', 'kimi', 'zcode', 'grokbot'])
     for (const fetcher of Object.values(fetchers)) expect(fetcher).toHaveBeenCalledTimes(1)
     // Antigravity is local-only; it must not receive keychain permission.
     expect(fetchers.antigravity).toHaveBeenCalledWith({ signal: expect.any(AbortSignal), allowKeychain: false })
@@ -68,7 +69,7 @@ describe('QuotaService', () => {
       readFile: vi.fn(async () => null), writeFile: vi.fn(async () => undefined),
     })
     const results = await service.getQuota({ force: true })
-    expect(results.map(row => row.provider)).toEqual(['claude', 'codex', 'gemini', 'copilot', 'antigravity', 'kimi'])
+    expect(results.map(row => row.provider)).toEqual(['claude', 'codex', 'gemini', 'copilot', 'antigravity', 'kimi', 'zcode'])
     expect(fetchers.grokbot).not.toHaveBeenCalled()
   })
 
@@ -80,7 +81,7 @@ describe('QuotaService', () => {
     })
     // Unknown names are ignored rather than throwing.
     const results = await service.getQuota({ force: true, disabled: ['gemini', 'copilot', 'bogus' as ProviderName] })
-    expect(results.map(row => row.provider)).toEqual(['claude', 'codex', 'antigravity', 'kimi', 'grokbot'])
+    expect(results.map(row => row.provider)).toEqual(['claude', 'codex', 'antigravity', 'kimi', 'zcode', 'grokbot'])
     expect(fetchers.gemini).not.toHaveBeenCalled()
     expect(fetchers.copilot).not.toHaveBeenCalled()
   })

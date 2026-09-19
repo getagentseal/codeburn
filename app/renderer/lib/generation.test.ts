@@ -1,7 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { __resetGeneration, generationAt, generationHeadline, periodTotalsBreach, rememberGeneration, type PeriodTotals } from './generation'
+import { __resetGeneration, generationAt, generationHeadline, generationModels, periodTotalsBreach, rememberGeneration, type PeriodTotals } from './generation'
 import type { MenubarPayload } from './types'
+
+const MODELS = [{ name: 'gen-opus', cost: 400, savingsUSD: 0, savingsBaselineModel: '', calls: 200 }] as MenubarPayload['current']['topModels']
+
+function payloadWithModels(periodTotals: PeriodTotals, models: MenubarPayload['current']['topModels']): MenubarPayload {
+  return { periodTotals, current: { topModels: models } } as MenubarPayload
+}
 
 function totals(over: Partial<Record<keyof PeriodTotals, [number, number]>> = {}): PeriodTotals {
   const base: Record<string, [number, number]> = {
@@ -92,5 +98,29 @@ describe('rememberGeneration', () => {
     rememberGeneration(payload(totals({ lifetime: [1, 1] })), 1_000)
     expect(error).toHaveBeenCalledWith(expect.stringContaining('not nested'))
     error.mockRestore()
+  })
+})
+
+describe('generationModels', () => {
+  it('serves the models when the generation is newer and captured from the shown period', () => {
+    rememberGeneration(payloadWithModels(totals(), MODELS), 2_000, '30days')
+    expect(generationModels('30days', 1_000)).toEqual(MODELS)
+  })
+
+  it('withholds the models when the generation was captured from another period', () => {
+    rememberGeneration(payloadWithModels(totals(), MODELS), 2_000, 'week')
+    // The headline can still take the 30days total, but the models belong to week.
+    expect(generationHeadline('30days', 1_000)).toEqual({ cost: 14000, calls: 87000 })
+    expect(generationModels('30days', 1_000)).toBeNull()
+  })
+
+  it('withholds the models when the payload on screen is already the newest', () => {
+    rememberGeneration(payloadWithModels(totals(), MODELS), 1_000, '30days')
+    expect(generationModels('30days', 1_000)).toBeNull()
+  })
+
+  it('withholds an empty model list rather than blanking the table', () => {
+    rememberGeneration(payloadWithModels(totals(), []), 2_000, '30days')
+    expect(generationModels('30days', 1_000)).toBeNull()
   })
 })

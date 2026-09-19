@@ -1,3 +1,4 @@
+import { t } from '../i18n'
 import { filterChipKey, filterChipLabel, type FilterDimension, type InvestigationFilters, withoutFilterValue } from '../lib/investigation'
 import { Icon } from './icons'
 
@@ -7,15 +8,17 @@ export type FilterChip = {
   value: string | { project: string; branch: string } | { provider: string; sessionId: string }
 }
 
-const DIMENSION_LABELS: Record<FilterDimension, string> = {
-  days: 'Day',
-  providers: 'Provider',
-  projects: 'Project',
-  models: 'Model',
-  categories: 'Category',
-  prs: 'PR',
-  branches: 'Branch',
-  sessions: 'Session',
+function dimensionLabels(): Record<FilterDimension, string> {
+  return {
+    days: t('shared.filterChips.dimension.day'),
+    providers: t('shared.filterChips.dimension.provider'),
+    projects: t('shared.filterChips.dimension.project'),
+    models: t('shared.filterChips.dimension.model'),
+    categories: t('shared.filterChips.dimension.category'),
+    prs: t('shared.filterChips.dimension.pr'),
+    branches: t('shared.filterChips.dimension.branch'),
+    sessions: t('shared.filterChips.dimension.session'),
+  }
 }
 
 /** Flatten the selection into chips in a stable display order. */
@@ -43,22 +46,23 @@ export function FilterChips({ filters, onChange }: {
 }) {
   const chips = filterChips(filters)
   if (chips.length === 0) return null
+  const dimLabels = dimensionLabels()
   return (
-    <div className="drill-chips" role="group" aria-label="Active investigation filters">
-      <span className="drill-chips-label">Investigating</span>
+    <div className="drill-chips" role="group" aria-label={t('shared.filterChips.ariaLabel')}>
+      <span className="drill-chips-label">{t('shared.filterChips.investigating')}</span>
       {/* Keyed by the chip's identity, never by its label: the label truncates
           a session id and shortens a project path, so two chips in the same
           dimension can read identically while selecting different things. */}
       {chips.map(chip => (
         <span className={`drill-chip d-${chip.dimension}`} key={`${chip.dimension}:${filterChipKey(chip.dimension, chip.value)}`}>
-          <span className="drill-chip-dim">{DIMENSION_LABELS[chip.dimension]}</span>
+          <span className="drill-chip-dim">{dimLabels[chip.dimension]}</span>
           <span className="drill-chip-value" title={chip.dimension === 'prs' ? String(chip.value) : undefined}>
             {filterChipLabel(chip.dimension, chip.value)}
           </span>
           <button
             type="button"
             className="drill-chip-x"
-            aria-label={`Remove ${DIMENSION_LABELS[chip.dimension]} filter ${filterChipLabel(chip.dimension, chip.value)}`}
+            aria-label={t('shared.filterChips.removeAria', { dimension: dimLabels[chip.dimension], value: filterChipLabel(chip.dimension, chip.value) })}
             onClick={() => onChange(withoutFilterValue(filters, chip.dimension, chip.value))}
           >
             <Icon name="x" />
@@ -66,7 +70,7 @@ export function FilterChips({ filters, onChange }: {
         </span>
       ))}
       <button type="button" className="drill-chips-clear" onClick={() => onChange({ ...filters, days: [], providers: [], projects: [], models: [], categories: [], prs: [], branches: [], sessions: [] })}>
-        Clear
+        {t('shared.filterChips.clear')}
       </button>
     </div>
   )

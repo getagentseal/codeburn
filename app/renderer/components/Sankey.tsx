@@ -1,5 +1,6 @@
 import { useLayoutEffect, useRef, useState } from 'react'
 
+import { t } from '../i18n'
 import { formatUsd, shortenProjectPath } from '../lib/format'
 import { isOtherNode, seriesColorForModel } from '../lib/modelSeries'
 import type { SpendFlow, SpendFlowNode } from '../lib/types'
@@ -230,7 +231,7 @@ function modelDisplayLabel(raw: string): string {
 
 function projectCanonicalLabel(raw: string): string {
   const value = raw.trim()
-  if (isOtherNode(value)) return 'Other'
+  if (isOtherNode(value)) return t('shared.sankey.other')
   // Abs cwd still sent as the label (older payloads) may shorten. Canonical
   // CLI labels already include the parent context that distinguishes collisions
   // — do not drop it with a 3-segment tail.

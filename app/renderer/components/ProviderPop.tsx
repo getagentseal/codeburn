@@ -1,3 +1,4 @@
+import { t } from '../i18n'
 import { Dropdown } from './Dropdown'
 import { ProviderLogo } from './ProviderLogo'
 
@@ -22,7 +23,7 @@ export function ProviderPop({
   return (
     <Dropdown
       id="provider-select"
-      ariaLabel="Providers"
+      ariaLabel={t('shared.providerPop.ariaLabel')}
       value={value}
       options={options}
       onChange={onSelect}

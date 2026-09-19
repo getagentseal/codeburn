@@ -1,0 +1,716 @@
+/* CodeBurn Menubar — Français (fr).
+ *
+ * Keys are the English development copy; see en.lproj/Localizable.strings for
+ * the conventions. Format specifiers (%@, %lld, %%) must stay identical to the
+ * English entry, in the same order — LocalizationCatalogTests fails the build
+ * otherwise, because a mismatch is a crash or a wrong number at runtime.
+ *
+ * Untranslated on purpose: provider, model and plan names (Claude, Codex,
+ * Gemini, Opus, Sonnet, Antigravity…), units, currency codes, shell commands
+ * and file paths, and anything the `codeburn` CLI produces.
+ */
+
+/* MARK: Currencies, filters, periods and insight tabs */
+"US Dollar" = "Dollar américain";
+"British Pound" = "Livre sterling";
+"Euro" = "Euro";
+"Australian Dollar" = "Dollar australien";
+"Canadian Dollar" = "Dollar canadien";
+"New Zealand Dollar" = "Dollar néo-zélandais";
+"Japanese Yen" = "Yen japonais";
+"Chinese Yuan" = "Yuan chinois";
+"Swiss Franc" = "Franc suisse";
+"Indian Rupee" = "Roupie indienne";
+"Brazilian Real" = "Real brésilien";
+"Swedish Krona" = "Couronne suédoise";
+"Singapore Dollar" = "Dollar singapourien";
+"Hong Kong Dollar" = "Dollar de Hong Kong";
+"South Korean Won" = "Won sud-coréen";
+"Mexican Peso" = "Peso mexicain";
+"South African Rand" = "Rand sud-africain";
+"Danish Krone" = "Couronne danoise";
+"Romanian Leu" = "Leu roumain";
+"All" = "Tout";
+"Plan" = "Forfait";
+"Trend" = "Tendance";
+"Forecast" = "Prévision";
+"Calendar" = "Calendrier";
+"Pulse" = "Pouls";
+"Stats" = "Stats";
+"Optimize" = "Optimiser";
+"Today" = "Aujourd'hui";
+"7D" = "7j";
+"30D" = "30j";
+"Month" = "Mois";
+"6M" = "6M";
+"Life" = "Total";
+"Week" = "Semaine";
+"30 Days" = "30 jours";
+"6 Months" = "6 mois";
+"Lifetime" = "Total";
+
+/* MARK: Scope toggle */
+"Local" = "Local";
+"Combined" = "Combiné";
+
+/* MARK: Accent presets */
+"Ember" = "Braise";
+"Blue" = "Bleu";
+"Purple" = "Violet";
+"Pink" = "Rose";
+"Red" = "Rouge";
+"Orange" = "Orange";
+"Yellow" = "Jaune";
+"Green" = "Vert";
+"Graphite" = "Graphite";
+
+/* MARK: Session counts */
+"Older session logs may be unavailable." = "Les anciens journaux de session peuvent être indisponibles.";
+"Session identities are unavailable across devices." = "Les identités de session ne sont pas disponibles entre appareils.";
+"Session count unavailable" = "Nombre de sessions indisponible";
+"At least 1 session" = "Au moins 1 session";
+"At least %lld sessions" = "Au moins %lld sessions";
+"1 session" = "1 session";
+"%lld sessions" = "%lld sessions";
+"Unavailable" = "Indisponible";
+"≥%lld sess" = "≥%lld sess.";
+"%lld sess" = "%lld sess.";
+
+/* MARK: Quota windows and reset countdowns */
+"Connect" = "Connecter";
+"Reconnect" = "Reconnecter";
+"Add API Key" = "Ajouter une clé API";
+"now" = "maintenant";
+"%1$lldd %2$lldh" = "%1$lldj %2$lldh";
+"%1$lldh %2$lldm" = "%1$lldh %2$lldmin";
+"%lldm" = "%lldmin";
+
+/* MARK: Usage refresh cadence */
+"Auto (2m, less on battery)" = "Auto (2 min, moins sur batterie)";
+"Manual" = "Manuel";
+"1 minute" = "1 minute";
+"5 minutes" = "5 minutes";
+"15 minutes" = "15 minutes";
+
+/* MARK: Quota refresh cadence */
+"2 minutes" = "2 minutes";
+
+/* MARK: Capacity Dock appearance */
+"Liquid Glass" = "Liquid Glass";
+"Circle" = "Cercle";
+"Squircle" = "Squircle";
+
+/* MARK: Provider connection guidance */
+"Installed app or CLI" = "App ou CLI installée";
+"OAuth" = "OAuth";
+"API or cloud credentials" = "Identifiants API ou cloud";
+"Browser session" = "Session navigateur";
+"Localhost service" = "Service local";
+"No sign-in required" = "Aucune connexion requise";
+"Enter an API key or token below, then press Save & Connect." = "Entrez une clé API ou un jeton ci-dessous, puis appuyez sur Enregistrer et connecter.";
+"Sign in to %@ in a supported browser, then click Retry." = "Connectez-vous à %@ dans un navigateur pris en charge, puis cliquez sur Réessayer.";
+"Sign in with the %@ app or CLI, then click Retry." = "Connectez-vous via l'app ou la CLI %@, puis cliquez sur Réessayer.";
+"Complete %@ OAuth, then click Retry." = "Terminez l'authentification OAuth %@, puis cliquez sur Réessayer.";
+"Start the local %@ service, then click Retry." = "Démarrez le service local %@, puis cliquez sur Réessayer.";
+"Enter the required API or cloud credentials below, then press Save & Connect." = "Entrez les identifiants API ou cloud requis ci-dessous, puis appuyez sur Enregistrer et connecter.";
+"No sign-in is required. Click Retry to refresh quota." = "Aucune connexion requise. Cliquez sur Réessayer pour actualiser le quota.";
+"Add an API key or token in Provider Settings." = "Ajoutez une clé API ou un jeton dans les réglages du fournisseur.";
+"Add the required API or cloud credentials in Provider Settings." = "Ajoutez les identifiants API ou cloud requis dans les réglages du fournisseur.";
+
+/* MARK: Provider reconnect copy */
+"Reconnect %@" = "Reconnecter %@";
+"Claude Code credentials need to be refreshed." = "Les identifiants Claude Code doivent être actualisés.";
+"Open Claude Code in your terminal and type `/login`, then click Reconnect." = "Ouvrez Claude Code dans votre terminal et tapez `/login`, puis cliquez sur Reconnecter.";
+"Codex credentials need to be refreshed." = "Les identifiants Codex doivent être actualisés.";
+"Run `codex login` in your terminal, then click Reconnect." = "Exécutez `codex login` dans votre terminal, puis cliquez sur Reconnecter.";
+"Kimi Code credentials need to be refreshed." = "Les identifiants Kimi Code doivent être actualisés.";
+"Run the Kimi CLI once to refresh your login, then click Reconnect." = "Lancez la CLI Kimi une fois pour actualiser votre connexion, puis cliquez sur Reconnecter.";
+"Gemini credentials need to be refreshed." = "Les identifiants Gemini doivent être actualisés.";
+"Run the Gemini CLI once to refresh your login, then click Reconnect." = "Lancez la CLI Gemini une fois pour actualiser votre connexion, puis cliquez sur Reconnecter.";
+"Copilot credentials need to be refreshed." = "Les identifiants Copilot doivent être actualisés.";
+"Sign in with the Copilot CLI, an editor plugin, or `gh auth login`, then click Reconnect." = "Connectez-vous via la CLI Copilot, un plugin d'éditeur, ou `gh auth login`, puis cliquez sur Reconnecter.";
+"The local Antigravity service is unavailable." = "Le service Antigravity local est indisponible.";
+"Start the Antigravity app, then click Reconnect." = "Démarrez l'app Antigravity, puis cliquez sur Reconnecter.";
+"%@ credentials need to be refreshed." = "Les identifiants %@ doivent être actualisés.";
+"Sign in to %@ again, then retry." = "Reconnectez-vous à %@, puis réessayez.";
+
+/* MARK: Copilot quota copy */
+"No Copilot credentials found" = "Aucun identifiant Copilot trouvé";
+"Sign in via an editor's Copilot plugin first. Then click Try Again." = "Connectez-vous d'abord via le plugin Copilot d'un éditeur, puis cliquez sur Réessayer.";
+"Copilot quota tracking disconnected" = "Suivi du quota Copilot déconnecté";
+"Your Copilot credentials are untouched. Click Connect to resume." = "Vos identifiants Copilot restent inchangés. Cliquez sur Connecter pour reprendre.";
+"Usage tracking still works. For live quota, sign in with the Copilot CLI or gh auth login, or paste a token below, then click Connect." = "Le suivi d'usage fonctionne toujours. Pour le quota en direct, connectez-vous via la CLI Copilot ou gh auth login, ou collez un jeton ci-dessous, puis cliquez sur Connecter.";
+"Quota tracking disconnected. Credentials are untouched. Click Connect to resume." = "Suivi du quota déconnecté. Les identifiants restent inchangés. Cliquez sur Connecter pour reprendre.";
+
+/* MARK: Grok Bot quota copy */
+"Grok Bot is not installed. Install the Grok Bot app, then click Retry." = "Grok Bot n'est pas installé. Installez l'app Grok Bot, puis cliquez sur Réessayer.";
+"Sign in to the Cursor app with the account Grok Bot uses, then click Retry." = "Connectez-vous à l'app Cursor avec le compte utilisé par Grok Bot, puis cliquez sur Réessayer.";
+"Cursor rejected the current app session. Sign in again, then click Retry." = "Cursor a rejeté la session en cours. Reconnectez-vous, puis cliquez sur Réessayer.";
+"Could not read the Cursor app's local session data. Quit and reopen Cursor, then click Retry." = "Impossible de lire les données de session locale de Cursor. Quittez puis rouvrez Cursor, puis cliquez sur Réessayer.";
+"This account has no included Grok Bot allowance." = "Ce compte n'inclut aucun forfait Grok Bot.";
+"Grok Bot usage is drawn from a pooled enterprise allowance, which has no per-account reading." = "L'usage de Grok Bot provient d'un forfait entreprise partagé, sans relevé par compte.";
+"Cursor rate-limited the quota request." = "Cursor a limité la requête de quota.";
+"Grok Bot quota is temporarily unavailable." = "Le quota Grok Bot est temporairement indisponible.";
+"Cursor returned an unrecognized Grok Bot quota response." = "Cursor a renvoyé une réponse de quota Grok Bot non reconnue.";
+"Network error fetching Grok Bot quota." = "Erreur réseau lors de la récupération du quota Grok Bot.";
+
+/* MARK: Updates */
+"Update Check Failed" = "Échec de la vérification des mises à jour";
+"CLI Update Failed" = "Échec de la mise à jour de la CLI";
+"Menubar Update Failed" = "Échec de la mise à jour de l'app menu bar";
+"CodeBurn could not check GitHub for updates." = "CodeBurn n'a pas pu vérifier les mises à jour sur GitHub.";
+"CodeBurn could not update the CLI." = "CodeBurn n'a pas pu mettre à jour la CLI.";
+"CodeBurn could not update the menubar app." = "CodeBurn n'a pas pu mettre à jour l'app menu bar.";
+"Click to retry the update check." = "Cliquez pour relancer la vérification des mises à jour.";
+"Click to retry the update." = "Cliquez pour relancer la mise à jour.";
+"Updating..." = "Mise à jour…";
+"Update" = "Mettre à jour";
+"Update the CLI and menubar to the latest release" = "Mettre la CLI et l'app menu bar à jour vers la dernière version";
+"CodeBurn %@ available" = "CodeBurn %@ disponible";
+"App and CLI %@ updates are ready. Click to install." = "Les mises à jour %@ de l'app et de la CLI sont prêtes. Cliquez pour installer.";
+"Click to install the update." = "Cliquez pour installer la mise à jour.";
+"CodeBurn CLI %@ available" = "CodeBurn CLI %@ disponible";
+"Could not find the package manager for %1$@. Run “%2$@” manually, then try again." = "Gestionnaire de paquets introuvable pour %1$@. Exécutez « %2$@ » manuellement, puis réessayez.";
+"the CLI" = "la CLI";
+"CLI update failed (exit %lld)" = "Échec de la mise à jour de la CLI (code %lld)";
+"Your codeburn CLI (%1$@) is too old to update the menubar. Run “%2$@” first, then try again." = "Votre CLI codeburn (%1$@) est trop ancienne pour mettre à jour l'app menu bar. Exécutez d'abord « %2$@ », puis réessayez.";
+"Update failed (exit %lld)" = "Échec de la mise à jour (code %lld)";
+"GitHub returned HTTP %lld." = "GitHub a renvoyé le code HTTP %lld.";
+"No mac-v release with a menubar zip and checksum was found." = "Aucune version mac-v avec zip menu bar et somme de contrôle n'a été trouvée.";
+
+/* MARK: Terminal picker */
+"Terminal (macOS default)" = "Terminal (par défaut macOS)";
+
+/* MARK: Status-item menu, tooltip and update alerts */
+"%@ credits" = "%@ crédits";
+"CodeBurn %1$@ · %2$lld of %3$lld devices reporting" = "CodeBurn %1$@ · %2$lld appareil(s) sur %3$lld actif(s)";
+"Settings…" = "Réglages…";
+"Capacity Dock Settings…" = "Réglages du Capacity Dock…";
+"Refresh Now" = "Actualiser maintenant";
+"Check for Updates" = "Rechercher des mises à jour";
+"About CodeBurn" = "À propos de CodeBurn";
+"Quit CodeBurn" = "Quitter CodeBurn";
+"Today · no usage yet" = "Aujourd'hui · aucun usage";
+"1 call" = "1 appel";
+"%lld calls" = "%lld appels";
+"Today · %1$@ · %2$@" = "Aujourd'hui · %1$@ · %2$@";
+"CodeBurn Settings" = "Réglages CodeBurn";
+"Update Available" = "Mise à jour disponible";
+"%1$@ is available (you have %2$@)." = "%1$@ est disponible (vous avez %2$@).";
+"%1$@ Your codeburn CLI is too old to install it. First run:\n\n%2$@\n\nthen:\n\ncodeburn menubar --force" = "%1$@ Votre CLI codeburn est trop ancienne pour l'installer. Exécutez d'abord :\n\n%2$@\n\npuis :\n\ncodeburn menubar --force";
+"%@ Run:\n\ncodeburn menubar --force" = "%@ Exécutez :\n\ncodeburn menubar --force";
+"Up to Date" = "À jour";
+"You're on the latest version (%@)." = "Vous êtes sur la dernière version (%@).";
+"OK" = "OK";
+
+/* MARK: Popover chrome, header, footer and banners */
+"This total may be incomplete." = "Ce total peut être incomplet.";
+"Claude config" = "Configuration Claude";
+"No %1$@ data for %2$@" = "Aucune donnée %1$@ pour %2$@";
+"Couldn't load %@" = "Impossible de charger %@";
+"Retry" = "Réessayer";
+"Loading %@…" = "Chargement de %@…";
+"Your AI Bill, Itemized" = "Votre facture IA, détaillée";
+"%1$@ over limit (%2$lld%%)" = "%1$@ au-delà de la limite (%2$lld%%)";
+"resets in %@" = "réinitialisation dans %@";
+"Change accent color" = "Changer la couleur d'accent";
+"CLI %@ available" = "CLI %@ disponible";
+"Update now" = "Mettre à jour";
+"Update the CLI (and the menubar if one is available) automatically" = "Mettre à jour automatiquement la CLI (et l'app menu bar si disponible)";
+"Copy update command to clipboard" = "Copier la commande de mise à jour";
+"Enjoying CodeBurn?" = "Vous aimez CodeBurn ?";
+"Star us on GitHub" = "Mettez-nous une étoile sur GitHub";
+"Hide this banner" = "Masquer cette bannière";
+"CSV (folder)" = "CSV (dossier)";
+"JSON" = "JSON";
+"Export" = "Exporter";
+"Full Report" = "Rapport complet";
+
+/* MARK: Hero section */
+"%@ call" = "%@ appel";
+"%@ calls" = "%@ appels";
+"Daily budget of %@ exceeded" = "Budget quotidien de %@ dépassé";
+"Combined unavailable · showing local" = "Combiné indisponible · affichage local";
+"Combined · %@" = "Combiné · %@";
+"Saved %@ with local models" = "%@ économisés avec des modèles locaux";
+"%1$lld of %2$lld devices" = "%1$lld appareil(s) sur %2$lld";
+"%@ · local" = "%@ · local";
+
+/* MARK: Period strip and date picker */
+"Clear" = "Effacer";
+"Done" = "Terminé";
+"Pick dates" = "Choisir des dates";
+"1 day" = "1 jour";
+"%lld days" = "%lld jours";
+
+/* MARK: Provider tab strip and quota popover */
+"Show previous providers" = "Fournisseurs précédents";
+"Show next providers" = "Fournisseurs suivants";
+"Loading…" = "Chargement…";
+"Sign in with `codex` (ChatGPT mode) to track quota." = "Connectez-vous via `codex` (mode ChatGPT) pour suivre le quota.";
+"Sign in to Claude Code to track quota." = "Connectez-vous à Claude Code pour suivre le quota.";
+"Sign in to track quota." = "Connectez-vous pour suivre le quota.";
+"%@ usage" = "Usage %@";
+"stale" = "obsolète";
+"retrying" = "nouvel essai";
+
+/* MARK: Activity section */
+"Activity" = "Activité";
+"Cost" = "Coût";
+"Turns" = "Tours";
+"1-shot" = "1er coup";
+
+/* MARK: Models section */
+"Models" = "Modèles";
+"Saved" = "Économisé";
+"Calls" = "Appels";
+"Tokens" = "Tokens";
+"%@ in" = "%@ entrée";
+"%@ out" = "%@ sortie";
+"%1$@ in · %2$@ out · %3$@ cache read" = "%1$@ entrée · %2$@ sortie · %3$@ lecture cache";
+"%@%% cache hit" = "%@%% de cache";
+"1 model unpriced, counted at $0 · %@ tokens" = "1 modèle non tarifé, compté à 0 $ · %@ tokens";
+"%1$lld models unpriced, counted at $0 · %2$@ tokens" = "%1$lld modèles non tarifés, comptés à 0 $ · %2$@ tokens";
+
+/* MARK: Pull requests section */
+"Pull requests" = "Pull requests";
+
+/* MARK: Tooling section */
+"Tooling" = "Outillage";
+"Tools" = "Outils";
+"Skills & Agents" = "Compétences et agents";
+"MCP Servers" = "Serveurs MCP";
+
+/* MARK: Tips section */
+"Tips for you" = "Conseils pour vous";
+"%lld signals" = "%lld signaux";
+"Open Full Optimize" = "Ouvrir l'optimisation complète";
+"Cache hit at %lld%% — most prompts reuse cache" = "Cache touché à %lld%% — la plupart des prompts réutilisent le cache";
+"%lld%% one-shot — edits landing first try" = "%lld%% en un coup — les modifs passent du premier coup";
+"Spend down %lld%% vs last 7 days" = "Dépense en baisse de %lld%% sur 7 jours";
+"%lld-day usage streak" = "%lld jours d'usage consécutifs";
+"Spend up %lld%% vs prior 7 days" = "Dépense en hausse de %lld%% sur 7 jours";
+"Cache hit only %lld%% — paying for cold prompts" = "Cache touché à seulement %lld%% — vous payez des prompts froids";
+"%lld%% one-shot — lots of iteration" = "%lld%% en un coup — beaucoup d'itérations";
+"On pace for %1$@ this month (+%2$lld%% vs last)" = "En rythme pour %1$@ ce mois-ci (+%2$lld%% vs le précédent)";
+"What's working" = "Ce qui fonctionne";
+"What to improve" = "À améliorer";
+"Risks" = "Risques";
+
+/* MARK: Insight tabs (trend, calendar, forecast, pulse, stats, optimize, plan) */
+"Last %lld days" = "%lld derniers jours";
+"%1$@%% vs prior %2$lldd" = "%1$@%% vs %2$lldj précédents";
+"Avg/day" = "Moy./jour";
+"Peak" = "Pic";
+"Yesterday" = "Hier";
+"Total" = "Total";
+"%@ tokens" = "%@ tokens";
+"%1$@ on %2$@" = "%1$@ le %2$@";
+"Daily activity" = "Activité quotidienne";
+"%lld active days" = "%lld jours actifs";
+"Peak day" = "Jour de pointe";
+"Avg active" = "Moy. active";
+"Streak" = "Série";
+"%lldd" = "%lldj";
+"Mon" = "Lun";
+"Wed" = "Mer";
+"Fri" = "Ven";
+"Sun" = "Dim";
+"Daily detail" = "Détail quotidien";
+"Hover a day" = "Survolez un jour";
+"Future day" = "Jour futur";
+"No tracked usage" = "Aucun usage suivi";
+"%@: future day" = "%@ : jour futur";
+"%@: no tracked usage" = "%@ : aucun usage suivi";
+"%1$@: %2$@, %3$lld calls, %4$@ tokens" = "%1$@ : %2$@, %3$lld appels, %4$@ tokens";
+"Month-to-date" = "Depuis le début du mois";
+"On pace for" = "En rythme pour";
+"Avg/day (this wk)" = "Moy./jour (cette sem.)";
+"Last 7d" = "7 derniers jours";
+"no prior month" = "pas de mois précédent";
+"%1$@%% vs last month (%2$@)" = "%1$@%% vs mois dernier (%2$@)";
+"Cache hit" = "Cache touché";
+"Cost / session" = "Coût / session";
+"Cost/edit" = "Coût/modif";
+"Save ~%1$@ / ~%2$@ tokens · 1 finding" = "Économie ~%1$@ / ~%2$@ tokens · 1 constat";
+"Save ~%1$@ / ~%2$@ tokens · %3$lld findings" = "Économie ~%1$@ / ~%2$@ tokens · %3$lld constats";
+"Favorite model" = "Modèle favori";
+"Active days (month)" = "Jours actifs (mois)";
+"Most active day" = "Jour le plus actif";
+"Peak day spend" = "Dépense du jour de pointe";
+"Sessions" = "Sessions";
+"Current streak" = "Série actuelle";
+"Longest streak" = "Plus longue série";
+"Tracked spend (last %lld days)" = "Dépense suivie (%lld derniers jours)";
+"Costliest session" = "Session la plus coûteuse";
+"Retry tax" = "Coût des réessais";
+"%1$lld retries across %2$lld edits" = "%1$lld réessais sur %2$lld modifs";
+"%@ ret/edit" = "%@ réess./modif";
+"Hides session details" = "Masque les détails de session";
+"Shows session details" = "Affiche les détails de session";
+"Expanded" = "Développé";
+"Collapsed" = "Réduit";
+"  %lld call" = "  %lld appel";
+"  %lld calls" = "  %lld appels";
+"Potential savings" = "Économies potentielles";
+"%lld%% of spend" = "%lld%% de la dépense";
+"could be optimized" = "pourrait être optimisé";
+"Routing waste" = "Gaspillage de routage";
+"vs %1$@ @ %2$@/edit" = "vs %1$@ à %2$@/modif";
+"Connect Claude subscription" = "Connecter l'abonnement Claude";
+"CodeBurn will read your Claude Code credentials once. macOS will ask permission. After that, the live quota bar shows next to the Claude tab and updates automatically." = "CodeBurn lira vos identifiants Claude Code une seule fois. macOS demandera une autorisation. Ensuite, la barre de quota en direct s'affiche à côté de l'onglet Claude et se met à jour automatiquement.";
+"Reading Claude credentials..." = "Lecture des identifiants Claude…";
+"No Claude credentials found" = "Aucun identifiant Claude trouvé";
+"Sign in with Claude Code first: open `claude` in your terminal and type `/login`. Then click Try Again." = "Connectez-vous d'abord à Claude Code : ouvrez `claude` dans votre terminal et tapez `/login`. Puis cliquez sur Réessayer.";
+"Anthropic temporarily unreachable. Retrying." = "Anthropic temporairement injoignable. Nouvel essai.";
+"Reconnect Claude" = "Reconnecter Claude";
+"Your Claude session has expired. Open Claude Code in your terminal and type `/login`, then click Reconnect." = "Votre session Claude a expiré. Ouvrez Claude Code dans votre terminal et tapez `/login`, puis cliquez sur Reconnecter.";
+"Resets %@" = "Réinitialisation %@";
+"5-hour window" = "Fenêtre de 5 h";
+"7-day total" = "Total sur 7 j";
+"7-day Opus" = "Opus sur 7 j";
+"7-day Sonnet" = "Sonnet sur 7 j";
+"7-day %@" = "%@ sur 7 j";
+"Try Again" = "Réessayer";
+"Couldn't load plan data" = "Impossible de charger les données du forfait";
+"Connect ChatGPT subscription" = "Connecter l'abonnement ChatGPT";
+"CodeBurn will read your Codex CLI credentials once. After that, the live quota bar shows next to the Codex tab and updates automatically." = "CodeBurn lira vos identifiants CLI Codex une seule fois. Ensuite, la barre de quota en direct s'affiche à côté de l'onglet Codex et se met à jour automatiquement.";
+"Reading Codex CLI credentials..." = "Lecture des identifiants CLI Codex…";
+"No Codex credentials found" = "Aucun identifiant Codex trouvé";
+"Sign in with Codex first: run `codex login` in your terminal. Then click Try Again." = "Connectez-vous d'abord à Codex : exécutez `codex login` dans votre terminal. Puis cliquez sur Réessayer.";
+"ChatGPT temporarily unreachable. Retrying." = "ChatGPT temporairement injoignable. Nouvel essai.";
+"Reconnect Codex" = "Reconnecter Codex";
+"Your ChatGPT session has expired. Run `codex login` in your terminal, then click Reconnect." = "Votre session ChatGPT a expiré. Exécutez `codex login` dans votre terminal, puis cliquez sur Reconnecter.";
+"%@ window" = "Fenêtre %@";
+"Credits" = "Crédits";
+"Unlimited" = "Illimité";
+"Limit resets" = "Réinitialisation de la limite";
+"No Kimi Code credentials found" = "Aucun identifiant Kimi Code trouvé";
+"Sign in with the Kimi CLI first. Then click Try Again." = "Connectez-vous d'abord via la CLI Kimi. Puis cliquez sur Réessayer.";
+"Reading Kimi Code credentials..." = "Lecture des identifiants Kimi Code…";
+"Kimi temporarily unreachable. Retrying." = "Kimi temporairement injoignable. Nouvel essai.";
+"Refresh Kimi Code login" = "Actualiser la connexion Kimi Code";
+"Kimi Code tokens are short-lived. Run the Kimi CLI once to refresh your login, then click Reconnect." = "Les jetons Kimi Code sont de courte durée. Lancez la CLI Kimi une fois pour actualiser votre connexion, puis cliquez sur Reconnecter.";
+"Parallel sessions" = "Sessions parallèles";
+"Login idle. Run the Kimi CLI to refresh." = "Connexion inactive. Lancez la CLI Kimi pour l'actualiser.";
+"as of %@" = "au %@";
+"No Gemini credentials found" = "Aucun identifiant Gemini trouvé";
+"Sign in with the Gemini CLI first. Then click Try Again." = "Connectez-vous d'abord via la CLI Gemini. Puis cliquez sur Réessayer.";
+"Reading Gemini credentials..." = "Lecture des identifiants Gemini…";
+"Gemini temporarily unreachable. Retrying." = "Gemini temporairement injoignable. Nouvel essai.";
+"Refresh Gemini login" = "Actualiser la connexion Gemini";
+"Your Gemini login has expired. Run the Gemini CLI once to refresh it, then click Reconnect." = "Votre connexion Gemini a expiré. Lancez la CLI Gemini une fois pour l'actualiser, puis cliquez sur Reconnecter.";
+"Login idle. Run the Gemini CLI to refresh." = "Connexion inactive. Lancez la CLI Gemini pour l'actualiser.";
+"Reading Copilot credentials..." = "Lecture des identifiants Copilot…";
+"GitHub temporarily unreachable. Retrying." = "GitHub temporairement injoignable. Nouvel essai.";
+"Refresh Copilot login" = "Actualiser la connexion Copilot";
+"Your Copilot sign-in has expired. Sign in via an editor's Copilot plugin again, then click Reconnect." = "Votre connexion Copilot a expiré. Reconnectez-vous via le plugin Copilot d'un éditeur, puis cliquez sur Reconnecter.";
+"Login idle. Sign in via an editor's Copilot plugin to refresh." = "Connexion inactive. Connectez-vous via le plugin Copilot d'un éditeur pour l'actualiser.";
+"No local Antigravity server found" = "Aucun serveur Antigravity local trouvé";
+"Start the Antigravity app, then click Try Again." = "Démarrez l'app Antigravity, puis cliquez sur Réessayer.";
+"Probing the local Antigravity server..." = "Sondage du serveur Antigravity local…";
+"Local Antigravity server unreachable. Retrying." = "Serveur Antigravity local injoignable. Nouvel essai.";
+"Reconnect Antigravity" = "Reconnecter Antigravity";
+"Server disconnected. Start the Antigravity app to refresh." = "Serveur déconnecté. Démarrez l'app Antigravity pour actualiser.";
+"On pace" = "En rythme";
+"On pace: %@ at reset" = "En rythme : %@ à la réinitialisation";
+"%@%% in deficit" = "%@%% de déficit";
+"%@%% in reserve" = "%@%% en réserve";
+"%1$@ · hits 100%% %2$@" = "%1$@ · atteint 100%% %2$@";
+"%1$@ · %2$@ at reset" = "%1$@ · %2$@ à la réinitialisation";
+"On pace: %1$@ at reset · hits 100%% %2$@" = "En rythme : %1$@ à la réinitialisation · atteint 100%% %2$@";
+"Based on last cycle: %@" = "D'après le dernier cycle : %@";
+"in %lldm" = "dans %lldmin";
+"in %lldh" = "dans %lldh";
+"in %lldd" = "dans %lldj";
+
+/* MARK: Capacity Dock */
+"Dock to Edge" = "Ancrer au bord";
+"Left" = "Gauche";
+"Right" = "Droite";
+"Top" = "Haut";
+"Bottom" = "Bas";
+"Hide Capacity Dock" = "Masquer le Capacity Dock";
+"Capacity Dock" = "Capacity Dock";
+"Unknown" = "Inconnu";
+"Click to keep Capacity Dock expanded" = "Cliquez pour garder le Capacity Dock déployé";
+"Click to switch between this provider's usage windows" = "Cliquez pour changer de fenêtre d'usage de ce fournisseur";
+/* VoiceOver action on the provider cell. The window name is either the
+   provider's own label or the generic horizon, both left verbatim. */
+"Show %@ usage" = "Afficher l'usage %@";
+"none running" = "aucune en cours";
+"Kimi Code" = "Kimi Code";
+"Gemini" = "Gemini";
+"Copilot" = "Copilot";
+"Antigravity" = "Antigravity";
+"1 running" = "1 en cours";
+"%lld running" = "%lld en cours";
+"%@ left" = "%@ restant";
+/* Tooltip on a live-session row. %@ is the terminal application's own name,
+   left verbatim. The second form is used where the terminal cannot select the
+   session's tab, only come forward. */
+"Open in %@" = "Ouvrir dans %@";
+"Bring %@ to front" = "Mettre %@ au premier plan";
+"burned" = "consommé";
+"today %1$@ of %2$@" = "aujourd'hui %1$@ sur %2$@";
+"no budget set" = "aucun budget défini";
+"Refreshing…" = "Actualisation…";
+"Last known usage · refreshing" = "Dernier usage connu · actualisation";
+"Last known usage · retrying" = "Dernier usage connu · nouvel essai";
+"Not connected" = "Non connecté";
+"Reconnect required" = "Reconnexion requise";
+
+/* MARK: Settings */
+"General" = "Général";
+"Providers" = "Fournisseurs";
+"%lld on" = "%lld actif(s)";
+"About" = "À propos";
+"Settings" = "Réglages";
+"Search providers" = "Rechercher un fournisseur";
+"Enter an amount above, or the alert stays off." = "Saisissez un montant ci-dessus, sinon l'alerte reste désactivée.";
+"Flame icon turns yellow when today's tokens pass the daily budget." = "L'icône flamme devient jaune quand les tokens du jour dépassent le budget quotidien.";
+"Flame icon turns yellow when today's cost pass the daily budget." = "L'icône flamme devient jaune quand le coût du jour dépasse le budget quotidien.";
+"Display" = "Affichage";
+"Currency" = "Devise";
+"Metric" = "Métrique";
+"Cost ($)" = "Coût ($)";
+"Tokens (↑↓)" = "Tokens (↑↓)";
+"Total Tokens" = "Tokens totaux";
+"Credits (Codex)" = "Crédits (Codex)";
+"Icon Only" = "Icône seule";
+"Period" = "Période";
+"Scope" = "Portée";
+"Accent" = "Accent";
+"Usage Refresh" = "Actualisation de l'usage";
+"Update every" = "Actualiser toutes les";
+"How often the menubar figure re-reads your local session data. Auto refreshes every 30 seconds while you're plugged in and backs off on battery; Manual only refreshes when you open the popover or click Refresh Now." = "Fréquence de relecture des données de session locales par le chiffre du menu bar. Auto actualise toutes les 30 s sur secteur et ralentit sur batterie ; Manuel n'actualise qu'à l'ouverture du popover ou via Actualiser maintenant.";
+"Updates" = "Mises à jour";
+"Notify me about updates" = "Me notifier des mises à jour";
+"Posts a notification when a new CodeBurn release is available. Click it to install." = "Envoie une notification lorsqu'une nouvelle version de CodeBurn est disponible. Cliquez dessus pour l'installer.";
+"Terminal" = "Terminal";
+"Open commands in" = "Ouvrir les commandes dans";
+"%@ (not installed)" = "%@ (non installé)";
+"Where Full Report and Optimize open. If the chosen app isn't installed CodeBurn falls back to Terminal; if that's missing too the command runs in the background. Only terminals that can script a command into a live window are listed." = "Là où s'ouvrent Rapport complet et Optimiser. Si l'app choisie n'est pas installée, CodeBurn utilise Terminal ; si celui-ci manque aussi, la commande s'exécute en arrière-plan. Seuls les terminaux capables d'exécuter une commande dans une fenêtre active sont listés.";
+"Alerts" = "Alertes";
+"Daily budget" = "Budget quotidien";
+"Off" = "Désactivé";
+"Custom…" = "Personnalisé…";
+"Amount" = "Montant";
+"M tokens" = "M tokens";
+"Show Capacity Dock" = "Afficher le Capacity Dock";
+"Resting provider" = "Fournisseur au repos";
+"Size" = "Taille";
+"Capacity Dock size" = "Taille du Capacity Dock";
+"Appearance" = "Apparence";
+"Gauge shape" = "Forme de la jauge";
+"Dock providers" = "Fournisseurs du dock";
+"Connect a provider from its sidebar page to make it available here." = "Connectez un fournisseur depuis sa page latérale pour le rendre disponible ici.";
+"Needs attention" = "Nécessite attention";
+"Connected providers and anything already shown in the dock appear here, so a provider can always be removed even if its connection later fails." = "Les fournisseurs connectés et tout ce qui est déjà affiché dans le dock apparaissent ici, afin qu'un fournisseur puisse toujours être retiré même si sa connexion échoue ensuite.";
+"Connection" = "Connexion";
+"Config Directories" = "Répertoires de configuration";
+"Aggregate usage across multiple Claude config directories (e.g. work and personal accounts). Leave empty to track just the default `~/.claude`. The `CLAUDE_CONFIG_DIRS` environment variable, if set, overrides this list." = "Agrège l'usage de plusieurs répertoires de configuration Claude (ex. comptes pro et perso). Laissez vide pour ne suivre que le répertoire par défaut `~/.claude`. La variable d'environnement `CLAUDE_CONFIG_DIRS`, si définie, remplace cette liste.";
+"Quota Refresh" = "Actualisation du quota";
+"Anthropic rate-limits this endpoint per account. 2 minutes is plenty for the 5-hour and weekly windows; pick Manual if you only want updates on demand." = "Anthropic limite le débit de ce point d'accès par compte. 2 minutes suffisent largement pour les fenêtres de 5 h et hebdomadaires ; choisissez Manuel pour n'actualiser qu'à la demande.";
+"Connected" = "Connecté";
+"Backing off" = "Ralenti";
+"Connecting…" = "Connexion…";
+"Ready" = "Prêt";
+"Plan: %@" = "Forfait : %@";
+"Live quota tracked from Anthropic." = "Quota en direct suivi depuis Anthropic.";
+"Anthropic rate-limited; auto-retrying." = "Anthropic limite le débit ; nouvel essai automatique.";
+"macOS may ask permission to read your credentials." = "macOS peut demander une autorisation pour lire vos identifiants.";
+"Background refresh in progress." = "Actualisation en arrière-plan en cours.";
+"Tap Load Quota to fetch live usage from Anthropic." = "Appuyez sur Charger le quota pour récupérer l'usage en direct depuis Anthropic.";
+"Click Connect to read your Claude Code credentials and start tracking quota." = "Cliquez sur Connecter pour lire vos identifiants Claude Code et suivre le quota.";
+"Disconnect" = "Déconnecter";
+"Disconnect Claude?" = "Déconnecter Claude ?";
+"Cancel" = "Annuler";
+"CodeBurn will stop tracking quota and clear its connection state plus any legacy credential cache. Your Claude Code credential is untouched. Claude Code keeps working." = "CodeBurn arrêtera de suivre le quota et effacera son état de connexion ainsi que tout cache d'identifiants hérité. Votre identifiant Claude Code reste inchangé. Claude Code continue de fonctionner.";
+"Load Quota" = "Charger le quota";
+"No extra directories. Tracking the default `~/.claude`." = "Aucun répertoire supplémentaire. Suivi du répertoire par défaut `~/.claude`.";
+"Remove" = "Retirer";
+"Add Directory…" = "Ajouter un répertoire…";
+"Add" = "Ajouter";
+"Choose one or more Claude config directories (each containing a `projects` folder)." = "Choisissez un ou plusieurs répertoires de configuration Claude (chacun contenant un dossier `projects`).";
+"Codex live-quota tracking follows the authoritative `~/.codex/auth.json` session directly and does not create a second Keychain copy. A legacy CodeBurn Keychain item, when present, is read only as a migration fallback. Only ChatGPT-mode auth (Plus / Pro / Team / Business / Edu / Enterprise) is supported. API-key users are billed per request and have a different reporting surface. Credit-metered workspaces report no rate-limit windows, so their monthly credit allowance is shown instead." = "Le suivi du quota en direct de Codex utilise directement la session `~/.codex/auth.json` faisant autorité, sans créer de seconde copie dans le trousseau. Un ancien élément de trousseau CodeBurn, s'il existe, n'est lu qu'en secours de migration. Seule l'authentification en mode ChatGPT (Plus / Pro / Team / Business / Edu / Enterprise) est prise en charge. Les utilisateurs en clé API sont facturés à la requête et ont un rapport différent. Les espaces de travail facturés en crédits ne rapportent aucune fenêtre de limite de débit ; leur allocation mensuelle de crédits est affichée à la place.";
+"How it works" = "Fonctionnement";
+"Couldn't load Codex quota" = "Impossible de charger le quota Codex";
+"Live quota tracked from chatgpt.com." = "Quota en direct suivi depuis chatgpt.com.";
+"Codex is in API-key mode. Run `codex login` and choose a ChatGPT plan to enable quota tracking." = "Codex est en mode clé API. Exécutez `codex login` et choisissez un forfait ChatGPT pour activer le suivi du quota.";
+"Run `codex login` in your terminal to sign in again, then click Reconnect." = "Exécutez `codex login` dans votre terminal pour vous reconnecter, puis cliquez sur Reconnecter.";
+"ChatGPT rate-limited; auto-retrying." = "ChatGPT limite le débit ; nouvel essai automatique.";
+"Reading ~/.codex/auth.json." = "Lecture de ~/.codex/auth.json.";
+"Tap Load Quota to fetch live usage from chatgpt.com." = "Appuyez sur Charger le quota pour récupérer l'usage en direct depuis chatgpt.com.";
+"Click Connect to read your Codex CLI credentials. If Connect fails, run `codex login` in your terminal first to create ~/.codex/auth.json." = "Cliquez sur Connecter pour lire vos identifiants CLI Codex. Si la connexion échoue, exécutez d'abord `codex login` dans votre terminal pour créer ~/.codex/auth.json.";
+"Disconnect Codex?" = "Déconnecter Codex ?";
+"CodeBurn will stop tracking quota and clear its connection state plus any legacy credential cache. Your ~/.codex/auth.json is untouched. Codex CLI keeps working." = "CodeBurn arrêtera de suivre le quota et effacera son état de connexion ainsi que tout cache d'identifiants hérité. Votre fichier ~/.codex/auth.json reste inchangé. La CLI Codex continue de fonctionner.";
+"Kimi Code live-quota tracking reads `~/.kimi-code/credentials/kimi-code.json` directly. Nothing is copied or stored. Access tokens are short-lived (~15 minutes) and only the Kimi CLI refreshes them, so if the connection shows as expired, run the Kimi CLI once and click Reconnect." = "Le suivi du quota en direct de Kimi Code lit directement `~/.kimi-code/credentials/kimi-code.json`. Rien n'est copié ni stocké. Les jetons d'accès sont de courte durée (~15 minutes) et seule la CLI Kimi les actualise ; si la connexion apparaît expirée, lancez la CLI Kimi une fois puis cliquez sur Reconnecter.";
+"Login refresh required" = "Actualisation de connexion requise";
+"Couldn't load Kimi quota" = "Impossible de charger le quota Kimi";
+"Live quota tracked from api.kimi.com." = "Quota en direct suivi depuis api.kimi.com.";
+"Kimi rate-limited; auto-retrying." = "Kimi limite le débit ; nouvel essai automatique.";
+"Reading ~/.kimi-code credentials." = "Lecture des identifiants ~/.kimi-code.";
+"Tap Load Quota to fetch live usage from api.kimi.com." = "Appuyez sur Charger le quota pour récupérer l'usage en direct depuis api.kimi.com.";
+"Sign in with the Kimi CLI first, then click Connect." = "Connectez-vous d'abord via la CLI Kimi, puis cliquez sur Connecter.";
+"Disconnect Kimi Code?" = "Déconnecter Kimi Code ?";
+"CodeBurn will stop tracking Kimi Code quota. Your ~/.kimi-code credentials are untouched. The Kimi CLI keeps working." = "CodeBurn arrêtera de suivre le quota Kimi Code. Vos identifiants ~/.kimi-code restent inchangés. La CLI Kimi continue de fonctionner.";
+"Gemini live-quota tracking reads `~/.gemini/oauth_creds.json` read-only. Nothing is copied or stored, and tokens stay in memory. If the connection shows as expired, run the Gemini CLI once to refresh your login, then click Reconnect." = "Le suivi du quota en direct de Gemini lit `~/.gemini/oauth_creds.json` en lecture seule. Rien n'est copié ni stocké, et les jetons restent en mémoire. Si la connexion apparaît expirée, lancez la CLI Gemini une fois pour actualiser votre connexion, puis cliquez sur Reconnecter.";
+"Couldn't load Gemini quota" = "Impossible de charger le quota Gemini";
+"Live quota tracked from Google Code Assist." = "Quota en direct suivi depuis Google Code Assist.";
+"Gemini rate-limited; auto-retrying." = "Gemini limite le débit ; nouvel essai automatique.";
+"Reading ~/.gemini credentials." = "Lecture des identifiants ~/.gemini.";
+"Tap Load Quota to fetch live usage from Google Code Assist." = "Appuyez sur Charger le quota pour récupérer l'usage en direct depuis Google Code Assist.";
+"Sign in with the Gemini CLI first, then click Connect." = "Connectez-vous d'abord via la CLI Gemini, puis cliquez sur Connecter.";
+"Disconnect Gemini?" = "Déconnecter Gemini ?";
+"CodeBurn will stop tracking Gemini quota. Your ~/.gemini credentials are untouched. The Gemini CLI keeps working." = "CodeBurn arrêtera de suivre le quota Gemini. Vos identifiants ~/.gemini restent inchangés. La CLI Gemini continue de fonctionner.";
+"Copilot live-quota tracking reads a GitHub token that is already on this Mac, read-only. Nothing is copied or stored. CodeBurn looks at the editor plugin files in `~/.config/github-copilot`, the Copilot CLI's `~/.copilot` files, the COPILOT_GITHUB_TOKEN, GH_TOKEN and GITHUB_TOKEN variables, `gh auth token`, and finally a token you paste below. Usage tracking works without any of this; only the live quota bars need a token. Every one of those carries the GitHub host it belongs to — the plugin files are keyed by host, the variables are read with GH_HOST, the `gh` login with the host in gh's own hosts.yml, and a pasted token with the host you type beside it — and a credential for a GitHub Enterprise Cloud host is queried on that tenant's own API (api.<tenant>.ghe.com), never sent to api.github.com." = "Le suivi du quota en direct de Copilot lit en lecture seule un jeton GitHub déjà présent sur ce Mac. Rien n'est copié ni stocké. CodeBurn regarde les fichiers de plugin d'éditeur dans `~/.config/github-copilot`, les fichiers `~/.copilot` de la CLI Copilot, les variables COPILOT_GITHUB_TOKEN, GH_TOKEN et GITHUB_TOKEN, `gh auth token`, et enfin un jeton que vous collez ci-dessous. Le suivi d'usage fonctionne sans tout cela ; seules les barres de quota en direct ont besoin d'un jeton. Chacune de ces sources porte l'hôte GitHub auquel elle appartient — les fichiers de plugin sont classés par hôte, les variables sont lues avec GH_HOST, la connexion `gh` avec l'hôte du hosts.yml de gh, et un jeton collé avec l'hôte que vous saisissez à côté — et un identifiant pour un hôte GitHub Enterprise Cloud est interrogé sur l'API propre à ce locataire (api.<tenant>.ghe.com), jamais envoyé à api.github.com.";
+"GitHub token" = "Jeton GitHub";
+"GitHub host" = "Hôte GitHub";
+"Save & Connect" = "Enregistrer et connecter";
+"Clear Token" = "Effacer le jeton";
+"Paste a token" = "Coller un jeton";
+"Optional, and only needed when nothing else on this Mac is signed in. A fine-grained personal access token with the \"Plan: Read-only\" permission is enough. Leave the host at github.com unless the token was minted on a GitHub Enterprise Cloud tenant, in which case enter that tenant's host (<tenant>.ghe.com) so the token is never sent to api.github.com. Both are saved in CodeBurn's own Keychain item and are used only to read your Copilot quota." = "Facultatif, requis uniquement si rien d'autre n'est connecté sur ce Mac. Un jeton d'accès personnel fin avec la permission \"Plan: Read-only\" suffit. Laissez l'hôte à github.com sauf si le jeton a été créé sur un locataire GitHub Enterprise Cloud ; dans ce cas, saisissez l'hôte de ce locataire (<tenant>.ghe.com) pour que le jeton ne soit jamais envoyé à api.github.com. Les deux sont enregistrés dans l'élément de trousseau propre à CodeBurn et utilisés uniquement pour lire votre quota Copilot.";
+"Couldn't load Copilot quota" = "Impossible de charger le quota Copilot";
+"Live quota tracked from %@." = "Quota en direct suivi depuis %@.";
+"Plan: %1$@. Live quota tracked from %2$@." = "Forfait : %1$@. Quota en direct suivi depuis %2$@.";
+"Sign in again with the Copilot CLI, an editor's Copilot plugin, or gh auth login, then click Reconnect." = "Reconnectez-vous via la CLI Copilot, le plugin Copilot d'un éditeur, ou gh auth login, puis cliquez sur Reconnecter.";
+"GitHub rate-limited; auto-retrying." = "GitHub limite le débit ; nouvel essai automatique.";
+"Looking for a GitHub token on this Mac." = "Recherche d'un jeton GitHub sur ce Mac.";
+"Tap Load Quota to fetch live usage from GitHub." = "Appuyez sur Charger le quota pour récupérer l'usage en direct depuis GitHub.";
+"Tap Load Quota to fetch live usage from %@." = "Appuyez sur Charger le quota pour récupérer l'usage en direct depuis %@.";
+"CodeBurn cannot read Copilot quota for %@. Use github.com or a GitHub Enterprise Cloud host (*.ghe.com)." = "CodeBurn ne peut pas lire le quota Copilot pour %@. Utilisez github.com ou un hôte GitHub Enterprise Cloud (*.ghe.com).";
+"Disconnect Copilot?" = "Déconnecter Copilot ?";
+"CodeBurn will stop tracking Copilot quota. Every credential it read stays untouched, and your Copilot clients keep working." = "CodeBurn arrêtera de suivre le quota Copilot. Tous les identifiants lus restent inchangés, et vos clients Copilot continuent de fonctionner.";
+"Antigravity live-quota tracking talks to the Antigravity app's local language server on 127.0.0.1 only. Nothing leaves the machine and no credential files are read. If it shows as disconnected, start the Antigravity app, then click Reconnect." = "Le suivi du quota en direct d'Antigravity communique uniquement avec le serveur de langage local de l'app Antigravity sur 127.0.0.1. Rien ne quitte la machine et aucun fichier d'identifiants n'est lu. Si la connexion apparaît coupée, démarrez l'app Antigravity, puis cliquez sur Reconnecter.";
+"Couldn't load Antigravity quota" = "Impossible de charger le quota Antigravity";
+"Live quota tracked from the local Antigravity server." = "Quota en direct suivi depuis le serveur Antigravity local.";
+"Local probe failed; auto-retrying." = "Échec du sondage local ; nouvel essai automatique.";
+"Probing the local Antigravity language server." = "Sondage du serveur de langage Antigravity local.";
+"Tap Load Quota to probe the local Antigravity server." = "Appuyez sur Charger le quota pour sonder le serveur Antigravity local.";
+"Start the Antigravity app first, then click Connect." = "Démarrez d'abord l'app Antigravity, puis cliquez sur Connecter.";
+"No local Antigravity server found. Start the Antigravity app, then click Reconnect." = "Aucun serveur Antigravity local trouvé. Démarrez l'app Antigravity, puis cliquez sur Reconnecter.";
+"Disconnect Antigravity?" = "Déconnecter Antigravity ?";
+"CodeBurn will stop tracking Antigravity quota. Nothing is read from or written to disk. The Antigravity app keeps working." = "CodeBurn arrêtera de suivre le quota Antigravity. Rien n'est lu ni écrit sur le disque. L'app Antigravity continue de fonctionner.";
+"Not yet supported" = "Pas encore pris en charge";
+"Automatic connection uses the provider's existing app, CLI, OAuth, browser session, or environment credentials first. CodeBurn does not copy those source credentials into its Keychain." = "La connexion automatique utilise d'abord l'app, la CLI, l'OAuth, la session navigateur ou les identifiants d'environnement existants du fournisseur. CodeBurn ne copie pas ces identifiants source dans son trousseau.";
+"Authentication methods are listed for reference. A native CodeBurn quota adapter is required before this provider can connect to Capacity Dock." = "Les méthodes d'authentification sont listées à titre indicatif. Un adaptateur de quota CodeBurn natif est requis avant que ce fournisseur puisse se connecter au Capacity Dock.";
+"Authentication methods" = "Méthodes d'authentification";
+"Source" = "Source";
+"API key or token" = "Clé API ou jeton";
+"Clear Override" = "Effacer la substitution";
+"Loading saved provider credential" = "Chargement de l'identifiant fournisseur enregistré";
+"Connection override" = "Substitution de connexion";
+"Overrides are optional and are saved only when you press Save & Connect. Secret values use one CodeBurn-owned Keychain item for this provider; background reads suppress authentication UI." = "Les substitutions sont facultatives et ne sont enregistrées qu'en appuyant sur Enregistrer et connecter. Les valeurs secrètes utilisent un élément de trousseau propre à CodeBurn pour ce fournisseur ; les lectures en arrière-plan n'affichent pas d'interface d'authentification.";
+"Remove saved override" = "Supprimer la substitution enregistrée";
+"Saved data" = "Données enregistrées";
+"This credential predates a live CodeBurn quota adapter and is not treated as a connection." = "Cet identifiant précède un adaptateur de quota CodeBurn en direct et n'est pas considéré comme une connexion.";
+"Quota adapter not available" = "Adaptateur de quota indisponible";
+"Retrying" = "Nouvel essai";
+"%@ is catalogued, but CodeBurn cannot fetch its live quota yet." = "%@ est répertorié, mais CodeBurn ne peut pas encore récupérer son quota en direct.";
+"Live quota is available to Capacity Dock." = "Le quota en direct est disponible pour le Capacity Dock.";
+"Waiting for quota data." = "En attente des données de quota.";
+"Automatic" = "Automatique";
+"CLI" = "CLI";
+"API" = "API";
+"Version %@" = "Version %@";
+"%@ is available. Choose Check for Updates in the CodeBurn menu to install it." = "%@ est disponible. Choisissez Rechercher des mises à jour dans le menu CodeBurn pour l'installer.";
+"GitHub" = "GitHub";
+"Website" = "Site web";
+"Issues" = "Problèmes";
+"Links" = "Liens";
+"© 2026 Resham Joshi (iamtoruk) · AgentSeal. MIT License." = "© 2026 Resham Joshi (iamtoruk) · AgentSeal. Licence MIT.";
+
+/* MARK: Menubar second row (#1252) */
+"Second row" = "Seconde ligne";
+"Second row shows" = "La seconde ligne affiche";
+"Adds a smaller second line under the menubar figure. Quota remaining tracks whichever connected provider is nearest its limit. The line hides itself while the chosen metric has no data." = "Ajoute une seconde ligne plus petite sous le chiffre du menu bar. Quota restant suit le fournisseur connecté le plus proche de sa limite. La ligne se masque quand la métrique choisie n'a pas de données.";
+"Quota remaining" = "Quota restant";
+"Today's cost" = "Coût du jour";
+"Today's tokens" = "Tokens du jour";
+"Active sessions" = "Sessions actives";
+/* Row text. The amount, the token figure and the provider name are substituted
+   already formatted, so only the word around them is translated; `tok` is a
+   unit and stays verbatim. The reset countdown reuses the popover's own
+   `%lldd %lldh` / `%lldh %lldm` / `%lldm` keys above. */
+"%@ today" = "%@ aujourd'hui";
+"%@ tok today" = "%@ tok aujourd'hui";
+"%lld%% left" = "%lld%% restant";
+
+/* MARK: Codex credit limit */
+"Monthly" = "Mensuel";
+"Monthly usage limit" = "Limite d'usage mensuelle";
+"Monthly usage limit · limit reached" = "Limite d'usage mensuelle · limite atteinte";
+"Monthly usage limit · %1$@ / %2$@ credits" = "Limite d'usage mensuelle · %1$@ / %2$@ crédits";
+"%@ · limit reached" = "%@ · limite atteinte";
+
+/* MARK: Added on rebase onto main (#1306, #1313, #1314, #1328, #1329) */
+"Last known usage" = "Dernier usage connu";
+"Notifications" = "Notifications";
+"Notify me when Codex banks a limit reset" = "Me notifier quand Codex reçoit une réinitialisation de limite";
+"OpenAI sometimes grants Codex accounts a credit that resets a rate-limit window early. CodeBurn reads these from the quota response it already fetches and tells you once per grant. It never spends one." = "OpenAI accorde parfois aux comptes Codex un crédit qui réinitialise une fenêtre de limite de débit en avance. CodeBurn lit ces crédits dans la réponse de quota qu'il récupère déjà et vous prévient une fois par octroi. Il n'en dépense jamais.";
+"Notify me when a quota resets early" = "Me notifier en cas de réinitialisation anticipée du quota";
+"Posts a notification when a provider resets a usage limit before its scheduled time, so you know the capacity is back." = "Envoie une notification quand un fournisseur réinitialise une limite d'usage avant l'heure prévue, pour que vous sachiez que la capacité est revenue.";
+"cache read" = "lecture cache";
+"Cache read: %@ tokens" = "Lecture cache : %@ tokens";
+"Quota window %@" = "Fenêtre de quota %@";
+
+/* MARK: Language picker */
+"Language" = "Langue";
+"System" = "Système";
+"Relaunch to apply." = "Relancez pour appliquer.";
+"Relaunch" = "Relancer";
+"Follows System Settings > Language & Region unless you pick one here." = "Suit Réglages Système > Langue et région, sauf sélection ici.";
+
+/* MARK: Quota pace captions (#1267) */
+"On pace" = "En rythme";
+"5-hour" = "5 h";
+"<1m" = "<1 min";
+
+/* MARK: Early quota reset (#725) */
+"%@ quota reset early" = "Quota %@ réinitialisé en avance";
+"%@ quota cleared early" = "Quota %@ effacé en avance";
+"You're back to %lld%%." = "Vous êtes revenu à %lld%%.";
+"%1$@'s %2$@ reset %3$@ early. %4$@" = "%2$@ de %1$@ s'est réinitialisé %3$@ en avance. %4$@";
+"%1$@ cleared your %2$@ %3$@ before its reset. %4$@" = "%1$@ a effacé votre %2$@ %3$@ avant sa réinitialisation. %4$@";
+"%lldh" = "%lldh";
+"%@ limit" = "Limite %@";
+"5-hour limit" = "Limite de 5 h";
+"weekly limit" = "limite hebdomadaire";
+"Opus weekly limit" = "Limite hebdomadaire Opus";
+"Sonnet weekly limit" = "Limite hebdomadaire Sonnet";
+"weekly" = "hebdomadaire";
+"Opus weekly" = "Opus hebdomadaire";
+"Sonnet weekly" = "Sonnet hebdomadaire";
+"5-hour usage" = "Usage sur 5 h";
+"weekly usage" = "usage hebdomadaire";
+"Opus weekly usage" = "Usage hebdomadaire Opus";
+"Sonnet weekly usage" = "Usage hebdomadaire Sonnet";
+
+/* MARK: Codex banked limit resets (#725) */
+"%lld available" = "%lld disponible(s)";
+"%lld usable now" = "%lld utilisable(s) maintenant";
+"next %1$@ lands %2$@" = "prochain %1$@ arrive %2$@";
+"latest %1$@ granted %2$@" = "dernier %1$@ accordé %2$@";
+"next expires %@" = "le prochain expire %@";
+"A %1$@ lands %2$@." = "Un %1$@ arrive %2$@.";
+"A %1$@ was added to your account %2$@." = "Un %1$@ a été ajouté à votre compte %2$@.";
+"A %@ was added to your account." = "Un %@ a été ajouté à votre compte.";
+"You have %lld available to use." = "Vous avez %lld disponible(s) à utiliser.";
+"Codex banked a limit reset" = "Codex a reçu une réinitialisation de limite";
+"limit reset" = "réinitialisation de limite";
+"%@ reset" = "réinitialisation %@";
+"daily" = "quotidienne";
+"monthly" = "mensuelle";
+"hourly" = "horaire";
+"just now" = "à l'instant";
+"%lldm ago" = "il y a %lldmin";
+"%lldh ago" = "il y a %lldh";
+"%lldd ago" = "il y a %lldj";
+"in under a minute" = "en moins d'une minute";
+"Input tokens reused from this provider's prompt cache today — not fresh input (arrow.down), not cache writes, and already priced at the cache-read rate inside the burned figure." = "Tokens d'entrée réutilisés aujourd'hui depuis le cache de prompts de ce fournisseur — pas une entrée fraîche (arrow.down), pas une écriture de cache, et déjà tarifés au taux de lecture cache dans le chiffre consommé.";
+
+/* MARK: Quota crossing notifications */
+"%1$@ · %2$@ at 80%%" = "%1$@ · %2$@ à 80%%";
+"%1$@ · %2$@ limit reached" = "%1$@ · %2$@ limite atteinte";
+"Quota crossings (%1$lld%% and %2$lld%%)" = "Franchissements de quota (%1$lld%% et %2$lld%%)";

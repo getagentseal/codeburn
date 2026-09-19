@@ -1,6 +1,7 @@
 import { useLayoutEffect, useMemo, useRef, useState } from 'react'
 
 import { ChartTip } from './ChartTip'
+import { localeTag, t } from '../i18n'
 import { formatCount, formatUsd } from '../lib/format'
 import { dataStartKey, localDateKey } from '../lib/period'
 import type { DailyHistoryEntry } from '../lib/types'
@@ -23,7 +24,18 @@ const GAP = 3
 const MAX_WEEKS = 26
 /** Fewest week columns between two month labels before the later one is dropped. */
 const MIN_LABEL_COLUMNS = 3
-const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+
+function weekdays(): string[] {
+  return [
+    t('shared.weekday.sun'),
+    t('shared.weekday.mon'),
+    t('shared.weekday.tue'),
+    t('shared.weekday.wed'),
+    t('shared.weekday.thu'),
+    t('shared.weekday.fri'),
+    t('shared.weekday.sat'),
+  ]
+}
 
 function dateFromKey(key: string): Date {
   const [year, month, day] = key.split('-').map(Number)
@@ -31,7 +43,7 @@ function dateFromKey(key: string): Date {
 }
 
 function formatDate(key: string): string {
-  return dateFromKey(key).toLocaleString('en-US', {
+  return dateFromKey(key).toLocaleString(localeTag(), {
     month: 'short',
     day: 'numeric',
     year: 'numeric',
@@ -96,7 +108,7 @@ export function ActivityHeatmap({ daily, bare = false }: { daily: DailyHistoryEn
       const key = `${date.getFullYear()}-${date.getMonth()}`
       if (seen.has(key)) continue
       seen.add(key)
-      markers.push({ key, label: date.toLocaleString('en-US', { month: 'short' }), week: Math.floor(index / 7) })
+      markers.push({ key, label: date.toLocaleString(localeTag(), { month: 'short' }), week: Math.floor(index / 7) })
     }
     // Two labels closer than MIN_LABEL_COLUMNS would collide. Real month starts
     // are always four or five weeks apart, so this only ever drops the leading
@@ -130,33 +142,33 @@ export function ActivityHeatmap({ daily, bare = false }: { daily: DailyHistoryEn
 
   const head = (
     <div className={bare ? 'ov-activity-head' : 'ov-panel-head'}>
-      {bare ? <span className="ov-label">Daily activity</span> : <h3>Daily activity</h3>}
-      <span className="r ov-active-days">{activeDays} active days</span>
+      {bare ? <span className="ov-label">{t('shared.heatmap.title')}</span> : <h3>{t('shared.heatmap.title')}</h3>}
+      <span className="r ov-active-days">{t(activeDays === 1 ? 'shared.heatmap.activeDayCount.one' : 'shared.heatmap.activeDayCount.other', { count: activeDays })}</span>
     </div>
   )
   const grid = (
     <div className="ov-heatmap-frame">
       <div className="ov-heatmap-corner" aria-hidden="true" />
-      <div className="ov-heatmap-labels" aria-label="Weekday labels">
-        {WEEKDAYS.map((weekday, index) => (
-          <span key={weekday}>{index === 1 || index === 3 || index === 5 ? weekday : ''}</span>
+      <div className="ov-heatmap-labels" aria-label={t('shared.heatmap.weekdayLabelsAria')}>
+        {weekdays().map((weekday, index) => (
+          <span key={index}>{index === 1 || index === 3 || index === 5 ? weekday : ''}</span>
         ))}
       </div>
-      <div className="ov-heatmap-scroll" ref={scrollRef} role="region" aria-label="Daily activity timeline">
+      <div className="ov-heatmap-scroll" ref={scrollRef} role="region" aria-label={t('shared.heatmap.timelineAria')}>
         <div className="ov-heatmap-track">
-          <div className="ov-heatmap-months" aria-label="Month labels">
+          <div className="ov-heatmap-months" aria-label={t('shared.heatmap.monthLabelsAria')}>
             {monthMarkers.map(marker => (
               <span key={marker.key} style={{ gridColumnStart: marker.week + 1 }}>{marker.label}</span>
             ))}
           </div>
-          <div className="ov-heatmap-cells" role="grid" aria-label="Daily activity contribution heatmap">
+          <div className="ov-heatmap-cells" role="grid" aria-label={t('shared.heatmap.gridAria')}>
             {days.map(day => (
               <button
                 type="button"
                 role="gridcell"
                 key={day.date}
                 className={`ov-heat-cell heat-level-${day.level}${day.isFuture ? ' future' : ''}${day.noData ? ' nodata' : ''}`}
-                aria-label={`${formatDate(day.date)}: ${day.noData ? 'no data recorded' : day.isFuture ? 'future day' : `${formatUsd(day.cost)}, ${formatCount(day.calls, 'call')}`}`}
+                aria-label={`${formatDate(day.date)}: ${day.noData ? t('shared.chart.noDataAria') : day.isFuture ? t('shared.chart.futureDayAria') : `${formatUsd(day.cost)}, ${formatCount(day.calls, 'call')}`}`}
                 data-date={day.date}
                 data-cost={day.cost}
                 data-active={!day.isFuture && !day.noData && day.cost > 0 ? 'true' : 'false'}
@@ -175,11 +187,11 @@ export function ActivityHeatmap({ daily, bare = false }: { daily: DailyHistoryEn
         <ChartTip x={tip.x} y={tip.y}>
           <div className="chart-tip-d">{formatDate(tip.day.date)}</div>
           {tip.day.noData ? (
-            <div className="chart-tip-s">No data recorded</div>
+            <div className="chart-tip-s">{t('shared.chart.noData')}</div>
           ) : (
             <>
-              <div className="chart-tip-v">{tip.day.isFuture ? 'Future day' : formatUsd(tip.day.cost)}</div>
-              <div className="chart-tip-s">{tip.day.isFuture ? 'No activity yet' : `${tip.day.calls} calls`}</div>
+              <div className="chart-tip-v">{tip.day.isFuture ? t('shared.chart.futureDay') : formatUsd(tip.day.cost)}</div>
+              <div className="chart-tip-s">{tip.day.isFuture ? t('shared.chart.noActivityYet') : formatCount(tip.day.calls, 'call')}</div>
             </>
           )}
         </ChartTip>

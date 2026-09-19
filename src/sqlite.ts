@@ -1,5 +1,5 @@
 import { createRequire } from 'node:module'
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { copyFileSync, existsSync, mkdirSync, readdirSync, renameSync, statSync, unlinkSync, utimesSync } from 'node:fs'
 import { createHash, randomBytes } from 'node:crypto'
 import { homedir } from 'node:os'
@@ -422,10 +422,59 @@ const TCC_PROBE_TIMEOUT_MS = 3000
 const TCC_PROBE_CACHE_MS = 60_000
 
 const tccProbeCache = new Map<string, { blocked: boolean; at: number }>()
+const tccProbeRefreshing = new Set<string>()
 let warnedTccBlocked = false
 
 export function isBlockedDatabaseError(err: unknown): boolean {
   return typeof err === 'object' && err !== null && 'codeburnBlocked' in err
+}
+
+/// Turn one probe outcome into a verdict. A timeout kill (SIGKILL) is a real
+/// hang: never open the file wherever it lives. A spawn that never ran (the
+/// child could not start, e.g. execPath missing) taught us nothing about the
+/// file, so fail CLOSED for Group Container paths - opening one with no consent
+/// wedges the whole process - and open elsewhere, where a spawn failure is not
+/// the file's fault. Otherwise 0 is readable, 2 is missing (let the real open
+/// report that), any other exit means do not touch it.
+function classifyProbe(
+  result: { signal: NodeJS.Signals | null; error?: unknown; status: number | null },
+  isGroupContainer: boolean,
+): boolean {
+  if (result.signal === 'SIGKILL') return true
+  if (result.error) return isGroupContainer
+  return result.status !== 0 && result.status !== 2
+}
+
+/// Re-probe a stale entry off the request path. spawnSync would freeze the
+/// single-threaded serve queue for up to the timeout on every stale read; the
+/// async spawn refreshes the cache without blocking the caller, which keeps
+/// serving on the last known verdict until it lands.
+function refreshProbeAsync(key: string, path: string, script: string, execPath: string, isGroupContainer: boolean): void {
+  if (tccProbeRefreshing.has(key)) return
+  tccProbeRefreshing.add(key)
+  const settle = (result: { signal: NodeJS.Signals | null; error?: unknown; status: number | null }): void => {
+    tccProbeRefreshing.delete(key)
+    tccProbeCache.set(key, { blocked: classifyProbe(result, isGroupContainer), at: Date.now() })
+  }
+  let child: ReturnType<typeof spawn>
+  try {
+    child = spawn(execPath, ['-e', script, path], {
+      stdio: 'ignore',
+      // process.execPath is Electron's binary in the desktop app; without this
+      // it would launch a second app window instead of running the script.
+      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+    })
+  } catch (error) {
+    settle({ signal: null, error, status: null })
+    return
+  }
+  const timer = setTimeout(() => {
+    child.kill('SIGKILL')
+    settle({ signal: 'SIGKILL', status: null })
+  }, TCC_PROBE_TIMEOUT_MS)
+  timer.unref?.()
+  child.once('error', (error) => { clearTimeout(timer); settle({ signal: null, error, status: null }) })
+  child.once('exit', (status, signal) => { clearTimeout(timer); settle({ signal, status }) })
 }
 
 /// `script` and `execPath` are only ever overridden by tests, which cannot make
@@ -433,9 +482,19 @@ export function isBlockedDatabaseError(err: unknown): boolean {
 export function probeDatabaseBlocked(path: string, script = TCC_PROBE, execPath = process.execPath): boolean {
   const now = Date.now()
   const key = `${script}\u0000${path}`
+  const isGroupContainer = path.startsWith(GROUP_CONTAINERS_PREFIX)
   const cached = tccProbeCache.get(key)
-  if (cached && now - cached.at < TCC_PROBE_CACHE_MS) return cached.blocked
+  if (cached) {
+    // Stale: refresh in the background so granting FDA later recovers, but never
+    // block this (possibly serve) request on spawnSync; answer with the last
+    // known verdict until the async re-probe lands.
+    if (now - cached.at >= TCC_PROBE_CACHE_MS) refreshProbeAsync(key, path, script, execPath, isGroupContainer)
+    return cached.blocked
+  }
 
+  // Cold: no cached verdict yet. A one-shot CLI run has no later request to wait
+  // for an async probe, so answer authoritatively now with a single spawnSync.
+  // serve warms this cache off the request path when it arms its root watchers.
   const probe = spawnSync(execPath, ['-e', script, path], {
     timeout: TCC_PROBE_TIMEOUT_MS,
     killSignal: 'SIGKILL',
@@ -444,10 +503,7 @@ export function probeDatabaseBlocked(path: string, script = TCC_PROBE, execPath 
     // would launch a second app window instead of running the script.
     env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
   })
-  // 0 readable, 2 missing (let the real open report that); the timeout kill and
-  // any other exit mean we must not touch this file. A probe we could not run
-  // at all says nothing about the file, so it must not block it.
-  const blocked = probe.signal === 'SIGKILL' || (!probe.error && probe.status !== 0 && probe.status !== 2)
+  const blocked = classifyProbe(probe, isGroupContainer)
   tccProbeCache.set(key, { blocked, at: now })
   return blocked
 }

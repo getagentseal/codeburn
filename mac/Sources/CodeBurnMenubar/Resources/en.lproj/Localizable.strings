@@ -276,6 +276,8 @@
 "%@ out" = "%@ out";
 "%1$@ in · %2$@ out · %3$@ cache read" = "%1$@ in · %2$@ out · %3$@ cache read";
 "%@%% cache hit" = "%@%% cache hit";
+"1 model unpriced, counted at $0 · %@ tokens" = "1 model unpriced, counted at $0 · %@ tokens";
+"%1$lld models unpriced, counted at $0 · %2$@ tokens" = "%1$lld models unpriced, counted at $0 · %2$@ tokens";
 
 /* MARK: Pull requests section */
 "Pull requests" = "Pull requests";
@@ -643,6 +645,7 @@
 "%lld%% left" = "%lld%% left";
 
 /* MARK: Codex credit limit */
+"Monthly" = "Monthly";
 "Monthly usage limit" = "Monthly usage limit";
 "Monthly usage limit · limit reached" = "Monthly usage limit · limit reached";
 "Monthly usage limit · %1$@ / %2$@ credits" = "Monthly usage limit · %1$@ / %2$@ credits";

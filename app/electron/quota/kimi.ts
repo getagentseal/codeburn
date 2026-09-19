@@ -153,7 +153,7 @@ export async function fetchKimiQuota(options: Partial<KimiDeps> & { signal?: Abo
   try {
     const token = await freshToken(deps)
     if (token === null) return { quota: empty('disconnected') }
-    if (token === 'expired') return { quota: empty('terminalFailure', EXPIRED_FOOTER) }
+    if (token === 'expired') return { quota: { ...empty('terminalFailure', EXPIRED_FOOTER), connectable: true } }
 
     const device = await deviceId(deps)
     const response = await deps.fetch(USAGE_ENDPOINT, {
@@ -167,7 +167,7 @@ export async function fetchKimiQuota(options: Partial<KimiDeps> & { signal?: Abo
       },
     })
     // We never self-refresh, so a rejected token is terminal until the CLI runs.
-    if (response.status === 401 || response.status === 403) return { quota: empty('terminalFailure', EXPIRED_FOOTER) }
+    if (response.status === 401 || response.status === 403) return { quota: { ...empty('terminalFailure', EXPIRED_FOOTER), connectable: true } }
     if (response.status === 429) {
       const raw = response.headers.get('Retry-After')
       const seconds = raw === null ? NaN : Number(raw)

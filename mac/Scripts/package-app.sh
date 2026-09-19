@@ -87,7 +87,11 @@ cat > "${BUNDLE}/Contents/Info.plist" <<PLIST
     <key>CFBundleLocalizations</key>
     <array>
         <string>en</string>
+        <string>fr</string>
+        <string>ja</string>
+        <string>ko</string>
         <string>zh-Hans</string>
+        <string>zh-Hant</string>
     </array>
     <key>CFBundleDisplayName</key>
     <string>CodeBurn Menubar</string>

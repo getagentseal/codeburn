@@ -1733,6 +1733,63 @@ describe('copilot provider - OTel cache token parsing', () => {
     expect(calls[0]!.skills).toEqual(['ponytail'])
   })
 
+  it('attributes a trace-level skill to one chat span, not every span in the trace', async () => {
+    if (!isSqliteAvailable()) return
+
+    createOtelDb(dbPath)
+    // Five chat spans in ONE trace, each with its own tokens.
+    const perSpanTokens = [
+      { input: 100, output: 20 },
+      { input: 200, output: 40 },
+      { input: 300, output: 60 },
+      { input: 400, output: 80 },
+      { input: 500, output: 100 },
+    ]
+    perSpanTokens.forEach((t, i) => {
+      insertSpan(dbPath, {
+        spanId: `span-multi-${i}`, traceId: 'trace-multi', operationName: 'chat', startTimeMs: 1000 + i,
+        attrs: {
+          'gen_ai.conversation.id': 'conv-multi',
+          'gen_ai.response.model': 'gpt-4.1',
+          'gen_ai.usage.input_tokens': t.input,
+          'gen_ai.usage.output_tokens': t.output,
+        },
+      })
+    })
+    // One skill call for the whole trace.
+    insertSpan(dbPath, {
+      spanId: 'span-multi-tool', traceId: 'trace-multi', operationName: 'execute_tool', startTimeMs: 1500,
+      attrs: {
+        'gen_ai.tool.name': 'skill',
+        'gen_ai.tool.call.arguments': JSON.stringify({ skill: 'graphify' }),
+      },
+    })
+
+    const provider = createCopilotProvider('/nonexistent/jsonl', '/nonexistent/ws')
+    const sources = await provider.discoverSessions()
+    const src = sources.find(s => s.path.startsWith(dbPath))
+    expect(src).toBeDefined()
+
+    const calls = await collectCalls(src!)
+
+    expect(calls).toHaveLength(5)
+    // The skill and Skill tool land on exactly one span, not all five.
+    const withSkill = calls.filter(c => (c.skills ?? []).includes('graphify'))
+    expect(withSkill).toHaveLength(1)
+    expect(calls.filter(c => c.tools.includes('Skill'))).toHaveLength(1)
+    // Every other span carries no trace metadata.
+    expect(calls.filter(c => (c.skills ?? []).length > 0)).toHaveLength(1)
+    expect(calls.filter(c => c.tools.length > 0)).toHaveLength(1)
+    // Per-span token costs are untouched by the attribution fix.
+    const byInput = new Map(calls.map(c => [c.inputTokens, c]))
+    for (const t of perSpanTokens) {
+      const c = byInput.get(t.input)
+      expect(c).toBeDefined()
+      expect(c!.outputTokens).toBe(t.output)
+      expect(c!.costUSD).toBeGreaterThan(0)
+    }
+  })
+
   it('skips OTel spans with zero input and output tokens', async () => {
     if (!isSqliteAvailable()) return
 

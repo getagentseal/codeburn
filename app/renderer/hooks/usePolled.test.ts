@@ -426,7 +426,7 @@ describe('usePolled', () => {
     }
   })
 
-  it('continues data refreshes while the document is hidden', async () => {
+  it('stops the interval while hidden, then resumes with a catch-up on return', async () => {
     vi.useFakeTimers()
     try {
       setVisibility('visible')
@@ -435,18 +435,23 @@ describe('usePolled', () => {
       expect(fetcher).toHaveBeenCalledTimes(1) // mount fetch
       // Let the mount fetch resolve so lastSuccess is recorded.
       await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+      // One visible cadence ticks.
+      await act(async () => { await vi.advanceTimersByTimeAsync(1000) })
+      expect(fetcher).toHaveBeenCalledTimes(2)
 
-      // Hidden/minimized is still an open product. Data refreshes continue so a
-      // return hours later never exposes an arbitrarily stale snapshot.
+      // Hidden: the interval stops, so no CLI re-parse fires while unwatched.
       setVisibility('hidden')
+      await act(async () => { document.dispatchEvent(new Event('visibilitychange')) })
       await act(async () => { await vi.advanceTimersByTimeAsync(5000) })
-      expect(fetcher).toHaveBeenCalledTimes(6)
+      expect(fetcher).toHaveBeenCalledTimes(2) // frozen while hidden
 
-      // Returning visible does not duplicate a refresh because the latest hidden
-      // interval already succeeded inside one cadence.
+      // Back to visible after more than one cadence: an immediate catch-up
+      // refresh fires so the returning view is never stale, then ticking resumes.
       setVisibility('visible')
       await act(async () => { document.dispatchEvent(new Event('visibilitychange')) })
-      expect(fetcher).toHaveBeenCalledTimes(6)
+      expect(fetcher).toHaveBeenCalledTimes(3) // catch-up
+      await act(async () => { await vi.advanceTimersByTimeAsync(1000) })
+      expect(fetcher).toHaveBeenCalledTimes(4) // single resumed interval, no stack
     } finally {
       vi.useRealTimers()
     }

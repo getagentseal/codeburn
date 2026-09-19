@@ -1,0 +1,716 @@
+/* CodeBurn Menubar — 日本語 (ja).
+ *
+ * Keys are the English development copy; see en.lproj/Localizable.strings for
+ * the conventions. Format specifiers (%@, %lld, %%) must stay identical to the
+ * English entry, in the same order — LocalizationCatalogTests fails the build
+ * otherwise, because a mismatch is a crash or a wrong number at runtime.
+ *
+ * Untranslated on purpose: provider, model and plan names (Claude, Codex,
+ * Gemini, Opus, Sonnet, Antigravity…), units, currency codes, shell commands
+ * and file paths, and anything the `codeburn` CLI produces.
+ */
+
+/* MARK: Currencies, filters, periods and insight tabs */
+"US Dollar" = "米ドル";
+"British Pound" = "英ポンド";
+"Euro" = "ユーロ";
+"Australian Dollar" = "オーストラリアドル";
+"Canadian Dollar" = "カナダドル";
+"New Zealand Dollar" = "ニュージーランドドル";
+"Japanese Yen" = "日本円";
+"Chinese Yuan" = "中国元";
+"Swiss Franc" = "スイスフラン";
+"Indian Rupee" = "インドルピー";
+"Brazilian Real" = "ブラジルレアル";
+"Swedish Krona" = "スウェーデンクローナ";
+"Singapore Dollar" = "シンガポールドル";
+"Hong Kong Dollar" = "香港ドル";
+"South Korean Won" = "韓国ウォン";
+"Mexican Peso" = "メキシコペソ";
+"South African Rand" = "南アフリカランド";
+"Danish Krone" = "デンマーククローネ";
+"Romanian Leu" = "ルーマニアレウ";
+"All" = "すべて";
+"Plan" = "プラン";
+"Trend" = "トレンド";
+"Forecast" = "予測";
+"Calendar" = "カレンダー";
+"Pulse" = "パルス";
+"Stats" = "統計";
+"Optimize" = "最適化";
+"Today" = "今日";
+"7D" = "7日";
+"30D" = "30日";
+"Month" = "今月";
+"6M" = "6か月";
+"Life" = "累計";
+"Week" = "今週";
+"30 Days" = "30日間";
+"6 Months" = "6か月間";
+"Lifetime" = "累計";
+
+/* MARK: Scope toggle */
+"Local" = "ローカル";
+"Combined" = "合算";
+
+/* MARK: Accent presets */
+"Ember" = "エンバー";
+"Blue" = "ブルー";
+"Purple" = "パープル";
+"Pink" = "ピンク";
+"Red" = "レッド";
+"Orange" = "オレンジ";
+"Yellow" = "イエロー";
+"Green" = "グリーン";
+"Graphite" = "グラファイト";
+
+/* MARK: Session counts */
+"Older session logs may be unavailable." = "古いセッションログは利用できない場合があります。";
+"Session identities are unavailable across devices." = "セッションIDはデバイス間で共有されません。";
+"Session count unavailable" = "セッション数を取得できません";
+"At least 1 session" = "1 セッション以上";
+"At least %lld sessions" = "%lld セッション以上";
+"1 session" = "1 セッション";
+"%lld sessions" = "%lld セッション";
+"Unavailable" = "利用不可";
+"≥%lld sess" = "≥%lld セッション";
+"%lld sess" = "%lld セッション";
+
+/* MARK: Quota windows and reset countdowns */
+"Connect" = "接続";
+"Reconnect" = "再接続";
+"Add API Key" = "APIキーを追加";
+"now" = "たった今";
+"%1$lldd %2$lldh" = "%1$lld日%2$lld時間";
+"%1$lldh %2$lldm" = "%1$lld時間%2$lld分";
+"%lldm" = "%lld分";
+
+/* MARK: Usage refresh cadence */
+"Auto (2m, less on battery)" = "自動（2分、バッテリー時は控えめ）";
+"Manual" = "手動";
+"1 minute" = "1分";
+"5 minutes" = "5分";
+"15 minutes" = "15分";
+
+/* MARK: Quota refresh cadence */
+"2 minutes" = "2分";
+
+/* MARK: Capacity Dock appearance */
+"Liquid Glass" = "リキッドグラス";
+"Circle" = "円形";
+"Squircle" = "角丸四角形";
+
+/* MARK: Provider connection guidance */
+"Installed app or CLI" = "インストール済みのアプリまたはCLI";
+"OAuth" = "OAuth";
+"API or cloud credentials" = "APIまたはクラウド認証情報";
+"Browser session" = "ブラウザセッション";
+"Localhost service" = "ローカルサービス";
+"No sign-in required" = "サインイン不要";
+"Enter an API key or token below, then press Save & Connect." = "下にAPIキーまたはトークンを入力し、「保存して接続」を押してください。";
+"Sign in to %@ in a supported browser, then click Retry." = "対応ブラウザで%@にサインインし、「再試行」をクリックしてください。";
+"Sign in with the %@ app or CLI, then click Retry." = "%@のアプリまたはCLIでサインインし、「再試行」をクリックしてください。";
+"Complete %@ OAuth, then click Retry." = "%@のOAuth認証を完了し、「再試行」をクリックしてください。";
+"Start the local %@ service, then click Retry." = "ローカルの%@サービスを起動し、「再試行」をクリックしてください。";
+"Enter the required API or cloud credentials below, then press Save & Connect." = "下に必要なAPIまたはクラウド認証情報を入力し、「保存して接続」を押してください。";
+"No sign-in is required. Click Retry to refresh quota." = "サインインは不要です。「再試行」をクリックしてクォータを更新してください。";
+"Add an API key or token in Provider Settings." = "プロバイダー設定でAPIキーまたはトークンを追加してください。";
+"Add the required API or cloud credentials in Provider Settings." = "プロバイダー設定で必要なAPIまたはクラウド認証情報を追加してください。";
+
+/* MARK: Provider reconnect copy */
+"Reconnect %@" = "%@に再接続";
+"Claude Code credentials need to be refreshed." = "Claude Codeの認証情報を更新する必要があります。";
+"Open Claude Code in your terminal and type `/login`, then click Reconnect." = "ターミナルでClaude Codeを開き `/login` と入力してから、「再接続」をクリックしてください。";
+"Codex credentials need to be refreshed." = "Codexの認証情報を更新する必要があります。";
+"Run `codex login` in your terminal, then click Reconnect." = "ターミナルで `codex login` を実行してから、「再接続」をクリックしてください。";
+"Kimi Code credentials need to be refreshed." = "Kimi Codeの認証情報を更新する必要があります。";
+"Run the Kimi CLI once to refresh your login, then click Reconnect." = "Kimi CLIを一度実行してログインを更新してから、「再接続」をクリックしてください。";
+"Gemini credentials need to be refreshed." = "Geminiの認証情報を更新する必要があります。";
+"Run the Gemini CLI once to refresh your login, then click Reconnect." = "Gemini CLIを一度実行してログインを更新してから、「再接続」をクリックしてください。";
+"Copilot credentials need to be refreshed." = "Copilotの認証情報を更新する必要があります。";
+"Sign in with the Copilot CLI, an editor plugin, or `gh auth login`, then click Reconnect." = "Copilot CLI、エディタプラグイン、または `gh auth login` でサインインしてから、「再接続」をクリックしてください。";
+"The local Antigravity service is unavailable." = "ローカルのAntigravityサービスが利用できません。";
+"Start the Antigravity app, then click Reconnect." = "Antigravityアプリを起動してから、「再接続」をクリックしてください。";
+"%@ credentials need to be refreshed." = "%@の認証情報を更新する必要があります。";
+"Sign in to %@ again, then retry." = "%@に再度サインインしてから、再試行してください。";
+
+/* MARK: Copilot quota copy */
+"No Copilot credentials found" = "Copilotの認証情報が見つかりません";
+"Sign in via an editor's Copilot plugin first. Then click Try Again." = "まずエディタのCopilotプラグインでサインインし、「再試行」をクリックしてください。";
+"Copilot quota tracking disconnected" = "Copilotのクォータ追跡が切断されました";
+"Your Copilot credentials are untouched. Click Connect to resume." = "Copilotの認証情報はそのまま保持されています。「接続」をクリックして再開してください。";
+"Usage tracking still works. For live quota, sign in with the Copilot CLI or gh auth login, or paste a token below, then click Connect." = "使用量の追跡は引き続き機能します。リアルタイムのクォータを取得するには、Copilot CLIまたはgh auth loginでサインインするか、下にトークンを貼り付けてから「接続」をクリックしてください。";
+"Quota tracking disconnected. Credentials are untouched. Click Connect to resume." = "クォータ追跡が切断されました。認証情報はそのまま保持されています。「接続」をクリックして再開してください。";
+
+/* MARK: Grok Bot quota copy */
+"Grok Bot is not installed. Install the Grok Bot app, then click Retry." = "Grok Botがインストールされていません。Grok Botアプリをインストールしてから、「再試行」をクリックしてください。";
+"Sign in to the Cursor app with the account Grok Bot uses, then click Retry." = "Grok Botが使用するアカウントでCursorアプリにサインインしてから、「再試行」をクリックしてください。";
+"Cursor rejected the current app session. Sign in again, then click Retry." = "Cursorが現在のアプリセッションを拒否しました。再度サインインしてから、「再試行」をクリックしてください。";
+"Could not read the Cursor app's local session data. Quit and reopen Cursor, then click Retry." = "Cursorアプリのローカルセッションデータを読み取れませんでした。Cursorを終了して再度開いてから、「再試行」をクリックしてください。";
+"This account has no included Grok Bot allowance." = "このアカウントにはGrok Botの利用枠が含まれていません。";
+"Grok Bot usage is drawn from a pooled enterprise allowance, which has no per-account reading." = "Grok Botの使用量は企業共有の割り当てから消費されるため、アカウント単位の数値は取得できません。";
+"Cursor rate-limited the quota request." = "Cursorがクォータリクエストをレート制限しました。";
+"Grok Bot quota is temporarily unavailable." = "Grok Botのクォータは一時的に利用できません。";
+"Cursor returned an unrecognized Grok Bot quota response." = "CursorがGrok Botのクォータについて認識できない応答を返しました。";
+"Network error fetching Grok Bot quota." = "Grok Botのクォータ取得中にネットワークエラーが発生しました。";
+
+/* MARK: Updates */
+"Update Check Failed" = "更新の確認に失敗";
+"CLI Update Failed" = "CLIの更新に失敗";
+"Menubar Update Failed" = "メニューバーアプリの更新に失敗";
+"CodeBurn could not check GitHub for updates." = "CodeBurnはGitHubで更新を確認できませんでした。";
+"CodeBurn could not update the CLI." = "CodeBurnはCLIを更新できませんでした。";
+"CodeBurn could not update the menubar app." = "CodeBurnはメニューバーアプリを更新できませんでした。";
+"Click to retry the update check." = "クリックして更新確認を再試行します。";
+"Click to retry the update." = "クリックして更新を再試行します。";
+"Updating..." = "更新中…";
+"Update" = "更新";
+"Update the CLI and menubar to the latest release" = "CLIとメニューバーアプリを最新版に更新";
+"CodeBurn %@ available" = "CodeBurn %@ が利用可能";
+"App and CLI %@ updates are ready. Click to install." = "アプリとCLIの%@アップデートの準備ができました。クリックしてインストールしてください。";
+"Click to install the update." = "クリックして更新をインストールします。";
+"CodeBurn CLI %@ available" = "CodeBurn CLI %@ が利用可能";
+"Could not find the package manager for %1$@. Run “%2$@” manually, then try again." = "%1$@用のパッケージマネージャーが見つかりませんでした。「%2$@」を手動で実行してから、もう一度お試しください。";
+"the CLI" = "CLI";
+"CLI update failed (exit %lld)" = "CLIの更新に失敗しました（終了コード %lld）";
+"Your codeburn CLI (%1$@) is too old to update the menubar. Run “%2$@” first, then try again." = "codeburn CLI（%1$@）が古すぎるためメニューバーアプリを更新できません。まず「%2$@」を実行してから、もう一度お試しください。";
+"Update failed (exit %lld)" = "更新に失敗しました（終了コード %lld）";
+"GitHub returned HTTP %lld." = "GitHubがHTTP %lldを返しました。";
+"No mac-v release with a menubar zip and checksum was found." = "メニューバー用のzipとチェックサムを含むmac-vリリースが見つかりませんでした。";
+
+/* MARK: Terminal picker */
+"Terminal (macOS default)" = "ターミナル（macOS標準）";
+
+/* MARK: Status-item menu, tooltip and update alerts */
+"%@ credits" = "%@ クレジット";
+"CodeBurn %1$@ · %2$lld of %3$lld devices reporting" = "CodeBurn %1$@ · %2$lld/%3$lld台のデバイスが報告中";
+"Settings…" = "設定…";
+"Capacity Dock Settings…" = "容量ドック設定…";
+"Refresh Now" = "今すぐ更新";
+"Check for Updates" = "更新を確認";
+"About CodeBurn" = "CodeBurnについて";
+"Quit CodeBurn" = "CodeBurnを終了";
+"Today · no usage yet" = "今日 · 使用量なし";
+"1 call" = "1回の呼び出し";
+"%lld calls" = "%lld回の呼び出し";
+"Today · %1$@ · %2$@" = "今日 · %1$@ · %2$@";
+"CodeBurn Settings" = "CodeBurn設定";
+"Update Available" = "更新があります";
+"%1$@ is available (you have %2$@)." = "%1$@ が利用可能です（現在は%2$@）。";
+"%1$@ Your codeburn CLI is too old to install it. First run:\n\n%2$@\n\nthen:\n\ncodeburn menubar --force" = "%1$@ codeburn CLIが古すぎてインストールできません。まず次を実行してください:\n\n%2$@\n\n次に:\n\ncodeburn menubar --force";
+"%@ Run:\n\ncodeburn menubar --force" = "%@ 次を実行してください:\n\ncodeburn menubar --force";
+"Up to Date" = "最新の状態です";
+"You're on the latest version (%@)." = "最新バージョン（%@）を使用中です。";
+"OK" = "OK";
+
+/* MARK: Popover chrome, header, footer and banners */
+"This total may be incomplete." = "この合計は不完全な場合があります。";
+"Claude config" = "Claude設定";
+"No %1$@ data for %2$@" = "%2$@の%1$@データはありません";
+"Couldn't load %@" = "%@を読み込めませんでした";
+"Retry" = "再試行";
+"Loading %@…" = "%@を読み込み中…";
+"Your AI Bill, Itemized" = "AI利用料の内訳";
+"%1$@ over limit (%2$lld%%)" = "%1$@が上限超過（%2$lld%%）";
+"resets in %@" = "%@後にリセット";
+"Change accent color" = "アクセントカラーを変更";
+"CLI %@ available" = "CLI %@ が利用可能";
+"Update now" = "今すぐ更新";
+"Update the CLI (and the menubar if one is available) automatically" = "CLI（および利用可能であればメニューバーアプリ）を自動的に更新";
+"Copy update command to clipboard" = "更新コマンドをクリップボードにコピー";
+"Enjoying CodeBurn?" = "CodeBurnを楽しんでいますか？";
+"Star us on GitHub" = "GitHubでスターをつける";
+"Hide this banner" = "このバナーを非表示";
+"CSV (folder)" = "CSV（フォルダ）";
+"JSON" = "JSON";
+"Export" = "書き出す";
+"Full Report" = "完全なレポート";
+
+/* MARK: Hero section */
+"%@ call" = "%@回の呼び出し";
+"%@ calls" = "%@回の呼び出し";
+"Daily budget of %@ exceeded" = "1日の予算%@を超過";
+"Combined unavailable · showing local" = "合算不可 · ローカルを表示中";
+"Combined · %@" = "合算 · %@";
+"Saved %@ with local models" = "ローカルモデルで%@節約";
+"%1$lld of %2$lld devices" = "%1$lld/%2$lld台のデバイス";
+"%@ · local" = "%@ · ローカル";
+
+/* MARK: Period strip and date picker */
+"Clear" = "クリア";
+"Done" = "完了";
+"Pick dates" = "日付を選択";
+"1 day" = "1日";
+"%lld days" = "%lld日";
+
+/* MARK: Provider tab strip and quota popover */
+"Show previous providers" = "前のプロバイダーを表示";
+"Show next providers" = "次のプロバイダーを表示";
+"Loading…" = "読み込み中…";
+"Sign in with `codex` (ChatGPT mode) to track quota." = "`codex`（ChatGPTモード）でサインインするとクォータを追跡できます。";
+"Sign in to Claude Code to track quota." = "Claude Codeにサインインするとクォータを追跡できます。";
+"Sign in to track quota." = "サインインするとクォータを追跡できます。";
+"%@ usage" = "%@の使用量";
+"stale" = "古い";
+"retrying" = "再試行中";
+
+/* MARK: Activity section */
+"Activity" = "アクティビティ";
+"Cost" = "コスト";
+"Turns" = "ターン数";
+"1-shot" = "一発成功";
+
+/* MARK: Models section */
+"Models" = "モデル";
+"Saved" = "節約額";
+"Calls" = "呼び出し";
+"Tokens" = "トークン";
+"%@ in" = "入力 %@";
+"%@ out" = "出力 %@";
+"%1$@ in · %2$@ out · %3$@ cache read" = "入力 %1$@ · 出力 %2$@ · キャッシュ読取 %3$@";
+"%@%% cache hit" = "キャッシュヒット率 %@%%";
+"1 model unpriced, counted at $0 · %@ tokens" = "価格未設定のモデル1件、$0として計上 · %@トークン";
+"%1$lld models unpriced, counted at $0 · %2$@ tokens" = "価格未設定のモデル%1$lld件、$0として計上 · %2$@トークン";
+
+/* MARK: Pull requests section */
+"Pull requests" = "プルリクエスト";
+
+/* MARK: Tooling section */
+"Tooling" = "ツール";
+"Tools" = "ツール";
+"Skills & Agents" = "スキルとエージェント";
+"MCP Servers" = "MCPサーバー";
+
+/* MARK: Tips section */
+"Tips for you" = "あなたへのヒント";
+"%lld signals" = "%lld件のシグナル";
+"Open Full Optimize" = "完全な最適化レポートを開く";
+"Cache hit at %lld%% — most prompts reuse cache" = "キャッシュヒット率%lld%% — 大半のプロンプトがキャッシュを再利用";
+"%lld%% one-shot — edits landing first try" = "一発成功率%lld%% — 編集が最初の試行で成功";
+"Spend down %lld%% vs last 7 days" = "支出が過去7日間より%lld%%減少";
+"%lld-day usage streak" = "%lld日連続で使用中";
+"Spend up %lld%% vs prior 7 days" = "支出が過去7日間より%lld%%増加";
+"Cache hit only %lld%% — paying for cold prompts" = "キャッシュヒット率はわずか%lld%% — コールドプロンプトに料金を支払い中";
+"%lld%% one-shot — lots of iteration" = "一発成功率%lld%% — 修正の繰り返しが多い";
+"On pace for %1$@ this month (+%2$lld%% vs last)" = "このペースだと今月は%1$@（前月比+%2$lld%%）";
+"What's working" = "うまくいっていること";
+"What to improve" = "改善できること";
+"Risks" = "リスク";
+
+/* MARK: Insight tabs (trend, calendar, forecast, pulse, stats, optimize, plan) */
+"Last %lld days" = "過去%lld日間";
+"%1$@%% vs prior %2$lldd" = "%1$@%%（前%2$lld日比）";
+"Avg/day" = "1日平均";
+"Peak" = "ピーク";
+"Yesterday" = "昨日";
+"Total" = "合計";
+"%@ tokens" = "%@トークン";
+"%1$@ on %2$@" = "%1$@（%2$@）";
+"Daily activity" = "日次アクティビティ";
+"%lld active days" = "%lld稼働日";
+"Peak day" = "ピーク日";
+"Avg active" = "稼働日平均";
+"Streak" = "連続日数";
+"%lldd" = "%lld日";
+"Mon" = "月";
+"Wed" = "水";
+"Fri" = "金";
+"Sun" = "日";
+"Daily detail" = "日次の詳細";
+"Hover a day" = "日にカーソルを合わせる";
+"Future day" = "未来の日付";
+"No tracked usage" = "追跡された使用量なし";
+"%@: future day" = "%@：未来の日付";
+"%@: no tracked usage" = "%@：追跡された使用量なし";
+"%1$@: %2$@, %3$lld calls, %4$@ tokens" = "%1$@：%2$@、%3$lld回の呼び出し、%4$@トークン";
+"Month-to-date" = "月初来";
+"On pace for" = "このペースだと";
+"Avg/day (this wk)" = "1日平均（今週）";
+"Last 7d" = "過去7日間";
+"no prior month" = "前月データなし";
+"%1$@%% vs last month (%2$@)" = "%1$@%%（前月比、%2$@）";
+"Cache hit" = "キャッシュヒット";
+"Cost / session" = "セッションあたりコスト";
+"Cost/edit" = "編集あたりコスト";
+"Save ~%1$@ / ~%2$@ tokens · 1 finding" = "約%1$@ / 約%2$@トークンを節約可能 · 1件の指摘";
+"Save ~%1$@ / ~%2$@ tokens · %3$lld findings" = "約%1$@ / 約%2$@トークンを節約可能 · %3$lld件の指摘";
+"Favorite model" = "よく使うモデル";
+"Active days (month)" = "稼働日数（今月）";
+"Most active day" = "最も活発だった日";
+"Peak day spend" = "ピーク日の支出";
+"Sessions" = "セッション";
+"Current streak" = "現在の連続記録";
+"Longest streak" = "最長連続記録";
+"Tracked spend (last %lld days)" = "追跡された支出（過去%lld日間）";
+"Costliest session" = "最も費用のかかったセッション";
+"Retry tax" = "リトライコスト";
+"%1$lld retries across %2$lld edits" = "%2$lld件の編集で%1$lld回のリトライ";
+"%@ ret/edit" = "%@回/編集";
+"Hides session details" = "セッションの詳細を非表示";
+"Shows session details" = "セッションの詳細を表示";
+"Expanded" = "展開済み";
+"Collapsed" = "折りたたみ済み";
+"  %lld call" = "  %lld回の呼び出し";
+"  %lld calls" = "  %lld回の呼び出し";
+"Potential savings" = "節約できる可能性";
+"%lld%% of spend" = "支出の%lld%%";
+"could be optimized" = "最適化の余地あり";
+"Routing waste" = "ルーティングの無駄";
+"vs %1$@ @ %2$@/edit" = "%1$@との比較（%2$@/編集）";
+"Connect Claude subscription" = "Claudeサブスクリプションを接続";
+"CodeBurn will read your Claude Code credentials once. macOS will ask permission. After that, the live quota bar shows next to the Claude tab and updates automatically." = "CodeBurnはClaude Codeの認証情報を一度だけ読み取ります。macOSが許可を求めます。その後、リアルタイムのクォータバーがClaudeタブの横に表示され、自動的に更新されます。";
+"Reading Claude credentials..." = "Claudeの認証情報を読み取り中…";
+"No Claude credentials found" = "Claudeの認証情報が見つかりません";
+"Sign in with Claude Code first: open `claude` in your terminal and type `/login`. Then click Try Again." = "まずClaude Codeでサインインしてください。ターミナルで`claude`を開き`/login`と入力し、「再試行」をクリックしてください。";
+"Anthropic temporarily unreachable. Retrying." = "Anthropicに一時的に接続できません。再試行しています。";
+"Reconnect Claude" = "Claudeに再接続";
+"Your Claude session has expired. Open Claude Code in your terminal and type `/login`, then click Reconnect." = "Claudeのセッションが期限切れです。ターミナルでClaude Codeを開き`/login`と入力してから、「再接続」をクリックしてください。";
+"Resets %@" = "リセット：%@";
+"5-hour window" = "5時間ウィンドウ";
+"7-day total" = "7日間合計";
+"7-day Opus" = "7日間Opus";
+"7-day Sonnet" = "7日間Sonnet";
+"7-day %@" = "7日間%@";
+"Try Again" = "再試行";
+"Couldn't load plan data" = "プランデータを読み込めませんでした";
+"Connect ChatGPT subscription" = "ChatGPTサブスクリプションを接続";
+"CodeBurn will read your Codex CLI credentials once. After that, the live quota bar shows next to the Codex tab and updates automatically." = "CodeBurnはCodex CLIの認証情報を一度だけ読み取ります。その後、リアルタイムのクォータバーがCodexタブの横に表示され、自動的に更新されます。";
+"Reading Codex CLI credentials..." = "Codex CLIの認証情報を読み取り中…";
+"No Codex credentials found" = "Codexの認証情報が見つかりません";
+"Sign in with Codex first: run `codex login` in your terminal. Then click Try Again." = "まずCodexでサインインしてください。ターミナルで`codex login`を実行し、「再試行」をクリックしてください。";
+"ChatGPT temporarily unreachable. Retrying." = "ChatGPTに一時的に接続できません。再試行しています。";
+"Reconnect Codex" = "Codexに再接続";
+"Your ChatGPT session has expired. Run `codex login` in your terminal, then click Reconnect." = "ChatGPTのセッションが期限切れです。ターミナルで`codex login`を実行してから、「再接続」をクリックしてください。";
+"%@ window" = "%@ウィンドウ";
+"Credits" = "クレジット";
+"Unlimited" = "無制限";
+"Limit resets" = "上限のリセット";
+"No Kimi Code credentials found" = "Kimi Codeの認証情報が見つかりません";
+"Sign in with the Kimi CLI first. Then click Try Again." = "まずKimi CLIでサインインしてから、「再試行」をクリックしてください。";
+"Reading Kimi Code credentials..." = "Kimi Codeの認証情報を読み取り中…";
+"Kimi temporarily unreachable. Retrying." = "Kimiに一時的に接続できません。再試行しています。";
+"Refresh Kimi Code login" = "Kimi Codeのログインを更新";
+"Kimi Code tokens are short-lived. Run the Kimi CLI once to refresh your login, then click Reconnect." = "Kimi Codeのトークンは有効期限が短いです。Kimi CLIを一度実行してログインを更新してから、「再接続」をクリックしてください。";
+"Parallel sessions" = "並列セッション";
+"Login idle. Run the Kimi CLI to refresh." = "ログインが休止中です。Kimi CLIを実行して更新してください。";
+"as of %@" = "%@時点";
+"No Gemini credentials found" = "Geminiの認証情報が見つかりません";
+"Sign in with the Gemini CLI first. Then click Try Again." = "まずGemini CLIでサインインしてから、「再試行」をクリックしてください。";
+"Reading Gemini credentials..." = "Geminiの認証情報を読み取り中…";
+"Gemini temporarily unreachable. Retrying." = "Geminiに一時的に接続できません。再試行しています。";
+"Refresh Gemini login" = "Geminiのログインを更新";
+"Your Gemini login has expired. Run the Gemini CLI once to refresh it, then click Reconnect." = "Geminiのログインが期限切れです。Gemini CLIを一度実行して更新してから、「再接続」をクリックしてください。";
+"Login idle. Run the Gemini CLI to refresh." = "ログインが休止中です。Gemini CLIを実行して更新してください。";
+"Reading Copilot credentials..." = "Copilotの認証情報を読み取り中…";
+"GitHub temporarily unreachable. Retrying." = "GitHubに一時的に接続できません。再試行しています。";
+"Refresh Copilot login" = "Copilotのログインを更新";
+"Your Copilot sign-in has expired. Sign in via an editor's Copilot plugin again, then click Reconnect." = "Copilotのサインインが期限切れです。エディタのCopilotプラグインで再度サインインしてから、「再接続」をクリックしてください。";
+"Login idle. Sign in via an editor's Copilot plugin to refresh." = "ログインが休止中です。エディタのCopilotプラグインでサインインして更新してください。";
+"No local Antigravity server found" = "ローカルのAntigravityサーバーが見つかりません";
+"Start the Antigravity app, then click Try Again." = "Antigravityアプリを起動してから、「再試行」をクリックしてください。";
+"Probing the local Antigravity server..." = "ローカルのAntigravityサーバーを確認中…";
+"Local Antigravity server unreachable. Retrying." = "ローカルのAntigravityサーバーに接続できません。再試行しています。";
+"Reconnect Antigravity" = "Antigravityに再接続";
+"Server disconnected. Start the Antigravity app to refresh." = "サーバーが切断されました。Antigravityアプリを起動して更新してください。";
+"On pace" = "順調なペース";
+"On pace: %@ at reset" = "順調なペース：リセット時点で%@";
+"%@%% in deficit" = "%@%%超過";
+"%@%% in reserve" = "%@%%の余裕";
+"%1$@ · hits 100%% %2$@" = "%1$@ · %2$@に100%%到達";
+"%1$@ · %2$@ at reset" = "%1$@ · リセット時点で%2$@";
+"On pace: %1$@ at reset · hits 100%% %2$@" = "順調なペース：リセット時点で%1$@ · %2$@に100%%到達";
+"Based on last cycle: %@" = "前回のサイクルに基づく：%@";
+"in %lldm" = "%lld分後";
+"in %lldh" = "%lld時間後";
+"in %lldd" = "%lld日後";
+
+/* MARK: Capacity Dock */
+"Dock to Edge" = "画面端にドッキング";
+"Left" = "左";
+"Right" = "右";
+"Top" = "上";
+"Bottom" = "下";
+"Hide Capacity Dock" = "容量ドックを隠す";
+"Capacity Dock" = "容量ドック";
+"Unknown" = "不明";
+"Click to keep Capacity Dock expanded" = "クリックすると容量ドックを展開したままにします";
+"Click to switch between this provider's usage windows" = "クリックしてこのプロバイダーの使用量ウィンドウを切り替え";
+/* プロバイダーセルのVoiceOver操作。ウィンドウ名はプロバイダー自身のラベルか
+   汎用の期間名のいずれかで、いずれもそのまま使用します。 */
+"Show %@ usage" = "%@の使用量を表示";
+"none running" = "実行中なし";
+"Kimi Code" = "Kimi Code";
+"Gemini" = "Gemini";
+"Copilot" = "Copilot";
+"Antigravity" = "Antigravity";
+"1 running" = "1件実行中";
+"%lld running" = "%lld件実行中";
+"%@ left" = "残り%@";
+/* 実行中セッション行のツールチップ。%@はターミナルアプリ自身の名前で、そのまま
+   使用します。2つ目の形式は、ターミナルがセッションのタブを選択できず、前面に
+   出すことしかできない場合に使用します。 */
+"Open in %@" = "%@で開く";
+"Bring %@ to front" = "%@を前面に表示";
+"burned" = "消費済み";
+"today %1$@ of %2$@" = "今日 %1$@ / %2$@";
+"no budget set" = "予算未設定";
+"Refreshing…" = "更新中…";
+"Last known usage · refreshing" = "最後に確認した使用量 · 更新中";
+"Last known usage · retrying" = "最後に確認した使用量 · 再試行中";
+"Not connected" = "未接続";
+"Reconnect required" = "再接続が必要";
+
+/* MARK: Settings */
+"General" = "一般";
+"Providers" = "プロバイダー";
+"%lld on" = "%lld件が有効";
+"About" = "情報";
+"Settings" = "設定";
+"Search providers" = "プロバイダーを検索";
+"Enter an amount above, or the alert stays off." = "上に金額を入力してください。入力しない場合、アラートはオフのままです。";
+"Flame icon turns yellow when today's tokens pass the daily budget." = "今日のトークン数が1日の予算を超えると、炎のアイコンが黄色になります。";
+"Flame icon turns yellow when today's cost pass the daily budget." = "今日のコストが1日の予算を超えると、炎のアイコンが黄色になります。";
+"Display" = "表示";
+"Currency" = "通貨";
+"Metric" = "指標";
+"Cost ($)" = "コスト（$）";
+"Tokens (↑↓)" = "トークン（↑↓）";
+"Total Tokens" = "トークン合計";
+"Credits (Codex)" = "クレジット（Codex）";
+"Icon Only" = "アイコンのみ";
+"Period" = "期間";
+"Scope" = "範囲";
+"Accent" = "アクセントカラー";
+"Usage Refresh" = "使用量の更新";
+"Update every" = "更新間隔";
+"How often the menubar figure re-reads your local session data. Auto refreshes every 30 seconds while you're plugged in and backs off on battery; Manual only refreshes when you open the popover or click Refresh Now." = "メニューバーの数値がローカルのセッションデータを再読み込みする頻度です。「自動」は電源接続時に30秒ごとに更新し、バッテリー使用時は間隔を延ばします。「手動」はポップオーバーを開くか「今すぐ更新」をクリックしたときのみ更新します。";
+"Updates" = "更新";
+"Notify me about updates" = "更新があれば通知する";
+"Posts a notification when a new CodeBurn release is available. Click it to install." = "新しいCodeBurnのリリースが利用可能になると通知します。通知をクリックするとインストールできます。";
+"Terminal" = "ターミナル";
+"Open commands in" = "コマンドを開くアプリ";
+"%@ (not installed)" = "%@（未インストール）";
+"Where Full Report and Optimize open. If the chosen app isn't installed CodeBurn falls back to Terminal; if that's missing too the command runs in the background. Only terminals that can script a command into a live window are listed." = "「完全なレポート」と「最適化」が開くアプリです。選択したアプリがインストールされていない場合、CodeBurnはターミナルにフォールバックします。ターミナルもない場合はコマンドがバックグラウンドで実行されます。アクティブなウィンドウにコマンドをスクリプトで送れるターミナルのみが表示されます。";
+"Alerts" = "アラート";
+"Daily budget" = "1日の予算";
+"Off" = "オフ";
+"Custom…" = "カスタム…";
+"Amount" = "金額";
+"M tokens" = "百万トークン";
+"Show Capacity Dock" = "容量ドックを表示";
+"Resting provider" = "デフォルトのプロバイダー";
+"Size" = "サイズ";
+"Capacity Dock size" = "容量ドックのサイズ";
+"Appearance" = "外観";
+"Gauge shape" = "ゲージの形状";
+"Dock providers" = "ドックのプロバイダー";
+"Connect a provider from its sidebar page to make it available here." = "サイドバーのプロバイダーページから接続すると、ここに表示されるようになります。";
+"Needs attention" = "要対応";
+"Connected providers and anything already shown in the dock appear here, so a provider can always be removed even if its connection later fails." = "接続済みのプロバイダーと、すでにドックに表示されている項目がここに表示されます。接続が後で失敗しても、プロバイダーは常に削除できます。";
+"Connection" = "接続";
+"Config Directories" = "設定ディレクトリ";
+"Aggregate usage across multiple Claude config directories (e.g. work and personal accounts). Leave empty to track just the default `~/.claude`. The `CLAUDE_CONFIG_DIRS` environment variable, if set, overrides this list." = "複数のClaude設定ディレクトリ（仕事用と個人用のアカウントなど）の使用量を集計します。空のままにするとデフォルトの`~/.claude`のみを追跡します。`CLAUDE_CONFIG_DIRS`環境変数が設定されている場合、このリストより優先されます。";
+"Quota Refresh" = "クォータの更新";
+"Anthropic rate-limits this endpoint per account. 2 minutes is plenty for the 5-hour and weekly windows; pick Manual if you only want updates on demand." = "Anthropicはこのエンドポイントをアカウントごとにレート制限しています。5時間および週間ウィンドウには2分で十分です。必要なときだけ更新したい場合は「手動」を選択してください。";
+"Connected" = "接続済み";
+"Backing off" = "待機中";
+"Connecting…" = "接続中…";
+"Ready" = "準備完了";
+"Plan: %@" = "プラン：%@";
+"Live quota tracked from Anthropic." = "Anthropicからリアルタイムのクォータを追跡しています。";
+"Anthropic rate-limited; auto-retrying." = "Anthropicがレート制限中です。自動的に再試行しています。";
+"macOS may ask permission to read your credentials." = "macOSが認証情報の読み取り許可を求める場合があります。";
+"Background refresh in progress." = "バックグラウンドで更新中です。";
+"Tap Load Quota to fetch live usage from Anthropic." = "「クォータを読み込む」をクリックしてAnthropicからリアルタイムの使用量を取得してください。";
+"Click Connect to read your Claude Code credentials and start tracking quota." = "「接続」をクリックしてClaude Codeの認証情報を読み取り、クォータの追跡を開始してください。";
+"Disconnect" = "切断";
+"Disconnect Claude?" = "Claudeを切断しますか？";
+"Cancel" = "キャンセル";
+"CodeBurn will stop tracking quota and clear its connection state plus any legacy credential cache. Your Claude Code credential is untouched. Claude Code keeps working." = "CodeBurnはクォータの追跡を停止し、接続状態と旧バージョンの認証情報キャッシュをすべて消去します。Claude Codeの認証情報自体は変更されず、Claude Codeは引き続き使用できます。";
+"Load Quota" = "クォータを読み込む";
+"No extra directories. Tracking the default `~/.claude`." = "追加のディレクトリはありません。デフォルトの`~/.claude`を追跡しています。";
+"Remove" = "削除";
+"Add Directory…" = "ディレクトリを追加…";
+"Add" = "追加";
+"Choose one or more Claude config directories (each containing a `projects` folder)." = "1つ以上のClaude設定ディレクトリ（それぞれ`projects`フォルダを含む）を選択してください。";
+"Codex live-quota tracking follows the authoritative `~/.codex/auth.json` session directly and does not create a second Keychain copy. A legacy CodeBurn Keychain item, when present, is read only as a migration fallback. Only ChatGPT-mode auth (Plus / Pro / Team / Business / Edu / Enterprise) is supported. API-key users are billed per request and have a different reporting surface. Credit-metered workspaces report no rate-limit windows, so their monthly credit allowance is shown instead." = "Codexのリアルタイムクォータ追跡は、正規の`~/.codex/auth.json`セッションを直接参照し、キーチェーンに別のコピーを作成しません。旧バージョンのCodeBurnキーチェーン項目が存在する場合は、移行時のフォールバックとしてのみ読み取られます。対応するのはChatGPTモードの認証（Plus / Pro / Team / Business / Edu / Enterprise）のみです。APIキーを使うユーザーはリクエスト単位で課金され、レポート方法が異なります。クレジット制のワークスペースではレート制限ウィンドウが報告されないため、代わりに月間クレジット枠が表示されます。";
+"How it works" = "仕組み";
+"Couldn't load Codex quota" = "Codexのクォータを読み込めませんでした";
+"Live quota tracked from chatgpt.com." = "chatgpt.comからリアルタイムのクォータを追跡しています。";
+"Codex is in API-key mode. Run `codex login` and choose a ChatGPT plan to enable quota tracking." = "Codexは現在APIキーモードです。`codex login`を実行してChatGPTプランを選択すると、クォータの追跡が有効になります。";
+"Run `codex login` in your terminal to sign in again, then click Reconnect." = "ターミナルで`codex login`を実行して再度サインインし、「再接続」をクリックしてください。";
+"ChatGPT rate-limited; auto-retrying." = "ChatGPTがレート制限中です。自動的に再試行しています。";
+"Reading ~/.codex/auth.json." = "~/.codex/auth.jsonを読み取り中です。";
+"Tap Load Quota to fetch live usage from chatgpt.com." = "「クォータを読み込む」をクリックしてchatgpt.comからリアルタイムの使用量を取得してください。";
+"Click Connect to read your Codex CLI credentials. If Connect fails, run `codex login` in your terminal first to create ~/.codex/auth.json." = "「接続」をクリックしてCodex CLIの認証情報を読み取ってください。接続に失敗する場合は、まずターミナルで`codex login`を実行して~/.codex/auth.jsonを作成してください。";
+"Disconnect Codex?" = "Codexを切断しますか？";
+"CodeBurn will stop tracking quota and clear its connection state plus any legacy credential cache. Your ~/.codex/auth.json is untouched. Codex CLI keeps working." = "CodeBurnはクォータの追跡を停止し、接続状態と旧バージョンの認証情報キャッシュをすべて消去します。~/.codex/auth.json自体は変更されず、Codex CLIは引き続き使用できます。";
+"Kimi Code live-quota tracking reads `~/.kimi-code/credentials/kimi-code.json` directly. Nothing is copied or stored. Access tokens are short-lived (~15 minutes) and only the Kimi CLI refreshes them, so if the connection shows as expired, run the Kimi CLI once and click Reconnect." = "Kimi Codeのリアルタイムクォータ追跡は`~/.kimi-code/credentials/kimi-code.json`を直接読み取ります。コピーや保存は行いません。アクセストークンは有効期限が短く（約15分）、Kimi CLIのみが更新できます。接続が期限切れと表示された場合は、Kimi CLIを一度実行してから「再接続」をクリックしてください。";
+"Login refresh required" = "ログインの更新が必要";
+"Couldn't load Kimi quota" = "Kimiのクォータを読み込めませんでした";
+"Live quota tracked from api.kimi.com." = "api.kimi.comからリアルタイムのクォータを追跡しています。";
+"Kimi rate-limited; auto-retrying." = "Kimiがレート制限中です。自動的に再試行しています。";
+"Reading ~/.kimi-code credentials." = "~/.kimi-codeの認証情報を読み取り中です。";
+"Tap Load Quota to fetch live usage from api.kimi.com." = "「クォータを読み込む」をクリックしてapi.kimi.comからリアルタイムの使用量を取得してください。";
+"Sign in with the Kimi CLI first, then click Connect." = "まずKimi CLIでサインインしてから、「接続」をクリックしてください。";
+"Disconnect Kimi Code?" = "Kimi Codeを切断しますか？";
+"CodeBurn will stop tracking Kimi Code quota. Your ~/.kimi-code credentials are untouched. The Kimi CLI keeps working." = "CodeBurnはKimi Codeのクォータ追跡を停止します。~/.kimi-codeの認証情報自体は変更されず、Kimi CLIは引き続き使用できます。";
+"Gemini live-quota tracking reads `~/.gemini/oauth_creds.json` read-only. Nothing is copied or stored, and tokens stay in memory. If the connection shows as expired, run the Gemini CLI once to refresh your login, then click Reconnect." = "Geminiのリアルタイムクォータ追跡は`~/.gemini/oauth_creds.json`を読み取り専用で参照します。コピーや保存は行わず、トークンはメモリ内にのみ保持されます。接続が期限切れと表示された場合は、Gemini CLIを一度実行してログインを更新してから、「再接続」をクリックしてください。";
+"Couldn't load Gemini quota" = "Geminiのクォータを読み込めませんでした";
+"Live quota tracked from Google Code Assist." = "Google Code Assistからリアルタイムのクォータを追跡しています。";
+"Gemini rate-limited; auto-retrying." = "Geminiがレート制限中です。自動的に再試行しています。";
+"Reading ~/.gemini credentials." = "~/.geminiの認証情報を読み取り中です。";
+"Tap Load Quota to fetch live usage from Google Code Assist." = "「クォータを読み込む」をクリックしてGoogle Code Assistからリアルタイムの使用量を取得してください。";
+"Sign in with the Gemini CLI first, then click Connect." = "まずGemini CLIでサインインしてから、「接続」をクリックしてください。";
+"Disconnect Gemini?" = "Geminiを切断しますか？";
+"CodeBurn will stop tracking Gemini quota. Your ~/.gemini credentials are untouched. The Gemini CLI keeps working." = "CodeBurnはGeminiのクォータ追跡を停止します。~/.geminiの認証情報自体は変更されず、Gemini CLIは引き続き使用できます。";
+"Copilot live-quota tracking reads a GitHub token that is already on this Mac, read-only. Nothing is copied or stored. CodeBurn looks at the editor plugin files in `~/.config/github-copilot`, the Copilot CLI's `~/.copilot` files, the COPILOT_GITHUB_TOKEN, GH_TOKEN and GITHUB_TOKEN variables, `gh auth token`, and finally a token you paste below. Usage tracking works without any of this; only the live quota bars need a token. Every one of those carries the GitHub host it belongs to — the plugin files are keyed by host, the variables are read with GH_HOST, the `gh` login with the host in gh's own hosts.yml, and a pasted token with the host you type beside it — and a credential for a GitHub Enterprise Cloud host is queried on that tenant's own API (api.<tenant>.ghe.com), never sent to api.github.com." = "Copilotのリアルタイムクォータ追跡は、このMac上に既にあるGitHubトークンを読み取り専用で参照します。コピーや保存は行いません。CodeBurnは`~/.config/github-copilot`内のエディタプラグインファイル、Copilot CLIの`~/.copilot`ファイル、COPILOT_GITHUB_TOKEN・GH_TOKEN・GITHUB_TOKEN環境変数、`gh auth token`、そして最後に下で貼り付けたトークンの順に確認します。使用量の追跡にはこれらは不要で、リアルタイムのクォータバーにのみトークンが必要です。これらにはそれぞれ対応するGitHubホストが紐づいています。プラグインファイルはホストごとに分類され、環境変数はGH_HOSTで読み取られ、`gh`のログインはghのhosts.yml内のホストを使用し、貼り付けたトークンは横に入力したホストを使用します。GitHub Enterprise Cloudホスト用の認証情報は、そのテナント自身のAPI（api.<tenant>.ghe.com）にのみ問い合わせ、api.github.comには送信されません。";
+"GitHub token" = "GitHubトークン";
+"GitHub host" = "GitHubホスト";
+"Save & Connect" = "保存して接続";
+"Clear Token" = "トークンを消去";
+"Paste a token" = "トークンを貼り付け";
+"Optional, and only needed when nothing else on this Mac is signed in. A fine-grained personal access token with the \"Plan: Read-only\" permission is enough. Leave the host at github.com unless the token was minted on a GitHub Enterprise Cloud tenant, in which case enter that tenant's host (<tenant>.ghe.com) so the token is never sent to api.github.com. Both are saved in CodeBurn's own Keychain item and are used only to read your Copilot quota." = "任意項目で、このMac上に他にサインイン済みのものがない場合にのみ必要です。「Plan: Read-only」権限を持つ細粒度パーソナルアクセストークンで十分です。ホストはgithub.comのままにしてください。ただしトークンがGitHub Enterprise Cloudテナントで発行された場合は、そのテナントのホスト（<tenant>.ghe.com）を入力し、トークンがapi.github.comに送信されないようにしてください。どちらもCodeBurn専用のキーチェーン項目に保存され、Copilotのクォータの読み取りにのみ使用されます。";
+"Couldn't load Copilot quota" = "Copilotのクォータを読み込めませんでした";
+"Live quota tracked from %@." = "%@からリアルタイムのクォータを追跡しています。";
+"Plan: %1$@. Live quota tracked from %2$@." = "プラン：%1$@。%2$@からリアルタイムのクォータを追跡しています。";
+"Sign in again with the Copilot CLI, an editor's Copilot plugin, or gh auth login, then click Reconnect." = "Copilot CLI、エディタのCopilotプラグイン、またはgh auth loginで再度サインインしてから、「再接続」をクリックしてください。";
+"GitHub rate-limited; auto-retrying." = "GitHubがレート制限中です。自動的に再試行しています。";
+"Looking for a GitHub token on this Mac." = "このMac上のGitHubトークンを探しています。";
+"Tap Load Quota to fetch live usage from GitHub." = "「クォータを読み込む」をクリックしてGitHubからリアルタイムの使用量を取得してください。";
+"Tap Load Quota to fetch live usage from %@." = "「クォータを読み込む」をクリックして%@からリアルタイムの使用量を取得してください。";
+"CodeBurn cannot read Copilot quota for %@. Use github.com or a GitHub Enterprise Cloud host (*.ghe.com)." = "CodeBurnは%@のCopilotクォータを読み取れません。github.comまたはGitHub Enterprise Cloudホスト（*.ghe.com）を使用してください。";
+"Disconnect Copilot?" = "Copilotを切断しますか？";
+"CodeBurn will stop tracking Copilot quota. Every credential it read stays untouched, and your Copilot clients keep working." = "CodeBurnはCopilotのクォータ追跡を停止します。読み取った認証情報はすべて変更されず、Copilotクライアントは引き続き使用できます。";
+"Antigravity live-quota tracking talks to the Antigravity app's local language server on 127.0.0.1 only. Nothing leaves the machine and no credential files are read. If it shows as disconnected, start the Antigravity app, then click Reconnect." = "Antigravityのリアルタイムクォータ追跡は、Antigravityアプリのローカル言語サーバー（127.0.0.1）のみと通信します。データが外部に送信されることはなく、認証情報ファイルも読み取りません。切断中と表示された場合は、Antigravityアプリを起動してから、「再接続」をクリックしてください。";
+"Couldn't load Antigravity quota" = "Antigravityのクォータを読み込めませんでした";
+"Live quota tracked from the local Antigravity server." = "ローカルのAntigravityサーバーからリアルタイムのクォータを追跡しています。";
+"Local probe failed; auto-retrying." = "ローカルの確認に失敗しました。自動的に再試行しています。";
+"Probing the local Antigravity language server." = "ローカルのAntigravity言語サーバーを確認中です。";
+"Tap Load Quota to probe the local Antigravity server." = "「クォータを読み込む」をクリックしてローカルのAntigravityサーバーを確認してください。";
+"Start the Antigravity app first, then click Connect." = "まずAntigravityアプリを起動してから、「接続」をクリックしてください。";
+"No local Antigravity server found. Start the Antigravity app, then click Reconnect." = "ローカルのAntigravityサーバーが見つかりません。Antigravityアプリを起動してから、「再接続」をクリックしてください。";
+"Disconnect Antigravity?" = "Antigravityを切断しますか？";
+"CodeBurn will stop tracking Antigravity quota. Nothing is read from or written to disk. The Antigravity app keeps working." = "CodeBurnはAntigravityのクォータ追跡を停止します。ディスクへの読み書きは一切行いません。Antigravityアプリは引き続き使用できます。";
+"Not yet supported" = "未対応";
+"Automatic connection uses the provider's existing app, CLI, OAuth, browser session, or environment credentials first. CodeBurn does not copy those source credentials into its Keychain." = "自動接続では、まずプロバイダーの既存のアプリ、CLI、OAuth、ブラウザセッション、または環境変数の認証情報を使用します。CodeBurnはこれらの元の認証情報を自身のキーチェーンにコピーしません。";
+"Authentication methods are listed for reference. A native CodeBurn quota adapter is required before this provider can connect to Capacity Dock." = "認証方式は参考として掲載されています。このプロバイダーが容量ドックに接続するには、専用のCodeBurnクォータアダプターが必要です。";
+"Authentication methods" = "認証方式";
+"Source" = "取得元";
+"API key or token" = "APIキーまたはトークン";
+"Clear Override" = "上書き設定を消去";
+"Loading saved provider credential" = "保存済みのプロバイダー認証情報を読み込み中";
+"Connection override" = "接続の上書き設定";
+"Overrides are optional and are saved only when you press Save & Connect. Secret values use one CodeBurn-owned Keychain item for this provider; background reads suppress authentication UI." = "上書き設定は任意で、「保存して接続」を押したときのみ保存されます。機密情報はこのプロバイダー専用の、CodeBurnが所有する1つのキーチェーン項目に保存されます。バックグラウンドでの読み取り時には認証用UIは表示されません。";
+"Remove saved override" = "保存済みの上書き設定を削除";
+"Saved data" = "保存済みデータ";
+"This credential predates a live CodeBurn quota adapter and is not treated as a connection." = "この認証情報はCodeBurnのリアルタイムクォータアダプターより前のものであり、接続としては扱われません。";
+"Quota adapter not available" = "クォータアダプター未対応";
+"Retrying" = "再試行中";
+"%@ is catalogued, but CodeBurn cannot fetch its live quota yet." = "%@は登録されていますが、CodeBurnはまだそのリアルタイムクォータを取得できません。";
+"Live quota is available to Capacity Dock." = "リアルタイムのクォータを容量ドックで利用できます。";
+"Waiting for quota data." = "クォータデータを待機中です。";
+"Automatic" = "自動";
+"CLI" = "CLI";
+"API" = "API";
+"Version %@" = "バージョン %@";
+"%@ is available. Choose Check for Updates in the CodeBurn menu to install it." = "%@が利用可能です。CodeBurnメニューの「更新を確認」からインストールしてください。";
+"GitHub" = "GitHub";
+"Website" = "ウェブサイト";
+"Issues" = "問題を報告";
+"Links" = "リンク";
+"© 2026 Resham Joshi (iamtoruk) · AgentSeal. MIT License." = "© 2026 Resham Joshi (iamtoruk) · AgentSeal. MITライセンス。";
+
+/* MARK: Menubar second row (#1252) */
+"Second row" = "2行目";
+"Second row shows" = "2行目に表示";
+"Adds a smaller second line under the menubar figure. Quota remaining tracks whichever connected provider is nearest its limit. The line hides itself while the chosen metric has no data." = "メニューバーの数値の下に小さな2行目を追加します。「残りクォータ」は上限に最も近い接続済みプロバイダーを追跡します。選択した指標にデータがない場合、この行は自動的に非表示になります。";
+"Quota remaining" = "残りクォータ";
+"Today's cost" = "今日のコスト";
+"Today's tokens" = "今日のトークン";
+"Active sessions" = "アクティブなセッション";
+/* 行のテキスト。金額、トークン数、プロバイダー名はすでに整形済みの値が
+   差し込まれるため、その周りの単語のみを翻訳します。`tok`は単位なので
+   そのまま使用します。リセットまでのカウントダウンは、上にあるポップオーバー
+   自身の`%lldd %lldh` / `%lldh %lldm` / `%lldm`キーを再利用します。 */
+"%@ today" = "今日 %@";
+"%@ tok today" = "今日 %@ tok";
+"%lld%% left" = "残り%lld%%";
+
+/* MARK: Codex credit limit */
+"Monthly" = "月間";
+"Monthly usage limit" = "月間利用上限";
+"Monthly usage limit · limit reached" = "月間利用上限 · 上限到達";
+"Monthly usage limit · %1$@ / %2$@ credits" = "月間利用上限 · %1$@ / %2$@クレジット";
+"%@ · limit reached" = "%@ · 上限到達";
+
+/* MARK: Added on rebase onto main (#1306, #1313, #1314, #1328, #1329) */
+"Last known usage" = "最後に確認した使用量";
+"Notifications" = "通知";
+"Notify me when Codex banks a limit reset" = "Codexが限度リセットを獲得したら通知する";
+"OpenAI sometimes grants Codex accounts a credit that resets a rate-limit window early. CodeBurn reads these from the quota response it already fetches and tells you once per grant. It never spends one." = "OpenAIは、レート制限ウィンドウを早期にリセットするクレジットをCodexアカウントに付与することがあります。CodeBurnはすでに取得しているクォータの応答からこれを読み取り、付与ごとに一度だけ通知します。CodeBurn自身がこのクレジットを消費することはありません。";
+"Notify me when a quota resets early" = "クォータが早期にリセットされたら通知する";
+"Posts a notification when a provider resets a usage limit before its scheduled time, so you know the capacity is back." = "プロバイダーが予定より早く利用上限をリセットしたときに通知し、利用枠が戻ったことを知らせます。";
+"cache read" = "キャッシュ読取";
+"Cache read: %@ tokens" = "キャッシュ読取：%@トークン";
+"Quota window %@" = "クォータウィンドウ %@";
+
+/* MARK: Language picker */
+"Language" = "言語";
+"System" = "システムに従う";
+"Relaunch to apply." = "適用するには再起動してください。";
+"Relaunch" = "再起動";
+"Follows System Settings > Language & Region unless you pick one here." = "ここで選択しない限り、「システム設定 > 言語と地域」の設定に従います。";
+
+/* MARK: Quota pace captions (#1267) */
+"On pace" = "順調なペース";
+"5-hour" = "5時間";
+"<1m" = "<1分";
+
+/* MARK: Early quota reset (#725) */
+"%@ quota reset early" = "%@のクォータが早期にリセットされました";
+"%@ quota cleared early" = "%@のクォータが早期にクリアされました";
+"You're back to %lld%%." = "%lld%%に戻りました。";
+"%1$@'s %2$@ reset %3$@ early. %4$@" = "%1$@の%2$@が%3$@早くリセットされました。%4$@";
+"%1$@ cleared your %2$@ %3$@ before its reset. %4$@" = "%1$@がリセットの%3$@前にあなたの%2$@をクリアしました。%4$@";
+"%lldh" = "%lld時間";
+"%@ limit" = "%@の上限";
+"5-hour limit" = "5時間の上限";
+"weekly limit" = "週間の上限";
+"Opus weekly limit" = "Opusの週間上限";
+"Sonnet weekly limit" = "Sonnetの週間上限";
+"weekly" = "週間";
+"Opus weekly" = "Opus週間";
+"Sonnet weekly" = "Sonnet週間";
+"5-hour usage" = "5時間の使用量";
+"weekly usage" = "週間の使用量";
+"Opus weekly usage" = "Opus週間使用量";
+"Sonnet weekly usage" = "Sonnet週間使用量";
+
+/* MARK: Codex banked limit resets (#725) */
+"%lld available" = "%lld件利用可能";
+"%lld usable now" = "%lld件が今すぐ使用可能";
+"next %1$@ lands %2$@" = "次の%1$@は%2$@に付与";
+"latest %1$@ granted %2$@" = "最新の%1$@は%2$@に付与済み";
+"next expires %@" = "次は%@に失効";
+"A %1$@ lands %2$@." = "%1$@が%2$@に付与されます。";
+"A %1$@ was added to your account %2$@." = "%1$@が%2$@にアカウントへ追加されました。";
+"A %@ was added to your account." = "%@がアカウントに追加されました。";
+"You have %lld available to use." = "%lld件利用可能です。";
+"Codex banked a limit reset" = "Codexが限度リセットを獲得しました";
+"limit reset" = "限度リセット";
+"%@ reset" = "%@リセット";
+"daily" = "日次";
+"monthly" = "月次";
+"hourly" = "時間ごと";
+"just now" = "たった今";
+"%lldm ago" = "%lld分前";
+"%lldh ago" = "%lld時間前";
+"%lldd ago" = "%lld日前";
+"in under a minute" = "1分以内";
+"Input tokens reused from this provider's prompt cache today — not fresh input (arrow.down), not cache writes, and already priced at the cache-read rate inside the burned figure." = "今日このプロバイダーのプロンプトキャッシュから再利用された入力トークンです。新規入力（arrow.down）でもキャッシュ書き込みでもなく、消費額の数値の中ですでにキャッシュ読取レートで計上済みです。";
+
+/* MARK: Quota crossing notifications */
+"%1$@ · %2$@ at 80%%" = "%1$@ · %2$@が80%%到達";
+"%1$@ · %2$@ limit reached" = "%1$@ · %2$@が上限到達";
+"Quota crossings (%1$lld%% and %2$lld%%)" = "クォータ通知しきい値（%1$lld%%と%2$lld%%）";

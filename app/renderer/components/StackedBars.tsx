@@ -1,10 +1,11 @@
 import { useRef, useState } from 'react'
 
 import { ChartTip } from './ChartTip'
+import { t } from '../i18n'
 import { formatAxisMoney, niceTicks, ticksClearOfPeak } from '../lib/chartAxis'
 import { formatUsd } from '../lib/format'
 import { useBarGrowIn } from '../lib/motion'
-import { SERIES_LABELS, type SeriesKey, seriesClassForKey, seriesClassForModel, seriesKeyForModel } from '../lib/modelSeries'
+import { type SeriesKey, seriesClassForKey, seriesClassForModel, seriesKeyForModel, seriesLabel } from '../lib/modelSeries'
 import { formatChartDate } from '../lib/period'
 import type { DailyHistoryEntry } from '../lib/types'
 
@@ -14,7 +15,8 @@ function modelSpend(day: DailyHistoryEntry): number {
   return day.topModels.reduce((sum, model) => sum + Math.max(0, model.cost), 0)
 }
 
-export function StackedBars({ daily, fallbackLabel = 'All models', animateKey = '', dataStart = null }: { daily: DailyHistoryEntry[]; fallbackLabel?: string; animateKey?: string; dataStart?: string | null }) {
+export function StackedBars({ daily, fallbackLabel, animateKey = '', dataStart = null }: { daily: DailyHistoryEntry[]; fallbackLabel?: string; animateKey?: string; dataStart?: string | null }) {
+  const resolvedFallbackLabel = fallbackLabel ?? t('shared.stackedBars.allModels')
   const barsRef = useRef<HTMLDivElement>(null)
   const [tip, setTip] = useState<{ day: DailyHistoryEntry; x: number; y: number } | null>(null)
   useBarGrowIn(barsRef, '.c', [animateKey])
@@ -53,7 +55,7 @@ export function StackedBars({ daily, fallbackLabel = 'All models', animateKey = 
           ? <span className="chart-weekline" key={day.date} style={{ left: `${columnCentre(index) - (50 / Math.max(1, daily.length))}%` }} />
           : null))}
       </div>
-      <div className="sbars" aria-label="Daily spend by model" ref={barsRef}>
+      <div className="sbars" aria-label={t('shared.stackedBars.ariaLabel')} ref={barsRef}>
         {daily.map(day => {
           // Days before the first recorded day are unknown, not zero: no bar, and
           // an honest "No data recorded" hover instead of a "$0.00" claim.
@@ -65,8 +67,8 @@ export function StackedBars({ daily, fallbackLabel = 'All models', animateKey = 
               data-date={day.date}
               data-nodata={noData ? 'true' : 'false'}
               role="img"
-              aria-label={noData ? `${day.date}, no data recorded` : `${day.date}, ${formatUsd(day.cost)}`}
-              title={noData ? `${day.date} · No data recorded` : `${day.date} · ${formatUsd(day.cost)}`}
+              aria-label={noData ? `${day.date}, ${t('shared.chart.noDataAria')}` : `${day.date}, ${formatUsd(day.cost)}`}
+              title={noData ? `${day.date} · ${t('shared.chart.noData')}` : `${day.date} · ${formatUsd(day.cost)}`}
               onMouseEnter={event => setTip({ day, x: event.clientX, y: event.clientY })}
               onMouseMove={event => setTip({ day, x: event.clientX, y: event.clientY })}
               onMouseLeave={() => setTip(null)}
@@ -92,7 +94,7 @@ export function StackedBars({ daily, fallbackLabel = 'All models', animateKey = 
                 <span
                   className={`s ${seriesClassForKey('other')}`}
                   style={{ height: `${Math.max(1, (day.cost / axisMax) * 100)}%` }}
-                  title={`${fallbackLabel} · ${formatUsd(day.cost)}`}
+                  title={`${resolvedFallbackLabel} · ${formatUsd(day.cost)}`}
                 />
               ) : null}
             </div>
@@ -124,13 +126,13 @@ export function StackedBars({ daily, fallbackLabel = 'All models', animateKey = 
         {legendSeries.map(series => (
           <span key={series}>
             <i className={seriesClassForKey(series)} />
-            {SERIES_LABELS[series]}
+            {seriesLabel(series)}
           </span>
         ))}
         {usesFallback && !presentSeries.has('other') && (
           <span key="fallback">
             <i className={seriesClassForKey('other')} />
-            {fallbackLabel}
+            {resolvedFallbackLabel}
           </span>
         )}
       </div>
@@ -138,7 +140,7 @@ export function StackedBars({ daily, fallbackLabel = 'All models', animateKey = 
         <ChartTip x={tip.x} y={tip.y}>
           <div className="chart-tip-d">{formatChartDate(tip.day.date)}</div>
           {dataStart !== null && tip.day.date < dataStart ? (
-            <div className="chart-tip-s">No data recorded</div>
+            <div className="chart-tip-s">{t('shared.chart.noData')}</div>
           ) : modelSpend(tip.day) > 0 ? (
             [...tip.day.topModels].sort((a, b) => b.cost - a.cost).map(model => (
               <div className="chart-tip-row" key={model.name}>
@@ -150,7 +152,7 @@ export function StackedBars({ daily, fallbackLabel = 'All models', animateKey = 
           ) : (
             <div className="chart-tip-row">
               <i className={`chart-tip-sw ${seriesClassForKey('other')}`} />
-              <span>{fallbackLabel}</span>
+              <span>{resolvedFallbackLabel}</span>
               <b>{formatUsd(tip.day.cost)}</b>
             </div>
           )}

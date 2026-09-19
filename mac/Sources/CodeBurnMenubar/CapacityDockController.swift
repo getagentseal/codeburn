@@ -10,6 +10,7 @@ final class CapacityDockController {
     private var railPanel: CapacityDockPanel?
     private var detailPanel: CapacityDockPanel?
     private var preferencesObserver: NSObjectProtocol?
+    private var enabledObserver: DefaultsKeyObserver?
     private var screenObserver: NSObjectProtocol?
     private var wakeObserver: NSObjectProtocol?
     private var localEventMonitor: Any?
@@ -54,6 +55,13 @@ final class CapacityDockController {
             object: nil,
             queue: .main
         ) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.preferencesDidChange() }
+        }
+        // The desktop app's Plugins card turns the rail on and off by writing this app's own
+        // defaults domain from another process, which posts nothing in here:
+        // UserDefaults.didChangeNotification is in-process only. cfprefsd does deliver the
+        // outside write as a KVO change on the key, so that is the link.
+        enabledObserver = DefaultsKeyObserver(defaults: defaults, key: CapacityDockPreferences.enabledKey) { [weak self] in
             Task { @MainActor [weak self] in self?.preferencesDidChange() }
         }
         screenObserver = NotificationCenter.default.addObserver(
@@ -105,6 +113,7 @@ final class CapacityDockController {
             NotificationCenter.default.removeObserver(preferencesObserver)
             self.preferencesObserver = nil
         }
+        enabledObserver = nil
         if let screenObserver {
             NotificationCenter.default.removeObserver(screenObserver)
             self.screenObserver = nil
@@ -1506,5 +1515,34 @@ private final class CapacityDockHostingView<Content: View>: NSHostingView<Conten
             return nil
         }
         return super.hitTest(point)
+    }
+}
+
+/// One UserDefaults key, watched with KVO so a write from another process is seen. Its own
+/// NSObject because that is what `addObserver(_:forKeyPath:options:context:)` takes.
+final class DefaultsKeyObserver: NSObject {
+    private let defaults: UserDefaults
+    private let key: String
+    private let onChange: () -> Void
+
+    init(defaults: UserDefaults, key: String, onChange: @escaping () -> Void) {
+        self.defaults = defaults
+        self.key = key
+        self.onChange = onChange
+        super.init()
+        defaults.addObserver(self, forKeyPath: key, options: [.new], context: nil)
+    }
+
+    deinit {
+        defaults.removeObserver(self, forKeyPath: key)
+    }
+
+    override func observeValue(
+        forKeyPath keyPath: String?,
+        of object: Any?,
+        change: [NSKeyValueChangeKey: Any]?,
+        context: UnsafeMutableRawPointer?
+    ) {
+        onChange()
     }
 }

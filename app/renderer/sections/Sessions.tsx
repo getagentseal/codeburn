@@ -24,18 +24,12 @@ import {
 } from '../lib/investigation'
 import { reportMemoKey } from '../lib/reportMemoKey'
 import type { DateRange, Period, SessionDrillRow, SessionRow } from '../lib/types'
+import { t } from '../i18n'
 
 export const INITIAL_VISIBLE = 120
 const STEP = 120
 
 export type SessionSort = 'cost' | 'recent' | 'turns' | 'tokens'
-
-const SORT_OPTIONS = [
-  { value: 'cost', label: 'Cost' },
-  { value: 'recent', label: 'Recent' },
-  { value: 'turns', label: 'Turns' },
-  { value: 'tokens', label: 'Tokens' },
-]
 
 /** Composite identity of a session row: provider + project + sessionId. An id
  *  alone is not globally unique (another provider, or an imported transcript,
@@ -96,14 +90,14 @@ function ProviderFilterRow({
 }) {
   if (detectedProviders.length === 0) return null
   return (
-    <div className="seg session-provider-filter" role="group" aria-label="Filter sessions by provider">
+    <div className="seg session-provider-filter" role="group" aria-label={t('sessions.providerFilter.ariaLabel')}>
       <button
         type="button"
         className={provider === 'all' ? 'on' : undefined}
         aria-pressed={provider === 'all'}
         onClick={() => onProviderChange('all')}
       >
-        All
+        {t('sessions.providerFilter.all')}
       </button>
       {detectedProviders.map(entry => (
         <button
@@ -345,20 +339,20 @@ export function Sessions({
   }, [effectiveOpenSessionId])
 
   if (!report.data) {
-    if (report.error) return <CliErrorPanel error={report.error} subject="sessions" />
-    return <SectionSkeleton label="Scanning sessions…" rows={5} />
+    if (report.error) return <CliErrorPanel error={report.error} subject={t('common.subject.sessions')} />
+    return <SectionSkeleton label={t('sessions.skeleton.label')} rows={5} />
   }
 
   if (!report.data.length) {
     return (
       <>
-        <Panel title="Sessions">
+        <Panel title={t('sessions.panel.title')}>
           <ProviderFilterRow provider={provider} detectedProviders={detectedProviders} onProviderChange={onProviderChange} />
           {investigating && <FilterChips filters={filters} onChange={next => onFiltersChange?.(next)} />}
           <EmptyNote>
             {investigating
-              ? 'No sessions match the current selection. Remove a chip above to widen it.'
-              : 'No sessions in this range yet.'}
+              ? t('sessions.empty.noMatchSelection')
+              : t('sessions.empty.noneInRange')}
           </EmptyNote>
         </Panel>
       </>
@@ -377,13 +371,18 @@ export function Sessions({
       <div className="sessions-toolbar">
         <input
           className="sessions-search"
-          aria-label="Search sessions"
-          placeholder="Search project, model, or id…"
+          aria-label={t('sessions.search.ariaLabel')}
+          placeholder={t('sessions.search.placeholder')}
           value={query}
           onChange={event => setQuery(event.target.value)}
         />
         <SegTabs
-          options={SORT_OPTIONS}
+          options={[
+            { value: 'cost', label: t('sessions.sort.cost') },
+            { value: 'recent', label: t('sessions.sort.recent') },
+            { value: 'turns', label: t('sessions.sort.turns') },
+            { value: 'tokens', label: t('sessions.sort.tokens') },
+          ]}
           value={sort}
           onChange={value => setSort(value as SessionSort)}
         />
@@ -393,24 +392,24 @@ export function Sessions({
           aria-pressed={grouped}
           onClick={() => setGrouped(value => !value)}
         >
-          Group by provider
+          {t('sessions.toolbar.groupByProvider')}
         </button>
       </div>
       <div className="sessions-summary">
         {investigating
           ? (
               <>
-                {formatCount(included.length, 'session')} in selection · <strong>{formatUsd(selectionCost)}</strong> in selection
-                {summary.fullCost > selectionCost + 1e-9 && <> · full cost of these sessions {formatUsd(summary.fullCost)}</>}
-                {summary.tokens > 0 && <> · {formatCompact(summary.tokens)} tokens in selection</>}
+                {formatCount(included.length, 'session')} {t('sessions.summary.inSelection')} · <strong>{formatUsd(selectionCost)}</strong> {t('sessions.summary.inSelection')}
+                {summary.fullCost > selectionCost + 1e-9 && <> · {t('sessions.summary.fullCostOfSessions')} {formatUsd(summary.fullCost)}</>}
+                {summary.tokens > 0 && <> · {formatCompact(summary.tokens)} {t('sessions.summary.tokensInSelection')}</>}
                 {summary.unattributable > 0 && (
-                  <span className="sessions-unattributed"> · {formatCount(summary.unattributable, 'session')} could not be attributed to this selection</span>
+                  <span className="sessions-unattributed"> · {formatCount(summary.unattributable, 'session')} {t('sessions.summary.unattributedSuffix')}</span>
                 )}
               </>
             )
           : (
               <>
-                {formatCount(included.length, 'session')} · {formatUsd(selectionCost)} · {formatCompact(summary.tokens)} tokens
+                {formatCount(included.length, 'session')} · {formatUsd(selectionCost)} · {formatCompact(summary.tokens)} {t('sessions.summary.tokens')}
               </>
             )}
       </div>
@@ -418,16 +417,16 @@ export function Sessions({
         <div className="sessions-empty">
           <EmptyNote>
             {investigating
-              ? 'No sessions contribute to the current selection.'
+              ? t('sessions.empty.noneContribute')
               : q
-                ? <>No sessions match &quot;{query}&quot;.</>
-                : 'No sessions in this range yet.'}
+                ? t('sessions.empty.noMatchQuery', { query })
+                : t('sessions.empty.noneInRange')}
           </EmptyNote>
           {investigating && onFiltersChange && (
-            <button className="sessions-clear" type="button" onClick={() => onFiltersChange(EMPTY_FILTERS)}>Clear selection</button>
+            <button className="sessions-clear" type="button" onClick={() => onFiltersChange(EMPTY_FILTERS)}>{t('sessions.empty.clearSelection')}</button>
           )}
           {!investigating && q && (
-            <button className="sessions-clear" type="button" onClick={() => setQuery('')}>Clear search</button>
+            <button className="sessions-clear" type="button" onClick={() => setQuery('')}>{t('sessions.empty.clearSearch')}</button>
           )}
         </div>
       ) : (
@@ -466,11 +465,11 @@ export function Sessions({
                       <span className="session-cost-split">
                         <strong>{formatUsd(entry.entry.cost)}</strong>
                         {entry.entry.cost < entry.entry.row.cost - 1e-9 && (
-                          <small title="Full cost of the whole session"> of <Usd value={entry.entry.row.cost} tokens={tokensOf(entry.entry.row)} /></small>
+                          <small title={t('sessions.list.fullCostTooltip')}> {t('sessions.list.ofConnector')} <Usd value={entry.entry.row.cost} tokens={tokensOf(entry.entry.row)} nested /></small>
                         )}
                       </span>
                     ) : (
-                      <span><Usd value={entry.entry.row.cost} tokens={tokensOf(entry.entry.row)} /></span>
+                      <span><Usd value={entry.entry.row.cost} tokens={tokensOf(entry.entry.row)} nested /></span>
                     )}
                     <span>{formatCompact(rowTokens(entry.entry.row))}</span>
                   </button>
@@ -478,10 +477,12 @@ export function Sessions({
               ))}
             </div>
           </div>
-          <div className="sessions-more-caption">Showing {renderedRows.toLocaleString('en-US')} of {included.length.toLocaleString('en-US')}</div>
+          <div className="sessions-more-caption">
+            {t('sessions.list.showingOf', { shown: renderedRows.toLocaleString('en-US'), total: included.length.toLocaleString('en-US') })}
+          </div>
           {remaining > 0 && (
             <button className="sessions-more" type="button" onClick={() => setVisibleCount(visibleCount + STEP)}>
-              Show {Math.min(STEP, remaining).toLocaleString('en-US')} more · {remaining.toLocaleString('en-US')} remaining
+              {t('sessions.list.showMore', { count: Math.min(STEP, remaining).toLocaleString('en-US'), remaining: remaining.toLocaleString('en-US') })}
             </button>
           )}
         </>

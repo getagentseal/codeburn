@@ -4,6 +4,7 @@ import { codeburn } from '../lib/ipc'
 import { showToast } from '../lib/toast'
 import styles from './Plugins.module.css'
 import { Icon } from '../components/icons'
+import { t } from '../i18n'
 
 interface InstallFlowProps {
   onClose: () => void
@@ -31,11 +32,11 @@ export function InstallFlowModal({ onClose, onSuccess }: InstallFlowProps) {
 
   const proceedToInstall = () => {
     if (source === 'org' && !orgInput.trim()) {
-      showToast('Please enter an organization name', 'error')
+      showToast(t('onboarding.installFlow.toastOrgRequired'), 'error')
       return
     }
     if (source === 'folder' && !folderPath) {
-      showToast('Please choose a folder', 'error')
+      showToast(t('onboarding.installFlow.toastFolderRequired'), 'error')
       return
     }
     setStep(2)
@@ -59,9 +60,9 @@ export function InstallFlowModal({ onClose, onSuccess }: InstallFlowProps) {
         onSuccess?.()
       } else {
         // CLI failed: display stderr verbatim
-        const stderr = result.stderr || 'Plugin installation failed'
+        const stderr = result.stderr || t('onboarding.installFlow.installFailedFallback')
         if (stderr.includes('no-sync-config')) {
-          setInstallError(`${stderr}\n\nHint: Visit Settings > Sync to configure.`)
+          setInstallError(`${stderr}\n\n${t('onboarding.installFlow.syncHint')}`)
         } else {
           setInstallError(stderr)
         }
@@ -88,7 +89,7 @@ export function InstallFlowModal({ onClose, onSuccess }: InstallFlowProps) {
         <div className={styles.modalContent}>
           {step === 1 && (
             <>
-              <h2>Install Plugin</h2>
+              <h2>{t('onboarding.installFlow.title')}</h2>
               <div style={{ marginTop: '1.5rem' }}>
                 <label style={{ display: 'flex', alignItems: 'center', marginBottom: '1rem' }}>
                   <input
@@ -99,12 +100,12 @@ export function InstallFlowModal({ onClose, onSuccess }: InstallFlowProps) {
                     onChange={() => setSource('org')}
                     style={{ marginRight: '0.5rem' }}
                   />
-                  From your organization
+                  {t('onboarding.installFlow.sourceOrgLabel')}
                 </label>
                 {source === 'org' && (
                   <input
                     type="text"
-                    placeholder="Organization or URL"
+                    placeholder={t('onboarding.installFlow.orgPlaceholder')}
                     value={orgInput}
                     onChange={e => setOrgInput(e.target.value)}
                     style={{
@@ -128,15 +129,15 @@ export function InstallFlowModal({ onClose, onSuccess }: InstallFlowProps) {
                     onChange={() => setSource('folder')}
                     style={{ marginRight: '0.5rem' }}
                   />
-                  From folder
+                  {t('onboarding.installFlow.sourceFolderLabel')}
                 </label>
                 {source === 'folder' && (
                   <div style={{ marginLeft: '1.5rem', marginBottom: '1rem' }}>
                     <div style={{ marginBottom: '0.5rem', color: 'var(--mut)' }}>
-                      {folderPath || 'No folder selected'}
+                      {folderPath || t('onboarding.installFlow.noFolderSelected')}
                     </div>
                     <button className="btnp" onClick={() => void chooseFolder()}>
-                      Choose folder
+                      {t('onboarding.installFlow.chooseFolder')}
                     </button>
                   </div>
                 )}
@@ -144,10 +145,10 @@ export function InstallFlowModal({ onClose, onSuccess }: InstallFlowProps) {
 
               <div style={{ marginTop: '2rem', display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
                 <button className="btnp" onClick={onClose}>
-                  Cancel
+                  {t('onboarding.installFlow.cancel')}
                 </button>
                 <button className="btnp btnp-primary" onClick={proceedToInstall}>
-                  Next
+                  {t('onboarding.installFlow.next')}
                 </button>
               </div>
             </>
@@ -155,13 +156,13 @@ export function InstallFlowModal({ onClose, onSuccess }: InstallFlowProps) {
 
           {step === 2 && (
             <>
-              <h2>{installError ? 'Installation failed' : 'Installing'}</h2>
+              <h2>{installError ? t('onboarding.installFlow.installationFailed') : t('onboarding.installFlow.installingTitle')}</h2>
               {!installError && (
                 <div style={{ marginTop: '2rem', textAlign: 'center' }}>
                   <div style={{ marginBottom: '1.5rem' }}>
                     <div className={styles.spinner} />
                   </div>
-                  <p>Installing plugin from {source === 'org' ? orgInput : folderPath}…</p>
+                  <p>{t('onboarding.installFlow.installingFrom', { source: source === 'org' ? orgInput : (folderPath ?? '') })}</p>
                 </div>
               )}
               {installError && (
@@ -177,25 +178,25 @@ export function InstallFlowModal({ onClose, onSuccess }: InstallFlowProps) {
                 {!installError && !installing && (
                   <>
                     <button className="btnp" onClick={onClose}>
-                      Cancel
+                      {t('onboarding.installFlow.cancel')}
                     </button>
                     <button className="btnp btnp-primary" onClick={() => void performInstall()}>
-                      Install
+                      {t('onboarding.installFlow.install')}
                     </button>
                   </>
                 )}
                 {installing && !installError && (
                   <button className="btnp" onClick={onClose} disabled>
-                    Cancel
+                    {t('onboarding.installFlow.cancel')}
                   </button>
                 )}
                 {installError && (
                   <>
                     <button className="btnp" onClick={() => { setStep(1); setInstallError(null) }}>
-                      Back
+                      {t('onboarding.installFlow.back')}
                     </button>
                     <button className="btnp" onClick={onClose}>
-                      Cancel
+                      {t('onboarding.installFlow.cancel')}
                     </button>
                   </>
                 )}
@@ -205,21 +206,21 @@ export function InstallFlowModal({ onClose, onSuccess }: InstallFlowProps) {
 
           {step === 3 && (
             <>
-              <h2>Installation Complete</h2>
+              <h2>{t('onboarding.installFlow.completeTitle')}</h2>
               <div style={{ marginTop: '1.5rem' }}>
                 <div style={{ padding: '1rem', background: 'var(--fill)', borderRadius: '4px', marginBottom: '1.5rem' }}>
-                  <p>Installed <strong>{installName}@{installVersion}</strong></p>
+                  <p>{t('onboarding.installFlow.installedLabel')} <strong>{installName}@{installVersion}</strong></p>
                   <p style={{ fontSize: '0.875rem', color: 'var(--mut)', marginTop: '0.5rem' }}>
-                    Signature verified
+                    {t('onboarding.installFlow.signatureVerified')}
                   </p>
                 </div>
               </div>
               <div style={{ marginTop: '2rem', display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
                 <button className="btnp" onClick={onClose}>
-                  Close
+                  {t('onboarding.installFlow.close')}
                 </button>
                 <button className="btnp btnp-primary" onClick={onClose}>
-                  View details
+                  {t('onboarding.installFlow.viewDetails')}
                 </button>
               </div>
             </>

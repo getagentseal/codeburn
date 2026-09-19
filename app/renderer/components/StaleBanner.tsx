@@ -1,3 +1,4 @@
+import { t } from '../i18n'
 import type { CliError } from '../lib/types'
 
 /**
@@ -7,7 +8,7 @@ import type { CliError } from '../lib/types'
 export function StaleBanner({ error }: { error: CliError }) {
   return (
     <div role="status" className="stale-banner">
-      Refresh failed, showing last good data · {error.message}
+      {t('shell.stale.refreshFailed')} · {error.message}
     </div>
   )
 }

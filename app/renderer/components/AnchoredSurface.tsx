@@ -33,17 +33,23 @@ export function AnchoredSurface({
   const [box, setBox] = useState<React.CSSProperties | null>(null)
 
   useLayoutEffect(() => {
+    // The surface's natural width, captured once before we constrain it. The
+    // selected row is bold (plus an icon and padding), so it is wider than the
+    // trigger measured at regular weight; matching only the trigger would clip
+    // it. Read before the first setBox, so it reflects unconstrained content.
+    let contentWidth = 0
     const place = () => {
       const trigger = anchor.current
       const surface = surfaceRef.current
       if (!trigger || !surface) return
+      if (contentWidth === 0) contentWidth = Math.ceil(surface.getBoundingClientRect().width)
       const rect = trigger.getBoundingClientRect()
       const below = window.innerHeight - rect.bottom - OFFSET - EDGE
       const above = rect.top - OFFSET - EDGE
       const flip = below < MIN_BELOW && above > below
       const room = Math.max(0, flip ? above : below)
       const maxHeight = Math.min(MAX_HEIGHT, room)
-      const width = matchWidth ? Math.min(Math.max(rect.width, 160), MAX_WIDTH) : surface.offsetWidth
+      const width = matchWidth ? Math.min(Math.max(rect.width, 160, contentWidth), MAX_WIDTH) : surface.offsetWidth
       setBox({
         position: 'fixed',
         top: flip ? Math.max(EDGE, rect.top - OFFSET - Math.min(surface.offsetHeight, maxHeight)) : rect.bottom + OFFSET,

@@ -65,6 +65,10 @@ export type Current = {
   // Share (0-1) of cost-bearing calls that resolved a price. null when not
   // computable; "unknown" must never render as 100% coverage.
   pricingCoverage?: number | null
+  // Models with recorded usage whose cost prices at $0 for lack of pricing
+  // data — usage ran, the figure is unknown, not zero. Absent on older
+  // payloads; absent or empty -> the models panel shows no unpriced line.
+  unpricedModels?: Array<{ model: string; calls: number; tokens: number }>
   localModelSavings: { totalUSD: number }
   retryTax: { totalUSD: number; retries: number }
   routingWaste: { totalSavingsUSD: number }
@@ -165,6 +169,7 @@ function normalizePayload(p?: Payload): Payload | undefined {
         edits: f.edits ?? 0,
       })),
       pricingCoverage: c.pricingCoverage ?? null,
+      unpricedModels: c.unpricedModels ?? [],
       localModelSavings: c.localModelSavings ?? { totalUSD: 0 },
       retryTax: c.retryTax ?? { totalUSD: 0, retries: 0 },
       routingWaste: c.routingWaste ?? { totalSavingsUSD: 0 },

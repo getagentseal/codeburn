@@ -9,5 +9,9 @@ if (typeof document !== 'undefined') {
   // The usePolled memo is module-level and persists across renders; clear it
   // between tests so a cached result from one test never seeds another.
   const { __resetPolledMemo } = await import('../hooks/usePolled')
-  afterEach(() => { cleanup(); __resetPolledMemo() })
+  afterEach(() => {
+    cleanup()
+    __resetPolledMemo()
+    try { globalThis.localStorage?.clear() } catch { /* storage can be unavailable */ }
+  })
 }

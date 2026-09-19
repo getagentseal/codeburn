@@ -1,9 +1,20 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 
+import { localeTag, t } from '../i18n'
 import type { DateRange } from '../lib/types'
 import { Icon } from './icons'
 
-const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+function weekdays(): string[] {
+  return [
+    t('shared.weekday.sun'),
+    t('shared.weekday.mon'),
+    t('shared.weekday.tue'),
+    t('shared.weekday.wed'),
+    t('shared.weekday.thu'),
+    t('shared.weekday.fri'),
+    t('shared.weekday.sat'),
+  ]
+}
 
 function dateKey(date: Date): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
@@ -48,21 +59,21 @@ export function RangeCalendar({ value, onSelect }: { value: DateRange | null; on
   }
 
   return (
-    <div className="range-calendar" aria-label="Date range calendar">
+    <div className="range-calendar" aria-label={t('shared.rangeCalendar.ariaLabel')}>
       <div className="calendar-head">
         <button
           type="button"
           className="calendar-nav"
-          aria-label="Previous month"
+          aria-label={t('shared.rangeCalendar.prevMonth')}
           onClick={() => setMonth(current => new Date(current.getFullYear(), current.getMonth() - 1, 1))}
         >
           <Icon name="chevron-left" />
         </button>
-        <strong>{month.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}</strong>
+        <strong>{month.toLocaleDateString(localeTag(), { month: 'long', year: 'numeric' })}</strong>
         <button
           type="button"
           className="calendar-nav"
-          aria-label="Next month"
+          aria-label={t('shared.rangeCalendar.nextMonth')}
           disabled={month.getFullYear() === today.getFullYear() && month.getMonth() === today.getMonth()}
           onClick={() => setMonth(current => new Date(current.getFullYear(), current.getMonth() + 1, 1))}
         >
@@ -70,7 +81,7 @@ export function RangeCalendar({ value, onSelect }: { value: DateRange | null; on
         </button>
       </div>
       <div className="calendar-grid">
-        {WEEKDAYS.map(day => <span className="calendar-weekday" key={day}>{day}</span>)}
+        {weekdays().map((day, i) => <span className="calendar-weekday" key={i}>{day}</span>)}
         {days.map(day => {
           const key = dateKey(day)
           const outside = day.getMonth() !== month.getMonth()
@@ -90,7 +101,7 @@ export function RangeCalendar({ value, onSelect }: { value: DateRange | null; on
               key={key}
               className={className}
               disabled={disabled}
-              aria-label={day.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
+              aria-label={day.toLocaleDateString(localeTag(), { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
               onMouseDown={event => {
                 event.preventDefault()
                 dragAnchor.current = key

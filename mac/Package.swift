@@ -31,7 +31,11 @@ let package = Package(
                 // live in the SwiftPM resource bundle inside Contents/Resources,
                 // not at the app bundle's resource root.
                 .process("Resources/en.lproj"),
-                .process("Resources/zh-Hans.lproj")
+                .process("Resources/fr.lproj"),
+                .process("Resources/ja.lproj"),
+                .process("Resources/ko.lproj"),
+                .process("Resources/zh-Hans.lproj"),
+                .process("Resources/zh-Hant.lproj")
             ],
             swiftSettings: [
                 .enableUpcomingFeature("StrictConcurrency")

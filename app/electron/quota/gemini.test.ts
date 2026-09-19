@@ -103,10 +103,12 @@ describe('Gemini quota fetch', () => {
     expect(result.quota.connection).toBe('transientFailure')
   })
 
-  it('stays transientFailure when a 401 leaves the stored token unchanged', async () => {
+  it('treats a 401 with an unchanged token as a terminal, connectable login expiry', async () => {
     const fetchMock = vi.fn(async () => new Response('', { status: 401 }))
     const result = await fetchGeminiQuota({ fetch: fetchMock, readFile: vi.fn(async () => credential) })
-    expect(result.quota.connection).toBe('transientFailure')
+    expect(result.quota.connection).toBe('terminalFailure')
+    expect(result.quota.connectable).toBe(true)
+    expect(result.quota.footerLines[0]).toMatch(/login expired/i)
     expect((fetchMock.mock.calls as unknown as Array<[string]>).every(call => call[0].includes('loadCodeAssist'))).toBe(true)
   })
 

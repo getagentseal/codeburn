@@ -73,7 +73,7 @@ export function Dropdown({
   }
 
   return (
-    <div className="pop-wrap dropdown" ref={wrapRef} style={{ width }}>
+    <div className="pop-wrap dropdown" ref={wrapRef} style={{ width: 'max-content', minWidth: width }}>
       <button
         id={id}
         ref={triggerRef}

@@ -14,6 +14,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { Dropdown } from '../components/Dropdown'
 import { ProviderLogo } from '../components/ProviderLogo'
 import { usePolled } from '../hooks/usePolled'
+import { t } from '../i18n'
 import { codeburn } from '../lib/ipc'
 import { PROVIDER_NAMES, QUOTA_PROVIDERS } from '../lib/providers'
 import type { QuotaProvider, TrayPrefs } from '../lib/types'
@@ -24,48 +25,48 @@ const STARTUP_APPS_SETTINGS_URL = 'ms-settings:startupapps'
 
 /// The nine presets from the tray app's Theme/ThemeState.swift port
 /// (windows/src/lib/accent.ts). Only the base shade is needed to draw a swatch.
-const ACCENTS: Array<{ id: string; label: string; base: string }> = [
-  { id: 'ember', label: 'Ember', base: '#C9521D' },
-  { id: 'blue', label: 'Blue', base: '#0A84FF' },
-  { id: 'purple', label: 'Purple', base: '#BF5AF2' },
-  { id: 'pink', label: 'Pink', base: '#FF375F' },
-  { id: 'red', label: 'Red', base: '#FF453A' },
-  { id: 'orange', label: 'Orange', base: '#FF9F0A' },
-  { id: 'yellow', label: 'Yellow', base: '#FFD60A' },
-  { id: 'green', label: 'Green', base: '#30D158' },
-  { id: 'graphite', label: 'Graphite', base: '#98989D' },
+const ACCENTS: Array<{ id: string; labelKey: string; base: string }> = [
+  { id: 'ember', labelKey: 'settings.tray.accent.ember', base: '#C9521D' },
+  { id: 'blue', labelKey: 'settings.tray.accent.blue', base: '#0A84FF' },
+  { id: 'purple', labelKey: 'settings.tray.accent.purple', base: '#BF5AF2' },
+  { id: 'pink', labelKey: 'settings.tray.accent.pink', base: '#FF375F' },
+  { id: 'red', labelKey: 'settings.tray.accent.red', base: '#FF453A' },
+  { id: 'orange', labelKey: 'settings.tray.accent.orange', base: '#FF9F0A' },
+  { id: 'yellow', labelKey: 'settings.tray.accent.yellow', base: '#FFD60A' },
+  { id: 'green', labelKey: 'settings.tray.accent.green', base: '#30D158' },
+  { id: 'graphite', labelKey: 'settings.tray.accent.graphite', base: '#98989D' },
 ]
 
 const METRICS = [
-  { value: 'cost', label: 'Cost ($)' },
-  { value: 'tokens', label: 'Tokens (up/down)' },
-  { value: 'totalTokens', label: 'Total tokens' },
-  { value: 'iconOnly', label: 'Icon only' },
+  { value: 'cost', labelKey: 'settings.tray.metric.cost' },
+  { value: 'tokens', labelKey: 'settings.tray.metric.tokens' },
+  { value: 'totalTokens', labelKey: 'settings.tray.metric.totalTokens' },
+  { value: 'iconOnly', labelKey: 'settings.tray.metric.iconOnly' },
 ]
 
 const MENUBAR_PERIODS = [
-  { value: 'today', label: 'Today' },
-  { value: 'week', label: 'Week' },
-  { value: 'month', label: 'Month' },
-  { value: 'all', label: '6 months' },
+  { value: 'today', labelKey: 'settings.tray.period.today' },
+  { value: 'week', labelKey: 'settings.tray.period.week' },
+  { value: 'month', labelKey: 'settings.tray.period.month' },
+  { value: 'all', labelKey: 'settings.tray.period.sixMonths' },
 ]
 
 // The cadences are seconds, and the dropdown speaks strings, so they travel as strings and
 // are turned back into numbers on the way to the file.
 const USAGE_CADENCES = [
-  { value: '-1', label: 'Auto' },
-  { value: '0', label: 'Manual' },
-  { value: '60', label: '1 minute' },
-  { value: '300', label: '5 minutes' },
-  { value: '900', label: '15 minutes' },
+  { value: '-1', labelKey: 'settings.tray.cadence.auto' },
+  { value: '0', labelKey: 'settings.tray.cadence.manual' },
+  { value: '60', labelKey: 'settings.tray.cadence.oneMinute' },
+  { value: '300', labelKey: 'settings.tray.cadence.fiveMinutes' },
+  { value: '900', labelKey: 'settings.tray.cadence.fifteenMinutes' },
 ]
 
 const QUOTA_CADENCES = [
-  { value: '0', label: 'Manual' },
-  { value: '60', label: '1 minute' },
-  { value: '120', label: '2 minutes' },
-  { value: '300', label: '5 minutes' },
-  { value: '900', label: '15 minutes' },
+  { value: '0', labelKey: 'settings.tray.cadence.manual' },
+  { value: '60', labelKey: 'settings.tray.cadence.oneMinute' },
+  { value: '120', labelKey: 'settings.tray.cadence.twoMinutes' },
+  { value: '300', labelKey: 'settings.tray.cadence.fiveMinutes' },
+  { value: '900', labelKey: 'settings.tray.cadence.fifteenMinutes' },
 ]
 
 const TERMINALS = [
@@ -75,13 +76,13 @@ const TERMINALS = [
 ]
 
 const DOCK_THEMES = [
-  { value: 'graphite', label: 'Graphite' },
-  { value: 'glass', label: 'Glass' },
+  { value: 'graphite', labelKey: 'settings.dock.theme.graphite' },
+  { value: 'glass', labelKey: 'settings.dock.theme.glass' },
 ]
 
 const DOCK_GAUGE_SHAPES = [
-  { value: 'circle', label: 'Circle' },
-  { value: 'squircle', label: 'Squircle' },
+  { value: 'circle', labelKey: 'settings.dock.gauge.circle' },
+  { value: 'squircle', labelKey: 'settings.dock.gauge.squircle' },
 ]
 
 const SCALE_MIN = 0.6
@@ -145,41 +146,41 @@ function Switch({ on, label, disabled, onToggle }: {
 
 export function MenuBarPane() {
   const { prefs, setApp, setLaunchAtLogin } = useTrayPrefs()
-  if (!prefs) return <section className="set-p on"><p className="set-cap">Loading menu bar settings…</p></section>
+  if (!prefs) return <section className="set-p on"><p className="set-cap">{t('settings.tray.loadingMenuBar')}</p></section>
   const app = prefs.app
 
   return (
     <section className="set-p on">
       <div>
-        <h3 className="set-h">Menu bar</h3>
-        <p className="set-sub">The CodeBurn icon in the Windows notification area. These are its own settings; currency, period and the daily budget are shared and live in General.</p>
+        <h3 className="set-h">{t('settings.tray.menuBarHeading')}</h3>
+        <p className="set-sub">{t('settings.tray.menuBarSubtitle')}</p>
       </div>
       <div className="card">
         <div className="about-sec">
-          <div className="about-sec-h">Tray figure</div>
-          <div className="about-row"><label className="tx" htmlFor="tray-metric">Metric<small>What the tray shows beside the flame.</small></label><span className="r">
-            <Dropdown id="tray-metric" ariaLabel="Tray metric" value={app.metric} options={METRICS} onChange={value => setApp({ metric: value })} width={168} />
+          <div className="about-sec-h">{t('settings.tray.figureHeading')}</div>
+          <div className="about-row"><label className="tx" htmlFor="tray-metric">{t('settings.tray.metricLabel')}<small>{t('settings.tray.metricHint')}</small></label><span className="r">
+            <Dropdown id="tray-metric" ariaLabel={t('settings.tray.metricAriaLabel')} value={app.metric} options={METRICS.map(m => ({ value: m.value, label: t(m.labelKey) }))} onChange={value => setApp({ metric: value })} width={168} />
           </span></div>
-          <div className="about-row"><label className="tx" htmlFor="tray-period">Period<small>The span the tray figure is measured over.</small></label><span className="r">
-            <Dropdown id="tray-period" ariaLabel="Tray period" value={app.menubarPeriod} options={MENUBAR_PERIODS} onChange={value => setApp({ menubarPeriod: value })} width={120} />
+          <div className="about-row"><label className="tx" htmlFor="tray-period">{t('settings.tray.periodLabel')}<small>{t('settings.tray.periodHint')}</small></label><span className="r">
+            <Dropdown id="tray-period" ariaLabel={t('settings.tray.periodAriaLabel')} value={app.menubarPeriod} options={MENUBAR_PERIODS.map(p => ({ value: p.value, label: t(p.labelKey) }))} onChange={value => setApp({ menubarPeriod: value })} width={120} />
           </span></div>
-          <div className="about-row"><span className="tx">Show today's figure<small>A second tray icon carrying the number. Off keeps it in the tooltip and the menu.</small></span><span className="r">
-            <Switch on={app.trayBadge} label="Show today's figure in the tray" onToggle={() => setApp({ trayBadge: !app.trayBadge })} />
+          <div className="about-row"><span className="tx">{t('settings.tray.showFigure')}<small>{t('settings.tray.showFigureHint')}</small></span><span className="r">
+            <Switch on={app.trayBadge} label={t('settings.tray.showFigureAriaLabel')} onToggle={() => setApp({ trayBadge: !app.trayBadge })} />
           </span></div>
         </div>
 
         <div className="about-sec">
-          <div className="about-sec-h">Appearance</div>
-          <div className="about-row"><span className="tx">Accent<small>Tints the popover, the settings window and the Capacity Dock.</small></span><span className="r">
-            <span className="tray-accents" role="radiogroup" aria-label="Accent">
+          <div className="about-sec-h">{t('settings.tray.appearanceHeading')}</div>
+          <div className="about-row"><span className="tx">{t('settings.tray.accentLabel')}<small>{t('settings.tray.accentHint')}</small></span><span className="r">
+            <span className="tray-accents" role="radiogroup" aria-label={t('settings.tray.accentLabel')}>
               {ACCENTS.map(accent => (
                 <button
                   key={accent.id}
                   type="button"
                   role="radio"
                   aria-checked={app.accent === accent.id}
-                  aria-label={accent.label}
-                  title={accent.label}
+                  aria-label={t(accent.labelKey)}
+                  title={t(accent.labelKey)}
                   className={app.accent === accent.id ? 'tray-accent on' : 'tray-accent'}
                   style={{ background: accent.base }}
                   onClick={() => setApp({ accent: accent.id })}
@@ -190,36 +191,36 @@ export function MenuBarPane() {
         </div>
 
         <div className="about-sec">
-          <div className="about-sec-h">Refresh</div>
-          <div className="about-row"><label className="tx" htmlFor="tray-usage">Usage<small>Auto follows the popover and the power state. Manual never refreshes on its own.</small></label><span className="r">
-            <Dropdown id="tray-usage" ariaLabel="Usage refresh" value={String(app.usageRefreshSeconds)} options={USAGE_CADENCES} onChange={value => setApp({ usageRefreshSeconds: Number(value) })} width={124} />
+          <div className="about-sec-h">{t('settings.tray.refreshHeading')}</div>
+          <div className="about-row"><label className="tx" htmlFor="tray-usage">{t('settings.tray.usageLabel')}<small>{t('settings.tray.usageHint')}</small></label><span className="r">
+            <Dropdown id="tray-usage" ariaLabel={t('settings.tray.usageAriaLabel')} value={String(app.usageRefreshSeconds)} options={USAGE_CADENCES.map(c => ({ value: c.value, label: t(c.labelKey) }))} onChange={value => setApp({ usageRefreshSeconds: Number(value) })} width={124} />
           </span></div>
-          <div className="about-row"><label className="tx" htmlFor="tray-quota">Quota<small>One run answers for every provider, so this is one setting rather than ten.</small></label><span className="r">
-            <Dropdown id="tray-quota" ariaLabel="Quota refresh" value={String(app.quotaCadenceSeconds)} options={QUOTA_CADENCES} onChange={value => setApp({ quotaCadenceSeconds: Number(value) })} width={124} />
+          <div className="about-row"><label className="tx" htmlFor="tray-quota">{t('settings.tray.quotaLabel')}<small>{t('settings.tray.quotaHint')}</small></label><span className="r">
+            <Dropdown id="tray-quota" ariaLabel={t('settings.tray.quotaAriaLabel')} value={String(app.quotaCadenceSeconds)} options={QUOTA_CADENCES.map(c => ({ value: c.value, label: t(c.labelKey) }))} onChange={value => setApp({ quotaCadenceSeconds: Number(value) })} width={124} />
           </span></div>
         </div>
 
         <div className="about-sec set-last-sec">
-          <div className="about-sec-h">System</div>
-          <div className="about-row"><label className="tx" htmlFor="tray-terminal">Terminal<small>Where Open Full Report runs.</small></label><span className="r">
-            <Dropdown id="tray-terminal" ariaLabel="Terminal" value={app.terminal} options={TERMINALS} onChange={value => setApp({ terminal: value })} width={168} />
+          <div className="about-sec-h">{t('settings.tray.systemHeading')}</div>
+          <div className="about-row"><label className="tx" htmlFor="tray-terminal">{t('settings.tray.terminalLabel')}<small>{t('settings.tray.terminalHint')}</small></label><span className="r">
+            <Dropdown id="tray-terminal" ariaLabel={t('settings.tray.terminalLabel')} value={app.terminal} options={TERMINALS} onChange={value => setApp({ terminal: value })} width={168} />
           </span></div>
           {prefs.launchAtLoginManaged ? (
             // The Store package declares launch at login as its own startup task, which only
             // Windows can turn on and off. A switch here would move nothing, so this says who
             // owns it and opens the page that does.
-            <div className="about-row"><span className="tx">Launch at login<small>Managed by Windows for this build, in Settings &gt; Apps &gt; Startup.</small></span><span className="r">
+            <div className="about-row"><span className="tx">{t('settings.tray.launchAtLogin')}<small>{t('settings.tray.launchAtLoginManagedHint')}</small></span><span className="r">
               <button
                 type="button"
                 className="set-text-button"
                 onClick={() => { void codeburn.openExternal(STARTUP_APPS_SETTINGS_URL) }}
               >
-                Open Startup Apps
+                {t('settings.tray.openStartupApps')}
               </button>
             </span></div>
           ) : (
-            <div className="about-row"><span className="tx">Launch at login<small>Starts the menu bar app when you sign in.</small></span><span className="r">
-              <Switch on={prefs.launchAtLogin} label="Launch at login" onToggle={() => setLaunchAtLogin(!prefs.launchAtLogin)} />
+            <div className="about-row"><span className="tx">{t('settings.tray.launchAtLogin')}<small>{t('settings.tray.launchAtLoginHint')}</small></span><span className="r">
+              <Switch on={prefs.launchAtLogin} label={t('settings.tray.launchAtLogin')} onToggle={() => setLaunchAtLogin(!prefs.launchAtLogin)} />
             </span></div>
           )}
         </div>
@@ -232,7 +233,7 @@ export function CapacityDockPane({ refreshToken }: { refreshToken?: number }) {
   const { prefs, setDock } = useTrayPrefs()
   const quota = usePolled<QuotaProvider[]>(() => codeburn.getQuota(), [refreshToken])
 
-  if (!prefs) return <section className="set-p on"><p className="set-cap">Loading Capacity Dock settings…</p></section>
+  if (!prefs) return <section className="set-p on"><p className="set-cap">{t('settings.dock.loading')}</p></section>
   const dock = prefs.dock
 
   const connected = (quota.data ?? [])
@@ -259,26 +260,26 @@ export function CapacityDockPane({ refreshToken }: { refreshToken?: number }) {
   return (
     <section className="set-p on">
       <div>
-        <h3 className="set-h">Capacity Dock</h3>
-        <p className="set-sub">The rail on the screen edge. Drag it to move it; these are the settings the menu bar app keeps for it.</p>
+        <h3 className="set-h">{t('settings.dock.heading')}</h3>
+        <p className="set-sub">{t('settings.dock.subtitle')}</p>
       </div>
       <div className="card">
         <div className="about-sec">
-          <div className="about-sec-h">Rail</div>
-          <div className="about-row"><span className="tx">Show the rail<small>The same switch as Sidebar in the corner.</small></span><span className="r">
-            <Switch on={dock.enabled} label="Show the Capacity Dock" onToggle={() => setDock({ enabled: !dock.enabled })} />
+          <div className="about-sec-h">{t('settings.dock.railHeading')}</div>
+          <div className="about-row"><span className="tx">{t('settings.dock.showRail')}<small>{t('settings.dock.showRailHint')}</small></span><span className="r">
+            <Switch on={dock.enabled} label={t('settings.dock.showRailAriaLabel')} onToggle={() => setDock({ enabled: !dock.enabled })} />
           </span></div>
-          <div className="about-row"><label className="tx" htmlFor="dock-resting">Resting provider<small>The one row the rail shows until you hover it.</small></label><span className="r">
+          <div className="about-row"><label className="tx" htmlFor="dock-resting">{t('settings.dock.restingLabel')}<small>{t('settings.dock.restingHint')}</small></label><span className="r">
             {restingOptions.length > 0
-              ? <Dropdown id="dock-resting" ariaLabel="Resting provider" value={dock.preferred ?? restingOptions[0]!.value} options={restingOptions} onChange={value => setDock({ preferred: value })} width={140} />
-              : <span className="set-cap">No providers yet</span>}
+              ? <Dropdown id="dock-resting" ariaLabel={t('settings.dock.restingLabel')} value={dock.preferred ?? restingOptions[0]!.value} options={restingOptions} onChange={value => setDock({ preferred: value })} width={140} />
+              : <span className="set-cap">{t('settings.dock.noProvidersYet')}</span>}
           </span></div>
-          <div className="about-row"><label className="tx" htmlFor="dock-scale">Size<small>{Math.round(dock.scale * 100)} percent.</small></label><span className="r">
+          <div className="about-row"><label className="tx" htmlFor="dock-scale">{t('settings.dock.sizeLabel')}<small>{t('settings.dock.sizePercent', { percent: Math.round(dock.scale * 100) })}</small></label><span className="r">
             <input
               id="dock-scale"
               className="set-range"
               type="range"
-              aria-label="Capacity Dock size"
+              aria-label={t('settings.dock.sizeAriaLabel')}
               min={SCALE_MIN}
               max={SCALE_MAX}
               step={SCALE_STEP}
@@ -289,19 +290,19 @@ export function CapacityDockPane({ refreshToken }: { refreshToken?: number }) {
         </div>
 
         <div className="about-sec">
-          <div className="about-sec-h">Appearance</div>
-          <div className="about-row"><label className="tx" htmlFor="dock-theme">Surface<small>Graphite is opaque. Glass is translucent, painted inside the rail's own outline.</small></label><span className="r">
-            <Dropdown id="dock-theme" ariaLabel="Capacity Dock appearance" value={dock.theme} options={DOCK_THEMES} onChange={value => setDock({ theme: value })} width={124} />
+          <div className="about-sec-h">{t('settings.dock.appearanceHeading')}</div>
+          <div className="about-row"><label className="tx" htmlFor="dock-theme">{t('settings.dock.surfaceLabel')}<small>{t('settings.dock.surfaceHint')}</small></label><span className="r">
+            <Dropdown id="dock-theme" ariaLabel={t('settings.dock.appearanceAriaLabel')} value={dock.theme} options={DOCK_THEMES.map(o => ({ value: o.value, label: t(o.labelKey) }))} onChange={value => setDock({ theme: value })} width={124} />
           </span></div>
-          <div className="about-row"><label className="tx" htmlFor="dock-gauge">Gauge<small>The shape of the ring around each provider glyph.</small></label><span className="r">
-            <Dropdown id="dock-gauge" ariaLabel="Gauge shape" value={dock.gaugeShape} options={DOCK_GAUGE_SHAPES} onChange={value => setDock({ gaugeShape: value })} width={124} />
+          <div className="about-row"><label className="tx" htmlFor="dock-gauge">{t('settings.dock.gaugeLabel')}<small>{t('settings.dock.gaugeHint')}</small></label><span className="r">
+            <Dropdown id="dock-gauge" ariaLabel={t('settings.dock.gaugeAriaLabel')} value={dock.gaugeShape} options={DOCK_GAUGE_SHAPES.map(o => ({ value: o.value, label: t(o.labelKey) }))} onChange={value => setDock({ gaugeShape: value })} width={124} />
           </span></div>
         </div>
 
         <div className="about-sec set-last-sec">
-          <div className="about-sec-h">Providers</div>
+          <div className="about-sec-h">{t('settings.dock.providersHeading')}</div>
           {manageable.length === 0
-            ? <p className="set-cap">No providers are connected yet. The rail follows whatever signs in.</p>
+            ? <p className="set-cap">{t('settings.dock.noneConnected')}</p>
             : manageable.map(id => {
               const on = dock.providers.includes(id)
               const locked = on && !canDeselect(id)
@@ -310,11 +311,11 @@ export function CapacityDockPane({ refreshToken }: { refreshToken?: number }) {
                   <span className="tx set-dock-prov">
                     <ProviderLogo provider={id} />
                     {PROVIDER_NAMES[id as keyof typeof PROVIDER_NAMES] ?? id}
-                    {locked && <small>The rail needs at least one connected provider.</small>}
-                    {!connected.includes(id) && <small>Not connected.</small>}
+                    {locked && <small>{t('settings.dock.lastProviderHint')}</small>}
+                    {!connected.includes(id) && <small>{t('settings.dock.notConnected')}</small>}
                   </span>
                   <span className="r">
-                    <Switch on={on} disabled={locked} label={`${PROVIDER_NAMES[id as keyof typeof PROVIDER_NAMES] ?? id} on the Capacity Dock`} onToggle={() => toggleProvider(id)} />
+                    <Switch on={on} disabled={locked} label={t('settings.dock.providerSwitchLabel', { provider: PROVIDER_NAMES[id as keyof typeof PROVIDER_NAMES] ?? id })} onToggle={() => toggleProvider(id)} />
                   </span>
                 </div>
               )

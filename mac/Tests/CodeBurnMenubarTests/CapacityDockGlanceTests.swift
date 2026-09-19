@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Testing
 @testable import CodeBurnMenubar
@@ -396,6 +397,44 @@ struct CapacityDockGlanceTests {
         #expect(
             CapacityDockGlance.connectCardHeight(provider: .claude, width: width)
                 == 47 + 15 + CapacityDockGlance.actionRowHeight
+        )
+    }
+
+    @Test("The reconnect block reserves its scaled text at the 0.9 floor, so nothing clips")
+    func reconnectBlockDoesNotClipAtFloor() {
+        let width: CGFloat = 350 - 2 * CapacityDockGlance.contentInset
+        let s: CGFloat = 0.9
+        // SwiftUI's line box, the same one connectionBlockHeight measures with.
+        func lineBox(_ size: CGFloat, _ weight: NSFont.Weight) -> CGFloat {
+            let f = NSFont.systemFont(ofSize: size, weight: weight)
+            return max(
+                (f.ascender - f.descender + f.leading).rounded(.up),
+                f.ascender.rounded(.up) + (-f.descender).rounded(.up)
+            )
+        }
+        func block(_ c: QuotaSummary.Connection, scale: CGFloat) -> CGFloat {
+            CapacityDockGlance.connectionBlockHeight(c, provider: .claude, width: width, scale: scale)
+        }
+        let pads = (CapacityDockGlance.noticeTopPad + CapacityDockGlance.noticeBottomPad) * s
+
+        // The disconnected block is one 11pt line: its reserve must hold the
+        // line SwiftUI draws at the SCALED size, not a fixed-size measurement
+        // shrunk by the scale.
+        #expect(block(.disconnected, scale: s) >= pads + lineBox(11 * s, .regular))
+        // And that is strictly more than the old reserve (fixed line box * scale),
+        // which fell short of the fixed-size draw and clipped.
+        #expect(block(.disconnected, scale: s) > block(.disconnected, scale: 1) * s)
+
+        // The reconnect title is the 11pt semibold line that clipped; its reserve
+        // must cover the scaled draw.
+        #expect(
+            block(.terminalFailure(reason: nil), scale: s)
+                >= CapacityDockGlance.noticeTopPad * s + lineBox(11 * s, .semibold)
+        )
+        #expect(
+            block(.terminalFailure(reason: "Token expired"), scale: s)
+                >= CapacityDockGlance.noticeTopPad * s + lineBox(11 * s, .semibold)
+                    + CapacityDockGlance.noticeRowGap * s + lineBox(10 * s, .regular)
         )
     }
 }

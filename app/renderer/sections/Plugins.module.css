@@ -1,5 +1,5 @@
 .container {
-  padding: var(--sp-5);
+  padding: var(--sp-7);
   flex: 1;
   overflow-y: auto;
   margin-bottom: var(--sp-2);
@@ -19,14 +19,16 @@
 }
 
 .empty {
-  max-width: 560px;
-  margin: 0 auto;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 1180px;
+  margin: 0;
   padding: 0 2px 2px;
-  text-align: center;
+  text-align: left;
 }
 
 .emptyBodyPanel {
-  padding: var(--sp-7) var(--sp-6);
+  padding: var(--sp-5);
   background: var(--card-inner);
   border: 1px solid var(--line);
   border-radius: 12px;
@@ -38,24 +40,13 @@
   align-items: center;
   min-height: 40px;
   margin: 0;
-  padding: 0 17px;
+  padding: 0 22px;
   color: var(--ink);
   font-size: var(--fs-subhead);
   font-weight: var(--fw-subhead);
 }
 
-.emptyBody {
-  margin: 0 0 var(--sp-3);
-  color: var(--mut);
-  font-size: var(--fs-subhead);
-  line-height: 1.55;
-}
 
-.emptyFooter {
-  margin: var(--sp-5) 0 0;
-  color: var(--mut2);
-  font-size: var(--fs-meta);
-}
 
 .list {
   display: flex;
@@ -261,16 +252,16 @@
 }
 
 /* Windows: plugins have no runtime there yet, so the page says so instead of loading.
-   Same centred card the empty state uses, with the section's own glyph above it. */
+   A panel of its own, with the section's own glyph above it. */
 .soon {
   display: flex;
   flex-direction: column;
-  align-items: center;
-  text-align: center;
+  align-items: flex-start;
+  text-align: left;
   gap: var(--sp-3);
-  padding: var(--sp-7) var(--sp-6);
+  padding: var(--sp-6);
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: 12px;
   background: var(--fill);
 }
 
@@ -293,4 +284,440 @@
   color: var(--mut);
   font-size: var(--fs-body);
   line-height: 1.55;
+}
+
+/* The macOS menu bar app's card (MenuBarCard.tsx). Same .row shell as a plugin; the switch
+   sits outside .actions because that rule repaints every button under it, which would strip
+   the shared .switch of its track and knob. */
+.dockToggle {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--fs-label);
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+
+/* `.caps span` paints every chip, so the dot has to opt out of being one. */
+.caps span.running {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  color: var(--ok);
+}
+
+.caps span.runningDot {
+  width: 7px;
+  height: 7px;
+  padding: 0;
+  border-radius: 50%;
+  background: var(--ok);
+}
+
+.cardError {
+  margin-top: var(--sp-2);
+  font-size: var(--fs-body);
+  color: var(--color-error-text);
+}
+
+.website {
+  font-size: var(--fs-body);
+  color: var(--color-text-secondary);
+}
+
+
+/* The two artwork cards share the responsive grid the Plans tab uses: side by side as equal
+   columns, dropping to one column when the row is too narrow to hold a card at its floor. */
+.artGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr));
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-5);
+}
+
+/* Artwork cards (Menu bar, Teams). The art rides on .row's own background, so the radius,
+   rim, padding and layout are untouched; only the paint under them changes. Each card sets
+   `--card-art` and `--card-art-light` (and, where its own light wordmark needs holding back,
+   `--art-light-wash`); the theme picks which one paints. Layers, top down: the scrim that
+   keeps the controls legible, the artwork. Right-bottom anchored so the wordmark baked into
+   the bottom-right of the source stays where it was drawn and the flat left edge stretches. */
+.art {
+  box-sizing: border-box;
+  /* A floor, not a fixed height: the grid stretches both cards in a row to the taller one, so
+     a card whose copy runs long (Teams, shown in full) grows and its neighbour matches it. */
+  min-height: 150px;
+  /* Text column top-left, controls pinned to the top-right rather than centred, so both cards'
+     controls share one top and right offset (the card's own padding) and line up. */
+  align-items: flex-start;
+  background-image:
+    linear-gradient(to right, var(--art-scrim-0) 0%, var(--art-scrim-0) var(--art-scrim-start), var(--art-scrim-1) var(--art-scrim-end), var(--art-scrim-1) 100%),
+    var(--art-src);
+  background-repeat: no-repeat;
+  /* Not `cover`: a card taller than the artwork's own 5.25:1 makes cover scale by height, and
+     a right-anchored image wider than the card drags the baked-in wordmark left, under the
+     description. Stretching instead pins the wordmark to the same fraction of the card's
+     width at every height; the flat left edge takes the distortion and nothing crops. */
+  background-size: auto, 100% 100%;
+  background-position: center, right bottom;
+  /* Light is the default here, the same way plain.css orders it. */
+  --art-src: var(--card-art-light);
+  --art-scrim-0: rgba(230, 230, 232, 0);
+  --art-scrim-1: rgba(230, 230, 232, var(--art-light-wash, .25));
+  /* The light wash is at full strength across the whole wordmark rather than only at the card
+     edge, so a light artwork whose wordmark came out too dark is held back over every letter. */
+  --art-scrim-start: 45%;
+  --art-scrim-end: 56%;
+  --art-btn-line: rgba(0, 0, 0, .14);
+}
+
+@media (prefers-color-scheme: dark) {
+  .art {
+    --art-src: var(--card-art);
+    --art-scrim-0: rgba(0, 0, 0, 0);
+    --art-scrim-1: rgba(0, 0, 0, .55);
+    --art-scrim-start: 55%;
+    --art-scrim-end: 100%;
+    --art-btn-line: rgba(255, 255, 255, .22);
+  }
+}
+
+:root[data-theme='dark'] .art {
+  --art-src: var(--card-art);
+  --art-scrim-0: rgba(0, 0, 0, 0);
+  --art-scrim-1: rgba(0, 0, 0, .55);
+  --art-scrim-start: 55%;
+  --art-scrim-end: 100%;
+  --art-btn-line: rgba(255, 255, 255, .22);
+}
+
+:root[data-theme='light'] .art {
+  --art-src: var(--card-art-light);
+  --art-scrim-0: rgba(230, 230, 232, 0);
+  --art-scrim-1: rgba(230, 230, 232, var(--art-light-wash, .25));
+  --art-scrim-start: 45%;
+  --art-scrim-end: 56%;
+  --art-btn-line: rgba(0, 0, 0, .14);
+}
+
+/* Same button, firmer edge: --line is a hairline meant for a flat panel and disappears
+   against the haze. One height for all of them, so the row is a row. */
+.art .actions button {
+  height: var(--mb-ctl-h);
+  padding-top: 0;
+  padding-bottom: 0;
+  border-color: var(--art-btn-line);
+}
+
+.art .dockToggle {
+  height: var(--mb-ctl-h);
+}
+
+/* The card is the same height in every state: the text column keeps its width whatever the
+   controls need, and the chip row and the note line keep their row whether or not they have
+   anything in them. */
+.art .info {
+  flex: 0 0 44%;
+}
+
+.art .caps {
+  min-height: 22px;
+}
+
+.art .caps span {
+  display: inline-flex;
+  align-items: center;
+  box-sizing: border-box;
+  height: 22px;
+  padding: 0 var(--sp-2);
+}
+
+.art .caps span.runningDot {
+  height: 7px;
+  padding: 0;
+}
+
+.art .note {
+  /* Two lines, reserved whether or not there is anything to say and clamped to that, so no
+     message can change the card's height. A longer one keeps its tail in the tooltip. */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  min-height: 2.7em;
+  margin-top: var(--sp-1);
+  font-size: var(--fs-body);
+  line-height: 1.35;
+  color: var(--color-error-text);
+}
+
+.art .note[data-kind="hint"] {
+  color: var(--mut);
+}
+
+/* The text column stops short of the wordmark baked into the right of the artwork, and its
+   copy is capped at two lines the way the note row above it is. */
+.art .info {
+  max-width: 44%;
+}
+
+/* Bigger title, top-left, over a small one-line description directly below it. */
+.art .name {
+  font-size: var(--fs-kpi);
+  font-weight: var(--fw-subhead);
+}
+
+.art .reason {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 1;
+  overflow: hidden;
+  margin-top: 2px;
+  font-size: var(--fs-meta);
+}
+
+/* Teams shows its description in full rather than clipped to one line, and the card grows. */
+.art .reasonFull {
+  display: block;
+  -webkit-line-clamp: unset;
+  overflow: visible;
+}
+
+/* The Teams column runs full height so its beta link can sit at the bottom of the card. */
+.teamsInfo {
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+}
+
+/* The menu bar column runs full height too: title and full description at the top, and the
+   status line (Running · version) pinned to the bottom-left, clear of the wordmark baked into
+   the artwork's bottom-right. The note row keeps its place just above the status. */
+.menubarInfo {
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+}
+
+.menubarInfo .note {
+  margin-top: auto;
+}
+
+.betaLink {
+  margin-top: auto;
+  align-self: flex-start;
+  padding-top: var(--sp-2);
+}
+
+/* Below this the switch's written label no longer fits beside the buttons and the text
+   column. Wrapping the controls onto their own row was the other option and is worse: it
+   makes the card tall, and `cover` then blows the artwork's wordmark up to fill it. The
+   switch keeps its name in aria-label and in its tooltip. Driven by the window width, never
+   by how many buttons a state has, so the card is still one height across every state. */
+/* Half a row is never enough for the switch's written label beside the buttons, so it is
+   always screen-reader-only here; the aria-label and the tooltip still name it. */
+.art .dockToggle > span {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* Disabled still has to be readable over the haze; the shared .6 lands at 4.1:1 there. */
+.art .actions button:disabled {
+  opacity: .7;
+}
+
+
+.art .actions button.primary {
+  border-color: var(--accent);
+}
+
+/* Nothing on this card moves when it is pressed. The shared button classes take a 2% dip and
+   ease their colours, and the menu grows out of its trigger; here every change is instant. */
+.art .actions button,
+.art .controls button,
+.art .pill,
+.art .infoDot,
+.art .controls :global(.switch),
+.art .controls :global(.switch-knob) {
+  transition: none;
+}
+
+.art .actions button:hover,
+.art .actions button:active,
+.art .actions button:focus,
+.art .actions button:focus-visible,
+.art .actions button:disabled,
+.art .controls button:active,
+.art .infoDot:active {
+  transition: none;
+  transform: none;
+  box-shadow: none;
+  animation: none;
+}
+
+/* Teams has nothing to press, so the slot the other card fills with buttons carries a label. */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  height: var(--mb-ctl-h);
+  box-sizing: border-box;
+  padding: 0 var(--sp-3);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--fill);
+  color: var(--mut);
+  font-size: var(--fs-meta);
+  white-space: nowrap;
+}
+
+/* One height for every control in an art card's right-hand row, and for the Yes/No of a
+   confirm row that opens out of it. Declared on :root because the overflow menu is portaled
+   to the body and so cannot inherit it from the card. */
+:root {
+  --mb-ctl-h: 28px;
+}
+
+/* Title plus the info dot that opens the two-column modal below. */
+.nameRow {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.infoDot {
+  cursor: pointer;
+}
+
+/* One right-aligned row: the Capacity Dock switch, then the buttons. The switch stays out of
+   `.actions` because that rule repaints every button under it, which would strip the shared
+   `.switch` of its track and knob. */
+.controls {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  margin-left: auto;
+}
+
+/* The one button that carries the action. `.btnp-primary` fills with the accent and puts
+   white on it, which is 2.9:1 — under this card's own floor — so the emphasis is the accent
+   edge and label instead, on the same button body as its neighbours. */
+.primary {
+  border-color: var(--accent);
+  color: var(--accent-text);
+  font-weight: var(--fw-subhead);
+}
+
+/* The running-state actions are icon-only, all visible: a square button per action, the same
+   28px as the text buttons and the switch beside them, matching their border and no motion. */
+.iconBtn {
+  width: var(--mb-ctl-h);
+  padding-left: 0;
+  padding-right: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.iconBtn .icon {
+  width: 15px;
+  height: 15px;
+}
+
+/* Armed: the icon has swapped to a check and one more click carries the destructive action
+   out, so the button reads in the danger colour until focus leaves it. */
+.art .actions button.confirming {
+  color: var(--bad);
+  border-color: var(--bad);
+}
+
+/* The Menu bar card's info modal: two columns of plain lines, one hairline between them. */
+.aboutModal {
+  position: relative;
+  box-sizing: border-box;
+  width: min(720px, 100%);
+  max-height: 80vh;
+  overflow-y: auto;
+  padding: var(--sp-6);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--card-inner);
+  color: var(--ink);
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.28), 0 3px 12px rgba(0, 0, 0, 0.16);
+}
+
+.aboutCols {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--sp-6);
+}
+
+.aboutCols > .aboutCol + .aboutCol {
+  padding-left: var(--sp-6);
+  border-left: 1px solid var(--line);
+}
+
+/* At a narrow window the two columns stack and the hairline turns with them. */
+@media (max-width: 900px) {
+  .aboutCols {
+    grid-template-columns: 1fr;
+    gap: var(--sp-5);
+  }
+  .aboutCols > .aboutCol + .aboutCol {
+    padding-left: 0;
+    padding-top: var(--sp-5);
+    border-left: 0;
+    border-top: 1px solid var(--line);
+  }
+}
+
+.aboutColTitle {
+  margin: 0 0 var(--sp-3);
+  font-size: var(--fs-subhead);
+  font-weight: var(--fw-subhead);
+  color: var(--ink);
+}
+
+.aboutLines {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.aboutLines li {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  font-size: var(--fs-body);
+  line-height: 1.5;
+  color: var(--ink);
+}
+
+.aboutLineIcon {
+  flex: 0 0 auto;
+  width: 15px;
+  height: 15px;
+  margin-top: 2px;
+  color: var(--mut);
+}
+
+.aboutWorks {
+  margin-top: var(--sp-4);
+  padding-top: var(--sp-3);
+  border-top: 1px solid var(--line2);
+  font-size: var(--fs-body);
+  line-height: 1.5;
+  color: var(--mut);
+}
+
+.aboutWorksLabel {
+  display: block;
+  margin-bottom: var(--sp-1);
+  color: var(--ink);
+  font-weight: var(--fw-medium);
 }

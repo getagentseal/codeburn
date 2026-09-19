@@ -40,7 +40,7 @@ enum L10n {
 
     /// Locales shipped today. Mirrored by `CFBundleLocalizations` in the two
     /// packaging scripts and asserted by `LocalizationCatalogTests`.
-    static let supportedLocalizations = ["en", "zh-Hans"]
+    static let supportedLocalizations = ["en", "fr", "ja", "ko", "zh-Hans", "zh-Hant"]
 }
 
 /// Localized copy for `key`, falling back to the key (its English text) when a
@@ -59,4 +59,15 @@ func L(_ key: String) -> String {
 /// `asCurrency()` / `asThousandsSeparated()` output next to it.
 func L(_ key: String, _ arguments: CVarArg...) -> String {
     String(format: L(key), arguments: arguments)
+}
+
+/// A quota window's label. Provider adapters hand these over in English and most
+/// are passed through verbatim (a vendor's own wording, per `QuotaCrossing`);
+/// the generic billing period the app itself composes is the one the dock and
+/// the menu bar translate, so it does not read English amid localized copy.
+func localizedWindowLabel(_ label: String) -> String {
+    switch label {
+    case "Monthly": return L("Monthly")
+    default: return label
+    }
 }

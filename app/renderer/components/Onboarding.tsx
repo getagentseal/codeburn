@@ -5,27 +5,19 @@ import { codeburn } from '../lib/ipc'
 import backdrop from '../assets/onboarding-bg.jpg'
 import flame from '../assets/onboarding-flame.png'
 import { version } from '../../package.json'
+import { t } from '../i18n'
 
 const COLLECT_URL = 'https://www.codeburn.app/telemetry'
 
 type Screen = {
-  title: string
-  body: string
+  titleKey: string
+  bodyKey: string
 }
 
 const SCREENS: Screen[] = [
-  {
-    title: 'Every agent. One dashboard.',
-    body: 'Claude Code, Codex, Cursor, Copilot and 20+ more: spend, sessions, models and quotas, side by side.',
-  },
-  {
-    title: 'Local-first by design.',
-    body: 'Usage is read from files already on your machine. No accounts, no API keys, nothing leaves your device.',
-  },
-  {
-    title: 'Find the waste.',
-    body: 'Retry tax, routing waste and task success by category: see what your agents actually deliver for the money.',
-  },
+  { titleKey: 'onboarding.screens.dashboard.title', bodyKey: 'onboarding.screens.dashboard.body' },
+  { titleKey: 'onboarding.screens.localFirst.title', bodyKey: 'onboarding.screens.localFirst.body' },
+  { titleKey: 'onboarding.screens.findWaste.title', bodyKey: 'onboarding.screens.findWaste.body' },
 ]
 
 /**
@@ -62,7 +54,7 @@ export function Onboarding({ defaultEnabled, onDone }: { defaultEnabled: boolean
   if (typeof document === 'undefined') return null
 
   return createPortal(
-    <div className="onboard" role="dialog" aria-label="Welcome to CodeBurn">
+    <div className="onboard" role="dialog" aria-label={t('onboarding.dialog.ariaLabel')}>
       <img className="onboard-bg" src={backdrop} alt="" aria-hidden />
       <div className="onboard-grain" aria-hidden />
       <div className="onboard-veil" aria-hidden />
@@ -76,15 +68,12 @@ export function Onboarding({ defaultEnabled, onDone }: { defaultEnabled: boolean
         <div className="onboard-step" key={step}>
           {isConsent ? (
             <>
-              <h2 className="onboard-title">Help improve CodeBurn</h2>
+              <h2 className="onboard-title">{t('onboarding.consent.title')}</h2>
               <p className="onboard-body">
-                Share anonymous usage statistics: model and provider mix, task success rates, performance and errors.
-                The daily report includes the names of the models, tools, skills and MCP servers you use, alongside
-                bucketed counts of how often each one came up.
-                Never your prompts, your code, or your project and file names.
+                {t('onboarding.consent.body')}
               </p>
               <div className="onboard-consent">
-                <span id="onboard-consent-label">Anonymous telemetry</span>
+                <span id="onboard-consent-label">{t('onboarding.consent.label')}</span>
                 <button
                   type="button"
                   role="switch"
@@ -97,18 +86,18 @@ export function Onboarding({ defaultEnabled, onDone }: { defaultEnabled: boolean
                 </button>
               </div>
               <button type="button" className="onboard-link" onClick={() => { void codeburn.openExternal?.(COLLECT_URL) }}>
-                What data we collect
+                {t('onboarding.consent.dataLink')}
               </button>
               {document.documentElement.dataset.platform === 'darwin' && (
                 <p className="onboard-hint">
-                  Tip: if a provider looks empty, grant Full Disk Access in System Settings › Privacy &amp; Security.
+                  {t('onboarding.consent.hint')}
                 </p>
               )}
             </>
           ) : (
             <>
-              <h2 className="onboard-title">{SCREENS[step].title}</h2>
-              <p className="onboard-body">{SCREENS[step].body}</p>
+              <h2 className="onboard-title">{t(SCREENS[step].titleKey)}</h2>
+              <p className="onboard-body">{t(SCREENS[step].bodyKey)}</p>
             </>
           )}
         </div>
@@ -121,15 +110,15 @@ export function Onboarding({ defaultEnabled, onDone }: { defaultEnabled: boolean
 
         <div className="onboard-controls">
           {isConsent ? (
-            <button type="button" className="onboard-btn primary" onClick={() => onDone(enabled)}>Get started</button>
+            <button type="button" className="onboard-btn primary" onClick={() => onDone(enabled)}>{t('onboarding.button.getStarted')}</button>
           ) : (
-            <button type="button" className="onboard-btn primary" onClick={advance}>Next</button>
+            <button type="button" className="onboard-btn primary" onClick={advance}>{t('onboarding.button.next')}</button>
           )}
           {step > 0 && (
-            <button type="button" className="onboard-quiet" onClick={() => setStep(value => value - 1)}>Back</button>
+            <button type="button" className="onboard-quiet" onClick={() => setStep(value => value - 1)}>{t('onboarding.button.back')}</button>
           )}
           {!isConsent && (
-            <button type="button" className="onboard-quiet" onClick={() => setStep(SCREENS.length)}>Skip</button>
+            <button type="button" className="onboard-quiet" onClick={() => setStep(SCREENS.length)}>{t('onboarding.button.skip')}</button>
           )}
         </div>
       </div>

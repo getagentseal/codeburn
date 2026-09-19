@@ -15,6 +15,7 @@ import { prFilters } from '../lib/investigation'
 import { rangeLabel } from '../components/TopBar'
 import type { InvestigateRequest } from './Overview'
 import { Icon } from '../components/icons'
+import { t } from '../i18n'
 
 type PullRequests = NonNullable<MenubarPayload['current']['pullRequests']>
 type PrRow = PullRequests['rows'][number]
@@ -28,13 +29,9 @@ function spanLabel(firstStarted: string, lastEnded: string): string {
   return start === end ? start : `${start} - ${end}`
 }
 
-function sessionWord(n: number): string {
-  return n === 1 ? 'session' : 'sessions'
-}
-
 function ModelChips({ models }: { models: string[] }) {
   return (
-    <div className="pr-model-list" aria-label={models.length ? `Models used: ${models.join(', ')}` : 'No model data'}>
+    <div className="pr-model-list" aria-label={models.length ? t('pullRequests.models.usedAria', { models: models.join(', ') }) : t('pullRequests.models.noneAria')}>
       {models.map(model => <span className="pr-model-chip" key={model}>{model}</span>)}
     </div>
   )
@@ -81,8 +78,8 @@ export function PullRequestsContent({ overview, period, provider, range = null, 
   onInvestigate?: (request: InvestigateRequest) => void
 }) {
   if (!overview.data) {
-    if (overview.error) return <CliErrorPanel error={overview.error} subject="pull requests" />
-    return <SectionSkeleton label="Scanning pull requests…" rows={5} />
+    if (overview.error) return <CliErrorPanel error={overview.error} subject={t('pullRequests.errorSubject')} />
+    return <SectionSkeleton label={t('pullRequests.loading')} rows={5} />
   }
   return <PullRequestsPage
     pullRequests={overview.data.current.pullRequests}
@@ -107,7 +104,7 @@ function PullRequestsPage({ pullRequests, staleError, period, provider, range, o
     <>
       {staleError && <StaleBanner error={staleError} />}
       {empty ? (
-        <Panel title="Pull request spend">
+        <Panel title={t('pullRequests.summary.title')}>
           <PrEmptyNote period={period} provider={provider} range={range} />
         </Panel>
       ) : (
@@ -134,11 +131,11 @@ function PrEmptyNote({ period, provider, range }: { period: Period; provider: st
 
   const periodLabel = range ? rangeLabel(range) : PERIOD_LABELS[period]
   const widerHint = widerCount && widerCount > 0
-    ? ` Lifetime has ${widerCount.toLocaleString('en-US')} pull requests. Switch the period control to Life.`
+    ? t('pullRequests.empty.widerHint', { count: widerCount.toLocaleString('en-US') })
     : ''
   return (
     <EmptyNote>
-      No sessions in {periodLabel} mentioned a pull request URL. Spend is attributed only when a transcript contains a github.com/…/pull/N link.
+      {t('pullRequests.empty.body', { period: periodLabel })}
       {widerHint}
     </EmptyNote>
   )
@@ -163,31 +160,31 @@ function PrTable({ pullRequests, onInvestigate }: { pullRequests: PullRequests; 
 
   return (
     <div className="pr-page">
-      <Panel title="Pull request spend">
-        <div className="pr-summary" aria-label="Pull request attribution summary">
+      <Panel title={t('pullRequests.summary.title')}>
+        <div className="pr-summary" aria-label={t('pullRequests.summary.aria')}>
           <div className="pr-summary-item">
-            <span>Attributed spend</span>
+            <span>{t('pullRequests.summary.attributedSpend')}</span>
             <strong>{formatUsd(summable ? displayedAttributed : distinctCost)}</strong>
           </div>
           <div className="pr-summary-item">
-            <span>Pull requests</span>
+            <span>{t('pullRequests.summary.pullRequests')}</span>
             <strong>{rows.length.toLocaleString('en-US')}</strong>
           </div>
           <div className="pr-summary-item">
-            <span>Linked sessions</span>
+            <span>{t('pullRequests.summary.linkedSessions')}</span>
             <strong>{distinctSessions.toLocaleString('en-US')}</strong>
           </div>
           <div className="pr-summary-item">
-            <span>Folded agent runs</span>
+            <span>{t('pullRequests.summary.foldedAgentRuns')}</span>
             <strong>{(subagentSessions ?? 0).toLocaleString('en-US')}</strong>
           </div>
         </div>
       </Panel>
       <Panel
-        title="Attributed pull requests"
-        right={<>Sorted by spend, highest first <span className="pr-list-count">{rows.length.toLocaleString('en-US')} total</span></>}
+        title={t('pullRequests.list.title')}
+        right={<>{t('pullRequests.list.sortedHint')} <span className="pr-list-count">{t('pullRequests.list.total', { count: rows.length.toLocaleString('en-US') })}</span></>}
       >
-          <div className="pr-list" aria-label="Spend by pull request">
+          <div className="pr-list" aria-label={t('pullRequests.list.aria')}>
           {rows.map(pr => (
             <PrRowView
               key={pr.url}
@@ -200,24 +197,22 @@ function PrTable({ pullRequests, onInvestigate }: { pullRequests: PullRequests; 
         </div>
         {summable ? (
           <p className="pr-footnote">
-            Costs are attributed turn by turn, so every row adds up without double counting.
-            {subagentSessions ? ` ${subagentSessions.toLocaleString('en-US')} subagent ${subagentSessions === 1 ? 'run is' : 'runs are'} included in the PR where the work happened.` : ''}
+            {t('pullRequests.footnote.turnByTurn')}
+            {subagentSessions ? t(`pullRequests.footnote.subagentIncluded.${subagentSessions === 1 ? 'one' : 'other'}`, { count: subagentSessions.toLocaleString('en-US') }) : ''}
           </p>
         ) : (
           <p className="pr-footnote">
-            {formatUsd(distinctCost)} across {distinctSessions.toLocaleString('en-US')} distinct {sessionWord(distinctSessions)} produced pull requests.
-            {' '}Attribution is by reference: a session referencing several PRs counts toward each, so the rows above are not summed.
+            {t('pullRequests.footnote.byReference.summary', { amount: formatUsd(distinctCost), sessionCount: formatCount(distinctSessions, 'distinct session') })}
+            {' '}{t('pullRequests.footnote.byReference.detail')}
           </p>
         )}
         {unattributed > 0 && (
-          <p className="pr-unattributed">Not tied to a specific PR: {formatUsd(unattributed)}</p>
+          <p className="pr-unattributed">{t('pullRequests.unattributed', { amount: formatUsd(unattributed) })}</p>
         )}
       </Panel>
     </div>
   )
 }
-
-const APPROX_TITLE = 'Approximate: the transcript expired before per-turn capture, so this PR’s share is an even split of the whole session.'
 
 function PrRowView({ pr, expanded, onToggle, onInvestigate }: { pr: PrRow; expanded: boolean; onToggle: () => void; onInvestigate?: (request: InvestigateRequest) => void }) {
   const models = pr.models ?? []
@@ -242,18 +237,18 @@ function PrRowView({ pr, expanded, onToggle, onInvestigate }: { pr: PrRow; expan
             <a className="pr-link" href={pr.url} title={pr.url} onClick={event => openPr(event, pr.url)}>{pr.label}</a>
             <div className="pr-card-meta">
               <span>{spanLabel(pr.firstStarted, pr.lastEnded)}</span>
-              <span>{pr.sessions.toLocaleString('en-US')} {sessionWord(pr.sessions)}</span>
+              <span>{formatCount(pr.sessions, 'session')}</span>
               <span>{formatCount(pr.calls, 'call')}</span>
             </div>
           </div>
         </div>
         <div className="pr-card-models">
-          <span className="pr-card-label">Models</span>
+          <span className="pr-card-label">{t('pullRequests.card.modelsLabel')}</span>
           <ModelChips models={models} />
         </div>
         <div className="pr-card-cost">
-          <span className="pr-card-label">Spend</span>
-          <strong {...(pr.approx ? { title: APPROX_TITLE } : {})}>{pr.approx ? '~' : ''}{formatUsd(pr.cost)}</strong>
+          <span className="pr-card-label">{t('pullRequests.card.spendLabel')}</span>
+          <strong {...(pr.approx ? { title: t('pullRequests.card.approxTitle') } : {})}>{pr.approx ? '~' : ''}{formatUsd(pr.cost)}</strong>
         </div>
         <span className="pr-chevron" aria-hidden="true"><Icon name="chevron-right" /></span>
       </div>
@@ -269,17 +264,17 @@ function PrRowView({ pr, expanded, onToggle, onInvestigate }: { pr: PrRow; expan
               <button
                 className="ov-link pr-drill"
                 type="button"
-                title={`View sessions for ${pr.label}`}
+                title={t('pullRequests.drill.viewSessionsTitle', { label: pr.label })}
                 onClick={() => onInvestigate({ filters: prFilters(pr.url) })}
               >
-                View sessions for this pull request →
+                {t('pullRequests.drill.viewSessionsButton')}
               </button>
             )}
             {categories.length > 0 ? (
-              <div className="pr-detail" role="region" aria-label={`${pr.label} cost breakdown`}>
+              <div className="pr-detail" role="region" aria-label={t('pullRequests.card.costBreakdownAria', { label: pr.label })}>
                 <div className="pr-detail-head">
-                  <span>Work breakdown</span>
-                  <strong>{formatUsd(pr.cost)} total</strong>
+                  <span>{t('pullRequests.card.workBreakdownTitle')}</span>
+                  <strong>{t('pullRequests.card.workBreakdownTotal', { amount: formatUsd(pr.cost) })}</strong>
                 </div>
                 <div className="pr-cats">
                   {categories.map(cat => (
@@ -294,7 +289,7 @@ function PrRowView({ pr, expanded, onToggle, onInvestigate }: { pr: PrRow; expan
                 </div>
               </div>
             ) : (
-              <p className="pr-cat-empty">No per-turn detail (estimated from a whole-session split).</p>
+              <p className="pr-cat-empty">{t('pullRequests.card.noPerTurnDetail')}</p>
             )}
         </div>
       )}

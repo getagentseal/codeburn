@@ -1160,6 +1160,26 @@ describe('findUnpricedModels', () => {
     expect(isExpectedFreeModel('llama3.1:8b-instruct-q4_K_M')).toBe(true)
   })
 
+  it('flags Bedrock provisioned-model / custom-model ARNs as unpriced, not local', () => {
+    // These ARNs carry colons from the ARN structure, so they used to fall to
+    // the `:tag` branch and be hidden as free local inference. They are metered
+    // Bedrock and, when unpriced, must reach the unpriced list.
+    const provisioned = 'arn:aws:bedrock:us-east-1:123456789012:provisioned-model/2c3f9a1b'
+    const custom = 'arn:aws:bedrock:eu-central-1:210987654321:custom-model/my-tuned-claude'
+    expect(isExpectedFreeModel(provisioned)).toBe(false)
+    expect(isExpectedFreeModel(custom)).toBe(false)
+    expect(findUnpricedModels([
+      { model: provisioned, calls: 4, cost: 0, tokens: 2000 },
+      { model: custom, calls: 1, cost: 0, tokens: 300 },
+    ])).toEqual([
+      { model: provisioned, calls: 4, tokens: 2000 },
+      { model: custom, calls: 1, tokens: 300 },
+    ])
+    // Real local tags are untouched by the ARN exemption.
+    expect(isExpectedFreeModel('llama3.1:8b-instruct-q4_K_M')).toBe(true)
+    expect(isExpectedFreeModel('qwen3.6:35b-a3b-bf16')).toBe(true)
+  })
+
   it('flags zero-rate pricing stubs but not explicit zero-rate user overrides', async () => {
     // LiteLLM ships [0,0] stubs for models it lists but has no price for;
     // a stub hit means "unknown price", not "free".

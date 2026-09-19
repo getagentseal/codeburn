@@ -84,7 +84,7 @@ struct CapacityDockPreferencesTests {
 
     @Test("every audited provider can be selected for Capacity Dock")
     func supportsCompleteProviderCatalog() {
-        #expect(CapacityDockPreferences.supportedProviders.count == 70)
+        #expect(CapacityDockPreferences.supportedProviders.count == 71)
         #expect(CapacityDockPreferences.supportedProviders.map(\.rawValue)
             == ProviderConnectionCatalog.providers.map(\.id))
         #expect(CapacityDockProvider(rawValue: "openrouter")?.displayName == "OpenRouter")
@@ -188,5 +188,31 @@ struct CapacityDockPreferencesTests {
         CapacityDockPreferences.autoSeedFromConnected([], defaults: defaults)
 
         #expect(CapacityDockPreferences.load(defaults: defaults).selectedProviders == [.codex])
+    }
+
+    @Test("auto-seed skips ZCode while Z.ai is connected: same z.ai endpoint, one ring")
+    func autoSeedZcodeYieldsToZai() {
+        let defaults = defaults()
+        let zai = CapacityDockProvider(rawValue: "zai")!
+        let zcode = CapacityDockProvider(rawValue: "zcode")!
+
+        CapacityDockPreferences.autoSeedFromConnected([.codex, zai, zcode], defaults: defaults)
+
+        let selected = CapacityDockPreferences.load(defaults: defaults).selectedProviders
+        #expect(selected.contains(.codex))
+        #expect(selected.contains(zai))
+        #expect(!selected.contains(zcode))
+    }
+
+    @Test("auto-seed keeps ZCode when Z.ai is not connected")
+    func autoSeedKeepsZcodeWithoutZai() {
+        let defaults = defaults()
+        let zcode = CapacityDockProvider(rawValue: "zcode")!
+
+        CapacityDockPreferences.autoSeedFromConnected([.codex, zcode], defaults: defaults)
+
+        let selected = CapacityDockPreferences.load(defaults: defaults).selectedProviders
+        #expect(selected.contains(.codex))
+        #expect(selected.contains(zcode))
     }
 }

@@ -130,27 +130,33 @@ struct LocalizationCatalogTests {
         }
     }
 
-    @Test("en and zh-Hans cover exactly the same keys")
+    /// Every shipped localization except the `en` identity table.
+    static let translatedLocalizations = L10n.supportedLocalizations.filter { $0 != "en" }
+
+    @Test("every shipped locale covers exactly the same keys as en")
     func keySetsMatch() throws {
         let en = try Self.table("en")
-        let zh = try Self.table("zh-Hans")
 
-        let untranslated = Set(en.keys).subtracting(zh.keys).sorted()
-        #expect(
-            untranslated.isEmpty,
-            "these en keys have no zh-Hans entry: \(untranslated.prefix(10))"
-        )
+        for localization in Self.translatedLocalizations {
+            let other = try Self.table(localization)
 
-        let orphaned = Set(zh.keys).subtracting(en.keys).sorted()
-        #expect(
-            orphaned.isEmpty,
-            "these zh-Hans keys are not in en, so nothing ever reaches them: \(orphaned.prefix(10))"
-        )
+            let untranslated = Set(en.keys).subtracting(other.keys).sorted()
+            #expect(
+                untranslated.isEmpty,
+                "these en keys have no \(localization) entry: \(untranslated.prefix(10))"
+            )
+
+            let orphaned = Set(other.keys).subtracting(en.keys).sorted()
+            #expect(
+                orphaned.isEmpty,
+                "these \(localization) keys are not in en, so nothing ever reaches them: \(orphaned.prefix(10))"
+            )
+        }
     }
 
-    @Test("no entry is blank in either locale")
+    @Test("no entry is blank in any locale")
     func noEmptyValues() throws {
-        for localization in ["en", "zh-Hans"] {
+        for localization in L10n.supportedLocalizations {
             let blank = try Self.table(localization)
                 .filter { $0.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
                 .keys
@@ -173,16 +179,18 @@ struct LocalizationCatalogTests {
     @Test("every argument slot agrees on its verb across locales")
     func argumentSpecifierParity() throws {
         let en = try Self.table("en")
-        let zh = try Self.table("zh-Hans")
 
-        for key in en.keys.sorted() {
-            guard let english = en[key], let chinese = zh[key] else { continue }
-            let expected = Self.argumentSlots(in: english)
-            let actual = Self.argumentSlots(in: chinese)
-            #expect(
-                expected == actual,
-                "specifier mismatch for \(key.debugDescription): en \(expected) vs zh-Hans \(actual). String(format:) binds by slot, so a slot with a different verb is a wrong value or a crash."
-            )
+        for localization in Self.translatedLocalizations {
+            let other = try Self.table(localization)
+            for key in en.keys.sorted() {
+                guard let english = en[key], let translated = other[key] else { continue }
+                let expected = Self.argumentSlots(in: english)
+                let actual = Self.argumentSlots(in: translated)
+                #expect(
+                    expected == actual,
+                    "specifier mismatch for \(key.debugDescription): en \(expected) vs \(localization) \(actual). String(format:) binds by slot, so a slot with a different verb is a wrong value or a crash."
+                )
+            }
         }
     }
 
@@ -194,7 +202,7 @@ struct LocalizationCatalogTests {
     /// slot comparison above has something explicit to compare.
     @Test("keys with two or more arguments use positional specifiers in every locale")
     func multiArgumentKeysArePositional() throws {
-        for localization in ["en", "zh-Hans"] {
+        for localization in L10n.supportedLocalizations {
             for (key, value) in try Self.table(localization) {
                 let args = Self.arguments(in: value)
                 guard args.count >= 2 else { continue }
@@ -210,18 +218,20 @@ struct LocalizationCatalogTests {
     @Test("literal percent signs survive translation")
     func literalPercentParity() throws {
         let en = try Self.table("en")
-        let zh = try Self.table("zh-Hans")
 
-        for key in en.keys.sorted() {
-            guard let english = en[key], let chinese = zh[key] else { continue }
-            // Unlike the argument specifiers above, `%%` may move: Chinese word
-            // order puts the time before the verb in "%@ · %@ 达到 100%%".
-            let expected = Self.literalPercentCount(in: english)
-            let actual = Self.literalPercentCount(in: chinese)
-            #expect(
-                expected == actual,
-                "\(key.debugDescription) has \(expected) literal percent sign(s) in en but \(actual) in zh-Hans"
-            )
+        for localization in Self.translatedLocalizations {
+            let other = try Self.table(localization)
+            for key in en.keys.sorted() {
+                guard let english = en[key], let translated = other[key] else { continue }
+                // Unlike the argument specifiers above, `%%` may move: word order
+                // can put the time before the verb in "%@ · %@ 达到 100%%".
+                let expected = Self.literalPercentCount(in: english)
+                let actual = Self.literalPercentCount(in: translated)
+                #expect(
+                    expected == actual,
+                    "\(key.debugDescription) has \(expected) literal percent sign(s) in en but \(actual) in \(localization)"
+                )
+            }
         }
     }
 
