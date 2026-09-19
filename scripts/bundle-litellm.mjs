@@ -1,4 +1,4 @@
-import { writeFileSync, mkdirSync } from 'fs'
+import { readFileSync, writeFileSync, mkdirSync } from 'fs'
 import { dirname, join } from 'path'
 import { fileURLToPath } from 'url'
 
@@ -64,11 +64,43 @@ if (!res.ok) throw new Error(`HTTP ${res.status}`)
 const data = await res.json()
 const entries = Object.entries(data).filter(([k]) => k !== 'sample_spec')
 
+// The plain context-length tiers only: `input_cost_per_token_above_272k_tokens`
+// and siblings. Service-tier variants (`_above_272k_priority_tokens`,
+// `_above_272k_flex_tokens`) and the 1-hour cache-write combination are NOT
+// context thresholds and are deliberately not matched. The threshold comes
+// from the key suffix (272k -> 272000) because LiteLLM carries no numeric
+// threshold field (#1076). Mirrored in src/models.ts parseLiteLLMEntry.
+const TIER_KEY_RE = /^(input_cost_per_token|output_cost_per_token|cache_read_input_token_cost|cache_creation_input_token_cost)_above_(\d+)k_tokens$/
+
+function tierOf(entry) {
+  // Rates are read ONLY from the largest threshold a model carries, so a
+  // hypothetical entry with two tiers can never mix a smaller tier's rates
+  // under the bigger threshold. Values must be finite and non-negative, the
+  // same validation src/models.ts applies on the live path.
+  const byThreshold = new Map()
+  for (const [key, value] of Object.entries(entry)) {
+    const m = TIER_KEY_RE.exec(key)
+    if (!m || typeof value !== 'number' || !Number.isFinite(value) || value < 0) continue
+    const tokens = Number(m[2]) * 1000
+    const rates = byThreshold.get(tokens) ?? {}
+    if (m[1] === 'input_cost_per_token') rates.input = value
+    else if (m[1] === 'output_cost_per_token') rates.output = value
+    else if (m[1] === 'cache_read_input_token_cost') rates.cacheRead = value
+    else rates.cacheWrite = value
+    byThreshold.set(tokens, rates)
+  }
+  if (byThreshold.size === 0) return null
+  const threshold = Math.max(...byThreshold.keys())
+  const rates = byThreshold.get(threshold)
+  if (rates.input == null || rates.output == null) return null
+  return { threshold, input: rates.input, output: rates.output, cacheWrite: rates.cacheWrite ?? null, cacheRead: rates.cacheRead ?? null }
+}
+
 function toVal(entry) {
   const inp = entry.input_cost_per_token
   const out = entry.output_cost_per_token
   if (inp == null || out == null) return null
-  return [inp, out, entry.cache_creation_input_token_cost ?? null, entry.cache_read_input_token_cost ?? null, entry.provider_specific_entry?.fast ?? null]
+  return [inp, out, entry.cache_creation_input_token_cost ?? null, entry.cache_read_input_token_cost ?? null, entry.provider_specific_entry?.fast ?? null, tierOf(entry)]
 }
 
 // Pass 1: direct entries (no prefix) get priority
@@ -77,14 +109,22 @@ for (const [name, entry] of entries) {
   const val = toVal(entry)
   if (val) snapshot[name] = val
 }
-// Pass 2: prefixed entries - store full key + stripped (first-write-wins)
+// A tuple's completeness: how many rate slots carry a published value. Used
+// to keep a richer entry from being shadowed by a sparser alias of the same
+// model (e.g. a new `nebius/MiniMaxAI/MiniMax-M3` without cache-read rates
+// must not displace the publisher's entry that carries them).
+const completeness = (val) => (val[2] != null ? 1 : 0) + (val[3] != null ? 1 : 0) + (val[5] != null ? 1 : 0)
+
+// Pass 2: prefixed entries - store full key + stripped (completeness-wins)
 for (const [name, entry] of entries) {
   if (!name.includes('/')) continue
   const val = toVal(entry)
   if (!val) continue
   if (!snapshot[name]) snapshot[name] = val
   const stripped = name.replace(/^[^/]+\//, '')
-  if (stripped !== name && !snapshot[stripped]) snapshot[stripped] = val
+  if (stripped === name) continue
+  const existing = snapshot[stripped]
+  if (!existing || completeness(val) > completeness(existing)) snapshot[stripped] = val
 }
 
 // A MANUAL_ENTRY that LiteLLM now ships is a candidate to delete (the override
@@ -109,6 +149,18 @@ for (const k of Object.keys(snapshot)) {
   seen.add(k.toLowerCase())
   seen.add(bareKey(k).toLowerCase())
 }
+// A refresh must never leave a model that HAD pricing without any: carry the
+// previous fallback's entries forward verbatim when neither the new primary
+// nor the new gap-fill covers them. Sources drop and rename ids routinely
+// (nine models lost all pricing in the 2026-09-18 regen), and the fallback is
+// exactly the last-resort tier those ids belong to.
+const previousFallback = (() => {
+  try {
+    return JSON.parse(readFileSync(fallbackPath, 'utf8'))
+  } catch {
+    return {}
+  }
+})()
 const finite = (v) => { const n = Number(v); return Number.isFinite(n) ? n : null }
 // A rate pair is usable only if both sides are non-negative and not both zero.
 // OpenRouter uses -1 as a "variable / BYOK price" sentinel; without this guard a
@@ -173,6 +225,23 @@ try {
 }
 
 mkdirSync(dataDir, { recursive: true })
+let carried = 0
+// Coverage here is exact-key or vendor-prefixed (the resolution pipeline
+// reaches `vendor/<id>` for a bare `<id>` query), but NOT date-stripped: a
+// dated primary variant like `qwen/qwen3.5-plus-20260420` does not answer the
+// undated query, so `seen` (which folds date-stripped bare names) would
+// silently drop the old entry while the model keeps pricing only under a name
+// nobody queries.
+const coveredByKey = (key) =>
+  snapshot[key] !== undefined
+  || fallback[key] !== undefined
+  || Object.keys(snapshot).some(k => k.endsWith(`/${key}`))
+for (const [k, v] of Object.entries(previousFallback)) {
+  if (coveredByKey(k)) continue
+  fallback[k] = v
+  carried += 1
+}
+if (carried > 0) console.log(`carried ${carried} previously-priced fallback entries forward`)
 writeFileSync(snapshotPath, JSON.stringify(snapshot))
 writeFileSync(fallbackPath, JSON.stringify(fallback))
 console.log(`Bundled ${Object.keys(snapshot).length} primary + ${Object.keys(fallback).length} fallback models`)

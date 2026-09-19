@@ -948,6 +948,15 @@ export type ModelCosts = {
   cacheReadCostPerToken: number
   webSearchCostPerRequest: number
   fastMultiplier: number
+  /** The vendor's long-context tier, applied once prompt tokens reach the
+   *  threshold. Optional: absent on models without a published tier. */
+  longContextTier?: {
+    thresholdTokens: number
+    inputCostPerToken: number
+    outputCostPerToken: number
+    cacheWriteCostPerToken?: number
+    cacheReadCostPerToken?: number
+  }
 }
 
 /** One (provider, model) audit bucket (src/audit-report.ts AuditRow): raw

@@ -22,6 +22,23 @@ export type ModelCosts = {
   /// them by) must consult this before routing tokens to the cache-write
   /// bucket. Optional so an incomplete literal defaults to the safe answer.
   cacheWriteCostIsExplicit?: boolean
+  /// The vendor's long-context tier (LiteLLM `*_above_<n>k_tokens`), applied
+  /// when a request's prompt tokens (input + cached input) reach the
+  /// threshold. Each rate the source published for the tier replaces its base
+  /// rate; a slot the source omitted keeps the base. Optional: absent on
+  /// models without a published tier and on tuples predating the extension.
+  longContextTier?: LongContextTier
+}
+
+/** Long-context pricing tier, e.g. OpenAI's above-272k or Anthropic's
+ *  above-200k rates. `thresholdTokens` is parsed from the source key suffix
+ *  (272k → 272_000) because LiteLLM carries no numeric threshold field. */
+export type LongContextTier = {
+  thresholdTokens: number
+  inputCostPerToken: number
+  outputCostPerToken: number
+  cacheWriteCostPerToken?: number
+  cacheReadCostPerToken?: number
 }
 
 /// Providers whose reported `reasoningTokens` are a SUBSET of `outputTokens`
@@ -59,21 +76,24 @@ type LiteLLMEntry = {
   provider_specific_entry?: { fast?: number }
 }
 
-// [input, output, cacheWrite, cacheRead, fastMultiplier]. The trailing fast
-// multiplier is carried straight from LiteLLM's provider_specific_entry.fast so
-// new models pick it up automatically — no hand-maintained per-model table.
-type SnapshotEntry = [number, number, number | null, number | null, (number | null)?]
+// [input, output, cacheWrite, cacheRead, fastMultiplier, longContextTier?].
+// The trailing fast multiplier is carried straight from LiteLLM's
+// provider_specific_entry.fast so new models pick it up automatically — no
+// hand-maintained per-model table. The optional sixth slot carries the
+// vendor's long-context tier; older bundles without it parse unchanged.
+type SnapshotTier = { threshold: number, input: number, output: number, cacheWrite: number | null, cacheRead: number | null }
+type SnapshotEntry = [number, number, number | null, number | null, (number | null)?, (SnapshotTier | null)?]
 
 const LITELLM_URL = 'https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json'
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000
-// Bump whenever a ModelCosts field changes pricing behavior (cacheWriteCostIsExplicit,
-// added in #1075/#1078). A cache written under an older/missing version is treated as a
-// miss instead of read verbatim, so a stale on-disk file can't reintroduce a killed bug
-// for up to CACHE_TTL_MS after an upgrade.
+// Bump whenever a ModelCosts field changes pricing behavior (cacheWriteCostIsExplicit
+// from #1075/#1078; longContextTier from #1076). A cache written under an older/missing
+// version is treated as a miss instead of read verbatim, so a stale on-disk file can't
+// reintroduce a killed bug for up to CACHE_TTL_MS after an upgrade.
 // Also folded into getPricingGenerationKey() below: a resident/snapshot-caching
 // consumer needs the same "pricing behavior changed" signal this already gives
 // the on-disk LiteLLM cache, not just the on-disk cache itself.
-export const CACHE_SCHEMA_VERSION = 3
+export const CACHE_SCHEMA_VERSION = 4
 const WEB_SEARCH_COST = 0.01
 const ONE_HOUR_CACHE_WRITE_MULTIPLIER_FROM_FIVE_MINUTE_RATE = 1.6
 
@@ -100,6 +120,7 @@ function buildCosts(
   cacheWrite: number | null | undefined,
   cacheRead: number | null | undefined,
   fast: number | null | undefined,
+  tier?: SnapshotTier | null,
 ): ModelCosts {
   return {
     inputCostPerToken: input,
@@ -109,6 +130,13 @@ function buildCosts(
     webSearchCostPerRequest: WEB_SEARCH_COST,
     fastMultiplier: fast ?? 1,
     cacheWriteCostIsExplicit: cacheWrite !== null && cacheWrite !== undefined,
+    ...(tier ? { longContextTier: {
+      thresholdTokens: tier.threshold,
+      inputCostPerToken: tier.input,
+      outputCostPerToken: tier.output,
+      ...(tier.cacheWrite !== null ? { cacheWriteCostPerToken: tier.cacheWrite } : {}),
+      ...(tier.cacheRead !== null ? { cacheReadCostPerToken: tier.cacheRead } : {}),
+    } } : {}),
   }
 }
 // For grok-4.6, prompt tokens mean input tokens plus cached input tokens for a
@@ -118,22 +146,51 @@ function buildCosts(
 const GROK_4_6_PROMPT_TOKEN_THRESHOLD = 200_000
 const GROK_4_6_HIGH_PROMPT_COSTS = buildCosts(4e-6, 12e-6, null, 1e-6, null)
 
+// Providers verified to pass the vendor's long-context surcharge through to
+// the bill. The mechanism is data-driven (any model's tier rides its bundled
+// or live rates), but APPLYING it is evidence-based: codex bills the OpenAI
+// above-272k rate directly (#1076, measured on a real corpus), while a real
+// Copilot session on gpt-5.6-terra with ~6M-token prompts billed at the base
+// rate (tests/parser.test.ts "(c4) attributed cost tracks recomputed cost") —
+// applying the tier there fabricates spend, the exact class #1075 warned
+// about. Adding a provider here requires that kind of billing evidence AND
+// threading its provider through every calculateCost site that prices it (the
+// codex sites and the parser.ts central recompute pass it; the Claude journal
+// paths and the copilot residual path do not, so a newly added provider whose
+// calls flow through those sites would silently stay tierless).
+export const TIERED_PRICING_PROVIDERS: ReadonlySet<string> = new Set(['codex'])
+
 // Swap in the vendor's high tier when a request's prompt crosses the published
-// threshold. A user-set exact priceOverride still wins over the built-in tier.
-// Kept as a helper so the next tiered model extends this one branch instead of
-// copy-pasting the inline condition.
-function tieredCostsFor(model: string, baseCosts: ModelCosts, promptTokens: number): ModelCosts {
+// threshold. A user-set priceOverride wins over any tier: the override row
+// is rebuilt without one, exact or aliased. The
+// generic branch serves the models of TIERED_PRICING_PROVIDERS whose rates
+// carry a longContextTier (OpenAI's above-272k family, Anthropic's above-200k);
+// grok-4.6 predates the data plumbing and stays hardcoded. Each tier rate the
+// source published replaces its base rate; omitted slots keep the base.
+export function tieredCostsFor(model: string, baseCosts: ModelCosts, promptTokens: number, provider?: string): ModelCosts {
   if (exactPriceOverrideFor(model)) return baseCosts
   if (resolveCanonicalModelId(model) === 'grok-4.6' && promptTokens >= GROK_4_6_PROMPT_TOKEN_THRESHOLD) {
     return GROK_4_6_HIGH_PROMPT_COSTS
+  }
+  const tier = provider !== undefined && TIERED_PRICING_PROVIDERS.has(provider)
+    ? baseCosts.longContextTier
+    : undefined
+  if (tier && promptTokens >= tier.thresholdTokens) {
+    return {
+      ...baseCosts,
+      inputCostPerToken: tier.inputCostPerToken,
+      outputCostPerToken: tier.outputCostPerToken,
+      ...(tier.cacheWriteCostPerToken !== undefined ? { cacheWriteCostPerToken: tier.cacheWriteCostPerToken } : {}),
+      ...(tier.cacheReadCostPerToken !== undefined ? { cacheReadCostPerToken: tier.cacheReadCostPerToken } : {}),
+    }
   }
   return baseCosts
 }
 
 
 function tupleToCosts(raw: SnapshotEntry): ModelCosts {
-  const [input, output, cacheWrite, cacheRead, fast] = raw
-  return buildCosts(input, output, cacheWrite, cacheRead, fast)
+  const [input, output, cacheWrite, cacheRead, fast, tier] = raw
+  return buildCosts(input, output, cacheWrite, cacheRead, fast, tier)
 }
 
 function applyBuiltinPriceOverrides(pricing: Map<string, ModelCosts>): Map<string, ModelCosts> {
@@ -217,6 +274,38 @@ function safePerTokenRate(n: number | undefined): number | null {
   return n
 }
 
+// Plain context-length tiers only; mirrors scripts/bundle-litellm.mjs
+// TIER_KEY_RE (service-tier `_priority`/`_flex` variants and the 1-hour
+// combination are not context thresholds). The live path needs its own copy
+// because the bundler is a standalone .mjs script.
+const TIER_KEY_RE = /^(input_cost_per_token|output_cost_per_token|cache_read_input_token_cost|cache_creation_input_token_cost)_above_(\d+)k_tokens$/
+
+function tierOfLiteLLMEntry(entry: LiteLLMEntry): SnapshotTier | null {
+  // Rates are read ONLY from the largest threshold a model carries, mirroring
+  // scripts/bundle-litellm.mjs tierOf, so a two-tier entry can never mix a
+  // smaller tier's rates under the bigger threshold.
+  const byThreshold = new Map<number, Partial<Record<string, number>>>()
+  for (const [key, value] of Object.entries(entry)) {
+    const match = TIER_KEY_RE.exec(key)
+    if (!match || typeof value !== 'number' || !Number.isFinite(value) || value < 0) continue
+    const tokens = Number(match[2]) * 1000
+    const rates = byThreshold.get(tokens) ?? {}
+    rates[match[1]] = value
+    byThreshold.set(tokens, rates)
+  }
+  if (byThreshold.size === 0) return null
+  const threshold = Math.max(...byThreshold.keys())
+  const rates = byThreshold.get(threshold)!
+  if (rates.input_cost_per_token === undefined || rates.output_cost_per_token === undefined) return null
+  return {
+    threshold,
+    input: rates.input_cost_per_token,
+    output: rates.output_cost_per_token,
+    cacheWrite: rates.cache_creation_input_token_cost ?? null,
+    cacheRead: rates.cache_read_input_token_cost ?? null,
+  }
+}
+
 export function parseLiteLLMEntry(entry: LiteLLMEntry): ModelCosts | null {
   // The live LiteLLM map is remote JSON; a null (or non-object) value for a
   // model would make the field reads below throw and abort the whole pricing
@@ -231,6 +320,7 @@ export function parseLiteLLMEntry(entry: LiteLLMEntry): ModelCosts | null {
     safePerTokenRate(entry.cache_creation_input_token_cost),
     safePerTokenRate(entry.cache_read_input_token_cost),
     entry.provider_specific_entry?.fast,
+    tierOfLiteLLMEntry(entry),
   )
 }
 
@@ -1217,6 +1307,7 @@ export function calculateCost(
   webSearchRequests: number,
   speed: 'standard' | 'fast' = 'standard',
   oneHourCacheCreationTokens = 0,
+  provider?: string,
 ): number {
   const costs = getModelCosts(model)
   if (!costs) {
@@ -1239,7 +1330,7 @@ export function calculateCost(
   const safeCacheCreation = Math.max(safe(cacheCreationTokens), safeOneHourCacheCreation)
   const safeFiveMinuteCacheCreation = Math.max(0, safeCacheCreation - safeOneHourCacheCreation)
   const promptTokens = safe(inputTokens) + safe(cacheReadTokens)
-  const tieredCosts = tieredCostsFor(model, costs, promptTokens)
+  const tieredCosts = tieredCostsFor(model, costs, promptTokens, provider)
   const multiplier = speed === 'fast' ? tieredCosts.fastMultiplier : 1
 
   // Clamp negative inputs to 0. A corrupt JSONL that emits a negative token

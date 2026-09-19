@@ -73,6 +73,25 @@ function makeProject(calls: ParsedApiCall[]): ProjectSummary {
 }
 
 describe('aggregateAudit', () => {
+  it('tiers the audit recompute per call, never on the bucket sum (#1076 review blocker)', async () => {
+    // One 300k-prompt gpt-5.6 codex call (past the 272k tier) plus 200 small
+    // calls whose SUM would blow far past the threshold. The per-call
+    // recompute must tier only the big call; a bucket-sum tier would have
+    // repriced all 201 and opened a phantom gap vs attributedCostUSD.
+    const big = makeCall({ inputTokens: 300_000, outputTokens: 1_000 }, 300_000 * 8e-6 + 1_000 * 3e-5, 'gpt-5.6', 'codex')
+    const small: ParsedApiCall[] = Array.from({ length: 200 }, (_, i) =>
+      makeCall({ inputTokens: 1_000, outputTokens: 10 }, 1_000 * 4e-6 + 10 * 2e-5, 'gpt-5.6', 'codex'))
+    const rows = await aggregateAudit([makeProject([big, ...small])])
+    expect(rows).toHaveLength(1)
+    const row = rows[0]!
+    // Expected: the big call at tier rates (in 8e-6, out 3e-5) + the 200
+    // small calls at base (in 4e-6, out 2e-5).
+    const expected = 300_000 * 8e-6 + 1_000 * 3e-5 + 200 * (1_000 * 4e-6 + 10 * 2e-5)
+    expect(row.cost.recomputedTotalUSD).toBeCloseTo(expected, 9)
+    // attributed priced the same way at parse time, so the invariant holds.
+    expect(row.attributedCostUSD).toBeCloseTo(expected, 9)
+  })
+
   it('keeps raw fields and exposes codeburn normalizations', async () => {
     const anthropicCall = makeCall({ inputTokens: 100, outputTokens: 50, reasoningTokens: 10, cacheReadInputTokens: 200 }, 0.5)
     const openaiCall = makeCall({ inputTokens: 100, outputTokens: 50, cachedInputTokens: 300 }, 0.5)
