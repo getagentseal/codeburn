@@ -1147,6 +1147,39 @@ describe('copilot provider - chatSessions parsing', () => {
     expect(calls[0]!.tools).toEqual(['Read', 'Bash'])
   })
 
+  it('extracts shell commands and the original prompt from chat-session metadata', async () => {
+    const filePath = join(tmpDir, 'shell-and-prompt.jsonl')
+    await createChatSessionFile(filePath, [
+      { kind: 0, v: { version: 3, creationDate: 1780157113020, sessionId: 'chat-shell', requests: [] } },
+      { kind: 2, k: ['requests'], v: [chatSessionSampleRequest({
+        message: { text: 'Run the checks' },
+        result: {
+          metadata: {
+            promptTokens: 100,
+            outputTokens: 20,
+            resolvedModel: 'claude-sonnet-4-6',
+            renderedUserMessage: [{ type: 1, text: '<context>Injected system text</context>' }],
+            toolCallRounds: [{
+              toolCalls: [
+                { name: 'run_in_terminal', arguments: JSON.stringify({ command: 'git status && bun test' }) },
+                { name: 'runCommand', arguments: { command: 'npm run build' } },
+                { name: 'run_in_terminal', arguments: '{bad json' },
+                { name: 'read_file' },
+              ],
+            }],
+          },
+        },
+      })] },
+    ])
+
+    const calls = await collectCalls({ path: filePath, project: 'myproject', provider: 'copilot', sourceType: 'chatsession' })
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.tools).toEqual(['Shell', 'Read'])
+    expect(calls[0]!.bashCommands).toEqual(['git', 'bun', 'npm'])
+    expect(calls[0]!.userMessage).toBe('Run the checks')
+  })
+
   it('returns no calls for an empty reconstructed requests array', async () => {
     const filePath = join(tmpDir, 'empty.jsonl')
     await createChatSessionFile(filePath, [

@@ -591,7 +591,7 @@ function modelFromChatSessionRequest(req: ChatSessionRequest, metadata: Record<s
   return modelId || 'unknown'
 }
 
-function extractStructuredSkill(raw: unknown): string | null {
+function parseStructuredArguments(raw: unknown): Record<string, unknown> | null {
   const payload = typeof raw === 'string'
     ? (() => {
         try {
@@ -601,28 +601,40 @@ function extractStructuredSkill(raw: unknown): string | null {
         }
       })()
     : raw
-  if (!isRecord(payload)) return null
+  return isRecord(payload) ? payload : null
+}
+
+function extractStructuredSkill(raw: unknown): string | null {
+  const payload = parseStructuredArguments(raw)
+  if (!payload) return null
   const skill = payload['skill']
   return typeof skill === 'string' && skill.trim() ? skill.trim() : null
 }
 
-function extractChatSessionTools(metadata: Record<string, unknown>): { tools: string[]; skills: string[] } {
+function extractChatSessionTools(metadata: Record<string, unknown>): { tools: string[]; skills: string[]; bashCommands: string[] } {
   const rounds = metadata['toolCallRounds']
-  if (!Array.isArray(rounds)) return { tools: [], skills: [] }
+  if (!Array.isArray(rounds)) return { tools: [], skills: [], bashCommands: [] }
 
   const names = new Set<string>()
   const skills = new Set<string>()
+  const bashCommands: string[] = []
   const addName = (raw: unknown): void => {
     if (typeof raw === 'string' && raw.trim()) names.add(normalizeTool(raw))
   }
   const addFromRecord = (record: Record<string, unknown>): void => {
-    for (const key of ['toolName', 'name', 'tool']) {
-      const raw = record[key]
+    const rawNames = ['toolName', 'name', 'tool'].map(key => record[key])
+    for (const raw of rawNames) {
       addName(raw)
       if (typeof raw !== 'string' || normalizeTool(raw) !== 'Skill') continue
       const skill = extractStructuredSkill(record['arguments'])
         ?? extractStructuredSkill(record['input'])
       if (skill) skills.add(skill)
+    }
+    if (rawNames.some(raw => typeof raw === 'string' && BASH_TOOL_NAMES.has(raw))) {
+      const args = parseStructuredArguments(record['arguments'])
+        ?? parseStructuredArguments(record['input'])
+      const command = args?.['command']
+      if (typeof command === 'string') bashCommands.push(...extractBashCommands(command))
     }
   }
 
@@ -643,7 +655,7 @@ function extractChatSessionTools(metadata: Record<string, unknown>): { tools: st
     }
   }
 
-  return { tools: [...names], skills: [...skills] }
+  return { tools: [...names], skills: [...skills], bashCommands }
 }
 
 /**
@@ -1141,6 +1153,7 @@ function createChatSessionParser(
         const model = modelFromChatSessionRequest(rawReq, metadata)
         const costUSD = calculateCost(model, inputTokens, outputTokens, 0, 0, 0)
         const timestamp = timestampToISO(rawReq['timestamp']) || sessionCreatedAt
+        const userMessage = isRecord(rawReq['message']) ? readString(rawReq['message']['text']) : ''
 
         const extracted = extractChatSessionTools(metadata)
 
@@ -1158,12 +1171,12 @@ function createChatSessionParser(
           webSearchRequests: 0,
           costUSD,
           tools: extracted.tools,
-          bashCommands: [],
+          bashCommands: extracted.bashCommands,
           skills: extracted.skills.length > 0 ? extracted.skills : undefined,
           timestamp,
           speed: 'standard' as const,
           deduplicationKey: dedupKey,
-          userMessage: '',
+          userMessage,
         }
       }
     },
