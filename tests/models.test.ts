@@ -89,7 +89,12 @@ describe('getModelCosts', () => {
     expect(getModelCosts('omniroute:provider/glm-5.3')).toBeNull()
     expect(getModelCosts('unknown/deepseek-v4-flash')).toBeNull()
     expect(getModelCosts('z-ai/glm-5.2')).not.toBeNull()
-    expect(getModelCosts('z-ai/glm-5.3')!.inputCostPerToken).toBe(sibling!.inputCostPerToken)
+    // 2026-09-19 refresh: LiteLLM now ships z-ai/glm-5.3 with its own distinct
+    // rate, so the prefixed spelling prices at ITS row, not the glm-5p2
+    // sibling's. Assert against the snapshot's own row so a later upstream
+    // reprice or namespace rename (z-ai/ -> zai/) can't flip this again.
+    expect(getModelCosts('z-ai/glm-5.3')!.inputCostPerToken)
+      .toBe((snapshotData as Record<string, number[]>)['z-ai/glm-5.3']![0])
   })
 
   it('prices gpt-5.6-codex and gpt-5.6-codex-max, sourced directly from the snapshot (#1077)', () => {
