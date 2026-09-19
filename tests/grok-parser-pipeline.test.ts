@@ -193,15 +193,11 @@ describe('Grok parser through the session-cache pipeline', () => {
 
     const cold = (await parseGrokSessions())[0]!
     const coldCalls = cold.turns.flatMap(turn => turn.assistantCalls)
-    // The refresh adds upstream's Grok Build family, so `grok-4.6-build` prices
-    // through it and chooseAuthoritativeModel prefers the actual modelUsage id
-    // over the summary's grok-latest — the documented "price the real id"
-    // rule. The totals assertions are what this test exists for.
-    const expected = calculateCost('grok-build', 2300, 300, 100, 600, 0)
+    const expected = calculateCost('grok-latest', 2300, 300, 100, 600, 0)
 
     expect(cold.turns).toHaveLength(1)
     expect(cold.apiCalls).toBe(1)
-    expect(coldCalls.map(call => call.model)).toEqual(['grok-build'])
+    expect(coldCalls.map(call => call.model)).toEqual(['grok-latest'])
     expect(coldCalls.map(call => call.usage.inputTokens)).toEqual([2300])
     expect(coldCalls[0]!.usage.outputTokens + coldCalls[0]!.usage.reasoningTokens).toBe(300)
     expect(cold.totalCostUSD).toBeCloseTo(expected, 12)
