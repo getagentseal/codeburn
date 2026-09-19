@@ -5,7 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 
 import { CliError, DESKTOP_COLD_TIMEOUT_MS, PROGRESS_LINE_PREFIX, reapOrphanServe, resolveCodeburnPath, shutdownAll, spawnCli, spawnCliAction, startServe, type ActionResult, type SpawnPriority } from './cli'
-import { MenubarCompanion, STARTUP_APPS_SETTINGS_URL, type CompanionStatus } from './menubar'
+import { MenubarCompanion, readDockEnabled, STARTUP_APPS_SETTINGS_URL, type CompanionStatus } from './menubar'
 import { MacMenubar, NO_MAC_MENUBAR, type InstallPhase } from './mac-menubar'
 import { getQuota, sanitizeError } from './quota'
 import { Telemetry } from './telemetry'
@@ -1080,8 +1080,12 @@ function bootstrap(): void {
         appVersion: app.getVersion(),
       })
       // completeOnboarding tracks the first app_open itself; only already-
-      // onboarded installs record subsequent opens here.
-      if (telemetryInstance.status().onboarded) telemetryInstance.track('app_open', {})
+      // onboarded installs record subsequent opens here. app_open carries the
+      // Capacity Dock state (on/off/none) so dock adoption is measurable.
+      if (telemetryInstance.status().onboarded) {
+        const dockPref = readDockEnabled()
+        telemetryInstance.track('app_open', { dock: dockPref === undefined ? 'none' : dockPref ? 'on' : 'off' })
+      }
       setInterval(() => { void telemetryInstance?.flush() }, 5 * 60_000)
     } catch (err) {
       console.error('telemetry init failed (continuing without):', err)
