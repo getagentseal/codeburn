@@ -29,7 +29,7 @@ import { rateLimitedNote } from './Plans'
 import { SharingPane } from './SettingsSharing'
 import { CapacityDockPane, MenuBarPane } from './SettingsTray'
 import type { ActionResult, AliasRow, ClaudeConfigSelector, CompanionStatus, CliError, CombinedUsage, DeviceScanResult, Identity, JsonPlanSummary, MenubarPayload, Period, PlanId, PlanProvider, PriceOverrideList, PriceOverrideRow, PriceRates, ProjectFilter, ProjectRow, ProjectsReport, ProviderName, QuotaProvider, Scope, ShareStatus, StatusJson, TelemetryStatus } from '../lib/types'
-import { Icon } from '../components/icons'
+import { Icon, type IconName } from '../components/icons'
 
 export type SettingsPane = 'general' | 'providers' | 'projects' | 'aliases' | 'pricing' | 'plans' | 'devices' | 'export' | 'privacy' | 'sharing' | 'menubar' | 'dock'
 type Pane = SettingsPane
@@ -650,8 +650,8 @@ function PrivacyPane() {
     showToast(t('settings.privacy.snapshotsCleared'), 'ok')
   }
   return <section className="set-p on"><div><h3 className="set-h">{t('settings.privacy.heading')}</h3><p className="set-sub">{t('settings.privacy.subtitle')}</p></div><div className="card">
-    <PrivacyClaim title={t('settings.privacy.localOnly.title')} detail={t('settings.privacy.localOnly.detail')} icon={<><rect x="4.5" y="10" width="15" height="11" rx="2" /><path d="M8 10V7a4 4 0 0 1 8 0v3" /></>} />
-    <PrivacyClaim title={t('settings.privacy.noApiKeys.title')} detail={t('settings.privacy.noApiKeys.detail')} icon={<path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z" />} />
+    <PrivacyClaim title={t('settings.privacy.localOnly.title')} detail={t('settings.privacy.localOnly.detail')} icon="lock" />
+    <PrivacyClaim title={t('settings.privacy.noApiKeys.title')} detail={t('settings.privacy.noApiKeys.detail')} icon="shield" />
     <div className="set-claim"><Icon name="trash-2" /><div style={{ flex: 1 }}><div className="set-claim-t">{t('settings.privacy.snapshots.title')}</div><div className="set-claim-d">{t('settings.privacy.snapshots.detail')}</div></div><button type="button" className="btnp" onClick={clearSnapshots}>{t('settings.privacy.clearButton')}</button></div>
     <TelemetryClaim />
   </div></section>
@@ -683,8 +683,8 @@ function TelemetryClaim() {
   </div>
 }
 
-function PrivacyClaim({ title, detail, icon }: { title: string; detail: string; icon: React.ReactNode }) {
-  return <div className="set-claim">{icon}<div><div className="set-claim-t">{title}</div><div className="set-claim-d">{detail}</div></div></div>
+function PrivacyClaim({ title, detail, icon }: { title: string; detail: string; icon: IconName }) {
+  return <div className="set-claim"><Icon name={icon} /><div style={{ flex: 1 }}><div className="set-claim-t">{title}</div><div className="set-claim-d">{detail}</div></div></div>
 }
 
 function ThisDevicePanel({ identity, shareStatus }: { identity: ReturnType<typeof usePolled<Identity>>; shareStatus: ReturnType<typeof usePolled<ShareStatus>> }) {
