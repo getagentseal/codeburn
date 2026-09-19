@@ -5,6 +5,8 @@ import { spawnSync } from 'node:child_process'
 
 import { describe, expect, it } from 'vitest'
 
+import { calculateCost } from '../src/models.js'
+
 function runCli(args: string[], home: string) {
   return spawnSync(process.execPath, ['--import', 'tsx', 'src/cli.ts', ...args], {
     cwd: process.cwd(),
@@ -27,11 +29,6 @@ describe('codeburn report Devin model variants', () => {
   it('keeps friendly Devin effort-tier names in JSON model rows and efficiency rows', async () => {
     const home = await mkdtemp(join(tmpdir(), 'codeburn-cli-devin-models-'))
     try {
-      await mkdir(join(home, '.config', 'codeburn'), { recursive: true })
-      await writeFile(join(home, '.config', 'codeburn', 'config.json'), JSON.stringify({
-        devin: { acuUsdRate: 1 },
-      }))
-
       const transcriptsDir = join(home, '.local', 'share', 'devin', 'cli', 'transcripts')
       await mkdir(transcriptsDir, { recursive: true })
       await writeFile(join(transcriptsDir, 'session-487.json'), JSON.stringify({
@@ -50,7 +47,6 @@ describe('codeburn report Devin model variants', () => {
             tool_calls: [{ function_name: 'Edit' }],
             metadata: {
               created_at: '2026-04-10T09:01:00.000Z',
-              committed_acu_cost: 0.25,
               generation_model: 'gpt-5-3-codex-xhigh',
               metrics: { input_tokens: 100, output_tokens: 25 },
             },
@@ -86,10 +82,10 @@ describe('codeburn report Devin model variants', () => {
       expect(report.models[0]).toMatchObject({
         name: 'GPT-5.3 Codex (xhigh)',
         calls: 1,
-        cost: 0.25,
+        cost: calculateCost('gpt-5.3-codex-xhigh', 100, 25, 0, 0, 0),
         editTurns: 1,
         oneShotTurns: 1,
-        costPerEdit: 0.25,
+        costPerEdit: calculateCost('gpt-5.3-codex-xhigh', 100, 25, 0, 0, 0),
       })
     } finally {
       await rm(home, { recursive: true, force: true })

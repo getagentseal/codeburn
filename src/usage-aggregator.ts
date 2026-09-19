@@ -6,7 +6,7 @@ import { type SessionCountBasis } from './session-count-label.js'
 import { parseAllSessions, filterProjectsByName, filterProjectsByDays, filterProjectsByClaudeConfigSource, filterProjectsByDateRange, isSessionHydrationComplete, makeProjectFilter, type ProjectFilterTarget, sessionHydrationSnapshot } from './parser.js'
 type ProjectFilter = (entry: ProjectFilterTarget) => boolean
 
-import { findUnpricedModels, getFlatRateModelsConfigHash, getLocalModelSavingsConfigHash, getPriceOverridesConfigHash, getShortModelName, isExpectedFreeModel } from './models.js'
+import { findUnpricedModels, getFlatRateModelsConfigHash, getLocalModelSavingsConfigHash, getPriceOverridesConfigHash, getShortModelName, isExpectedFreeModel, billableOutputTokens, modelRowKey } from './models.js'
 import { getAllProviders, safeDiscoverSessions } from './providers/index.js'
 import { loadPlugins, pluginPayloadSections } from './plugins/loader.js'
 import { collectLiveSessions } from './live-sessions.js'
@@ -19,7 +19,9 @@ import { aggregateModelTaskTurns, sessionDurationMinutes } from './telemetry-sna
 import { scanUserCorrections, medianTimeToFirstEditMs, aggregateFileChurn, computePricingCoverage } from './workflow-insights.js'
 import { buildPrAttribution, aggregateByBranch } from './sessions-report.js'
 import { scanAndDetect } from './optimize.js'
-import { callBillableOutputTokens, sessionBillableOutputTokens, inferSessionProvider } from './session-output.js'
+import { callBillableOutputTokens, sessionBillableOutput, sessionBillableOutputTokens, inferSessionProvider } from './session-output.js'
+import { getDateRange } from './cli-date.js'
+import { activityStreak } from './streak.js'
 import { getDaysInRange, ensureCacheHydrated, loadDailyCache, cachedProjectIdentities, emptyCache, mergeDayEntries, BACKFILL_DAYS, toDateString, type DailyCache, type DailyEntry, type ProjectDayStats, type ProviderDaySlice } from './daily-cache.js'
 import { buildGranularHistory } from './granular-history.js'
 import { spendProjectIdentity } from './spend-flow.js'
@@ -118,12 +120,32 @@ function cacheReadForProviderDays(days: DailyEntry[], provider: string): Pick<Pr
 export function buildPeriodData(label: string, projects: ProjectSummary[]): PeriodData {
   const sessions = projects.flatMap(p => p.sessions)
   const catTotals: Record<string, { turns: number; cost: number; savingsUSD: number; editTurns: number; oneShotTurns: number }> = {}
-  const modelTotals: Record<string, { calls: number; cost: number; savingsUSD: number; estimatedCostUSD: number; tokens: number }> = {}
+  const modelTotals: Record<string, {
+    calls: number
+    cost: number
+    savingsUSD: number
+    estimatedCostUSD: number
+    tokens: number
+    inputTokens: number
+    outputTokens: number
+    cacheReadTokens: number
+    cacheWriteTokens: number
+  }> = {}
   let inputTokens = 0, outputTokens = 0, cacheReadTokens = 0, cacheWriteTokens = 0
 
   for (const sess of sessions) {
     inputTokens += sess.totalInputTokens
-    outputTokens += sessionBillableOutputTokens(sess)
+    // Per-model output uses the same billable-output rule as the headline:
+    // reasoning tokens are added only where the provider reports them
+    // separately from output (never twice where output already includes
+    // them, #1075). modelBreakdown's raw token counters cannot be summed
+    // for display without it. A bucket no surviving call maps to falls
+    // back to its own counters under the session's provider.
+    //
+    // One walk yields both: the headline total and the per-model split come
+    // out of the same pass over this session's assistant calls.
+    const { total: sessionOut, byModel: sessionModelOut } = sessionBillableOutput(sess)
+    outputTokens += sessionOut
     cacheReadTokens += sess.totalCacheReadTokens
     cacheWriteTokens += sess.totalCacheWriteTokens
     for (const [cat, d] of Object.entries(sess.categoryBreakdown)) {
@@ -135,12 +157,17 @@ export function buildPeriodData(label: string, projects: ProjectSummary[]): Peri
       catTotals[cat].oneShotTurns += d.oneShotTurns
     }
     for (const [model, d] of Object.entries(sess.modelBreakdown)) {
-      if (!modelTotals[model]) modelTotals[model] = { calls: 0, cost: 0, savingsUSD: 0, estimatedCostUSD: 0, tokens: 0 }
-      modelTotals[model].calls += d.calls
-      modelTotals[model].cost += d.costUSD
-      modelTotals[model].savingsUSD += d.savingsUSD
-      modelTotals[model].estimatedCostUSD += d.estimatedCostUSD ?? 0
-      modelTotals[model].tokens += d.tokens.inputTokens + d.tokens.outputTokens + d.tokens.cacheReadInputTokens + d.tokens.cacheCreationInputTokens
+      if (!modelTotals[model]) modelTotals[model] = { calls: 0, cost: 0, savingsUSD: 0, estimatedCostUSD: 0, tokens: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 }
+      const acc = modelTotals[model]
+      acc.calls += d.calls
+      acc.cost += d.costUSD
+      acc.savingsUSD += d.savingsUSD
+      acc.estimatedCostUSD += d.estimatedCostUSD ?? 0
+      acc.tokens += d.tokens.inputTokens + d.tokens.outputTokens + d.tokens.cacheReadInputTokens + d.tokens.cacheCreationInputTokens
+      acc.inputTokens += d.tokens.inputTokens
+      acc.outputTokens += sessionModelOut[model] ?? billableOutputTokens(inferSessionProvider(sess), d.tokens.outputTokens, d.tokens.reasoningTokens)
+      acc.cacheReadTokens += d.tokens.cacheReadInputTokens
+      acc.cacheWriteTokens += d.tokens.cacheCreationInputTokens
     }
   }
 
@@ -165,7 +192,17 @@ export function buildPeriodData(label: string, projects: ProjectSummary[]): Peri
       .map(([cat, d]) => ({ name: CATEGORY_LABELS[cat as TaskCategory] ?? cat, rawCategory: cat, ...d })),
     models: Object.entries(modelTotals)
       .sort(([, a], [, b]) => b.cost - a.cost)
-      .map(([name, d]) => ({ name, calls: d.calls, cost: d.cost, savingsUSD: d.savingsUSD, estimatedCostUSD: d.estimatedCostUSD })),
+      .map(([name, d]) => ({
+        name,
+        calls: d.calls,
+        cost: d.cost,
+        savingsUSD: d.savingsUSD,
+        estimatedCostUSD: d.estimatedCostUSD,
+        inputTokens: d.inputTokens,
+        outputTokens: d.outputTokens,
+        cacheReadTokens: d.cacheReadTokens,
+        cacheWriteTokens: d.cacheWriteTokens,
+      })),
     unpricedModels,
     workflow: {
       corrections: corrections.corrections,
@@ -320,7 +357,7 @@ export function mergeDayModelsByDisplayName(models: DailyEntry['models']): Array
   const merged = new Map<string, { cost: number; savingsUSD: number; calls: number; inputTokens: number; outputTokens: number; rawModels: string[] }>()
   for (const [raw, m] of Object.entries(models)) {
     if (raw === '<synthetic>') continue
-    const name = getShortModelName(raw)
+    const name = modelRowKey(raw)
     const acc = merged.get(name) ?? { cost: 0, savingsUSD: 0, calls: 0, inputTokens: 0, outputTokens: 0, rawModels: [] }
     acc.cost += m.cost
     acc.savingsUSD += m.savingsUSD ?? 0
@@ -714,7 +751,18 @@ export type DurablePeriod = {
   todayAllDays: DailyEntry[]
   /// The scan range the live parse covered (today-only when the period is today).
   scanRange: DateRange
+  /// Cost and calls for every headline window this call's live scan covered,
+  /// from its own cache and today set. Switching period in a client must not mix
+  /// two aggregations taken minutes apart, so the windows it can show come from
+  /// one generation. Present only on the unscoped all-provider path with no
+  /// project filter or day selection; a scoped path must not scan what it does
+  /// not display.
+  periodTotals?: PeriodTotals
 }
+
+export const HEADLINE_PERIODS = ['today', 'week', '30days', 'month', 'all', 'lifetime'] as const
+export type HeadlinePeriod = typeof HEADLINE_PERIODS[number]
+export type PeriodTotals = Partial<Record<HeadlinePeriod, { cost: number; calls: number; inputTokens?: number; outputTokens?: number; cacheReadTokens?: number; cacheWriteTokens?: number }>>
 
 export async function buildDurablePeriod(periodInfo: PeriodInfo, opts: AggregateOpts = {}): Promise<DurablePeriod> {
   const pf = opts.provider ?? 'all'
@@ -863,7 +911,32 @@ export async function buildDurablePeriod(periodInfo: PeriodInfo, opts: Aggregate
 
   const carriedCostUSD = days.reduce((s, d) => s + (d.carried ? d.cost : 0), 0)
   const knownProjects = [...seenProjects, ...cachedProjectIdentities(cache, rangeStartStr, rangeEndStr)]
-  return { data, days, carriedCostUSD, unattributedCostUSD, liveProjects, knownProjects, cache, todayAllDays, scanRange }
+  // Same cache, same today set, same live days as the headline above; only the
+  // window moves, so each entry is what a direct request for that period would
+  // return. A window that reaches back past `scanRange` is NOT emitted: the live
+  // parse never read those dates, so the cache would stand there unreconciled
+  // and the total would trail a direct request by whatever an under-read cached
+  // day is missing (#1217). A client falls back to the period's own payload for
+  // a window that is absent.
+  const scanStartStr = toDateString(scanRange.start)
+  const periodTotals = pf === 'all' && !daysSelection && !hasProjectFilter
+    ? Object.fromEntries(HEADLINE_PERIODS
+      .map(period => [period, getDateRange(period)] as const)
+      .filter(([, info]) => toDateString(info.range.start) >= scanStartStr)
+      .map(([period, info]) => {
+        const windowDays = unionDaysForPeriod(cache, todayAllDays, info, null, undefined, liveHistoricalDays)
+        const windowData = buildPeriodDataFromDays(windowDays, info.label)
+        return [period, {
+          cost: windowData.cost,
+          calls: windowData.calls,
+          inputTokens: windowData.inputTokens,
+          outputTokens: windowData.outputTokens,
+          cacheReadTokens: windowData.cacheReadTokens,
+          cacheWriteTokens: windowData.cacheWriteTokens,
+        }]
+      })) as PeriodTotals
+    : undefined
+  return { data, days, carriedCostUSD, unattributedCostUSD, liveProjects, knownProjects, cache, todayAllDays, scanRange, periodTotals }
 }
 
 type PayloadProject = NonNullable<PeriodData['projects']>[number]
@@ -1383,6 +1456,7 @@ export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: 
   let scanProjects!: ProjectSummary[]
   let scanRange!: DateRange
   let cache: DailyCache = emptyCache()
+  let durablePeriodTotals: PeriodTotals | undefined
   /// The exact day set behind the all-provider headline (cache-backed
   /// historical days + today's live days, day-filtered). Non-null only on the
   /// unscoped all-provider path; it is the authority the projects view merges
@@ -1436,6 +1510,7 @@ export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: 
     cacheDaysForPeriod = durable.days
     cache = durable.cache
     todayAllDays = durable.todayAllDays
+    durablePeriodTotals = durable.periodTotals
   }
   claudeConfigs = claudeConfigs ?? await claudeConfigSelector(scanProjects, null)
 
@@ -1744,7 +1819,7 @@ export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: 
         const callWeight = isBehavioralCall(call) ? 1 : 0
         totalSavings += call.savingsUSD
         totalSavingsCalls += callWeight
-        const modelKey = getShortModelName(call.model)
+        const modelKey = modelRowKey(call.model, call.route)
         const acc = savingsByModel.get(modelKey) ?? { calls: 0, actualUSD: 0, savingsUSD: 0, baselineModel: call.savingsBaselineModel ?? '', inputTokens: 0, outputTokens: 0 }
         acc.calls += callWeight
         acc.actualUSD += call.costUSD
@@ -1798,6 +1873,19 @@ export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: 
   const partialFirstPaint = hydration?.deferredForFirstPaint === true
   const stale = hydration?.complete === false && !partialFirstPaint ? true : undefined
   const payload = buildMenubarPayload(currentData, providers, optimize, dailyHistory, retryTax, routingWaste, breakdowns, claudeConfigs, granularHistory, stale, hydrationStateFor(hydration))
+  // Deliberately NOT derived from this payload's own history: that is narrowed
+  // by the period, which made the same pill read a different number on every
+  // tab. Emitted only from the all-provider path, whose cache and today set are
+  // already the whole machine's: a provider-scoped render must not scan
+  // unrelated providers just to count days, so it omits the field and consumers
+  // keep the last one they were given.
+  if (durablePeriodTotals) payload.periodTotals = durablePeriodTotals
+  if (isAllProviders) {
+    payload.streak = activityStreak(
+      [...getDaysInRange(cache, historyStartStr, yesterdayStr), ...(await getTodayAllDays()).filter(d => d.date === todayStr)],
+      now,
+    )
+  }
   // Plugin socket: add-only sections from loaded plugins (empty socket by
   // default, so the payload is byte-identical without plugins installed).
   const pluginSections = await pluginPayloadSections(await loadPlugins())

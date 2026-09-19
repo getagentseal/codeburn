@@ -274,7 +274,10 @@
 "Tokens" = "Tokens";
 "%@ in" = "%@ in";
 "%@ out" = "%@ out";
+"%1$@ in · %2$@ out · %3$@ cache read" = "%1$@ in · %2$@ out · %3$@ cache read";
 "%@%% cache hit" = "%@%% cache hit";
+"1 model unpriced, counted at $0 · %@ tokens" = "1 model unpriced, counted at $0 · %@ tokens";
+"%1$lld models unpriced, counted at $0 · %2$@ tokens" = "%1$lld models unpriced, counted at $0 · %2$@ tokens";
 
 /* MARK: Pull requests section */
 "Pull requests" = "Pull requests";
@@ -617,11 +620,6 @@
 "Automatic" = "Automatic";
 "CLI" = "CLI";
 "API" = "API";
-"ACU Conversion" = "ACU Conversion";
-"USD per ACU" = "USD per ACU";
-"Save" = "Save";
-"CodeBurn reads Devin ACU usage from local transcripts only after this rate is configured, then multiplies each step by the rate before reporting cost." = "CodeBurn reads Devin ACU usage from local transcripts only after this rate is configured, then multiplies each step by the rate before reporting cost.";
-"Saved. Refresh CodeBurn to recalculate Devin cost." = "Saved. Refresh CodeBurn to recalculate Devin cost.";
 "Version %@" = "Version %@";
 "%@ is available. Choose Check for Updates in the CodeBurn menu to install it." = "%@ is available. Choose Check for Updates in the CodeBurn menu to install it.";
 "GitHub" = "GitHub";
@@ -682,6 +680,7 @@
 "%1$@'s %2$@ reset %3$@ early. %4$@" = "%1$@'s %2$@ reset %3$@ early. %4$@";
 "%1$@ cleared your %2$@ %3$@ before its reset. %4$@" = "%1$@ cleared your %2$@ %3$@ before its reset. %4$@";
 "%lldh" = "%lldh";
+"%@ limit" = "%@ limit";
 "5-hour limit" = "5-hour limit";
 "weekly limit" = "weekly limit";
 "Opus weekly limit" = "Opus weekly limit";

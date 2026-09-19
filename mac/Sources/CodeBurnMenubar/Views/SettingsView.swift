@@ -48,8 +48,6 @@ struct SettingsView: View {
         case CapacityDockProvider.gemini.id: store.geminiLoadState == .loaded
         case CapacityDockProvider.copilot.id: store.copilotLoadState == .loaded
         case CapacityDockProvider.antigravity.id: store.antigravityLoadState == .loaded
-        case "devin":
-            store.capacityDockProviderIsConnected(provider) || CLIDevinConfig.loadAcuUsdRate() != nil
         default: store.capacityDockProviderIsConnected(provider)
         }
     }
@@ -150,7 +148,6 @@ struct SettingsView: View {
         case "claude": ClaudeSettingsTab()
         case "codex": CodexSettingsTab()
         case "kimi": KimiSettingsTab()
-        case "devin": DevinSettingsTab()
         case "gemini": GeminiSettingsTab()
         case "copilot": CopilotSettingsTab()
         case "antigravity": AntigravitySettingsTab()
@@ -2192,83 +2189,6 @@ private struct GenericProviderConnectionSections: View {
         }
     }
 
-}
-
-// MARK: - Devin
-
-private struct DevinSettingsTab: View {
-    @State private var rateText: String = ""
-    @State private var statusText: String = ""
-
-    private var parsedRate: Double? {
-        let trimmed = rateText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let value = Double(trimmed), value.isFinite, value > 0 else { return nil }
-        return value
-    }
-
-    var body: some View {
-        Form {
-            GenericProviderConnectionSections(provider: CapacityDockProvider(rawValue: "devin")!)
-
-            Section(L("ACU Conversion")) {
-                HStack(alignment: .center, spacing: 10) {
-                    Text(L("USD per ACU"))
-                    Spacer()
-                    TextField("", text: $rateText)
-                        .textFieldStyle(.roundedBorder)
-                        .multilineTextAlignment(.trailing)
-                        .frame(width: 96)
-                        .accessibilityLabel(L("USD per ACU"))
-                    Text("USD")
-                        .foregroundStyle(.secondary)
-                        .frame(width: 36, alignment: .leading)
-                }
-
-                Button(L("Save")) {
-                    saveRate()
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(parsedRate == nil)
-
-                if !statusText.isEmpty {
-                    Text(statusText)
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            Section {
-                Text(L("CodeBurn reads Devin ACU usage from local transcripts only after this rate is configured, then multiplies each step by the rate before reporting cost."))
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-            } header: {
-                Text(L("How it works"))
-            }
-        }
-        .formStyle(.grouped)
-        .padding()
-        .onAppear {
-            if let rate = CLIDevinConfig.loadAcuUsdRate() {
-                rateText = Self.format(rate)
-            }
-        }
-    }
-
-    private func saveRate() {
-        guard let rate = parsedRate else { return }
-        CLIDevinConfig.persistAcuUsdRate(rate)
-        rateText = Self.format(rate)
-        statusText = L("Saved. Refresh CodeBurn to recalculate Devin cost.")
-    }
-
-    private static func format(_ value: Double) -> String {
-        let formatter = NumberFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.numberStyle = .decimal
-        formatter.minimumFractionDigits = 0
-        formatter.maximumFractionDigits = 6
-        return formatter.string(from: NSNumber(value: value)) ?? String(value)
-    }
 }
 
 // MARK: - About

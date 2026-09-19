@@ -154,6 +154,12 @@ struct CodexUsage: Sendable, Equatable {
         var shortLabel: String {
             reached ? L("Monthly usage limit · limit reached") : L("Monthly usage limit")
         }
+
+        /// The identity behind `shortLabel`: pre-localization and free of the
+        /// `reached` state, so the early-reset monitor's storage key and name
+        /// survive a language switch and do not flip at the limit boundary —
+        /// the goodwill reset the monitor announces happens exactly there.
+        var storageLabel: String { "Monthly usage limit" }
     }
 
     let plan: PlanType

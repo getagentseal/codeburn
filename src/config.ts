@@ -27,9 +27,6 @@ export type CodeburnConfig = {
     code: string
     symbol?: string
   }
-  devin?: {
-    acuUsdRate?: number
-  }
   plan?: Plan
   plans?: PlanConfigMap
   modelAliases?: Record<string, string>

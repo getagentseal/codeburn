@@ -88,6 +88,12 @@ export type ParsedProviderCall = {
   // Hermes observation-time deltas persist this flag (and reconstruct it at
   // serve time from a `:obs:` key). Copilot still assigns it only at serve time.
   supplementaryAccounting?: boolean
+  // Billing route the provider recorded for this call, as a route id from
+  // `src/models.ts` ROUTES (`bedrock`). Set only from a provider's own
+  // endpoint column (Hermes `billing_provider`); when absent, the model id's
+  // shape decides at aggregation. Undefined means "direct door or unknown",
+  // never "not routed".
+  route?: string
   // Exact provider-recorded cwd, kept separately because projectPath may later
   // canonicalize a linked worktree to its main repository.
   workingDirectory?: string

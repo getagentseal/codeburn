@@ -84,12 +84,19 @@ enum CapacityDockMetrics {
     /// in step, and keep every term a whole number of points (see `points`).
     static func detailHeight(
         quota: QuotaSummary?,
+        provider: CapacityDockProvider,
         sessionCount: Int?,
         hasToday: Bool,
         tailEdge: CapacityDockEdge,
         scale: CGFloat
     ) -> CGFloat {
-        guard let quota else { return 186 * scale }
+        guard let quota else {
+            let card = CapacityDockGlance.connectCardHeight(
+                provider: provider,
+                width: baseDetailWidth - 2 * CapacityDockGlance.contentInset
+            )
+            return (card * scale).rounded()
+        }
         // Each section carries its own padding, so the panel adds none.
         var height = CapacityDockGlance.headerHeight
         // The tail only eats vertical room when it points up or down.
@@ -101,18 +108,20 @@ enum CapacityDockMetrics {
                 ? CapacityDockGlance.windowsEmptyHeight
                 : CapacityDockGlance.windowsHeight(for: quota)
         }
-        height += CapacityDockConnectionAction.resolve(quota: quota) == nil ? 0 : 38
-        let connectionExtra: CGFloat = switch quota.connection {
-        case .terminalFailure: 90
-        case .disconnected: 18
-        // The staleness line is a section like any other, so it needs a section's
-        // height. It used to get 16, a bare 10pt line box with no padding, which is
-        // why it sat crammed against the header with the blocks below pushed into it.
-        case .loading, .stale, .transientFailure: CapacityDockGlance.noticeHeight
-        case .connected: 0
-        }
-        height += connectionExtra
-        return (height * scale).rounded()
+        height += CapacityDockConnectionAction.resolve(quota: quota) == nil
+            ? 0
+            : CapacityDockGlance.actionRowHeight
+        // Measured rather than reserved at worst case: every block here is a
+        // padded section, and the panel is sized to their sum. The connection
+        // block is measured at the drawn scale and added after the body scales,
+        // so its fixed-size reconnect text keeps its reserve at the 0.9 floor.
+        let connection = CapacityDockGlance.connectionBlockHeight(
+            quota.connection,
+            provider: provider,
+            width: baseDetailWidth - 2 * CapacityDockGlance.contentInset,
+            scale: scale
+        )
+        return ((height * scale).rounded() + connection).rounded()
     }
 }
 
@@ -125,8 +134,12 @@ enum CapacityDockGlance {
     static let contentInset: CGFloat = 16
     static let tailAllowance: CGFloat = 18
 
+    /// The title row's own line box.
+    static let headerRow: CGFloat = 20
     /// 16 top + 20 title + 8 bottom.
-    static let headerHeight: CGFloat = 44
+    static let headerHeight: CGFloat = contentInset + headerRow + 8
+    /// Gap between the title and the guidance paragraph on the no-quota card.
+    static let connectGuidanceGap: CGFloat = 11
     static let sectionPadTop: CGFloat = 8
     static let sectionPadBottom: CGFloat = 10
     /// A 10.5pt caption's line box, shared by every section header.
@@ -190,7 +203,117 @@ enum CapacityDockGlance {
     /// other, so the panel has to reserve its height: the frame is computed, not
     /// fitted, and an unreserved line squeezes every block below it.
     /// 6 top + a 10pt line box + 8 bottom.
-    static let noticeHeight: CGFloat = 27
+    static let noticeTopPad: CGFloat = 6
+    static let noticeBottomPad: CGFloat = 8
+    /// Spacing between the notice block's own lines.
+    static let noticeRowGap: CGFloat = 3
+    static let noticeHeight: CGFloat = noticeTopPad + captionLine + noticeBottomPad
+    /// 8 above the action row, the button's own line box, then the panel inset.
+    static let actionRowHeight: CGFloat = sectionPadTop + 21 + contentInset
+
+    /// The no-quota card: title row, the guidance paragraph as it wraps, and the
+    /// action row. Measured for the same reason the reconnect block is — a
+    /// constant leaves its surplus as dead space above the button.
+    static func connectCardHeight(provider: CapacityDockProvider, width: CGFloat) -> CGFloat {
+        // The Copilot card swaps in a longer paragraph once the user has
+        // explicitly disconnected; the store is not in reach here, so reserve
+        // whichever of its two paragraphs is taller.
+        let paragraphs = [
+            ProviderConnectionGuidance.dockInstruction(for: provider),
+            provider == .copilot ? CopilotQuotaPresentation.disconnectedSettingsDetail : nil,
+        ].compactMap { $0 }
+        let guidance = paragraphs
+            .map { textHeight($0, size: 12, weight: .regular, width: width, maxLines: .max) }
+            .max() ?? 0
+        return contentInset + headerRow + connectGuidanceGap + guidance + actionRowHeight
+    }
+
+    /// How tall the reconnect or disconnected block actually draws. The panel
+    /// frame is computed rather than fitted, so a worst-case reserve does not
+    /// shrink the panel — it parks its surplus above the action row as a gap.
+    /// `scale` measures the reconnect block at the font size and content width
+    /// it is actually drawn at, so the reserve tracks the scaled text instead of
+    /// shrinking below a fixed-size draw and clipping at the 0.9 floor. The
+    /// transient notices keep their single-caption reserve.
+    static func connectionBlockHeight(
+        _ connection: QuotaSummary.Connection,
+        provider: CapacityDockProvider,
+        width: CGFloat,
+        scale: CGFloat = 1
+    ) -> CGFloat {
+        let w = width * scale
+        switch connection {
+        case .connected: return 0
+        case .loading, .stale, .transientFailure: return noticeHeight * scale
+        case .disconnected:
+            return (noticeTopPad + noticeBottomPad) * scale
+                + textHeight(L("Not connected"), size: 11 * scale, weight: .regular, width: w, maxLines: 1)
+        case .terminalFailure(let reason):
+            var height = noticeTopPad * scale
+                + textHeight(L("Reconnect required"), size: 11 * scale, weight: .semibold, width: w, maxLines: 1)
+            if let reason, !reason.isEmpty {
+                height += noticeRowGap * scale
+                    + textHeight(reason, size: 10 * scale, weight: .regular, width: w, maxLines: 2)
+            }
+            height += noticeRowGap * scale + textHeight(
+                ProviderConnectionGuidance.dockInstruction(for: provider),
+                size: 10 * scale,
+                weight: .regular,
+                width: w,
+                maxLines: 3
+            )
+            return height + noticeBottomPad * scale
+        }
+    }
+
+    /// Whole line boxes, capped at the `Text`'s own line limit, so the reserve
+    /// can never be shorter than what SwiftUI draws in the same width.
+    private static func textHeight(
+        _ string: String,
+        size: CGFloat,
+        weight: NSFont.Weight,
+        width: CGFloat,
+        maxLines: Int
+    ) -> CGFloat {
+        guard !string.isEmpty, width > 0 else { return 0 }
+        let font = NSFont.systemFont(ofSize: size, weight: weight)
+        // Two line boxes on purpose: `boundingRect` wraps by the font's own
+        // extent, so that is what counts the lines, but SwiftUI draws each line
+        // in the taller box `lineBox` returns.
+        let wrapLine = (font.ascender - font.descender + font.leading).rounded(.up)
+        let measured = (string as NSString).boundingRect(
+            with: CGSize(width: width, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: [.font: font]
+        ).height
+        let lines = min(maxLines, max(1, Int((measured / wrapLine).rounded(.up))))
+        return CGFloat(lines) * lineBox(font)
+    }
+
+    /// The height SwiftUI gives one line of `.system(size:)`, which is neither
+    /// the font's ceil'd extent nor `NSLayoutManager.defaultLineHeight` — at 10
+    /// and 11pt it is a point taller than both, because it rounds the ascent and
+    /// the descent up separately. The larger of the two formulas matches SwiftUI
+    /// exactly at every size the glance uses and stays an upper bound elsewhere,
+    /// so a measured reserve can never be shorter than what is drawn.
+    private static func lineBox(_ font: NSFont) -> CGFloat {
+        max(
+            (font.ascender - font.descender + font.leading).rounded(.up),
+            font.ascender.rounded(.up) + (-font.descender).rounded(.up)
+        )
+    }
+
+    /// The plan to show beside the title, or nil when it only repeats the
+    /// provider's own name — several services use that name as their fallback.
+    static func headerPlanLabel(_ plan: String?, provider: CapacityDockProvider) -> String? {
+        guard let plan else { return nil }
+        let trimmed = plan.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty,
+              trimmed.caseInsensitiveCompare(provider.displayName) != .orderedSame
+        else { return nil }
+        return trimmed
+    }
+
     /// Whether the band is drawn as its own padded section. Disconnected and
     /// reconnect draw their own blocks with an action button instead.
     static func drawsNotice(_ connection: QuotaSummary.Connection) -> Bool {
@@ -782,17 +905,22 @@ struct CapacityDockDetailView: View {
         if let quota {
             glance(for: provider, quota: quota)
         } else {
-            VStack(alignment: .leading, spacing: 11 * model.detailScale) {
-                header(provider, plan: nil)
-                Text(
-                    provider == .copilot
-                        && CopilotExplicitDisconnect.isSet(defaults: store.copilotQuotaRuntime.defaults)
-                        ? CopilotQuotaPresentation.disconnectedSettingsDetail
-                        : ProviderConnectionGuidance.dockInstruction(for: provider)
-                )
-                    .font(.system(size: 12))
-                    .foregroundStyle(Color.capacityDockText.opacity(0.62))
-                    .fixedSize(horizontal: false, vertical: true)
+            VStack(alignment: .leading, spacing: 0) {
+                VStack(alignment: .leading, spacing: CapacityDockGlance.connectGuidanceGap * model.detailScale) {
+                    header(provider, plan: nil)
+                    Text(
+                        provider == .copilot
+                            && CopilotExplicitDisconnect.isSet(defaults: store.copilotQuotaRuntime.defaults)
+                            ? CopilotQuotaPresentation.disconnectedSettingsDetail
+                            : ProviderConnectionGuidance.dockInstruction(for: provider)
+                    )
+                        .font(.system(size: 12))
+                        .foregroundStyle(Color.capacityDockText.opacity(0.62))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(.top, CapacityDockGlance.contentInset * model.detailScale)
+                .padding(.horizontal, CapacityDockGlance.contentInset * model.detailScale)
+                Spacer(minLength: 0)
                 connectButton(provider, quota: nil)
             }
         }
@@ -806,9 +934,6 @@ struct CapacityDockDetailView: View {
         VStack(alignment: .leading, spacing: 0) {
             headerSection(provider, plan: quota.planLabel).dividerBelow()
             noticeSection(quota.connection, provider: provider)
-            if !CapacityDockGlance.drawsNotice(quota.connection) {
-                connectionLabel(quota.connection, provider: provider)
-            }
             if let sessions = store.capacityDockLiveSessions(for: provider) {
                 sessionsSection(sessions).dividerBelow()
             }
@@ -839,13 +964,19 @@ struct CapacityDockDetailView: View {
         provider: CapacityDockProvider
     ) -> some View {
         let s = model.detailScale
-        if CapacityDockGlance.drawsNotice(connection) {
-            connectionLabel(connection, provider: provider)
+        if case .connected = connection {
+            EmptyView()
+        } else {
+            let band = connectionLabel(connection, provider: provider)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.top, 6 * s)
-                .padding(.bottom, 8 * s)
+                .padding(.top, CapacityDockGlance.noticeTopPad * s)
+                .padding(.bottom, CapacityDockGlance.noticeBottomPad * s)
                 .padding(.horizontal, CapacityDockGlance.contentInset * s)
-                .dividerBelow()
+            if CapacityDockGlance.drawsNotice(connection) {
+                band.dividerBelow()
+            } else {
+                band
+            }
         }
     }
 
@@ -865,7 +996,9 @@ struct CapacityDockDetailView: View {
                 .font(.system(size: 17, weight: .semibold))
                 .foregroundStyle(Color.capacityDockText)
             Spacer(minLength: 6)
-            if let plan, !plan.isEmpty {
+            // Several providers fall back to their own name as the plan label
+            // when no plan is known, which draws the title twice in one row.
+            if let plan = CapacityDockGlance.headerPlanLabel(plan, provider: provider) {
                 Text(plan)
                     .font(.system(size: 10, weight: .medium))
                     .foregroundStyle(Color.capacityDockText.opacity(0.6))
@@ -1029,7 +1162,7 @@ struct CapacityDockDetailView: View {
         let s = model.detailScale
         VStack(alignment: .leading, spacing: 0) {
             sectionCaption(L("Today"), trailing: nil)
-            HStack(alignment: .center, spacing: 8 * s) {
+            HStack(alignment: .firstTextBaseline, spacing: 8 * s) {
                 HStack(alignment: .firstTextBaseline, spacing: 5 * s) {
                     Text(today.cost.asUSD())
                         .font(.system(size: 17, weight: .semibold))
@@ -1250,6 +1383,8 @@ struct CapacityDockDetailView: View {
                 .tint(provider.ringColor)
                 .controlSize(.small)
                 .accessibilityLabel("\(title) \(provider.displayName)")
+                .padding(.horizontal, CapacityDockGlance.contentInset * model.detailScale)
+                .padding(.bottom, CapacityDockGlance.contentInset * model.detailScale)
         }
     }
 
@@ -1258,6 +1393,10 @@ struct CapacityDockDetailView: View {
         _ connection: QuotaSummary.Connection,
         provider: CapacityDockProvider
     ) -> some View {
+        // The reconnect block's reserve scales with the panel, so its fixed-size
+        // text has to scale too or it clips at the 0.9 floor. The transient
+        // notices are a single caption line whose reserve already covers them.
+        let s = model.detailScale
         switch connection {
         case .connected:
             EmptyView()
@@ -1277,21 +1416,21 @@ struct CapacityDockDetailView: View {
                 .foregroundStyle(.orange.opacity(0.86))
         case .disconnected:
             Text(L("Not connected"))
-                .font(.system(size: 11))
+                .font(.system(size: 11 * s))
                 .foregroundStyle(Color.capacityDockText.opacity(0.6))
         case .terminalFailure(let reason):
-            VStack(alignment: .leading, spacing: 3 * model.detailScale) {
+            VStack(alignment: .leading, spacing: CapacityDockGlance.noticeRowGap * s) {
                 Text(L("Reconnect required"))
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(.system(size: 11 * s, weight: .semibold))
                     .foregroundStyle(.red)
                 if let reason, !reason.isEmpty {
                     Text(reason)
-                        .font(.system(size: 10))
+                        .font(.system(size: 10 * s))
                         .foregroundStyle(Color.capacityDockText.opacity(0.58))
                         .lineLimit(2)
                 }
                 Text(ProviderConnectionGuidance.dockInstruction(for: provider))
-                    .font(.system(size: 10))
+                    .font(.system(size: 10 * s))
                     .foregroundStyle(Color.capacityDockText.opacity(0.72))
                     .lineLimit(3)
                     .fixedSize(horizontal: false, vertical: true)

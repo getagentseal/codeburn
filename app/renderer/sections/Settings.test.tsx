@@ -325,6 +325,21 @@ describe('Settings', () => {
     expect(document.documentElement).not.toHaveAttribute('data-theme')
   })
 
+  it('defaults a fresh install with no saved theme to light, not the OS setting', async () => {
+    render(<Settings period="month" />)
+    await screen.findByRole('heading', { name: 'General' })
+    expect(document.documentElement).toHaveAttribute('data-theme', 'light')
+    expect(screen.getByRole('button', { name: 'Light' }).getAttribute('aria-pressed')).toBe('true')
+  })
+
+  it('keeps an explicit System choice following the OS', async () => {
+    stored.set('codeburn.theme', 'system')
+    render(<Settings period="month" />)
+    await screen.findByRole('heading', { name: 'General' })
+    expect(document.documentElement).not.toHaveAttribute('data-theme')
+    expect(screen.getByRole('button', { name: 'System' }).getAttribute('aria-pressed')).toBe('true')
+  })
+
   it('shows the active Claude config as a read-only line in General when multiple configs exist', async () => {
     render(<Settings period="month" claudeConfigs={{ selectedId: null, options: [{ id: 'claude-config:aaaa', label: 'Default Claude', path: '/x' }, { id: 'claude-desktop:bbbb', label: 'Claude Desktop', path: '/y' }] }} claudeConfigSource="claude-desktop:bbbb" />)
     expect(await screen.findByText('Claude config')).toBeInTheDocument()

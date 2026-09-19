@@ -182,7 +182,14 @@ import type { DateRange, ProjectSummary } from './types.js'
 // v32: DSH session formats v1-v3 and inclusive reasoning accounting. Re-derive
 // finalized DSH days so migrated generations and retry attempts replace the
 // v0-only totals, and reasoning detail is not added on top of full output.
-export const DAILY_CACHE_VERSION = 32
+// v33: #1450 billing routes. `day.models` is keyed by modelRowKey (display
+// name + route label) instead of the raw provider id, so a route the provider
+// recorded in its own column (Hermes `billing_provider`) survives into the
+// finalized day; the raw id alone cannot carry it. A v32 day holds raw ids,
+// which re-derive to the same rows for direct calls and to "(Bedrock)" rows
+// for Bedrock-shaped ids, but its Hermes column routes are unrecoverable
+// without a re-parse, so hermes joins PENDING_REDERIVE_PROVIDER_VERSIONS.
+export const DAILY_CACHE_VERSION = 33
 const MIN_SUPPORTED_VERSION = 28
 
 /// Providers whose per-day CALL COUNT means something different at
@@ -207,9 +214,11 @@ const MIN_SUPPORTED_VERSION = 28
 /// untouched, in both directions, and every other provider keeps the guard.
 const PENDING_REDERIVE_PROVIDER_VERSIONS: Readonly<Record<string, number>> = {
   copilot: 26,
-  // Tracks DAILY_CACHE_VERSION: a v30 file may have been written by #1132's
-  // accounting, which never carried the Hermes cost contract.
-  hermes: 31,
+  // 31: a v30 file may have been written by #1132's accounting, which never
+  // carried the Hermes cost contract. 33: day.models is keyed by route, and a
+  // v32 Hermes day cannot know which of its rows went through
+  // `billing_provider = bedrock` / `openrouter` (#1450).
+  hermes: 33,
   // DSH v0-only parsing and exclusive-reasoning display were both stale in
   // finalized days written before the multi-generation reader.
   dsh: 32,
@@ -448,10 +457,48 @@ function sanitizeProjects(raw: unknown): { projects?: DailyEntry['projects'] } {
 
 const DATE_KEY_RE = /^\d{4}-\d{2}-\d{2}$/
 
+/// The row that owns a provider slice's calls and cost no model row explains.
+/// Pre-v14 slices carry only calls/cost/savings, so their money exists in the
+/// day total with nothing to attribute it to and every model table silently
+/// totals less than the headline it sits under.
+export const CARRIED_MODEL_NAME = 'Unknown (carried)'
+
+const REMAINDER_KEYS = ['calls', 'cost', 'savingsUSD', 'inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheWriteTokens'] as const
+
+/// Money is compared at the cent every surface reports it in. Summing a day's
+/// model rows in a different order than its total was accumulated leaves a
+/// 1e-13 residue on most days; without this, every one of them would grow a
+/// carried row holding a fraction of a cent and no calls.
+const CENT = 0.005
+
+/// Credit whatever `totals` holds that its own model rows cannot explain to
+/// CARRIED_MODEL_NAME. Idempotent: the row it writes is part of the next sum,
+/// so a second pass sees a zero remainder. Only ever adds: money with no calls
+/// against it (a slice that recorded cost but never a request) still gets a row.
+function creditCarriedRemainder(
+  totals: { calls: number; cost: number; savingsUSD?: number; inputTokens?: number; outputTokens?: number; cacheReadTokens?: number; cacheWriteTokens?: number },
+  models: Record<string, ModelDayStats>,
+): void {
+  const rows = Object.values(models)
+  const rest = emptyModelStats()
+  for (const key of REMAINDER_KEYS) {
+    rest[key] = Math.max(0, num(totals[key]) - rows.reduce((sum, m) => sum + m[key], 0))
+  }
+  // Token remainders (whole tokens) are part of REMAINDER_KEYS too: a day whose
+  // cost and calls reconcile but whose token totals fall short must still credit
+  // the missing tokens to the carried row, or the model rows sum to fewer tokens
+  // than the day headline.
+  const tokenRemainder = rest.inputTokens + rest.outputTokens + rest.cacheReadTokens + rest.cacheWriteTokens
+  if (rest.calls <= 0 && rest.cost < CENT && rest.savingsUSD < CENT && tokenRemainder < 1) return
+  const acc = Object.hasOwn(models, CARRIED_MODEL_NAME) ? models[CARRIED_MODEL_NAME]! : emptyModelStats()
+  for (const key of REMAINDER_KEYS) acc[key] += rest[key]
+  setOwn(models, CARRIED_MODEL_NAME, acc)
+}
+
 function migrateDays(days: Record<string, unknown>[]): DailyEntry[] {
   return days
     .filter(d => d && typeof d === 'object' && typeof d.date === 'string' && DATE_KEY_RE.test(d.date))
-    .map(d => ({
+    .map((d): DailyEntry => ({
       date: d.date as string,
       cost: num(d.cost),
       savingsUSD: num(d.savingsUSD),
@@ -469,6 +516,14 @@ function migrateDays(days: Record<string, unknown>[]): DailyEntry[] {
       ...(sanitizeProjects(d.projects)),
       ...(d.carried === true ? { carried: true as const } : {}),
     }))
+    // Day and slices are summed independently: a day can hold the full model
+    // split while one of its slices was written before slices carried one (or
+    // the reverse), and a provider-scoped view reads the slice's map alone.
+    .map(day => {
+      for (const slice of Object.values(day.providers)) creditCarriedRemainder(slice, slice.models ??= {})
+      creditCarriedRemainder(day, day.models)
+      return day
+    })
 }
 
 /// The providers a cache at `fromVersion` still owes a re-derivation, carrying

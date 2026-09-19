@@ -315,6 +315,121 @@ function sessionWindow(session: SessionSummary): SessionWindow | null {
   return { start, end, sessionId: session.sessionId }
 }
 
+/**
+ * Branch names a session was observed on, from its turns' `gitBranch` metadata
+ * (recorded by providers that capture it, e.g. Claude Code). Empty for
+ * providers without branch metadata — the merged-branch rescue is additive and
+ * simply never fires for those.
+ */
+function sessionBranches(session: SessionSummary): Set<string> {
+  const names = new Set<string>()
+  for (const turn of session.turns) {
+    const branch = turn.gitBranch
+    if (typeof branch === 'string' && branch) names.add(branch)
+  }
+  return names
+}
+
+function refMatchesSessionBranch(ref: string, branch: string): boolean {
+  if (ref === branch) return true
+  // Only the remote-tracking shape (`origin/<branch>`, `upstream/<branch>`):
+  // a bare suffix match would let an unrelated `topic/<branch>` rescue a
+  // session that never touched it.
+  if (!ref.endsWith(`/${branch}`)) return false
+  const prefix = ref.slice(0, ref.length - branch.length - 1)
+  return prefix.length > 0 && !prefix.includes('/')
+}
+
+/** What one ref can prove about work having shipped. */
+type BranchEvidence = {
+  readonly ref: string
+  /** Tip tree hash: the squash signature is this tree existing on main. */
+  readonly tree: string
+  /** Merge-base tree: the branch must carry changes beyond it. */
+  readonly baseTree: string | null
+  /** Author dates of the branch's own commits (`base..ref`), for the per-session cut. */
+  readonly commitDates: readonly Date[]
+}
+
+type MergedBranchIndex = {
+  /** All tree hashes reachable on main, for squash-merge detection. */
+  readonly mainTrees: ReadonlySet<string>
+  /** Every matching ref per session-observed branch name — local AND remote-tracking. */
+  readonly branches: ReadonlyMap<string, readonly BranchEvidence[]>
+  /** The main branch's own short name, so it can never rescue a session. */
+  readonly mainBranch: string
+}
+
+/**
+ * Evidence per session-observed branch name for the squash-merge rescue:
+ *
+ * A GitHub squash merge lands the branch's work on main under a brand-new SHA,
+ * so neither the original SHAs nor the branch ref appear in main's history.
+ * The signature that survives is the TREE: the squashed commit's tree is
+ * byte-identical to the branch tip's. The rule therefore requires the branch
+ * to carry commits of its own (tip tree differs from its merge-base tree, and
+ * `base..ref` is non-empty) and its tip tree to match a commit on main.
+ *
+ * Ancestry is deliberately NOT a rule: a branch that never advanced past an
+ * old main commit is an ancestor of main by construction, and rescuing through
+ * it calls dead work shipped — on one real corpus, 567 of 600 first-draft
+ * rescues came from exactly one such parked ref.
+ */
+function buildMergedBranchIndex(
+  gitDir: string,
+  mainBranch: string,
+  wanted: ReadonlySet<string>,
+): MergedBranchIndex | null {
+  if (wanted.size === 0) return null
+
+  const mainLog = runGit(['log', mainBranch, '--format=%T'], gitDir) ?? ''
+  const mainTrees = new Set(mainLog.split('\n').filter(Boolean))
+
+  // Collect EVERY matching ref per branch name: a stale local copy that does
+  // not qualify must not hide a remote-tracking ref that does (and vice
+  // versa), so all candidates become evidence rather than first-wins.
+  const allRefs = (runGit(['for-each-ref', 'refs/heads', 'refs/remotes', '--format=%(refname:short)'], gitDir) ?? '')
+    .split('\n').map(l => l.trim()).filter(Boolean)
+  const branches = new Map<string, BranchEvidence[]>()
+  for (const branch of wanted) {
+    const evidence: BranchEvidence[] = []
+    for (const ref of allRefs) {
+      if (!refMatchesSessionBranch(ref, branch)) continue
+      const tree = runGit(['rev-parse', `${ref}^{tree}`], gitDir)
+      if (!tree) continue
+      const base = runGit(['merge-base', ref, mainBranch], gitDir)
+      const baseTree = base ? runGit(['rev-parse', `${base}^{tree}`], gitDir) : null
+      const ownLog = base ? runGit(['log', '--format=%aI', `${base}..${ref}`], gitDir) ?? '' : ''
+      const commitDates = ownLog.split('\n').filter(Boolean).map(d => new Date(d))
+      evidence.push({ ref, tree, baseTree, commitDates })
+    }
+    if (evidence.length > 0) branches.set(branch, evidence)
+  }
+
+  return { mainTrees, branches, mainBranch }
+}
+
+/**
+ * Whether this session's own work shipped through a squash merge: the branch it
+ * was observed on carries commits, its tip tree is on main, and at least one of
+ * its own commits was made inside the session's window — the session
+ * contributed, rather than merely having run on a branch that later shipped.
+ */
+function sessionBranchShipped(session: SessionSummary, branches: ReadonlySet<string>, index: MergedBranchIndex): boolean {
+  const window = sessionWindow(session)
+  if (!window) return false
+  for (const branch of branches) {
+    if (branch === index.mainBranch) continue
+    for (const evidence of index.branches.get(branch) ?? []) {
+      if (evidence.commitDates.length === 0) continue
+      if (evidence.tree === evidence.baseTree) continue
+      if (!index.mainTrees.has(evidence.tree)) continue
+      if (evidence.commitDates.some(date => date >= window.start && date <= window.end)) return true
+    }
+  }
+  return false
+}
+
 function attributeCommits(
   sessions: SessionSummary[],
   commits: CommitInfo[],
@@ -480,13 +595,39 @@ export async function computeYield(range: DateRange, cwd: string, provider: stri
 
   for (const group of repoGroups.values()) {
     const attributions = attributeCommits(group.sessions, group.commits)
+    // All branch names observed across this group's sessions, so one index
+    // covers every session; built lazily below only if a rescue is attempted.
+    const groupBranches = new Set<string>()
+    for (const session of group.sessions) {
+      for (const branch of sessionBranches(session)) groupBranches.add(branch)
+    }
+    let mergedBranchIndex: MergedBranchIndex | null | undefined
+    const rescueIfShipped = (session: SessionSummary, branches: ReadonlySet<string>): boolean => {
+      if (groupBranches.size === 0 || !group.gitDir) return false
+      if (mergedBranchIndex === undefined) {
+        mergedBranchIndex = buildMergedBranchIndex(group.gitDir, getMainBranch(group.gitDir), groupBranches)
+      }
+      return mergedBranchIndex !== null && sessionBranchShipped(session, branches, mergedBranchIndex)
+    }
+
     for (const [index, session] of group.sessions.entries()) {
       const attribution = attributions[index]
-      const { category, commitCount } = categorizeSession(
+      let { category, commitCount } = categorizeSession(
         session,
         attribution?.commits ?? [],
         attribution?.lostCandidacy ?? false,
       )
+      // #1442: the timestamp-window heuristics call work abandoned that later
+      // shipped — a squash merge lands the work under a SHA the window can
+      // never see. When the session was observed on a branch whose tip tree is
+      // on main AND whose own commits overlap this session's window, the
+      // session's work demonstrably shipped and it is productive. Reverted
+      // stays reverted: that verdict already describes shipped-then-undone.
+      if (category === 'abandoned' || category === 'ambiguous') {
+        if (rescueIfShipped(session, sessionBranches(session))) {
+          category = 'productive'
+        }
+      }
 
       summary[category].cost += session.totalCostUSD
       summary[category].sessions += 1
@@ -519,7 +660,7 @@ export function formatYieldSummary(summary: YieldSummary): string {
     `Abandoned:   ${fmt(abandoned.cost).padStart(8)} (${pct(abandoned.cost)}%) - ${abandoned.sessions} sessions never committed`,
     `Ambiguous:   ${fmt(ambiguous.cost).padStart(8)} (${pct(ambiguous.cost)}%) - ${ambiguous.sessions} sessions lost commits to concurrent sessions`,
     '',
-    'Attribution: timestamp-window based (heuristic)',
+    'Attribution: timestamp-window + merged-branch evidence (heuristic)',
     '',
     `Total:       ${fmt(total.cost).padStart(8)}     - ${total.sessions} sessions`,
     '',

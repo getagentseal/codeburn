@@ -268,7 +268,10 @@
 "Tokens" = "Token";
 "%@ in" = "输入 %@";
 "%@ out" = "输出 %@";
+"%1$@ in · %2$@ out · %3$@ cache read" = "输入 %1$@ · 输出 %2$@ · 缓存读取 %3$@";
 "%@%% cache hit" = "缓存命中 %@%%";
+"1 model unpriced, counted at $0 · %@ tokens" = "1 个模型无定价，按 $0 计入 · %@ Token";
+"%1$lld models unpriced, counted at $0 · %2$@ tokens" = "%1$lld 个模型无定价，按 $0 计入 · %2$@ Token";
 
 /* MARK: Pull requests section */
 "Pull requests" = "拉取请求";
@@ -609,11 +612,6 @@
 "Automatic" = "自动";
 "CLI" = "命令行工具";
 "API" = "API";
-"ACU Conversion" = "ACU 换算";
-"USD per ACU" = "每 ACU 美元";
-"Save" = "存储";
-"CodeBurn reads Devin ACU usage from local transcripts only after this rate is configured, then multiplies each step by the rate before reporting cost." = "只有在配置了此汇率之后，CodeBurn 才会从本地记录中读取 Devin 的 ACU 用量，并在报告花费前将每一步乘以该汇率。";
-"Saved. Refresh CodeBurn to recalculate Devin cost." = "已存储。刷新 CodeBurn 以重新计算 Devin 花费。";
 "Version %@" = "版本 %@";
 "%@ is available. Choose Check for Updates in the CodeBurn menu to install it." = "%@ 已发布。在 CodeBurn 菜单中选择“检查更新”即可安装。";
 "GitHub" = "GitHub";
@@ -673,6 +671,7 @@
 "%1$@'s %2$@ reset %3$@ early. %4$@" = "%1$@ 的%2$@提前 %3$@重置。%4$@";
 "%1$@ cleared your %2$@ %3$@ before its reset. %4$@" = "%1$@ 清空了你的%2$@，比其重置提前 %3$@。%4$@";
 "%lldh" = "%lld 小时";
+"%@ limit" = "%@ 限额";
 "5-hour limit" = "5 小时限额";
 "weekly limit" = "每周限额";
 "Opus weekly limit" = "Opus 每周限额";

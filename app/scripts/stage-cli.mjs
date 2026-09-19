@@ -25,6 +25,8 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import electronPath from 'electron'
 
+import { topLevelPackagesFromNpmLs } from './stage-cli-packages.mjs'
+
 const here = dirname(fileURLToPath(import.meta.url)) // app/scripts
 const appDir = join(here, '..') // app
 const root = join(appDir, '..') // repo root
@@ -69,12 +71,14 @@ writeFileSync(
 
 // `npm ls` prints the tree to stdout even when it exits non-zero on peer/
 // extraneous warnings, so capture stdout regardless of exit code.
+// npm_execpath is checked BEFORE the try: swallowing that error here degraded
+// into the empty-closure message below and hid the real cause (#1466).
+// Execute npm's JavaScript entry point with the current Node binary. Windows
+// exposes npm as a .cmd shim, which execFile cannot launch without a shell.
+const npmCli = process.env.npm_execpath
+if (!npmCli) throw new Error('stage-cli: npm_execpath is unavailable — run staging through npm scripts (npm run stage-cli), not node directly')
 let listed = ''
 try {
-  // Execute npm's JavaScript entry point with the current Node binary. Windows
-  // exposes npm as a .cmd shim, which execFile cannot launch without a shell.
-  const npmCli = process.env.npm_execpath
-  if (!npmCli) throw new Error('npm_execpath is unavailable')
   listed = execFileSync(process.execPath, [npmCli, 'ls', '--omit=dev', '--all', '--parseable'], {
     cwd: root,
     encoding: 'utf8',
@@ -84,24 +88,15 @@ try {
   listed = err.stdout ? String(err.stdout) : ''
 }
 
-// Every parseable line is an absolute path to a production package instance.
-// Map each back to its top-level node_modules entry (`name` or `@scope/name`),
-// then copy those dirs whole — a package's own nested node_modules comes with
-// it, which is exactly the closure it needs at runtime.
-// `npm ls --parseable` uses native separators on Windows. Normalize both sides
-// before extracting the package name so Store builds do not treat a populated
-// node_modules tree as empty merely because it uses `\\` instead of `/`.
-const prefix = rootModules.replaceAll('\\', '/') + '/'
-const comparisonPrefix = process.platform === 'win32' ? prefix.toLowerCase() : prefix
-const topLevel = new Set()
-for (const line of listed.split('\n')) {
-  const normalizedLine = line.trim().replaceAll('\\', '/')
-  const comparisonLine = process.platform === 'win32' ? normalizedLine.toLowerCase() : normalizedLine
-  if (!comparisonLine.startsWith(comparisonPrefix)) continue
-  const rest = normalizedLine.slice(prefix.length)
-  const match = rest.match(/^(@[^/]+\/[^/]+|[^/]+)/)
-  if (match) topLevel.add(match[1])
-}
+// Every parseable line is a path to a production package instance. Map each
+// to its top-level node_modules entry (`name` or `@scope/name`), then copy
+// those dirs whole — a package's own nested node_modules comes with it, which
+// is exactly the closure it needs at runtime. Names are extracted by segment
+// position rather than matched against the checkout's absolute path: npm 11
+// and later redact UUID-shaped path segments to `***` in this output, so a
+// checkout under a UUID directory (CI runners, scratch worktrees) broke the
+// absolute-prefix match and staged an empty closure (#1466).
+const topLevel = topLevelPackagesFromNpmLs(listed, rootModules)
 if (topLevel.size === 0) {
   throw new Error('stage-cli: production dependency closure is empty — is the root `npm install`ed?')
 }

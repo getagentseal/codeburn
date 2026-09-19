@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { setActiveCurrency } from '../lib/format'
+import { __resetPolledMemo } from '../hooks/usePolled'
 import type { JsonPlanSummary, QuotaProvider, StatusJson } from '../lib/types'
 import { Plans } from './Plans'
 
@@ -279,10 +280,68 @@ describe('Plans', () => {
       { provider: 'claude', connection: 'transientFailure', rateLimited: false, primary: null, details: [], planLabel: null, footerLines: [] },
     ])
 
-    render(<Plans period="30days" />)
+    const { container } = render(<Plans period="30days" />)
+    const q = within(container)
 
-    expect(await screen.findByText('Waiting on the CLI…')).toBeInTheDocument()
-    expect(screen.queryByText(/rate limited the quota endpoint/)).not.toBeInTheDocument()
+    expect(await q.findByText('Waiting on the CLI…')).toBeInTheDocument()
+    expect(q.queryByText(/rate limited the quota endpoint/)).not.toBeInTheDocument()
+  })
+
+  const connectedClaude: QuotaProvider = {
+    provider: 'claude',
+    connection: 'connected',
+    primary: { label: 'Weekly', percent: 0.1, resetsAt: null },
+    details: [{ label: 'Weekly', percent: 0.1, resetsAt: null }],
+    planLabel: 'Max 20x',
+    footerLines: [],
+  }
+  const disconnectedClaude: QuotaProvider = {
+    provider: 'claude', connection: 'disconnected', primary: null, details: [], planLabel: null, footerLines: [],
+  }
+
+  it('never flips a connected provider to disconnected across connected → empty → connected polls', async () => {
+    __resetPolledMemo()
+    getPlans.mockResolvedValue(baseStatus)
+    getQuota.mockReset()
+    getQuota
+      .mockResolvedValueOnce([connectedClaude]) // poll 1: connected
+      .mockResolvedValueOnce([]) // poll 2: empty/slow serve — a transient miss
+      .mockResolvedValue([connectedClaude]) // poll 3+: connected again
+
+    const { rerender } = render(<Plans period="30days" refreshToken={0} />)
+    await screen.findByText('Max 20x')
+    expect(screen.queryByText(/Not connected/)).not.toBeInTheDocument()
+
+    rerender(<Plans period="30days" refreshToken={1} />) // empty poll
+    await waitFor(() => expect(getQuota).toHaveBeenCalledTimes(2))
+    // The row must survive an empty poll — no disconnect flicker, plan still shown.
+    expect(screen.queryByText(/Not connected/)).not.toBeInTheDocument()
+    expect(screen.getByText('Max 20x')).toBeInTheDocument()
+
+    rerender(<Plans period="30days" refreshToken={2} />) // connected again
+    await waitFor(() => expect(getQuota).toHaveBeenCalledTimes(3))
+    expect(screen.queryByText(/Not connected/)).not.toBeInTheDocument()
+  })
+
+  it('debounces a single disconnected poll but still surfaces a sustained disconnect', async () => {
+    __resetPolledMemo()
+    getPlans.mockResolvedValue(baseStatus)
+    getQuota.mockReset()
+    getQuota
+      .mockResolvedValueOnce([connectedClaude]) // poll 1: connected
+      .mockResolvedValueOnce([disconnectedClaude]) // poll 2: one anomalous disconnect
+      .mockResolvedValue([disconnectedClaude]) // poll 3+: sustained disconnect
+
+    const { rerender } = render(<Plans period="30days" refreshToken={0} />)
+    await screen.findByText('Max 20x')
+
+    rerender(<Plans period="30days" refreshToken={1} />) // single disconnect — debounced
+    await waitFor(() => expect(getQuota).toHaveBeenCalledTimes(2))
+    expect(screen.queryByText(/Not connected/)).not.toBeInTheDocument()
+
+    rerender(<Plans period="30days" refreshToken={2} />) // second consecutive disconnect — real
+    await waitFor(() => expect(getQuota).toHaveBeenCalledTimes(3))
+    expect(await screen.findByText(/Not connected/)).toBeInTheDocument()
   })
 
   it('renders the keychain access-denied state with recovery copy and a locked indicator', async () => {
@@ -296,5 +355,76 @@ describe('Plans', () => {
 
     expect(await screen.findByText('Keychain access needed: click Allow when macOS asks, then Refresh.')).toBeInTheDocument()
     expect(screen.getByText('locked')).toBeInTheDocument()
+  })
+
+  it('adds the Connect affordance to a login-expired error, keeping its message', async () => {
+    getPlans.mockResolvedValue(baseStatus)
+    getQuota.mockReset()
+    getQuota.mockResolvedValue([
+      { provider: 'kimi', connection: 'terminalFailure', connectable: true, primary: null, details: [], planLabel: null, footerLines: ['Login expired. Run the Kimi CLI once, then refresh.'] },
+    ])
+
+    const { container } = render(<Plans period="30days" />)
+    const q = within(container)
+
+    expect(await q.findByText('Login expired. Run the Kimi CLI once, then refresh.')).toBeInTheDocument()
+    expect(q.getByRole('button', { name: 'Connect' })).toBeInTheDocument()
+  })
+
+  it('leaves a genuinely terminal error (not auth) without a Connect affordance', async () => {
+    getPlans.mockResolvedValue(baseStatus)
+    getQuota.mockReset()
+    getQuota.mockResolvedValue([
+      { provider: 'gemini', connection: 'terminalFailure', primary: null, details: [], planLabel: null, footerLines: ['Your Gemini tier was retired.'] },
+    ])
+
+    const { container } = render(<Plans period="30days" />)
+    const q = within(container)
+
+    expect(await q.findByText('Your Gemini tier was retired.')).toBeInTheDocument()
+    expect(q.queryByRole('button', { name: 'Connect' })).not.toBeInTheDocument()
+  })
+
+  it('keeps a connected provider\'s bars through a transient "waiting" poll (manual refresh race)', async () => {
+    __resetPolledMemo()
+    getPlans.mockResolvedValue(baseStatus)
+    getQuota.mockReset()
+    const connected: QuotaProvider[] = [
+      { provider: 'codex', connection: 'connected', primary: { label: 'Weekly', percent: 0.17, resetsAt: null }, details: [{ label: 'Weekly', percent: 0.17, resetsAt: null }], planLabel: 'Plus', footerLines: [] },
+    ]
+    const waiting: QuotaProvider[] = [
+      { provider: 'codex', connection: 'transientFailure', rateLimited: false, primary: null, details: [], planLabel: null, footerLines: [] },
+    ]
+    getQuota.mockResolvedValueOnce(connected).mockResolvedValue(waiting)
+
+    const { rerender } = render(<Plans period="30days" refreshToken={0} />)
+    expect(await screen.findByText('17% used')).toBeInTheDocument()
+
+    rerender(<Plans period="30days" refreshToken={1} />) // refresh comes back transient for Codex
+    await waitFor(() => expect(getQuota).toHaveBeenCalledTimes(2))
+    expect(screen.getByText('17% used')).toBeInTheDocument() // bars stay
+    expect(screen.queryByText('Waiting on the CLI…')).not.toBeInTheDocument()
+  })
+
+  it('caps a stuck "waiting" state to an actionable Connect after the cap', async () => {
+    __resetPolledMemo()
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(1_000_000)
+    getPlans.mockResolvedValue(baseStatus)
+    getQuota.mockReset()
+    const waiting = (): QuotaProvider[] => [
+      { provider: 'gemini', connection: 'transientFailure', rateLimited: false, primary: null, details: [], planLabel: null, footerLines: [] },
+    ]
+    getQuota.mockResolvedValueOnce(waiting()).mockResolvedValue(waiting())
+
+    const { rerender } = render(<Plans period="30days" refreshToken={0} />)
+    expect(await screen.findByText('Waiting on the CLI…')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Connect' })).not.toBeInTheDocument()
+
+    nowSpy.mockReturnValue(1_000_000 + 25_000) // past the 20s cap
+    rerender(<Plans period="30days" refreshToken={1} />)
+    await waitFor(() => expect(getQuota).toHaveBeenCalledTimes(2))
+    expect(await screen.findByText("Couldn't reach the Gemini CLI.")).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Connect' })).toBeInTheDocument()
+    nowSpy.mockRestore()
   })
 })

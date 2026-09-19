@@ -36,9 +36,33 @@ struct ModelsSection: View {
 
                 TokensLine()
                     .padding(.top, 5)
+
+                // The $0-cost rows below the table's floor never render as
+                // rows; without this line "cheap" and "uncounted" read the
+                // same. Hidden entirely when the payload predates the block.
+                if !store.payload.current.unpricedModels.isEmpty {
+                    UnpricedLine()
+                        .padding(.top, 3)
+                }
             }
         }
     }
+}
+
+/// Compact token count for the narrow popover: `1.2K` / `3.4M` / `5.6B`,
+/// plain digits below a thousand. The exact values ride along in the row's
+/// accessibility label, so compact rounding never hides the real number.
+/// Internal so tests can pin the billions rung (#1318): period cache-read
+/// totals on heavy machines cross a billion and rendered as `12345.7M`.
+func compactTokenCount(_ n: Int) -> String {
+    if n >= 1_000_000_000 {
+        return String(format: "%.1fB", Double(n) / 1_000_000_000)
+    } else if n >= 1_000_000 {
+        return String(format: "%.1fM", Double(n) / 1_000_000)
+    } else if n >= 1_000 {
+        return String(format: "%.1fK", Double(n) / 1_000)
+    }
+    return "\(n)"
 }
 
 private struct ModelRow: View {
@@ -47,38 +71,92 @@ private struct ModelRow: View {
     let showSavings: Bool
 
     var body: some View {
-        HStack(spacing: 8) {
-            // Bar tracks actual cost; for local models the cost is $0 and the
-            // bar will be empty. Saved counterfactual (if any) renders as
-            // green text in the saved column, never summed into the bar.
-            FixedBar(fraction: model.cost / maxCost)
-                .frame(width: 56, height: 6)
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 8) {
+                // Bar tracks actual cost; for local models the cost is $0 and the
+                // bar will be empty. Saved counterfactual (if any) renders as
+                // green text in the saved column, never summed into the bar.
+                FixedBar(fraction: model.cost / maxCost)
+                    .frame(width: 56, height: 6)
 
-            Text(model.name)
-                .font(.system(size: 12.5, weight: .medium))
-                .frame(maxWidth: .infinity, alignment: .leading)
+                Text(model.name)
+                    .font(.system(size: 12.5, weight: .medium))
+                    .lineLimit(1)
+                    .frame(maxWidth: .infinity, alignment: .leading)
 
-            Text(model.cost.asCompactCurrency())
-                .font(.codeMono(size: 12, weight: .medium))
-                .tracking(-0.2)
-                .frame(minWidth: 54, alignment: .trailing)
-
-            if showSavings {
-                Text(model.savingsUSD > 0 ? model.savingsUSD.asCompactCurrency() : "—")
-                    .font(.codeMono(size: 12))
+                Text(model.cost.asCompactCurrency())
+                    .font(.codeMono(size: 12, weight: .medium))
                     .tracking(-0.2)
-                    .foregroundStyle(model.savingsUSD > 0 ? Color.green : Color.secondary)
                     .frame(minWidth: 54, alignment: .trailing)
+
+                if showSavings {
+                    Text(model.savingsUSD > 0 ? model.savingsUSD.asCompactCurrency() : "—")
+                        .font(.codeMono(size: 12))
+                        .tracking(-0.2)
+                        .foregroundStyle(model.savingsUSD > 0 ? Color.green : Color.secondary)
+                        .frame(minWidth: 54, alignment: .trailing)
+                }
+
+                Text("\(model.calls)")
+                    .font(.system(size: 11))
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+                    .frame(minWidth: 52, alignment: .trailing)
             }
 
-            Text("\(model.calls)")
-                .font(.system(size: 11))
-                .monospacedDigit()
-                .foregroundStyle(.secondary)
-                .frame(minWidth: 52, alignment: .trailing)
+            // Token counts sit on their own secondary line under the model name:
+            // seven squashed columns cannot stay legible in the narrow popover,
+            // and the cost stays visually attached to its model either way. The
+            // line appears only when the payload carries counts for the row — an
+            // older CLI renders exactly as before.
+            if model.hasTokenCounts {
+                Text(L("%1$@ in · %2$@ out · %3$@ cache read", count(model.inputTokens), count(model.outputTokens), count(model.cacheReadTokens)))
+                    .font(.system(size: 10.5))
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .padding(.leading, 64)
+                    .accessibilityLabel(model.tokenAccessibilityText)
+            }
         }
         .padding(.horizontal, 2)
         .padding(.vertical, 1)
+    }
+
+    // Unknown (absent count) renders as a dash; a known zero renders as "0".
+    private func count(_ value: Int?) -> String {
+        value.map(compactTokenCount) ?? "—"
+    }
+}
+
+extension ModelEntry {
+    /// Exact token counts for assistive tech, since the visible line rounds
+    /// compactly. Cache read is labelled as reused input, and cache write is
+    /// named separately so the two are never read as one bucket. Locale-pinned
+    /// comma grouping so the text is deterministic.
+    var tokenAccessibilityText: String {
+        func exact(_ value: Int) -> String {
+            // Group the MAGNITUDE, then re-apply the sign. Grouping the signed
+            // string treats "-" as a leading digit, so the sign is emitted
+            // twice ("--1,234,567"). `magnitude` is unsigned, so Int.min is
+            // handled too rather than trapping on negation.
+            var digits = String(value.magnitude)
+            var grouped = ""
+            while digits.count > 3 {
+                let cut = digits.index(digits.endIndex, offsetBy: -3)
+                grouped = "," + digits[cut...] + grouped
+                digits = String(digits[..<cut])
+            }
+            return (value < 0 ? "-" : "") + digits + grouped
+        }
+
+        var parts: [String] = []
+        if let inputTokens { parts.append("\(exact(inputTokens)) input") }
+        if let outputTokens { parts.append("\(exact(outputTokens)) output") }
+        if let cacheReadTokens { parts.append("\(exact(cacheReadTokens)) cache read (reused input)") }
+        if let cacheWriteTokens, cacheWriteTokens > 0 { parts.append("\(exact(cacheWriteTokens)) cache write") }
+        return parts.joined(separator: ", ")
     }
 }
 
@@ -109,11 +187,44 @@ private struct TokensLine: View {
     }
 
     private func formatTokens(_ n: Int) -> String {
-        if n >= 1_000_000 {
-            return String(format: "%.1fM", Double(n) / 1_000_000)
-        } else if n >= 1_000 {
-            return String(format: "%.1fK", Double(n) / 1_000)
+        compactTokenCount(n)
+    }
+}
+
+/// One secondary line under the models table naming the usage the cost floor
+/// hid (#1420): models whose recorded usage prices at $0 for lack of pricing
+/// data. Compact rounding visible, exact counts in the accessibility label —
+/// the same contract as the token line. "Counted at $0" is the phrase every
+/// other consumer of the block uses (`codeburn mcp`, the desktop compare
+/// view), so the popover names the same condition the same way.
+private struct UnpricedLine: View {
+    @Environment(AppStore.self) private var store
+
+    var body: some View {
+        let unpriced = store.payload.current.unpricedModels
+        let tokens = unpriced.reduce(0) { $0 + $1.tokens }
+        let tok = compactTokenCount(tokens)
+
+        HStack(spacing: 4) {
+            Text(unpriced.count == 1
+                ? L("1 model unpriced, counted at $0 · %@ tokens", tok)
+                : L("%1$lld models unpriced, counted at $0 · %2$@ tokens", unpriced.count, tok))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Spacer()
         }
-        return "\(n)"
+        .font(.system(size: 10.5))
+        .monospacedDigit()
+        .accessibilityLabel(unpricedAccessibilityText(unpriced))
+    }
+
+    /// Exact ids and counts for assistive tech; computed, not a literal, the
+    /// same opt-out the per-row token label uses.
+    private func unpricedAccessibilityText(_ unpriced: [UnpricedModelEntry]) -> String {
+        let rows = unpriced.map { entry in
+            "\(entry.model): \(entry.calls) calls, \(entry.tokens) tokens"
+        }
+        return "Unpriced, counted at $0 — " + rows.joined(separator: ", ")
     }
 }

@@ -82,6 +82,13 @@ const THEMED_LOGOS: Record<string, { light: string; dark: string }> = {
   qwen: { light: qwenLight, dark: qwenDark },
 }
 
+/** Whether a real logo asset exists for this provider (not the mono-initial
+ *  fallback). Callers that use the logo as background art skip drawing anything
+ *  rather than embossing a lone letter. */
+export function hasProviderLogo(provider: string): boolean {
+  return provider in SINGLE_LOGOS || provider in THEMED_LOGOS
+}
+
 export function ProviderLogo({ provider, size = 16 }: { provider: string; size?: number }) {
   const singleLogo = SINGLE_LOGOS[provider]
   if (singleLogo) {

@@ -1100,6 +1100,53 @@ describe('copilot provider - chatSessions parsing', () => {
     expect(calls[0]!.costUSD).toBeGreaterThan(0)
   })
 
+  it('extracts structured skill calls without inferring from prompt text', async () => {
+    const filePath = join(tmpDir, 'skill.jsonl')
+    await createChatSessionFile(filePath, [
+      { kind: 0, v: { version: 3, creationDate: 1780157113020, sessionId: 'chat-skill', requests: [] } },
+      { kind: 2, k: ['requests'], v: [chatSessionSampleRequest({
+        result: {
+          metadata: {
+            promptTokens: 100,
+            outputTokens: 20,
+            resolvedModel: 'claude-sonnet-4-6',
+            renderedUserMessage: [{ type: 1, text: 'Follow instructions in #prompt:SKILL.md' }],
+            toolCallRounds: [{
+              toolCalls: [{ name: 'skill', arguments: { skill: 'ponytail' } }],
+            }],
+          },
+        },
+      })] },
+    ])
+
+    const calls = await collectCalls({ path: filePath, project: 'myproject', provider: 'copilot', sourceType: 'chatsession' })
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.tools).toEqual(['Skill'])
+    expect(calls[0]!.skills).toEqual(['ponytail'])
+  })
+
+  it('keeps every tool name a round record carries', async () => {
+    const filePath = join(tmpDir, 'multi-tool.jsonl')
+    await createChatSessionFile(filePath, [
+      { kind: 0, v: { version: 3, creationDate: 1780157113020, sessionId: 'chat-multi', requests: [] } },
+      { kind: 2, k: ['requests'], v: [chatSessionSampleRequest({
+        result: {
+          metadata: {
+            promptTokens: 100,
+            outputTokens: 20,
+            resolvedModel: 'claude-sonnet-4-6',
+            toolCallRounds: [{ toolCalls: [{ name: 'read_file', tool: 'bash' }] }],
+          },
+        },
+      })] },
+    ])
+
+    const calls = await collectCalls({ path: filePath, project: 'myproject', provider: 'copilot', sourceType: 'chatsession' })
+
+    expect(calls[0]!.tools).toEqual(['Read', 'Bash'])
+  })
+
   it('returns no calls for an empty reconstructed requests array', async () => {
     const filePath = join(tmpDir, 'empty.jsonl')
     await createChatSessionFile(filePath, [
@@ -1651,6 +1698,96 @@ describe('copilot provider - OTel cache token parsing', () => {
     expect(calls).toHaveLength(1)
     expect(calls[0]!.tools).toContain('Read')
     expect(calls[0]!.cacheReadInputTokens).toBe(10000)
+  })
+
+  it('extracts structured skill calls from execute_tool spans', async () => {
+    if (!isSqliteAvailable()) return
+
+    createOtelDb(dbPath)
+    insertSpan(dbPath, {
+      spanId: 'span-skill-chat', traceId: 'trace-skill', operationName: 'chat', startTimeMs: 1000,
+      attrs: {
+        'gen_ai.conversation.id': 'conv-skill',
+        'gen_ai.response.model': 'gpt-4.1',
+        'gen_ai.usage.input_tokens': 100,
+        'gen_ai.usage.output_tokens': 20,
+      },
+    })
+    insertSpan(dbPath, {
+      spanId: 'span-skill-tool', traceId: 'trace-skill', operationName: 'execute_tool', startTimeMs: 1100,
+      attrs: {
+        'gen_ai.tool.name': 'skill',
+        'gen_ai.tool.call.arguments': JSON.stringify({ skill: 'ponytail' }),
+      },
+    })
+
+    const provider = createCopilotProvider('/nonexistent/jsonl', '/nonexistent/ws')
+    const sources = await provider.discoverSessions()
+    const src = sources.find(s => s.path.startsWith(dbPath))
+    expect(src).toBeDefined()
+
+    const calls = await collectCalls(src!)
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.tools).toContain('Skill')
+    expect(calls[0]!.skills).toEqual(['ponytail'])
+  })
+
+  it('attributes a trace-level skill to one chat span, not every span in the trace', async () => {
+    if (!isSqliteAvailable()) return
+
+    createOtelDb(dbPath)
+    // Five chat spans in ONE trace, each with its own tokens.
+    const perSpanTokens = [
+      { input: 100, output: 20 },
+      { input: 200, output: 40 },
+      { input: 300, output: 60 },
+      { input: 400, output: 80 },
+      { input: 500, output: 100 },
+    ]
+    perSpanTokens.forEach((t, i) => {
+      insertSpan(dbPath, {
+        spanId: `span-multi-${i}`, traceId: 'trace-multi', operationName: 'chat', startTimeMs: 1000 + i,
+        attrs: {
+          'gen_ai.conversation.id': 'conv-multi',
+          'gen_ai.response.model': 'gpt-4.1',
+          'gen_ai.usage.input_tokens': t.input,
+          'gen_ai.usage.output_tokens': t.output,
+        },
+      })
+    })
+    // One skill call for the whole trace.
+    insertSpan(dbPath, {
+      spanId: 'span-multi-tool', traceId: 'trace-multi', operationName: 'execute_tool', startTimeMs: 1500,
+      attrs: {
+        'gen_ai.tool.name': 'skill',
+        'gen_ai.tool.call.arguments': JSON.stringify({ skill: 'graphify' }),
+      },
+    })
+
+    const provider = createCopilotProvider('/nonexistent/jsonl', '/nonexistent/ws')
+    const sources = await provider.discoverSessions()
+    const src = sources.find(s => s.path.startsWith(dbPath))
+    expect(src).toBeDefined()
+
+    const calls = await collectCalls(src!)
+
+    expect(calls).toHaveLength(5)
+    // The skill and Skill tool land on exactly one span, not all five.
+    const withSkill = calls.filter(c => (c.skills ?? []).includes('graphify'))
+    expect(withSkill).toHaveLength(1)
+    expect(calls.filter(c => c.tools.includes('Skill'))).toHaveLength(1)
+    // Every other span carries no trace metadata.
+    expect(calls.filter(c => (c.skills ?? []).length > 0)).toHaveLength(1)
+    expect(calls.filter(c => c.tools.length > 0)).toHaveLength(1)
+    // Per-span token costs are untouched by the attribution fix.
+    const byInput = new Map(calls.map(c => [c.inputTokens, c]))
+    for (const t of perSpanTokens) {
+      const c = byInput.get(t.input)
+      expect(c).toBeDefined()
+      expect(c!.outputTokens).toBe(t.output)
+      expect(c!.costUSD).toBeGreaterThan(0)
+    }
   })
 
   it('skips OTel spans with zero input and output tokens', async () => {

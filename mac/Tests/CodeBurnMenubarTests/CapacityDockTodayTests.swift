@@ -345,9 +345,9 @@ struct CapacityDockTodayTests {
         // Which is what the panel reserves height from.
         #expect(
             CapacityDockMetrics.detailHeight(
-                quota: nil, sessionCount: nil, hasToday: false, tailEdge: .right, scale: 1
+                quota: nil, provider: .claude, sessionCount: nil, hasToday: false, tailEdge: .right, scale: 1
             ) == CapacityDockMetrics.detailHeight(
-                quota: nil, sessionCount: nil, hasToday: true, tailEdge: .right, scale: 1
+                quota: nil, provider: .claude, sessionCount: nil, hasToday: true, tailEdge: .right, scale: 1
             )
         )
     }
@@ -375,7 +375,7 @@ struct CapacityDockTodayTests {
         )
         func height(_ hasToday: Bool, scale: CGFloat) -> CGFloat {
             CapacityDockMetrics.detailHeight(
-                quota: quota, sessionCount: 1, hasToday: hasToday, tailEdge: .right, scale: scale
+                quota: quota, provider: .claude, sessionCount: 1, hasToday: hasToday, tailEdge: .right, scale: scale
             )
         }
         #expect(height(true, scale: 1) - height(false, scale: 1) == CapacityDockGlance.todayHeight)

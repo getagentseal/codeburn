@@ -11,6 +11,7 @@ import { StaleBanner } from '../components/StaleBanner'
 import { DUR, motionEnabled, useBarGrowIn } from '../lib/motion'
 import { type Polled, usePolled } from '../hooks/usePolled'
 import { formatCompact, formatCount, formatUsd, formatUsdWithCurrency } from '../lib/format'
+import { Usd, sumTokens, tokensOf, useUsdPop } from '../components/Usd'
 import { codeburn } from '../lib/ipc'
 import {
   categoryFilters,
@@ -21,7 +22,9 @@ import {
 } from '../lib/investigation'
 import { contiguousDailyWindow, dataStartKey, formatChartDate, localDateKey, sliceDailyToPeriod, sliceDailyToRange } from '../lib/period'
 import { reportMemoKey } from '../lib/reportMemoKey'
-import { formatAxisMoney, niceTicks, ticksClearOfPeak } from '../lib/chartAxis'
+import { barBucketDays, barLayout, formatAxisMoney, niceTicks, ticksClearOfPeak } from '../lib/chartAxis'
+import { generationHeadline, generationModels, rememberGeneration } from '../lib/generation'
+import { rememberStreak } from '../lib/streak'
 import { paceDirection, sparkArea, sparkPath, sparkPoints } from '../lib/spark'
 import type {
   ActReportJson,
@@ -306,7 +309,7 @@ export function deriveSignals(data: MenubarPayload, now: Date, rangeActive: bool
   const improvements: Signal[] = []
   const risks: Signal[] = []
 
-  const streak = streakDays(daily, now)
+  const streak = rememberStreak(data.streak) ?? streakDays(daily, now)
 
   // Week-over-week: mean of the last 7 active entries vs the prior 7 (matches the
   // coach's pacing line). Needs >= 14 entries for both windows to exist.
@@ -487,6 +490,9 @@ function deriveStats(data: MenubarPayload, now: Date, anchorKey = localDateKey(n
   return {
     todayEntry,
     todayCost: todayEntry?.cost ?? 0,
+    mtdEntries,
+    priorDayEntry: daily.find(day => day.date === priorKey),
+    sevenDayEntries: upToAnchor.slice(-7),
     mtd,
     projected,
     pacePct,
@@ -556,12 +562,13 @@ function buildModelIndex(data: MenubarPayload): Map<string, string> {
 
 function streakDays(daily: DailyHistoryEntry[], now: Date): number {
   const byDate = new Map(daily.map(day => [day.date, day.cost]))
+  const spent = (offset: number) =>
+    (byDate.get(localDateKey(new Date(now.getFullYear(), now.getMonth(), now.getDate() - offset))) ?? 0) > 0
+  // A day that has not happened yet does not end a streak: before the first
+  // session of the day the count runs from yesterday, so a long run of active
+  // days never reads as 0.
   let streak = 0
-  for (let offset = 0; ; offset++) {
-    const date = new Date(now.getFullYear(), now.getMonth(), now.getDate() - offset)
-    if ((byDate.get(localDateKey(date)) ?? 0) <= 0) break
-    streak++
-  }
+  for (let offset = spent(0) ? 0 : 1; spent(offset); offset++) streak++
   return streak
 }
 
@@ -570,8 +577,9 @@ function streakDays(daily: DailyHistoryEntry[], now: Date): number {
  * changes (a user action), but never on the 30s poll: a value that arrives
  * under the same `animateKey` snaps in place instead of re-animating.
  */
-function CountUp({ value, animateKey, animate = true }: { value: number; animateKey: string; animate?: boolean }) {
-  const ref = useRef<HTMLDivElement>(null)
+function CountUp({ value, tokens, animateKey, animate = true }: { value: number; tokens?: ReturnType<typeof tokensOf>; animateKey: string; animate?: boolean }) {
+  const pop = useUsdPop<HTMLDivElement>(tokens)
+  const ref = pop.ref
   const keyRef = useRef<string | null>(null)
 
   useEffect(() => {
@@ -593,7 +601,12 @@ function CountUp({ value, animateKey, animate = true }: { value: number; animate
     return () => { tween.kill() }
   }, [value, animateKey, animate])
 
-  return <div ref={ref} className="ov-hero-num" data-countup={value} data-countup-animation={animate ? 'enabled' : 'suppressed'}>{formatUsd(value)}</div>
+  return (
+    <>
+      <div ref={ref} className="ov-hero-num" data-countup={value} data-countup-animation={animate ? 'enabled' : 'suppressed'} {...pop.props}>{formatUsd(value)}</div>
+      {pop.pop}
+    </>
+  )
 }
 
 /** 0 = Sunday, from a local `YYYY-MM-DD` key. */
@@ -611,16 +624,28 @@ type AggregatedModel = {
   name: string
   cost: number
   calls: number
-  // Absent in provider-filtered mode: `current.topModels` carries no per-model
-  // token counts, so the table shows "—" rather than a misleading zero.
+  // Absent when the payload carries no count for the row (an older CLI, or a
+  // row whose contributing legacy data lacked counts): the table shows "—"
+  // rather than a misleading zero.
   inputTokens?: number
   outputTokens?: number
+  cacheReadTokens?: number
+  // No column of its own; the cost cell's token popover reads it.
+  cacheWriteTokens?: number
 }
 
 /** Provider-filtered source: `current.topModels` is already period/range/provider-scoped by the CLI. */
 function topModelsToAggregated(models: MenubarPayload['current']['topModels']): AggregatedModel[] {
   return models
-    .map(model => ({ name: model.name, cost: model.cost, calls: model.calls }))
+    .map(model => ({
+      name: model.name,
+      cost: model.cost,
+      calls: model.calls,
+      ...(model.inputTokens === undefined ? {} : { inputTokens: model.inputTokens }),
+      ...(model.outputTokens === undefined ? {} : { outputTokens: model.outputTokens }),
+      ...(model.cacheReadTokens === undefined ? {} : { cacheReadTokens: model.cacheReadTokens }),
+      ...(model.cacheWriteTokens === undefined ? {} : { cacheWriteTokens: model.cacheWriteTokens }),
+    }))
     .sort((a, b) => b.cost - a.cost)
 }
 
@@ -656,6 +681,8 @@ function ModelsTable({ models, onSelectModel }: { models: AggregatedModel[]; onS
             <th>Model</th>
             <th className="num">Input tok</th>
             <th className="num">Output tok</th>
+            {/* Reused input tokens: prompts the provider served from cache. */}
+            <th className="num" title="Reused input tokens served from the provider's cache">Cache read</th>
             <th className="num">Cost</th>
             <th className="num">Calls</th>
           </tr>
@@ -670,7 +697,8 @@ function ModelsTable({ models, onSelectModel }: { models: AggregatedModel[]; onS
               </td>
               <td className="num mono">{model.inputTokens === undefined ? '—' : formatCompact(model.inputTokens)}</td>
               <td className="num mono">{model.outputTokens === undefined ? '—' : formatCompact(model.outputTokens)}</td>
-              <td className="num mono">{formatUsd(model.cost)}</td>
+              <td className="num mono">{model.cacheReadTokens === undefined ? '—' : formatCompact(model.cacheReadTokens)}</td>
+              <td className="num mono"><Usd value={model.cost} tokens={tokensOf(model)} /></td>
               <td className="num">{model.calls.toLocaleString('en-US')}</td>
             </tr>
           ))}
@@ -687,8 +715,49 @@ export type InvestigateRequest = {
   sessionId?: string | null
 }
 
-function DailyChart({ daily, dataStart = null, animateKey = '', onSelectDay }: { daily: DailyHistoryEntry[]; dataStart?: string | null; animateKey?: string; onSelectDay?: (date: string) => void }) {
-  const isNoData = (day: DailyHistoryEntry) => dataStart !== null && day.date < dataStart
+/** A drawn column: a single day, or a bucket that also carries the first day it covers. */
+type ChartDay = DailyHistoryEntry & { spanStart?: string }
+
+/** The days a column stands for. A bucket sums a week, so naming only its last
+ *  day presents a weekly figure as a daily one. */
+function spanLabel(day: ChartDay, format: (date: string) => string = date => date): string {
+  return day.spanStart && day.spanStart !== day.date ? `${format(day.spanStart)} to ${format(day.date)}` : format(day.date)
+}
+
+/** Fold `size` consecutive days into one column, dated by the last day it covers
+ *  so the axis label, the today highlight and the no-data cutoff stay truthful. */
+function bucketDays(daily: DailyHistoryEntry[], size: number): ChartDay[] {
+  if (size <= 1) return daily
+  const buckets: ChartDay[] = []
+  for (let start = 0; start < daily.length; start += size) {
+    const slice = daily.slice(start, start + size)
+    const lead = slice.reduce((best, day) => (day.cost > best.cost ? day : best), slice[0])
+    buckets.push({
+      ...slice[slice.length - 1],
+      spanStart: slice[0].date,
+      cost: slice.reduce((total, day) => total + day.cost, 0),
+      calls: slice.reduce((total, day) => total + day.calls, 0),
+      inputTokens: slice.reduce((total, day) => total + day.inputTokens, 0),
+      outputTokens: slice.reduce((total, day) => total + day.outputTokens, 0),
+      cacheReadTokens: slice.reduce((total, day) => total + day.cacheReadTokens, 0),
+      cacheWriteTokens: slice.reduce((total, day) => total + day.cacheWriteTokens, 0),
+      topModels: lead.topModels,
+    })
+  }
+  return buckets
+}
+
+/** The token breakdown behind a bar's amount, in the chart tip's own skin. */
+const TOKEN_TIP_ROWS = [
+  ['Input', 'inputTokens'],
+  ['Output', 'outputTokens'],
+  ['Cache read', 'cacheReadTokens'],
+  ['Cache write', 'cacheWriteTokens'],
+] as const
+
+function DailyChart({ daily, dataStart = null, animateKey = '', onSelectDay, bucketed = false }: { daily: ChartDay[]; dataStart?: string | null; animateKey?: string; onSelectDay?: (date: string) => void; bucketed?: boolean }) {
+  const bars = barLayout(daily.length)
+  const isNoData = (day: ChartDay) => dataStart !== null && day.date < dataStart
   const max = Math.max(...daily.map(day => day.cost), 0)
   // Bars are drawn against the top tick, not the raw peak, so a bar top and a
   // gridline mean the same number.
@@ -703,7 +772,7 @@ function DailyChart({ daily, dataStart = null, animateKey = '', onSelectDay }: {
   const tickIndexes = daily.map((_, index) => index).filter(index => index % tickStride === 0)
   if (daily.length > 45 && tickIndexes.at(-1) !== daily.length - 1) tickIndexes.push(daily.length - 1)
   const ticks = tickIndexes.map(index => daily[index])
-  const [tip, setTip] = useState<{ day: DailyHistoryEntry; x: number; y: number } | null>(null)
+  const [tip, setTip] = useState<{ day: ChartDay; x: number; y: number } | null>(null)
   const chartRef = useRef<HTMLDivElement>(null)
   useBarGrowIn(chartRef, '.col', [animateKey])
   const columnCentre = (index: number) => ((index + 0.5) / Math.max(1, daily.length)) * 100
@@ -714,11 +783,11 @@ function DailyChart({ daily, dataStart = null, animateKey = '', onSelectDay }: {
         <div className="chart-plot">
           <div className="chart-grid" aria-hidden="true">
             {valueTicks.map(tick => <span className="chart-gridline" key={tick} style={{ bottom: `${(tick / axisMax) * 100}%` }} />)}
-            {daily.map((day, index) => (dayOfWeek(day.date) === 0 && index > 0
+            {bucketed ? null : daily.map((day, index) => (dayOfWeek(day.date) === 0 && index > 0
               ? <span className="chart-weekline" key={day.date} style={{ left: `${columnCentre(index) - (50 / Math.max(1, daily.length))}%` }} />
               : null))}
           </div>
-          <div className="chart" ref={chartRef}>
+          <div className="chart" ref={chartRef} style={{ gap: `${bars.gap}px` }}>
             {daily.map(day => {
               const noData = isNoData(day)
               // A day with recorded activity is a drill-through entry: clicking it
@@ -728,10 +797,10 @@ function DailyChart({ daily, dataStart = null, animateKey = '', onSelectDay }: {
               return (
                 <button
                   type="button"
-                  aria-label={`${day.date}: ${noData ? 'no data recorded' : formatUsd(day.cost)}${drillable ? ' — view sessions' : ''}`}
+                  aria-label={`${spanLabel(day)}: ${noData ? 'no data recorded' : formatUsd(day.cost)}${drillable ? ' — view sessions' : ''}`}
                   className={`col${day.date === todayKey && !noData ? ' hi' : ''}${noData ? ' nodata' : ''}`}
                   key={day.date}
-                  style={{ height: `${axisMax > 0 ? Math.max(2, (day.cost / axisMax) * 100) : 2}%` }}
+                  style={{ height: `${axisMax > 0 ? Math.max(2, (day.cost / axisMax) * 100) : 2}%`, minWidth: `${bars.minWidth}px` }}
                   data-date={day.date}
                   data-cost={day.cost}
                   data-calls={day.calls}
@@ -764,7 +833,7 @@ function DailyChart({ daily, dataStart = null, animateKey = '', onSelectDay }: {
       </div>
       {tip && (
         <ChartTip x={tip.x} y={tip.y}>
-          <div className="chart-tip-d">{formatChartDate(tip.day.date)}</div>
+          <div className="chart-tip-d">{spanLabel(tip.day, formatChartDate)}</div>
           {isNoData(tip.day) ? (
             <div className="chart-tip-s">No data recorded</div>
           ) : (
@@ -779,6 +848,13 @@ function DailyChart({ daily, dataStart = null, animateKey = '', onSelectDay }: {
                 <span>{tip.day.topModels[0]?.name ?? 'No model'} led</span>
                 <b>{formatCount(tip.day.calls, 'call')}</b>
               </div>
+              {TOKEN_TIP_ROWS.map(([label, key]) => (
+                <div className="chart-tip-row" key={key}>
+                  <i className="chart-tip-sw" />
+                  <span>{label}</span>
+                  <b>{formatCompact(tip.day[key])}</b>
+                </div>
+              ))}
             </>
           )}
         </ChartTip>
@@ -788,15 +864,15 @@ function DailyChart({ daily, dataStart = null, animateKey = '', onSelectDay }: {
 }
 
 /** The card header's right slot: the menubar's three daily figures, read off the drawn window. */
-function DailySummaries({ daily, anchorIsToday }: { daily: DailyHistoryEntry[]; anchorIsToday: boolean }) {
+function DailySummaries({ daily, anchorIsToday, bucketed = false }: { daily: DailyHistoryEntry[]; anchorIsToday: boolean; bucketed?: boolean }) {
   const peak = daily.reduce<DailyHistoryEntry | undefined>((best, day) => (best && best.cost >= day.cost ? best : day), undefined)
   const yesterday = daily.at(-2)
   const average = mean(daily.map(day => day.cost))
   return (
     <div className="ov-chart-summaries" aria-label="Daily spend summary">
-      <div className="ov-summary-chip"><span>Avg/day</span><strong>{formatUsd(average)}</strong></div>
-      <div className="ov-summary-chip"><span>Peak</span><strong>{peak ? `${formatUsd(peak.cost)} · ${formatShortDay(peak.date)}` : '$0.00'}</strong></div>
-      <div className="ov-summary-chip"><span>{anchorIsToday ? 'Yesterday' : 'Previous day'}</span><strong>{formatUsd(yesterday?.cost ?? 0)}</strong></div>
+      <div className="ov-summary-chip"><span>{bucketed ? 'Avg/week' : 'Avg/day'}</span><strong><Usd value={average} tokens={sumTokens(daily, daily.length)} /></strong></div>
+      <div className="ov-summary-chip"><span>Peak</span><strong>{peak ? <><Usd value={peak.cost} tokens={tokensOf(peak)} /> · {formatShortDay(peak.date)}</> : '$0.00'}</strong></div>
+      <div className="ov-summary-chip"><span>{bucketed ? 'Previous week' : anchorIsToday ? 'Yesterday' : 'Previous day'}</span><strong><Usd value={yesterday?.cost ?? 0} tokens={tokensOf(yesterday)} /></strong></div>
     </div>
   )
 }
@@ -896,7 +972,7 @@ export function OverviewContent({
   scope?: Scope
   headlineSnapshot?: OverviewHeadlineSnapshot | null
 }) {
-  const { data, error } = overview
+  const { data, error, lastSuccessAt } = overview
   const heroSelectionKey = `${period}|${provider}|${range?.from ?? ''}|${range?.to ?? ''}|${scope}`
   // Suppress only the single persisted-headline -> live-data handoff. A stored
   // headline remains available after that handoff, so testing the snapshot prop
@@ -965,12 +1041,29 @@ export function OverviewContent({
   // the menubar. Only the hero totals are aggregated; the detailed panels below
   // (daily chart, models) stay local — the combined payload carries totals only.
   const combined = scope === 'combined' ? data.combined : undefined
-  const heroCost = combined ? combined.combined.cost : data.current.cost
-  const heroCalls = combined ? combined.combined.calls : data.current.calls
+  // One generation behind every period the user can switch to. `periodTotals`
+  // is emitted only for an unscoped, unfiltered request, so its presence on THIS
+  // payload is the gate: under a provider, project or config filter the machine-
+  // wide generation must never stand in for the filtered headline.
+  const unfiltered = !rangeActive && !combined && !!data.periodTotals
+  rememberGeneration(unfiltered ? data : null, lastSuccessAt, period)
+  const headline = unfiltered ? generationHeadline(period, lastSuccessAt) : null
+  // The hero stands in with the generation only when the models table can stand in
+  // with the same one; a generation from another period carries the wrong models,
+  // so both fall back to this payload rather than disagreeing for a moment.
+  const genModels = unfiltered ? generationModels(period, lastSuccessAt) : null
+  const useGeneration = headline != null && genModels != null
+  const heroCost = combined ? combined.combined.cost : useGeneration ? headline.cost : data.current.cost
+  const heroCalls = combined ? combined.combined.calls : useGeneration ? headline.calls : data.current.calls
   const heroSessions = combined ? combined.combined.sessions : data.current.sessions
   const heroSessionLabel = combined
     ? formatCombinedSessionCount()
     : formatSessionCount(heroSessions, data.current.sessionCountBasis)
+  // The breakdown must belong to the number on screen: the combined aggregate,
+  // the generation window, or this payload's own period — never a mix.
+  const heroTokens = combined
+    ? tokensOf({ ...combined.combined, cacheWriteTokens: combined.combined.cacheCreateTokens })
+    : tokensOf(useGeneration ? headline : data.current)
   const heroSessionHelp = combined
     ? COMBINED_SESSION_COUNT_HELP
     : (sessionCountIsExact(data.current.sessionCountBasis) ? undefined : SESSION_COUNT_HELP)
@@ -990,11 +1083,33 @@ export function OverviewContent({
         periodDaily[0] && periodDaily[0].date < defaultChartStart ? periodDaily[0].date : defaultChartStart,
         localDateKey(now),
       )
-  // Provider-filtered history.daily has empty topModels, so source the models
-  // table from current.topModels (already period/range/provider-scoped) instead.
-  const models = provider !== 'all'
-    ? topModelsToAggregated(data.current.topModels)
-    : aggregateModels(rangeActive ? sliceDailyToRange(data.history.daily, range.from, range.to) : periodDaily)
+  // The chips read the same series the chart draws. Past the fit ceiling the
+  // chart folds days into weeks, and a Peak taken from the raw days then named a
+  // day the chart has no bar for, so the guide and the chip disagreed.
+  const chartBucketSize = barBucketDays(chartDaily.length)
+  const drawnDaily = bucketDays(chartDaily, chartBucketSize)
+  // Models this period come from `current.topModels` — period/range/provider-
+  // scoped by the CLI, and (on CLIs that emit per-model counts) carrying input/
+  // output/cache-read counts for every model in the period, including days
+  // whose per-day top-5 history list no longer names them. history.daily is
+  // the fallback for payloads from older CLIs: its rows know input/output but
+  // not cache read, so the cache column shows "—" there. Provider-filtered
+  // history.daily has empty topModels, so a provider filter always sources
+  // from current.topModels.
+  //
+  // `current.topModels` is uncapped (#1318), so this table lists every model
+  // with usage in the period — the union-over-top-5 fallback it replaced was
+  // itself truncated per day, and a row cap would drop exactly the local and
+  // free models (qwen, llama, …) whose cost is $0 and therefore rank last.
+  // Consumers wanting fewer rows slice their own; this table scrolls instead.
+  const topModelsCarryCounts = data.current.topModels.some(model =>
+    model.inputTokens !== undefined || model.outputTokens !== undefined,
+  )
+  const models = useGeneration
+    ? topModelsToAggregated(genModels)
+    : provider !== 'all' || topModelsCarryCounts
+      ? topModelsToAggregated(data.current.topModels)
+      : aggregateModels(rangeActive ? sliceDailyToRange(data.history.daily, range.from, range.to) : periodDaily)
   const recent14 = data.history.daily.slice(-14)
   const weekNow = mean(recent14.slice(-7).map(day => day.cost))
   const weekPrior = mean(recent14.slice(-14, -7).map(day => day.cost))
@@ -1029,7 +1144,7 @@ export function OverviewContent({
         <div className="ov-panel-head">
           <Icon name="circle-dollar-sign" />
           <h3>{combined ? `Combined · ${data.current.label}` : data.current.label}</h3>
-          <span className="r"><span className="ov-streak"><b>{streakDays(data.history.daily, now)}</b>-day streak</span></span>
+          <span className="r"><span className="ov-streak"><b>{rememberStreak(data.streak) ?? streakDays(data.history.daily, now)}</b>-day streak</span></span>
         </div>
         <div className="ov-card-inner ov-hero-split" aria-label="Key performance indicators">
           <div className="ov-hero-main">
@@ -1037,7 +1152,7 @@ export function OverviewContent({
               {/* A returning launch already showed a truthful persisted headline.
                   Replaying the live hero from $0 on handoff makes that exact value
                   appear to collapse and recover; snap to the revalidated total. */}
-              <CountUp value={heroCost} animateKey={animateKey} animate={!suppressHeroReplay} />
+              <CountUp value={heroCost} tokens={heroTokens} animateKey={animateKey} animate={!suppressHeroReplay} />
               <div className="ov-hero-sub" title={heroSessionHelp}>{formatCount(heroCalls, 'call')} · {heroSessionLabel}</div>
               {combined
                 ? <CombinedDevices usage={combined} />
@@ -1053,8 +1168,8 @@ export function OverviewContent({
                 )}
             </div>
             <div className="ov-hero-foot">
-              <div><span>{anchorIsToday ? 'Yesterday' : 'Previous day'}</span><strong>{stats.priorDayCost === null ? 'n/a' : formatUsd(stats.priorDayCost)}</strong></div>
-              <div><span>7-day avg</span><strong>{stats.sevenDayAvg === null ? 'n/a' : formatUsd(stats.sevenDayAvg)}</strong></div>
+              <div><span>{anchorIsToday ? 'Yesterday' : 'Previous day'}</span><strong>{stats.priorDayCost === null ? 'n/a' : <Usd value={stats.priorDayCost} tokens={tokensOf(stats.priorDayEntry)} />}</strong></div>
+              <div><span>7-day avg</span><strong>{stats.sevenDayAvg === null ? 'n/a' : <Usd value={stats.sevenDayAvg} tokens={sumTokens(stats.sevenDayEntries, stats.sevenDayEntries.length)} />}</strong></div>
               <div><span>{anchorIsToday ? 'vs yesterday' : 'vs previous day'}</span><strong className={stats.dayOverDayPct === null ? undefined : `tone-${paceDirection(stats.dayOverDayPct)}`}>{stats.dayOverDayPct === null ? 'n/a' : `${stats.dayOverDayPct >= 0 ? '+' : '-'}${Math.abs(Math.round(stats.dayOverDayPct))}%`}</strong></div>
             </div>
           </div>
@@ -1070,7 +1185,7 @@ export function OverviewContent({
             <div className="ov-card-inner ov-stat">
               <SpendTrend values={stats.mtdSeries} tone={stats.pacePct === null ? 'flat' : paceDirection(stats.pacePct)} />
               <div className="ov-stat-figures">
-                <div className="v">{formatUsd(stats.mtd)}</div>
+                <div className="v"><Usd value={stats.mtd} tokens={sumTokens(stats.mtdEntries)} /></div>
                 {stats.pacePct === null ? (
                   <div className="d">No {stats.prevMonthName} pace yet</div>
                 ) : (
@@ -1107,8 +1222,8 @@ export function OverviewContent({
       )}
 
       <div className="ov-card ov-panel ov-chart-widget">
-        <div className="ov-panel-head"><Icon name="chart-column" /><h3>Daily spend</h3>{data.history.daily.length ? <span className="r"><DailySummaries daily={chartDaily} anchorIsToday={anchorIsToday} /></span> : null}</div>
-        <div className="ov-panel-body">{data.history.daily.length ? <DailyChart daily={chartDaily} dataStart={dataStartKey(data.history.daily)} animateKey={animateKey} onSelectDay={date => onInvestigate?.({ filters: dayFilters(date) })} /> : <EmptyNote>No spend yet.</EmptyNote>}</div>
+        <div className="ov-panel-head"><Icon name="chart-column" /><h3>Daily spend</h3>{data.history.daily.length ? <span className="r"><DailySummaries daily={drawnDaily} anchorIsToday={anchorIsToday} bucketed={chartBucketSize > 1} /></span> : null}</div>
+        <div className="ov-panel-body">{data.history.daily.length ? <DailyChart daily={drawnDaily} bucketed={chartBucketSize > 1} dataStart={dataStartKey(data.history.daily)} animateKey={animateKey} onSelectDay={date => onInvestigate?.({ filters: dayFilters(date) })} /> : <EmptyNote>No spend yet.</EmptyNote>}</div>
       </div>
 
       <WorkflowCard current={data.current} />

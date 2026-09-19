@@ -81,7 +81,7 @@ export function Punchcard({ timeline }: { timeline: Timeline }) {
           <div style={gridCols}>
             <span />
             {HOURS.map(h => (
-              <span key={h} style={{ paddingBottom: 3, textAlign: 'center', fontSize: 9.5, fontVariantNumeric: 'tabular-nums', color: 'var(--mut)' }}>
+              <span key={h} style={{ paddingBottom: 3, textAlign: 'center', fontSize: 'var(--fs-micro)', fontVariantNumeric: 'tabular-nums', color: 'var(--mut)' }}>
                 {h % 3 === 0 ? h : ''}
               </span>
             ))}

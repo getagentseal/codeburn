@@ -3,7 +3,7 @@ import { homedir } from 'os'
 
 import { extractBashCommands } from '../bash-utils.js'
 import { calculateCost, getShortModelName } from '../models.js'
-import { blobToText, getSqliteLoadError, isSqliteAvailable, openDatabase, type SqliteDatabase } from '../sqlite.js'
+import { blobToText, getSqliteLoadError, isBlockedDatabaseError, isSqliteAvailable, openDatabase, type SqliteDatabase } from '../sqlite.js'
 import { estimateTokensFromChars } from '../token-estimate.js'
 import type { ProbeRoot, ParsedProviderCall, Provider, SessionParser, SessionSource } from './types.js'
 import { safeNumber } from '../parser.js'
@@ -426,7 +426,10 @@ async function discoverFromDb(dbPath: string): Promise<SessionSource[]> {
   let db: SqliteDatabase
   try {
     db = openDatabase(dbPath)
-  } catch {
+  } catch (err) {
+    // A blocked database means "unknown", not "no sessions": let it reach the
+    // registry so the run is marked degraded instead of silently empty.
+    if (isBlockedDatabaseError(err)) throw err
     return []
   }
 

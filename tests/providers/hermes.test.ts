@@ -319,6 +319,40 @@ skipUnlessSqlite('hermes provider', () => {
     expect(calls[0]!.reasoningTokens).toBe(50)
   })
 
+  it('carries the billing route the session recorded, and stays silent for every other door', async () => {
+    // billing_provider is the door the call went through; it was SELECTed and
+    // dropped before #1450. The direct `anthropic` door has no route: its row
+    // IS the direct row. `openrouter` and `bedrock-mantle` are real Hermes
+    // values with no sessions on disk yet, so they are not registered and are
+    // treated the same as an unknown door.
+    const dbPath = createHermesDb(tmpDir)
+    withTestDb(dbPath, (db) => {
+      const rows: Array<[string, string, string]> = [
+        ['route-bedrock', 'openai.gpt-5.6-luna', 'bedrock'],
+        ['route-plain-id-bedrock', 'claude-sonnet-4-5', 'bedrock'],
+        ['route-openrouter', 'claude-sonnet-4-5', 'openrouter'],
+        ['route-codex', 'gpt-5.6-sol', 'openai-codex'],
+        ['route-anthropic', 'claude-fable-5-1', 'anthropic'],
+      ]
+      for (const [id, model, billingProvider] of rows) {
+        insertSession(db, { id, model, billingProvider, inputTokens: 1000, outputTokens: 100, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0, startedAt: 1779549200 })
+        db.prepare('INSERT INTO messages (session_id, role, content, timestamp) VALUES (?, ?, ?, ?)').run(id, 'user', 'hi', 1779549201)
+      }
+    })
+
+    const byId = new Map<string, ParsedProviderCall>()
+    for (const id of ['route-bedrock', 'route-plain-id-bedrock', 'route-openrouter', 'route-codex', 'route-anthropic']) {
+      const calls = await collectCalls(tmpDir, `${dbPath}#hermes-session=${id}`)
+      expect(calls, id).toHaveLength(1)
+      byId.set(id, calls[0]!)
+    }
+    expect(byId.get('route-bedrock')!.route).toBe('bedrock')
+    expect(byId.get('route-plain-id-bedrock')!.route).toBe('bedrock')
+    for (const id of ['route-openrouter', 'route-codex', 'route-anthropic']) {
+      expect(byId.get(id)!.route, id).toBeUndefined()
+    }
+  })
+
   it('does not split multibyte characters when truncating the first user message', async () => {
     const dbPath = createHermesDb(tmpDir)
     const message = `${'a'.repeat(499)}😀truncated tail`

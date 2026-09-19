@@ -601,7 +601,10 @@ describe('adoption union across older cache files', () => {
         models: { 'opus-4-8': { calls: 3, cost: 20, savingsUSD: 0, inputTokens: 1000, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 } },
         categories: { coding: { turns: 3, cost: 20, savingsUSD: 0, editTurns: 1, oneShotTurns: 1 } },
       }),
-    }, { carried: true })
+    }, {
+      carried: true,
+      models: { 'opus-4-8': { calls: 3, cost: 20, savingsUSD: 0, inputTokens: 1000, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 } },
+    })
     const cache: DailyCache = {
       version: DAILY_CACHE_VERSION,
       savingsConfigHash: '',
@@ -634,7 +637,11 @@ describe('adoption union across older cache files', () => {
 
     const loaded = await loadDailyCache()
 
-    expect(loaded.days[0]!.models).toEqual({})
+    // The junk map is dropped; the day's own calls and cost are then left with
+    // nothing to attribute them to, so they land on the carried row.
+    expect(loaded.days[0]!.models).toEqual({
+      'Unknown (carried)': { calls: 2, cost: 5, savingsUSD: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+    })
     expect(loaded.days[0]!.categories).toEqual({})
   })
 
@@ -800,7 +807,9 @@ describe('#946: a migration re-derives copilot instead of carrying it', () => {
     )
 
     const loaded = await loadDailyCache()
-    expect(loaded.pendingRederive).toEqual(['dsh'])
+    // From v32 only hermes (contract 33: day.models keyed by route) is owed a
+    // re-derivation; dsh's v32 contract is already satisfied.
+    expect(loaded.pendingRederive).toEqual(['hermes'])
   })
 
   it('preserves an older cache pending repair while adding a newer provider repair', async () => {
@@ -820,7 +829,7 @@ describe('#946: a migration re-derives copilot instead of carrying it', () => {
     )
 
     const loaded = await loadDailyCache()
-    expect(loaded.pendingRederive).toEqual(['copilot', 'dsh'])
+    expect(loaded.pendingRederive).toEqual(['copilot', 'hermes'])
   })
 
   it('still carries the slice whole when the sources are gone (never-lose, #1033)', async () => {

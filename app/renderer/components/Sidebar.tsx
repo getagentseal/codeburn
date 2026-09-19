@@ -55,7 +55,6 @@ export function Sidebar({
   // A count, not a flag: every open is a fresh key, so reopening the modal
   // mid-fade cancels the exit instead of being closed by its pending timer.
   const [aboutOpens, setAboutOpens] = useState(0)
-  const showKeys = useModifierHeld()
   const [collapsed, setCollapsed] = useState(readCollapsed)
 
   useEffect(() => { writeCollapsed(collapsed) }, [collapsed])
@@ -72,7 +71,7 @@ export function Sidebar({
 
   return (
     <>
-      <nav className={collapsed ? 'sb collapsed' : 'sb'} data-show-keys={showKeys ? '' : undefined}>
+      <nav className={collapsed ? 'sb collapsed' : 'sb'}>
         <div className="app">
           <b className="flame-text">CodeBurn</b>
           <button
@@ -96,6 +95,7 @@ export function Sidebar({
                 role="button"
                 aria-current={item.id === active ? 'page' : undefined}
                 data-tip={`${item.label} ${shortcutLabel(item.key)}`}
+                title={`${item.label} ${shortcutLabel(item.key)}`}
                 tabIndex={0}
                 onClick={() => onNavigate(item.id)}
                 onKeyDown={e => {
@@ -107,7 +107,6 @@ export function Sidebar({
               >
                 {item.icon}
                 <span className="ni-label">{item.label}</span>
-                <span className="k">{shortcutLabel(item.key)}</span>
               </div>
             ))}
           </div>
@@ -137,27 +136,6 @@ function readCollapsed(): boolean {
 
 function writeCollapsed(collapsed: boolean): void {
   try { globalThis.localStorage?.setItem(COLLAPSE_KEY, collapsed ? '1' : '0') } catch { /* storage can be unavailable */ }
-}
-
-/** Shortcut badges are noise until someone reaches for the modifier, so the nav
- *  only shows them while it is down. They stay in the DOM for screen readers. */
-function useModifierHeld(): boolean {
-  const [held, setHeld] = useState(false)
-
-  useEffect(() => {
-    const sync = (event: KeyboardEvent) => setHeld(event.metaKey || event.ctrlKey)
-    const clear = () => setHeld(false)
-    window.addEventListener('keydown', sync)
-    window.addEventListener('keyup', sync)
-    window.addEventListener('blur', clear)
-    return () => {
-      window.removeEventListener('keydown', sync)
-      window.removeEventListener('keyup', sync)
-      window.removeEventListener('blur', clear)
-    }
-  }, [])
-
-  return held
 }
 
 /**

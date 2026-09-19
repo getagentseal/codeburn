@@ -128,6 +128,10 @@ describe('#1115 billableOutputTokens on report/optimize totals', () => {
     expect(aggregateSessions([codex])[0]!.outputTokens).toBe(10)
     expect(buildPeriodData('t', [grok]).outputTokens).toBe(13)
     expect(buildPeriodData('t', [codex]).outputTokens).toBe(10)
+    // Per-model output normalizes like the headline, not the raw counter: an
+    // exclusive provider's row adds reasoning, an inclusive one never does.
+    expect(buildPeriodData('t', [grok]).models[0]!.outputTokens).toBe(13)
+    expect(buildPeriodData('t', [codex]).models[0]!.outputTokens).toBe(10)
   })
 
   it('optimize context-bloat denominator does not double-count inclusive reasoning', () => {

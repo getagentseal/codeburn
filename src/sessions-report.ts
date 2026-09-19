@@ -1,5 +1,5 @@
 import { behavioralCallCount, behavioralTurnCount } from './behavioral-weight.js'
-import { getShortModelName } from './models.js'
+import { modelRowKey } from './models.js'
 import { maxOf } from './math-utils.js'
 import { inferSessionProvider, sessionBillableOutputTokens } from './session-output.js'
 import { CATEGORY_LABELS } from './types.js'
@@ -163,7 +163,7 @@ export function sessionDisplayName(row: SessionRow): string {
 
 export function sessionModelLabel(models: string[]): string {
   const visible = models.filter(model => model !== '<synthetic>')
-  return (visible.length > 0 ? visible : models).map(getShortModelName).join(', ') || 'Unknown'
+  return (visible.length > 0 ? visible : models).map(m => modelRowKey(m)).join(', ') || 'Unknown'
 }
 
 function cellValue(row: SessionRow, key: SessionColumnKey): string {
@@ -923,7 +923,7 @@ export function buildPrAttribution(projects: ProjectSummary[]): PrAttribution {
       const shortCosts = new Map<string, number>()
       for (const [raw, mc] of r.models) {
         if (raw === '<synthetic>') continue
-        addToMap(shortCosts, getShortModelName(raw), mc)
+        addToMap(shortCosts, modelRowKey(raw), mc)
       }
       const models = [...shortCosts.entries()]
         .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))

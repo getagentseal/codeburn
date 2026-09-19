@@ -1138,6 +1138,48 @@ describe('findUnpricedModels', () => {
     expect(unpriced).toEqual([{ model: 'Sonnet 4.6', calls: 12, tokens: 500_000 }])
   })
 
+  it('does not mistake a Bedrock `-v1:0` version for an Ollama tag', () => {
+    // Claude Code with CLAUDE_CODE_USE_BEDROCK=1 records Bedrock's foundation-
+    // model id, which ends in `-v<major>:<minor>`. The colon used to read as
+    // a local `:tag`, so an unpriced Bedrock model was classed as free local
+    // inference and never reached the unpriced list. It is metered.
+    expect(isExpectedFreeModel('anthropic.claude-nonexistent-99-v1:0')).toBe(false)
+    expect(findUnpricedModels([
+      { model: 'anthropic.claude-nonexistent-99-v1:0', calls: 3, cost: 0, tokens: 1000 },
+    ])).toEqual([{ model: 'anthropic.claude-nonexistent-99-v1:0', calls: 3, tokens: 1000 }])
+    // A priced Bedrock id is still not "expected free" — its $0 would be a gap.
+    expect(isExpectedFreeModel('anthropic.claude-haiku-4-5-20251001-v1:0')).toBe(false)
+    // Not every Bedrock id spells the `v`: OpenAI and Cohere ids on Bedrock
+    // end in a bare `-<major>:<minor>`, and they are metered all the same.
+    expect(isExpectedFreeModel('openai.gpt-oss-120b-1:0')).toBe(false)
+    expect(isExpectedFreeModel('cohere.rerank-v3-5:0')).toBe(false)
+    expect(isExpectedFreeModel('us-gov-west-1/openai.gpt-oss-20b-1:0')).toBe(false)
+    // Ollama tags keep their treatment; only the version shape is exempted.
+    expect(isExpectedFreeModel('qwen3.6:35b-a3b-bf16')).toBe(true)
+    expect(isExpectedFreeModel('gpt-oss:120b')).toBe(true)
+    expect(isExpectedFreeModel('llama3.1:8b-instruct-q4_K_M')).toBe(true)
+  })
+
+  it('flags Bedrock provisioned-model / custom-model ARNs as unpriced, not local', () => {
+    // These ARNs carry colons from the ARN structure, so they used to fall to
+    // the `:tag` branch and be hidden as free local inference. They are metered
+    // Bedrock and, when unpriced, must reach the unpriced list.
+    const provisioned = 'arn:aws:bedrock:us-east-1:123456789012:provisioned-model/2c3f9a1b'
+    const custom = 'arn:aws:bedrock:eu-central-1:210987654321:custom-model/my-tuned-claude'
+    expect(isExpectedFreeModel(provisioned)).toBe(false)
+    expect(isExpectedFreeModel(custom)).toBe(false)
+    expect(findUnpricedModels([
+      { model: provisioned, calls: 4, cost: 0, tokens: 2000 },
+      { model: custom, calls: 1, cost: 0, tokens: 300 },
+    ])).toEqual([
+      { model: provisioned, calls: 4, tokens: 2000 },
+      { model: custom, calls: 1, tokens: 300 },
+    ])
+    // Real local tags are untouched by the ARN exemption.
+    expect(isExpectedFreeModel('llama3.1:8b-instruct-q4_K_M')).toBe(true)
+    expect(isExpectedFreeModel('qwen3.6:35b-a3b-bf16')).toBe(true)
+  })
+
   it('flags zero-rate pricing stubs but not explicit zero-rate user overrides', async () => {
     // LiteLLM ships [0,0] stubs for models it lists but has no price for;
     // a stub hit means "unknown price", not "free".

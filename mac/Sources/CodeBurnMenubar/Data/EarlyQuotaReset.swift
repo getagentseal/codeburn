@@ -18,12 +18,26 @@ struct EarlyQuotaResetReading: Codable, Equatable, Sendable {
     let percent: Double
     let resetsAt: Date
     let observedAt: Date
+    /// Absolute usage in the provider's own units, when the adapter reports
+    /// one. The ratio alone cannot tell the two ways usage percent falls: a
+    /// vendor clearing the counter (a goodwill reset) and a vendor raising the
+    /// limit (a spend-cap increase) both drop it. Optional so records written
+    /// before the field existed still decode.
+    var usedUnits: Double?
+
+    init(percent: Double, resetsAt: Date, observedAt: Date, usedUnits: Double? = nil) {
+        self.percent = percent
+        self.resetsAt = resetsAt
+        self.observedAt = observedAt
+        self.usedUnits = usedUnits
+    }
 
     /// A reading this build can reason about. Anything else is "no opinion".
     var isWellFormed: Bool {
         percent.isFinite && percent >= 0 && percent <= 100
             && resetsAt.timeIntervalSince1970.isFinite
             && observedAt.timeIntervalSince1970.isFinite
+            && (usedUnits == nil || usedUnits!.isFinite)
     }
 }
 
@@ -90,11 +104,15 @@ struct EarlyQuotaResetEvent: Codable, Equatable, Sendable {
 /// Decides whether two consecutive readings of the same window are an early
 /// reset. Pure: every clock value comes from the readings themselves.
 ///
-/// The detector assumes a fixed-cycle window with a validated duration (Claude's
-/// 5-hour and 7-day limits). A rolling window's reset time creeps forward on
-/// every fetch, which is exactly what signal 1 must not read as a new cycle, so
-/// callers must not pass rolling windows and a window without a duration gets
-/// no opinion.
+/// The detector assumes a fixed-cycle window with a duration the ADAPTER has
+/// validated as fixed (Claude's 5-hour and 7-day constants, Codex's
+/// `limitWindowSeconds`). A rolling window's reset time creeps forward on every
+/// fetch, and no pair of readings can tell a rolling re-anchor observed across
+/// a gap from a genuine cut-short cycle: both move the reset forward by the
+/// elapsed time and both can drop the percent. The exclusion of rolling
+/// windows is therefore the `windowSeconds` contract itself — an adapter that
+/// cannot vouch for a fixed cycle passes nil, and a window without a duration
+/// gets no opinion.
 enum EarlyQuotaResetDetector {
     /// Anything within this of a boundary is clock or timestamp noise, not a
     /// reset: vendors jitter `resets_at` by seconds between fetches, and local
@@ -163,9 +181,16 @@ enum EarlyQuotaResetDetector {
 
         // Signal 1: a new cycle began while the old one still had time left.
         if jump >= skewTolerance {
-            // A new fixed cycle starts no earlier than our last look at the old
-            // one, so it cannot reset sooner than a window after that look. A
-            // reset time that merely creeps forward is not a new cycle.
+            // A successor cycle began when the vendor cut the old one short —
+            // after our last look at it, by definition of this pair — so its
+            // reset sits at or after (last look + one window), minus rounding.
+            // This is what rejects a same-cycle nudge (the vendor moving its
+            // reset a few hours later inside the ONE cycle: the "successor"
+            // that implies began before our last look). It cannot reject a
+            // rolling window's re-anchor, whose implied start is always "now":
+            // for that shape the anchor holds for any observation gap, and the
+            // exclusion is the windowSeconds contract, not this test (see the
+            // type doc).
             let anchoredToNewCycle = current.resetsAt
                 >= previous.observedAt.addingTimeInterval(window - cycleAnchorTolerance)
             guard anchoredToNewCycle else { return nil }
@@ -179,6 +204,13 @@ enum EarlyQuotaResetDetector {
         guard abs(jump) < skewTolerance else { return nil }
         guard previous.percent - current.percent >= minimumPercentDrop,
               current.percent <= maximumPercentAfterDrop else { return nil }
+        // A spend-cap increase is not a goodwill reset: the limit grew, the
+        // ratio fell, and the absolute usage did not. When the provider
+        // reports absolute units, require them to fall too; percent-only
+        // providers (Claude) keep the ratio test.
+        if let before = previous.usedUnits, let after = current.usedUnits {
+            guard after < before else { return nil }
+        }
         return event(.usageDropped, previous: previous, current: current, context: context)
     }
 
@@ -215,6 +247,47 @@ enum EarlyQuotaResetFormat {
         }
     }
 
+    /// Storage identity for a window that has no key of its own. Claude's
+    /// windows keep the snapshot store's keys; Codex identifies its windows by
+    /// a label slugified here. The label MUST be pre-localized English —
+    /// adapters whose display label translates or carries state pass
+    /// `QuotaSummary.Window.storageLabel` instead, and the caller prefers it —
+    /// because a slug of a translated string both drops the stored baseline on
+    /// a language switch and lets two translated siblings collide on one key.
+    ///
+    /// Callers must pass a label with something in it; a blank one is skipped
+    /// before it reaches here.
+    static func windowKey(forLabel label: String) -> String {
+        var slug = ""
+        var pendingSeparator = false
+        for scalar in label.lowercased().unicodeScalars {
+            if CharacterSet.alphanumerics.contains(scalar) {
+                if pendingSeparator { slug.append("_") }
+                slug.unicodeScalars.append(scalar)
+                pendingSeparator = false
+            } else if !slug.isEmpty {
+                pendingSeparator = true
+            }
+        }
+        return slug.isEmpty ? "window" : slug
+    }
+
+    /// Copy noun for a window named only by its display label. A label that
+    /// already says what it caps ("Monthly usage limit") keeps its own noun; one
+    /// that names only a period ("Weekly", "5-hour") gains "limit" so the
+    /// notification reads as a sentence.
+    ///
+    /// English, like `claudeWindowName(forKey:)`, because this is the name that
+    /// is persisted with the event: `limitName`, `usageName` and `windowNoun`
+    /// translate it at render.
+    static func windowName(forLabel label: String) -> String {
+        let trimmed = label
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        guard !trimmed.isEmpty else { return trimmed }
+        return trimmed.hasSuffix("limit") ? trimmed : "\(trimmed) limit"
+    }
+
     /// "2d 3h", "18h", "40m" — rounded to the unit it prints, so a lead of
     /// 1h57m reads "2h" rather than truncating to "1h".
     static func lead(seconds: TimeInterval) -> String {
@@ -232,8 +305,10 @@ enum EarlyQuotaResetFormat {
     /// stays the English name `claudeWindowName(forKey:)` produced and the
     /// translation happens here, at render. Keyed on that English name rather
     /// than by stripping `" limit"` off the end, which is a rule only English
-    /// obeys. A label outside the known set — a provider wired up later —
-    /// keeps the old suffix behaviour and reads through untranslated.
+    /// obeys. A label outside the known set — Codex's, composed by
+    /// `windowName(forLabel:)` — keeps the suffix behaviour: the provider's noun
+    /// reads through untranslated and only the word this file added to it is
+    /// routed, the same shape `usageName` already used for its default.
 
     /// "weekly limit" -> "weekly limit": the cap itself.
     static func limitName(_ name: String) -> String {
@@ -242,7 +317,9 @@ enum EarlyQuotaResetFormat {
         case "weekly limit": L("weekly limit")
         case "Opus weekly limit": L("Opus weekly limit")
         case "Sonnet weekly limit": L("Sonnet weekly limit")
-        default: name
+        default: name.hasSuffix(" limit")
+            ? L("%@ limit", String(name.dropLast(" limit".count)))
+            : name
         }
     }
 
@@ -258,13 +335,18 @@ enum EarlyQuotaResetFormat {
     }
 
     /// "weekly limit" -> "weekly usage": what the vendor cleared, not the cap.
+    /// A name outside the known set whose noun already says "usage" — Codex's
+    /// "monthly usage limit" — is left alone rather than doubled into
+    /// "monthly usage usage".
     static func usageName(_ name: String) -> String {
         switch name {
-        case "5-hour limit": L("5-hour usage")
-        case "weekly limit": L("weekly usage")
-        case "Opus weekly limit": L("Opus weekly usage")
-        case "Sonnet weekly limit": L("Sonnet weekly usage")
-        default: L("%@ usage", windowNoun(name))
+        case "5-hour limit": return L("5-hour usage")
+        case "weekly limit": return L("weekly usage")
+        case "Opus weekly limit": return L("Opus weekly usage")
+        case "Sonnet weekly limit": return L("Sonnet weekly usage")
+        default:
+            let noun = windowNoun(name)
+            return noun.hasSuffix("usage") ? noun : L("%@ usage", noun)
         }
     }
 }

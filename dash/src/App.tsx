@@ -172,6 +172,24 @@ function DeviceView({ payload, isRemote, unit }: { payload?: Payload; isRemote: 
               savings: usd(m.savingsUSD),
             }))}
           />
+          {/* $0 rows never make the table (the cost sort buries them), so the
+              panel names them instead: usage ran, the figure is unknown, not
+              zero. Same "counted at $0" wording every other consumer uses. */}
+          {(c?.unpricedModels ?? []).length > 0 && (() => {
+            const unpriced = c!.unpricedModels!
+            const tokens = unpriced.reduce((s, m) => s + m.tokens, 0)
+            const headline = unpriced.length === 1
+              ? `1 model counted at $0 · ${fmtTokens(tokens)} tokens — cost unknown, not zero: ${unpriced[0].model}`
+              : `${unpriced.length} models counted at $0 · ${fmtTokens(tokens)} tokens — cost unknown, not zero`
+            return (
+              <div className="mt-3 border-t border-border pt-3 text-xs text-tertiary-foreground">
+                {headline}
+                <span className="text-tertiary-foreground/80">
+                  {' '}(fix with <code>codeburn model-alias</code> / <code>price-override</code>)
+                </span>
+              </div>
+            )
+          })()}
         </Panel>
       </div>
 

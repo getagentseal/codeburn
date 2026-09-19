@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { createWriteStream } from 'node:fs'
-import { chmod, lstat, mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { createWriteStream, constants as fsConstants } from 'node:fs'
+import { access, chmod, lstat, mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { homedir, platform, tmpdir } from 'node:os'
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import { pipeline } from 'node:stream/promises'
@@ -518,10 +518,33 @@ async function resolvePersistentCodeburnPath(): Promise<string> {
 }
 
 async function persistCodeburnPath(): Promise<void> {
-  const cliPath = await resolvePersistentCodeburnPath()
+  let cliPath: string
+  try {
+    cliPath = await resolvePersistentCodeburnPath()
+  } catch (err) {
+    // Nothing on PATH, but someone may already have recorded a codeburn the menubar can run:
+    // the desktop app writes a launcher for the CLI it carries before it asks for this install,
+    // and a person who only ever installed the .dmg has no global command to find. A recorded
+    // launcher that still runs is a better answer than refusing the install.
+    if (await hasRunnableRecordedCli()) return
+    throw err
+  }
   await mkdir(join(homedir(), 'Library', 'Application Support', 'CodeBurn'), { recursive: true, mode: 0o700 })
   await writeFile(PERSISTED_CLI_PATH, `${cliPath}\n`, { mode: 0o600 })
   await chmod(PERSISTED_CLI_PATH, 0o600)
+}
+
+/// Whether the recorded path names an absolute file this machine can execute. Same three
+/// checks the menubar itself makes before trusting the record (CodeburnCLI.persistedCLIPath).
+export async function hasRunnableRecordedCli(recordPath: string = PERSISTED_CLI_PATH): Promise<boolean> {
+  try {
+    const recorded = (await readFile(recordPath, 'utf-8')).trim()
+    if (!isAbsolute(recorded)) return false
+    await access(recorded, fsConstants.X_OK)
+    return (await stat(recorded)).isFile()
+  } catch {
+    return false
+  }
 }
 
 async function isAppRunning(): Promise<boolean> {

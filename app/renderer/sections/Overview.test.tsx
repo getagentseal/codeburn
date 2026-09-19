@@ -6,10 +6,11 @@ import type { Polled } from '../hooks/usePolled'
 import { setActiveCurrency } from '../lib/format'
 import type { OverviewHeadlineSnapshot } from '../lib/overviewSnapshot'
 import type { ActReportJson, DailyHistoryEntry, MenubarPayload, YieldJsonReport } from '../lib/types'
+import { __resetGeneration } from '../lib/generation'
 import { Overview, OverviewContent, deriveSignals, localDateKey } from './Overview'
 
-function polled(data: MenubarPayload): Polled<MenubarPayload> {
-  return { data, error: null, loading: false, switching: false, lastSuccessAt: Date.now(), refresh: vi.fn() }
+function polled(data: MenubarPayload, lastSuccessAt = Date.now()): Polled<MenubarPayload> {
+  return { data, error: null, loading: false, switching: false, lastSuccessAt, refresh: vi.fn() }
 }
 
 // Mock the typed bridge so the section fetches our payload instead of spawning
@@ -183,6 +184,18 @@ describe('Overview', () => {
   })
   afterEach(() => {
     vi.useRealTimers()
+    __resetGeneration()
+  })
+
+  it('counts the streak from yesterday when today has no spend yet', async () => {
+    const now = new Date()
+    const daily = consecutiveDays(now, 12, index => (index === 11 ? 0 : 5))
+    getOverview.mockResolvedValue({ ...makePayload(now), history: { daily } })
+
+    const { container } = render(<Overview period="30days" provider="all" />)
+
+    expect(await screen.findByText('Last 30 days')).toBeInTheDocument()
+    expect(container.querySelector('.ov-streak')).toHaveTextContent('11-day streak')
   })
 
   it("renders real hero, stats, model, saved, session, and daily-chart data", async () => {
@@ -263,7 +276,9 @@ describe('Overview', () => {
     expect(within(summaries).getByText('Avg/day')).toBeInTheDocument()
     expect(within(summaries).getByText('$6.71')).toBeInTheDocument()
     expect(within(summaries).getByText('Peak')).toBeInTheDocument()
-    expect(within(summaries).getByText(/\$32\.00 · \d{1,2}\/\d{1,2}/)).toBeInTheDocument()
+    // The amount is its own element (it carries the token popover); the chip
+    // still reads "$32.00 · 5/12".
+    expect(within(summaries).getByText('Peak').nextElementSibling).toHaveTextContent(/^\$32\.00 · \d{1,2}\/\d{1,2}$/)
     expect(within(summaries).getByText('Yesterday')).toBeInTheDocument()
     expect(within(summaries).getByText('$5.00')).toBeInTheDocument()
 
@@ -559,8 +574,55 @@ describe('Overview', () => {
     expect(rows[1]).toHaveTextContent('$120.00')
     expect(rows[1]).toHaveTextContent('240')
     expect(rows[2]).toHaveTextContent('claude-opus-4')
-    // current.topModels carries no per-model tokens → both token cells show a dash.
-    expect(within(rows[1] as HTMLElement).getAllByText('—')).toHaveLength(2)
+    // This legacy-shaped payload carries no per-model counts → all three token
+    // cells (input, output, cache read) show a dash.
+    expect(within(rows[1] as HTMLElement).getAllByText('—')).toHaveLength(3)
+  })
+
+  it('prefers current.topModels for the models table when the payload carries per-model counts', async () => {
+    const now = new Date()
+    const payload = makePayload(now)
+    // New-CLI payload: per-model counts ride on current.topModels, including
+    // cache read. history.daily still carries different (per-day, truncated)
+    // aggregates that the table must NOT fall back to.
+    payload.current.topModels = [
+      { name: 'claude-opus-4', cost: 200, savingsUSD: 0, savingsBaselineModel: '', calls: 100, inputTokens: 1_200_000, outputTokens: 340_000, cacheReadTokens: 56_000_000, cacheWriteTokens: 7_000 },
+      { name: 'claude-haiku-4', cost: 4, savingsUSD: 0, savingsBaselineModel: '', calls: 12, inputTokens: 0, outputTokens: 0, cacheReadTokens: 900, cacheWriteTokens: 0 },
+    ]
+
+    render(<OverviewContent period="30days" provider="all" overview={polled(payload)} />)
+
+    const modelsTable = await screen.findByRole('table', { name: 'Models this period' })
+    expect(within(modelsTable).getByRole('columnheader', { name: 'Cache read' })).toBeInTheDocument()
+    const rows = within(modelsTable).getAllByRole('row')
+    // Counts come from current.topModels (1.2M in), not the daily aggregation (40M in).
+    expect(rows[1]).toHaveTextContent('claude-opus-4')
+    expect(rows[1]).toHaveTextContent('1.2M')
+    expect(rows[1]).toHaveTextContent('340K')
+    expect(rows[1]).toHaveTextContent('56M')
+    expect(within(modelsTable).queryByText('40M')).not.toBeInTheDocument()
+    // Known zeros stay zeros: haiku's fresh input/output render as 0, its cache
+    // read as the real 900.
+    expect(within(rows[2] as HTMLElement).getAllByText('0')).toHaveLength(2)
+    expect(within(rows[2] as HTMLElement).getByText('900')).toBeInTheDocument()
+  })
+
+  it('falls back to aggregating history.daily when the payload predates per-model counts', async () => {
+    const now = new Date()
+    const payload = makePayload(now)
+    // Legacy all-provider payload: current.topModels has no counts, history.daily
+    // does (input/output only — the CLI never emitted per-model cache read there).
+
+    render(<OverviewContent period="30days" provider="all" overview={polled(payload)} />)
+
+    const modelsTable = await screen.findByRole('table', { name: 'Models this period' })
+    const rows = within(modelsTable).getAllByRole('row')
+    // Input/output still come from the daily aggregation (30 days × 40M/2M) ...
+    expect(rows[1]).toHaveTextContent('claude-opus-4')
+    expect(rows[1]).toHaveTextContent('1.2B')
+    expect(rows[1]).toHaveTextContent('60M')
+    // ... and the absent per-model cache read shows as a dash, not zero.
+    expect(within(rows[1] as HTMLElement).getAllByText('—')).toHaveLength(1)
   })
 
   it('suppresses the week-over-week signal and MTD card for a custom range', async () => {
@@ -710,6 +772,113 @@ describe('Overview', () => {
     const kpis = document.querySelector('.ov-hero-main') as HTMLElement
     expect(within(kpis).getByText(/At least 3 sessions/)).toBeInTheDocument()
     expect(within(kpis).getByTitle('Older session logs may be unavailable.')).toBeInTheDocument()
+  })
+
+  it('never serves the machine-wide generation as the hero under a provider filter', async () => {
+    const now = new Date()
+    const all = makePayload(now)
+    // The unfiltered payload alone carries periodTotals; the generation it
+    // leaves behind is machine-wide.
+    all.periodTotals = { '30days': { cost: 312.4, calls: 4200 } }
+    const { unmount } = render(<OverviewContent period="30days" provider="all" overview={polled(all, 2_000)} />)
+    expect(within(document.querySelector('.ov-hero-main') as HTMLElement).getByText('$312.40')).toBeInTheDocument()
+    unmount()
+
+    // Codex spent nothing: its payload carries no periodTotals, and it is older
+    // than the generation (a switch back onto a memoized filtered report).
+    const codex = makePayload(now)
+    codex.current = { ...codex.current, cost: 0, calls: 0, sessions: 0, sessionCountBasis: 'identity' }
+
+    const { container } = render(<OverviewContent period="30days" provider="codex" overview={polled(codex, 1_000)} />)
+
+    const kpis = container.querySelector('.ov-hero-main') as HTMLElement
+    expect(within(kpis).getByText('$0.00')).toBeInTheDocument()
+    expect(within(kpis).queryByText('$312.40')).not.toBeInTheDocument()
+    expect(within(kpis).getByText(/0 calls · 0 sessions/)).toBeInTheDocument()
+  })
+
+  it('keeps the hero and the models table on the generation together when it stands in for this period', async () => {
+    const now = new Date()
+    // A fresh 30days generation: its total and its models come from one pass.
+    const fresh = makePayload(now)
+    fresh.periodTotals = { '30days': { cost: 500, calls: 9000 } }
+    fresh.current = { ...fresh.current, cost: 500, calls: 9000, topModels: [
+      { name: 'gen-opus', cost: 400, savingsUSD: 0, savingsBaselineModel: '', calls: 200 },
+      { name: 'gen-haiku', cost: 100, savingsUSD: 0, savingsBaselineModel: '', calls: 50 },
+    ] }
+    const first = render(<OverviewContent period="30days" provider="all" overview={polled(fresh, 2_000)} />)
+    first.unmount()
+
+    // An older 30days payload with different numbers and models. It is itself
+    // unfiltered (carries periodTotals), so the generation gate stays open.
+    const stale = makePayload(now)
+    stale.periodTotals = { '30days': { cost: 312.4, calls: 4200 } }
+    stale.current = { ...stale.current, cost: 312.4, topModels: [
+      { name: 'stale-sonnet', cost: 312.4, savingsUSD: 0, savingsBaselineModel: '', calls: 90 },
+    ] }
+    const { container } = render(<OverviewContent period="30days" provider="all" overview={polled(stale, 1_000)} />)
+
+    // Hero shows the generation cost, and the table shows the generation's models,
+    // so the two never disagree.
+    expect(within(container.querySelector('.ov-hero-main') as HTMLElement).getByText('$500.00')).toBeInTheDocument()
+    const table = within(container.querySelector('.ov-models') as HTMLElement)
+    expect(table.getByText('gen-opus')).toBeInTheDocument()
+    expect(table.queryByText('stale-sonnet')).not.toBeInTheDocument()
+  })
+
+  it('falls back to this payload for both hero and table when the generation is from another period', async () => {
+    const now = new Date()
+    // A week generation that also carries a 30days total, but whose models are week's.
+    const week = makePayload(now)
+    week.periodTotals = { week: { cost: 90, calls: 800 }, '30days': { cost: 500, calls: 9000 } }
+    week.current = { ...week.current, cost: 90, topModels: [
+      { name: 'week-model', cost: 90, savingsUSD: 0, savingsBaselineModel: '', calls: 40 },
+    ] }
+    const first = render(<OverviewContent period="week" provider="all" overview={polled(week, 2_000)} />)
+    first.unmount()
+
+    // Switch to an older 30days payload. The generation's 30days total exists, but its
+    // models belong to week, so the hero must not show $500 with week's models.
+    const stale30 = makePayload(now)
+    stale30.periodTotals = { '30days': { cost: 312.4, calls: 4200 } }
+    stale30.current = { ...stale30.current, cost: 312.4, topModels: [
+      { name: 'thirtyday-model', cost: 312.4, savingsUSD: 0, savingsBaselineModel: '', calls: 90, inputTokens: 10, outputTokens: 5 },
+    ] }
+    const { container } = render(<OverviewContent period="30days" provider="all" overview={polled(stale30, 1_000)} />)
+
+    const kpis = within(container.querySelector('.ov-hero-main') as HTMLElement)
+    expect(kpis.getByText('$312.40')).toBeInTheDocument()
+    expect(kpis.queryByText('$500.00')).not.toBeInTheDocument()
+    const table = within(container.querySelector('.ov-models') as HTMLElement)
+    expect(table.getByText('thirtyday-model')).toBeInTheDocument()
+    expect(table.queryByText('week-model')).not.toBeInTheDocument()
+  })
+
+  it('folds a long series into weekly buckets that keep the total, the peak and their date range', async () => {
+    const now = new Date()
+    // Past 520 days the chart draws whole weeks. The biggest single day ($500)
+    // sits in a quieter week than the biggest week (7 x $85 = $595), so a chip
+    // read off days and a guide read off buckets would disagree.
+    const daily = consecutiveDays(now, 800, index => (index === 100 ? 500 : index >= 700 && index <= 706 ? 85 : 5))
+    const payload = { ...makePayload(now), history: { daily } }
+
+    const { container } = render(<OverviewContent period="lifetime" provider="all" overview={polled(payload)} />)
+
+    const bars = Array.from(container.querySelectorAll('.chart .col')) as HTMLElement[]
+    const drawn = bars.reduce((total, bar) => total + Number(bar.dataset.cost), 0)
+    expect(bars.length).toBe(Math.ceil(800 / 7))
+    expect(drawn).toBeCloseTo(daily.reduce((total, day) => total + day.cost, 0), 6)
+
+    // Header chip and chart guide read the same series.
+    expect(container.querySelector('.chart-axis-peak')).toHaveTextContent('$595.00')
+    expect(container.querySelector('.ov-chart-summaries')).toHaveTextContent('$595.00')
+    expect(container.querySelector('.ov-chart-summaries')).not.toHaveTextContent('$500.00')
+
+    // A week's sum is never presented against one date.
+    const peakBar = bars.find(bar => Number(bar.dataset.cost) === 595) as HTMLElement
+    expect(peakBar.getAttribute('aria-label')).toMatch(/^\d{4}-\d{2}-\d{2} to \d{4}-\d{2}-\d{2}: \$595\.00/)
+    fireEvent.mouseEnter(peakBar, { clientX: 10, clientY: 10 })
+    expect(document.querySelector('.chart-tip-d')).toHaveTextContent(' to ')
   })
 
   it('keeps local hero totals when scope is local even if a combined payload is present', async () => {

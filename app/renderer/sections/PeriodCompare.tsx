@@ -3,12 +3,14 @@ import { CliErrorPanel } from '../components/CliErrorPanel'
 import { EmptyNote } from '../components/EmptyState'
 import { SectionSkeleton } from '../components/Skeleton'
 import { SegTabs } from '../components/SegTabs'
+import { AnchoredSurface } from '../components/AnchoredSurface'
 import { RangeCalendar } from '../components/RangeCalendar'
 import { useEscape } from '../hooks/useEscape'
 import { usePolled } from '../hooks/usePolled'
 import { ChartTip } from '../components/ChartTip'
 import { formatAxisMoney, niceTicks, ticksClearOfPeak } from '../lib/chartAxis'
 import { formatCompact, formatUsd, shortenProjectPath } from '../lib/format'
+import { Usd, tokensOf } from '../components/Usd'
 import { codeburn } from '../lib/ipc'
 import { reportMemoKey } from '../lib/reportMemoKey'
 import { trackEvent } from '../lib/track'
@@ -307,10 +309,13 @@ export function PeriodCompare({
 function RangeField({ label, value, onChange }: { label: string; value: DateRange; onChange: (range: DateRange) => void }) {
   const [open, setOpen] = useState(false)
   const wrapRef = useRef<HTMLDivElement>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const popoverRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
     if (!open) return
     const onPointerDown = (event: MouseEvent) => {
-      if (!wrapRef.current?.contains(event.target as Node)) setOpen(false)
+      const target = event.target as Node
+      if (!wrapRef.current?.contains(target) && !popoverRef.current?.contains(target)) setOpen(false)
     }
     document.addEventListener('mousedown', onPointerDown)
     return () => document.removeEventListener('mousedown', onPointerDown)
@@ -322,6 +327,7 @@ function RangeField({ label, value, onChange }: { label: string; value: DateRang
     <div className="pcmp-range" ref={wrapRef}>
       <span className="pcmp-range-label">{label}</span>
       <button
+        ref={triggerRef}
         type="button"
         className="pcmp-range-trigger"
         aria-haspopup="dialog"
@@ -332,7 +338,7 @@ function RangeField({ label, value, onChange }: { label: string; value: DateRang
         {formatDayShort(value.from)} – {formatDayShort(value.to)}
       </button>
       {open && (
-        <div className="calendar-popover" role="dialog" aria-label={`${label} date range`}>
+        <AnchoredSurface anchor={triggerRef} surfaceRef={popoverRef} className="calendar-popover" role="dialog" aria-label={`${label} date range`}>
           <RangeCalendar
             value={value}
             onSelect={range => {
@@ -340,7 +346,7 @@ function RangeField({ label, value, onChange }: { label: string; value: DateRang
               setOpen(false)
             }}
           />
-        </div>
+        </AnchoredSurface>
       )}
     </div>
   )
@@ -379,7 +385,7 @@ function SummaryCard({ report }: { report: PeriodDiffReport }) {
   // Only the two money tiles carry the cost semantics: more sessions is not a
   // bill going up, so the Sessions tile stays neutral.
   const tiles = [
-    { label: 'Total cost', value: formatUsd(report.totals.B.cost), change: signedUsd(report.totals.diff.cost), tone: diffClass(report.totals.diff.cost, 'cost'), pct: report.totals.pct.cost },
+    { label: 'Total cost', value: <Usd value={report.totals.B.cost} tokens={tokensOf(report.totals.B)} />, change: signedUsd(report.totals.diff.cost), tone: diffClass(report.totals.diff.cost, 'cost'), pct: report.totals.pct.cost },
     { label: 'Cost per 100 calls', value: per100.b === null ? '—' : formatUsd(per100.b), change: per100.diff === null ? '—' : signedUsd(per100.diff), tone: diffClass(per100.diff ?? 0, 'cost'), pct: per100.pct },
     { label: 'Sessions', value: report.totals.B.sessions.toLocaleString('en-US'), change: signedCount(report.totals.diff.sessions), tone: '', pct: report.totals.pct.sessions },
   ]

@@ -44,7 +44,7 @@ function colorForTone(tone: 'amber' | 'red' | 'muted'): string {
 
 export function CliErrorText({ error }: { error: CliError }) {
   const display = cliErrorDisplay(error)
-  return <p style={{ color: colorForTone(display.tone), margin: 0, fontSize: 12 }}>{display.message}</p>
+  return <p style={{ color: colorForTone(display.tone), margin: 0, fontSize: 'var(--fs-meta)' }}>{display.message}</p>
 }
 
 export function CliErrorPanel({ error, subject = 'usage' }: { error: CliError; subject?: string }) {
@@ -52,12 +52,12 @@ export function CliErrorPanel({ error, subject = 'usage' }: { error: CliError; s
   if (error.kind === 'not-found') {
     return (
       <Panel title={display.title}>
-        <p style={{ color: 'var(--mut)', margin: '0 0 6px', fontSize: 12.5 }}>
+        <p style={{ color: 'var(--mut)', margin: '0 0 6px', fontSize: 'var(--fs-body)' }}>
           CodeBurn Desktop reads {subject} by running the{' '}
           <code style={{ fontFamily: 'var(--mono)', color: 'var(--accent)' }}>codeburn</code> command, but it isn&apos;t
           on your PATH yet.
         </p>
-        <p style={{ color: colorForTone(display.tone), margin: 0, fontSize: 11.5 }}>
+        <p style={{ color: colorForTone(display.tone), margin: 0, fontSize: 'var(--fs-meta)' }}>
           Install it with <code style={{ fontFamily: 'var(--mono)', color: 'var(--accent)' }}>npm i -g codeburn</code>,
           then reopen this window.
         </p>

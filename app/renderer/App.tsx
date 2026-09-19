@@ -39,7 +39,8 @@ import { codeburn } from './lib/ipc'
 import { trackEvent } from './lib/track'
 import { isMacPlatform, isModifierChord, shortcutLabel } from './lib/platform'
 import { localDateKey, PERIOD_LABELS } from './lib/period'
-import { readDisabledProviders } from './lib/providers'
+import { generationAt } from './lib/generation'
+import { detectedProviders as detectedProviderList, providerLabel, readDisabledProviders, type DetectedProvider } from './lib/providers'
 import { reportMemoKey } from './lib/reportMemoKey'
 import { persistRefreshValue, readRefreshValue, refreshValueToMs, RefreshCadenceContext, type RefreshCadence } from './lib/refreshCadence'
 import { OverviewContent, type InvestigateRequest } from './sections/Overview'
@@ -250,15 +251,6 @@ function persistProjectFiltered(active: boolean): void {
   try { globalThis.localStorage?.setItem('codeburn.projectFiltered', active ? '1' : '0') } catch { /* storage can be unavailable */ }
 }
 
-function providerName(provider: string): string {
-  if (provider === 'all') return 'All providers'
-  return provider
-    .split(/[-\s]+/)
-    .filter(Boolean)
-    .map(part => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(' ')
-}
-
 export function refreshedLabel(lastSuccessAt: number | null, loading: boolean, now: number): string {
   if (loading && lastSuccessAt === null) return 'refreshing…'
   if (lastSuccessAt === null) return 'not refreshed yet'
@@ -330,7 +322,7 @@ function AppMain() {
   const [settingsPane, setSettingsPane] = useState<SettingsPane>('general')
   const [providerCatalog, setProviderCatalog] = useState<{
     key: string | null
-    entries: Array<{ id: string; label: string }>
+    entries: DetectedProvider[]
   }>({ key: null, entries: [] })
   const detectedProviders = providerCatalog.entries
   const [claudeConfigSource, setClaudeConfigSource] = useState<string | null>(initialConfigSource)
@@ -340,7 +332,22 @@ function AppMain() {
   // Combined reports unfiltered paired-device usage, so a project filter would
   // come back inside the aggregate. The filter wins, from the first poll.
   const scope: Scope = projectFiltered ? 'local' : requestedScope
-  const [now, setNow] = useState(() => Date.now())
+  // Rolls the shell once per local calendar day: the overview memo keys bake in
+  // a today/month boundary, so midnight must produce a re-render — but ticking
+  // a wall clock every second would re-render the whole tree for a label one
+  // row wide, so the per-second "refreshed Ns ago" tick lives in RefreshedAt.
+  const dayRef = useRef(localDateKey(new Date()))
+  const [, bumpDay] = useState(0)
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      const today = localDateKey(new Date())
+      if (today !== dayRef.current) {
+        dayRef.current = today
+        bumpDay(n => n + 1)
+      }
+    }, 15_000)
+    return () => window.clearInterval(id)
+  }, [])
   const [, setCurrencyTick] = useState(0)
   const [snapshotRevision, setSnapshotRevision] = useState(0)
   const configGenerationRef = useRef(0)
@@ -401,11 +408,11 @@ function AppMain() {
   // a provider/config filter, so onScopeChange forces provider='all' and clears
   // the config scope before this poll runs. Passing scope='local' produces the
   // same flag-free argv as before, so local users are unaffected.
-  const activeOverviewKey = overviewMemoKey(provider, period, customRange, claudeConfigSource, scope, new Date(now))
+  const activeOverviewKey = overviewMemoKey(provider, period, customRange, claudeConfigSource, scope, new Date())
   // Provider membership is period/range-specific. Keep the catalog tied to the
   // exact unscoped local overview that produced it so a scoped view cannot leak
   // providers from a different time horizon while its own payload is loading.
-  const allProviderOverviewKey = overviewMemoKey('all', period, customRange, null, 'local', new Date(now))
+  const allProviderOverviewKey = overviewMemoKey('all', period, customRange, null, 'local', new Date())
   const overview = usePolled<MenubarPayload>(
     () => scope === 'combined'
       ? codeburn.getOverview(period, 'all', customRange ?? undefined, undefined, undefined, 'combined')
@@ -514,7 +521,10 @@ function AppMain() {
     let saved: string | null = null
     try { saved = globalThis.localStorage?.getItem('codeburn.theme') ?? null } catch { /* storage can be unavailable */ }
     if (saved === 'light' || saved === 'dark') document.documentElement.setAttribute('data-theme', saved)
-    else document.documentElement.removeAttribute('data-theme')
+    // An explicit "system" choice still follows the OS; only a fresh install with no choice at
+    // all defaults to light rather than to the OS setting.
+    else if (saved === 'system') document.documentElement.removeAttribute('data-theme')
+    else document.documentElement.setAttribute('data-theme', 'light')
   }, [])
 
   useEffect(() => {
@@ -522,30 +532,12 @@ function AppMain() {
     // payload contains just the selected provider; merging it forever also
     // leaked idle providers across period changes.
     if (!overview.data || overview.switching || provider !== 'all' || claudeConfigSource || scope !== 'local') return
-    const details = overview.data.current.providerDetails
-    // Prefer providerDetails (internal id + display label); fall back to the
-    // providers map keys (lowercased display names) for older CLIs. `hasUsage`
-    // keeps idle discovery rows out of the picker, but only when the CLI
-    // actually emits it: every released CLI omits it, and falling back to cost
-    // there hid subscription-backed providers whose period spend is $0.
-    const found = details
-      ? [...details]
-          .filter(entry => entry.hasUsage ?? true)
-          .sort((a, b) => b.cost - a.cost)
-          .map(entry => ({ id: entry.id, label: entry.label }))
-      : Object.entries(overview.data.current.providers)
-          // Fallback map keys are lowercased display names; ones with spaces
-          // ("grok build") cannot round-trip as --provider, so exclude them
-          // rather than offer a filter that is guaranteed to error.
-          .filter(([key, cost]) => cost > 0 && /^[a-z0-9-]+$/.test(key))
-          .sort(([, a], [, b]) => b - a)
-          .map(([key]) => ({ id: key, label: providerName(key) }))
-    setProviderCatalog({ key: allProviderOverviewKey, entries: found })
+    setProviderCatalog({ key: allProviderOverviewKey, entries: detectedProviderList(overview.data.current) })
   }, [allProviderOverviewKey, claudeConfigSource, overview.data, overview.switching, provider, scope])
 
   const selectedProviderEntry = useMemo(() => provider === 'all'
     ? null
-    : detectedProviders.find(entry => entry.id === provider) ?? { id: provider, label: providerName(provider) },
+    : detectedProviders.find(entry => entry.id === provider) ?? { id: provider, label: providerLabel(provider), cost: 0, idle: false },
   [detectedProviders, provider])
   const visibleProviderEntries = useMemo(() => providerCatalog.key === allProviderOverviewKey
     ? detectedProviders
@@ -673,7 +665,7 @@ function AppMain() {
       // Keep the current-main provider-switch contract while the shared Core
       // provider snapshot work is still held: warm the visible period for each
       // detected provider only after the higher-value period/report queue.
-      for (const targetProvider of visibleProviderEntries.map(entry => entry.id)) {
+      for (const targetProvider of visibleProviderEntries.filter(entry => !entry.idle).map(entry => entry.id)) {
         if (cancelled || targetProvider === provider) continue
         const key = overviewMemoKey(targetProvider, period, null, null)
         if (warmedKeys.current.has(key) || hasPolledMemo(key)) continue
@@ -700,11 +692,6 @@ function AppMain() {
     // re-running every poll; the data content itself is intentionally not a dep.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready, period, provider, visibleProviderEntries, customRange, claudeConfigSource, scope, snapshotRevision, overview.data == null])
-
-  useEffect(() => {
-    const id = window.setInterval(() => setNow(Date.now()), 1000)
-    return () => window.clearInterval(id)
-  }, [])
 
   const refreshVisible = useCallback(() => {
     refreshOverview()
@@ -872,9 +859,9 @@ function AppMain() {
   const claudeConfigs = overview.data?.claudeConfigs
   const providerOptions = [
     { value: 'all', label: 'All providers' },
-    ...visibleProviderEntries.map(entry => ({ value: entry.id, label: entry.label })),
+    ...visibleProviderEntries.map(entry => ({ value: entry.id, label: entry.label, muted: entry.idle })),
   ]
-  const providerLabel = selectedProviderEntry?.label ?? providerName(provider)
+  const activeProviderLabel = selectedProviderEntry?.label ?? providerLabel(provider)
   const activeConfigLabel = claudeConfigSource
     ? claudeConfigs?.options.find(option => option.id === claudeConfigSource)?.label ?? null
     : null
@@ -882,13 +869,28 @@ function AppMain() {
   // "Combined" in place of the (forced-'all') provider label.
   const scopeCaption = scope === 'combined'
     ? `${customRange ? rangeLabel(customRange) : PERIOD_LABELS[period]} · Combined`
-    : `${customRange ? rangeLabel(customRange) : PERIOD_LABELS[period]} · ${providerLabel}${activeConfigLabel ? ` · ${activeConfigLabel}` : ''}`
+    : `${customRange ? rangeLabel(customRange) : PERIOD_LABELS[period]} · ${activeProviderLabel}${activeConfigLabel ? ` · ${activeConfigLabel}` : ''}`
   const refreshing = usePolledInFlight() || overview.switching || (!!headlineSnapshot && overview.loading)
   const selectedReportKeys = selectedReportMemoKeys(section, period, provider, customRange, activeOverviewKey)
   const selectedReportTimestamps = selectedReportKeys.map(polledMemoTimestamp)
-  const selectedLastSuccessAt = selectedReportKeys.length > 0 && selectedReportTimestamps.every((value): value is number => value != null)
+  const reportLastSuccessAt = selectedReportKeys.length > 0 && selectedReportTimestamps.every((value): value is number => value != null)
     ? Math.min(...selectedReportTimestamps)
     : null
+  // The headline on screen is the generation's, so the clock describes the
+  // generation. Without this the footer aged with whichever period's detail
+  // payload happened to be oldest, which is not what the numbers came from.
+  // A filtered view shows its own payload, never the machine-wide generation, so
+  // its clock stays the report's.
+  const headlineFromGeneration = !customRange
+    && scope === 'local'
+    && !claudeConfigSource
+    && provider === 'all'
+    && !projectFiltered
+    && !!overview.data?.periodTotals
+  const generationClock = headlineFromGeneration ? generationAt() : null
+  const selectedLastSuccessAt = generationClock != null && (reportLastSuccessAt == null || generationClock > reportLastSuccessAt)
+    ? generationClock
+    : reportLastSuccessAt
 
   return (
     <Window>
@@ -899,7 +901,7 @@ function AppMain() {
       <div className="ct" aria-busy={refreshing}>
         <div className={refreshing ? 'switch-line on' : 'switch-line'} aria-hidden="true" />
         <UpdateBanner />
-        <IndexingBanner payload={overview.data ?? null} />
+        <IndexingBanner payload={overview.degraded ?? overview.data ?? null} />
         <DailyBudgetBanner payload={overview.data ?? null} provider={provider} />
         <ErrorBoundary key={section}>
         {section === 'plans' ? (
@@ -922,7 +924,7 @@ function AppMain() {
               customRange={customRange}
               onRangeSelect={range => commitNav({ range, visibleCount: INITIAL_VISIBLE })}
               provider={provider}
-              providerLabel={providerLabel}
+              providerLabel={activeProviderLabel}
               providerOptions={providerOptions}
               onProviderSelect={onProviderSelect}
               claudeConfigs={claudeConfigs}
@@ -964,12 +966,27 @@ function AppMain() {
               { k: shortcutLabel(','), label: 'Settings' },
               { k: shortcutLabel('R'), label: 'Refresh' },
             ]}
-            right={<RefreshMark refreshing={refreshing} label={refreshedLabel(selectedLastSuccessAt, false, now)} />}
+            right={<RefreshedAt lastSuccessAt={selectedLastSuccessAt} refreshing={refreshing} />}
           />
         )}
       </div>
     </Window>
   )
+}
+
+/** The footer's "refreshed Ns ago" note. The only part of the shell that needs
+ *  a 1-second tick, so the tick lives here: a clock in AppMain would reconcile
+ *  the whole tree — sidebar, hero, chart, heatmap, tables — 60 times a minute
+ *  for a label one row wide. Props re-renders (a new lastSuccessAt) still land
+ *  immediately; the interval only repaints elapsed time. The RefreshMark it
+ *  renders keeps the fixed icon and screen-reader state main's footer added. */
+function RefreshedAt({ lastSuccessAt, refreshing }: { lastSuccessAt: number | null; refreshing: boolean }) {
+  const [, setTick] = useState(0)
+  useEffect(() => {
+    const id = window.setInterval(() => setTick(tick => tick + 1), 1000)
+    return () => window.clearInterval(id)
+  }, [])
+  return <RefreshMark refreshing={refreshing} label={refreshedLabel(lastSuccessAt, refreshing, Date.now())} />
 }
 
 /** Footer refresh state. The icon is always in the DOM at a fixed 12px so the

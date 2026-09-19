@@ -45,13 +45,13 @@ describe('Sidebar', () => {
   ] as const)('renders every nav item in its group with %s keycaps', (platform, mod) => {
     setPlatform(platform)
     const { container } = render(<Sidebar active="overview" onNavigate={() => {}} />)
-    const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-    const labels = [...container.querySelectorAll('.ni')].map(item => item.textContent?.replace(/(⌘|Ctrl\+)[\d,.]/, ''))
+    const labels = [...container.querySelectorAll('.ni')].map(item => item.textContent)
     expect(labels).toEqual(['Overview', 'Sessions', 'Pull requests', 'Spend', 'Models', 'Optimize', 'Compare', 'Compare periods', 'Plans', 'Plugins', 'Settings'])
-    expect(screen.getByRole('button', { name: new RegExp(`Sessions.*${esc(mod)}2`) })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: new RegExp(`Pull requests.*${esc(mod)}3`) })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: new RegExp(`Compare.*${esc(mod)}7`) })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: new RegExp(`Plans.*${esc(mod)}8`) })).toBeInTheDocument()
+    const tip = (label: string) => [...container.querySelectorAll('.ni')].find(item => item.textContent === label)?.getAttribute('title')
+    expect(tip('Sessions')).toBe(`Sessions ${mod}2`)
+    expect(tip('Pull requests')).toBe(`Pull requests ${mod}3`)
+    expect(tip('Compare')).toBe(`Compare ${mod}7`)
+    expect(tip('Plans')).toBe(`Plans ${mod}8`)
   })
 
   it('calls onNavigate with the section id when a nav item is clicked', () => {
@@ -80,20 +80,14 @@ describe('Sidebar', () => {
     expect([...container.querySelectorAll('.grp-label')].map(el => el.textContent)).toEqual(['Usage', 'Insight', 'Account'])
   })
 
-  it('shows the shortcut badges only while the modifier is held', () => {
+  it('keeps the shortcut on the row tooltip rather than a chip in the row', () => {
+    setPlatform('darwin')
     const { container } = render(<Sidebar active="overview" onNavigate={() => {}} />)
-    const nav = container.querySelector('.sb')
 
-    expect(nav).not.toHaveAttribute('data-show-keys')
-    fireEvent.keyDown(window, { key: 'Meta', metaKey: true })
-    expect(nav).toHaveAttribute('data-show-keys')
-    fireEvent.keyUp(window, { key: 'Meta' })
-    expect(nav).not.toHaveAttribute('data-show-keys')
-
-    fireEvent.keyDown(window, { key: 'Control', ctrlKey: true })
-    expect(nav).toHaveAttribute('data-show-keys')
-    fireEvent.blur(window)
-    expect(nav).not.toHaveAttribute('data-show-keys')
+    expect(container.querySelector('.ni .k')).toBeNull()
+    const spend = [...container.querySelectorAll('.ni')].find(item => item.textContent === 'Spend')
+    expect(spend).toHaveAttribute('title', 'Spend ⌘4')
+    expect(spend).toHaveAttribute('data-tip', 'Spend ⌘4')
   })
 
   it('carries About and the version in the corner, with the links in the modal', async () => {

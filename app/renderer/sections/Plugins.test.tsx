@@ -1,7 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, it, expect, vi } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
-import userEvent from '@testing-library/user-event'
 
 // The section reads the preload bridge at module load, so it is mocked rather than
 // assigned onto window after the fact. isWindowsPlatform reads window.codeburn.platform.
@@ -154,20 +153,19 @@ describe('PluginsSection', () => {
 })
 
 describe('PluginsSection empty state', () => {
-  it('shows the coming-soon card and opens the install flow from the link', async () => {
+  it('shows the Teams card and nothing else to press', async () => {
     setPlatform('darwin')
     bridge.pluginList.mockResolvedValue([])
 
-    const user = userEvent.setup()
     render(<PluginsSection />)
 
     await waitFor(() => expect(bridge.pluginList).toHaveBeenCalled())
-    expect(screen.getByRole('heading', { name: 'Coming soon' })).toBeInTheDocument()
+    expect(screen.getByText('Teams')).toBeInTheDocument()
+    expect(screen.getByText('Coming soon')).toBeInTheDocument()
     expect(screen.queryByText('No plugins installed')).toBeNull()
     expect(screen.queryByText('Refresh')).toBeNull()
-
-    await user.click(screen.getByRole('button', { name: 'Install it' }))
-    expect(await screen.findByText('Install Plugin')).toBeInTheDocument()
+    // The manual plugin-file line is gone; the flow itself still opens from Install plugin.
+    expect(screen.queryByRole('button', { name: 'Install it' })).toBeNull()
   })
 })
 

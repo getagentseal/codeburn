@@ -333,12 +333,14 @@ describe('aggregateProjectsIntoDays', () => {
     ]
     const days = aggregateProjectsIntoDays(projects)
     const day = days[0]!
+    // v33: day.models is keyed by modelRowKey (display name + route), not the
+    // raw id, so a route sourced from a provider column survives into the day.
     expect(day.models['Opus 4.7']).toEqual({
       calls: 1, cost: 7, savingsUSD: 0,
       inputTokens: 100, outputTokens: 200,
       cacheReadTokens: 50, cacheWriteTokens: 0,
     })
-    expect(day.models['gpt-5']).toEqual({
+    expect(day.models['GPT-5']).toEqual({
       calls: 1, cost: 3, savingsUSD: 0,
       inputTokens: 100, outputTokens: 200,
       cacheReadTokens: 50, cacheWriteTokens: 0,
@@ -357,7 +359,7 @@ describe('aggregateProjectsIntoDays', () => {
       inputTokens: 100, outputTokens: 200, cacheReadTokens: 50, cacheWriteTokens: 0,
     })
     expect(day.providers['codex']!.models).toEqual({
-      'gpt-5': { calls: 1, cost: 3, savingsUSD: 0, inputTokens: 100, outputTokens: 200, cacheReadTokens: 50, cacheWriteTokens: 0 },
+      'GPT-5': { calls: 1, cost: 3, savingsUSD: 0, inputTokens: 100, outputTokens: 200, cacheReadTokens: 50, cacheWriteTokens: 0 },
     })
     // Slice categories hold only that provider's share of cost; the primary
     // provider (the first call in this tie) owns the turn count.
@@ -465,6 +467,38 @@ describe('buildPeriodDataFromDays', () => {
     expect(coding.editTurns).toBe(4)
     expect(coding.oneShotTurns).toBe(2)
     expect(coding.cost).toBeCloseTo(15)
+  })
+
+  // The hero's token popover reads the period totals; the Models table sums the
+  // per-model rows. Both come out of here, so they must be the same numbers.
+  it('period token totals equal the day sums and the per-model sums', () => {
+    const split = (date: string, factor: number) => {
+      const models = {
+        'Opus 4.7': { calls: 8, cost: 8 * factor, savingsUSD: 0, inputTokens: 80 * factor, outputTokens: 160 * factor, cacheReadTokens: 240 * factor, cacheWriteTokens: 40 * factor },
+        'Haiku 4.5': { calls: 2, cost: 2 * factor, savingsUSD: 0, inputTokens: 20 * factor, outputTokens: 40 * factor, cacheReadTokens: 60 * factor, cacheWriteTokens: 10 * factor },
+      }
+      return {
+        ...makeDay(date, 10 * factor),
+        inputTokens: 100 * factor,
+        outputTokens: 200 * factor,
+        cacheReadTokens: 300 * factor,
+        cacheWriteTokens: 50 * factor,
+        models,
+      }
+    }
+    const days = [split('2026-04-09', 1), split('2026-04-10', 3)]
+    const pd = buildPeriodDataFromDays(days, '7 Days')
+    const sumOf = (field: 'inputTokens' | 'outputTokens' | 'cacheReadTokens' | 'cacheWriteTokens') => ({
+      period: pd[field],
+      overDays: days.reduce((sum, day) => sum + day[field], 0),
+      overModels: pd.models.reduce((sum, model) => sum + model[field], 0),
+    })
+    for (const field of ['inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheWriteTokens'] as const) {
+      const { period, overDays, overModels } = sumOf(field)
+      expect(period).toBe(overDays)
+      expect(period).toBe(overModels)
+    }
+    expect(pd.calls).toBe(days.reduce((sum, day) => sum + day.calls, 0))
   })
 
   it('returns empty period totals when no days supplied', () => {
@@ -621,6 +655,29 @@ describe('daily-cache ↔ report daily-bucket parity', () => {
   })
 })
 
+describe('billing routes in the finalized day (v33)', () => {
+  it('keys day.models by route so a column-sourced route survives, and keeps Bedrock SKUs apart', () => {
+    // Hermes writes `billing_provider = bedrock` next to a plain vendor id;
+    // only the call's `route` can carry that into the day. The raw-id key
+    // (pre-v33) would have folded it into the direct row on re-derivation.
+    const direct = makeCall('2026-08-05T10:00:00Z', 1, 'claude-sonnet-4-5', 'hermes')
+    const viaColumn = { ...makeCall('2026-08-05T10:01:00Z', 2, 'claude-sonnet-4-5', 'hermes'), route: 'bedrock' }
+    const viaId = makeCall('2026-08-05T10:02:00Z', 3, 'anthropic.claude-sonnet-4-5-20250929-v1:0', 'claude')
+    const viaIdUs = makeCall('2026-08-05T10:03:00Z', 4, 'us.anthropic.claude-sonnet-4-5-20250929-v1:0', 'claude')
+    const day = aggregateProjectsIntoDays([makeSingleTurnProject([direct, viaColumn, viaId, viaIdUs])])[0]!
+    expect(Object.keys(day.models).sort()).toEqual([
+      'Sonnet 4.5', 'Sonnet 4.5 (Bedrock us)', 'Sonnet 4.5 (Bedrock)',
+    ])
+    expect(day.models['Sonnet 4.5']!.cost).toBe(1)
+    // The column-routed call and the id-shaped one are one row: same SKU, same door.
+    expect(day.models['Sonnet 4.5 (Bedrock)']!.cost).toBe(5)
+    expect(day.models['Sonnet 4.5 (Bedrock us)']!.cost).toBe(4)
+    // Provider slices carry the same keys, so a per-provider re-derivation
+    // (the pending-rederive path) lands on the rows the day already holds.
+    expect(Object.keys(day.providers['hermes']!.models!).sort()).toEqual(['Sonnet 4.5', 'Sonnet 4.5 (Bedrock)'])
+  })
+})
+
 describe('supplementary accounting weight (copilot store/rollup calls)', () => {
   it('adds cost and tokens but no call or turn weight, matching buildSessionSummary', () => {
     // One real request served both ways: the per-turn call is behavioral, the
@@ -632,8 +689,8 @@ describe('supplementary accounting weight (copilot store/rollup calls)', () => {
     expect(day.calls).toBe(1)
     expect(day.cost).toBeCloseTo(3, 12)
     expect(day.inputTokens).toBe(200)
-    expect(day.models['claude-sonnet-4-5']!.calls).toBe(1)
-    expect(day.models['claude-sonnet-4-5']!.cost).toBeCloseTo(3, 12)
+    expect(day.models['Sonnet 4.5']!.calls).toBe(1)
+    expect(day.models['Sonnet 4.5']!.cost).toBeCloseTo(3, 12)
     expect(day.providers['copilot']!.calls).toBe(1)
     expect(day.categories['coding']!.turns).toBe(1)
 
@@ -647,7 +704,7 @@ describe('supplementary accounting weight (copilot store/rollup calls)', () => {
     expect(aggOnly.inputTokens).toBe(100)
     expect(aggOnly.categories['coding']!.turns).toBe(0)
     expect(aggOnly.editTurns).toBe(0)
-    expect(aggOnly.models['claude-sonnet-4-5']!.calls).toBe(0)
+    expect(aggOnly.models['Sonnet 4.5']!.calls).toBe(0)
     expect(aggOnly.providers['copilot']!.calls).toBe(0)
   })
 })
