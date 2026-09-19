@@ -88,6 +88,10 @@ const BUILTIN_PRICE_OVERRIDES: Record<string, SnapshotEntry> = {
   'composer-2': [0.5e-6, 2.5e-6, 0.5e-6, 0.2e-6],
   'composer-1.5': [3.5e-6, 17.5e-6, 3.5e-6, 0.35e-6],
   'composer-1': [1.25e-6, 10e-6, 1.25e-6, 0.125e-6],
+  // Hunyuan house models observed in WorkBuddy (DeepSeek v4 prices come from
+  // the bundled snapshot; local overrides here were stale and shadowed it).
+  'hy3': [0.132e-6, 0.528e-6, 0, 0.033e-6],
+  'hy3-free': [0.132e-6, 0.528e-6, 0, 0.033e-6],
 }
 
 // Assemble a ModelCosts, applying the cache-cost heuristics (write = 1.25x
@@ -513,6 +517,14 @@ const BUILTIN_ALIASES: Record<string, string> = {
   // released sibling (GLM-5.2 / glm-5p2). Hermes stores the id lowercased.
   'GLM-5.3':                        'glm-5p2',
   'glm-5.3':                        'glm-5p2',
+  // WorkBuddy / WorkBuddy AI models and aliases
+  'deepseek-v4.1-flash':               'deepseek-v4-flash',
+  'glm-5.2-x':                         'glm-5p1',
+  'kimi-k3-1':                         'kimi-k3',
+  'glm-5.1':                           'glm-5p1',
+  'glm-5.2-a':                         'glm-5p1',
+  'glm-5v-turbo':                      'glm-5p1',
+  'kimi-k2.7':                         'kimi-k2p6',
 }
 
 let userAliases: Record<string, string> = {}
@@ -1314,6 +1326,7 @@ const SHORT_NAMES: Record<string, string> = {
   'kimi-k2-thinking-turbo': 'Kimi K2 Thinking Turbo',
   'kimi-k2-thinking': 'Kimi K2 Thinking',
   'kimi-k3': 'Kimi K3',
+  'kimi-k3-1': 'Kimi K3.1',
   'kimi-k2p6': 'Kimi K2.6',
   'kimi-thinking-preview': 'Kimi Thinking',
   'kimi-k2.6': 'Kimi K2.6',
@@ -1326,6 +1339,7 @@ const SHORT_NAMES: Record<string, string> = {
   'moonshot-v1': 'Moonshot v1',
   'deepseek-v4-pro': 'DeepSeek v4 Pro',
   'deepseek-v4-flash': 'DeepSeek v4 Flash',
+  'deepseek-v4.1-flash': 'DeepSeek v4.1 Flash',
   'deepseek-coder-max': 'DeepSeek Coder Max',
   'deepseek-coder': 'DeepSeek Coder',
   'deepseek-r1': 'DeepSeek R1',

@@ -1,9 +1,10 @@
 import { readdir, stat } from "fs/promises";
+import { statSync } from "fs";
 import { basename, join } from "path";
 import { homedir } from "os";
 
 import { calculateCost, getShortModelName } from "../models.js";
-import { openDatabase } from "../sqlite.js";
+import { blobToText, isSqliteAvailable, openDatabase } from "../sqlite.js";
 import type {
   ProbeRoot,
   Provider,
@@ -11,6 +12,7 @@ import type {
   SessionSource,
   ParsedProviderCall,
 } from "./types.js";
+import type { DateRange } from "../types.js";
 import { readSessionFile } from "../fs-utils.js";
 import { isPositiveNumber, safeNumber } from "../parser.js";
 
@@ -155,13 +157,15 @@ type DevinUsage = {
   cacheReadInputTokens: number;
 };
 
-const DEFAULT_DEVIN_CLI_DIR = join(
-  homedir(),
-  ".local",
-  "share",
-  "devin",
-  "cli",
-);
+// Devin Desktop keeps its CLI data under %APPDATA% on Windows; the Linux-style
+// XDG path is the fallback there and the default everywhere else.
+const DEFAULT_DEVIN_CLI_DIRS =
+  process.platform === "win32"
+    ? [
+        join(homedir(), "AppData", "Roaming", "devin", "cli"),
+        join(homedir(), ".local", "share", "devin", "cli"),
+      ]
+    : [join(homedir(), ".local", "share", "devin", "cli")];
 
 const DEFAULT_MODEL_NAME = "devin";
 const DEVIN_PROVIDER_NAME = "devin";
@@ -554,8 +558,170 @@ class DevinSessionParser implements SessionParser {
   }
 }
 
+// ── sessions.db message tree ─────────────────────────────────────────────
+// Current CLI builds keep the whole conversation tree inside sessions.db
+// (message_nodes.chat_message); no transcripts/ directory is written. Each
+// assistant node carries metadata.metrics (input/output/cache tokens),
+// metadata.generation_model (canonical model id), and request_id.
+// The node tree shares messages across branches after a fork, so the same
+// API call appears on multiple rows — dedupe on request_id, not row_id.
+
+type DevinMessageNodeRow = {
+  session_id: string | null;
+  node_id: number;
+  created_at: number | null;
+  chat_message: string | Uint8Array | null;
+};
+
+type DevinChatMessage = {
+  message_id?: string;
+  role?: string;
+  tool_calls?: Array<{ name?: string; function_name?: string }>;
+  metadata?: DevinMetadata;
+};
+
+class DevinDbSessionParser implements SessionParser {
+  constructor(
+    private source: SessionSource,
+    private seenKeys: Set<string>,
+    private sessionMetadata: Map<string, DevinSessionMetadata>,
+    private transcriptSessionIds: Set<string>,
+    private dateRange?: DateRange,
+  ) {}
+
+  async *parse(): AsyncGenerator<ParsedProviderCall> {
+    if (!isSqliteAvailable()) return;
+    let db: ReturnType<typeof openDatabase> | null = null;
+    try {
+      db = openDatabase(this.source.path);
+      const rows = db.query<DevinMessageNodeRow>(
+        `SELECT session_id, node_id, created_at, CAST(chat_message AS BLOB) AS chat_message
+         FROM message_nodes
+         WHERE json_extract(chat_message, '$.role') = 'assistant'
+           AND json_extract(chat_message, '$.metadata.metrics') IS NOT NULL` +
+          (this.dateRange ? " AND created_at BETWEEN ? AND ?" : ""),
+        this.dateRange
+          ? [
+              Math.floor(this.dateRange.start.getTime() / 1000),
+              Math.ceil(this.dateRange.end.getTime() / 1000),
+            ]
+          : [],
+      );
+      for (const row of rows) {
+        const sessionId = row.session_id ?? "";
+        if (!sessionId || this.transcriptSessionIds.has(sessionId)) continue;
+        const session = this.sessionMetadata.get(sessionId) ?? null;
+        if (session?.hidden) continue;
+
+        let msg: DevinChatMessage;
+        try {
+          msg = JSON.parse(blobToText(row.chat_message)) as DevinChatMessage;
+        } catch {
+          continue;
+        }
+        const metrics = msg.metadata?.metrics;
+        if (!metrics) continue;
+        const inputTokens = safeNumber(metrics.input_tokens);
+        const outputTokens = safeNumber(metrics.output_tokens);
+        const cacheReadTokens = safeNumber(metrics.cache_read_tokens);
+        const cacheCreationTokens = safeNumber(metrics.cache_creation_tokens);
+        if (!inputTokens && !outputTokens && !cacheReadTokens && !cacheCreationTokens) {
+          continue;
+        }
+
+        const requestId =
+          firstPresentString(msg.metadata?.request_id, msg.message_id) ??
+          `node-${row.node_id}`;
+        const deduplicationKey = `devin:db:${sessionId}:${requestId}`;
+        if (this.seenKeys.has(deduplicationKey)) continue;
+        this.seenKeys.add(deduplicationKey);
+
+        const generationModel = firstPresentString(
+          msg.metadata?.generation_model,
+        );
+        const modelName = session?.model ?? DEFAULT_MODEL_NAME;
+        const pricingModel =
+          !generationModel || /^MODEL_/.test(generationModel)
+            ? modelName
+            : normalizeDevinGptId(generationModel);
+        const model = getDevinDisplayModelName(generationModel, modelName);
+        const timestamp =
+          typeof row.created_at === "number"
+            ? parseNumericTimestamp(row.created_at)
+            : (session?.lastActivityAt ?? "");
+
+        yield {
+          provider: DEVIN_PROVIDER_NAME,
+          model,
+          inputTokens,
+          outputTokens,
+          cacheCreationInputTokens: cacheCreationTokens,
+          cacheReadInputTokens: cacheReadTokens,
+          cachedInputTokens: cacheReadTokens,
+          reasoningTokens: 0,
+          webSearchRequests: 0,
+          costUSD: calculateCost(
+            pricingModel,
+            inputTokens,
+            outputTokens,
+            cacheCreationTokens,
+            cacheReadTokens,
+            0,
+          ),
+          tools: (msg.tool_calls ?? [])
+            .map((call) => call.name ?? call.function_name ?? "")
+            .filter(Boolean),
+          bashCommands: [],
+          timestamp,
+          speed: "standard",
+          deduplicationKey,
+          userMessage: "",
+          sessionId,
+          project: getProjectName(this.source, session),
+          projectPath: getProjectPath(session),
+        };
+      }
+    } catch {
+      // Missing table on an older schema, or a locked/corrupt db — nothing
+      // to report.
+    } finally {
+      db?.close();
+    }
+  }
+}
+
 function resolveDevinCliDir(override?: string): string {
-  return override && override.trim() ? override : DEFAULT_DEVIN_CLI_DIR;
+  if (override && override.trim()) return override;
+  for (const dir of DEFAULT_DEVIN_CLI_DIRS) {
+    try {
+      if (statSync(dir).isDirectory()) return dir;
+    } catch {
+      // keep looking
+    }
+  }
+  return DEFAULT_DEVIN_CLI_DIRS[0];
+}
+
+async function isFile(path: string): Promise<boolean> {
+  try {
+    return (await stat(path)).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function hasMessageNodes(dbPath: string): boolean {
+  if (!isSqliteAvailable()) return false;
+  let db: ReturnType<typeof openDatabase> | null = null;
+  try {
+    db = openDatabase(dbPath);
+    db.query("SELECT 1 FROM message_nodes LIMIT 1");
+    return true;
+  } catch {
+    return false;
+  } finally {
+    db?.close();
+  }
 }
 
 function getDevinDiscoveryRoots(cliDir: string): {
@@ -573,6 +739,7 @@ export function createDevinProvider(cliDir?: string): Provider {
   const { transcriptsDir, sessionsDbPath } =
     getDevinDiscoveryRoots(resolvedCliDir);
   let sessionMetadata: Map<string, DevinSessionMetadata> | null = null;
+  let transcriptSessionIds = new Set<string>();
 
   const getSessionMetadata = () => {
     if (!sessionMetadata) sessionMetadata = loadSessionMetadata(sessionsDbPath);
@@ -582,6 +749,9 @@ export function createDevinProvider(cliDir?: string): Provider {
   return {
     name: DEVIN_PROVIDER_NAME,
     displayName: DEVIN_PROVIDER_DISPLAY_NAME,
+    // The CLI owns sessions.db and can prune old sessions; cached calls keep
+    // contributing after their rows disappear.
+    durableSources: true,
 
     modelDisplayName(model: string): string {
       return model;
@@ -602,6 +772,7 @@ export function createDevinProvider(cliDir?: string): Provider {
       const entries = await readdir(transcriptsDir).catch(() => []);
       const metadata = getSessionMetadata();
       const sources: SessionSource[] = [];
+      const covered = new Set<string>();
 
       for (const entry of entries) {
         if (!entry.endsWith(".json")) continue;
@@ -627,6 +798,23 @@ export function createDevinProvider(cliDir?: string): Provider {
           project,
           provider: DEVIN_PROVIDER_NAME,
         });
+        covered.add(basename(filePath, ".json"));
+      }
+      transcriptSessionIds = covered;
+
+      // Current CLI builds keep the whole message tree in sessions.db — usable
+      // because per-call token metrics support a calculated price. Sessions
+      // that also have a transcript file are skipped inside the DB parser so
+      // nothing counts twice.
+      // A db without message_nodes only carries session metadata for the
+      // transcript path; probing it keeps discovery cheap for that layout.
+      if (await isFile(sessionsDbPath) && hasMessageNodes(sessionsDbPath)) {
+        sources.push({
+          path: sessionsDbPath,
+          project: DEVIN_PROVIDER_NAME,
+          provider: DEVIN_PROVIDER_NAME,
+          sourceId: "sessions-db",
+        });
       }
 
       return sources;
@@ -635,10 +823,20 @@ export function createDevinProvider(cliDir?: string): Provider {
     createSessionParser(
       source: SessionSource,
       seenKeys: Set<string>,
+      dateRange?: DateRange,
     ): SessionParser {
+      if (source.sourceId === "sessions-db") {
+        return new DevinDbSessionParser(
+          source,
+          seenKeys,
+          getSessionMetadata(),
+          transcriptSessionIds,
+          dateRange,
+        );
+      }
       return new DevinSessionParser(source, seenKeys, getSessionMetadata());
     },
   };
 }
 
-export const devin = createDevinProvider(DEFAULT_DEVIN_CLI_DIR);
+export const devin = createDevinProvider();

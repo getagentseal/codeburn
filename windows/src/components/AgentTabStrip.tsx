@@ -70,6 +70,8 @@ const PROVIDER_COLORS: Record<string, string> = {
   grok: '#8E8E93',
   hermes: '#C7523E',
   zcode: '#526ED6',
+  workbuddy: '#2563EB',
+  workbuddyai: '#06B6D4',
 }
 
 export function providerColor(id: Provider): string {

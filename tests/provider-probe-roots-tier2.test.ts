@@ -162,9 +162,13 @@ describe('probeRoots mirrors discovery resolution (Tier 2, batch 2)', () => {
       { path: join('/tmp/probe-devin', 'transcripts'), label: 'transcripts' },
       { path: join('/tmp/probe-devin', 'sessions.db'), label: 'sessions.db' },
     ])
+    const defaultCliDir =
+      process.platform === 'win32'
+        ? join(homedir(), 'AppData', 'Roaming', 'devin', 'cli')
+        : join(homedir(), '.local', 'share', 'devin', 'cli')
     const defaults = [
-      { path: join(homedir(), '.local', 'share', 'devin', 'cli', 'transcripts'), label: 'transcripts' },
-      { path: join(homedir(), '.local', 'share', 'devin', 'cli', 'sessions.db'), label: 'sessions.db' },
+      { path: join(defaultCliDir, 'transcripts'), label: 'transcripts' },
+      { path: join(defaultCliDir, 'sessions.db'), label: 'sessions.db' },
     ]
     expect(await createDevinProvider().probeRoots!()).toEqual(defaults)
     expect(await createDevinProvider('').probeRoots!()).toEqual(defaults)

@@ -432,14 +432,15 @@ function resolveHermesCost(
     return { costUSD: 0, costIsEstimated: false, costBasis: 'included' }
   }
   // An explicit Hermes estimate is authoritative even when it is zero (for
-  // example, a provider's free tier). Preserve that provenance in the UI.
-  if (costStatus === 'estimated' && row?.estimated_cost_usd != null) {
+  // example, a provider's free tier), UNLESS it is an unscaled raw credit/token figure
+  // or garbage value (sanity cap at $1,000 per session).
+  if (costStatus === 'estimated' && row?.estimated_cost_usd != null && row.estimated_cost_usd <= 1000) {
     return { costUSD: row.estimated_cost_usd, costIsEstimated: true, costBasis: 'estimated' }
   }
   // Only rows predating BOTH provenance fields use the legacy positive-estimate
   // fallback. A provenance-aware `unknown` row can retain a partial estimate
   // from earlier priced calls; treating that as the session total undercounts.
-  if (!costStatus && !costSource && row && row.estimated_cost_usd != null && row.estimated_cost_usd > 0) {
+  if (!costStatus && !costSource && row && row.estimated_cost_usd != null && row.estimated_cost_usd > 0 && row.estimated_cost_usd <= 1000) {
     return { costUSD: row.estimated_cost_usd, costIsEstimated: true, costBasis: 'estimated' }
   }
   return { costUSD: calculatedCost, costIsEstimated: true, costBasis: 'calculated' }

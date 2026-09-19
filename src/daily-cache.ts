@@ -189,7 +189,13 @@ import type { DateRange, ProjectSummary } from './types.js'
 // which re-derive to the same rows for direct calls and to "(Bedrock)" rows
 // for Bedrock-shaped ids, but its Hermes column routes are unrecoverable
 // without a re-parse, so hermes joins PENDING_REDERIVE_PROVIDER_VERSIONS.
-export const DAILY_CACHE_VERSION = 33
+// v34: merge rung — this branch's v33 (Hermes abnormal estimated_cost_usd
+// sanity check + WorkBuddy/WorkBuddy AI providers) collided with upstream's
+// billing-route v33, and one number cannot carry two accountings. Also picks
+// up the new proxy-farm providers (antigravity-tools, cc-switch, new-api) and
+// the devin sessions.db source: days finalized before they existed re-derive
+// so their slices appear.
+export const DAILY_CACHE_VERSION = 34
 const MIN_SUPPORTED_VERSION = 28
 
 /// Providers whose per-day CALL COUNT means something different at
@@ -215,10 +221,12 @@ const MIN_SUPPORTED_VERSION = 28
 const PENDING_REDERIVE_PROVIDER_VERSIONS: Readonly<Record<string, number>> = {
   copilot: 26,
   // 31: a v30 file may have been written by #1132's accounting, which never
-  // carried the Hermes cost contract. 33: day.models is keyed by route, and a
-  // v32 Hermes day cannot know which of its rows went through
-  // `billing_provider = bedrock` / `openrouter` (#1450).
-  hermes: 33,
+  // carried the Hermes cost contract. 34: day.models is keyed by route, and a
+  // pre-route Hermes day cannot know which of its rows went through
+  // `billing_provider = bedrock` / `openrouter` (#1450). Contracted at 34, not
+  // upstream's 33: this branch also shipped a v33 (Hermes guard + WorkBuddy),
+  // and caches that version wrote still hold raw-id model keys.
+  hermes: 34,
   // DSH v0-only parsing and exclusive-reasoning display were both stale in
   // finalized days written before the multi-generation reader.
   dsh: 32,

@@ -1,3 +1,5 @@
+import { antigravityTools } from './antigravity-tools.js'
+import { ccSwitch } from './cc-switch.js'
 import { claude } from './claude.js'
 import { cline } from './cline.js'
 import { clineCli } from './cline-cli.js'
@@ -18,6 +20,7 @@ import { kimicode } from './kimicode.js'
 import { lingtaiTui } from './lingtai-tui.js'
 import { mistralVibe } from './mistral-vibe.js'
 import { mux } from './mux.js'
+import { newApi } from './new-api.js'
 import { openclaw } from './openclaw.js'
 import { openclaude } from './openclaude.js'
 import { openDesign } from './open-design.js'
@@ -28,6 +31,7 @@ import { rooCode } from './roo-code.js'
 import { zerostack } from './zerostack.js'
 import { grok } from './grok.js'
 import { grokbot } from './grokbot.js'
+import { workbuddy, workbuddyai } from './workbuddy.js'
 import { isBlockedDatabaseError } from '../sqlite.js'
 import type { Provider, SessionSource } from './types.js'
 
@@ -195,7 +199,7 @@ async function loadZed(): Promise<Provider | null> {
   }
 }
 
-const coreProviders: Provider[] = [claude, cline, clineCli, codewhale, codebuff, codex, copilot, devin, droid, dsh, gemini, hermes, ibmBob, kiloCode, kiro, kimi, kimicode, lingtaiTui, mistralVibe, mux, openclaw, openclaude, openDesign, pi, omp, qwen, quickdesk, rooCode, zerostack, grok, grokbot]
+const coreProviders: Provider[] = [antigravityTools, ccSwitch, claude, cline, clineCli, codewhale, codebuff, codex, copilot, devin, droid, dsh, gemini, hermes, ibmBob, kiloCode, kiro, kimi, kimicode, lingtaiTui, mistralVibe, mux, newApi, openclaw, openclaude, openDesign, pi, omp, qwen, quickdesk, rooCode, zerostack, grok, grokbot, workbuddy, workbuddyai]
 
 // Lazily loaded providers, listed by name so --provider validation works even
 // when an optional module fails to load. Must stay in sync with getAllProviders.

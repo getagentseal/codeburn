@@ -214,6 +214,8 @@
               "$HOME/.moldbot/agents",
               "$HOME/.pi/agent/sessions",
               "$HOME/.qwen/projects",
+              "$HOME/.workbuddy/projects",
+              "$HOME/.workbuddy-ai/projects",
               "$HOME/.quickwork/profiles.json",
               "$HOME/.quickwork/sessions",
               "$HOME/.quickwork/metrics",
