@@ -1126,15 +1126,53 @@ async function readEnvelope(dir: string): Promise<CacheEnvelope | null> {
   }
 }
 
-// A shard that is missing or malformed costs exactly the provider-months it
-// held, not the provider and never the whole cache: those files re-parse while
-// every other month keeps serving.
+/// Shards at or under this size decode with plain JSON.parse; larger ones
+/// stream. Profiled on a real corpus: 166MB of shards in 333ms via JSON.parse
+/// against 15-20s through the streaming walk, while the walk exists for the
+/// one shard past V8's max string length (readFile+JSON.parse hard-fails
+/// there regardless of heap). Half that ceiling keeps the fast path safely
+/// below it with room for UTF-16 expansion.
+const SHARD_STREAM_GATE_BYTES = 256 * 1024 * 1024
+let shardStreamGateForTests: number | null = null
+export function __setShardStreamGateForTests(bytes: number | null): void {
+  shardStreamGateForTests = bytes
+}
+/// True when path must take the streaming decoder. Unstatable files fall
+/// through to the stream, which fails exactly the way the unreadable-shard
+/// path always has (null, never a partial commit).
+async function shardNeedsStreaming(path: string): Promise<boolean> {
+  const gate = shardStreamGateForTests ?? SHARD_STREAM_GATE_BYTES
+  const size = await stat(path).then(s => s.size, () => null)
+  if (size === null) return true
+  return size > gate
+}
+/// Decode one shard with plain JSON.parse: the fast path for shards at or
+/// under SHARD_STREAM_GATE_BYTES. One readFile is already an atomic snapshot,
+/// and JSON.parse returns fresh strings, so nothing here can pin a tokenizer
+/// buffer. Any invalid record drops the whole shard, mirroring validateFiles
+/// entry for entry.
+async function loadShardSmall(path: string): Promise<Record<string, CachedFile> | null> {
+  let raw: unknown
+  try {
+    raw = JSON.parse(await readFile(path, 'utf-8'))
+  } catch {
+    return null
+  }
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const files: Record<string, CachedFile> = {}
+  for (const [key, value] of Object.entries(raw)) {
+    if (!validateCachedFile(value)) return null
+    files[key] = value
+  }
+  return files
+}
 /// Assemble a whole shard without ever materializing its text: files past
 /// ~512MB exceed V8's max string length, so readFile+JSON.parse hard-fails
 /// (RangeError) regardless of heap. Per-record streaming bounds transients by
 /// the largest single record instead. Any invalid record drops the whole
 /// shard, mirroring validateFiles entry for entry.
 async function loadShardStreaming(path: string): Promise<Record<string, CachedFile> | null> {
+  if (!(await shardNeedsStreaming(path))) return loadShardSmall(path)
   const files: Record<string, CachedFile> = {}
   try {
     await streamShardEntries(path, ({ key, value }) => {
@@ -1456,6 +1494,30 @@ function filterShardFile(value: unknown, keepTurn: TurnFilter): CachedFile | nul
   return sliced.whole ? file : sliced.file
 }
 
+/// Small-file twin of loadShardFiltered for shards at or under
+/// SHARD_STREAM_GATE_BYTES: one readFile is already an atomic snapshot, so
+/// no fingerprint guard is needed, and every record projects through the
+/// same filterShardFile the streaming second pass uses (whole files,
+/// inexact slices included, stay whole with no second read).
+async function loadShardFilteredSmall(
+  shardPath: string,
+  turnFilter: TurnFilter,
+): Promise<Record<string, CachedFile> | null> {
+  let raw: unknown
+  try {
+    raw = JSON.parse(await readFile(shardPath, 'utf-8'))
+  } catch {
+    return null
+  }
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const files: Record<string, CachedFile> = {}
+  for (const [key, value] of Object.entries(raw)) {
+    const file = filterShardFile(value, turnFilter)
+    if (!file) return null
+    files[key] = file
+  }
+  return files
+}
 /// Decode one shard with a TurnFilter, streaming turns so peak heap tracks
 /// the retained slice plus one turn rather than the shard. Turns are
 /// validated as decoded (kept or dropped); the unmarked reconstruction is
@@ -1467,6 +1529,9 @@ function filterShardFile(value: unknown, keepTurn: TurnFilter): CachedFile | nul
 /// Whole-file gates (PR links, gappy kept turns, cross-side key overlap) are
 /// collected during the stream and decoded whole in one second pass over the
 /// shard: rare cases pay a re-read while the common path stays bounded.
+///
+/// Shards at or under SHARD_STREAM_GATE_BYTES skip the walk: one readFile
+/// plus filterShardFile per record (see loadShardFilteredSmall).
 export async function loadShardFiltered(
   dir: string,
   name: string,
@@ -1484,6 +1549,7 @@ export async function loadShardFiltered(
   }
   const builds = new Map<string, Build>()
   const shardPath = join(dir, name)
+  if (!(await shardNeedsStreaming(shardPath))) return loadShardFilteredSmall(shardPath, turnFilter)
   const fingerprintOf = async (): Promise<string | null> =>
     stat(shardPath).then(s => `${s.dev}:${s.ino}:${s.size}:${s.mtimeMs}`, () => null)
   const before = await fingerprintOf()
