@@ -1713,6 +1713,76 @@ function extractCanonicalCwd(entries: JournalEntry[]): string | undefined {
   return undefined
 }
 
+/// Aggregate-mode (lite) projection for parsed calls. Denylist: everything
+/// carries over except the payloads the overview path never reads downstream
+/// (toolSequence, call spawn ids, bash/skill/mcp/subagent name arrays,
+/// deduplicationKey), so a future optional field stays populated on the today
+/// headline instead of silently dropping to undefined. Breakdowns that read
+/// the dropped arrays (tool/mcp/bash/subagent) are computed in
+/// buildSessionSummary BEFORE stripping, so they are unaffected. Same type,
+/// fresh objects — the full originals stay eligible for release — plus the
+/// extracted shell commands PR launch matching needs.
+export function stripCallForAggregate(call: ParsedApiCall): ParsedApiCall {
+  // Denylist: everything carries over except the payloads the overview path
+  // never reads downstream. workingDirectory/projectPath ride on some calls
+  // outside the type (session-level identity covers the reports); they are
+  // heavy (~18MB serialized here) so they drop explicitly rather than by luck.
+  const {
+    toolSequence: _droppedSequence,
+    spawnToolUseIds: _droppedSpawns,
+    workingDirectory: _droppedWd,
+    projectPath: _droppedPp,
+    ...rest
+  } = call as ParsedApiCall & { workingDirectory?: unknown; projectPath?: unknown }
+  const lite: ParsedApiCall = {
+    ...rest,
+    bashCommands: [],
+    skills: [],
+    mcpTools: [],
+    subagentTypes: [],
+    deduplicationKey: '',
+  }
+  const commands = extractCallCommands(call)
+  if (commands.length > 0) lite.commands = commands
+  return lite
+}
+/// Shell-command strings from a call for PR launch matching, from the lite
+/// extraction when present, else straight from the full toolSequence.
+export function extractCallCommands(call: ParsedApiCall): string[] {
+  if (call.commands) return call.commands.filter(command => command.length > 0)
+  const commands: string[] = []
+  for (const step of call.toolSequence ?? []) {
+    for (const tool of step) {
+      if (typeof tool.command === 'string' && tool.command.length > 0) commands.push(tool.command)
+    }
+  }
+  return commands
+}
+
+/// Strip one classified turn for aggregate mode (see stripCallForAggregate).
+/// userMessage stays: PR candidate prompts and correction scans read it, and
+/// at ~115 bytes average it is not the dominator. subCategory drops (its
+/// skill breakdown is precomputed and nothing downstream reads it).
+export function stripTurnForAggregate(turn: ClassifiedTurn): ClassifiedTurn {
+  const { subCategory: _dropped, ...rest } = turn
+  return { ...rest, assistantCalls: turn.assistantCalls.map(stripCallForAggregate) }
+}
+
+/// Strip every session (and subagent anchor) of every project for aggregate
+/// mode, MUTATING the session graphs in place. Sessions are always fresh in
+/// lite mode (the shared memo is bypassed, so nothing else aliases them);
+/// only the turns arrays are replaced, one session at a time, so the transient
+/// stays bounded by a single session instead of doubling a whole provider.
+/// Totals and breakdowns are precomputed scalars, so they survive unchanged.
+export function stripProjectsForAggregate(projects: ProjectSummary[]): ProjectSummary[] {
+  for (const p of projects) {
+    for (const s of p.sessions) s.turns = s.turns.map(stripTurnForAggregate)
+    if (p.subagentAnchors) {
+      for (const a of p.subagentAnchors) a.turns = a.turns.map(stripTurnForAggregate)
+    }
+  }
+  return projects
+}
 function buildSessionSummary(
   sessionId: string,
   project: string,
@@ -4872,7 +4942,7 @@ function normalizedWorkingDirectory(path: string | undefined): string | null {
   return path.trim().replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
 }
 
-function normalizedPrompt(text: string): string {
+export function normalizedPrompt(text: string): string {
   return text.replace(/\s+/g, ' ').trim()
 }
 
@@ -4945,9 +5015,8 @@ export function correlateCrossProviderPrSessions(projects: ProjectSummary[]): vo
       if (turn.prRefs?.length) active = turn.prRefs
       if (active.length === 0) continue
       for (const call of turn.assistantCalls) {
-        const commands = (call.toolSequence ?? [])
-          .flat()
-          .map(tool => typeof tool.command === 'string' ? normalizedPrompt(tool.command) : '')
+        const commands = extractCallCommands(call)
+          .map(command => normalizedPrompt(command))
           .filter(command => command.length > 0)
         if (commands.length === 0) continue
         const atMs = Date.parse(call.timestamp || turn.timestamp)
@@ -5452,14 +5521,27 @@ function deferToBackgroundFill(path: string, fp: { mtimeMs: number }, cached: un
   return true
 }
 
-export function parseAllSessions(dateRange?: DateRange, providerFilter?: string): Promise<ProjectSummary[]> {
-  const scoped = singlePassParse(dateRange, providerFilter)
-  if (scoped) return scoped
+export type ParseAllSessionsOptions = {
+  /// Aggregate mode: strip per-call payloads the overview path never reads
+  /// (see stripProjectsForAggregate) per provider right after its summaries
+  /// resolve, so peak tracks one provider instead of the corpus. Totals and
+  /// breakdowns are unaffected (precomputed scalars); the memo is bypassed
+  /// in both directions so lite graphs never mix with full ones.
+  stripForAggregate?: boolean
+}
+
+export function parseAllSessions(dateRange?: DateRange, providerFilter?: string, opts?: ParseAllSessionsOptions): Promise<ProjectSummary[]> {
+  // Lite graphs must never hit the shared memo (or the single-pass scope):
+  // their stripped turns would poison full-session consumers on reuse.
+  if (!opts?.stripForAggregate) {
+    const scoped = singlePassParse(dateRange, providerFilter)
+    if (scoped) return scoped
+  }
   // Capture synchronously, before the first await. AsyncLocalStorage keeps all
   // Codex cache reads, dirty writes, and the final flush on this call-time
   // directory even if an embedding host changes the process env mid-parse.
   const codexCacheDir = getCodeburnCacheDir()
-  return withCodexCacheDirectory(codexCacheDir, () => parseAllSessionsInCacheScope(dateRange, providerFilter))
+  return withCodexCacheDirectory(codexCacheDir, () => parseAllSessionsInCacheScope(dateRange, providerFilter, opts))
 }
 
 function canServeCompleteSnapshot(cache: SessionCache, providerFilter?: string, sinceMs?: number): boolean {
@@ -5472,7 +5554,11 @@ function canServeCompleteSnapshot(cache: SessionCache, providerFilter?: string, 
 }
 
 export async function isCompleteSessionSnapshotAvailable(dateRange: DateRange, providerFilter?: string): Promise<boolean> {
-  const diskCache = await loadCache(monthScopeForRange(dateRange.start, dateRange.end))
+  // Same projection as the parse itself: this runs ahead of parseAllSessions
+  // on the dashboard path, and an unfiltered load here would whole-parse the
+  // month shards before the bounded parse ever starts. A filtered-negative
+  // only skips the snapshot fast path, never correctness.
+  const diskCache = await loadCache(monthScopeForRange(dateRange.start, dateRange.end), cacheLoadOpts(dateRange, providerFilter))
   return canServeCompleteSnapshot(diskCache, providerFilter, dateRange.start.getTime())
 }
 
@@ -5489,14 +5575,18 @@ function cacheLoadOpts(dateRange: DateRange | undefined, providerFilter?: string
   }
 }
 
-async function parseAllSessionsInCacheScope(dateRange?: DateRange, providerFilter?: string): Promise<ProjectSummary[]> {
+async function parseAllSessionsInCacheScope(dateRange?: DateRange, providerFilter?: string, opts?: ParseAllSessionsOptions): Promise<ProjectSummary[]> {
+  const stripForAggregate = opts?.stripForAggregate === true
   // Anchor freshness before any config, cache, or session input is read. A
   // watched-root event that lands while this parse is in flight must remain
   // newer than the resulting memo instead of being blessed retroactively.
   const parseStartedAt = Date.now()
   const claudeDiscoveryRoots = await getClaudeConfigDirs()
   const key = cacheKey(dateRange, providerFilter, claudeDiscoveryRoots)
-  const cached = sessionCache.get(key)
+  // Lite graphs bypass the shared memo in both directions (see
+  // ParseAllSessionsOptions): a stripped result must never be served to, or
+  // burst-reused by, a full-session consumer.
+  const cached = stripForAggregate ? undefined : sessionCache.get(key)
   if (cached) {
     const age = Date.now() - cached.createdAt
     const coveredRange = cached.startMs !== undefined && cached.endMs !== undefined
@@ -5521,7 +5611,7 @@ async function parseAllSessionsInCacheScope(dateRange?: DateRange, providerFilte
   // The signature is the key minus the range: what must match for a burst
   // reuse (provider, config env, proxy hash) regardless of the now-anchor.
   const burstSig = cacheKey(undefined, providerFilter, claudeDiscoveryRoots)
-  if (dateRange) {
+  if (dateRange && !stripForAggregate) {
     const reused = burstReuse(dateRange, burstSig)
     if (reused) return reused
   }
@@ -5555,10 +5645,10 @@ async function parseAllSessionsInCacheScope(dateRange?: DateRange, providerFilte
   // doubt it proceeds unlocked.
   if (!isCacheComplete(diskCache, providerFilter, rangeStartMs)) {
     const hydration = await beginColdHydration(true)
-    if (hydration.waited) diskCache = await loadCache(loadScope)
+    if (hydration.waited) diskCache = await loadCache(loadScope, cacheLoadOpts(dateRange, providerFilter))
     const isCold = !isCacheComplete(diskCache, providerFilter, rangeStartMs)
     try {
-      return await runParse(key, diskCache, dateRange, providerFilter, { isCold, burstSig, parseStartedAt })
+      return await runParse(key, diskCache, dateRange, providerFilter, { isCold, burstSig, parseStartedAt, stripForAggregate })
     } finally {
       await hydration.release()
     }
@@ -5570,13 +5660,18 @@ async function parseAllSessionsInCacheScope(dateRange?: DateRange, providerFilte
       snapshotOnly: true,
       burstSig,
       parseStartedAt,
+      stripForAggregate,
     })
   }
 
   // A complete cache refresh is a strict read/reconcile/parse/save transaction.
   // Keep the snapshot loaded before acquisition: timeout/unavailable paths serve
   // exactly this complete snapshot and never mutate or invalidate the holder.
-  const priorSnapshot = diskCache
+  // `let`: the canonical reloads below release this (and the identical
+  // `diskCache` binding) BEFORE decoding again. Awaiting the reload while
+  // either still references the first load keeps two whole filtered caches
+  // alive at once, which no per-shard bound can prevent.
+  let priorSnapshot: SessionCache | undefined = diskCache
   // Heartbeat the WAIT too, not just the parse behind it. This is the one place
   // a healthy process is deliberately idle for a long stretch, and the desktop
   // and menubar watchdogs read silence as a dead child - which is how a waiter
@@ -5594,20 +5689,26 @@ async function parseAllSessionsInCacheScope(dateRange?: DateRange, providerFilte
     process.stderr.write(`codeburn: startup timing refresh-lock=${(performance.now() - refreshWaitStarted).toFixed(1)}ms outcome=${refresh.outcome}\n`)
   }
   if (refresh.outcome === 'timed-out' || refresh.outcome === 'unavailable') {
-    return runParse(key, priorSnapshot, dateRange, providerFilter, { readOnly: true, burstSig, parseStartedAt })
+    return runParse(key, priorSnapshot ?? diskCache, dateRange, providerFilter, { readOnly: true, burstSig, parseStartedAt, stripForAggregate })
   }
   if (refresh.outcome === 'completed-by-other') {
-    return runParse(key, await loadCache(loadScope), dateRange, providerFilter, { readOnly: true, burstSig, parseStartedAt })
+    const reloadOpts = cacheLoadOpts(dateRange, providerFilter)
+    priorSnapshot = undefined
+    diskCache = emptyCache()
+    return runParse(key, await loadCache(loadScope, reloadOpts), dateRange, providerFilter, { readOnly: true, burstSig, parseStartedAt, stripForAggregate })
   }
 
   try {
     // Reload only after ownership is canonical; this closes the lost-update
     // window between the pre-gate read and the holder's completed publication.
-    diskCache = await loadCache(loadScope)
-    return await runParse(key, diskCache, dateRange, providerFilter, { refreshLock: refresh.handle, burstSig, parseStartedAt })
+    const reloadOpts = cacheLoadOpts(dateRange, providerFilter)
+    priorSnapshot = undefined
+    diskCache = emptyCache()
+    diskCache = await loadCache(loadScope, reloadOpts)
+    return await runParse(key, diskCache, dateRange, providerFilter, { refreshLock: refresh.handle, burstSig, parseStartedAt, stripForAggregate })
   } catch (err) {
     if (!(err instanceof RefreshFenceLostError) && !(err instanceof RefreshPublicationUnavailableError)) throw err
-    return runParse(key, await loadCache(loadScope), dateRange, providerFilter, { readOnly: true, burstSig, parseStartedAt })
+    return runParse(key, await loadCache(loadScope, cacheLoadOpts(dateRange, providerFilter)), dateRange, providerFilter, { readOnly: true, burstSig, parseStartedAt, stripForAggregate })
   } finally {
     await refresh.handle.release()
   }
@@ -5623,6 +5724,9 @@ type RunParseOptions = {
   refreshLock?: RefreshLockHandle
   burstSig: string
   parseStartedAt: number
+  /// Aggregate mode (see ParseAllSessionsOptions): strip per provider and
+  /// skip the shared memo. Read in runParseInner; never stored.
+  stripForAggregate?: boolean
 }
 
 /** Thin wrapper so every runParse call site heartbeats for its whole duration,
@@ -5650,6 +5754,10 @@ async function runParseInner(
   options: RunParseOptions,
 ): Promise<ProjectSummary[]> {
   const { isCold = false, readOnly = false, snapshotOnly = false, refreshLock } = options
+  const stripForAggregate = options.stripForAggregate === true
+  if (stripForAggregate && process.env['CODEBURN_VERBOSE'] === '1') {
+    process.stderr.write('codeburn: aggregate strip engaged (lite summaries)\n')
+  }
   const timingStarted = performance.now()
   let timingPrevious = timingStarted
   const traceTiming = (stage: string, extra = ''): void => {
@@ -5726,6 +5834,10 @@ async function runParseInner(
   if (claudeInScope) {
     try {
       claudeProjects = await scanProjectDirs(claudeDirs, seenMsgIds, diskCache, dateRange, saveProgress, readOnly)
+      // Aggregate mode: strip this provider now so peak tracks one provider
+      // instead of the corpus (see ParseAllSessionsOptions). Breakdowns and
+      // totals are precomputed; downstream reads only lite fields.
+      if (stripForAggregate) claudeProjects = stripProjectsForAggregate(claudeProjects)
       if (claudeSources.length > 0) emitScanProgress({ kind: 'provider', provider: 'claude', state: 'done', files: claudeSources.length })
     } catch (err) {
       if (!isPermissionError(err)) throw err
@@ -5741,7 +5853,8 @@ async function runParseInner(
     try {
       const projects = await parseProviderSources(providerName, sources, seenKeys, diskCache, dateRange, saveProgress, readOnly)
       emitScanProgress({ kind: 'provider', provider: providerName, state: 'done', files: sources.length })
-      otherProjects.push(...projects)
+      if (stripForAggregate) otherProjects.push(...stripProjectsForAggregate(projects))
+      else otherProjects.push(...projects)
     } catch (err) {
       // A permission-locked provider skips-and-continues; any other error is a
       // real bug and still aborts (per-file/DB-lock cases are handled deeper).
@@ -5771,7 +5884,8 @@ async function runParseInner(
     // round-trip for every unprocessed provider in the disk cache.
     if (!snapshotOnly && !section.durable && !DURABLE_PROVIDER_NAMES.has(providerName)) continue
     const projects = await parseProviderSources(providerName, [], seenKeys, diskCache, dateRange, saveProgress, readOnly)
-    otherProjects.push(...projects)
+    if (stripForAggregate) otherProjects.push(...stripProjectsForAggregate(projects))
+    else otherProjects.push(...projects)
   }
 
   // The full scan reached the end: this cache is now complete. Mark it and
@@ -5869,7 +5983,7 @@ async function runParseInner(
   // A snapshot is an explicitly stale, source-unvalidated view. Publishing it
   // into either exact-key or burst reuse can suppress the reconciliation that
   // the mounted dashboard starts immediately afterward for the full TTL.
-  if (!snapshotOnly) {
+  if (!snapshotOnly && !stripForAggregate) {
     if (dateRange) setCachePutMeta({ startMs: dateRange.start.getTime(), endMs: dateRange.end.getTime(), sig: options.burstSig })
     cachePut(key, result, options.parseStartedAt)
   }

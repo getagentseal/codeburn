@@ -296,6 +296,12 @@ export type AggregateOpts = {
   /// true. The desktop app never renders it, so it passes `--no-timeline` to
   /// skip the buildGranularHistory pass on every menubar poll.
   timeline?: boolean
+  /// Aggregate-mode request (see ParseAllSessionsOptions): strip per-call
+  /// payloads per provider right after parsing. This builder is the single
+  /// gate: it engages only for the narrow shape needing no session payloads
+  /// downstream (today-only, all-provider, no project filters or day
+  /// selection) and forces full sessions otherwise.
+  stripForAggregate?: boolean
 }
 
 type ConfigOption = { id: string; label: string; path: string }
@@ -780,6 +786,16 @@ export async function buildDurablePeriod(periodInfo: PeriodInfo, opts: Aggregate
   const rangeStartStr = toDateString(periodInfo.range.start)
   const rangeEndStr = toDateString(periodInfo.range.end)
   const isTodayOnly = rangeStartStr === todayStr && rangeEndStr === todayStr
+  // Aggregate mode engages only on the narrow shape that needs no session
+  // payloads downstream (see AggregateOpts): anything else forces full
+  // sessions even if a caller asked for lite.
+  const strip = opts.stripForAggregate === true
+    && isTodayOnly
+    && pf === 'all'
+    && (opts.project?.length ?? 0) === 0
+    && (opts.exclude?.length ?? 0) === 0
+    && daysSelection === null
+  const parseOpts = strip ? { stripForAggregate: true } : undefined
 
   // The shared daily cache is hydrated only by an all-provider request. A
   // provider tab must not turn into a hidden all-provider scan on a cold or
@@ -796,12 +812,12 @@ export async function buildDurablePeriod(periodInfo: PeriodInfo, opts: Aggregate
   let scanRange: DateRange
   if (pf === 'all') {
     if (isTodayOnly) {
-      const raw = fp(await parseAllSessions(todayRange, 'all'))
+      const raw = fp(await parseAllSessions(todayRange, 'all', parseOpts))
       liveProjects = raw
       scanRange = todayRange
       todayAllDays = aggregateProjectsIntoDays(raw).filter(d => d.date === todayStr)
     } else {
-      const raw = fp(await parseAllSessions(periodInfo.range, 'all'))
+      const raw = fp(await parseAllSessions(periodInfo.range, 'all', parseOpts))
       liveProjects = daysSelection ? filterProjectsByDays(raw, daysSelection.days) : raw
       scanRange = periodInfo.range
       // A period that reaches today contains today's turns already, so derive the
@@ -813,14 +829,14 @@ export async function buildDurablePeriod(periodInfo: PeriodInfo, opts: Aggregate
       // JSON daily turn count while the per-call cost/calls still bucket to today.
       todayAllDays = rangeEndStr >= todayStr
         ? aggregateProjectsIntoDays(filterProjectsByDays(raw, new Set([todayStr]))).filter(d => d.date === todayStr)
-        : aggregateProjectsIntoDays(fp(await parseAllSessions(todayRange, 'all'))).filter(d => d.date === todayStr)
+        : aggregateProjectsIntoDays(fp(await parseAllSessions(todayRange, 'all', parseOpts))).filter(d => d.date === todayStr)
     }
   } else {
     // Provider-filtered: one provider-scoped parse feeds both today's union
     // slice and the detail/enrichment fields. Scanning every unrelated provider
     // here made a first hover deserialize the entire multi-gigabyte cache even
     // though the returned payload contains only `pf`.
-    const rawProv = fp(await parseAllSessions(isTodayOnly ? todayRange : periodInfo.range, pf))
+    const rawProv = fp(await parseAllSessions(isTodayOnly ? todayRange : periodInfo.range, pf, parseOpts))
     freshProviderDays = aggregateProjectsIntoDays(rawProv)
     todayAllDays = rangeEndStr >= todayStr
       ? aggregateProjectsIntoDays(filterProjectsByDays(rawProv, new Set([todayStr]))).filter(d => d.date === todayStr)

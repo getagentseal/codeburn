@@ -1002,7 +1002,11 @@ program
     const { range, label } = customRange
       ? { range: customRange, label: formatDateRangeLabel(opts.from, opts.to) }
       : getDateRange(period!)
-    const durable = await buildDurablePeriod({ range, label }, { provider: opts.provider, project: opts.project, exclude: opts.exclude })
+    // Aggregate mode is requested unconditionally here; buildDurablePeriod
+    // is the single gate that engages it only for the narrow shape needing
+    // no session payloads downstream (today-only, all-provider, no project
+    // filters or day selection). Every other shape parses full sessions.
+    const durable = await buildDurablePeriod({ range, label }, { provider: opts.provider, project: opts.project, exclude: opts.exclude, stripForAggregate: true })
     await reportUnmatchedProjectPatterns(durable.knownProjects, opts.project, opts.exclude)
     const projects = durable.liveProjects
     const config = await readConfig()

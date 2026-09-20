@@ -123,6 +123,11 @@ export type ParsedApiCall = {
   deduplicationKey: string
   cacheCreationOneHourTokens?: number
   toolSequence?: ToolCall[][]
+  /// Aggregate-mode (lite) extraction: the shell-command strings from
+  /// toolSequence, pulled out before the sequence itself is stripped (see
+  /// stripCallForAggregate). Lets PR launch matching run on lite calls;
+  /// absent on full parses, which read toolSequence directly.
+  commands?: string[]
   /// Claude Code: `tool_use` ids of the `Agent`/`Task` subagent-spawn blocks in
   /// this call's assistant message. Transient (built at parse time, aggregated
   /// into the turn's `spawnToolUseIds`); never cached per-call.
