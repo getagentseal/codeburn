@@ -49,6 +49,10 @@ vi.mock('node:fs', async (importOriginal) => {
 const { CODEX_CACHE_VERSION, clearCodexMemCaches, codexCacheFileName, flushCodexCache, getCachedCodexProject, readCachedCodexResults, withCodexCacheDirectory, writeCachedCodexResults } =
   await import('../src/codex-cache.js')
 import type { ParsedProviderCall } from '../src/providers/types.js'
+// Every test here stages a publish mid-STREAM-decode: pin the stream path
+// (the size gate would otherwise parse these small fixtures whole, and the
+// createReadStream staging above would never engage).
+import { __setShardStreamGateForTests } from '../src/shard-stream.js'
 
 let cacheDir: string
 let sessionDir: string
@@ -56,6 +60,7 @@ let sessionDir: string
 beforeEach(async () => {
   streamSpy.mockClear()
   clearCodexMemCaches()
+  __setShardStreamGateForTests(0)
   streamGate.hold = false
   streamGate.opened = 0
   streamGate.releases.length = 0
@@ -67,6 +72,7 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
+  __setShardStreamGateForTests(null)
   clearCodexMemCaches()
   await rm(join(cacheDir, '..'), { recursive: true, force: true })
 })

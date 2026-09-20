@@ -27,7 +27,7 @@ export async function writeChunk(handle: FileHandle, text: string): Promise<void
 // `\uXXXX` escapes spanning reads) comes from the stream-json tokenizer, not
 // hand-rolled state; do not reimplement it here.
 import { createReadStream } from 'node:fs'
-import { open } from 'node:fs/promises'
+import { open, stat } from 'node:fs/promises'
 import { pipeline } from 'node:stream/promises'
 import { parser } from 'stream-json'
 import { Assembler } from 'stream-json/assembler.js'
@@ -41,6 +41,27 @@ import { flatString } from './content-utils.js'
 let afterStreamOpenForTests: (() => void) | null = null
 export function __setAfterStreamOpenForTests(hook: (() => void) | null): void {
   afterStreamOpenForTests = hook
+}
+
+/// Shards at or under this size decode with plain JSON.parse; larger ones
+/// stream. Profiled on a real corpus: 166MB of shards in 333ms via JSON.parse
+/// against 15-20s through the streaming walk, while the walk exists for the
+/// one shard past V8's max string length (readFile+JSON.parse hard-fails
+/// there regardless of heap). Half that ceiling keeps the fast path safely
+/// below it with room for UTF-16 expansion.
+export const SHARD_STREAM_GATE_BYTES = 256 * 1024 * 1024
+let shardStreamGateForTests: number | null = null
+export function __setShardStreamGateForTests(bytes: number | null): void {
+  shardStreamGateForTests = bytes
+}
+/// True when path must take the streaming decoder. Unstatable files fall
+/// through to the stream, which fails exactly the way the unreadable-shard
+/// path always has (null, never a partial commit).
+export async function shardNeedsStreaming(path: string): Promise<boolean> {
+  const gate = shardStreamGateForTests ?? SHARD_STREAM_GATE_BYTES
+  const size = await stat(path).then(s => s.size, () => null)
+  if (size === null) return true
+  return size > gate
 }
 
 export type ShardEntry = { key: string; value: unknown }

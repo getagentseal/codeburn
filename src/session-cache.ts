@@ -7,7 +7,7 @@ import { getCodeburnCacheDir } from './cache-dir.js'
 import { flatString, flattenJsonStrings } from './content-utils.js'
 import { acquireCacheRefreshLock, releaseOwnedRefreshLocksForExit } from './cache-refresh-lock.js'
 import type { ToolCall } from './types.js'
-import { streamShardArrayField, streamShardEntries } from './shard-stream.js'
+import { shardNeedsStreaming, streamShardArrayField, streamShardEntries } from './shard-stream.js'
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -1126,26 +1126,6 @@ async function readEnvelope(dir: string): Promise<CacheEnvelope | null> {
   }
 }
 
-/// Shards at or under this size decode with plain JSON.parse; larger ones
-/// stream. Profiled on a real corpus: 166MB of shards in 333ms via JSON.parse
-/// against 15-20s through the streaming walk, while the walk exists for the
-/// one shard past V8's max string length (readFile+JSON.parse hard-fails
-/// there regardless of heap). Half that ceiling keeps the fast path safely
-/// below it with room for UTF-16 expansion.
-const SHARD_STREAM_GATE_BYTES = 256 * 1024 * 1024
-let shardStreamGateForTests: number | null = null
-export function __setShardStreamGateForTests(bytes: number | null): void {
-  shardStreamGateForTests = bytes
-}
-/// True when path must take the streaming decoder. Unstatable files fall
-/// through to the stream, which fails exactly the way the unreadable-shard
-/// path always has (null, never a partial commit).
-async function shardNeedsStreaming(path: string): Promise<boolean> {
-  const gate = shardStreamGateForTests ?? SHARD_STREAM_GATE_BYTES
-  const size = await stat(path).then(s => s.size, () => null)
-  if (size === null) return true
-  return size > gate
-}
 /// Decode one shard with plain JSON.parse: the fast path for shards at or
 /// under SHARD_STREAM_GATE_BYTES. One readFile is already an atomic snapshot,
 /// and JSON.parse returns fresh strings, so nothing here can pin a tokenizer

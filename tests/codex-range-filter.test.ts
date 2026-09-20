@@ -29,7 +29,7 @@ import {
   writeCachedCodexResults,
   CODEX_CACHE_VERSION,
 } from '../src/codex-cache.js'
-import { __setAfterStreamOpenForTests } from '../src/shard-stream.js'
+import { __setAfterStreamOpenForTests, __setShardStreamGateForTests } from '../src/shard-stream.js'
 
 const originalCacheDir = process.env['CODEBURN_CACHE_DIR']
 let root: string
@@ -426,6 +426,10 @@ describe('codex two-pass range load', () => {
     })
     let opened!: () => void
     const streamOpened = new Promise<void>(resolve => { opened = resolve })
+    // This test stages a publish mid-STREAM-decode: pin the stream path
+    // (the size gate would otherwise parse this small fixture whole, and
+    // the stream-open rendezvous below would never fire).
+    __setShardStreamGateForTests(0)
     __setAfterStreamOpenForTests(() => opened())
     const load = readCachedCodexResults(keepPath, { rangeStartMs: DAY_START })
     try {
@@ -436,6 +440,7 @@ describe('codex two-pass range load', () => {
       await rm(cachePath)
       await flushCodexCache()
     } finally {
+      __setShardStreamGateForTests(null)
       __setAfterStreamOpenForTests(null)
     }
     const hit = await load
@@ -445,5 +450,35 @@ describe('codex two-pass range load', () => {
     if (hit && hit.kind === 'exact') {
       expect(hit.calls.map(c => c.deduplicationKey)).toEqual(['codex:v2'])
     }
+  })
+})
+
+describe('codex size gate parity', () => {
+  it('scans and loads identical results from the parse and stream paths', async () => {
+    const JUNE = '2026-06-10T10:00:00.000Z'
+    const JULY = '2026-07-15T10:00:00.000Z'
+    const JUNE_MS = new Date(JUNE).getTime()
+    const monster = Array.from({ length: 20000 }, (_, i) => codexCall(`bulk-${i}`, JUNE))
+    const entries: Record<string, unknown> = {
+      'keep-mtime': { mtimeMs: DAY_START + 3600_000, project: 'p', calls: [codexCall('old-1', JUNE)] },
+      'keep-call': { mtimeMs: JUNE_MS, project: 'p', calls: [codexCall('c-old', JUNE), codexCall('c-new', JULY)] },
+      'drop-clean': { mtimeMs: JUNE_MS, project: 'p', calls: [codexCall('d1', JUNE), codexCall('d2', JUNE)] },
+      'drop-monster': { mtimeMs: JUNE_MS, project: 'p', calls: monster },
+      'keep-empty-calls': { mtimeMs: JUNE_MS, project: 'p', calls: [] },
+      'keep-bare': {},
+    }
+    await seedResults(entries)
+    const cacheFile = join(root, codexCacheFileName())
+    __setShardStreamGateForTests(Number.POSITIVE_INFINITY)
+    const scannedParse = await scanRetainedCodexKeys(cacheFile, DAY_START)
+    const loadedParse = await loadCacheFilteredFromDisk(root, DAY_START)
+    __setShardStreamGateForTests(0)
+    const scannedStream = await scanRetainedCodexKeys(cacheFile, DAY_START)
+    const loadedStream = await loadCacheFilteredFromDisk(root, DAY_START)
+    __setShardStreamGateForTests(null)
+    expect(scannedStream).toEqual(scannedParse)
+    expect(loadedStream).toEqual(loadedParse)
+    expect(scannedParse.has('drop-monster')).toBe(false)
+    expect(scannedParse.has('keep-call')).toBe(true)
   })
 })

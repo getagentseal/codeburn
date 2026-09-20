@@ -9,13 +9,12 @@ import { join } from 'path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import {
-  __setShardStreamGateForTests,
   clearShardMemo,
   loadShardFiltered,
   loadShardMemoized,
-  sessionCacheDir,
   type CachedFile,
 } from '../src/session-cache.js'
+import { __setShardStreamGateForTests } from '../src/shard-stream.js'
 
 type Turn = CachedFile['turns'][number]
 

@@ -11,7 +11,7 @@ import { streamObject } from 'stream-json/streamers/stream-object.js'
 
 import { getCodeburnCacheDir } from './cache-dir.js'
 import type { ParsedProviderCall } from './providers/types.js'
-import { streamShardArrayField, writeChunk } from './shard-stream.js'
+import { shardNeedsStreaming, streamShardArrayField, writeChunk } from './shard-stream.js'
 import { flatString, flattenJsonStrings } from './content-utils.js'
 
 // v4: attribute MCP calls emitted as event_msg/mcp_tool_call_end (issue #478).
@@ -322,16 +322,51 @@ export function retainCodexEntry(value: unknown, rangeStartMs: number): boolean 
   return !seenCall
 }
 
+/// Small-file twin of loadResultsStreaming for result files at or under
+/// SHARD_STREAM_GATE_BYTES: one readFile plus the same retain rule per
+/// entry. JSON.parse returns fresh strings, so no detaching is needed, and
+/// entries arrive whole — the pick filter's subtree drops (retainKeys,
+/// skipCalls) are just key skips here. A missing `files` object serves empty
+/// (the pick filter yields zero entries); anything else malformed drops the
+/// whole file, mirroring the stream entry for entry.
+async function loadResultsSmall(
+  path: string,
+  retain: (value: unknown) => boolean,
+  retainKeys?: Set<string>,
+): Promise<Record<string, unknown> | null> {
+  if ((await readResultsVersion(path)) !== CODEX_CACHE_VERSION) return null
+  let raw: unknown
+  try {
+    raw = JSON.parse(await readFile(path, 'utf-8'))
+  } catch {
+    return null
+  }
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const filesObj = 'files' in raw ? raw.files : undefined
+  if (filesObj === undefined) return {}
+  if (!filesObj || typeof filesObj !== 'object' || Array.isArray(filesObj)) return null
+  const files: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(filesObj)) {
+    if (retainKeys && !retainKeys.has(key)) continue
+    if (!retain(value)) continue
+    files[key] = value
+  }
+  return files
+}
+
 /// Streaming load of one result file: version-gated, then per-entry through
 /// the pick filter (the nested `files` object streams entry by entry — a
 /// top-level decode would assemble all 227MB first). Any failure drops the
 /// whole file, mirroring the historical whole-file behavior entry for entry.
+/// Result files at or under SHARD_STREAM_GATE_BYTES take loadResultsSmall
+/// instead (see above).
 async function loadResultsStreaming(
   path: string,
   retain: (value: unknown) => boolean,
   retainKeys?: Set<string>,
 ): Promise<Record<string, unknown> | null> {
   if ((await readResultsVersion(path)) !== CODEX_CACHE_VERSION) return null
+  if (!(await shardNeedsStreaming(path))) return loadResultsSmall(path, retain, retainKeys)
   const files: Record<string, unknown> = {}
   try {
     await streamCodexEntries(path, (key, value) => {
@@ -358,13 +393,40 @@ async function loadCacheFullFromDisk(cacheDir: string): Promise<ResultCache> {
   // stored unvalidated and every consumer reads them defensively.
   return { version: CODEX_CACHE_VERSION, files: files as Record<string, FileEntry> }
 }
+/// Small-file twin of the timestamp scan for result files at or under
+/// SHARD_STREAM_GATE_BYTES: one readFile, then the exported retainCodexEntry
+/// rule per entry — the same rule the streaming scan mirrors call-for-call,
+/// so the two cannot drift. Decode failure throws like the stream, and the
+/// caller falls back the same way.
+async function scanRetainedCodexKeysSmall(path: string, rangeStartMs: number): Promise<Set<string>> {
+  let raw: unknown
+  try {
+    raw = JSON.parse(await readFile(path, 'utf-8'))
+  } catch {
+    throw new Error(`codex results unreadable: ${path}`)
+  }
+  const retained = new Set<string>()
+  const filesObj = raw !== null && typeof raw === 'object' && !Array.isArray(raw) && 'files' in raw
+    ? raw.files
+    : undefined
+  if (filesObj !== undefined && filesObj !== null && typeof filesObj === 'object' && !Array.isArray(filesObj)) {
+    for (const [key, value] of Object.entries(filesObj)) {
+      if (retainCodexEntry(value, rangeStartMs)) retained.add(key)
+    }
+  }
+  return retained
+}
+
 
 /// First pass of a range load: stream one call at a time (never an entry)
 /// and decide each file's fate by the exact `retainCodexEntry` rule —
 /// file-mtime first, then call timestamps. Returns the keys to assemble whole
 /// in pass two. Any decode failure throws, and the caller falls back to the
 /// single-pass load (same bytes-or-null contract as a torn file today).
+/// Result files at or under SHARD_STREAM_GATE_BYTES take
+/// scanRetainedCodexKeysSmall instead (see above).
 export async function scanRetainedCodexKeys(path: string, rangeStartMs: number): Promise<Set<string>> {
+  if (!(await shardNeedsStreaming(path))) return scanRetainedCodexKeysSmall(path, rangeStartMs)
   const retained = new Set<string>()
   type Scan = { mtimeMs: number | null; callsNonArray: boolean; keep: boolean; count: number }
   const scans = new Map<string, Scan>()
