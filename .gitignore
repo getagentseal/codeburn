@@ -29,6 +29,7 @@ docs/superpowers/
 
 # Debug / logs
 *.log
+*.heapsnapshot
 npm-debug.log*
 
 # Cache
