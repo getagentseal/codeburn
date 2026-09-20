@@ -18,6 +18,7 @@ import {
 import { estimateTokensFromChars } from '../token-estimate.js'
 import type { DateRange } from '../types.js'
 import type { ProbeRoot, Provider, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
+import { DedupSet } from '../session-cache.js'
 
 /** Matches cli-date.ts "all" period cap (6 months). */
 const CURSOR_MAX_LOOKBACK_MONTHS = 6
@@ -681,7 +682,7 @@ type ComposerScan = {
 
 function parseBubbles(
   db: SqliteDatabase,
-  seenKeys: Set<string>,
+  seenKeys: DedupSet,
   timeFloor: string,
   agentKvTimestamp: string,
 ): { calls: ParsedProviderCall[] } {
@@ -948,7 +949,7 @@ function parseBubbles(
 
 function createParser(
   source: SessionSource,
-  seenKeys: Set<string>,
+  seenKeys: DedupSet,
   dateRange?: DateRange,
 ): SessionParser {
   const timeFloor = getCursorTimeFloor(dateRange)
@@ -1008,10 +1009,10 @@ function createParser(
             process.stderr.write('codeburn: Cursor storage format not recognized. You may need to update CodeBurn.\n')
             return
           }
-           // Use a fresh local Set for intra-parse dedup so the global
-           // seenKeys is not mutated by calls that the workspace filter is
-           // about to drop. Cross-source dedup happens at yield time.
-           const localSeen = new Set<string>()
+          // Use a fresh local DedupSet for intra-parse dedup so the global
+          // seenKeys is not mutated by calls that the workspace filter is
+          // about to drop. Cross-source dedup happens at yield time.
+          const localSeen = new DedupSet()
           // agentKv rows carry no timestamps; sessions found only there get
           // the DB's last-write time.
           let agentKvTimestamp: string
@@ -1088,7 +1089,7 @@ export function createCursorProvider(dbPathOverride?: string): Provider {
       return sources
     },
 
-    createSessionParser(source: SessionSource, seenKeys: Set<string>, dateRange?: DateRange): SessionParser {
+    createSessionParser(source: SessionSource, seenKeys: DedupSet, dateRange?: DateRange): SessionParser {
       return createParser(source, seenKeys, dateRange)
     },
   }

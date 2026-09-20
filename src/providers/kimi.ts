@@ -7,6 +7,7 @@ import { extractBashCommands } from '../bash-utils.js'
 import { readSessionLines } from '../fs-utils.js'
 import { calculateCost, getShortModelName } from '../models.js'
 import type { ProbeRoot, ParsedProviderCall, Provider, SessionParser, SessionSource } from './types.js'
+import type { DedupSet } from '../session-cache.js'
 
 type JsonObject = Record<string, unknown>
 
@@ -241,7 +242,7 @@ function extractTool(payload: JsonObject): { tool: string; bashCommands: string[
   return { tool, bashCommands }
 }
 
-function createParser(source: SessionSource, shareDir: string, seenKeys: Set<string>): SessionParser {
+function createParser(source: SessionSource, shareDir: string, seenKeys: DedupSet): SessionParser {
   return {
     async *parse(): AsyncGenerator<ParsedProviderCall> {
       const configuredModel = await getConfiguredModel(shareDir)
@@ -389,7 +390,7 @@ export function createKimiProvider(overrideDir?: string): Provider {
       return sources
     },
 
-    createSessionParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
+    createSessionParser(source: SessionSource, seenKeys: DedupSet): SessionParser {
       return createParser(source, shareDir, seenKeys)
     },
   }

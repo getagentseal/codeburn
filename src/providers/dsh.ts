@@ -7,6 +7,7 @@ import { MAX_SESSION_FILE_BYTES, readSessionFile, readSessionLines } from '../fs
 import { billableOutputTokens, calculateCost, getShortModelName } from '../models.js'
 import { extractBashCommands } from '../bash-utils.js'
 import type { ProbeRoot, Provider, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
+import type { DedupSet } from '../session-cache.js'
 
 // DeepSeek Harness (dsh) stores one session per directory:
 //   <DSH_HOME|~/.dsh>/sessions/<encoded-cwd>/session-<uuid>/session.jsonl.zstd
@@ -489,7 +490,7 @@ function emptyStepBucket(): StepBucket {
   return { observations: [], tools: [], skills: [], bashCommands: [] }
 }
 
-function createParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
+function createParser(source: SessionSource, seenKeys: DedupSet): SessionParser {
   return {
     async *parse(): AsyncGenerator<ParsedProviderCall> {
       const lines = await readEventLines(source.path)
@@ -763,7 +764,7 @@ export function createDshProvider(dshHomeOverride?: string): Provider {
       return discoverSessionsInDir(sessionsDir, onSkippedVersion)
     },
 
-    createSessionParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
+    createSessionParser(source: SessionSource, seenKeys: DedupSet): SessionParser {
       return createParser(source, seenKeys)
     },
   }

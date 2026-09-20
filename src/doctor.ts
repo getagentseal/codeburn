@@ -9,6 +9,7 @@ import { getAllProviders } from './providers/index.js'
 import type { Provider } from './providers/types.js'
 import { dailyCachePath, isTurnResidueOnly, type DailyEntry } from './daily-cache.js'
 import {
+  DedupSet,
   PROVIDER_ENV_VARS,
   PROVIDER_PARSE_VERSIONS,
   loadCache,
@@ -302,7 +303,7 @@ async function collectOneProvider(
     if (sources.length > 0) {
       const sample = sources.slice(0, sampleLimit)
       base.bounded = sample.length < sources.length
-      const seenKeys = new Set<string>()
+      const seenKeys = new DedupSet()
       for (const source of sample) {
         base.sampled++
         try {

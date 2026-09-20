@@ -1,4 +1,5 @@
  import type { DateRange, ToolCall } from '../types.js'
+import type { DedupSet } from '../session-cache.js'
 
 export type SessionSource = {
   path: string
@@ -129,7 +130,7 @@ export type Provider = {
   // Report once per excluded session, independently of deduplicated warnings.
   // The callback belongs to this scan, avoiding stale/shared diagnostic counts.
   discoverSessions(onSkippedVersion?: (version: number) => void): Promise<SessionSource[]>
-   createSessionParser(source: SessionSource, seenKeys: Set<string>, dateRange?: DateRange): SessionParser
+ createSessionParser(source: SessionSource, seenKeys: DedupSet, dateRange?: DateRange): SessionParser
   // The exact directories/dbs discoverSessions() scans, resolved the same way.
   // Optional: providers that implement it let `codeburn doctor` show and
   // existence-check the probed paths even when zero sessions are found (so

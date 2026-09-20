@@ -6,6 +6,7 @@ import { extractBashCommands } from '../bash-utils.js'
 import { calculateCost } from '../models.js'
 import { FS_SCAN_CONCURRENCY, mapWithConcurrency } from '../fs-utils.js'
 import type { ParsedProviderCall, ProbeRoot, Provider, SessionParser, SessionSource } from './types.js'
+import type { DedupSet } from '../session-cache.js'
 
 type JsonObject = Record<string, unknown>
 
@@ -270,7 +271,7 @@ function toolDetails(value: unknown): { name: string; bashCommands: string[] } |
   }
 }
 
-function createParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
+function createParser(source: SessionSource, seenKeys: DedupSet): SessionParser {
   return {
     async *parse(): AsyncGenerator<ParsedProviderCall> {
       let contents: string
@@ -429,7 +430,7 @@ export function createKimicodeProvider(homeOverride?: string): Provider {
       return all.sort((a, b) => a.path.localeCompare(b.path))
     },
 
-    createSessionParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
+    createSessionParser(source: SessionSource, seenKeys: DedupSet): SessionParser {
       return createParser(source, seenKeys)
     },
   }

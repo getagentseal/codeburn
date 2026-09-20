@@ -13,6 +13,7 @@ import type {
   ParsedProviderCall,
   ProbeRoot,
 } from './types.js'
+import type { DedupSet } from '../session-cache.js'
 
 const toolNameMap: Record<string, string> = {
   Read: 'Read',
@@ -112,7 +113,7 @@ function extractDroidBashCommands(command: string): string[] {
 
 function createParser(
   source: SessionSource,
-  seenKeys: Set<string>,
+  seenKeys: DedupSet,
 ): SessionParser {
   return {
     async *parse(): AsyncGenerator<ParsedProviderCall> {
@@ -402,7 +403,7 @@ export function createDroidProvider(factoryDir?: string): Provider {
 
     createSessionParser(
       source: SessionSource,
-      seenKeys: Set<string>,
+      seenKeys: DedupSet,
     ): SessionParser {
       return createParser(source, seenKeys)
     },

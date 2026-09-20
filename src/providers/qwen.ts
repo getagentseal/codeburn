@@ -6,6 +6,7 @@ import { readSessionFile } from '../fs-utils.js'
 import { calculateCost } from '../models.js'
 import { extractBashCommands } from '../bash-utils.js'
 import type { ProbeRoot, Provider, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
+import type { DedupSet } from '../session-cache.js'
 
 const toolNameMap: Record<string, string> = {
   read_file: 'Read',
@@ -75,7 +76,7 @@ function extractTools(parts: QwenPart[]): { tools: string[]; bashCommands: strin
   return { tools, bashCommands }
 }
 
-function createParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
+function createParser(source: SessionSource, seenKeys: DedupSet): SessionParser {
   return {
     async *parse(): AsyncGenerator<ParsedProviderCall> {
       const raw = await readSessionFile(source.path)
@@ -199,7 +200,7 @@ export function createQwenProvider(overrideDir?: string): Provider {
       return sources
     },
 
-    createSessionParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
+    createSessionParser(source: SessionSource, seenKeys: DedupSet): SessionParser {
       return createParser(source, seenKeys)
     },
   }

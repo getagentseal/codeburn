@@ -6,6 +6,7 @@ import { extractBashCommands } from '../bash-utils.js'
 import { calculateCost } from '../models.js'
 import { getSqliteLoadError, isSqliteAvailable, openDatabase, type SqliteDatabase } from '../sqlite.js'
 import type { ParsedProviderCall, ProbeRoot, Provider, SessionParser, SessionSource } from './types.js'
+import type { DedupSet } from '../session-cache.js'
 
 type ConversationRow = {
   conversation_id: string
@@ -137,7 +138,7 @@ function splitSourcePath(path: string): { dbPath: string; conversationId: string
   return { dbPath: path.slice(0, idx), conversationId: path.slice(idx + 1) }
 }
 
-function createParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
+function createParser(source: SessionSource, seenKeys: DedupSet): SessionParser {
   return {
     async *parse(): AsyncGenerator<ParsedProviderCall> {
       if (!isSqliteAvailable()) {
@@ -279,7 +280,7 @@ export function createForgeProvider(dbPath = DEFAULT_DB_PATH): Provider {
       return discoverFromDb(dbPath)
     },
 
-    createSessionParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
+    createSessionParser(source: SessionSource, seenKeys: DedupSet): SessionParser {
       return createParser(source, seenKeys)
     },
   }

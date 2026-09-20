@@ -6,6 +6,7 @@ import { FS_SCAN_CONCURRENCY, mapWithConcurrency, readSessionFile } from '../fs-
 import { calculateCost, getShortModelName } from '../models.js'
 import { estimateTokensFromChars } from '../token-estimate.js'
 import type { ParsedProviderCall, ProbeRoot, Provider, SessionParser, SessionSource } from './types.js'
+import type { DedupSet } from '../session-cache.js'
 
 // Grok Bot is xAI's Electron desktop agent app (bundle id com.anysphere.sand),
 // not Grok Build — xAI's coding CLI, which is the separate `grok` provider.
@@ -186,7 +187,7 @@ function groupRequests(entries: unknown[]): GrokbotRequest[] {
   return [...requests.values()]
 }
 
-function createParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
+function createParser(source: SessionSource, seenKeys: DedupSet): SessionParser {
   return {
     async *parse(): AsyncGenerator<ParsedProviderCall> {
       const value = await readSlice(source.path)
@@ -296,7 +297,7 @@ export function createGrokbotProvider(persistenceDir?: string): Provider {
       return discoverSessions(resolveDir())
     },
 
-    createSessionParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
+    createSessionParser(source: SessionSource, seenKeys: DedupSet): SessionParser {
       return createParser(source, seenKeys)
     },
   }

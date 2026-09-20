@@ -6,6 +6,7 @@ import zlib from 'zlib'
 import { calculateCost } from '../models.js'
 import { getSqliteLoadError, isSqliteAvailable, openDatabase, type SqliteDatabase } from '../sqlite.js'
 import type { ParsedProviderCall, ProbeRoot, Provider, SessionParser, SessionSource } from './types.js'
+import type { DedupSet } from '../session-cache.js'
 
 // Zed's built-in agent stores one row per thread in a single SQLite database;
 // the `data` blob is zstd-compressed JSON carrying `request_token_usage`
@@ -99,7 +100,7 @@ function buildCall(opts: {
   }
 }
 
-function parseThreads(db: SqliteDatabase, seenKeys: Set<string>): ParsedProviderCall[] {
+function parseThreads(db: SqliteDatabase, seenKeys: DedupSet): ParsedProviderCall[] {
   const calls: ParsedProviderCall[] = []
   let skipped = 0
 
@@ -170,7 +171,7 @@ function parseThreads(db: SqliteDatabase, seenKeys: Set<string>): ParsedProvider
   return calls
 }
 
-function createParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
+function createParser(source: SessionSource, seenKeys: DedupSet): SessionParser {
   return {
     async *parse(): AsyncGenerator<ParsedProviderCall> {
       if (!isSqliteAvailable()) {
@@ -224,7 +225,7 @@ export function createZedProvider(dbPathOverride?: string): Provider {
       return [{ path: dbPath, project: 'zed', provider: 'zed' }]
     },
 
-    createSessionParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
+    createSessionParser(source: SessionSource, seenKeys: DedupSet): SessionParser {
       return createParser(source, seenKeys)
     },
   }

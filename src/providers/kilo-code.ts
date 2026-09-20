@@ -4,6 +4,7 @@ import { homedir } from 'os'
 import { discoverClineTasks, createClineParser, clineTaskRoots } from './vscode-cline-parser.js'
 import { discoverSqliteSessions, createSqliteSessionParser, type SqliteProviderConfig } from './sqlite-session-parser.js'
 import type { ProbeRoot, Provider, SessionSource, SessionParser } from './types.js'
+import type { DedupSet } from '../session-cache.js'
 
 const EXTENSION_ID = 'kilocode.kilo-code'
 const PROVIDER_NAME = 'kilo-code'
@@ -49,7 +50,7 @@ export function createKiloCodeProvider(overrideDir?: string | string[]): Provide
       return [...oldSessions, ...dbSessions]
     },
 
-    createSessionParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
+    createSessionParser(source: SessionSource, seenKeys: DedupSet): SessionParser {
       if (source.path.includes('.db:')) {
         return createSqliteSessionParser(source, seenKeys, sqliteConfig)
       }

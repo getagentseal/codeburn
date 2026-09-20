@@ -5,6 +5,7 @@ import { homedir, platform } from 'os'
 import { readSessionLines } from '../fs-utils.js'
 import { calculateCost } from '../models.js'
 import type { Provider, SessionSource, SessionParser, ParsedProviderCall, ProbeRoot } from './types.js'
+import type { DedupSet } from '../session-cache.js'
 
 const PROVIDER_NAME = 'open-design'
 const ENV_DIR = 'CODEBURN_OPEN_DESIGN_DIR'
@@ -162,7 +163,7 @@ async function discoverOpenDesignSessions(baseDir: string): Promise<SessionSourc
   return dedupeSources(sources)
 }
 
-function createParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
+function createParser(source: SessionSource, seenKeys: DedupSet): SessionParser {
   return {
     async *parse(): AsyncGenerator<ParsedProviderCall> {
       const sessionId = basename(dirname(source.path))
@@ -254,7 +255,7 @@ export function createOpenDesignProvider(overrideDir?: string): Provider {
       return discoverOpenDesignSessions(overrideDir ?? getOpenDesignDir())
     },
 
-    createSessionParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
+    createSessionParser(source: SessionSource, seenKeys: DedupSet): SessionParser {
       return createParser(source, seenKeys)
     },
   }

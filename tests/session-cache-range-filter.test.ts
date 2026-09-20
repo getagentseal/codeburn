@@ -37,6 +37,8 @@ import {
   clearLoadCacheMemo,
   clearShardMemo,
   computeEnvFingerprint,
+  digestDedupKey,
+  DedupSet,
   loadCache,
   loadShardFiltered,
   markCacheDirty,
@@ -202,14 +204,14 @@ describe('range-filtered shard load', () => {
 
     // June-only file: no turns retained, keys + scalars carried.
     expect(files['/live/june.jsonl']!.turns).toEqual([])
-    expect(files['/live/june.jsonl']!.rangeFiltered?.droppedKeys).toEqual(['june-1'])
+    expect(files['/live/june.jsonl']!.rangeFiltered?.droppedKeys).toEqual([digestDedupKey('june-1')])
     expect(files['/live/june.jsonl']!.fingerprint).toEqual({ dev: 1, ino: 2, mtimeMs: 3, sizeBytes: 4 })
 
     // Span file: prefix carry captured, straddling turn kept WHOLE (both
     // calls), July-14-only dropped.
     const span = files['/live/span.jsonl']!
     expect(span.turns.map(t => t.calls.map(c => c.deduplicationKey))).toEqual([['span-14', 'span-15']])
-    expect(span.rangeFiltered?.droppedKeys).toEqual(['juneb-1', 'july14-only'])
+    expect(span.rangeFiltered?.droppedKeys).toEqual([digestDedupKey('juneb-1'), digestDedupKey('july14-only')])
     expect(span.rangeFiltered?.carryBranch).toBe('main')
     expect(span.rangeFiltered?.carryPrRefs).toEqual(['https://github.com/o/r/pull/1'])
     expect(span.rangeFiltered?.droppedHadBranch).toBe(true)
@@ -217,7 +219,7 @@ describe('range-filtered shard load', () => {
     // July file: same-month decoys dropped in walk order, query day kept.
     const july = files['/live/july.jsonl']!
     expect(july.turns.map(t => t.calls.map(c => c.deduplicationKey))).toEqual([['day15-1']])
-    expect(july.rangeFiltered?.droppedKeys).toEqual(['july1-1', 'july16-1', 'july31-1'])
+    expect(july.rangeFiltered?.droppedKeys).toEqual([digestDedupKey('july1-1'), digestDedupKey('july16-1'), digestDedupKey('july31-1')])
   })
 
   it('keeps PR-linked, key-overlap and interleaved files whole', async () => {
@@ -261,19 +263,19 @@ describe('range-filtered shard load', () => {
       rangeFiltered: {
         span: { bucket: '2026-07', until: '2026-07' },
         newestCallMs: 1,
-        droppedKeys: ['shared-x'],
+        droppedKeys: [digestDedupKey('shared-x')],
       },
     })
     const fileB = cachedFile({ turns: [turnAt('2026-07-15T10:00:00Z', 'shared-x')] })
     // Walk order A then B (the serve loops must seed when they open each
     // file): B's kept turn suppresses exactly as the full walk would, where
     // A's out-of-range turn would have added the key at A's position.
-    const seen = new Set<string>()
+    const seen = new DedupSet()
     seedDroppedKeys(seen, fileA)
     const suppressed = fileB.turns[0]!.calls.some(c => seen.has(c.deduplicationKey))
     expect(suppressed).toBe(true)
     // Reversed: B first counts (nothing seeded yet) — order is load-bearing.
-    const seen2 = new Set<string>()
+    const seen2 = new DedupSet()
     const counted = !fileB.turns[0]!.calls.some(c => seen2.has(c.deduplicationKey))
     expect(counted).toBe(true)
   })
@@ -626,9 +628,9 @@ describe('range-filtered load at record scale', () => {
     expect(file.turns[0]!.calls[0]!.deduplicationKey).toBe('kept-1')
     const marker = file.rangeFiltered!
     expect(marker.droppedKeys.length).toBe(29999)
-    expect(marker.droppedKeys[0]).toBe('june-0')
-    expect(marker.droppedKeys[15000]).toBe('july1-0')
-    expect(marker.droppedKeys[29998]).toBe('july1-14998')
+    expect(marker.droppedKeys[0]).toBe(digestDedupKey('june-0'))
+    expect(marker.droppedKeys[15000]).toBe(digestDedupKey('july1-0'))
+    expect(marker.droppedKeys[29998]).toBe(digestDedupKey('july1-14998'))
     expect(marker.span).toEqual({ bucket: '2026-06', until: '2026-07' })
     expect(marker.newestCallMs).toBe(new Date('2026-07-15T12:00:00Z').getTime())
     expect(marker).not.toHaveProperty('carryBranch')
@@ -650,7 +652,7 @@ describe('range-filtered load at record scale', () => {
     const file = files['/live/old.jsonl']!
     expect(file.turns).toEqual([])
     const marker = file.rangeFiltered!
-    expect(marker.droppedKeys).toEqual(['june-0', 'june-1'])
+    expect(marker.droppedKeys).toEqual([digestDedupKey('june-0'), digestDedupKey('june-1')])
     expect(marker).not.toHaveProperty('carryBranch')
     expect(marker).not.toHaveProperty('carryPrRefs')
     expect(marker.droppedHadBranch).toBe(true)
@@ -673,3 +675,44 @@ describe('range-filtered load at record scale', () => {
   })
 })
 
+describe('dedup digests', () => {
+  it('hashes deterministically with avalanche and 32-char shape', async () => {
+    const a = digestDedupKey('codex:june-1')
+    expect(a).toBe(digestDedupKey('codex:june-1'))
+    // Full SHA-256 in single-byte encoding: 32 chars, not necessarily hex.
+    expect(a).toHaveLength(32)
+    expect(digestDedupKey('codex:june-2')).not.toBe(a)
+  })
+
+  it('pairs RPC bare keys on insert and matches them exactly', async () => {
+    const seen = new DedupSet()
+    seen.add('antigravity:cid-1:resp-9')
+    // Bare form resolves without prefix scanning.
+    expect(seen.has('antigravity:cid-1')).toBe(true)
+    // Statusline shapes pair nothing extra.
+    const before = seen.size
+    seen.add('antigravity-statusline:cid-1:0:sig')
+    expect(seen.size).toBe(before + 1)
+    expect(seen.has('antigravity-statusline:cid-1:0:sig')).toBe(true)
+  })
+
+  it('seeds bare conversation keys from marked files', async () => {
+    // Marker conversations (raw bare keys) hash through the normal path at
+    // seed time, exactly like live inserts pair them — so a conversation
+    // cached (and dropped) in a previous run still suppresses its statusline
+    // twin without prefix scanning digests.
+    const file = cachedFile({
+      turns: [],
+      rangeFiltered: {
+        span: { bucket: '2026-07', until: '2026-07' },
+        newestCallMs: 1,
+        droppedKeys: [digestDedupKey('antigravity:cid-9:resp-1')],
+        conversations: ['antigravity:cid-9'],
+      },
+    })
+    const seen = new DedupSet()
+    seedDroppedKeys(seen, file)
+    expect(seen.has('antigravity:cid-9:resp-1')).toBe(true)
+    expect(seen.has('antigravity:cid-9')).toBe(true)
+  })
+})

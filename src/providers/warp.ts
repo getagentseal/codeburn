@@ -6,6 +6,7 @@ import { calculateCost, getShortModelName } from '../models.js'
 import { blobToText, getSqliteLoadError, isBlockedDatabaseError, isSqliteAvailable, openDatabase, type SqliteDatabase } from '../sqlite.js'
 import { estimateTokensFromChars } from '../token-estimate.js'
 import type { ProbeRoot, ParsedProviderCall, Provider, SessionParser, SessionSource } from './types.js'
+import type { DedupSet } from '../session-cache.js'
 import { safeNumber } from '../parser.js'
 
 const WARP_GROUP_CONTAINER = '2BBY89MBSN.dev.warp'
@@ -312,7 +313,7 @@ function validateSchema(db: SqliteDatabase): boolean {
   }
 }
 
-function createParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
+function createParser(source: SessionSource, seenKeys: DedupSet): SessionParser {
   return {
     async *parse(): AsyncGenerator<ParsedProviderCall> {
       if (!isSqliteAvailable()) {
@@ -497,7 +498,7 @@ export function createWarpProvider(dbPathOverride?: string): Provider {
       return sessions
     },
 
-    createSessionParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
+    createSessionParser(source: SessionSource, seenKeys: DedupSet): SessionParser {
       return createParser(source, seenKeys)
     },
   }

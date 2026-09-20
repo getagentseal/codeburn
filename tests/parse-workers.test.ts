@@ -10,6 +10,7 @@ import { decideParseWorkers, ParseWorkerPool, parseFilesInOrder, type ClaudeWork
 import { clearSessionCache, parseAllSessions, parseClaudeFileFull } from '../src/parser.js'
 import { parseCodexFileFull, type CodexFullParse } from '../src/providers/codex.js'
 import type { SessionSource } from '../src/providers/types.js'
+import { DedupSet } from '../src/session-cache.js'
 
 // Two full cold CLI parses of a multi-hundred-file corpus, plus in-process parses
 // that spawn real threads.
@@ -467,12 +468,13 @@ describe('ParseWorkerPool', () => {
     const afterClose = await pool.submit({ kind: 'codex', source: codexSource })
     expect(afterClose.ok).toBe(false)
 
-    const seen = new Set<string>()
+    const seen = new DedupSet()
     const serial = await parseCodexFileFull(codexSource, seen)
     if (!fromWorker.ok || !fromWorker.parsed) throw new Error('expected a parsed result')
     const { keys, path, ...worker } = fromWorker.parsed
     expect(keys.length).toBeGreaterThan(0)
-    expect(new Set(keys)).toEqual(seen)
+    // Both sides carry digests now (the worker posts DedupSet.values()).
+    expect(new Set(keys)).toEqual(new Set(seen.values()))
     // Echoed back so the parent can assert the positional worker/file pairing.
     expect(path).toBe(codexPath)
     expect(worker).toEqual(JSON.parse(JSON.stringify(serial)))

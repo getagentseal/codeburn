@@ -18,6 +18,7 @@ import type {
   SessionParser,
   ParsedProviderCall,
 } from './types.js'
+import type { DedupSet } from '../session-cache.js'
 
 type MessageRow = {
   session_id: string
@@ -227,7 +228,7 @@ export type SqliteProviderConfig = {
 
 export function createSqliteSessionParser(
   source: SessionSource,
-  seenKeys: Set<string>,
+  seenKeys: DedupSet,
   config: SqliteProviderConfig,
 ): SessionParser {
   return {

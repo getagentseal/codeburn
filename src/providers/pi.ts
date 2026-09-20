@@ -8,6 +8,7 @@ import { calculateCost } from '../models.js'
 import { extractBashCommands } from '../bash-utils.js'
 import { normalizeContentBlocks } from '../content-utils.js'
 import type { ProbeRoot, Provider, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
+import type { DedupSet } from '../session-cache.js'
 
 const modelDisplayNames: Record<string, string> = {
   'gpt-5.4': 'GPT-5.4',
@@ -205,7 +206,7 @@ function resolveMessageModel(messageModel: string, resolvedModel: string): strin
   return messageModel || resolvedModel || 'gpt-5'
 }
 
-function createParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
+function createParser(source: SessionSource, seenKeys: DedupSet): SessionParser {
   return {
     async *parse(): AsyncGenerator<ParsedProviderCall> {
       const content = await readSessionFile(source.path)
@@ -379,7 +380,7 @@ export function createPiProvider(sessionsDir?: string): Provider {
       return discoverSessionsInDir(dir, 'pi')
     },
 
-    createSessionParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
+    createSessionParser(source: SessionSource, seenKeys: DedupSet): SessionParser {
       return createParser(source, seenKeys)
     },
   }
@@ -413,7 +414,7 @@ export function createOmpProvider(sessionsDir?: string): Provider {
       return discoverSessionsInDir(dir, 'omp')
     },
 
-    createSessionParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
+    createSessionParser(source: SessionSource, seenKeys: DedupSet): SessionParser {
       return createParser(source, seenKeys)
     },
   }

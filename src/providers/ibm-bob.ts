@@ -4,6 +4,7 @@ import { homedir } from 'os'
 import { getShortModelName } from '../models.js'
 import { discoverClineTasksInBaseDirs, createClineParser } from './vscode-cline-parser.js'
 import type { ProbeRoot, Provider, SessionSource, SessionParser } from './types.js'
+import type { DedupSet } from '../session-cache.js'
 
 const PROVIDER_NAME = 'ibm-bob'
 const DISPLAY_NAME = 'IBM Bob'
@@ -54,7 +55,7 @@ export function createIBMBobProvider(overrideDir?: string): Provider {
       return discoverClineTasksInBaseDirs(dirs, PROVIDER_NAME, DISPLAY_NAME)
     },
 
-    createSessionParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
+    createSessionParser(source: SessionSource, seenKeys: DedupSet): SessionParser {
       return createClineParser(source, seenKeys, PROVIDER_NAME, FALLBACK_MODEL)
     },
   }

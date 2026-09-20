@@ -6,6 +6,7 @@ import { FS_SCAN_CONCURRENCY, mapWithConcurrency, readSessionFile } from '../fs-
 import { calculateCost, getModelCosts, getShortModelName } from '../models.js'
 import { extractBashCommands } from '../bash-utils.js'
 import type { ProbeRoot, Provider, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
+import type { DedupSet } from '../session-cache.js'
 
 // Grok Build (xAI's coding CLI) stores one session per directory at
 // <grok-home>/sessions/<url-encoded-cwd>/<uuid>/, where grok-home is $GROK_HOME
@@ -370,7 +371,7 @@ function hasPositiveTotals(totals: GrokTokenTotals): boolean {
     || totals.reasoning > 0
 }
 
-function createParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
+function createParser(source: SessionSource, seenKeys: DedupSet): SessionParser {
   return {
     async *parse(): AsyncGenerator<ParsedProviderCall> {
       const dir = dirname(source.path)
@@ -508,7 +509,7 @@ export function createGrokProvider(sessionsDir?: string): Provider {
       return discoverSessions(dir)
     },
 
-    createSessionParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
+    createSessionParser(source: SessionSource, seenKeys: DedupSet): SessionParser {
       return createParser(source, seenKeys)
     },
   }

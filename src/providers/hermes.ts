@@ -8,6 +8,7 @@ import { calculateCost, getShortModelName, routeFromProviderField } from '../mod
 import { isUserHomeRoot } from '../path-privacy.js'
 import { isSqliteAvailable, getSqliteLoadError, openDatabase, isSqliteBusyError, type SqliteDatabase } from '../sqlite.js'
 import type { ProbeRoot, Provider, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
+import type { DedupSet } from '../session-cache.js'
 import type { ToolCall } from '../types.js'
 import {
   getHermesCursor,
@@ -571,7 +572,7 @@ async function discoverFromDb(dbPath: string, profile: string): Promise<SessionS
   }
 }
 
-function createParser(source: SessionSource, seenKeys: Set<string>, hermesHome: string): SessionParser {
+function createParser(source: SessionSource, seenKeys: DedupSet, hermesHome: string): SessionParser {
   return {
     async *parse(): AsyncGenerator<ParsedProviderCall> {
       if (!isSqliteAvailable()) {
@@ -783,7 +784,7 @@ export function createHermesProvider(hermesHomeOverride?: string): Provider {
       return sessions
     },
 
-    createSessionParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
+    createSessionParser(source: SessionSource, seenKeys: DedupSet): SessionParser {
       return createParser(source, seenKeys, hermesHome)
     },
   }

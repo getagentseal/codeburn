@@ -12,6 +12,7 @@ import { normalizeContentBlocks } from '../content-utils.js'
 import { estimateTokensFromChars } from '../token-estimate.js'
 import type { ToolCall } from '../types.js'
 import type { Provider, ProbeRoot, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
+import type { DedupSet } from '../session-cache.js'
 import { defaultBilledCodexHome, defaultLauncherRoots, FIRST_LINE_READ_CAP, isNestedLauncherCodexHome, listRolloutSessionIds, rolloutFileSessionId, sameCodexHome } from '../launcher-homes.js'
 
 const modelDisplayNames: Record<string, string> = {
@@ -701,7 +702,7 @@ export type CodexCacheWrite = {
 // written comes back through `capture` for the caller to install. That is what
 // lets a worker thread run this exact decode without owning the cache module's
 // per-directory state.
-function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { write?: CodexCacheWrite }, rangeStartMs?: number): SessionParser {
+function createParser(source: SessionSource, seenKeys: DedupSet, capture?: { write?: CodexCacheWrite }, rangeStartMs?: number): SessionParser {
   return {
     async *parse(): AsyncGenerator<ParsedProviderCall> {
        // PR-A scope: unfiltered lookup (range-filtered serve rides the stacked
@@ -1362,7 +1363,7 @@ export type CodexFullParse = { calls: ParsedProviderCall[]; write?: CodexCacheWr
 /// is the dedup set the decode runs against — pass an empty one off-thread and
 /// let the caller prove no earlier file claimed any of the keys before
 /// installing the result.
-export async function parseCodexFileFull(source: SessionSource, seenKeys: Set<string>): Promise<CodexFullParse> {
+export async function parseCodexFileFull(source: SessionSource, seenKeys: DedupSet): Promise<CodexFullParse> {
   const capture: { write?: CodexCacheWrite } = {}
   const calls: ParsedProviderCall[] = []
   for await (const call of createParser(source, seenKeys, capture).parse()) calls.push(call)
@@ -1442,7 +1443,7 @@ export function createCodexProvider(
 
     createSessionParser(
       source: SessionSource,
-      seenKeys: Set<string>,
+      seenKeys: DedupSet,
       dateRange?: { start: Date; end: Date },
     ): SessionParser {
       return createParser(source, seenKeys, undefined, dateRange?.start.getTime())

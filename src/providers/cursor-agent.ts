@@ -15,6 +15,7 @@ import type {
   ParsedProviderCall,
   ProbeRoot,
 } from './types.js'
+import type { DedupSet } from '../session-cache.js'
 
 type ConversationSummary = {
   conversationId: string
@@ -389,7 +390,7 @@ function parseTranscript(raw: string): { turns: ParsedTurn[]; recognized: boolea
 
 function createParser(
   source: SessionSource,
-  seenKeys: Set<string>,
+  seenKeys: DedupSet,
   dbPath: string,
   summariesByConversationId: Map<string, ConversationSummary>,
 ): SessionParser {
@@ -545,7 +546,7 @@ export function createCursorAgentProvider(baseDirOverride?: string): Provider {
       return sources
     },
 
-    createSessionParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
+    createSessionParser(source: SessionSource, seenKeys: DedupSet): SessionParser {
       return createParser(source, seenKeys, dbPath, summariesByConversationId)
     },
   }

@@ -1,5 +1,6 @@
 import { discoverClineTasks, createClineParser, clineTaskRoots } from './vscode-cline-parser.js'
 import type { ProbeRoot, Provider, SessionSource, SessionParser } from './types.js'
+import type { DedupSet } from '../session-cache.js'
 
 const EXTENSION_ID = 'rooveterinaryinc.roo-cline'
 
@@ -24,7 +25,7 @@ export function createRooCodeProvider(overrideDir?: string | string[]): Provider
       return discoverClineTasks(EXTENSION_ID, 'roo-code', 'Roo Code', overrideDir)
     },
 
-    createSessionParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
+    createSessionParser(source: SessionSource, seenKeys: DedupSet): SessionParser {
       return createClineParser(source, seenKeys, 'roo-code')
     },
   }

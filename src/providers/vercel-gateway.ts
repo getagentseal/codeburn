@@ -1,6 +1,7 @@
 import { getShortModelName } from '../models.js'
 import type { DateRange } from '../types.js'
 import type { Provider, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
+import type { DedupSet } from '../session-cache.js'
 import { fetchWithTimeout } from '../fetch-utils.js'
 
 const REPORT_URL = 'https://ai-gateway.vercel.sh/v1/report'
@@ -73,7 +74,7 @@ export async function fetchVercelGatewayReport(
 
 function createParser(
   source: SessionSource,
-  seenKeys: Set<string>,
+  seenKeys: DedupSet,
   dateRange?: DateRange,
 ): SessionParser {
   return {
@@ -144,7 +145,7 @@ export const vercelGateway: Provider = {
 
   createSessionParser(
     source: SessionSource,
-    seenKeys: Set<string>,
+    seenKeys: DedupSet,
     dateRange?: DateRange,
   ): SessionParser {
     return createParser(source, seenKeys, dateRange)

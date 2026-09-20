@@ -6,6 +6,7 @@ import { readSessionFile } from '../fs-utils.js'
 import { calculateCost } from '../models.js'
 import { extractBashCommands } from '../bash-utils.js'
 import type { Provider, SessionSource, SessionParser, ParsedProviderCall, ProbeRoot } from './types.js'
+import type { DedupSet } from '../session-cache.js'
 
 const toolNameMap: Record<string, string> = {
   bash: 'Bash',
@@ -86,7 +87,7 @@ function extractTools(content: Array<{ type?: string; name?: string; arguments?:
   return { tools, bashCommands }
 }
 
-function createParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
+function createParser(source: SessionSource, seenKeys: DedupSet): SessionParser {
   return {
     async *parse(): AsyncGenerator<ParsedProviderCall> {
       const raw = await readSessionFile(source.path)
@@ -279,7 +280,7 @@ export function createOpenClawProvider(overrideDir?: string): Provider {
       return all
     },
 
-    createSessionParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
+    createSessionParser(source: SessionSource, seenKeys: DedupSet): SessionParser {
       return createParser(source, seenKeys)
     },
   }

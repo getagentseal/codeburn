@@ -30,6 +30,7 @@ import {
   beginColdHydration,
   cleanupOrphanedTempFiles,
   computeEnvFingerprint,
+  DedupSet,
   DURABLE_PROVIDER_NAMES,
   emptyCache,
   fileFirstTurnProject,
@@ -1570,7 +1571,7 @@ export function dedupeStreamingMessageIds(entries: JournalEntry[]): JournalEntry
   return result
 }
 
-export function groupIntoTurns(entries: JournalEntry[], seenMsgIds: Set<string>, toolResultMeta?: Map<string, ToolResultMeta>): ParsedTurn[] {
+export function groupIntoTurns(entries: JournalEntry[], seenMsgIds: DedupSet, toolResultMeta?: Map<string, ToolResultMeta>): ParsedTurn[] {
   const turns: ParsedTurn[] = []
   let currentUserMessage = ''
   let currentCalls: ParsedApiCall[] = []
@@ -1871,7 +1872,7 @@ function buildSessionSummary(
 async function parseSessionFile(
   filePath: string,
   project: string,
-  seenMsgIds: Set<string>,
+  seenMsgIds: DedupSet,
   dateRange?: DateRange,
 ): Promise<{ session: SessionSummary; canonicalCwd?: string } | null> {
   // Skip files whose mtime is older than the range start. A session file
@@ -1988,7 +1989,7 @@ export async function readAgentType(filePath: string): Promise<string | undefine
 
 async function scanProjectDirs(
   dirs: Array<{ path: string; name: string; source?: SessionSourceMetadata }>,
-  seenMsgIds: Set<string>,
+  seenMsgIds: DedupSet,
   diskCache: SessionCache,
   dateRange?: DateRange,
   // Cold-run robustness: called after every parsed Claude file so a throttled
@@ -2164,11 +2165,11 @@ async function scanProjectDirs(
           if (result.parsed.path !== filePath) {
             throw new Error(`claude parse worker result out of order: got ${result.parsed.path}, expected ${filePath}`)
           }
-          if (result.parsed.msgIds.some(id => seenMsgIds.has(id))) {
+          if (result.parsed.msgIds.some(id => seenMsgIds.hasHashed(id))) {
             workerDiscards++
             parsed = undefined
           } else {
-            for (const id of result.parsed.msgIds) seenMsgIds.add(id)
+            for (const id of result.parsed.msgIds) seenMsgIds.addHashed(id)
             parsed = result.parsed
           }
         } else if (result?.ok) {
@@ -3016,7 +3017,7 @@ function claudeLineageForParse(
 
 export async function parseClaudeFileFull(
   filePath: string,
-  seenMsgIds: Set<string>,
+  seenMsgIds: DedupSet,
 ): Promise<ClaudeFileParse | null> {
   const tracker = { lastCompleteLineOffset: 0 }
   const toolResultMeta = new Map<string, ToolResultMeta>()
@@ -3340,7 +3341,7 @@ function classifiedTurnSlicedToDays(turn: ClassifiedTurn, days: Set<string>): Cl
 export async function parseProviderSources(
   providerName: string,
   sources: SessionSource[],
-  seenKeys: Set<string>,
+  seenKeys: DedupSet,
   diskCache: SessionCache,
   dateRange?: DateRange,
   // Cold-run robustness: called after each source's cache entry lands (mirrors
@@ -3474,8 +3475,10 @@ export async function parseProviderSources(
 
   // Parser dedup: cross-provider keys + cached file keys.
   // Separate from seenKeys so parsing doesn't suppress query-time output.
-  const parserDedup = new Set<string>()
-  for (const key of seenKeys) parserDedup.add(key)
+  // Clone the incoming digests verbatim (see DedupSet.values). The caller
+  // contract is DedupSet-only, so live inserts below stay comparable.
+  const parserDedup = new DedupSet()
+  for (const key of seenKeys.values()) parserDedup.addHashed(key)
   for (const { cached } of unchangedSources) {
     // Dropped turns contribute only dedup keys (see RangeFilteredMeta).
     seedDroppedKeys(parserDedup, cached)
@@ -3571,10 +3574,10 @@ export async function parseProviderSources(
           if (result.parsed.path !== source.path) {
             throw new Error(`codex parse worker result out of order: got ${result.parsed.path}, expected ${source.path}`)
           }
-          if (result.parsed.keys.some(k => parserDedup.has(k))) {
+          if (result.parsed.keys.some(k => parserDedup.hasHashed(k))) {
             workerDiscards++
           } else {
-            for (const k of result.parsed.keys) parserDedup.add(k)
+            for (const k of result.parsed.keys) parserDedup.addHashed(k)
             providerCalls = result.parsed.calls
             // The worker never touches the codex cache; publish its entry here,
             // in install order, so flushCodexCache writes what serial would.
@@ -5659,8 +5662,8 @@ async function runParseInner(
   deferredRetryableSource = false
   firstPaintDeferredThisRun = 0
   dateFloorSkippedProviders.clear()
-  const seenMsgIds = new Set<string>()
-  const seenKeys = new Set<string>()
+  const seenMsgIds = new DedupSet()
+  const seenKeys = new DedupSet()
   const discovery = snapshotOnly
     ? { sources: [], failedProviders: [] }
     : await discoverAllSessionsWithFailures(providerFilter)

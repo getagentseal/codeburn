@@ -5,6 +5,7 @@ import { homedir } from 'os'
 import { calculateCost } from '../models.js'
 import { extractBashCommands } from '../bash-utils.js'
 import type { ProbeRoot, Provider, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
+import type { DedupSet } from '../session-cache.js'
 
 // Codebuff (formerly Manicode) uses a credit-based billing system. The local
 // chat-messages.json doesn't record per-call token counts the way Claude Code
@@ -330,7 +331,7 @@ function extractChannelFromChatDir(chatDir: string): string | null {
   return channel ? channel : null
 }
 
-function createParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
+function createParser(source: SessionSource, seenKeys: DedupSet): SessionParser {
   return {
     async *parse(): AsyncGenerator<ParsedProviderCall> {
       const chatDir = source.path
@@ -445,7 +446,7 @@ export function createCodebuffProvider(baseDir?: string): Provider {
       return discoverSessionsInRoots(roots)
     },
 
-    createSessionParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
+    createSessionParser(source: SessionSource, seenKeys: DedupSet): SessionParser {
       return createParser(source, seenKeys)
     },
   }

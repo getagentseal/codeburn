@@ -7,6 +7,7 @@ import { readSessionFile } from '../fs-utils.js'
 import { calculateCost, getShortModelName } from '../models.js'
 import type { ToolCall } from '../types.js'
 import type { ParsedProviderCall, ProbeRoot, Provider, SessionParser, SessionSource } from './types.js'
+import type { DedupSet } from '../session-cache.js'
 
 // The Cline CLI (npm `cline`, 3.x) stores sessions in a layout unrelated to the
 // VS Code extension's tasks/ui_messages.json tree that `cline.ts` reads:
@@ -239,7 +240,7 @@ async function readJson(path: string): Promise<unknown> {
   }
 }
 
-function createParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
+function createParser(source: SessionSource, seenKeys: DedupSet): SessionParser {
   return {
     async *parse(): AsyncGenerator<ParsedProviderCall> {
       // `source.path` is the growing `<sessionId>.messages.json` file (see
@@ -420,7 +421,7 @@ export function createClineCliProvider(overrideDir?: string): Provider {
       return sources
     },
 
-    createSessionParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
+    createSessionParser(source: SessionSource, seenKeys: DedupSet): SessionParser {
       return createParser(source, seenKeys)
     },
   }

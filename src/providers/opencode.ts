@@ -5,6 +5,7 @@ import { getShortModelName } from '../models.js'
 import { discoverSqliteSessions, createSqliteSessionParser, type SqliteProviderConfig } from './sqlite-session-parser.js'
 import { discoverOpenCodeFileSessions, createOpenCodeFileSessionParser } from './opencode-file-parser.js'
 import type { Provider, ProbeRoot, SessionSource, SessionParser } from './types.js'
+import type { DedupSet } from '../session-cache.js'
 
 const toolNameMap: Record<string, string> = {
   bash: 'Bash',
@@ -91,7 +92,7 @@ export function createOpenCodeProvider(dataDir?: string): Provider {
       return [...fileSessions, ...sqliteSessions]
     },
 
-    createSessionParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
+    createSessionParser(source: SessionSource, seenKeys: DedupSet): SessionParser {
       if (source.path.endsWith('.json')) {
         return createOpenCodeFileSessionParser(source, seenKeys, resolvedDataDir, 'opencode')
       }

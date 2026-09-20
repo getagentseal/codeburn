@@ -4,6 +4,7 @@ import { homedir } from 'os'
 
 import { calculateCost } from '../models.js'
 import type { SessionSource, SessionParser, ParsedProviderCall } from './types.js'
+import type { DedupSet } from '../session-cache.js'
 
 type UiMessage = {
   type?: string
@@ -132,7 +133,7 @@ function workspaceToProject(workspace: string): string {
   return basename(workspace) || workspace
 }
 
-export function createClineParser(source: SessionSource, seenKeys: Set<string>, providerName: string, fallbackModel = 'cline-auto'): SessionParser {
+export function createClineParser(source: SessionSource, seenKeys: DedupSet, providerName: string, fallbackModel = 'cline-auto'): SessionParser {
   return {
     async *parse(): AsyncGenerator<ParsedProviderCall> {
       const taskDir = source.path

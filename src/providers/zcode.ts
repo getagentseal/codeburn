@@ -4,6 +4,7 @@ import { homedir } from 'os'
 import { calculateCost } from '../models.js'
 import { isSqliteAvailable, getSqliteLoadError, openDatabase, type SqliteDatabase } from '../sqlite.js'
 import type { Provider, SessionSource, SessionParser, ParsedProviderCall, ProbeRoot } from './types.js'
+import type { DedupSet } from '../session-cache.js'
 
 /// ZCode (CLI v0.14.x) records usage in a single SQLite database at
 /// ~/.zcode/cli/db/db.sqlite. We read it because the other on-disk sources are
@@ -86,7 +87,7 @@ function discover(dbPath: string): SessionSource[] {
   }
 }
 
-function createParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
+function createParser(source: SessionSource, seenKeys: DedupSet): SessionParser {
   return {
     async *parse(): AsyncGenerator<ParsedProviderCall> {
       if (!isSqliteAvailable()) {
@@ -222,7 +223,7 @@ export function createZcodeProvider(dbPathOverride?: string): Provider {
       return discover(dbPath)
     },
 
-    createSessionParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
+    createSessionParser(source: SessionSource, seenKeys: DedupSet): SessionParser {
       return createParser(source, seenKeys)
     },
   }

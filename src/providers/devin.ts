@@ -11,6 +11,7 @@ import type {
   SessionSource,
   ParsedProviderCall,
 } from "./types.js";
+import type { DedupSet } from "../session-cache.js";
 import { readSessionFile } from "../fs-utils.js";
 import { isPositiveNumber, safeNumber } from "../parser.js";
 
@@ -483,7 +484,7 @@ function loadSessionMetadata(
 class DevinSessionParser implements SessionParser {
   constructor(
     private source: SessionSource,
-    private seenKeys: Set<string>,
+    private seenKeys: DedupSet,
     private sessionMetadata: Map<string, DevinSessionMetadata>,
   ) {}
 
@@ -634,7 +635,7 @@ export function createDevinProvider(cliDir?: string): Provider {
 
     createSessionParser(
       source: SessionSource,
-      seenKeys: Set<string>,
+      seenKeys: DedupSet,
     ): SessionParser {
       return new DevinSessionParser(source, seenKeys, getSessionMetadata());
     },

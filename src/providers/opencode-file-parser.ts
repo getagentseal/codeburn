@@ -3,6 +3,7 @@ import { join } from 'path'
 
 import { buildAssistantCall, sanitize, type MessageData, type PartData } from './session-message.js'
 import type { SessionSource, SessionParser, ParsedProviderCall } from './types.js'
+import type { DedupSet } from '../session-cache.js'
 
 // OpenCode 1.1+ stores sessions as file-based JSON instead of a SQLite DB:
 //   storage/session/<projectID>/<sessionID>.json   session metadata
@@ -85,7 +86,7 @@ export async function discoverOpenCodeFileSessions(
 
 export function createOpenCodeFileSessionParser(
   source: SessionSource,
-  seenKeys: Set<string>,
+  seenKeys: DedupSet,
   dataDir: string,
   providerName: string,
 ): SessionParser {

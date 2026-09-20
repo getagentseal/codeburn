@@ -10,6 +10,7 @@ import { calculateCost } from '../models.js'
 import { estimateTokensFromChars } from '../token-estimate.js'
 import type { ToolCall } from '../types.js'
 import type { ProbeRoot, Provider, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
+import type { DedupSet } from '../session-cache.js'
 
 // Kiro bills in credits: individual plans are $20/mo for 1,000 credits and
 // overage is billed at $0.04 per additional credit. We price credits at the
@@ -199,7 +200,7 @@ function extractStructuredToolNames(value: unknown, text: string, options: { inc
   return tools
 }
 
-function parseChatFile(data: KiroChatFile, sessionId: string, project: string, seenKeys: Set<string>): ParsedProviderCall[] {
+function parseChatFile(data: KiroChatFile, sessionId: string, project: string, seenKeys: DedupSet): ParsedProviderCall[] {
   const results: ParsedProviderCall[] = []
   const { chat, metadata } = data
 
@@ -270,7 +271,7 @@ function parseChatFile(data: KiroChatFile, sessionId: string, project: string, s
   return results
 }
 
-function parseModernExecution(data: KiroModernExecution, sourcePath: string, seenKeys: Set<string>): ParsedProviderCall[] {
+function parseModernExecution(data: KiroModernExecution, sourcePath: string, seenKeys: DedupSet): ParsedProviderCall[] {
   const results: ParsedProviderCall[] = []
   if (Array.isArray(data['executions'])) return results
 
@@ -445,7 +446,7 @@ type KiroCliSessionMeta = {
   }
 }
 
-function parseCliSession(meta: KiroCliSessionMeta, entries: KiroCliEntry[], seenKeys: Set<string>): ParsedProviderCall[] {
+function parseCliSession(meta: KiroCliSessionMeta, entries: KiroCliEntry[], seenKeys: DedupSet): ParsedProviderCall[] {
   const results: ParsedProviderCall[] = []
   const sessionId = meta.session_id
   const project = basename(meta.cwd || '')
@@ -580,7 +581,7 @@ function parseCliSession(meta: KiroCliSessionMeta, entries: KiroCliEntry[], seen
 // Newer v1-era Kiro builds store session state here: history[] carries user prompts
 // and assistant messages, some of which are stubs referencing per-execution files
 // (parsed separately by parseModernExecution).
-async function parseWorkspaceSession(record: Record<string, unknown>, source: SessionSource, seenKeys: Set<string>): Promise<ParsedProviderCall[]> {
+async function parseWorkspaceSession(record: Record<string, unknown>, source: SessionSource, seenKeys: DedupSet): Promise<ParsedProviderCall[]> {
   const results: ParsedProviderCall[] = []
   const historyArr = record['history']
   if (!Array.isArray(historyArr) || typeof record['sessionId'] !== 'string') return results
@@ -695,7 +696,7 @@ type KiroV2SessionMeta = {
   lastModifiedAt?: string
 }
 
-async function parseV2Session(source: SessionSource, seenKeys: Set<string>): Promise<ParsedProviderCall[]> {
+async function parseV2Session(source: SessionSource, seenKeys: DedupSet): Promise<ParsedProviderCall[]> {
   const results: ParsedProviderCall[] = []
 
   const content = await readSessionFile(source.path)
@@ -857,7 +858,7 @@ async function parseV2Session(source: SessionSource, seenKeys: Set<string>): Pro
   return results
 }
 
-function createParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
+function createParser(source: SessionSource, seenKeys: DedupSet): SessionParser {
   return {
     async *parse(): AsyncGenerator<ParsedProviderCall> {
       // v2 IDE store: ~/.kiro/sessions/<hash>/sess_<id>/messages.jsonl — a
@@ -1203,7 +1204,7 @@ export function createKiroProvider(agentDirOverride?: string, workspaceStorageDi
       })
     },
 
-    createSessionParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
+    createSessionParser(source: SessionSource, seenKeys: DedupSet): SessionParser {
       return createParser(source, seenKeys)
     },
   }

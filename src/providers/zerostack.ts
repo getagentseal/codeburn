@@ -5,6 +5,7 @@ import { homedir, platform } from 'os'
 import { readSessionFile } from '../fs-utils.js'
 import { calculateCost, getShortModelName } from '../models.js'
 import type { Provider, SessionSource, SessionParser, ParsedProviderCall, ProbeRoot } from './types.js'
+import type { DedupSet } from '../session-cache.js'
 
 // zerostack (https://github.com/gi-dellav/zerostack) is a minimal Rust coding
 // agent. Each session is a single JSON file under <dataDir>/zerostack/sessions/.
@@ -72,7 +73,7 @@ async function readSession(path: string): Promise<ZerostackSession | null> {
   }
 }
 
-function createParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
+function createParser(source: SessionSource, seenKeys: DedupSet): SessionParser {
   return {
     async *parse(): AsyncGenerator<ParsedProviderCall> {
       const session = await readSession(source.path)
@@ -157,7 +158,7 @@ export function createZerostackProvider(sessionsDir?: string): Provider {
       return sources
     },
 
-    createSessionParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
+    createSessionParser(source: SessionSource, seenKeys: DedupSet): SessionParser {
       return createParser(source, seenKeys)
     },
   }

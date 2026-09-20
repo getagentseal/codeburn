@@ -7,6 +7,7 @@ import { readSessionFile } from '../fs-utils.js'
 import { calculateCost, getShortModelName } from '../models.js'
 import type { ToolCall } from '../types.js'
 import type { ProbeRoot, ParsedProviderCall, Provider, SessionParser, SessionSource } from './types.js'
+import type { DedupSet } from '../session-cache.js'
 
 const METADATA_PREFIX_BYTES = 64 * 1024
 
@@ -366,7 +367,7 @@ function reportedCost(cost: CodeWhaleCost | undefined): { value: number; exact: 
   }
 }
 
-function createParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
+function createParser(source: SessionSource, seenKeys: DedupSet): SessionParser {
   return {
     async *parse(): AsyncGenerator<ParsedProviderCall> {
       const raw = await readSessionFile(source.path)
@@ -477,7 +478,7 @@ export function createCodeWhaleProvider(overrideDirs?: string | string[]): Provi
       return sources
     },
 
-    createSessionParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
+    createSessionParser(source: SessionSource, seenKeys: DedupSet): SessionParser {
       return createParser(source, seenKeys)
     },
   }

@@ -21,6 +21,7 @@ import { readSessionFile } from '../fs-utils.js'
 import { calculateCost, getShortModelName } from '../models.js'
 import type { ToolCall } from '../types.js'
 import type { ParsedProviderCall, ProbeRoot, Provider, SessionParser, SessionSource } from './types.js'
+import type { DedupSet } from '../session-cache.js'
 
 const PROVIDER_NAME = 'openclaude'
 const DISPLAY_NAME = 'OpenClaude'
@@ -165,7 +166,7 @@ function projectFromCwd(cwd: string): string | undefined {
   return parts.at(-1)
 }
 
-function createParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
+function createParser(source: SessionSource, seenKeys: DedupSet): SessionParser {
   return {
     async *parse(): AsyncGenerator<ParsedProviderCall> {
       const raw = await readSessionFile(source.path)
@@ -319,7 +320,7 @@ export function createOpenClaudeProvider(overrideProjectsDir?: string): Provider
       return sources
     },
 
-    createSessionParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
+    createSessionParser(source: SessionSource, seenKeys: DedupSet): SessionParser {
       return createParser(source, seenKeys)
     },
   }

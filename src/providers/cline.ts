@@ -4,6 +4,7 @@ import { basename, join } from 'path'
 
 import { discoverClineTasks, createClineParser, clineTaskRoots } from './vscode-cline-parser.js'
 import type { ProbeRoot, Provider, SessionSource, SessionParser } from './types.js'
+import type { DedupSet } from '../session-cache.js'
 
 const EXTENSION_ID = 'saoudrizwan.claude-dev'
 
@@ -69,7 +70,7 @@ export function createClineProvider(overrideDirs?: string | string[]): Provider 
       return dedupeTaskSources(await discoverClineTasks(EXTENSION_ID, 'cline', 'Cline', baseDirs))
     },
 
-    createSessionParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
+    createSessionParser(source: SessionSource, seenKeys: DedupSet): SessionParser {
       return createClineParser(source, seenKeys, 'cline')
     },
   }

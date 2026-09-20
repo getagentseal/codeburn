@@ -74,6 +74,7 @@ import type {
   SessionParser,
   ParsedProviderCall,
 } from './types.js'
+import type { DedupSet } from '../session-cache.js'
 
 // ---------------------------------------------------------------------------
 // Model display names (unchanged from original)
@@ -752,7 +753,7 @@ function inferTranscriptModel(lines: string[]): string {
  */
 function createJsonlParser(
   source: SessionSource,
-  seenKeys: Set<string>,
+  seenKeys: DedupSet,
   isTranscript: boolean
 ): SessionParser {
   return {
@@ -1104,7 +1105,7 @@ function createJsonlParser(
 
 function createChatSessionParser(
   source: SessionSource,
-  seenKeys: Set<string>
+  seenKeys: DedupSet
 ): SessionParser {
   return {
     async *parse(): AsyncGenerator<ParsedProviderCall> {
@@ -1681,7 +1682,7 @@ function extractJetBrainsDbTurns(raw: string): JBDbTurn[] {
 
 function createJetBrainsParser(
   source: JetBrainsSessionSource,
-  seenKeys: Set<string>
+  seenKeys: DedupSet
 ): SessionParser {
   return {
     async *parse(): AsyncGenerator<ParsedProviderCall> {
@@ -1774,7 +1775,7 @@ function createJetBrainsParser(
 
 function createOtelParser(
   source: SessionSource,
-  seenKeys: Set<string>
+  seenKeys: DedupSet
 ): SessionParser {
   return {
     async *parse(): AsyncGenerator<ParsedProviderCall> {
@@ -2132,7 +2133,7 @@ function fnv1a64(s: string): string {
 
 function createSessionStoreParser(
   source: SessionStoreSessionSource,
-  seenKeys: Set<string>
+  seenKeys: DedupSet
 ): SessionParser {
   return {
     async *parse(): AsyncGenerator<ParsedProviderCall> {
@@ -3052,7 +3053,7 @@ export function createCopilotProvider(
 
     createSessionParser(
       source: SessionSource,
-      seenKeys: Set<string>
+      seenKeys: DedupSet
     ): SessionParser {
       // Route to the correct parser based on source type.
       // The dedup key set (seenKeys) is shared across both parsers,

@@ -6,6 +6,7 @@ import { readSessionFile, readSessionLines } from '../fs-utils.js'
 import { calculateCost } from '../models.js'
 import { extractBashCommands } from '../bash-utils.js'
 import type { ProbeRoot, Provider, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
+import type { DedupSet } from '../session-cache.js'
 import { safeNumber } from '../parser.js'
 
 const METADATA_FILENAME = 'meta.json'
@@ -296,7 +297,7 @@ function allocateCost(total: number, count: number): number {
   return count <= 1 ? total : total / count
 }
 
-function createParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
+function createParser(source: SessionSource, seenKeys: DedupSet): SessionParser {
   return {
     async *parse(): AsyncGenerator<ParsedProviderCall> {
       const metadataPath = join(source.path, METADATA_FILENAME)
@@ -431,7 +432,7 @@ export function createMistralVibeProvider(sessionsDir?: string): Provider {
       return sources
     },
 
-    createSessionParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
+    createSessionParser(source: SessionSource, seenKeys: DedupSet): SessionParser {
       return createParser(source, seenKeys)
     },
   }

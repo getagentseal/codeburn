@@ -5,6 +5,7 @@ import { homedir, platform } from 'os'
 import { calculateCost } from '../models.js'
 import { isSqliteAvailable, getSqliteLoadError, openDatabase, type SqliteDatabase } from '../sqlite.js'
 import type { ProbeRoot, Provider, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
+import type { DedupSet } from '../session-cache.js'
 
 /// Crush stores per-project SQLite databases discovered through a JSON registry.
 /// We only read both. Schema source: charmbracelet/crush
@@ -118,7 +119,7 @@ function dominantModel(db: SqliteDatabase, sessionId: string): string {
   }
 }
 
-function createParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
+function createParser(source: SessionSource, seenKeys: DedupSet): SessionParser {
   return {
     async *parse(): AsyncGenerator<ParsedProviderCall> {
       if (!isSqliteAvailable()) {
@@ -253,7 +254,7 @@ export function createCrushProvider(): Provider {
       return sources
     },
 
-    createSessionParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
+    createSessionParser(source: SessionSource, seenKeys: DedupSet): SessionParser {
       return createParser(source, seenKeys)
     },
   }

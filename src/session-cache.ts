@@ -7,6 +7,7 @@ import { getCodeburnCacheDir } from './cache-dir.js'
 import { flatString, flattenJsonStrings } from './content-utils.js'
 import { acquireCacheRefreshLock, releaseOwnedRefreshLocksForExit } from './cache-refresh-lock.js'
 import type { ToolCall } from './types.js'
+import { rpcConversationBareKey } from './providers/antigravity-keys.js'
 import { shardNeedsStreaming, streamShardArrayField, streamShardEntries } from './shard-stream.js'
 
 // ── Types ──────────────────────────────────────────────────────────────
@@ -148,13 +149,21 @@ export type RangeFilteredMeta = {
   /// `turns[0].calls[0].project` of the FULL pre-filter list (for orphan
   /// identity fallbacks that read past the retained turns).
   firstTurnProject?: string
-  /// Deduplication keys of the dropped turns, in file walk order. Added to
-  /// the shared dedup sets wherever the serve loops open the file. Exact if
-  /// and only if no key appears in both a kept and a dropped turn of this
-  /// file — the decoder keeps the whole file (unflagged) on any such
-  /// overlap, so a retained turn can never be suppressed by a dropped later
-  /// duplicate (or vice versa) differently than the full walk would.
+  /// Deduplication digests of the dropped turns, in file walk order (see
+  /// digestDedupKey). Added to the shared dedup sets wherever the serve loops
+  /// open the file. Exact if and only if no key appears in both a kept and a
+  /// dropped turn of this file — the decoder keeps the whole file (unflagged)
+  /// on any such overlap, so a retained turn can never be suppressed by a
+  /// dropped later duplicate (or vice versa) differently than the full walk
+  /// would. Digests (not raw keys): raw dropped identities dominate retained
+  /// heap at corpus scale, and every set/compare in the pipeline hashes both
+  /// sides uniformly, so membership is exact up to a 256-bit collision bound.
   droppedKeys: string[]
+  /// Bare RPC conversation keys (`antigravity:{cid}`, tiny: per conversation,
+  /// not per call) for consumers that match by conversation rather than by
+  /// call (the Antigravity RPC prefix check cannot match digests). Seeded
+  /// through the normal hashed path alongside droppedKeys.
+  conversations?: string[]
   /// Branch/PR state carried into the first kept turn, walked from the dropped
   /// Exact on append-only transcripts, where kept turns always form a suffix;
   /// files whose dropped turns also carry branch/PR state between kept turns
@@ -630,10 +639,15 @@ export function fileFirstTurnProject(file: CachedFile): string | undefined {
 /// walk adds an out-of-range turn's keys at the same file position. Within a
 /// file the decoder keeps the record whole on any kept/dropped key overlap,
 /// so no reordering hazard remains. No-op for unfiltered files.
-export function seedDroppedKeys(seen: Set<string>, file: CachedFile): void {
+export function seedDroppedKeys(seen: DedupSet, file: CachedFile): void {
   const marker = file.rangeFiltered
   if (!marker) return
-  for (const key of marker.droppedKeys) seen.add(key)
+  for (const digest of marker.droppedKeys) seen.addHashed(digest)
+  // Bare conversation keys hash through the normal path exactly like live
+  // keys do, so prefix-match consumers (Antigravity RPC) keep working.
+  if (marker.conversations) {
+    for (const bare of marker.conversations) seen.add(bare)
+  }
 }
 
 // Save bookkeeping, held beside the cache rather than on it so it never lands in
@@ -1237,12 +1251,76 @@ export async function loadShardMemoized(dir: string, name: string): Promise<Reco
   evictShardMemo(now)
   return files
 }
+/// Full SHA-256 digest of a dedup identity for memory-compact comparison,
+/// stored as 32 one-byte characters. Raw dropped keys dominate retained heap
+/// at corpus scale (~140MB of characters for ~1.1M keys here), so markers and
+/// shared sets store digests instead. Every insertion and lookup in the
+/// pipeline hashes uniformly (see DedupSet), so membership is exact up to a
+/// 256-bit collision bound — far below any operational risk, and a collision
+/// would suppress (not fabricate) a single call. Benchmarked against the
+/// previous inline mixer at ~1M keys: createHash costs the same wall time, so
+/// there is no reason to accept a weaker bound here. Persisted markers
+/// JSON-escape the rare control byte and parse back identically.
+/// `binary` is Node's typed name for the latin1 single-byte encoding.
+export function digestDedupKey(key: string): string {
+  return createHash('sha256').update(key, 'utf8').digest('binary')
+}
+
+/// Membership set over dedup-identity digests (see digestDedupKey). A plain
+/// class (not a Set subclass): an unadapted consumer must fail loudly at
+/// compile time instead of silently comparing mismatched representations.
+/// Producers keep passing raw keys — add/has hash transparently; marker
+/// seeding uses addHashed (markers already hold digests); values() exposes
+/// the stored identities for cloning. Consumers that match by key PREFIX (not
+/// exact membership) cannot use this set — they keep exact keys via the
+/// conversations channel below.
+export class DedupSet {
+  private readonly digests = new Set<string>()
+  add(key: string): this {
+    this.digests.add(digestDedupKey(key))
+    // Pair every RPC-form key with its bare conversation key (see
+    // rpcConversationBareKey): prefix-match consumers cannot match digests,
+    // so the bare form rides along wherever the full key goes — live inserts,
+    // generic cache seeding, and clones alike.
+    const bare = rpcConversationBareKey(key)
+    if (bare !== null) this.digests.add(digestDedupKey(bare))
+    return this
+  }
+  has(key: string): boolean {
+    return this.digests.has(digestDedupKey(key))
+  }
+  get size(): number {
+    return this.digests.size
+  }
+  /// Stored digests, for seeding another set via addHashed.
+  /// Mirrors Set.prototype.values so call sites read naturally.
+  values(): Iterable<string> {
+    return this.digests
+  }
+  /// Insert a pre-hashed digest (marker seeding). Never pass raw keys here.
+  addHashed(digest: string): this {
+    this.digests.add(digest)
+    return this
+  }
+  /// Membership test for a pre-hashed digest (worker results carry digests
+  /// across the thread boundary; hashing them again would never match).
+  hasHashed(digest: string): boolean {
+    return this.digests.has(digest)
+  }
+}
+
 
 type SliceItem = {
   keep: boolean
   turn: CachedTurn | null
-  /// Dedup keys of this turn's calls, for the overlap check and the marker.
+  /// Digests (see digestDedupKey) of this turn's calls, for the overlap check
+  /// and the marker.
   keys: string[]
+  /// Bare RPC conversation keys referenced by this turn's calls (usually
+  /// empty; Antigravity RPC keys only). Carried into the marker so consumers
+  /// that match by conversation survive digesting; tiny (per conversation,
+  /// not per call).
+  conversations: string[]
   gitBranch?: string
   prRefs?: string[]
   month: string | null
@@ -1258,16 +1336,22 @@ function turnNewestCallMs(turn: CachedTurn): number {
 }
 
 function droppedTurnKeys(turn: CachedTurn, into: string[]): void {
-  for (const call of turn.calls) into.push(call.deduplicationKey)
+  for (const call of turn.calls) into.push(digestDedupKey(call.deduplicationKey))
 }
 
 function sliceItemFor(turn: CachedTurn, keep: boolean): SliceItem {
   const keys: string[] = []
   droppedTurnKeys(turn, keys)
+  const conversations: string[] = []
+  for (const call of turn.calls) {
+    const bare = rpcConversationBareKey(call.deduplicationKey)
+    if (bare !== null && !conversations.includes(bare)) conversations.push(bare)
+  }
   return {
     keep,
     turn: keep ? turn : null,
     keys,
+    conversations,
     gitBranch: turn.gitBranch,
     prRefs: turn.prRefs,
     month: monthKey(turn.timestamp),
@@ -1286,6 +1370,7 @@ type SliceAccumulator = {
   kept: CachedTurn[]
   droppedKeys: string[]
   keptKeys: Set<string>
+  conversations: string[]
   total: number
   keptCount: number
   firstKept: number
@@ -1303,6 +1388,7 @@ function createSliceAccumulator(): SliceAccumulator {
     kept: [],
     droppedKeys: [],
     keptKeys: new Set(),
+    conversations: [],
     total: 0,
     keptCount: 0,
     firstKept: -1,
@@ -1315,6 +1401,9 @@ function createSliceAccumulator(): SliceAccumulator {
     anyBranch: false,
   }
 }
+function pushAccBare(acc: SliceAccumulator, bare: string | null): void {
+  if (bare !== null && !acc.conversations.includes(bare)) acc.conversations.push(bare)
+}
 
 /// Fold one live turn with zero per-turn allocation beyond the key strings
 /// themselves: keys stream straight into the shared arrays, scalars update
@@ -1325,7 +1414,8 @@ function foldLiveTurn(acc: SliceAccumulator, turn: CachedTurn, keep: boolean): v
     const index = acc.total++
     acc.kept.push(turn)
     for (const call of turn.calls) {
-      acc.keptKeys.add(call.deduplicationKey)
+      acc.keptKeys.add(digestDedupKey(call.deduplicationKey))
+      pushAccBare(acc, rpcConversationBareKey(call.deduplicationKey))
     }
     acc.keptCount++
     if (!acc.seenKept) {
@@ -1340,7 +1430,8 @@ function foldLiveTurn(acc: SliceAccumulator, turn: CachedTurn, keep: boolean): v
   }
   acc.total++
   for (const call of turn.calls) {
-    acc.droppedKeys.push(call.deduplicationKey)
+    acc.droppedKeys.push(digestDedupKey(call.deduplicationKey))
+    pushAccBare(acc, rpcConversationBareKey(call.deduplicationKey))
   }
   if (!acc.seenKept) {
     if (turn.gitBranch) {
@@ -1361,6 +1452,7 @@ function foldItem(acc: SliceAccumulator, item: SliceItem): void {
     const index = acc.total++
     acc.kept.push(item.turn!)
     for (const key of item.keys) acc.keptKeys.add(key)
+    for (const bare of item.conversations) pushAccBare(acc, bare)
     acc.keptCount++
     if (!acc.seenKept) {
       acc.seenKept = true
@@ -1373,6 +1465,7 @@ function foldItem(acc: SliceAccumulator, item: SliceItem): void {
   }
   acc.total++
   for (const key of item.keys) acc.droppedKeys.push(key)
+  for (const bare of item.conversations) pushAccBare(acc, bare)
   if (!acc.seenKept) {
     if (item.gitBranch) {
       acc.prefixHadBranch = true
@@ -1415,6 +1508,7 @@ function finishSlice(
         newestCallMs: newestMs,
         ...(firstProject !== undefined ? { firstTurnProject: firstProject } : {}),
         droppedKeys: acc.droppedKeys,
+        ...(acc.conversations.length > 0 ? { conversations: acc.conversations } : {}),
         // Carry needs a kept block to carry INTO: with zero kept turns the
         // old prefix loop ran zero times (firstKept === -1), so the fields
         // stay absent. droppedHadBranch still reports via anyBranch.

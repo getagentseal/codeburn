@@ -6,6 +6,7 @@ import { extractBashCommands } from '../bash-utils.js'
 import { isSqliteAvailable, getSqliteLoadError, openDatabase, blobToText, type SqliteDatabase } from '../sqlite.js'
 import type { ToolCall } from '../types.js'
 import type { ProbeRoot, Provider, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
+import type { DedupSet } from '../session-cache.js'
 
 type SessionRow = {
   id: string
@@ -150,7 +151,7 @@ function getFirstUserMessage(db: SqliteDatabase, sessionId: string): string {
   }
 }
 
-function createParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
+function createParser(source: SessionSource, seenKeys: DedupSet): SessionParser {
   return {
     async *parse(): AsyncGenerator<ParsedProviderCall> {
       if (!isSqliteAvailable()) {
@@ -291,7 +292,7 @@ export function createGooseProvider(): Provider {
       return discoverFromDb(dbPath)
     },
 
-    createSessionParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
+    createSessionParser(source: SessionSource, seenKeys: DedupSet): SessionParser {
       return createParser(source, seenKeys)
     },
   }

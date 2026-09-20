@@ -7,6 +7,7 @@ import { estimateTokensFromChars } from '../token-estimate.js'
 import { blobToText, isSqliteAvailable, openDatabase } from '../sqlite.js'
 import type { SqliteDatabase } from '../sqlite.js'
 import type { ParsedProviderCall, ProbeRoot, Provider, SessionParser, SessionSource } from './types.js'
+import type { DedupSet } from '../session-cache.js'
 
 const METRICS_FILE_RE = /^metrics-(\d{4})-(\d{2})-(\d{2})\.jsonl$/
 
@@ -432,7 +433,7 @@ function commonCallFields(source: SessionSource, basePath: string) {
   }
 }
 
-function createMetricsParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
+function createMetricsParser(source: SessionSource, seenKeys: DedupSet): SessionParser {
   return {
     async *parse(): AsyncGenerator<ParsedProviderCall> {
       const records = await readMetricsRecords(source.path)
@@ -481,7 +482,7 @@ function createMetricsParser(source: SessionSource, seenKeys: Set<string>): Sess
   }
 }
 
-function createDatabaseParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
+function createDatabaseParser(source: SessionSource, seenKeys: DedupSet): SessionParser {
   return {
     async *parse(): AsyncGenerator<ParsedProviderCall> {
       const basePath = basePathFor(source)
@@ -545,7 +546,7 @@ export const quickdesk: Provider = {
     return discoverSources()
   },
 
-  createSessionParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
+  createSessionParser(source: SessionSource, seenKeys: DedupSet): SessionParser {
     return source.sourceId === 'sessions-db' || basename(source.path) === 'sessions.db'
       ? createDatabaseParser(source, seenKeys)
       : createMetricsParser(source, seenKeys)
