@@ -64,11 +64,43 @@ if (!res.ok) throw new Error(`HTTP ${res.status}`)
 const data = await res.json()
 const entries = Object.entries(data).filter(([k]) => k !== 'sample_spec')
 
+// The plain context-length tiers only: `input_cost_per_token_above_272k_tokens`
+// and siblings. Service-tier variants (`_above_272k_priority_tokens`,
+// `_above_272k_flex_tokens`) and the 1-hour cache-write combination are NOT
+// context thresholds and are deliberately not matched. The threshold comes
+// from the key suffix (272k -> 272000) because LiteLLM carries no numeric
+// threshold field (#1076). Mirrored in src/models.ts parseLiteLLMEntry.
+const TIER_KEY_RE = /^(input_cost_per_token|output_cost_per_token|cache_read_input_token_cost|cache_creation_input_token_cost)_above_(\d+)k_tokens$/
+
+function tierOf(entry) {
+  // Rates are read ONLY from the largest threshold a model carries, so a
+  // hypothetical entry with two tiers can never mix a smaller tier's rates
+  // under the bigger threshold. Values must be finite and non-negative, the
+  // same validation src/models.ts applies on the live path.
+  const byThreshold = new Map()
+  for (const [key, value] of Object.entries(entry)) {
+    const m = TIER_KEY_RE.exec(key)
+    if (!m || typeof value !== 'number' || !Number.isFinite(value) || value < 0) continue
+    const tokens = Number(m[2]) * 1000
+    const rates = byThreshold.get(tokens) ?? {}
+    if (m[1] === 'input_cost_per_token') rates.input = value
+    else if (m[1] === 'output_cost_per_token') rates.output = value
+    else if (m[1] === 'cache_read_input_token_cost') rates.cacheRead = value
+    else rates.cacheWrite = value
+    byThreshold.set(tokens, rates)
+  }
+  if (byThreshold.size === 0) return null
+  const threshold = Math.max(...byThreshold.keys())
+  const rates = byThreshold.get(threshold)
+  if (rates.input == null || rates.output == null) return null
+  return { threshold, input: rates.input, output: rates.output, cacheWrite: rates.cacheWrite ?? null, cacheRead: rates.cacheRead ?? null }
+}
+
 function toVal(entry) {
   const inp = entry.input_cost_per_token
   const out = entry.output_cost_per_token
   if (inp == null || out == null) return null
-  return [inp, out, entry.cache_creation_input_token_cost ?? null, entry.cache_read_input_token_cost ?? null, entry.provider_specific_entry?.fast ?? null]
+  return [inp, out, entry.cache_creation_input_token_cost ?? null, entry.cache_read_input_token_cost ?? null, entry.provider_specific_entry?.fast ?? null, tierOf(entry)]
 }
 
 // Pass 1: direct entries (no prefix) get priority
@@ -80,8 +112,10 @@ for (const [name, entry] of entries) {
 // A tuple's completeness: how many optional rate slots (cache-write,
 // cache-read) carry a published value. A richer upstream row may cite it to
 // FILL a sparser entry's missing slots - never as a license to re-price it
-// (see the fillsOnly guard in Pass 2).
-const completeness = (val) => (val[2] != null ? 1 : 0) + (val[3] != null ? 1 : 0) + (val[5] != null ? 1 : 0)
+// (see the fillsOnly guard in Pass 2). The tier slot (5) is deliberately not
+// counted: tier presence must never decide which row wins, or a tier-bearing
+// row would outrank the base-richer row main would have picked.
+const completeness = (val) => (val[2] != null ? 1 : 0) + (val[3] != null ? 1 : 0)
 
 // Pass 2: prefixed entries - store full key + stripped (slot-fill-only)
 for (const [name, entry] of entries) {
@@ -100,13 +134,18 @@ for (const [name, entry] of entries) {
   // changes across a refresh; only missing slots fill. The completeness-wins
   // version re-priced 43 input/output and 34 cache rates by swapping in a
   // different upstream row (grok-3 3/15 -> 1.25/2.5, mistral-large-latest
-  // 8/24 -> 0.5/1.5).
+  // 8/24 -> 0.5/1.5). Slot 5 (the tier object) stays out of the guard: it is
+  // built fresh per row, so a reference compare is always false and would
+  // veto fills main performs (it silently dropped the azure cache-read fill
+  // for gpt-5.4-pro-class rows); and since the replacement only fires when
+  // the candidate fills a missing BASE slot, the winning row's tier travels
+  // with its own base rates - splicing the old row's tier onto the new row's
+  // base would mix two different upstream rows.
   const fillsOnly = (cand, prev) =>
     cand[0] === prev[0]
     && cand[1] === prev[1]
     && (prev[2] == null || cand[2] === prev[2])
     && (prev[3] == null || cand[3] === prev[3])
-    && (prev[5] == null || cand[5] === prev[5])
   if (!existing || (completeness(val) > completeness(existing) && fillsOnly(val, existing))) snapshot[stripped] = val
 }
 

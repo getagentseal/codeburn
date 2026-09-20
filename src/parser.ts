@@ -2758,7 +2758,7 @@ function cachedCallToApiCall(call: CachedCall): ParsedApiCall {
   const costUSD = calculateCost(
     call.model, u.inputTokens, outputForCost,
     u.cacheCreationInputTokens, u.cacheReadInputTokens,
-    u.webSearchRequests, call.speed, u.cacheCreationOneHourTokens,
+    u.webSearchRequests, call.speed, u.cacheCreationOneHourTokens, call.provider,
   )
   return applyLocalModelSavings({
     provider: call.provider,
