@@ -650,7 +650,7 @@ export function isCacheDirty(cache: SessionCache): boolean {
  *  held back by the resident process's coalescing. */
 export function hasDirtyDurableProvider(cache: SessionCache): boolean {
   for (const provider of stateOf(cache).dirtyBuckets.keys()) {
-    if (DURABLE_PROVIDER_NAMES.has(provider)) return true
+    if (DURABLE_PROVIDER_NAMES.has(provider) || cache.providers[provider]?.durable) return true
   }
   return false
 }
