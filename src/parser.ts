@@ -1,4 +1,5 @@
 import { homedir } from 'node:os'
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { existsSync } from 'fs'
 import { lstat, readFile, readdir, stat } from 'fs/promises'
 import { createHash } from 'crypto'
@@ -1941,7 +1942,7 @@ function buildSessionSummary(
     }
   }
 
-  return {
+  const summary: SessionSummary = {
     sessionId,
     project,
     firstTimestamp: firstTs || turns[0]?.timestamp || '',
@@ -1966,6 +1967,12 @@ function buildSessionSummary(
     ...(source ? { source } : {}),
     ...(mcpInventory && mcpInventory.length > 0 ? { mcpInventory } : {}),
   }
+  // Aggregate mode: strip this session now (per-session granularity), while
+  // its full turns are still hot and releasable. Breakdowns above already
+  // consumed the payloads. Anonymous (store-less) callers keep full turns.
+  const agg = aggregateStore.getStore()
+  if (agg) summary.turns = summary.turns.map(t => stripTurnForAggregate(t, agg.intern))
+  return summary
 }
 
 async function parseSessionFile(
@@ -5755,8 +5762,9 @@ type RunParseOptions = {
   refreshLock?: RefreshLockHandle
   burstSig: string
   parseStartedAt: number
-  /// Aggregate mode (see ParseAllSessionsOptions): strip per provider and
-  /// skip the shared memo. Read in runParseInner; never stored.
+  /// Aggregate mode (see ParseAllSessionsOptions): strip per session inside
+  /// buildSessionSummary and skip the shared memo. Read in runParseInner;
+  /// never stored.
   stripForAggregate?: boolean
 }
 
@@ -5771,11 +5779,24 @@ async function runParse(
 ): Promise<ProjectSummary[]> {
   startProgressKeepalive()
   try {
+    // Aggregate mode strips per session inside buildSessionSummary; the store
+    // carries one shared string interner for the whole parse (it holds only
+    // low-cardinality model/provider/category/project names).
+    if (options.stripForAggregate) {
+      return await aggregateStore.run({ intern: new Map() }, () =>
+        runParseInner(key, diskCache, dateRange, providerFilter, options))
+    }
     return await runParseInner(key, diskCache, dateRange, providerFilter, options)
   } finally {
     stopProgressKeepalive()
   }
 }
+/// Per-parse aggregate context: when set, buildSessionSummary strips each
+/// session the moment it resolves (per-session granularity, so peak never
+/// holds a provider's full turns). AsyncLocalStorage (not a module flag) so
+/// concurrent parses — e.g. a lite overview racing a full dashboard refresh
+/// in one serve process — cannot cross-contaminate. Set once per runParse.
+const aggregateStore = new AsyncLocalStorage<{ intern: Map<string, string> }>()
 
 async function runParseInner(
   key: string,
@@ -5865,10 +5886,6 @@ async function runParseInner(
   if (claudeInScope) {
     try {
       claudeProjects = await scanProjectDirs(claudeDirs, seenMsgIds, diskCache, dateRange, saveProgress, readOnly)
-      // Aggregate mode: strip this provider now so peak tracks one provider
-      // instead of the corpus (see ParseAllSessionsOptions). Breakdowns and
-      // totals are precomputed; downstream reads only lite fields.
-      if (stripForAggregate) claudeProjects = stripProjectsForAggregate(claudeProjects)
       if (claudeSources.length > 0) emitScanProgress({ kind: 'provider', provider: 'claude', state: 'done', files: claudeSources.length })
     } catch (err) {
       if (!isPermissionError(err)) throw err
@@ -5884,8 +5901,7 @@ async function runParseInner(
     try {
       const projects = await parseProviderSources(providerName, sources, seenKeys, diskCache, dateRange, saveProgress, readOnly)
       emitScanProgress({ kind: 'provider', provider: providerName, state: 'done', files: sources.length })
-      if (stripForAggregate) otherProjects.push(...stripProjectsForAggregate(projects))
-      else otherProjects.push(...projects)
+      otherProjects.push(...projects)
     } catch (err) {
       // A permission-locked provider skips-and-continues; any other error is a
       // real bug and still aborts (per-file/DB-lock cases are handled deeper).
@@ -5915,8 +5931,7 @@ async function runParseInner(
     // round-trip for every unprocessed provider in the disk cache.
     if (!snapshotOnly && !section.durable && !DURABLE_PROVIDER_NAMES.has(providerName)) continue
     const projects = await parseProviderSources(providerName, [], seenKeys, diskCache, dateRange, saveProgress, readOnly)
-    if (stripForAggregate) otherProjects.push(...stripProjectsForAggregate(projects))
-    else otherProjects.push(...projects)
+    otherProjects.push(...projects)
   }
 
   // The full scan reached the end: this cache is now complete. Mark it and
