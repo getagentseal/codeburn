@@ -1783,7 +1783,13 @@ export function stripTurnForAggregate(turn: ClassifiedTurn, intern?: Map<string,
   const { subCategory: _dropped, ...rest } = turn
   // Categories are 14 fixed labels repeated per turn: share one ref each.
   const category = (intern ? interned(intern, turn.category) : turn.category) as ClassifiedTurn['category']
-  return { ...rest, category, assistantCalls: turn.assistantCalls.map(c => stripCallForAggregate(c, intern)) }
+  // PR launch matching reads the first qualifying prompt prefix, not the
+  // message: precompute it (bounded, 160 chars) and drop the full text
+  // (~115B average, ~40MB serialized here). Candidates match identically
+  // because the prefix is exactly what the matcher slices (see PROMPT_*).
+  const normalized = normalizedPrompt(turn.userMessage)
+  const promptPrefix = normalized.length >= PROMPT_MIN ? normalized.slice(0, PROMPT_PREFIX) : undefined
+  return { ...rest, category, userMessage: '', ...(promptPrefix !== undefined ? { promptPrefix } : {}), assistantCalls: turn.assistantCalls.map(c => stripCallForAggregate(c, intern)) }
 }
 export function stripProjectsForAggregate(projects: ProjectSummary[]): ProjectSummary[] {
   // One interner per provider batch: model/provider/category/project names
@@ -4993,6 +4999,10 @@ function assignCorrelatedPrs(
  * Timestamps only narrow prompt comparisons for performance; they can never
  * create attribution. Conflicting PR evidence is deliberately left unassigned.
  */
+/// PR candidate-prompt shape, shared with the aggregate strip (which
+/// precomputes turn.promptPrefix so lite sessions match identically).
+const PROMPT_PREFIX = 160
+const PROMPT_MIN = 80
 export function correlateCrossProviderPrSessions(projects: ProjectSummary[]): void {
   const sessions = projects.flatMap(p => p.sessions)
   const linked = sessions.filter(s => s.prLinks?.length)
@@ -5048,8 +5058,6 @@ export function correlateCrossProviderPrSessions(projects: ProjectSummary[]): vo
     }
   }
 
-  const PROMPT_PREFIX = 160
-  const PROMPT_MIN = 80
   const LAUNCH_WINDOW_MS = 15 * 60 * 1000
   // Sorted once so each candidate scans only the launches inside its own
   // window instead of the whole array. Launch order is not observable: the
@@ -5069,7 +5077,7 @@ export function correlateCrossProviderPrSessions(projects: ProjectSummary[]): vo
   for (const session of candidates) {
     const provider = summaryProvider(session)
     const prompt = session.turns
-      .map(t => normalizedPrompt(t.userMessage))
+      .map(t => t.promptPrefix ?? normalizedPrompt(t.userMessage))
       .find(text => text.length >= PROMPT_MIN)
     if (!prompt) continue
     const prefix = prompt.slice(0, PROMPT_PREFIX)

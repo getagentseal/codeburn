@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
-import { extractCallCommands, normalizedPrompt, stripCallForAggregate, stripProjectsForAggregate } from '../src/parser.js'
-import type { ParsedApiCall } from '../src/types.js'
+import { extractCallCommands, normalizedPrompt, stripCallForAggregate, stripProjectsForAggregate, stripTurnForAggregate } from '../src/parser.js'
+import type { ClassifiedTurn, ParsedApiCall } from '../src/types.js'
 import type { ProjectSummary } from '../src/types.js'
 
 function fullCall(): ParsedApiCall {
@@ -123,12 +123,32 @@ describe('stripProjectsForAggregate', () => {
     const [lite] = stripProjectsForAggregate(projects)
     expect(lite!.totalCostUSD).toBe(0.01)
     expect(lite!.sessions[0]!.toolBreakdown).toEqual({ Edit: { calls: 1 } })
-    expect(lite!.sessions[0]!.turns[0]!.userMessage).toBe('do it')
+    expect(lite!.sessions[0]!.turns[0]!.userMessage).toBe('')
     expect(lite!.sessions[0]!.turns[0]!.assistantCalls[0]!.commands).toEqual(['git status'])
     expect(lite!.sessions[0]!.turns[0]!.assistantCalls[0]!.toolSequence).toBeUndefined()
     // In-place contract: same graphs, payloads stripped (single owner, no
     // provider-wide copy transient).
     expect(lite).toBe(projects[0])
     expect(projects[0]!.sessions[0]!.turns[0]!.assistantCalls[0]!.toolSequence).toBeUndefined()
+  })
+  it('precomputes qualifying prompt prefixes for launch matching', () => {
+    const longText = `please review the pull request thoroughly and carefully ${'x'.repeat(200)}`
+    const turn = {
+      userMessage: longText,
+      assistantCalls: [],
+      timestamp: '2026-09-19T10:00:00Z',
+      sessionId: 's9',
+      category: 'coding',
+      retries: 0,
+      hasEdits: false,
+    } as unknown as ClassifiedTurn
+    const lite = stripTurnForAggregate(turn)
+    expect(lite.userMessage).toBe('')
+    expect(lite.promptPrefix).toBe(longText.replace(/\s+/g, ' ').trim().slice(0, 160))
+    expect(lite.promptPrefix!.length).toBe(160)
+    // Short prompts leave no prefix (matcher skips them either way).
+    const short = stripTurnForAggregate({ ...turn, userMessage: 'do it' })
+    expect(short.promptPrefix).toBeUndefined()
+    expect(short.userMessage).toBe('')
   })
 })

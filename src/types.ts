@@ -87,6 +87,10 @@ export type JournalEntry = {
 
 export type ParsedTurn = {
   userMessage: string
+  /// Aggregate-mode extraction: first 160 chars of the normalized prompt when
+  /// it qualifies as a PR candidate (see correlateCrossProviderPrSessions).
+  /// Lets the lite path drop userMessage while keeping launch matching exact.
+  promptPrefix?: string
   assistantCalls: ParsedApiCall[]
   timestamp: string
   sessionId: string

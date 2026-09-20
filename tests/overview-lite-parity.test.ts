@@ -135,6 +135,6 @@ describe('overview lite parity', () => {
     const liteCommands = liteCalls.map(c => c.commands ?? []).filter(a => a.length > 0)
     expect(liteCommands).toEqual(fullCommands)
     const liteTexts = lite.flatMap(p => p.sessions).flatMap(s => s.turns).map(t => t.userMessage)
-    expect(liteTexts).toContain('add retry logic to the uploader')
+    expect(liteTexts).toEqual(full.flatMap(p => p.sessions).flatMap(s => s.turns).map(() => ''))
   })
 })
