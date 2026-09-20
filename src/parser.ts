@@ -1722,11 +1722,15 @@ function extractCanonicalCwd(entries: JournalEntry[]): string | undefined {
 /// buildSessionSummary BEFORE stripping, so they are unaffected. Same type,
 /// fresh objects — the full originals stay eligible for release — plus the
 /// extracted shell commands PR launch matching needs.
-export function stripCallForAggregate(call: ParsedApiCall): ParsedApiCall {
+export function stripCallForAggregate(call: ParsedApiCall, intern?: Map<string, string>): ParsedApiCall {
   // Denylist: everything carries over except the payloads the overview path
   // never reads downstream. workingDirectory/projectPath/project/prLinks ride
   // on some calls outside the type (session/project identity covers the
   // reports); they are heavy, so they drop explicitly rather than by luck.
+  // tools drops entirely (not just emptied): tool-name strings like 'Bash'
+  // repeat ~1.5M times as distinct objects (~90MB heap on this corpus); the
+  // tool breakdown is precomputed in buildSessionSummary and the edit-time
+  // median is not rendered on this path.
   const {
     toolSequence: _droppedSequence,
     spawnToolUseIds: _droppedSpawns,
@@ -1734,10 +1738,19 @@ export function stripCallForAggregate(call: ParsedApiCall): ParsedApiCall {
     projectPath: _droppedPp,
     project: _droppedProject,
     prLinks: _droppedPrLinks,
+    tools: _droppedTools,
     ...rest
   } = call as ParsedApiCall & { workingDirectory?: unknown; projectPath?: unknown; project?: unknown; prLinks?: unknown }
   const lite: ParsedApiCall = {
     ...rest,
+    tools: [],
+    // Intern low-cardinality strings (model/provider/speed repeat ~1M times
+    // as distinct slice objects): one shared ref each instead of per-call
+    // copies. Timestamps/userMessages are unique per call and must NOT enter
+    // the map (it would grow without bound and pin everything).
+    model: intern ? interned(intern, call.model) : call.model,
+    provider: intern ? interned(intern, call.provider) : call.provider,
+    speed: intern ? (interned(intern, call.speed) as 'standard' | 'fast') : call.speed,
     bashCommands: [],
     skills: [],
     mcpTools: [],
@@ -1747,6 +1760,12 @@ export function stripCallForAggregate(call: ParsedApiCall): ParsedApiCall {
   const commands = extractCallCommands(call)
   if (commands.length > 0) lite.commands = commands
   return lite
+}
+function interned(map: Map<string, string>, s: string): string {
+  const hit = map.get(s)
+  if (hit !== undefined) return hit
+  map.set(s, s)
+  return s
 }
 /// Shell-command strings from a call for PR launch matching, from the lite
 /// extraction when present, else straight from the full toolSequence.
@@ -1760,27 +1779,29 @@ export function extractCallCommands(call: ParsedApiCall): string[] {
   }
   return commands
 }
-
-/// Strip one classified turn for aggregate mode (see stripCallForAggregate).
-/// userMessage stays: PR candidate prompts and correction scans read it, and
-/// at ~115 bytes average it is not the dominator. subCategory drops (its
-/// skill breakdown is precomputed and nothing downstream reads it).
-export function stripTurnForAggregate(turn: ClassifiedTurn): ClassifiedTurn {
+export function stripTurnForAggregate(turn: ClassifiedTurn, intern?: Map<string, string>): ClassifiedTurn {
   const { subCategory: _dropped, ...rest } = turn
-  return { ...rest, assistantCalls: turn.assistantCalls.map(stripCallForAggregate) }
+  // Categories are 14 fixed labels repeated per turn: share one ref each.
+  const category = (intern ? interned(intern, turn.category) : turn.category) as ClassifiedTurn['category']
+  return { ...rest, category, assistantCalls: turn.assistantCalls.map(c => stripCallForAggregate(c, intern)) }
 }
-
-/// Strip every session (and subagent anchor) of every project for aggregate
-/// mode, MUTATING the session graphs in place. Sessions are always fresh in
-/// lite mode (the shared memo is bypassed, so nothing else aliases them);
-/// only the turns arrays are replaced, one session at a time, so the transient
-/// stays bounded by a single session instead of doubling a whole provider.
-/// Totals and breakdowns are precomputed scalars, so they survive unchanged.
 export function stripProjectsForAggregate(projects: ProjectSummary[]): ProjectSummary[] {
+  // One interner per provider batch: model/provider/category/project names
+  // repeat within a provider's sessions, so a batch-scoped map captures
+  // ~all duplication without growing across providers.
+  const intern = new Map<string, string>()
   for (const p of projects) {
-    for (const s of p.sessions) s.turns = s.turns.map(stripTurnForAggregate)
+    p.project = interned(intern, p.project)
+    if (p.projectPath) p.projectPath = interned(intern, p.projectPath)
+    for (const s of p.sessions) {
+      s.project = interned(intern, s.project)
+      s.turns = s.turns.map(t => stripTurnForAggregate(t, intern))
+    }
     if (p.subagentAnchors) {
-      for (const a of p.subagentAnchors) a.turns = a.turns.map(stripTurnForAggregate)
+      for (const a of p.subagentAnchors) {
+        a.project = interned(intern, a.project)
+        a.turns = a.turns.map(t => stripTurnForAggregate(t, intern))
+      }
     }
   }
   return projects
