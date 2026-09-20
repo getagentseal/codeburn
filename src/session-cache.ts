@@ -1073,6 +1073,24 @@ async function adoptNewestPriorCache(): Promise<SessionCache | null> {
 // stays the canonical one after a refresh.
 let cacheMemo: { dir: string; nonce: string; scope: string; provider: string; cache: SessionCache } | null = null
 
+/// Nonce of the envelope the most recent loadCache call in this process read
+/// (null when the directory held no envelope). Lets the refresh path prove no
+/// other process published between its pre-lock load and lock acquisition and
+/// skip the re-stream: every saveCache mints a fresh nonce, so an unchanged
+/// nonce means byte-identical shards.
+let lastLoadedEnvelopeNonce: string | null = null
+
+export function lastLoadCacheNonce(): string | null {
+  return lastLoadedEnvelopeNonce
+}
+
+/// Current envelope nonce on disk without parsing any shard (small-file read).
+/// Null when the envelope is missing or invalid.
+export async function readCurrentEnvelopeNonce(): Promise<string | null> {
+  const envelope = await readEnvelope(sessionCacheDir())
+  return envelope?.nonce ?? null
+}
+
 export function clearLoadCacheMemo(): void {
   cacheMemo = null
   clearShardMemo()
@@ -1816,6 +1834,7 @@ export async function loadCache(scope?: CacheLoadScope, opts?: LoadCacheOptions)
   if (process.env['CODEBURN_CACHE_SCOPE'] === 'all') scope = undefined
   const dir = sessionCacheDir()
   const envelope = await readEnvelope(dir)
+  lastLoadedEnvelopeNonce = envelope?.nonce ?? null
   if (!envelope) return afterMissingShardCache()
   const scopeKey = scope ? `${scope.fromMonth}..${scope.toMonth}` : 'all'
   // A filtered load must never reuse a memoized full cache (it would serve

@@ -39,10 +39,12 @@ import {
   fingerprintFile,
   isCacheComplete,
   isCacheDirty,
+  lastLoadCacheNonce,
   loadCache,
   markCacheDirty,
   markProviderComplete,
   monthScopeForRange,
+  readCurrentEnvelopeNonce,
   reconcileFile,
   saveCache,
   seedDroppedKeys,
@@ -5668,6 +5670,10 @@ async function parseAllSessionsInCacheScope(dateRange?: DateRange, providerFilte
   const rangeStartMs = dateRange?.start.getTime()
   const cacheLoadStarted = performance.now()
   let diskCache = await loadCache(loadScope, cacheLoadOpts(dateRange, providerFilter))
+  // Nonce the pre-lock load actually read (see the reload below): captured
+  // here because no other loadCache runs between this and lock acquisition
+  // on the complete-cache path.
+  const preLockEnvelopeNonce = lastLoadCacheNonce()
   await cleanupOrphanedTempFiles()
   if (process.env['CODEBURN_VERBOSE'] === '1') {
     process.stderr.write(`codeburn: startup timing cache-load=${(performance.now() - cacheLoadStarted).toFixed(1)}ms complete=${isCacheComplete(diskCache, providerFilter, rangeStartMs)}\n`)
@@ -5739,10 +5745,20 @@ async function parseAllSessionsInCacheScope(dateRange?: DateRange, providerFilte
   try {
     // Reload only after ownership is canonical; this closes the lost-update
     // window between the pre-gate read and the holder's completed publication.
+    // Every saveCache mints a fresh envelope nonce, so when the nonce is
+    // unchanged the shards are byte-identical and re-streaming them only
+    // doubles peak heap (the pre-lock snapshot stays referenced until the
+    // reload replaces it) for zero new data — reuse it. Any publication, torn
+    // read, or missing envelope falls back to the reload.
     const reloadOpts = cacheLoadOpts(dateRange, providerFilter)
-    priorSnapshot = undefined
-    diskCache = emptyCache()
-    diskCache = await loadCache(loadScope, reloadOpts)
+    const envelopeNonceNow = await readCurrentEnvelopeNonce()
+    if (envelopeNonceNow === null || envelopeNonceNow !== preLockEnvelopeNonce) {
+      priorSnapshot = undefined
+      diskCache = emptyCache()
+      diskCache = await loadCache(loadScope, reloadOpts)
+    } else if (process.env['CODEBURN_VERBOSE'] === '1') {
+      process.stderr.write('codeburn: startup timing reload=skipped (envelope unchanged)\n')
+    }
     return await runParse(key, diskCache, dateRange, providerFilter, { refreshLock: refresh.handle, burstSig, parseStartedAt, stripForAggregate })
   } catch (err) {
     if (!(err instanceof RefreshFenceLostError) && !(err instanceof RefreshPublicationUnavailableError)) throw err
