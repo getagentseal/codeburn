@@ -30,6 +30,8 @@ function fullCall(): ParsedApiCall {
     deduplicationKey: 'omp:abc123',
     workingDirectory: '/repo',
     projectPath: '/repo',
+    project: 'repo',
+    prLinks: ['https://github.com/o/r/pull/1'],
     toolSequence: [[{ tool: 'Bash', command: 'git status' }]],
     savingsUSD: 0.002,
     route: 'r1',
@@ -54,6 +56,8 @@ describe('stripCallForAggregate', () => {
     expect(lite.subagentTypes).toEqual([])
     expect(lite).not.toHaveProperty('workingDirectory')
     expect(lite).not.toHaveProperty('projectPath')
+    expect(lite).not.toHaveProperty('project')
+    expect(lite).not.toHaveProperty('prLinks')
   })
 
   it('extracts shell commands for PR launch matching', () => {

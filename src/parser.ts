@@ -1724,16 +1724,18 @@ function extractCanonicalCwd(entries: JournalEntry[]): string | undefined {
 /// extracted shell commands PR launch matching needs.
 export function stripCallForAggregate(call: ParsedApiCall): ParsedApiCall {
   // Denylist: everything carries over except the payloads the overview path
-  // never reads downstream. workingDirectory/projectPath ride on some calls
-  // outside the type (session-level identity covers the reports); they are
-  // heavy (~18MB serialized here) so they drop explicitly rather than by luck.
+  // never reads downstream. workingDirectory/projectPath/project/prLinks ride
+  // on some calls outside the type (session/project identity covers the
+  // reports); they are heavy, so they drop explicitly rather than by luck.
   const {
     toolSequence: _droppedSequence,
     spawnToolUseIds: _droppedSpawns,
     workingDirectory: _droppedWd,
     projectPath: _droppedPp,
+    project: _droppedProject,
+    prLinks: _droppedPrLinks,
     ...rest
-  } = call as ParsedApiCall & { workingDirectory?: unknown; projectPath?: unknown }
+  } = call as ParsedApiCall & { workingDirectory?: unknown; projectPath?: unknown; project?: unknown; prLinks?: unknown }
   const lite: ParsedApiCall = {
     ...rest,
     bashCommands: [],
