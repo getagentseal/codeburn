@@ -297,6 +297,90 @@ describe('cursor-agent provider', () => {
     expect(callsFirst[0]!.sessionId).toBe(callsSecond[0]!.sessionId)
     expect(callsFirst[0]!.deduplicationKey).toBe(callsSecond[0]!.deduplicationKey)
   })
+
+  it('counts every assistant message after one user message (jsonl)', async () => {
+    const baseDir = await makeBaseDir()
+    const sessionDir = join(baseDir, 'projects', 'multi-proj', 'agent-transcripts', FIXED_UUID)
+    await mkdir(sessionDir, { recursive: true })
+    await writeFile(
+      join(sessionDir, `${FIXED_UUID}.jsonl`),
+      '{"role":"user","message":{"content":[{"type":"text","text":"<user_query>do it</user_query>"}]}}\n' +
+      '{"role":"assistant","message":{"content":[{"type":"text","text":"step one"}]}}\n' +
+      '{"role":"assistant","message":{"content":[{"type":"text","text":"step two"}]}}\n' +
+      '{"role":"assistant","message":{"content":[{"type":"text","text":"step three"}]}}\n',
+    )
+
+    const provider = createCursorAgentProvider(baseDir)
+    const source = (await provider.discoverSessions())[0]!
+    const calls = await collectCalls(provider, source)
+
+    expect(calls).toHaveLength(3)
+    expect(calls.map(c => c.deduplicationKey)).toEqual([
+      `cursor-agent:${FIXED_UUID}:0`,
+      `cursor-agent:${FIXED_UUID}:1`,
+      `cursor-agent:${FIXED_UUID}:2`,
+    ])
+    expect(calls.every(c => c.userMessage === 'do it')).toBe(true)
+  })
+
+  it('counts tool_use inputs in output tokens (jsonl)', async () => {
+    const baseDir = await makeBaseDir()
+    const sessionDir = join(baseDir, 'projects', 'tool-proj', 'agent-transcripts', FIXED_UUID)
+    await mkdir(sessionDir, { recursive: true })
+    const toolInput = { path: '/some/very/long/path/to/a/file/that/adds/chars.txt' }
+    await writeFile(
+      join(sessionDir, `${FIXED_UUID}.jsonl`),
+      '{"role":"user","message":{"content":[{"type":"text","text":"<user_query>read it</user_query>"}]}}\n' +
+      `{"role":"assistant","message":{"content":[{"type":"text","text":"ok"},{"type":"tool_use","name":"Read","input":${JSON.stringify(toolInput)}}]}}\n`,
+    )
+
+    const provider = createCursorAgentProvider(baseDir)
+    const source = (await provider.discoverSessions())[0]!
+    const calls = await collectCalls(provider, source)
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.tools).toEqual(['cursor:read'])
+    expect(calls[0]!.outputTokens).toBe(
+      estimateTokensFromChars(('ok\n' + JSON.stringify(toolInput)).trim().length),
+    )
+  })
+
+  it('accounts full user text while keeping display truncated (jsonl)', async () => {
+    const baseDir = await makeBaseDir()
+    const sessionDir = join(baseDir, 'projects', 'long-proj', 'agent-transcripts', FIXED_UUID)
+    await mkdir(sessionDir, { recursive: true })
+    const longText = 'x'.repeat(2000)
+    await writeFile(
+      join(sessionDir, `${FIXED_UUID}.jsonl`),
+      `{"role":"user","message":{"content":[{"type":"text","text":"<user_query>${longText}</user_query>"}]}}\n` +
+      '{"role":"assistant","message":{"content":[{"type":"text","text":"done"}]}}\n',
+    )
+
+    const provider = createCursorAgentProvider(baseDir)
+    const source = (await provider.discoverSessions())[0]!
+    const calls = await collectCalls(provider, source)
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.inputTokens).toBe(estimateTokensFromChars(longText.length))
+    expect(calls[0]!.userMessage).toHaveLength(500)
+  })
+
+  it('counts every assistant block after one user block (txt)', async () => {
+    const baseDir = await makeBaseDir()
+    const transcriptDir = join(baseDir, 'projects', 'txt-multi', 'agent-transcripts')
+    await mkdir(transcriptDir, { recursive: true })
+    await writeFile(
+      join(transcriptDir, `${FIXED_UUID}.txt`),
+      'user:\n<user_query>go</user_query>\nA:\nfirst\nA:\nsecond\n',
+    )
+
+    const provider = createCursorAgentProvider(baseDir)
+    const source = (await provider.discoverSessions())[0]!
+    const calls = await collectCalls(provider, source)
+
+    expect(calls).toHaveLength(2)
+    expect(calls.every(c => c.userMessage === 'go')).toBe(true)
+  })
 })
 
 skipUnlessSqlite('cursor-agent sqlite metadata', () => {
