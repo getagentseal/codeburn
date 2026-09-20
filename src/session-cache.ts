@@ -4,7 +4,7 @@ import { createHash, randomBytes } from 'crypto'
 import { join } from 'path'
 
 import { getCodeburnCacheDir } from './cache-dir.js'
-import { flattenJsonStrings } from './content-utils.js'
+import { flatString, flattenJsonStrings } from './content-utils.js'
 import { acquireCacheRefreshLock, releaseOwnedRefreshLocksForExit } from './cache-refresh-lock.js'
 import type { ToolCall } from './types.js'
 import { streamShardArrayField, streamShardEntries } from './shard-stream.js'
@@ -1380,9 +1380,13 @@ function finishSlice(
   if (acc.keptCount > 0 && acc.lastKept - acc.firstKept + 1 !== acc.keptCount) return { whole: true }
   for (const key of acc.droppedKeys) if (acc.keptKeys.has(key)) return { whole: true }
   const droppedHadBranch = acc.prefixHadBranch || (acc.keptCount === 0 ? acc.anyBranch : acc.suffixHadBranch)
-  // No flattening here either: every turn passing through the accumulator
-  // was assembled by assembleTokens (already detached), so carry refs, first
-  // project, and kept turns retain directly.
+  // Detach what the marker retains: kept turns were flattened at fold time,
+  // but the carry refs and firstTurnProject may point at dropped
+  // (unflattened) turns. Detach those few strings here so no tokenizer
+  // chunk survives through the marker.
+  const carryBranch = acc.carryBranch !== undefined ? flatString(acc.carryBranch) : undefined
+  const carryPrRefs = acc.carryPrRefs !== undefined ? flattenJsonStrings(acc.carryPrRefs) : undefined
+  const firstProject = firstTurnProject !== undefined ? flatString(firstTurnProject) : undefined
   return {
     whole: false,
     file: {
@@ -1391,13 +1395,13 @@ function finishSlice(
       rangeFiltered: {
         span,
         newestCallMs: newestMs,
-        ...(firstTurnProject !== undefined ? { firstTurnProject } : {}),
+        ...(firstProject !== undefined ? { firstTurnProject: firstProject } : {}),
         droppedKeys: acc.droppedKeys,
         // Carry needs a kept block to carry INTO: with zero kept turns the
         // old prefix loop ran zero times (firstKept === -1), so the fields
         // stay absent. droppedHadBranch still reports via anyBranch.
-        ...(acc.keptCount > 0 && acc.carryBranch !== undefined ? { carryBranch: acc.carryBranch } : {}),
-        ...(acc.keptCount > 0 && acc.carryPrRefs !== undefined ? { carryPrRefs: acc.carryPrRefs } : {}),
+        ...(acc.keptCount > 0 && carryBranch !== undefined ? { carryBranch } : {}),
+        ...(acc.keptCount > 0 && carryPrRefs !== undefined ? { carryPrRefs } : {}),
         ...(droppedHadBranch ? { droppedHadBranch: true } : {}),
       },
     } as CachedFile,
@@ -1498,15 +1502,21 @@ export async function loadShardFiltered(
         // validation here, so fail the same way instead of serving metadata
         // without turns as complete.
         if (field === 'turns') throw new Error(`shard record invalid: ${name}`)
-        builds.get(key)!.meta[field] = value
+        builds.get(key)!.meta[field] = flattenJsonStrings(value)
       },
       onElement: (key, index, value) => {
         const build = builds.get(key)!
         if (!validateTurn(value)) throw new Error(`shard record invalid: ${name}`)
         const turn = value
+        const keep = turnFilter(turn)
+        // Detach only what the accumulator retains (see assembleTokens):
+        // kept turns flatten whole; dropped turns release their slices
+        // unflattened, so tokenizer chunks do not accumulate flattened copies
+        // of data nobody keeps.
+        if (keep) flattenJsonStrings(turn)
         // Fold straight into the accumulator: no per-turn wrapper or key
         // arrays (see SliceAccumulator). Scalars mirror sliceItemFor.
-        foldLiveTurn(build.acc, turn, turnFilter(turn))
+        foldLiveTurn(build.acc, turn, keep)
         const month = monthKey(turn.timestamp)
         if (month !== null) {
           if (build.spanMin === null || month < build.spanMin) build.spanMin = month
@@ -1549,7 +1559,7 @@ export async function loadShardFiltered(
         if (!validateCachedFile(rest)) throw new Error(`shard record invalid: ${name}`)
         files[key] = sliced.file
       },
-    })
+    }, { detachStrings: false })
   } catch {
     return null
   }
@@ -1572,13 +1582,13 @@ export async function loadShardFiltered(
         },
         onField: (key, field, value) => {
           const build = wholeBuilds.get(key)
-          if (build) build.meta[field] = value
+          if (build) build.meta[field] = flattenJsonStrings(value)
         },
         onElement: (key, _index, value) => {
           const build = wholeBuilds.get(key)
           if (!build) return
           if (!validateTurn(value)) throw new Error(`shard record invalid: ${name}`)
-          build.turns.push(value)
+          build.turns.push(flattenJsonStrings(value))
         },
         onFileEnd: (key, _count, arraySeen) => {
           const build = wholeBuilds.get(key)
@@ -1590,7 +1600,7 @@ export async function loadShardFiltered(
           files[key] = file
           completed.add(key)
         },
-      })
+      }, { detachStrings: false })
     } catch {
       return null
     }

@@ -129,14 +129,16 @@ type ParserToken = Parameters<Assembler['consume']>[0]
 const SCALAR_TOKENS = new Set(['stringValue', 'numberValue', 'nullValue', 'trueValue', 'falseValue'])
 const START_TOKENS = new Set(['startObject', 'startArray'])
 
-function assembleTokens(tokens: ParserToken[]): unknown {
-  // Detach strings from the tokenizer's buffers: every retained stringValue
-  // or key would otherwise pin its whole input chunk for the life of the
-  // cache (V8 SlicedString), ballooning streaming decode past whole-file
-  // JSON.parse. Buffer round-trip forces fresh flat strings (see flatString).
+function assembleTokens(tokens: ParserToken[], detach: boolean): unknown {
+  // Detach strings from the tokenizer's buffers when the caller retains the
+  // value: every retained stringValue or key would otherwise pin its whole
+  // input chunk for the life of the cache (V8 SlicedString), ballooning
+  // streaming decode past whole-file JSON.parse. Buffer round-trip forces
+  // fresh flat strings (see flatString). Callers that drop the value pass
+  // false and skip the per-string copy churn.
   const asm = new Assembler()
   for (const token of tokens) {
-    if ((token.name === 'stringValue' || token.name === 'keyValue') && 'value' in token && typeof token.value === 'string') {
+    if (detach && (token.name === 'stringValue' || token.name === 'keyValue') && 'value' in token && typeof token.value === 'string') {
       asm.consume({ ...token, value: flatString(token.value) })
     } else {
       asm.consume(token)
@@ -149,7 +151,7 @@ export async function streamShardArrayField(
   path: string,
   arrayField: string,
   cb: ShardArrayFieldCallbacks,
-  opts?: { rootField?: string },
+  opts?: { rootField?: string; detachStrings?: boolean },
 ): Promise<void> {
   let first: number | null
   try {
@@ -162,6 +164,9 @@ export async function streamShardArrayField(
   const source = createReadStream(path)
   const openHook = afterStreamOpenForTests
   if (openHook) source.once('open', openHook)
+  // Detach by default (callers that retain values); the filtered loader
+  // passes false and detaches only what it keeps (see loadShardFiltered).
+  const detach = opts?.detachStrings ?? true
   await pipeline(
     source,
     // Packed tokens only (keys as `keyValue`, whole strings/numbers): the
@@ -287,9 +292,9 @@ export async function streamShardArrayField(
               if (arrayFieldSeen) fail(`duplicate shard field ${arrayField}`)
               arrayFieldSeen = true
             }
-            await cb.onField?.(fileKey!, at[1] as string, assembleTokens([token]))
+            await cb.onField?.(fileKey!, at[1] as string, assembleTokens([token], detach))
           } else if (at.length === 3 && at[1] === arrayField) {
-            await cb.onElement?.(fileKey!, key as number, assembleTokens([token]))
+            await cb.onElement?.(fileKey!, key as number, assembleTokens([token], detach))
             elementCount++
           } else {
             fail('shard entry has unexpected nesting')
@@ -317,7 +322,7 @@ export async function streamShardArrayField(
             if (stack.length === capture.startDepth) {
               const done = capture
               capture = null
-              const assembled = assembleTokens(done.tokens)
+              const assembled = assembleTokens(done.tokens, detach)
               if (done.kind === 'element') {
                 await cb.onElement?.(fileKey!, done.index, assembled)
                 elementCount++
