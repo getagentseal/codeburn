@@ -1,0 +1,25 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Screenshot frame</title>
+<link rel="stylesheet" href="base.css">
+<style>
+  body { width: 1048px; padding: 26px; background: var(--ground); }
+  .shot {
+    display: block; width: 996px; border-radius: 12px; border: 1px solid var(--line);
+    box-shadow: var(--shadow); overflow: hidden;
+  }
+  .crop { width: 996px; border-radius: 12px; border: 1px solid var(--line); box-shadow: var(--shadow); overflow: hidden; line-height: 0; }
+  .crop img { width: 100%; display: block; object-fit: cover; object-position: center 30%; }
+</style>
+<div id="host"></div>
+<script>
+  const q = new URLSearchParams(location.search)
+  const src = q.get('img')
+  const ratio = q.get('ratio')
+  const host = document.getElementById('host')
+  if (ratio) {
+    host.innerHTML = '<div class="crop" style="height:' + Math.round(996 / parseFloat(ratio)) + 'px"><img src="' + src + '" alt=""></div>'
+  } else {
+    host.innerHTML = '<img class="shot" src="' + src + '" alt="">'
+  }
+</script>

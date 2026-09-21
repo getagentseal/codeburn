@@ -1,0 +1,4 @@
+# Raw app captures feeding frame.html. Re-capture from the desktop app instead of
+# shipping them: the framed PNGs next to this folder are what the README uses.
+raw/
+.terminal.built.html

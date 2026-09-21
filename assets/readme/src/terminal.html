@@ -1,0 +1,26 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>codeburn in the terminal</title>
+<link rel="stylesheet" href="base.css">
+<style>
+  body { width: 1048px; padding: 26px; background: var(--ground); }
+  .term {
+    background: #0C0D0F; border: 1px solid #23252A; border-radius: 12px;
+    box-shadow: var(--shadow); padding: 20px 22px 24px; overflow: hidden;
+  }
+  .bar { display: flex; gap: 7px; margin-bottom: 18px; }
+  .bar i { width: 11px; height: 11px; border-radius: 50%; background: #2E3037; display: block; }
+  pre {
+    margin: 0; font-family: 'JetBrainsMonoVar', ui-monospace, monospace;
+    font-size: 11.4px; line-height: 1.42; color: #C9C9CE; white-space: pre;
+    font-variant-ligatures: none;
+  }
+  .cmd { color: #F0EFEC; font-weight: 600; }
+  .cmd .p { color: #EA6A15; }
+</style>
+<div class="term">
+  <div class="bar"><i></i><i></i><i></i></div>
+  <pre><span class="cmd"><span class="p">$</span> npx codeburn</span>
+
+<!--TUI--></pre>
+</div>
