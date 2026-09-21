@@ -7,23 +7,28 @@ import type { QuotaProvider, QuotaWindow } from './types.js'
 
 const ENDPOINT = 'https://api.anthropic.com/api/oauth/usage'
 const KEYCHAIN_SERVICE = 'Claude Code-credentials'
+const EXPIRED_FOOTER = ['Claude Code login expired. Run Claude Code once, then refresh.']
 
 type ClaudeCredential = { accessToken: string; expiresAt?: number; rateLimitTier?: string; subscriptionType?: string }
+/** Where the credential in hand came from, so a rejected token is re-read from that same place. */
+type CredentialSource = 'file' | 'keychain'
 export type ClaudeDeps = {
   fetch: typeof fetch
   credentialPath: string
   readFile: typeof readSecureFile
   keychain?: () => Promise<KeychainOutcome>
+  now: () => number
 }
 
 const defaults: ClaudeDeps = {
   fetch: globalThis.fetch,
   credentialPath: path.join(os.homedir(), '.claude', '.credentials.json'),
   readFile: readSecureFile,
+  now: Date.now,
 }
 
-function empty(connection: QuotaProvider['connection']): QuotaProvider {
-  return { provider: 'claude', connection, primary: null, details: [], planLabel: null, footerLines: [] }
+function empty(connection: QuotaProvider['connection'], footerLines: string[] = []): QuotaProvider {
+  return { provider: 'claude', connection, primary: null, details: [], planLabel: null, footerLines }
 }
 
 function parseCredential(raw: string): ClaudeCredential | null {
@@ -41,6 +46,19 @@ function parseCredential(raw: string): ClaudeCredential | null {
 async function credentialFromFile(deps: ClaudeDeps): Promise<ClaudeCredential | null> {
   const raw = await deps.readFile(deps.credentialPath, 64 * 1024)
   return raw ? parseCredential(raw) : null
+}
+
+/**
+ * Re-read whichever store the credential came from. On macOS the credential
+ * usually lives in the Keychain and no file exists at all, so re-reading the
+ * file after a 401 could never see the token Claude Code has since renewed.
+ * A denied Keychain on a re-read needs no state of its own: the first read
+ * already decided whether that store is reachable.
+ */
+async function credentialFrom(source: CredentialSource, deps: ClaudeDeps): Promise<ClaudeCredential | null> {
+  if (source === 'file') return credentialFromFile(deps)
+  const outcome = await (deps.keychain ?? readClaudeKeychain)()
+  return outcome.status === 'found' ? parseCredential(outcome.value) : null
 }
 
 export async function readClaudeKeychain(): Promise<KeychainOutcome> {
@@ -125,17 +143,26 @@ export async function fetchClaudeQuota(options: Partial<ClaudeDeps> & { signal?:
   const deps = { ...defaults, ...options }
   try {
     let credential = await credentialFromFile(deps)
+    let source: CredentialSource = 'file'
     if (!credential && options.allowKeychain && process.platform === 'darwin') {
       const outcome = await (deps.keychain ?? readClaudeKeychain)()
       if (outcome.status === 'accessDenied') return { quota: empty('accessDenied') }
       credential = outcome.status === 'found' ? parseCredential(outcome.value) : null
+      source = 'keychain'
     }
     if (!credential) return { quota: empty('disconnected') }
 
     let response = await request(credential.accessToken, deps, options.signal)
     if (response.status === 401) {
-      const reread = await credentialFromFile(deps)
-      if (!reread || reread.accessToken === credential.accessToken) return { quota: empty('transientFailure') }
+      const reread = await credentialFrom(source, deps)
+      if (!reread || reread.accessToken === credential.accessToken) {
+        // Nothing but a fresh login can clear a 401 on a credential whose life is
+        // already over, so it is reported as terminal rather than as the blip its
+        // consumers are meant to retry and to keep their last numbers through. A
+        // token that has not expired is a real blip and keeps that backoff.
+        const expired = credential.expiresAt !== undefined && credential.expiresAt <= deps.now()
+        return { quota: expired ? empty('terminalFailure', EXPIRED_FOOTER) : empty('transientFailure') }
+      }
       credential = reread
       response = await request(credential.accessToken, deps, options.signal)
     }
