@@ -91,7 +91,28 @@
         "NSDownloadsFolderUsageDescription": "CodeBurn reads your local AI coding tool session logs (Claude Code, Codex, Cursor, and others) to calculate your token usage and cost. Your data never leaves your machine."
       }
     },
-    "dmg": {},
+    "dmg": {
+      "background": null,
+      "backgroundColor": "#ffffff",
+      "window": {
+        "width": 540,
+        "height": 380
+      },
+      "iconSize": 100,
+      "contents": [
+        {
+          "x": 150,
+          "y": 180,
+          "type": "file"
+        },
+        {
+          "x": 390,
+          "y": 180,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ]
+    },
     "win": {
       "target": [
         {
