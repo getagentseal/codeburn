@@ -468,7 +468,10 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // preserved through the cache via `costFromBilling`. This is OpenClaw's
   // first parse version; adding it moves the provider's env fingerprint,
   // which is what forces the one re-parse that lands the reported dollars.
-  openclaw: 'reported-cost-v1',
+  // sqlite-store-v1: id-less dedup keys now carry an occurrence index
+  // (`h:<hash>:<n>`) instead of the bare payload hash; cached turns hold the
+  // old keys, so without this bump they would suppress the re-parsed calls.
+  openclaw: 'reported-cost-v1-sqlite-store-v1',
   'lingtai-tui': 'token-ledger-registry-activity-v3',
   'ibm-bob': 'worktree-project-grouping-v1',
   // project-path-v1: the parser now records the session's full working
