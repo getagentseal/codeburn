@@ -24,6 +24,7 @@ import {
   getFlatRateModelsConfigHash,
   parseLiteLLMEntry,
   unpricedModelHint,
+  modelKeyMatches,
 } from '../src/models.js'
 import { getDailyCacheConfigHash } from '../src/usage-aggregator.js'
 import snapshotData from '../src/data/litellm-snapshot.json' with { type: 'json' }
@@ -354,9 +355,42 @@ describe('getShortModelName', () => {
     expect(getShortModelName('gpt-5.6-sol')).toBe('GPT-5.6 Sol')
     expect(getShortModelName('gpt-5.6-terra')).toBe('GPT-5.6 Terra')
     expect(getShortModelName('gpt-5.6-luna')).toBe('GPT-5.6 Luna')
-    // No bare `gpt-5.6` entry exists, so an unlisted future variant must still
-    // fall through to its raw id rather than borrow a sibling's label.
-    expect(getShortModelName('gpt-5.6-unlisted')).toBe('gpt-5.6-unlisted')
+    // No bare `gpt-5.6` entry exists, so an unlisted variant of this version
+    // must not borrow a sibling's curated label. Since #1530 it derives its own
+    // label from the id instead of surfacing the raw slug. (Versions that DO
+    // have a bare entry, like gpt-5.5, still fold suffixed ids by the prefix
+    // rule — unchanged here.)
+    expect(getShortModelName('gpt-5.6-unlisted')).toBe('GPT-5.6 Unlisted')
+  })
+
+  // Regression for #1530: some doors write the Claude minor with a dot
+  // (GitHub Copilot's session store: claude-opus-4.8). The derivation must
+  // accept both spellings, or the name silently loses its minor ("Opus 4").
+  it('derives dot-form Claude minors the same as dash-form (#1530)', () => {
+    expect(getShortModelName('claude-opus-4.8')).toBe('Opus 4.8')
+    expect(getShortModelName('claude-opus-4-8')).toBe('Opus 4.8')
+    expect(getShortModelName('claude-sonnet-4.9')).toBe('Sonnet 4.9')
+    expect(getShortModelName('claude-opus-4.8-20300101')).toBe('Opus 4.8')
+  })
+
+  // Regression for #1530: an unknown future GPT version derives its name from
+  // the id, the way unreleased Claude versions already do — no hand-maintained
+  // entry per release. Curated entries still win, and the legacy bare-major /
+  // date-packaged shapes stay raw.
+  it('derives unknown GPT versions from their ids instead of surfacing raw (#1530)', () => {
+    expect(getShortModelName('gpt-5.7-terra')).toBe('GPT-5.7 Terra')
+    expect(getShortModelName('gpt-5.7-codex-spark')).toBe('GPT-5.7 Codex Spark')
+    expect(getShortModelName('gpt-5.7')).toBe('GPT-5.7')
+    // Numeric segments are packaging, not part of the name.
+    expect(getShortModelName('gpt-5.7-20261105')).toBe('GPT-5.7')
+    // Legacy shapes stay raw: bare-major ids and date-versioned packaging.
+    expect(getShortModelName('gpt-9')).toBe('gpt-9')
+    expect(getShortModelName('gpt-4-1106-preview')).toBe('gpt-4-1106-preview')
+    // Curated labels keep winning over the derivation.
+    expect(getShortModelName('gpt-5.5')).toBe('GPT-5.5')
+    expect(getShortModelName('gpt-5.1-codex-mini')).toBe('GPT-5.1 Codex Mini')
+    expect(getShortModelName('gpt-5-mini')).toBe('GPT-5 Mini')
+    expect(getShortModelName('gpt-4o')).toBe('GPT-4o')
   })
 
   it('names grok-4.5 without disturbing the Grok Build harness label', () => {
@@ -387,6 +421,26 @@ describe('getShortModelName', () => {
     expect(getShortModelName('accounts/fireworks/models/kimi-k2p7-code')).toBe('Kimi K2.7 Code')
     expect(getShortModelName('accounts/fireworks/models/deepseek-v4-pro')).toBe('DeepSeek v4 Pro')
     expect(getShortModelName('accounts/fireworks/models/deepseek-v4-flash')).toBe('DeepSeek v4 Flash')
+  })
+})
+
+describe('modelKeyMatches', () => {
+  // The primitive provider display tables match with (#1530): a key must be
+  // the whole id or a whole dash-segment, never mid-version — so a bare
+  // `gpt-5` key cannot capture `gpt-5.5` or `gpt-5.6-luna`.
+  it('matches the exact id and dash-suffixed ids', () => {
+    expect(modelKeyMatches('gpt-5', 'gpt-5')).toBe(true)
+    expect(modelKeyMatches('gpt-5-mini', 'gpt-5')).toBe(true)
+    expect(modelKeyMatches('gpt-4.1-2025-04-14', 'gpt-4.1')).toBe(true)
+    expect(modelKeyMatches('openai/gpt-5', 'gpt-5')).toBe(true)
+  })
+
+  it('rejects mid-version and mid-word matches', () => {
+    expect(modelKeyMatches('gpt-5.5', 'gpt-5')).toBe(false)
+    expect(modelKeyMatches('gpt-5.6-luna', 'gpt-5')).toBe(false)
+    expect(modelKeyMatches('gpt-5.4.1', 'gpt-5.4')).toBe(false)
+    expect(modelKeyMatches('xgpt-5', 'gpt-5')).toBe(false)
+    expect(modelKeyMatches('claude-opus-4.8', 'claude-opus-4')).toBe(false)
   })
 })
 
