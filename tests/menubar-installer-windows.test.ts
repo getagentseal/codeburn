@@ -1099,6 +1099,33 @@ describe('installMenubarApp with a store install', () => {
     expect(logs.some(line => line.includes('--force') && line.includes('leaves the Store copy in place'))).toBe(true)
   })
 
+  it('tells the user to start the store copy from the start menu when the spawn fails', async () => {
+    const promise = installMenubarApp({
+      platform: 'win32',
+      cliVersion: '0.9.20',
+      windows: hooks({ launch: async () => 'Could not launch tray: spawn EPERM' }),
+    })
+
+    await expect(promise).rejects.toThrow(/Start CodeBurn Menubar from the Start menu instead/)
+    expect(installerCalls).toEqual([])
+  })
+
+  it('says the install itself succeeded when the launch after an msi install fails', async () => {
+    let queries = 0
+    const promise = installMenubarApp({
+      platform: 'win32',
+      cliVersion: '0.9.20',
+      windows: hooks({
+        queryStorePackage: async () => '',
+        queryRegistry: async () => (queries++ === 0 ? '' : INSTALLED_0_9_20),
+        launch: async () => 'Could not launch tray: spawn EPERM',
+      }),
+    })
+
+    await expect(promise).rejects.toThrow(/install itself succeeded/)
+    expect(installerCalls).toHaveLength(1)
+  })
+
   it('takes the msi route when the store package is not installed', async () => {
     const result = await installMenubarApp({
       platform: 'win32',

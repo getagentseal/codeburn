@@ -813,7 +813,12 @@ export type WindowsInstallHooks = {
   killTray?: () => Promise<void>
   /// The wait between two `isTrayRunning` polls, so tests need not spend the real one.
   sleep?: (ms: number) => Promise<void>
-  launch?: (exePath: string, args?: string[]) => void
+  /// Start the installed tray app. Returns an error message when the process could not be
+  /// spawned at all (the EPERM a console-locked-down app-container binary reports, a missing
+  /// file, a rejected execution), or null when the process started; an empty string counts
+  /// as null. A started process is not a promise it stays up: the tray is detached, so this
+  /// answers only the spawn.
+  launch?: (exePath: string, args?: string[]) => Promise<string | null> | string | null | void
   log?: (message: string) => void
   stagingDir?: string
   env?: NodeJS.ProcessEnv
@@ -1310,10 +1315,32 @@ async function runMsiexec(exe: string, args: string[]): Promise<number> {
   })
 }
 
-function launchWindowsApp(exePath: string, args: string[] = []): void {
-  const proc = spawn(exePath, args, { detached: true, stdio: 'ignore' })
-  proc.on('error', err => console.error(`Could not launch ${exePath}: ${err.message}`))
-  proc.unref()
+function launchWindowsApp(exePath: string, args: string[] = []): Promise<string | null> {
+  return new Promise((resolve) => {
+    const proc = spawn(exePath, args, { detached: true, stdio: 'ignore' })
+    proc.on('error', err => resolve(`Could not launch ${exePath}: ${err.message}`))
+    proc.on('spawn', () => {
+      proc.unref()
+      resolve(null)
+    })
+  })
+}
+
+/// The tray app is a second process that leaves; only its spawn is awaitable. A spawn failure
+/// (the EPERM a direct CreateProcess against a console-locked-down app-container binary
+/// reports, #1520) answers with the error message, and the route that asked owns its meaning:
+/// the Store route refuses the conflicting .msi, routes that just installed an .msi say so.
+async function awaitLaunch(
+  launch: (exePath: string, args?: string[]) => Promise<string | null> | string | null | void,
+  exePath: string,
+  args?: string[],
+): Promise<string | null> {
+  try {
+    const outcome = await launch(exePath, args)
+    return typeof outcome === 'string' && outcome.length > 0 ? outcome : null
+  } catch (err) {
+    return err instanceof Error ? err.message : String(err)
+  }
 }
 
 async function trayHasProcess(env: NodeJS.ProcessEnv): Promise<boolean> {
@@ -1359,7 +1386,11 @@ async function stopRunningMenubar(
 
   if (exePath) {
     log('CodeBurn Menubar is running; asking it to quit before installing...')
-    launch(exePath, ['--quit'])
+    // The quit signal is best effort: the polls below answer whether the tray heard it, and a
+    // spawn failure (a Store-packaged tray an outside console cannot reach, #1520) is logged,
+    // not fatal - the install still has taskkill as its fallback.
+    const quitError = await awaitLaunch(launch, exePath, ['--quit'])
+    if (quitError) log(quitError)
     // Counted polls rather than a wall clock, so the wait is the same length however long the
     // supplied sleep actually takes.
     for (let attempt = 0; attempt < Math.ceil(TRAY_QUIT_TIMEOUT_MS / TRAY_QUIT_POLL_MS); attempt++) {
@@ -1435,7 +1466,17 @@ async function installWindowsMenubarApp(options: InstallOptions): Promise<Instal
     if (installed) {
       log(`A separate .msi install is also present at ${installed.exePath}; leaving it in place and using the Store copy.`)
     }
-    launch(store.exePath)
+    const launchError = await awaitLaunch(launch, store.exePath)
+    if (launchError) {
+      // A Store-packaged tray cannot be spawned directly from a console outside its own
+      // app container (EPERM on C:\Program Files\WindowsApps, #1520). The Start-menu tile
+      // holds the activation the package allows, so point there instead of reporting a
+      // launch that never happened.
+      throw new Error(
+        `${launchError} ` +
+        `Start CodeBurn Menubar from the Start menu instead; the Store copy cannot be launched from a console.`,
+      )
+    }
     log('Launched CodeBurn Menubar.')
     return { installedPath: store.exePath, launched: true }
   }
@@ -1447,7 +1488,14 @@ async function installWindowsMenubarApp(options: InstallOptions): Promise<Instal
     // Nothing was installed, but this is still the route that owns a hand-installed tray app,
     // and a machine that was set up before the marker existed has none to show for it.
     await writeMenubarMarker(installed, 'manual', env)
-    launch(installed.exePath)
+    const launchError = await awaitLaunch(launch, installed.exePath)
+    if (launchError) {
+      // Nothing this run installed is at stake: the tray app is already on the machine, so
+      // the message says where it is rather than reading as a failed install.
+      throw new Error(
+        `${launchError} (nothing was reinstalled; CodeBurn Menubar ${installed.version} is already installed - start it from the Start menu)`,
+      )
+    }
     log('Launched CodeBurn Menubar.')
     return { installedPath: installed.exePath, launched: true }
   }
@@ -1499,7 +1547,14 @@ async function installWindowsMenubarApp(options: InstallOptions): Promise<Instal
     // the desktop app already credited to itself keeps that verdict: writeMenubarMarker never
     // rewrites one, so upgrading a desktop-installed tray from the CLI does not orphan it.
     await writeMenubarMarker(nowInstalled, 'manual', env)
-    launch(nowInstalled.exePath)
+    const launchError = await awaitLaunch(launch, nowInstalled.exePath)
+    if (launchError) {
+      // The install happened; say so in the error, or a launch that could not happen reads
+      // as an install that did not.
+      throw new Error(
+        `${launchError} (the install itself succeeded; start CodeBurn Menubar from the Start menu if it did not appear)`,
+      )
+    }
     log('Launched CodeBurn Menubar.')
     return { installedPath: nowInstalled.exePath, launched: true }
   } finally {
