@@ -82,12 +82,18 @@ const ONE_HOUR_CACHE_WRITE_MULTIPLIER_FROM_FIVE_MINUTE_RATE = 1.6
 // (provider "Cursor", USD per 1M tokens): composer-2/2.5: $0.50 input, $2.50
 // output, $0.20 cache read; composer-1.5: $3.50/$17.50/$0.35; composer-1:
 // $1.25/$10/$0.125. Cursor publishes no separate cache-write rate for these,
-// so cache write uses the input rate.
+// so cache write uses the input rate. OpenAI's GPT-6 rates below are the
+// Standard tier (up to 272K input tokens), in USD per token, from
+// https://developers.openai.com/api/docs/pricing. CodeBurn's current pricing
+// shape supports Standard and Fast (2x) rates; it has no per-request processing
+// or context-length metadata for the Batch/Flex or >272K tiers.
 const BUILTIN_PRICE_OVERRIDES: Record<string, SnapshotEntry> = {
   'composer-2.5': [0.5e-6, 2.5e-6, 0.5e-6, 0.2e-6],
   'composer-2': [0.5e-6, 2.5e-6, 0.5e-6, 0.2e-6],
   'composer-1.5': [3.5e-6, 17.5e-6, 3.5e-6, 0.35e-6],
   'composer-1': [1.25e-6, 10e-6, 1.25e-6, 0.125e-6],
+  'gpt-6-luna': [0.1e-6, 0.5e-6, 0.125e-6, 0.01e-6, 2],
+  'gpt-6-sol': [2e-6, 10e-6, 2.5e-6, 0.2e-6, 2],
 }
 
 // Assemble a ModelCosts, applying the cache-cost heuristics (write = 1.25x
@@ -1356,6 +1362,8 @@ const SHORT_NAMES: Record<string, string> = {
   'gpt-5.6-sol': 'GPT-5.6 Sol',
   'gpt-5.6-terra': 'GPT-5.6 Terra',
   'gpt-5.6-luna': 'GPT-5.6 Luna',
+  'gpt-6-luna': 'GPT-6 Luna',
+  'gpt-6-sol': 'GPT-6 Sol',
   // The Grok Build harness reports the model it runs (`grok-4.5`), so this is
   // the model's own name; `grok-build*` ids still resolve to "Grok Build".
   'grok-4.5': 'Grok 4.5',

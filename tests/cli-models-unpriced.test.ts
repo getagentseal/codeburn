@@ -115,12 +115,16 @@ describe('codeburn models --unpriced public CLI', () => {
       assistantLine('acme/unknown-alpha-969', '2026-05-20T10:01:00.000Z', 'alpha', 1_000),
       assistantLine('acme/unknown-beta-969', '2026-05-20T10:02:00.000Z', 'beta', 2_000),
       assistantLine('claude-opus-4-6', '2026-05-20T10:03:00.000Z', 'priced', 3_000),
+      assistantLine('gpt-6-luna', '2026-05-20T10:04:00.000Z', 'gpt-6-luna', 4_000),
+      assistantLine('gpt-6-sol', '2026-05-20T10:05:00.000Z', 'gpt-6-sol', 5_000),
     ], home => {
       const result = runCli(['models', '--unpriced', ...range], home)
       expect(result.status, result.stderr).toBe(0)
       expect(result.stdout).toContain('acme/unknown-alpha-969')
       expect(result.stdout).toContain('acme/unknown-beta-969')
       expect(result.stdout).not.toContain('claude-opus-4-6')
+      expect(result.stdout).not.toContain('GPT-6 Luna')
+      expect(result.stdout).not.toContain('GPT-6 Sol')
       expect(result.stdout).toContain('If a model is billed per token, map it with: codeburn model-alias "<model>" <known-model>')
       expect(result.stdout).toContain('codeburn model-flat-rate')
       expect(result.stdout).not.toContain('Fix: codeburn model-alias')

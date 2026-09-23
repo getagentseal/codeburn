@@ -148,6 +148,36 @@ describe('getModelCosts', () => {
     })
   })
 
+  it('prices GPT-6 Luna and Sol at OpenAI standard rates, with fast mode at 2x', () => {
+    const luna = getModelCosts('gpt-6-luna')
+    const sol = getModelCosts('gpt-6-sol')
+    expect(luna).toMatchObject({
+      inputCostPerToken: 0.1e-6,
+      outputCostPerToken: 0.5e-6,
+      cacheWriteCostPerToken: 0.125e-6,
+      cacheReadCostPerToken: 0.01e-6,
+      cacheWriteCostIsExplicit: true,
+      fastMultiplier: 2,
+    })
+    expect(sol).toMatchObject({
+      inputCostPerToken: 2e-6,
+      outputCostPerToken: 10e-6,
+      cacheWriteCostPerToken: 2.5e-6,
+      cacheReadCostPerToken: 0.2e-6,
+      cacheWriteCostIsExplicit: true,
+      fastMultiplier: 2,
+    })
+
+    expect(calculateCost('gpt-6-luna', 1_000_000, 1_000_000, 0, 0, 0)).toBeCloseTo(0.6, 8)
+    expect(calculateCost('gpt-6-luna', 1_000_000, 1_000_000, 0, 0, 0, 'fast')).toBeCloseTo(1.2, 8)
+    expect(calculateCost('gpt-6-sol', 1_000_000, 1_000_000, 0, 0, 0)).toBeCloseTo(12, 8)
+    expect(calculateCost('gpt-6-sol', 1_000_000, 1_000_000, 0, 0, 0, 'fast')).toBeCloseTo(24, 8)
+    expect(findUnpricedModels([
+      { model: 'gpt-6-luna', calls: 1, cost: 0, tokens: 10 },
+      { model: 'gpt-6-sol', calls: 1, cost: 0, tokens: 10 },
+    ])).toEqual([])
+  })
+
   it('prices claude-haiku-4.5 (copilot session-store raw id), aliased to the existing claude-haiku-4-5 row (#1093)', () => {
     const haiku45 = getModelCosts('claude-haiku-4.5')
     const haiku45Dash = getModelCosts('claude-haiku-4-5')
@@ -357,6 +387,11 @@ describe('getShortModelName', () => {
     // No bare `gpt-5.6` entry exists, so an unlisted future variant must still
     // fall through to its raw id rather than borrow a sibling's label.
     expect(getShortModelName('gpt-5.6-unlisted')).toBe('gpt-5.6-unlisted')
+  })
+
+  it('names GPT-6 variants individually', () => {
+    expect(getShortModelName('gpt-6-luna')).toBe('GPT-6 Luna')
+    expect(getShortModelName('gpt-6-sol')).toBe('GPT-6 Sol')
   })
 
   it('names grok-4.5 without disturbing the Grok Build harness label', () => {
