@@ -254,6 +254,19 @@ describe('exportCsv', () => {
     expect(lines).toHaveLength(3)
   })
 
+  it('prints unrounded record costs as plain decimals, never float noise or exponent form', async () => {
+    const project = makeProject('app')
+    const turn = project.sessions[0]!.turns[0]!
+    turn.assistantCalls[0]!.costUSD = 0.1 + 0.2
+    turn.assistantCalls.push({ ...turn.assistantCalls[0]!, costUSD: 1e-7, deduplicationKey: 'tiny' })
+
+    const folder = await exportCsv([{ label: '30 Days', projects: [project] }], join(tmpDir, 'records.csv'))
+    const lines = (await readFile(join(folder, 'records.csv'), 'utf-8')).trimEnd().split('\n')
+
+    expect(lines[1]!.endsWith(',0.3,0,,,')).toBe(true)
+    expect(lines[2]!.endsWith(',0.0000001,0,,,')).toBe(true)
+  })
+
   it('counts only behavioral turns in the sessions.csv Turns column', async () => {
     const project = makeProject('app')
     const session = project.sessions[0]!

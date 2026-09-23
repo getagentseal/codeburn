@@ -410,7 +410,9 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // otel-trace-metadata-once-v1: trace-level tool/skill/bash metadata is now
   // attributed to one chat span per trace instead of every span, so cached
   // calls carry the old per-span duplication - force one re-parse.
-  copilot: 'cli-shutdown-cost-v1-skills-source-provenance-v1-session-store-v3-chatsession-otel-skills-v1-otel-trace-metadata-once-v1',
+  // transcript-unknown-usage-v1: a transcript call with no token count is
+  // marked estimated; cached entries hold no flag and must re-parse once.
+  copilot: 'cli-shutdown-cost-v1-skills-source-provenance-v1-session-store-v3-chatsession-otel-skills-v1-otel-trace-metadata-once-v1-transcript-unknown-usage-v1',
   // authoritative-usage-v4: persist one Grok session call from top-level
   // authoritative totals, use modelUsage only for priced attribution, clamp
   // reasoning per record, and label mixed sessions estimated.

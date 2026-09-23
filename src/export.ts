@@ -24,9 +24,15 @@ function rowsToCsv(rows: Row[]): string {
   const headers = Object.keys(rows[0])
   const lines = [headers.map(escCsv).join(',')]
   for (const row of rows) {
-    lines.push(headers.map(h => escCsv(String(row[h] ?? ''))).join(','))
+    lines.push(headers.map(h => escCsv(csvCell(row[h]))).join(','))
   }
   return lines.join('\n') + '\n'
+}
+
+// Unrounded costs must not reach a spreadsheet as 0.24076000000000003 or 1e-7.
+function csvCell(v: Row[string]): string {
+  if (typeof v !== 'number' || Number.isInteger(v)) return String(v ?? '')
+  return v.toFixed(8).replace(/\.?0+$/, '')
 }
 
 function round2(n: number): number {
