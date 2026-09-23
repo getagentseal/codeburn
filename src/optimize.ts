@@ -16,7 +16,7 @@ import { formatTokens } from './format.js'
 import { recommendModelDefault, type ModelDefaultRecommendation } from './act/model-defaults.js'
 import { appliedFixGlyph, formatAppliedFix, type AppliedFix } from './act/types.js'
 import { isUserStartedSession, userStartedProjects } from './session-population.js'
-import { sessionBillableOutputTokens } from './session-output.js'
+import { inferSessionProvider, sessionBillableOutputTokens } from './session-output.js'
 import { aggregateFileChurn, buildCoachingNotes, scanUserCorrections, medianTimeToFirstEditMs, worstOneShotCategory, type ReworkedFile } from './workflow-insights.js'
 
 // ============================================================================
@@ -108,6 +108,10 @@ const CONTEXT_BLOAT_HIGH_MIN_CANDIDATES = 10
 const CONTEXT_BLOAT_GROWTH_RATIO = 2
 const CONTEXT_BLOAT_GROWTH_MAX_GAP_MS = 7 * 24 * 60 * 60 * 1000
 const CONTEXT_BLOAT_RATIO_DISPLAY_CAP = 1000
+const LOW_CACHE_HIT_TARGET_PERCENT = 80
+const LOW_CACHE_HIT_MIN_INPUT_TOKENS = CONTEXT_BLOAT_MIN_INPUT_TOKENS
+const LOW_CACHE_HIT_MIN_CALLS = 5
+const LOW_CACHE_HIT_PREVIEW = 5
 const WORTH_IT_MIN_COST_USD = 2
 const WORTH_IT_NO_EDIT_MIN_COST_USD = 3
 // A zero-edit session's full cost is an upper bound on recoverable waste, not
@@ -357,6 +361,7 @@ export type FindingId =
   | 'low-worth-sessions'
   | 'context-heavy-sessions'
   | 'cost-outliers'
+  | 'low-cache-hit-sessions'
   | 'claude-md-too-long'
   | 'bash-output-cap'
   | 'unused-agents'
@@ -395,6 +400,7 @@ export const FINDING_CLASS: Record<FindingId, FindingClass> = {
   'low-worth-sessions': 'nudge',
   'context-heavy-sessions': 'keep',  // context-heavy work is often load-bearing
   'cost-outliers': 'nudge',
+  'low-cache-hit-sessions': 'nudge',
   'claude-md-too-long': 'nudge',     // trimming is a judgement call, not a rule block
   'bash-output-cap': 'fix',
   'unused-agents': 'fix',
@@ -435,6 +441,7 @@ export const FINDING_BASIS: Record<FindingId, FindingBasis> = {
   'low-worth-sessions': 'estimated',       // real session tokens x recovery fraction
   'context-heavy-sessions': 'measured',    // counted input/cache tokens above the target ratio
   'cost-outliers': 'measured',             // counted session tokens above the peer average
+  'low-cache-hit-sessions': 'estimated',   // counted tokens below the target hit ratio x read discount
   'claude-md-too-long': 'estimated',       // lines x CLAUDEMD_TOKENS_PER_LINE
   'bash-output-cap': 'estimated',          // chars x BASH_TOKENS_PER_CHAR
   'unused-agents': 'estimated',            // count x TOKENS_PER_AGENT_DEF
@@ -3822,6 +3829,60 @@ export function detectSessionOutliers(projects: ProjectSummary[], excludedSessio
   }
 }
 
+export function detectLowCacheHitSessions(projects: ProjectSummary[], provider?: string): WasteFinding | null {
+  type Candidate = { project: string; sessionId: string; provider: string; hitPercent: number; totalInput: number; missedReads: number }
+  const candidates: Candidate[] = []
+
+  for (const project of projects) {
+    for (const session of project.sessions) {
+      if (!isOptimizeSession(session)) continue
+      const reads = session.totalCacheReadTokens
+      const writes = session.totalCacheWriteTokens
+      // Parsers record unreported cache usage as 0, so a session with no cache
+      // tokens at all is unmeasured, not a 0% hit rate.
+      if (reads + writes === 0) continue
+      if (session.apiCalls < LOW_CACHE_HIT_MIN_CALLS) continue
+      const totalInput = session.totalInputTokens + reads + writes
+      if (totalInput < LOW_CACHE_HIT_MIN_INPUT_TOKENS) continue
+      // Same formula as the dashboard overview: reads over all input incl. writes.
+      const hitPercent = (reads / totalInput) * 100
+      if (hitPercent >= LOW_CACHE_HIT_TARGET_PERCENT) continue
+      candidates.push({
+        project: project.project,
+        sessionId: session.sessionId,
+        provider: inferSessionProvider(session),
+        hitPercent,
+        totalInput,
+        missedReads: totalInput * LOW_CACHE_HIT_TARGET_PERCENT / 100 - reads,
+      })
+    }
+  }
+
+  if (candidates.length === 0) return null
+
+  candidates.sort((a, b) => b.missedReads - a.missedReads || a.sessionId.localeCompare(b.sessionId))
+  const preview = candidates.slice(0, LOW_CACHE_HIT_PREVIEW)
+  const list = preview
+    .map(c => `${c.project}/${c.sessionId} (${providerDisplayName(c.provider)}): ${c.hitPercent.toFixed(1)}% of ${formatTokens(c.totalInput)} input`)
+    .join('; ')
+  const extra = candidates.length > preview.length ? `; +${candidates.length - preview.length} more` : ''
+  const tokensSaved = Math.round(candidates.reduce((sum, c) => sum + c.missedReads, 0) * (1 - CACHE_READ_DISCOUNT))
+
+  return {
+    id: 'low-cache-hit-sessions',
+    title: `${candidates.length} session${candidates.length === 1 ? '' : 's'} with a low cache hit rate`,
+    explanation: `These sessions read less than ${LOW_CACHE_HIT_TARGET_PERCENT}% of their input from the prompt cache: ${list}${extra}. Healthy agent sessions usually sit above ${LOW_CACHE_HIT_TARGET_PERCENT}%. Low rates come from switching models or tools mid-session, editing instruction files mid-session, or long pauses that let the cache expire, so the full prompt is paid again.`,
+    impact: candidates.length >= 3 || tokensSaved >= CONTEXT_BLOAT_HIGH_INPUT_TOKENS ? 'high' : 'medium',
+    tokensSaved,
+    fix: {
+      type: 'paste',
+      destination: 'session-opener',
+      label: sessionOpenerLabel(optimizeRemediationCopy(provider)),
+      text: 'Keep the model, tools and instruction files unchanged for this whole session so the prompt cache stays valid.',
+    },
+  }
+}
+
 function findYoungProjectFirstSessionIds(projects: ProjectSummary[]): Set<string> {
   const firstSessionIds = new Set<string>()
 
@@ -4023,6 +4084,7 @@ export async function scanAndDetect(
     () => detectLowWorthSessions(behavioralProjects, provider),
     () => detectContextBloat(behavioralProjects, lowWorthSessionIds, provider),
     () => detectSessionOutliers(behavioralProjects, outlierExclusions, provider),
+    () => detectLowCacheHitSessions(behavioralProjects, provider),
     claudeOnly(() => detectBloatedClaudeMd(projectCwds)),
     claudeOnly(() => detectBashBloat()),
     claudeOnly(() => detectRecurringContext(openers)),
