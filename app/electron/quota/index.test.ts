@@ -129,6 +129,21 @@ describe('QuotaService', () => {
     expect(results.find(row => row.provider === 'claude')?.connection).toBe('accessDenied')
   })
 
+  it('holds an expired login\'s reconnect prompt through an unchecked-keychain background poll', async () => {
+    const fetchers = noopFetchers()
+    let now = 1000
+    const service = new QuotaService({
+      ...fetchers, grokbotInstalled: () => true, now: () => now,
+      readFile: vi.fn(async () => null), writeFile: vi.fn(async () => undefined),
+    })
+    fetchers.claude.mockResolvedValue({ quota: { ...quota('claude'), connection: 'terminalFailure', connectable: true } })
+    await service.getQuota({ force: true, allowKeychain: true })
+    fetchers.claude.mockResolvedValue({ quota: { ...quota('claude'), connection: 'keychainUnchecked' } })
+    now += 10 * 60_000
+    const results = await service.getQuota({})
+    expect(results.find(row => row.provider === 'claude')?.connection).toBe('terminalFailure')
+  })
+
   // The snap declares no Codex credential path, because the live gauge would
   // need write access to the Codex CLI's own auth.json to rotate the token.
   // Under $SNAP the Codex fetch must not run at all; Claude is unaffected.

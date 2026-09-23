@@ -175,8 +175,10 @@ export async function fetchClaudeQuota(options: Partial<ClaudeDeps> & { signal?:
     }
 
     let response: Response
-    if (credential.expiresAt !== undefined && credential.expiresAt - deps.now() <= 5 * 60_000) {
-      const reread = await credentialFrom(source, deps)
+    // A keychain read can raise a macOS prompt, so a keychain credential is only
+    // re-read after the endpoint has actually rejected it.
+    if (source === 'file' && credential.expiresAt !== undefined && credential.expiresAt - deps.now() <= 5 * 60_000) {
+      const reread = await credentialFromFile(deps)
       if (!reread || reread.accessToken === credential.accessToken) return { quota: unrecoverable(credential, deps) }
       credential = reread
     }

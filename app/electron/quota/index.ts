@@ -150,9 +150,10 @@ export class QuotaService {
         // look", which is never news: it must not overwrite what a forced check
         // established — neither a live connection nor the keychain-denied
         // guidance, which would otherwise be replaced by "Check now" one poll
-        // after the user denied it.
+        // after the user denied it, nor an expired login's reconnect prompt.
         if (!allowKeychain && next.connection === 'keychainUnchecked'
-          && (previous?.connection === 'connected' || previous?.connection === 'accessDenied')) return previous
+          && (previous?.connection === 'connected' || previous?.connection === 'accessDenied'
+            || previous?.connection === 'terminalFailure')) return previous
         if (previous?.connection !== 'connected') return next
         // Keychain-only credentials are invisible to a background (keychain-less)
         // poll; keep showing the live connection rather than flapping to

@@ -152,8 +152,7 @@ describe('Claude keychain fallback', () => {
 
 // The desktop app reads the same credential the CLI does, and on macOS that is
 // normally the Keychain with no credential file at all - which is exactly the
-// install the app never writes back to. Both recovery branches, the proactive
-// near-expiry re-read and the 401 re-read, have to consult that store.
+// install the app never writes back to. The 401 re-read has to consult that store.
 describe('Claude credential recovery', () => {
   const originalPlatform = process.platform
   beforeAll(() => Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true }))
@@ -181,40 +180,8 @@ describe('Claude credential recovery', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2)
   })
 
-  it('re-reads the keychain for a credential about to expire, before any request', async () => {
-    let reads = 0
-    const keychain = vi.fn(async () => (reads++ === 0
-      ? { status: 'found' as const, value: stored('before', now() + 60_000) }
-      : { status: 'found' as const, value: stored('after', now() + HOUR) }))
-    const fetchMock = vi.fn(async () => ok())
-
-    const result = await fetchClaudeQuota({ fetch: fetchMock, readFile: vi.fn(async () => null), keychain, allowKeychain: true, now })
-
-    expect(result.quota.connection).toBe('connected')
-    expect(keychain).toHaveBeenCalledTimes(2)
-    expect(fetchMock).toHaveBeenCalledTimes(1)
-  })
-
-  it('calls an expired login terminal on the near-expiry branch, without a request', async () => {
+  it('calls an expired login terminal when a 401 rejects it and the keychain has nothing newer', async () => {
     const keychain = vi.fn(async () => ({ status: 'found' as const, value: stored('unchanged', now() - HOUR) }))
-    const fetchMock = vi.fn()
-
-    const result = await fetchClaudeQuota({ fetch: fetchMock, readFile: vi.fn(async () => null), keychain, allowKeychain: true, now })
-
-    expect(result.quota.connection).toBe('terminalFailure')
-    expect(result.quota.footerLines[0]).toMatch(/expired/i)
-    expect(result.quota.connectable).toBe(true)
-    expect(fetchMock).not.toHaveBeenCalled()
-  })
-
-  // The 401 branch can only meet an expired credential by one route in this copy:
-  // the near-expiry branch runs first on anything already past `expiresAt`, so it
-  // has to have adopted a *different* token which is itself expired - a store that
-  // rotated the item without extending its life. Any simpler shape (an unchanged
-  // expired credential) returns from the near-expiry branch and never reaches here.
-  it('calls an expired login terminal when a 401 rejects the token the near-expiry re-read adopted', async () => {
-    let reads = 0
-    const keychain = vi.fn(async () => ({ status: 'found' as const, value: stored(reads++ === 0 ? 'before' : 'after', now() - HOUR) }))
     const fetchMock = vi.fn(async () => new Response('', { status: 401 }))
 
     const result = await fetchClaudeQuota({ fetch: fetchMock, readFile: vi.fn(async () => null), keychain, allowKeychain: true, now })
@@ -222,9 +189,7 @@ describe('Claude credential recovery', () => {
     expect(result.quota.connection).toBe('terminalFailure')
     expect(result.quota.footerLines[0]).toMatch(/expired/i)
     expect(result.quota.connectable).toBe(true)
-    // Three reads: the initial one, the near-expiry re-read that adopted 'after',
-    // and the 401 re-read that found nothing newer. One request, the rejected one.
-    expect(keychain).toHaveBeenCalledTimes(3)
+    expect(keychain).toHaveBeenCalledTimes(2)
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
@@ -239,14 +204,14 @@ describe('Claude credential recovery', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
-  it('re-reads the file for a file-backed credential and never touches the keychain', async () => {
+  it('re-reads the file for a file-backed credential on a background poll and never touches the keychain', async () => {
     let reads = 0
     const readFile = vi.fn(async () => stored(reads++ === 0 ? 'before' : 'after', now() + HOUR))
     let requests = 0
     const fetchMock = vi.fn(async () => (requests++ === 0 ? new Response('', { status: 401 }) : ok()))
     const keychain = vi.fn(async () => ({ status: 'found' as const, value: stored('keychain', now() + HOUR) }))
 
-    const result = await fetchClaudeQuota({ fetch: fetchMock, readFile, keychain, allowKeychain: true, now })
+    const result = await fetchClaudeQuota({ fetch: fetchMock, readFile, keychain, now })
 
     expect(result.quota.connection).toBe('connected')
     expect(readFile).toHaveBeenCalledTimes(2)
