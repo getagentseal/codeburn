@@ -44,6 +44,12 @@ Current bridge calls:
 
 Supported M1 periods are `today`, `week`, `30days`, `month`, and `all`. Provider filtering is passed through where the CLI command supports it.
 
+## Refresh tiers
+
+Not every call runs at the same cadence. The headline overview is the only live poll; it asks for neither optimize findings nor a fresh act report. `act report` refreshes on mount, on a manual refresh, and every 10 minutes; `yield` every 5. The optimize scan runs at most once a day per query scope, is stored in `userData` with the time it was computed, is reused only on the same local day, and is forced fresh by the Optimize page or a manual refresh. A figure that is not live is shown with its age. On battery the live interval doubles. While the window is hidden the app stops polling and animating altogether, and catches up immediately when it comes back.
+
+The CLI is spawned once as a resident `codeburn serve --stdio` child rather than per request. After 15 idle minutes it is retired and the next request starts a new resident; `CODEBURN_SERVE_IDLE_MS` tunes or disables that.
+
 ## Sections
 
 - Overview: daily spend, spend stats, waste summary, and expensive sessions from `menubar-json`.
@@ -64,5 +70,4 @@ Supported M1 periods are `today`, `week`, `30days`, `month`, and `all`. Provider
 - Add a `codeburn desktop` launcher subcommand.
 - Implement in-app pairing, approve, pull, and visibility mutations currently shown as M2 affordances.
 - Build the Models Compare sheet.
-- Add light theme support.
 - Expand `codeburn optimize --format json` with evidence and fix commands so Optimize can show richer actionable fixes.

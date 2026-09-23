@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { sanitizeProps } from '../app/electron/telemetry.js'
 import { buildMenubarPayload, type MenubarPayload, type PeriodData } from '../src/menubar-json.js'
+import { aggregateModelEfficiency, buildRetryTax } from '../src/model-efficiency.js'
 import {
   aggregateModelTaskTurns,
   buildTelemetrySnapshot,
@@ -81,7 +82,11 @@ function project(turns: ClassifiedTurn[], span: { first: string; last: string } 
 
 /// A payload with something in every block the snapshot reads, plus identifying
 /// strings in the blocks it must never read.
-function richPayload(over: Partial<PeriodData> = {}, breakdowns: Parameters<typeof buildMenubarPayload>[6] = {}): MenubarPayload {
+function richPayload(
+  over: Partial<PeriodData> = {},
+  breakdowns: Parameters<typeof buildMenubarPayload>[6] = {},
+  retryTax: Parameters<typeof buildMenubarPayload>[4] = { totalUSD: 31.25, retries: 40, editTurns: 500, byModel: [] },
+): MenubarPayload {
   const period = {
     label: '30 Days',
     cost: 312.5,
@@ -114,7 +119,7 @@ function richPayload(over: Partial<PeriodData> = {}, breakdowns: Parameters<type
     ],
     null,
     undefined,
-    { totalUSD: 31.25, retries: 40, editTurns: 500, byModel: [] },
+    retryTax,
     undefined,
     {
       mcpServers: [{ name: 'context7', calls: 40 }],
@@ -304,6 +309,20 @@ describe('buildTelemetrySnapshot', () => {
 
     expect(snapshot.efficiency.cacheHitRate).toBe(0.75)
     expect(snapshot.efficiency.retryTaxShare).toBe(0.1)
+  })
+
+  it('keeps the retry-tax share a share when retries outnumber edit turns', () => {
+    const projects = [project([
+      turn('claude-sonnet-4-5', 'coding', { retries: 3, calls: [call('claude-sonnet-4-5', 10)] }),
+      turn('claude-sonnet-4-5', 'coding', { retries: 2, calls: [call('claude-sonnet-4-5', 5)] }),
+      turn('claude-opus-4-6', 'coding', { retries: 0, calls: [call('claude-opus-4-6', 20)] }),
+    ])]
+    const retryTax = buildRetryTax(aggregateModelEfficiency(projects).values())
+    const snapshot = buildTelemetrySnapshot(richPayload({ cost: 35 }, {}, retryTax))
+
+    expect(retryTax.totalUSD).toBe(15)
+    expect(snapshot.efficiency.retryTaxShare!).toBeLessThanOrEqual(1)
+    expect(snapshot.efficiency.retryTaxShare).toBe(0.43)
   })
 
   it('omits efficiency figures that have no denominator', () => {

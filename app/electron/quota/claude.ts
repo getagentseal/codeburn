@@ -166,7 +166,13 @@ export async function fetchClaudeQuota(options: Partial<ClaudeDeps> & { signal?:
       credential = outcome.status === 'found' ? parseCredential(outcome.value) : null
       source = 'keychain'
     }
-    if (!credential) return { quota: empty('disconnected') }
+    // A Claude Code 2.x login lives only in the macOS keychain: no credentials
+    // file at all. Since a background poll never reads the keychain, "no file"
+    // is not evidence of being logged out — say we have not looked yet, and let
+    // the card offer the forced check.
+    if (!credential) {
+      return { quota: empty(!options.allowKeychain && process.platform === 'darwin' ? 'keychainUnchecked' : 'disconnected') }
+    }
 
     let response: Response
     if (credential.expiresAt !== undefined && credential.expiresAt - deps.now() <= 5 * 60_000) {

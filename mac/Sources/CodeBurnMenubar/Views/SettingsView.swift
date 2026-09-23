@@ -71,8 +71,8 @@ struct SettingsView: View {
         )
     }
 
-    private static let windowWidth: CGFloat = 880
-    private static let windowHeight: CGFloat = 620
+    static let windowWidth: CGFloat = 880
+    static let windowHeight: CGFloat = 620
     private static let sidebarWidth: CGFloat = 260
 
     var body: some View {
@@ -97,6 +97,9 @@ struct SettingsView: View {
             SettingsWindowStyleAccessor(title: currentPaneTitle)
                 .allowsHitTesting(false)
         }
+        // Every label below was resolved by `L(_:)` when this body last ran, so
+        // a language change has to rebuild the window rather than redraw it.
+        .id(LanguageGeneration.shared.value)
     }
 
     private var sidebar: some View {
@@ -337,8 +340,6 @@ private final class SettingsWindowStyleView: NSView {
         applyStyle()
     }
 
-    private var didPlaceWindow = false
-
     func applyStyle() {
         guard let window else { return }
         // Full-size content lets the sidebar material extend behind the
@@ -351,16 +352,6 @@ private final class SettingsWindowStyleView: NSView {
         // Match System Settings: the window is named after the visible pane.
         window.title = paneTitle
         window.collectionBehavior.insert(.fullScreenPrimary)
-        // The frameAutosave may restore a position saved when the window was
-        // smaller, leaving the grown window hanging off the screen edge —
-        // recenter once whenever it does not fit fully on its screen.
-        if !didPlaceWindow {
-            didPlaceWindow = true
-            if let screen = window.screen ?? NSScreen.main,
-               !screen.visibleFrame.contains(window.frame) {
-                window.center()
-            }
-        }
     }
 }
 
@@ -373,7 +364,6 @@ private struct GeneralSettingsTab: View {
     // millions). When custom is active the picker shows "Custom…" and a field
     // appears for an exact amount.
     @State private var language = LanguagePreference.current()
-    @State private var languageChanged = false
     @State private var costCustom = false
     @State private var tokenCustom = false
     @State private var costText = ""
@@ -510,24 +500,15 @@ private struct GeneralSettingsTab: View {
                 }
                 .pickerStyle(.menu)
                 .onChange(of: language) { _, choice in
+                    // The write is the whole switch: it persists the choice for
+                    // the next launch, and the app's own AppleLanguages observer
+                    // applies it to this one. Applying it here as well would
+                    // rebuild this window twice for one pick.
                     LanguagePreference.apply(choice)
-                    languageChanged = true
                 }
-                if languageChanged {
-                    // Inline rather than modal: the strings already loaded stay
-                    // as they are until the process restarts, and nothing is
-                    // lost by putting that off.
-                    HStack {
-                        Text(L("Relaunch to apply."))
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
-                        Button(L("Relaunch")) { AppRelaunch.now() }
-                    }
-                } else {
-                    Text(L("Follows System Settings > Language & Region unless you pick one here."))
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                }
+                Text(L("Follows System Settings > Language & Region unless you pick one here."))
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
             }
 
             Section(L("Usage Refresh")) {
@@ -698,7 +679,7 @@ private struct PrivacySettingsSection: View {
             ))
             .disabled(status?.isLocked ?? true)
             if status?.isLocked == true {
-                Text(L("Controlled in the CodeBurn desktop app."))
+                Text(L("Managed by the CodeBurn desktop app. Change it there under Settings → Privacy & data."))
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             }

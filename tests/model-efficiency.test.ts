@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { aggregateModelEfficiency } from '../src/model-efficiency.js'
+import { aggregateModelEfficiency, buildRetryTax } from '../src/model-efficiency.js'
 import type { ClassifiedTurn, ParsedApiCall, ProjectSummary, SessionSummary } from '../src/types.js'
 
 function call(model: string, costUSD = 1): ParsedApiCall {
@@ -137,5 +137,44 @@ describe('aggregateModelEfficiency', () => {
     ])])
 
     expect(stats.size).toBe(0)
+  })
+})
+
+describe('buildRetryTax', () => {
+  it('charges the real cost of a retried edit turn, not a multiple of it', () => {
+    const tax = buildRetryTax(aggregateModelEfficiency([project([
+      turn('claude-sonnet-4-5', { retries: 5, costUSD: 10 }),
+    ])]).values())
+
+    expect(tax.totalUSD).toBe(10)
+    expect(tax.retries).toBe(5)
+    expect(tax.editTurns).toBe(1)
+    expect(tax.byModel[0]).toMatchObject({ name: 'Sonnet 4.5', taxUSD: 10, retries: 5 })
+  })
+
+  it('stays a slice of edit spend when retries outnumber edit turns', () => {
+    const projects = [project([
+      turn('claude-sonnet-4-5', { retries: 3, costUSD: 10 }),
+      turn('claude-sonnet-4-5', { retries: 2, costUSD: 5 }),
+      turn('claude-opus-4-6', { retries: 0, costUSD: 20 }),
+      turn('claude-opus-4-6', { retries: 4, costUSD: 8 }),
+      turn('claude-sonnet-4-5', { hasEdits: false, retries: 0, costUSD: 7 }),
+    ])]
+    const stats = [...aggregateModelEfficiency(projects).values()]
+    const tax = buildRetryTax(stats)
+
+    const editCost = stats.reduce((s, m) => s + m.editCostUSD, 0)
+    const totalCost = projects[0]!.sessions[0]!.totalCostUSD
+    expect(tax.totalUSD).toBe(23)
+    expect(tax.totalUSD).toBeLessThanOrEqual(editCost)
+    expect(editCost).toBeLessThanOrEqual(totalCost)
+    expect(tax.editTurns).toBe(3)
+    expect(tax.retries).toBe(9)
+
+    for (const m of stats) {
+      expect(m.retriedTurns).toBeLessThanOrEqual(m.editTurns)
+      expect(m.retries).toBeGreaterThanOrEqual(m.retriedTurns)
+      expect(m.retries === 0).toBe(m.retriedTurns === 0)
+    }
   })
 })

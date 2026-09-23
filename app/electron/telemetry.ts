@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+
+import { writeFileAtomic } from './tray-settings'
 
 // Anonymous, consent-gated product telemetry for the desktop app ONLY.
 // Runs entirely in the Electron main process. Like cli.ts, this module must
@@ -101,6 +103,10 @@ export type TelemetryStatus = {
   defaultEnabled: boolean
   /** True once the user has been through the onboarding consent screen. */
   onboarded: boolean
+  /** Set by the setters only: whether the decision reached disk. False means it
+   *  holds for this session but the menu bar app, which reads the file, will
+   *  keep inheriting the old one. */
+  persisted?: boolean
 }
 
 type PersistedState = {
@@ -250,12 +256,16 @@ export class Telemetry {
     return { version: 1, installId: randomUUID(), enabled: defaultEnabledFor(this.deps.country) }
   }
 
-  private save(): void {
+  /** Returns whether the state reached disk. Atomic because the macOS menu bar
+   *  app reads this file to inherit the decision and must never see a torn one. */
+  private save(): boolean {
     try {
-      const file = this.stateFile()
-      if (!existsSync(dirname(file))) mkdirSync(dirname(file), { recursive: true })
-      writeFileSync(file, JSON.stringify(this.state), { mode: 0o600 })
-    } catch { /* consent must still work in-memory */ }
+      writeFileAtomic(this.stateFile(), JSON.stringify(this.state), 0o600)
+      return true
+    } catch {
+      // Consent must still work in-memory, but the caller has to be told.
+      return false
+    }
   }
 
   status(): TelemetryStatus {
@@ -275,8 +285,8 @@ export class Telemetry {
       this.queue = []
       this.state.installId = randomUUID()
     }
-    this.save()
-    return this.status()
+    const persisted = this.save()
+    return { ...this.status(), persisted }
   }
 
   /** The onboarding consent screen's final decision. Unlocks sending. */

@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import CodeBurnMenubar
 
@@ -90,5 +91,25 @@ struct CapacityDockInteractionStateTests {
         state.beginDragging()
         #expect(state.isExpanded)
         #expect(state.isCollapseGraceActive)
+    }
+}
+
+/// `settleActiveDrag()` runs on every language change, because a change rebuilds
+/// the rail's SwiftUI view and so destroys a `DragGesture` in flight before it
+/// can report its end. The overwhelmingly common case is no drag at all, and
+/// that one must not disturb the dock. Driving a real drag needs a rail panel
+/// and a screen, so the mid-drag path itself is verified by hand.
+@Suite("Capacity Dock drag settling")
+struct CapacityDockDragSettlingTests {
+    @MainActor
+    @Test("settling when no drag is in flight changes nothing")
+    func settlingIdleDockIsANoOp() {
+        let name = "CodeBurnMenubarTests.DragSettle.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: name)!
+        defer { TestDefaults.forget(name) }
+
+        let controller = CapacityDockController(store: AppStore(), defaults: defaults)
+        controller.settleActiveDrag()
+        controller.settleActiveDrag()
     }
 }

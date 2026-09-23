@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -91,6 +91,31 @@ describe('consent gating', () => {
     telemetry.track('app_open', {})
     expect(await telemetry.flush()).toBe(true)
     expect(posts.length).toBe(1)
+  })
+
+  it('reports whether the decision reached disk, and never tears the file', () => {
+    const { telemetry } = make()
+    const file = join(dir, 'telemetry.v1.json')
+    expect(telemetry.completeOnboarding(false).persisted).toBe(true)
+    const before = readFileSync(file, 'utf-8')
+
+    // The menu bar app inherits the decision from this file, so a write that
+    // cannot land must be reported, not swallowed behind an in-memory success.
+    chmodSync(dir, 0o500)
+    let status
+    try {
+      status = telemetry.setEnabled(true)
+    } finally {
+      chmodSync(dir, 0o700)
+    }
+
+    expect(status).toMatchObject({ enabled: true, persisted: false })
+    // Old file wholly intact, and no half-written temp left beside it.
+    expect(readFileSync(file, 'utf-8')).toBe(before)
+    expect(readdirSync(dir)).toEqual(['telemetry.v1.json'])
+
+    // And the in-memory decision still holds for this session.
+    expect(telemetry.status().enabled).toBe(true)
   })
 
   it('persists consent + install id across instances', () => {

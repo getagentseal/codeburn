@@ -344,7 +344,7 @@
 "Tracked spend (last %lld days)" = "Dépense suivie (%lld derniers jours)";
 "Costliest session" = "Session la plus coûteuse";
 "Retry tax" = "Coût des réessais";
-"%1$lld retries across %2$lld edits" = "%1$lld réessais sur %2$lld modifs";
+"%1$lld retries across %2$lld retried edits" = "%1$lld réessais sur %2$lld modifs avec réessai";
 "%@ ret/edit" = "%@ réess./modif";
 "Hides session details" = "Masque les détails de session";
 "Shows session details" = "Affiche les détails de session";
@@ -658,8 +658,6 @@
 /* MARK: Language picker */
 "Language" = "Langue";
 "System" = "Système";
-"Relaunch to apply." = "Relancez pour appliquer.";
-"Relaunch" = "Relancer";
 "Follows System Settings > Language & Region unless you pick one here." = "Suit Réglages Système > Langue et région, sauf sélection ici.";
 
 /* MARK: Quota pace captions (#1267) */
@@ -718,5 +716,5 @@
 /* MARK: Privacy */
 "Privacy" = "Confidentialité";
 "Anonymous usage statistics" = "Statistiques d'usage anonymes";
-"Controlled in the CodeBurn desktop app." = "Géré dans l'application de bureau CodeBurn.";
+"Managed by the CodeBurn desktop app. Change it there under Settings → Privacy & data." = "Géré par l'application de bureau CodeBurn. Modifiez-le dans Réglages → Confidentialité et données.";
 "Optional usage statistics: the names of the models, tools and providers you use, with bucketed counts of how often each one came up, plus when the app is opened. A random install id, the app version and your country code travel with them. Never your prompts, your code, your project and file names, or exact amounts." = "Statistiques d'usage optionnelles : les noms des modèles, outils et fournisseurs que vous utilisez, avec des compteurs groupés indiquant leur fréquence d'apparition, ainsi que les ouvertures de l'application. Un identifiant d'installation aléatoire, la version de l'application et votre code pays les accompagnent. Jamais vos prompts, votre code, les noms de vos projets et fichiers, ni les montants exacts.";

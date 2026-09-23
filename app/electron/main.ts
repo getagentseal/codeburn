@@ -643,8 +643,11 @@ export function createBridgeHandlers(deps: Deps = { spawnCli, spawnCliAction, re
       if (cached && now - computedAt < maxAge && sameLocalDay(computedAt, now)) return { ok: true, value: cached }
     }
     try {
-      // Background priority: this must never take a CLI slot from the live
-      // headline poll or a click.
+      // Background priority, which only applies to the one-shot fallback path:
+      // a serve-routed command (this one is `status`) is dispatched before
+      // priority is read, and the resident child answers strictly FIFO. So this
+      // does NOT let a click overtake it — it only keeps it out of the way when
+      // serve is unavailable.
       const payload = await deps.spawnCli(argv, { ...(readOpts() ?? {}), priority: 'background' })
       const optimize = (payload as { optimize?: OptimizeBlock } | null)?.optimize
       if (!optimize || !Array.isArray(optimize.topFindings)) {

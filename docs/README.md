@@ -6,10 +6,19 @@ One line per file in this directory, recursively.
 
 - [architecture.md](architecture.md) — A map of the codebase.
 - [by-branch.md](by-branch.md) — The Spend view in CodeBurn Desktop has a By branch panel: pick a project and see where its AI spend went, per git branch, with the recorded worktrees and the individual sessions behind each branch.
+- [cli.md](cli.md) — Every CodeBurn command and keyboard shortcut, plus the report-focused flags for filtering, JSON output, and diagnosing detection.
 - [compare-cohorts.md](compare-cohorts.md) — The classic Compare view answers "how do these two models differ across my whole history?" by aggregating everything each model ever did.
 - [compare-periods.md](compare-periods.md) — Compare two date ranges side by side and see exactly what drove the change in usage and cost.
+- [configuration.md](configuration.md) — Currency, model aliases, local/custom-priced/proxy models, and environment variables.
 - [drill-through.md](drill-through.md) — CodeBurn Desktop can open any aggregate as a session list that explains exactly what composes it, without losing your place.
+- [guard.md](guard.md) — Opt-in Claude Code hooks that watch session cost while you work: soft cap, hard cap, checkpoint nudge, session openers.
+- [how-it-works.md](how-it-works.md) — Pricing, task categories, breakdowns, one-shot rate, per-tool data locations and parsing, and how to read the dashboard.
+- [mcp.md](mcp.md) — `codeburn mcp` runs a local MCP server over stdio so an AI agent can ask about your usage and savings mid-conversation.
+- [menubar.md](menubar.md) — The macOS menu bar app, Windows tray app (with WSL discovery), and Linux GNOME Shell extension.
 - [optimize.md](optimize.md) — `codeburn optimize` scans your Claude Code sessions and your `~/.claude/` setup, reports what is costing tokens without earning them, and grades the setup A to F.
+- [plans-and-quota.md](plans-and-quota.md) — Subscription plan tracking and live provider quota via `codeburn quota`.
+- [web.md](web.md) — The local browser dashboard and combining usage across your paired devices.
+- [yield.md](yield.md) — `codeburn yield` correlates AI sessions with git commits to show what actually shipped.
 
 ## docs/design/
 

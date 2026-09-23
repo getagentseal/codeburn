@@ -4,7 +4,7 @@ Charmbracelet's Crush TUI coding agent.
 
 - **Source:** `src/providers/crush.ts`
 - **Loading:** lazy (`src/providers/index.ts`). Lazy because Crush ships per-project SQLite databases and we use `node:sqlite` to read them.
-- **Test:** `tests/providers/crush.test.ts` (10 tests, fixture-based)
+- **Test:** `tests/providers/crush.test.ts` (12 tests, fixture-based)
 
 ## Where it reads from
 
@@ -15,7 +15,7 @@ Crush keeps a global registry that lists every project it has touched, and a sep
 | Registry (project list) | `$CRUSH_GLOBAL_DATA/projects.json`, otherwise `$XDG_DATA_HOME/crush/projects.json`, otherwise `~/.local/share/crush/projects.json` (Linux/macOS) or `%LOCALAPPDATA%/crush/projects.json` (Windows). |
 | Per-project db | `<project.path>/<project.data_dir>/crush.db` where `data_dir` defaults to `.crush`. |
 
-The registry shape is an object keyed by project id (modern Crush) or an array (older builds and tokscale's sample fixtures). The parser accepts both.
+Current Crush writes an object with a `projects` array. The parser also accepts a bare array and an object keyed by project id for compatibility.
 
 ## Storage format
 

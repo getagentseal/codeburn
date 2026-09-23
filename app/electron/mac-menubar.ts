@@ -53,8 +53,8 @@ export function installPhase(line: string): InstallPhase | null {
  *  a menubar that cannot be asked is one the card refuses to drive at all (see OLDEST_ASKABLE). */
 const EXIT_TIMEOUT_MS = 5000
 const EXIT_POLL_MS = 250
-/** How long a relaunch is given to bring the process up before `open` is retried. */
-const RELAUNCH_TIMEOUT_MS = 3000
+/** How long a restarted menubar is given to come back up before the card reports what it sees. */
+const RESTART_TIMEOUT_MS = 3000
 
 /**
  * The first menubar version that watches its own defaults: it acts on a Capacity Dock change
@@ -62,6 +62,10 @@ const RELAUNCH_TIMEOUT_MS = 3000
  * driven from here at all, so the card offers an update instead of switches that do nothing.
  * The release these ship in, compared against literally: a dev desktop built at 0.9.24 must
  * still treat a published 0.9.24 menubar as too old, so this never reads the desktop version.
+ *
+ * It is not a gate any later command inherits: a menubar that watches the key but does not
+ * know a command consumes it and drops it, so a command added here later needs a version
+ * floor of its own.
  */
 export const OLDEST_ASKABLE = '0.9.25'
 
@@ -290,47 +294,32 @@ export class MacMenubar {
   /**
    * Drive the menu bar's language the way it already honors it: AppleLanguages in
    * its own defaults domain. A concrete Apple tag (en/ja/ko/fr, or zh-Hans/zh-Hant)
-   * overrides; null (System) clears the override so the OS language decides. The
-   * menu bar ships en + zh-Hans and falls back to English for the rest, so this is
-   * correct with no Swift change. AppKit reads AppleLanguages once, at launch, so the
-   * menu bar has to come back up for the switch to show.
+   * overrides; null (System) clears the override so the OS language decides.
    *
-   * It restarts *itself*, asked through the remote-command key. Quitting it and
-   * reopening it from here made the desktop app the new process's responsible
-   * process, and macOS then re-asked for "access data from other apps" on every
-   * single language change. An older menubar falls back to the quit-and-open below
-   * only because {@link OLDEST_ASKABLE} is the first version that watches the
-   * remote-command key at all. That is not a gate any later command inherits: a
-   * menubar that watches the key but does not know the command consumes it and
-   * drops it, so a command added here later needs a version floor of its own.
+   * For a current menu bar the write is the whole switch: it watches the key with
+   * KVO, which carries a write made by another process, and re-points its own
+   * string lookups in place. Nothing is started, quit or reopened, because every
+   * restart re-asked a Warp user for "access data from other apps" — that consent
+   * lasts exactly as long as the process does (WWDC23 session 10053).
+   *
+   * Observing the key arrived in the same release as {@link OLDEST_ASKABLE}, so
+   * `outdated` is the floor for this too rather than a second version to keep in
+   * step. An older menu bar reads AppleLanguages only at launch, so for it — and
+   * only for it — the change still costs a restart and the prompt that comes with
+   * one; leaving it in the old language while the desktop says the menu bar
+   * follows would be worse. One that is not running reads the key at its own next
+   * launch either way, so there is nothing to do for it.
    */
   async setLanguage(appleLang: string | null): Promise<MacMenubarStatus> {
     if (appleLang) await this.run('/usr/bin/defaults', ['write', MENUBAR_BUNDLE_ID, 'AppleLanguages', '-array', appleLang])
     else await this.run('/usr/bin/defaults', ['delete', MENUBAR_BUNDLE_ID, 'AppleLanguages'])
-    const path = await this.locate()
-    if (!path) return this.open()
-    const executable = join(path, 'Contents', 'MacOS', 'CodeBurnMenubar')
-    if ((await this.status()).running) {
-      const before = await this.runningPids(executable)
-      await this.run('/usr/bin/defaults', ['write', MENUBAR_BUNDLE_ID, REMOTE_COMMAND_KEY, '-string', 'relaunch'])
-      if (await this.waitForConsumed(EXIT_TIMEOUT_MS)) {
-        // It took the command but never came back up: open it ourselves rather than leave
-        // the menu bar gone for the sake of the permission prompt.
-        if (!(await this.waitForReplacement(executable, before, RELAUNCH_TIMEOUT_MS))) return this.open()
-        return this.status()
-      }
-      // Nobody consumed it, so it would relaunch the next launch instead.
-      await this.run('/usr/bin/defaults', ['delete', MENUBAR_BUNDLE_ID, REMOTE_COMMAND_KEY])
-      await this.run('/usr/bin/osascript', ['-e', 'quit app "CodeBurnMenubar"'])
-      await this.waitForExit(executable, EXIT_TIMEOUT_MS)
-    }
-    // `open` right after a quit can no-op while the OS still has the dying
-    // instance registered, leaving the menu bar down after a language switch.
-    // Open, confirm it came up, and open once more if it did not.
-    const status = await this.open()
-    if (await this.waitForRunning(executable, RELAUNCH_TIMEOUT_MS)) return status
-    await this.run('/usr/bin/open', [path])
-    await this.waitForRunning(executable, RELAUNCH_TIMEOUT_MS)
+    const status = await this.status()
+    if (!status.outdated || !status.running || !status.path) return status
+    const executable = join(status.path, 'Contents', 'MacOS', 'CodeBurnMenubar')
+    await this.run('/usr/bin/osascript', ['-e', 'quit app "CodeBurnMenubar"'])
+    await this.waitForExit(executable, EXIT_TIMEOUT_MS)
+    await this.run('/usr/bin/open', [status.path])
+    await this.waitForRunning(executable, RESTART_TIMEOUT_MS)
     return this.status()
   }
 
@@ -450,27 +439,7 @@ export class MacMenubar {
     }
   }
 
-  /** The pids running from this bundle, as pgrep reports them. */
-  private async runningPids(executable: string): Promise<Set<string>> {
-    const found = await this.run('/usr/bin/pgrep', ['-f', executable])
-    return new Set((found ?? '').split('\n').map(line => line.trim()).filter(Boolean))
-  }
-
-  /** True once a menubar process appears that is not one of `before`. A self-relaunch is
-   *  only done when the *replacement* is up: the old process still matches pgrep while it
-   *  tears itself down, so "something is running" would pass instantly and every relaunch
-   *  that silently failed would look like it worked. */
-  private async waitForReplacement(executable: string, before: Set<string>, timeoutMs: number): Promise<boolean> {
-    const deadline = this.now() + timeoutMs
-    for (;;) {
-      const pids = await this.runningPids(executable)
-      if ([...pids].some(pid => !before.has(pid))) return true
-      if (this.now() >= deadline) return false
-      await new Promise(resolve => setTimeout(resolve, EXIT_POLL_MS))
-    }
-  }
-
-  /** True once the menubar process is up, so a relaunch can confirm it took. */
+  /** True once the menubar process is up, so the one restart path can confirm it took. */
   private async waitForRunning(executable: string, timeoutMs: number): Promise<boolean> {
     const deadline = this.now() + timeoutMs
     for (;;) {

@@ -35,6 +35,100 @@ describe('QuotaService', () => {
     expect(fetchers.antigravity).toHaveBeenCalledWith({ signal: expect.any(AbortSignal), allowKeychain: false })
   })
 
+  // A forced refresh is the ONLY thing that reads the keychain, and Plans keeps
+  // polling in the background while it paints from the durable memo — so the
+  // click routinely lands on top of an in-flight unforced fetch.
+  describe('a forced refresh landing on an in-flight background poll', () => {
+    function deferred<T>() {
+      let resolve!: (v: T) => void
+      return { promise: new Promise<T>(r => { resolve = r }), resolve }
+    }
+
+    function service() {
+      const gate = deferred<void>()
+      const keychainReads: boolean[] = []
+      const fetchers = noopFetchers()
+      fetchers.claude = vi.fn(async (options: { allowKeychain: boolean }) => {
+        keychainReads.push(options.allowKeychain)
+        if (keychainReads.length === 1) await gate.promise
+        return { quota: { ...quota('claude'), planLabel: options.allowKeychain ? 'Max 20x' : null } }
+      })
+      const svc = new QuotaService({
+        ...fetchers, grokbotInstalled: () => true, now: () => 1000,
+        readFile: vi.fn(async () => null), writeFile: vi.fn(async () => undefined),
+      })
+      return { svc, gate, keychainReads }
+    }
+
+    it('reads the keychain and never reports the providers it aborted as disconnected', async () => {
+      const { svc, gate, keychainReads } = service()
+      const background = svc.getQuota({})
+      await Promise.resolve()
+      const forced = svc.getQuota({ force: true, allowKeychain: true })
+      gate.resolve()
+
+      const forcedRows = await forced
+      expect(keychainReads).toEqual([false, true])
+      expect(forcedRows.find(row => row.provider === 'claude')).toMatchObject({ connection: 'connected', planLabel: 'Max 20x' })
+      expect(forcedRows.filter(row => row.connection === 'disconnected')).toEqual([])
+      // The background caller is handed the run that replaced it, never the
+      // all-disconnected artefact of its own abort.
+      expect(await background).toEqual(forcedRows)
+    })
+
+    it('joins a second forced click onto the first, with no second keychain read', async () => {
+      const { svc, gate, keychainReads } = service()
+      const first = svc.getQuota({ force: true, allowKeychain: true })
+      await Promise.resolve()
+      const second = svc.getQuota({ force: true, allowKeychain: true })
+      gate.resolve()
+
+      const rows = await second
+      // One run, one keychain read: a double click must not raise a second
+      // macOS prompt, and must not abort the answer the first click is owed.
+      expect(keychainReads).toEqual([true])
+      expect(rows.find(row => row.provider === 'claude')).toMatchObject({ connection: 'connected', planLabel: 'Max 20x' })
+      expect(rows.filter(row => row.connection === 'disconnected')).toEqual([])
+      expect(await first).toEqual(rows)
+    })
+  })
+
+  it('holds a live connection through an unchecked-keychain background poll', async () => {
+    const fetchers = noopFetchers()
+    let now = 1000
+    const service = new QuotaService({
+      ...fetchers, grokbotInstalled: () => true, now: () => now,
+      readFile: vi.fn(async () => null), writeFile: vi.fn(async () => undefined),
+    })
+    // Forced: the keychain was read, Claude is connected.
+    await service.getQuota({ force: true, allowKeychain: true })
+    // The next background poll cannot see a keychain-only credential, so it
+    // reports "not checked". That must not flap a live card to the check-now
+    // state — only a forced refresh can change the answer.
+    fetchers.claude.mockResolvedValue({ quota: { ...quota('claude'), connection: 'keychainUnchecked' } })
+    now += 10 * 60_000
+    const results = await service.getQuota({})
+    expect(results.find(row => row.provider === 'claude')?.connection).toBe('connected')
+  })
+
+  it('holds the keychain-denied guidance through an unchecked-keychain background poll', async () => {
+    const fetchers = noopFetchers()
+    let now = 1000
+    const service = new QuotaService({
+      ...fetchers, grokbotInstalled: () => true, now: () => now,
+      readFile: vi.fn(async () => null), writeFile: vi.fn(async () => undefined),
+    })
+    // The user pressed Check now and denied the macOS prompt.
+    fetchers.claude.mockResolvedValue({ quota: { ...quota('claude'), connection: 'accessDenied' } })
+    await service.getQuota({ force: true, allowKeychain: true })
+    // One background poll later the card must still say how to fix it, not drop
+    // back to "Check now" as if nothing had been tried.
+    fetchers.claude.mockResolvedValue({ quota: { ...quota('claude'), connection: 'keychainUnchecked' } })
+    now += 10 * 60_000
+    const results = await service.getQuota({})
+    expect(results.find(row => row.provider === 'claude')?.connection).toBe('accessDenied')
+  })
+
   // The snap declares no Codex credential path, because the live gauge would
   // need write access to the Codex CLI's own auth.json to rotate the token.
   // Under $SNAP the Codex fetch must not run at all; Claude is unaffected.

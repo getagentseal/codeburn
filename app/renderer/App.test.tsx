@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { App, overviewMemoKey, refreshedLabel, selectedReportMemoKeys, topCategoryByModel, usageSnapshotProps } from './App'
 import { sanitizeProps } from '../electron/telemetry'
 import { __resetPolledMemo, hasPolledMemo, primePolledMemo } from './hooks/usePolled'
+import { reportMemoKey } from './lib/reportMemoKey'
 import { setActiveCurrency } from './lib/format'
 import { readOverviewHeadline, writeOverviewHeadline } from './lib/overviewSnapshot'
 import type { BranchSpendReport, DateRange, MenubarPayload, ModelReportRow, OptimizeJsonReport, SessionRow, SpendFlow } from './lib/types'
@@ -285,6 +286,24 @@ describe('App shortcuts', () => {
     // written beneath it and then shown as the seven-day headline on a later
     // switch or app launch.
     expect(readOverviewHeadline(overviewMemoKey('all', 'week', null, null))).toBeNull()
+  })
+
+  it('shows the loading state for a period the sweep never warmed, not the old numbers', async () => {
+    const thirtyDays = overviewPayload()
+    thirtyDays.current = { ...thirtyDays.current, label: 'Last 30 Days', cost: 30 }
+    const pendingWeek = new Promise<MenubarPayload>(() => {})
+    mocks.getOverview.mockImplementation((period: string) =>
+      period === 'week' ? pendingWeek : Promise.resolve(thirtyDays))
+
+    render(<App />)
+    expect(await screen.findByText('$30.00')).toBeInTheDocument()
+
+    // The sweep only warms the selected period, so 7D is cold: the on-demand
+    // fetch runs and the panel waits on it rather than showing 30D's figure.
+    fireEvent.click(screen.getByRole('tab', { name: '7D' }))
+    await waitFor(() => expect(mocks.getOverview).toHaveBeenCalledWith('week', 'all'))
+    await waitFor(() => expect(screen.queryByText('$30.00')).toBeNull())
+    expect(document.querySelector('.skel')).not.toBeNull()
   })
 
   it('rolls Today and Month cache identities at their local calendar boundaries', () => {
@@ -876,108 +895,166 @@ describe('overview idle warming', () => {
     __resetPolledMemo()
   })
 
-  it('warms other time horizons before provider variants', async () => {
+  it('warms only the selected period, never the other horizons', async () => {
     vi.useFakeTimers()
     try {
+      setVisibility('visible')
       render(<App />)
-      // Boot is pinned to 30D in beforeEach. Once it resolves, the idle queue
-      // should warm the remaining horizons in product priority order, then
-      // retain current main's provider-switch warming contract.
+      // Boot is pinned to 30D in beforeEach. The sweep warms that period's
+      // reports and the other providers' 30D headlines — and nothing for the
+      // five horizons the user has not asked for.
       await act(async () => { await vi.advanceTimersByTimeAsync(3_000) })
       await act(async () => { await vi.advanceTimersByTimeAsync(240_000) })
 
       const backgroundSpawns = mocks.getOverview.mock.calls.filter(call => call[4] === true)
-      expect(backgroundSpawns.slice(0, 5).map(call => [call[0], call[1]])).toEqual([
-        ['today', 'all'],
-        ['week', 'all'],
-        ['month', 'all'],
-        ['all', 'all'],
-        ['lifetime', 'all'],
-      ])
-
-      expect(backgroundSpawns[5]?.slice(0, 2)).toEqual(['30days', 'claude'])
+      expect(backgroundSpawns.every(call => call[0] === '30days')).toBe(true)
+      expect(backgroundSpawns[0]?.slice(0, 2)).toEqual(['30days', 'claude'])
+      for (const mock of [mocks.getSessions, mocks.getSpendFlow, mocks.getModels, mocks.getCompareModels, mocks.getOptimizeReport, mocks.getYield, mocks.getPlans]) {
+        expect(mock.mock.calls.every(call => call[0] === '30days')).toBe(true)
+      }
     } finally {
       vi.useRealTimers()
     }
   })
 
-  it('warms the first-click reports for each period behind the overview', async () => {
+  it('warms the selected period first-click reports', async () => {
     vi.useFakeTimers()
     try {
+      setVisibility('visible')
       render(<App />)
       await act(async () => { await vi.advanceTimersByTimeAsync(3_000) })
       await act(async () => { await vi.advanceTimersByTimeAsync(60_000) })
 
-      expect(mocks.getSessions.mock.calls.some(call => call[0] === 'today' && call[3] === true)).toBe(true)
-      expect(mocks.getSpendFlow.mock.calls.some(call => call[0] === 'today' && call[3] === true)).toBe(true)
-      expect(mocks.getModels.mock.calls.some(call => call[0] === 'today' && call[4] === true)).toBe(true)
-      expect(mocks.getCompareModels.mock.calls.some(call => call[0] === 'today' && call[2] === true)).toBe(true)
-      expect(mocks.getOptimizeReport.mock.calls.some(call => call[0] === 'today' && call[3] === true)).toBe(true)
-      expect(mocks.getYield.mock.calls.some(call => call[0] === 'today' && call[3] === true)).toBe(true)
-      expect(mocks.getPlans.mock.calls.some(call => call[0] === 'today' && call[1] === true)).toBe(true)
+      expect(mocks.getSessions.mock.calls.some(call => call[0] === '30days' && call[3] === true)).toBe(true)
+      expect(mocks.getSpendFlow.mock.calls.some(call => call[0] === '30days' && call[3] === true)).toBe(true)
+      expect(mocks.getModels.mock.calls.some(call => call[0] === '30days' && call[4] === true)).toBe(true)
+      expect(mocks.getCompareModels.mock.calls.some(call => call[0] === '30days' && call[2] === true)).toBe(true)
+      expect(mocks.getOptimizeReport.mock.calls.some(call => call[0] === '30days' && call[3] === true)).toBe(true)
+      expect(mocks.getPlans.mock.calls.some(call => call[0] === '30days' && call[1] === true)).toBe(true)
+      // Yield is polled by the visible Overview itself, so the sweep finds it
+      // already in the memo and skips it — warm either way.
+      expect(hasPolledMemo(reportMemoKey('yield', '30days', 'all'))).toBe(true)
     } finally {
       vi.useRealTimers()
     }
   })
 
-  it('finishes Today first-click reports before starting the 7D horizon', async () => {
+  it('does not warm while the window is hidden, and resumes on return', async () => {
     vi.useFakeTimers()
     try {
+      setVisibility('hidden')
+      render(<App />)
+      await act(async () => { await vi.advanceTimersByTimeAsync(3_000) })
+      await act(async () => { await vi.advanceTimersByTimeAsync(240_000) })
+      // Nothing speculative while nobody is looking: no background overview and
+      // no report warm at all.
+      expect(mocks.getOverview.mock.calls.filter(call => call[4] === true)).toEqual([])
+      expect(mocks.getSessions.mock.calls.filter(call => call[3] === true)).toEqual([])
+
+      // `visibilitychange` is what wakes the hold — while hidden it waits on the
+      // event, never on a timer that would spin the renderer every couple of
+      // seconds for a window nobody is looking at. The short delay after the
+      // event is the busy-hold yielding to the visibility catch-up poll.
+      setVisibility('visible')
+      await act(async () => { document.dispatchEvent(new Event('visibilitychange')) })
+      await act(async () => { await vi.advanceTimersByTimeAsync(10_000) })
+      expect(mocks.getSessions.mock.calls.some(call => call[0] === '30days' && call[3] === true)).toBe(true)
+      await act(async () => { await vi.advanceTimersByTimeAsync(240_000) })
+      expect(mocks.getOverview.mock.calls.some(call => call[4] === true)).toBe(true)
+    } finally {
+      setVisibility('visible')
+      vi.useRealTimers()
+    }
+  })
+
+  it('keeps a warm that outlives a poll cycle, and never re-issues it', async () => {
+    vi.useFakeTimers()
+    try {
+      setVisibility('visible')
+      // A fresh payload object per poll, as a real CLI sends: the provider
+      // entries the picker derives from it are new objects every cadence tick.
+      mocks.getOverview.mockImplementation(async () => manyProviderPayload())
+      let resolveSessions!: (rows: unknown) => void
+      let sessionWarms = 0
+      mocks.getSessions.mockImplementation((_period: string, _provider: string, _range, background) => {
+        if (background !== true) return Promise.resolve([])
+        sessionWarms++
+        return new Promise(resolve => { resolveSessions = resolve })
+      })
+
+      render(<App />)
+      await act(async () => { await vi.advanceTimersByTimeAsync(3_000) })
+      await act(async () => { await vi.advanceTimersByTimeAsync(10_000) })
+      expect(sessionWarms).toBe(1)
+
+      // Two full 30s poll cycles go by with the warm still in flight. The sweep
+      // must not be torn down and restarted underneath it.
+      await act(async () => { await vi.advanceTimersByTimeAsync(90_000) })
+      expect(sessionWarms).toBe(1)
+
+      await act(async () => { resolveSessions([]); await Promise.resolve() })
+      await act(async () => { await vi.advanceTimersByTimeAsync(60_000) })
+      // Landed once, under its own key, and never asked for again.
+      expect(sessionWarms).toBe(1)
+      expect(hasPolledMemo(reportMemoKey('sessions', '30days', 'all'))).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('skips a report the user visited while the sweep was parked', async () => {
+    vi.useFakeTimers()
+    try {
+      setVisibility('hidden')
       render(<App />)
       await act(async () => { await vi.advanceTimersByTimeAsync(3_000) })
       await act(async () => { await vi.advanceTimersByTimeAsync(60_000) })
+      expect(mocks.getSpendFlow.mock.calls.filter(call => call[3] === true)).toEqual([])
 
-      const todaySessions = mocks.getSessions.mock.calls.findIndex(call => call[0] === 'today' && call[3] === true)
-      const todayPlans = mocks.getPlans.mock.calls.findIndex(call => call[0] === 'today' && call[1] === true)
-      const weekOverview = mocks.getOverview.mock.calls.findIndex(call => call[0] === 'week' && call[4] === true)
-      expect(todaySessions).toBeGreaterThanOrEqual(0)
-      expect(todayPlans).toBeGreaterThanOrEqual(0)
-      expect(weekOverview).toBeGreaterThanOrEqual(0)
-      expect(mocks.getSessions.mock.invocationCallOrder[todaySessions]!)
-        .toBeLessThan(mocks.getOverview.mock.invocationCallOrder[weekOverview]!)
-      expect(mocks.getPlans.mock.invocationCallOrder[todayPlans]!)
-        .toBeLessThan(mocks.getOverview.mock.invocationCallOrder[weekOverview]!)
+      // The hold is unbounded, so the memo has to be re-tested on the way out:
+      // a section visited meanwhile is already warm and must not be re-parsed.
+      primePolledMemo(reportMemoKey('spendflow', '30days', 'all'), { period: { label: '', start: '', end: '' }, models: [], projects: [], links: [] })
+      setVisibility('visible')
+      await act(async () => { document.dispatchEvent(new Event('visibilitychange')) })
+      await act(async () => { await vi.advanceTimersByTimeAsync(240_000) })
+      expect(mocks.getSessions.mock.calls.some(call => call[3] === true)).toBe(true)
+      expect(mocks.getSpendFlow.mock.calls.filter(call => call[3] === true)).toEqual([])
     } finally {
+      setVisibility('visible')
       vi.useRealTimers()
     }
   })
 
-  it('retries a period warm that was cancelled by a user period switch', async () => {
+  it('does not mark a partially hydrated provider warm, and retries it later', async () => {
     vi.useFakeTimers()
     try {
-      let resolveFirstToday!: (payload: MenubarPayload) => void
-      const firstToday = new Promise<MenubarPayload>(resolve => { resolveFirstToday = resolve })
-      let todayWarmCalls = 0
-      mocks.getOverview.mockImplementation((period: string, _provider: string, _range, _config, background) => {
-        if (period === 'today' && background === true) {
-          todayWarmCalls++
-          if (todayWarmCalls === 1) return firstToday
-        }
+      setVisibility('visible')
+      let claudeWarms = 0
+      mocks.getOverview.mockImplementation(async (period: string, provider: string, _range, _config, background) => {
         const payload = manyProviderPayload()
-        payload.current = {
-          ...payload.current,
-          label: period === 'week' ? 'Last 7 Days' : payload.current.label,
+        if (provider === 'claude' && background === true) {
+          claudeWarms++
+          // A cold corpus can answer before the parse is complete; that is not an
+          // answer worth remembering as warm.
+          if (claudeWarms === 1) return { ...payload, hydration: { complete: false } } as MenubarPayload
         }
-        return Promise.resolve(payload)
+        return payload
       })
 
       render(<App />)
       await act(async () => { await vi.advanceTimersByTimeAsync(3_000) })
-      await act(async () => { await vi.advanceTimersByTimeAsync(2_000) })
-      expect(todayWarmCalls).toBe(1)
+      await act(async () => { await vi.advanceTimersByTimeAsync(60_000) })
+      expect(claudeWarms).toBe(1)
+      expect(hasPolledMemo(overviewMemoKey('claude', '30days', null, null))).toBe(false)
 
-      // The user takes priority while the first background warm is pending.
+      // Leaving 30D and coming back re-arms the sweep: the key was never marked,
+      // so it is warmed again rather than left cold for the session.
       fireEvent.click(screen.getByRole('tab', { name: '7D' }))
-      await act(async () => { await Promise.resolve() })
-      expect(mocks.getOverview).toHaveBeenCalledWith('week', 'all')
-
-      // The cancelled result must not poison the session-lifetime retry guard.
-      await act(async () => {
-        resolveFirstToday(manyProviderPayload())
-        await Promise.resolve()
-      })
-      await act(async () => { await vi.advanceTimersByTimeAsync(3_000) })
-      expect(todayWarmCalls).toBe(2)
+      await act(async () => { await vi.advanceTimersByTimeAsync(5_000) })
+      fireEvent.click(screen.getByRole('tab', { name: '30D' }))
+      await act(async () => { await vi.advanceTimersByTimeAsync(60_000) })
+      expect(claudeWarms).toBeGreaterThan(1)
+      expect(hasPolledMemo(overviewMemoKey('claude', '30days', null, null))).toBe(true)
     } finally {
       vi.useRealTimers()
     }
@@ -1174,15 +1251,15 @@ describe('currency correctness', () => {
     let resolveOldWarm!: (payload: MenubarPayload) => void
     const oldWarm = new Promise<MenubarPayload>(resolve => { resolveOldWarm = resolve })
     const usd = { ...overviewPayload(), currency: USD }
-    mocks.getOverview.mockImplementation((period: string, _provider: string, _range, _config, background) => {
-      if (period === 'today' && background === true) return oldWarm
+    mocks.getOverview.mockImplementation((_period: string, provider: string, _range, _config, background) => {
+      if (provider === 'claude' && background === true) return oldWarm
       return Promise.resolve(usd)
     })
 
     render(<App />)
     await act(async () => { await Promise.resolve() })
-    await act(async () => { await vi.advanceTimersByTimeAsync(5_000) })
-    expect(mocks.getOverview).toHaveBeenCalledWith('today', 'all', undefined, undefined, true)
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000) })
+    expect(mocks.getOverview).toHaveBeenCalledWith('30days', 'claude', undefined, undefined, true)
 
     fireEvent.keyDown(document, { key: ',', metaKey: true })
     fireEvent.click(screen.getByRole('button', { name: 'Reset to USD' }))
@@ -1194,9 +1271,9 @@ describe('currency correctness', () => {
       await Promise.resolve()
     })
 
-    const todayKey = overviewMemoKey('all', 'today', null, null)
-    expect(hasPolledMemo(todayKey)).toBe(false)
-    expect(readOverviewHeadline(todayKey)).toBeNull()
+    const claudeKey = overviewMemoKey('claude', '30days', null, null)
+    expect(hasPolledMemo(claudeKey)).toBe(false)
+    expect(readOverviewHeadline(claudeKey)).toBeNull()
   })
 })
 

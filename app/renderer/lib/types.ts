@@ -39,7 +39,11 @@ export type QuotaWindow = {
 
 export type QuotaProvider = {
   provider: 'claude' | 'codex' | 'gemini' | 'copilot' | 'antigravity' | 'kimi' | 'zcode' | 'grokbot'
-  connection: 'connected' | 'disconnected' | 'accessDenied' | 'loading' | 'stale' | 'transientFailure' | 'terminalFailure'
+  /** `keychainUnchecked` is darwin-only and distinct from `disconnected`: no
+   *  credential file was found and the keychain has NOT been looked at yet
+   *  (a keychain read raises a one-time macOS dialog, so only a user-initiated
+   *  forced refresh does one). It means "we do not know", not "logged out". */
+  connection: 'connected' | 'disconnected' | 'keychainUnchecked' | 'accessDenied' | 'loading' | 'stale' | 'transientFailure' | 'terminalFailure'
   primary: QuotaWindow | null
   details: QuotaWindow[]
   planLabel: string | null
@@ -1026,6 +1030,9 @@ export type TelemetryStatus = {
   enabled: boolean
   defaultEnabled: boolean
   onboarded: boolean
+  /** Set by the setters only: false when the decision holds in memory but could
+   *  not be written to disk, so the menu bar app still inherits the old one. */
+  persisted?: boolean
 }
 
 /** Cold-start scan progress streamed from the CLI warmup (src/parser.ts).

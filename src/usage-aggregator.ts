@@ -13,7 +13,7 @@ import { collectLiveSessions } from './live-sessions.js'
 import { claude, getClaudeConfigDirs, getDesktopSessionsDirs } from './providers/claude.js'
 import { stat } from 'node:fs/promises'
 import { aggregateProjectsIntoDays, buildPeriodDataFromDays, dateKeyInTz } from './day-aggregator.js'
-import { aggregateModelEfficiency } from './model-efficiency.js'
+import { aggregateModelEfficiency, buildRetryTax } from './model-efficiency.js'
 import { aggregateModels } from './models-report.js'
 import { aggregateModelTaskTurns, sessionDurationMinutes } from './telemetry-snapshot.js'
 import { scanUserCorrections, medianTimeToFirstEditMs, aggregateFileChurn, computePricingCoverage } from './workflow-insights.js'
@@ -1818,21 +1818,7 @@ export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: 
     oneShotRate: eff.oneShotRate,
   }))
 
-  const retryTaxByModel = [...effMap.values()]
-    .filter(m => m.retries > 0 && m.editTurns > 0)
-    .map(m => ({
-      name: m.model,
-      taxUSD: m.retries * (m.editCostUSD / m.editTurns),
-      retries: m.retries,
-      retriesPerEdit: m.retriesPerEdit,
-    }))
-    .sort((a, b) => b.taxUSD - a.taxUSD)
-  const retryTax = {
-    totalUSD: retryTaxByModel.reduce((s, m) => s + m.taxUSD, 0),
-    retries: retryTaxByModel.reduce((s, m) => s + m.retries, 0),
-    editTurns: [...effMap.values()].filter(m => m.retries > 0).reduce((s, m) => s + m.editTurns, 0),
-    byModel: retryTaxByModel.slice(0, 5),
-  }
+  const retryTax = buildRetryTax(effMap.values())
 
   currentData.topSessions = scanProjects.flatMap(p =>
     p.sessions.map(s => ({

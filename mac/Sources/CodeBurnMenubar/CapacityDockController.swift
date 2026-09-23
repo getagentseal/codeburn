@@ -841,6 +841,17 @@ final class CapacityDockController {
         )
     }
 
+    /// Settles a drag that is in flight when something outside the gesture takes
+    /// the rail's SwiftUI view away — today that is a language change, which
+    /// rebuilds the rail and so destroys the `DragGesture` before it can call
+    /// `onDragEnded`. Without this the controller is left in the dragging
+    /// interaction state with a stale `dragStartFrame`, which only `dragEnded()`
+    /// clears, and the rail stops responding to hover and re-layout.
+    func settleActiveDrag() {
+        guard dragStartFrame != nil else { return }
+        dragEnded()
+    }
+
     private func dragEnded() {
         defer {
             dragStartFrame = nil

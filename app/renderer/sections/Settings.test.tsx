@@ -249,6 +249,65 @@ describe('Settings', () => {
     expect(await screen.findByText('Updated')).toBeInTheDocument()
   })
 
+  // Every bridge setter is a rejectable envelope: a rejection that nobody
+  // catches leaves the control looking like it ignored the click. One test per
+  // pane, on one of that pane's setters.
+  describe('a rejected setter toasts instead of going quiet', () => {
+    const rejection = { kind: 'bad-args' as const, message: 'the CLI said no' }
+
+    it('currency (General)', async () => {
+      const user = userEvent.setup()
+      mocks.setCurrency.mockRejectedValue(rejection)
+      render(<Settings period="month" />)
+      await user.click(await screen.findByLabelText('Currency'))
+      await user.click(screen.getByRole('option', { name: 'CNY' }))
+      expect(await screen.findByText('the CLI said no')).toBeInTheDocument()
+    })
+
+    it('aliases', async () => {
+      const user = userEvent.setup()
+      mocks.removeAlias.mockRejectedValue(rejection)
+      render(<Settings period="month" />)
+      await user.click(screen.getByRole('button', { name: 'Model aliases' }))
+      expect(await screen.findByText('proxy-opus')).toBeInTheDocument()
+      await user.click(screen.getByRole('button', { name: 'Remove' }))
+      expect(await screen.findByText('the CLI said no')).toBeInTheDocument()
+    })
+
+    it('price overrides', async () => {
+      const user = userEvent.setup()
+      mocks.removePriceOverride.mockRejectedValue(rejection)
+      render(<Settings period="month" />)
+      await user.click(screen.getByRole('button', { name: 'Pricing' }))
+      expect(await screen.findByText('local/llama')).toBeInTheDocument()
+      await user.click(screen.getByRole('button', { name: 'Remove' }))
+      await user.click(screen.getByRole('button', { name: 'Confirm' }))
+      expect(await screen.findByText('the CLI said no')).toBeInTheDocument()
+    })
+
+    it('plans', async () => {
+      const user = userEvent.setup()
+      mocks.setPlan.mockRejectedValue(rejection)
+      render(<Settings period="month" />)
+      await user.click(screen.getByRole('button', { name: 'Plans' }))
+      await user.click(await screen.findByLabelText('Add a plan'))
+      await user.click(screen.getByRole('option', { name: 'Cursor Pro' }))
+      await user.click(screen.getByRole('button', { name: 'Add' }))
+      expect(await screen.findByText('the CLI said no')).toBeInTheDocument()
+    })
+
+    it('devices', async () => {
+      const user = userEvent.setup()
+      mocks.removeDevice.mockRejectedValue(rejection)
+      render(<Settings period="month" />)
+      await user.click(screen.getByRole('button', { name: 'Devices' }))
+      expect(await screen.findByText('studio-mini')).toBeInTheDocument()
+      await user.click(screen.getByRole('button', { name: 'Remove' }))
+      await user.click(screen.getByRole('button', { name: 'Confirm' }))
+      expect(await screen.findByText('the CLI said no')).toBeInTheDocument()
+    })
+  })
+
   it('reports settings, plan and export interactions as name-only events', async () => {
     const user = userEvent.setup()
     render(<Settings period="month" />)
@@ -293,6 +352,40 @@ describe('Settings', () => {
     })
     const tracked = mocks.telemetryTrack.mock.invocationCallOrder.at(-1)!
     expect(tracked).toBeGreaterThan(mocks.setTelemetryEnabled.mock.invocationCallOrder[0]!)
+  })
+
+  it('toasts when the telemetry setter rejects instead of failing silently', async () => {
+    const user = userEvent.setup()
+    mocks.setTelemetryEnabled.mockRejectedValue({ kind: 'nonzero', message: 'consent state could not be written' })
+    render(<Settings period="month" />)
+    await user.click(screen.getByRole('button', { name: 'Privacy & data' }))
+    await user.click(await screen.findByRole('switch', { name: 'Anonymous usage statistics' }))
+    expect(await screen.findByText('consent state could not be written')).toBeInTheDocument()
+    // and the switch still reports what main last confirmed, never the click.
+    expect(screen.getByRole('switch', { name: 'Anonymous usage statistics' })).toHaveAttribute('aria-checked', 'false')
+  })
+
+  it('says so when the consent decision only took in memory', async () => {
+    const user = userEvent.setup()
+    mocks.setTelemetryEnabled.mockResolvedValue({ ...telemetryOff, enabled: true, persisted: false })
+    render(<Settings period="month" />)
+    await user.click(screen.getByRole('button', { name: 'Privacy & data' }))
+    await user.click(await screen.findByRole('switch', { name: 'Anonymous usage statistics' }))
+    expect(await screen.findByText('Saved for this session only: could not write the setting to disk.')).toBeInTheDocument()
+  })
+
+  it('re-reads consent from main every time the Privacy pane is opened', async () => {
+    const user = userEvent.setup()
+    render(<Settings period="month" />)
+    await user.click(screen.getByRole('button', { name: 'Privacy & data' }))
+    expect(await screen.findByRole('switch', { name: 'Anonymous usage statistics' })).toHaveAttribute('aria-checked', 'false')
+
+    // The pane is conditionally rendered, so leaving unmounts it. Main changed
+    // the answer meanwhile (the menu bar app writes the same file).
+    mocks.telemetryStatus.mockResolvedValue({ ...telemetryOff, enabled: true })
+    await user.click(screen.getByRole('button', { name: 'Plans' }))
+    await user.click(screen.getByRole('button', { name: 'Privacy & data' }))
+    expect(await screen.findByRole('switch', { name: 'Anonymous usage statistics' })).toHaveAttribute('aria-checked', 'true')
   })
 
   it('sends nothing when the write does not take, and nothing on the way out', async () => {
@@ -574,10 +667,25 @@ describe('Settings', () => {
     render(<Settings period="month" />)
     await user.click(screen.getByRole('button', { name: 'Plans' }))
     await screen.findByText('Detected subscriptions')
-    await user.click(screen.getByRole('button', { name: 'Connect' }))
+    await user.click(screen.getByRole('button', { name: 'How to connect' }))
     expect(screen.getByText('codex login')).toBeInTheDocument()
     mocks.getQuota.mockClear()
     await user.click(screen.getByRole('button', { name: 'Refresh' }))
+    await waitFor(() => expect(mocks.getQuota).toHaveBeenCalledWith(true, []))
+  })
+
+  it('offers to read an unchecked Claude login, with the same keychain note the card shows', async () => {
+    mocks.getQuota.mockResolvedValue([
+      { provider: 'claude', connection: 'keychainUnchecked', primary: null, details: [], planLabel: null, footerLines: [] },
+    ])
+    const user = userEvent.setup()
+    render(<Settings period="month" />)
+    await user.click(screen.getByRole('button', { name: 'Plans' }))
+    expect(await screen.findByText(/CodeBurn has not read your Claude login yet\./)).toBeInTheDocument()
+    expect(screen.getByText(/macOS may ask once for keychain access\./)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'How to connect' })).not.toBeInTheDocument()
+    mocks.getQuota.mockClear()
+    await user.click(screen.getByRole('button', { name: 'Check now' }))
     await waitFor(() => expect(mocks.getQuota).toHaveBeenCalledWith(true, []))
   })
 
@@ -617,6 +725,41 @@ describe('Settings', () => {
     // The toast names what the CLI wrote, not the folder that was picked: the
     // CLI nests a dated folder (CSV) or appends the extension (JSON).
     expect(await screen.findByText('Exported to /Users/x/Exports/codeburn-export-2026-09-19')).toBeInTheDocument()
+  })
+
+  it('exports the internal provider id, not the display name the payload map is keyed on', async () => {
+    mocks.getOverview.mockResolvedValue({
+      current: {
+        providers: { 'grok build': 8.1, claude: 12.34 },
+        providerDetails: [
+          { id: 'grok', label: 'Grok Build', cost: 8.1 },
+          { id: 'claude', label: 'Claude', cost: 12.34 },
+        ],
+      },
+    } as unknown as MenubarPayload)
+    const user = userEvent.setup()
+    render(<Settings period="month" />)
+    await user.click(screen.getAllByRole('button', { name: 'Export' }).at(-1)!)
+    await user.click(screen.getByRole('button', { name: 'Choose folder…' }))
+    expect(await screen.findByText('/Users/x/Exports')).toBeInTheDocument()
+    await user.click(screen.getByLabelText('Provider'))
+    await user.click(screen.getByRole('option', { name: 'Grok Build' }))
+    await user.click(screen.getAllByRole('button', { name: 'Export' }).at(-1)!)
+    // 'grok build' is a lowercased display name; the CLI only accepts the id.
+    expect(mocks.exportData).toHaveBeenCalledWith('csv', 'grok', '/Users/x/Exports')
+  })
+
+  it('toasts when the export bridge rejects instead of failing silently', async () => {
+    mocks.exportData.mockRejectedValue({ kind: 'bad-args', message: 'invalid provider' })
+    const user = userEvent.setup()
+    render(<Settings period="month" />)
+    await user.click(screen.getAllByRole('button', { name: 'Export' }).at(-1)!)
+    await user.click(screen.getByRole('button', { name: 'Choose folder…' }))
+    expect(await screen.findByText('/Users/x/Exports')).toBeInTheDocument()
+    await user.click(screen.getAllByRole('button', { name: 'Export' }).at(-1)!)
+    expect(await screen.findByText('invalid provider')).toBeInTheDocument()
+    // and the button comes back, rather than staying stuck on "Exporting…"
+    expect(screen.getAllByRole('button', { name: 'Export' }).at(-1)!).toBeEnabled()
   })
 
   it('renders real device status and removes paired devices without fake pairing controls', async () => {

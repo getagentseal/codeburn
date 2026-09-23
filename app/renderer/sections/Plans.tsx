@@ -274,6 +274,7 @@ function QuotaPanel({ quota, onReconnect }: { quota: QuotaProvider; onReconnect:
 const CONNECTION_LABEL_KEYS: Record<QuotaProvider['connection'], string> = {
   connected: 'plans.quota.status.connected',
   disconnected: 'plans.quota.status.disconnected',
+  keychainUnchecked: 'plans.quota.status.notChecked',
   accessDenied: 'plans.quota.status.locked',
   loading: 'plans.quota.status.loading',
   stale: 'plans.quota.status.stale',
@@ -287,6 +288,17 @@ function ConnectionIndicator({ connection }: { connection: QuotaProvider['connec
 }
 
 function QuotaContent({ quota, onReconnect }: { quota: QuotaProvider; onReconnect: () => void }) {
+  // Not "logged out": we have not read the login yet. Offer the read instead of
+  // instructions for a login the user has probably already done.
+  if (quota.connection === 'keychainUnchecked') {
+    return (
+      <div className="quota-connect">
+        <span className="quota-connection-note">{t('plans.quota.notChecked.line', { name: PROVIDER_NAMES[quota.provider] })}</span>
+        <button type="button" className="btnp btnp-primary" onClick={onReconnect}>{t('plans.quota.notChecked.action')}</button>
+        <span className="quota-connection-note">{t('plans.quota.notChecked.keychainNote')}</span>
+      </div>
+    )
+  }
   if (quota.connection === 'disconnected' || quota.connection === 'accessDenied') {
     return <ConnectAffordance provider={quota.provider} connection={quota.connection} onRefresh={onReconnect} />
   }

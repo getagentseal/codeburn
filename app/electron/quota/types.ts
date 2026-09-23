@@ -6,7 +6,11 @@ export type QuotaWindow = {
 
 export type QuotaProvider = {
   provider: 'claude' | 'codex' | 'gemini' | 'copilot' | 'antigravity' | 'kimi' | 'zcode' | 'grokbot'
-  connection: 'connected' | 'disconnected' | 'accessDenied' | 'loading' | 'stale' | 'transientFailure' | 'terminalFailure'
+  /** `keychainUnchecked` is darwin-only and distinct from `disconnected`: no
+   *  credential file was found and the keychain has NOT been looked at yet
+   *  (a keychain read raises a one-time macOS dialog, so only a user-initiated
+   *  forced refresh does one). It means "we do not know", not "logged out". */
+  connection: 'connected' | 'disconnected' | 'keychainUnchecked' | 'accessDenied' | 'loading' | 'stale' | 'transientFailure' | 'terminalFailure'
   primary: QuotaWindow | null
   details: QuotaWindow[]
   planLabel: string | null

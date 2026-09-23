@@ -117,7 +117,25 @@ enum UsageDataChangeGuard {
         add(path(xdgData, "kilo"), scanFirstLevelDirectories: false)
         add(expand(environment["GOOSE_PATH_ROOT"] ?? path(xdgData, "goose"), homeDirectory: homeDirectory), scanFirstLevelDirectories: false)
         add(expand(environment["CRUSH_GLOBAL_DATA"] ?? path(xdgData, "crush"), homeDirectory: homeDirectory), scanFirstLevelDirectories: false)
-        add(environment["WARP_DB_PATH"] ?? path(homeDirectory, "Library", "Group Containers", "group.warp", "Library", "Application Support", "dev.warp.Warp-Stable", "warp.sqlite"), scanFirstLevelDirectories: false)
+        // Warp's default location is never watched. Its database lives in
+        // ~/Library/Group Containers/2BBY89MBSN.dev.warp (src/providers/warp.ts),
+        // and that tree is behind the "access data from other apps" consent: a
+        // process without it blocks in the kernel rather than failing, on a bare
+        // access(2) as much as on open() (see the TCC probe in src/sqlite.ts).
+        // Stat-ing it from the 30s refresh would hang the refresh and re-ask for
+        // consent. Without it, Warp-only writes can be skipped for at most
+        // maxSkipIntervalSeconds, the same staleness the in-place-edit case above
+        // already accepts. (The entry here used to name group.warp, a path that
+        // has never existed, so it watched nothing either way.)
+        //
+        // WARP_DB_PATH is the exception, because it is a path the person named
+        // themselves — the CLI (src/providers/warp.ts) and the Windows guard both
+        // honour it, and a copy kept outside the group container is exactly what
+        // it is for. Pointed back at the group container it carries that tree's
+        // risk, which is the caller's to take.
+        if let warpDB = environment["WARP_DB_PATH"], !warpDB.isEmpty {
+            add(expand(warpDB, homeDirectory: homeDirectory), scanFirstLevelDirectories: false)
+        }
         add(path(homeDirectory, ".forge", ".forge.db"), scanFirstLevelDirectories: false)
         add(path(homeDirectory, ".zcode", "cli", "db", "db.sqlite"), scanFirstLevelDirectories: false)
         add(path(applicationSupport, "Zed", "threads", "threads.db"), scanFirstLevelDirectories: false)

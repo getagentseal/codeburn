@@ -708,8 +708,26 @@ fn extra_search_dirs() -> Vec<PathBuf> {
         out.push(home.join("scoop").join("shims"));
         out.push(home.join(".bun").join("bin"));
     }
+    // Volta writes package shims (`codeburn.cmd`) to `%VOLTA_HOME%\bin`, not to Program Files
+    // where its installer keeps the node and npm shims, so `node` works from any prompt while
+    // `codeburn` lives wherever VOLTA_HOME points. The default home is probed above; this is
+    // the relocated one (#1532: `D:\Data\Volta`).
+    if let Some(dir) = volta_home_bin(env::var_os("VOLTA_HOME")) {
+        out.push(dir);
+    }
     out.extend(registry_path_dirs());
     out
+}
+
+/// `%VOLTA_HOME%\bin` for a set, non-empty VOLTA_HOME. A relative value is passed through and
+/// dropped by `find_in_dirs`, like every other relative search entry.
+#[cfg(windows)]
+fn volta_home_bin(volta_home: Option<std::ffi::OsString>) -> Option<PathBuf> {
+    let home = volta_home?;
+    if home.is_empty() {
+        return None;
+    }
+    Some(PathBuf::from(home).join("bin"))
 }
 
 #[cfg(not(windows))]
@@ -1228,6 +1246,18 @@ mod tests {
         let named = spawn_failure_message("/usr/local/bin/codeburn", &denied);
         assert!(named.contains("/usr/local/bin/codeburn"), "{}", named);
         assert!(!named.contains("desktop app"), "{}", named);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn volta_home_bin_follows_a_relocated_volta_home() {
+        use std::ffi::OsString;
+        assert_eq!(
+            volta_home_bin(Some(OsString::from(r"D:\Data\Volta"))),
+            Some(PathBuf::from(r"D:\Data\Volta\bin"))
+        );
+        assert_eq!(volta_home_bin(Some(OsString::from(""))), None);
+        assert_eq!(volta_home_bin(None), None);
     }
 
     #[test]

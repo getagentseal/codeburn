@@ -10,8 +10,8 @@ import AppKit
 /// system starts each as its own process and each registers its own login
 /// item, which is how both come up at once at login.
 ///
-/// One instance wins outright: the newest start — the right way round while
-/// developing, and what a self-relaunch needs (`AppRelaunch`).
+/// One instance wins outright: the newest start, which is the right way round
+/// while developing.
 ///
 /// The order is read from the kernel (`KERN_PROC_PID` → `p_starttime`), not from
 /// `NSRunningApplication.launchDate`, and not from the pid. Both sides read the

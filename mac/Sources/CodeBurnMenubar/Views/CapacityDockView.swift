@@ -616,6 +616,10 @@ struct CapacityDockView: View {
         )
         .accessibilityElement(children: .contain)
         .accessibilityLabel(L("Capacity Dock"))
+        // The rail panel is built once and kept, so its labels only follow a
+        // language change if the whole subtree is rebuilt. The detail bubble is
+        // torn down after every hover and needs nothing.
+        .id(LanguageGeneration.shared.value)
     }
 
     private var contentAlignment: Alignment {

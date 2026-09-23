@@ -289,6 +289,51 @@ struct TelemetryTests {
         #expect(scratch.defaults.bool(forKey: Telemetry.localOptOutKey) == false)
     }
 
+    /// Exactly what the Privacy section reads, for every combination it can be
+    /// shown in: under a desktop yes the toggle is a veto, under a desktop no it
+    /// is a disabled readout, and standalone it is the decision itself.
+    @Test("the Privacy toggle's state for every desktop and local combination")
+    func toggleStateForEveryCombination() {
+        for desktopEnabled in [true, false] {
+            for vetoed in [true, false] {
+                let scratch = Scratch()
+                scratch.defaults.set(vetoed, forKey: Telemetry.localOptOutKey)
+                let state = scratch.writeDesktopState(
+                    """
+                    {"version":1,"installId":"desk-1","enabled":\(desktopEnabled),\
+                    "onboardedAt":"2026-01-01T00:00:00Z"}
+                    """)
+                let status = Self.client(scratch, desktopStateURL: state).status()
+                #expect(status.source == .desktop)
+                #expect(status.isLocked == !desktopEnabled,
+                        "desktop \(desktopEnabled), veto \(vetoed)")
+                #expect(status.enabled == (desktopEnabled && !vetoed),
+                        "desktop \(desktopEnabled), veto \(vetoed)")
+            }
+        }
+
+        let scratch = Scratch()
+        let standalone = Self.client(scratch, region: "US")
+        #expect(standalone.status().source == .app)
+        #expect(standalone.status().isLocked == false, "standalone the toggle is never a readout")
+        #expect(standalone.status().enabled)
+        standalone.setEnabled(false)
+        #expect(standalone.status().enabled == false)
+    }
+
+    @Test("a local opt-out sticks across a restart under the desktop app's yes")
+    func localVetoSurvivesARestart() {
+        let scratch = Scratch()
+        let state = scratch.writeDesktopState(
+            #"{"version":1,"installId":"desk-1","enabled":true,"onboardedAt":"2026-01-01T00:00:00Z"}"#)
+        Self.client(scratch, desktopStateURL: state).setEnabled(false)
+        #expect(scratch.defaults.bool(forKey: Telemetry.localOptOutKey))
+
+        let restarted = Self.client(scratch, desktopStateURL: state)
+        #expect(restarted.status().enabled == false)
+        #expect(restarted.status().isLocked == false, "it can still be switched back on")
+    }
+
     @Test("a desktop decision is inherited, so deleting that app cannot reverse its no")
     func desktopDecisionSurvivesTheFileDisappearing() {
         let scratch = Scratch()

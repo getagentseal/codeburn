@@ -14,11 +14,14 @@ CodeBurn is useful before historical classification is complete. On every launch
    with a skeleton while refreshing.
 3. On a true first run, make Today the first useful result. Continue historical
    work in this order: Today, 7 days, 30 days, month, 6 months, lifetime.
-4. After each headline horizon, warm the first-click reports for Sessions,
-   Spend, Models, Compare, Optimize, Yield and Plans at background priority.
-   Interactive requests always run ahead of this queue.
-5. Keep the configured refresh cadence while the window is covered, minimized
-   or unfocused. Visibility may pause animation; it must not pause data freshness.
+4. Warm the first-click reports for the selected period only, once, and only
+   while the window is visible. Interactive requests always run ahead of that
+   queue, and a finished warm is kept across poll cycles rather than redone.
+5. Stop polling while the window is hidden, and catch up immediately when it
+   comes back. Only the headline runs at the live cadence: `act report` refreshes
+   every 10 minutes, `yield` every 5, and the optimize scan at most once a day
+   per query scope, shown with the time it was computed. On battery the live
+   interval doubles.
 
 Historical results are durable. A renderer restart is not a cache miss. Today
 and Month snapshot identities include the local calendar boundary, so yesterday's
@@ -28,7 +31,7 @@ answer is never painted beneath today's label. Custom ranges are exact-keyed.
 
 | State | Content | Status copy |
 | --- | --- | --- |
-| Exact snapshot, refreshing | Keep the full snapshot visible | `Refreshing selected view…` |
+| Exact snapshot, refreshing | Keep the full snapshot visible | No banner: the hairline under the top bar lights and the icon beside `refreshed Ns ago` spins |
 | Progressive first index | Show the exact indexed subset | `Indexing history · X/Y files · You can keep using CodeBurn; totals update as indexing completes.` |
 | Source refresh failed | Keep indexed content visible | `Some sources could not be refreshed. Showing indexed data; recent activity may be missing.` |
 | First run, no usable subset yet | Skeleton for that destination only | Specific work copy such as `Scanning sessions…` |

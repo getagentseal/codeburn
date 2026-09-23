@@ -34,10 +34,18 @@ describe('Claude quota', () => {
   })
 
   it('returns disconnected without credentials and never fetches', async () => {
-    const fetchMock = vi.fn()
-    const result = await fetchClaudeQuota({ fetch: fetchMock, readFile: vi.fn(async () => null) })
-    expect(result.quota.connection).toBe('disconnected')
-    expect(fetchMock).not.toHaveBeenCalled()
+    // Off darwin there is no keychain to look in, so no credential file really
+    // does mean disconnected. (On darwin it means "not checked yet" — below.)
+    const original = process.platform
+    Object.defineProperty(process, 'platform', { value: 'linux', configurable: true })
+    try {
+      const fetchMock = vi.fn()
+      const result = await fetchClaudeQuota({ fetch: fetchMock, readFile: vi.fn(async () => null) })
+      expect(result.quota.connection).toBe('disconnected')
+      expect(fetchMock).not.toHaveBeenCalled()
+    } finally {
+      Object.defineProperty(process, 'platform', { value: original, configurable: true })
+    }
   })
 
   it('prefers subscriptionType over rateLimitTier for the plan label', () => {
@@ -123,10 +131,21 @@ describe('Claude keychain fallback', () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
-  it('never reads the keychain unless allowKeychain is set', async () => {
+  it('never reads the keychain unless allowKeychain is set, and says so', async () => {
     const keychain = vi.fn(async () => ({ status: 'found' as const, value: credential }))
     const result = await fetchClaudeQuota({ fetch: vi.fn(), readFile: vi.fn(async () => null), keychain })
-    expect(result.quota.connection).toBe('disconnected')
+    // The credential is right there in the keychain. Reporting "disconnected"
+    // would be a lie that told the user to log in again; this says we have not
+    // looked, so the card can offer the look.
+    expect(result.quota.connection).toBe('keychainUnchecked')
+    expect(keychain).not.toHaveBeenCalled()
+  })
+
+  it('a file credential answers on an unforced poll, with no keychain read', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ seven_day: { utilization: 4, resets_at: '2026-07-19T00:00:00Z' } }), { status: 200 }))
+    const keychain = vi.fn(async () => ({ status: 'found' as const, value: credential }))
+    const result = await fetchClaudeQuota({ fetch: fetchMock, readFile: vi.fn(async () => credential), keychain })
+    expect(result.quota.connection).toBe('connected')
     expect(keychain).not.toHaveBeenCalled()
   })
 })

@@ -351,7 +351,7 @@
 "Tracked spend (last %lld days)" = "Tracked spend (last %lld days)";
 "Costliest session" = "Costliest session";
 "Retry tax" = "Retry tax";
-"%1$lld retries across %2$lld edits" = "%1$lld retries across %2$lld edits";
+"%1$lld retries across %2$lld retried edits" = "%1$lld retries across %2$lld retried edits";
 "%@ ret/edit" = "%@ ret/edit";
 "Hides session details" = "Hides session details";
 "Shows session details" = "Shows session details";
@@ -665,8 +665,6 @@
 /* MARK: Language picker */
 "Language" = "Language";
 "System" = "System";
-"Relaunch to apply." = "Relaunch to apply.";
-"Relaunch" = "Relaunch";
 "Follows System Settings > Language & Region unless you pick one here." = "Follows System Settings > Language & Region unless you pick one here.";
 
 /* MARK: Quota pace captions (#1267) */
@@ -725,5 +723,5 @@
 /* MARK: Privacy */
 "Privacy" = "Privacy";
 "Anonymous usage statistics" = "Anonymous usage statistics";
-"Controlled in the CodeBurn desktop app." = "Controlled in the CodeBurn desktop app.";
+"Managed by the CodeBurn desktop app. Change it there under Settings → Privacy & data." = "Managed by the CodeBurn desktop app. Change it there under Settings → Privacy & data.";
 "Optional usage statistics: the names of the models, tools and providers you use, with bucketed counts of how often each one came up, plus when the app is opened. A random install id, the app version and your country code travel with them. Never your prompts, your code, your project and file names, or exact amounts." = "Optional usage statistics: the names of the models, tools and providers you use, with bucketed counts of how often each one came up, plus when the app is opened. A random install id, the app version and your country code travel with them. Never your prompts, your code, your project and file names, or exact amounts.";

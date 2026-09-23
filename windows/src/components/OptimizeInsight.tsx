@@ -5,7 +5,7 @@ import { formatCompactCurrency, plural } from '../lib/currency'
 import { ChevronRight, RetryIcon, RouteIcon } from './Icons'
 
 /// Port of OptimizeInsight in mac/.../Views/HeatmapSection.swift: the two kinds of spend the
-/// CLI can name as avoidable. Retry tax is what re-asking cost; routing waste is what the
+/// CLI can name as avoidable. Retry tax is the spend on edit turns that needed a retry; routing waste is what the
 /// same edits would have cost on a cheaper model. They are shown apart because they are
 /// different decisions, and their sum is only a headline.
 
@@ -65,7 +65,7 @@ function RetryTaxRow({ retryTax, totalCost, currency }: {
         <ChevronRight size={7} className={`chevron ${expanded ? 'chevron-open' : ''}`} />
       </button>
       <div className="waste-note">
-        {plural(retryTax.retries, 'retry', 'retries')} across {plural(retryTax.editTurns, 'edit')}
+        {plural(retryTax.retries, 'retry', 'retries')} across {plural(retryTax.editTurns, 'retried edit')}
       </div>
       {expanded && (
         <div className="waste-rows">

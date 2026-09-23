@@ -344,7 +344,7 @@
 "Tracked spend (last %lld days)" = "추적된 지출 (최근 %lld일)";
 "Costliest session" = "가장 비용이 큰 세션";
 "Retry tax" = "재시도 비용";
-"%1$lld retries across %2$lld edits" = "편집 %2$lld건 중 재시도 %1$lld회";
+"%1$lld retries across %2$lld retried edits" = "재시도한 편집 %2$lld건에서 재시도 %1$lld회";
 "%@ ret/edit" = "편집당 재시도 %@회";
 "Hides session details" = "세션 상세 정보 숨기기";
 "Shows session details" = "세션 상세 정보 표시";
@@ -658,8 +658,6 @@
 /* MARK: Language picker */
 "Language" = "언어";
 "System" = "시스템 설정 따름";
-"Relaunch to apply." = "적용하려면 다시 시작하세요.";
-"Relaunch" = "다시 시작";
 "Follows System Settings > Language & Region unless you pick one here." = "여기서 선택하지 않으면 “시스템 설정 > 언어 및 지역”을 따릅니다.";
 
 /* MARK: Quota pace captions (#1267) */
@@ -718,5 +716,5 @@
 /* MARK: Privacy */
 "Privacy" = "개인정보";
 "Anonymous usage statistics" = "익명 사용 통계";
-"Controlled in the CodeBurn desktop app." = "CodeBurn 데스크톱 앱에서 관리됩니다.";
+"Managed by the CodeBurn desktop app. Change it there under Settings → Privacy & data." = "CodeBurn 데스크톱 앱에서 관리됩니다. 설정 → 개인정보 및 데이터에서 변경하세요.";
 "Optional usage statistics: the names of the models, tools and providers you use, with bucketed counts of how often each one came up, plus when the app is opened. A random install id, the app version and your country code travel with them. Never your prompts, your code, your project and file names, or exact amounts." = "선택적 사용 통계입니다: 사용한 모델, 도구, 제공업체의 이름과 각 항목이 나타난 횟수를 구간별로 집계한 값, 그리고 앱을 연 횟수. 여기에는 무작위 설치 ID, 앱 버전, 국가 코드가 함께 전송됩니다. 프롬프트, 코드, 프로젝트 및 파일 이름, 정확한 금액은 절대 포함되지 않습니다.";

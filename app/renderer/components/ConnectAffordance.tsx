@@ -21,9 +21,10 @@ const LOGIN: Record<QuotaProvider['provider'], { command?: string; hintKey?: str
   grokbot: { noteKey: 'shell.connect.grokbot.note' },
 }
 
-/** Inline "Connect" affordance for a disconnected or access-denied provider: a
- * short status line plus a text-button that expands the copy-paste login
- * command, the keychain-Allow note (access-denied), and a forced Refresh. */
+/** Inline affordance for a disconnected or access-denied provider: a short
+ * status line plus a text-button that expands the copy-paste login command, the
+ * keychain-Allow note (access-denied), and a forced Refresh. The toggle is named
+ * for what it does — it discloses instructions, it does not connect anything. */
 export function ConnectAffordance({ provider, connection, onRefresh, message: messageOverride }: {
   provider: QuotaProvider['provider']
   connection: 'disconnected' | 'accessDenied'
@@ -42,7 +43,7 @@ export function ConnectAffordance({ provider, connection, onRefresh, message: me
   return (
     <div className="quota-connect">
       <span className="quota-connection-note">{message}</span>
-      <button type="button" className="set-text-button quota-connect-toggle" aria-expanded={open} onClick={() => setOpen(value => !value)}>{t('shell.action.connect')}</button>
+      <button type="button" className="set-text-button quota-connect-toggle" aria-expanded={open} onClick={() => setOpen(value => !value)}>{t('shell.action.howToConnect')}</button>
       {open && (
         <div className="quota-connect-guide">
           {login.command ? (
