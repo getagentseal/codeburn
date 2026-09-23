@@ -1,5 +1,5 @@
 import { behavioralCallWeight } from './behavioral-weight.js'
-import { billableOutputTokens, fallbackRawModelDisplayName, getModelCosts, getShortModelName, sanitizeModelForDisplay, type ModelCosts } from './models.js'
+import { billableOutputTokens, cacheWriteCostPerToken, fallbackRawModelDisplayName, getModelCosts, getShortModelName, sanitizeModelForDisplay, type ModelCosts } from './models.js'
 import { getProvider } from './providers/index.js'
 import { formatCost, formatTokens } from './format.js'
 import { renderTable, type TableColumn } from './text-table.js'
@@ -138,7 +138,7 @@ export async function aggregateAudit(projects: ProjectSummary[]): Promise<AuditR
     const cost = {
       input: rates ? displayed.inputTokens * rates.inputCostPerToken : 0,
       output: rates ? displayed.outputTokens * rates.outputCostPerToken : 0,
-      cacheWrite: rates ? displayed.cacheWriteTokens * rates.cacheWriteCostPerToken : 0,
+      cacheWrite: rates ? displayed.cacheWriteTokens * cacheWriteCostPerToken(bucket.model, rates) : 0,
       cacheRead: rates ? displayed.cacheReadTokens * rates.cacheReadCostPerToken : 0,
       webSearch: rates ? bucket.raw.webSearchRequests * rates.webSearchCostPerRequest : 0,
       recomputedTotalUSD: 0,

@@ -549,6 +549,19 @@ describe('user aliases via setModelAliases', () => {
   })
 })
 
+describe('implicit cache-write rate', () => {
+  it('bills cache writes at input for a non-Anthropic model with no published write rate', () => {
+    setPriceOverrides({
+      'zz-acme-no-write-rate': { input: 2, output: 8 },
+      'claude-zz-no-write-rate': { input: 2, output: 8 },
+      'zz-acme-explicit-write': { input: 2, output: 8, cacheCreation: 3 },
+    })
+    expect(calculateCost('zz-acme-no-write-rate', 0, 0, 1_000_000, 0, 0)).toBeCloseTo(2, 10)
+    expect(calculateCost('claude-zz-no-write-rate', 0, 0, 1_000_000, 0, 0)).toBeCloseTo(2.5, 10)
+    expect(calculateCost('zz-acme-explicit-write', 0, 0, 1_000_000, 0, 0)).toBeCloseTo(3, 10)
+  })
+})
+
 describe('user price overrides', () => {
   it('prices a model missing from the pricing snapshot', () => {
     const model = 'zz-price-override-missing-model-390'

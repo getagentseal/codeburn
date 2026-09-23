@@ -73,7 +73,8 @@ const CACHE_TTL_MS = 24 * 60 * 60 * 1000
 // Also folded into getPricingGenerationKey() below: a resident/snapshot-caching
 // consumer needs the same "pricing behavior changed" signal this already gives
 // the on-disk LiteLLM cache, not just the on-disk cache itself.
-export const CACHE_SCHEMA_VERSION = 3
+// 4: calculateCost bills an implicit cache-write rate as input for non-Anthropic models.
+export const CACHE_SCHEMA_VERSION = 4
 const WEB_SEARCH_COST = 0.01
 const ONE_HOUR_CACHE_WRITE_MULTIPLIER_FROM_FIVE_MINUTE_RATE = 1.6
 
@@ -1205,6 +1206,14 @@ export function sanitizeModelForDisplay(model: string): string {
   return model.replace(/[\x00-\x1F\x7F-\x9F]/g, '?').slice(0, 200)
 }
 
+/// The fabricated 1.25x-input write rate only holds for Anthropic models. Any
+/// other model without a published write rate bills those tokens as plain
+/// input, the same rule codex.ts applies when it routes them.
+export function cacheWriteCostPerToken(model: string, costs: ModelCosts): number {
+  if (costs.cacheWriteCostIsExplicit || /claude|anthropic/i.test(model)) return costs.cacheWriteCostPerToken
+  return costs.inputCostPerToken
+}
+
 export function calculateCost(
   model: string,
   inputTokens: number,
@@ -1243,11 +1252,12 @@ export function calculateCost(
   // count would otherwise produce a negative cost that silently subtracts
   // from real spend in aggregate totals. NaN is also handled here; the
   // arithmetic below short-circuits to 0 when any operand is non-finite.
+  const cacheWriteRate = cacheWriteCostPerToken(model, tieredCosts)
   return multiplier * (
     safe(inputTokens) * tieredCosts.inputCostPerToken +
     safe(outputTokens) * tieredCosts.outputCostPerToken +
-    safeFiveMinuteCacheCreation * tieredCosts.cacheWriteCostPerToken +
-    safeOneHourCacheCreation * tieredCosts.cacheWriteCostPerToken * ONE_HOUR_CACHE_WRITE_MULTIPLIER_FROM_FIVE_MINUTE_RATE +
+    safeFiveMinuteCacheCreation * cacheWriteRate +
+    safeOneHourCacheCreation * cacheWriteRate * ONE_HOUR_CACHE_WRITE_MULTIPLIER_FROM_FIVE_MINUTE_RATE +
     safe(cacheReadTokens) * tieredCosts.cacheReadCostPerToken +
     safe(webSearchRequests) * tieredCosts.webSearchCostPerRequest
   )

@@ -7,6 +7,7 @@ import { dateKey } from './day-aggregator.js'
 import { behavioralCallWeight, behavioralTurnCount } from './behavioral-weight.js'
 import { aggregateModelEfficiency } from './model-efficiency.js'
 import { callBillableOutputTokens, sessionModelBillableOutputTokens } from './session-output.js'
+import { findUnpricedModels } from './models.js'
 
 function escCsv(s: string): string {
   const sanitized = /^[\t\r=+\-@]/.test(s) ? `'${s}` : s
@@ -52,13 +53,15 @@ function buildDailyRows(projects: ProjectSummary[], period: string): Row[] {
   for (const project of projects) {
     for (const session of project.sessions) {
       for (const turn of session.turns) {
-        if (!turn.timestamp) continue
-        const day = dateKey(turn.timestamp)
-        if (!daily[day]) {
-          daily[day] = { cost: 0, savings: 0, calls: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, sessions: new Set() }
-        }
-        daily[day].sessions.add(session.sessionId)
+        const turnTs = turn.timestamp || turn.assistantCalls[0]?.timestamp || ''
         for (const call of turn.assistantCalls) {
+          // Same per-call day rule as aggregateProjectsIntoDays, so the daily
+          // rows sum to the summary and land on the days the history shows.
+          const day = dateKey(Number.isNaN(new Date(call.timestamp).getTime()) ? turnTs : call.timestamp)
+          if (!daily[day]) {
+            daily[day] = { cost: 0, savings: 0, calls: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, sessions: new Set() }
+          }
+          daily[day].sessions.add(session.sessionId)
           daily[day].cost += call.costUSD
           daily[day].savings += call.savingsUSD ?? 0
           // Same weight rule as aggregateProjectsIntoDays: a supplementary
@@ -90,6 +93,16 @@ function buildDailyRows(projects: ProjectSummary[], period: string): Row[] {
 
 function buildRecordRows(projects: ProjectSummary[]): Row[] {
   const rows: Row[] = []
+  const unpricedModels = new Map<string, boolean>()
+  const isUnpriced = (model: string, cost: number): boolean => {
+    if (cost > 0) return false
+    let unpriced = unpricedModels.get(model)
+    if (unpriced === undefined) {
+      unpriced = findUnpricedModels([{ model, calls: 1, cost: 0 }]).length > 0
+      unpricedModels.set(model, unpriced)
+    }
+    return unpriced
+  }
   for (const project of projects) {
     for (const session of project.sessions) {
       for (const turn of session.turns) {
@@ -107,14 +120,16 @@ function buildRecordRows(projects: ProjectSummary[]): Row[] {
             reasoningTokens: call.usage.reasoningTokens,
             cacheWriteTokens: call.usage.cacheCreationInputTokens,
             cacheReadTokens: Math.max(call.usage.cacheReadInputTokens, call.usage.cachedInputTokens),
-            cost: roundForActiveCurrency(convertCost(call.costUSD)),
-            savings: roundForActiveCurrency(convertCost(call.savingsUSD ?? 0)),
+            cost: convertCost(call.costUSD),
+            savings: convertCost(call.savingsUSD ?? 0),
             // Records are the raw serve ledger and keep every supplementary
             // accounting row; the marker is how a "one row per API call"
             // consumer tells them apart. Key present on every row (undefined
             // when false) so rowsToCsv, which reads headers off the first row,
             // always emits the column; JSON drops the undefined ones.
             supplementary: call.supplementaryAccounting ? true : undefined,
+            estimated: call.isEstimated ? true : undefined,
+            unpriced: isUnpriced(call.model, call.costUSD) ? true : undefined,
           })
         }
       }
@@ -341,7 +356,9 @@ function buildReadme(periods: PeriodExport[]): string {
     '  models.csv            Spend per model with token totals and cache usage.',
     '  records.csv           One row per served call, with optional subagentType and model.',
     '                        supplementary marks accounting-only rows: recovered tokens/cost that',
-    '                        are not distinct requests.',
+    '                        are not distinct requests. estimated marks costs priced from',
+    '                        estimated or missing token counts; unpriced marks $0 rows whose',
+    '                        model has no known price. cost is unrounded.',
     '  projects.csv          Spend per project folder for the selected detail period.',
     '  sessions.csv          One row per session for the selected detail period.',
     '  tools.csv             Tool invocations and share for the selected detail period.',

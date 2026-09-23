@@ -248,9 +248,9 @@ describe('exportCsv', () => {
 
     // The column exists on every row (undefined on normal ones), so rowsToCsv —
     // which reads headers off the first row — always emits it.
-    expect(lines[0]!.endsWith(',supplementary')).toBe(true)
-    expect(lines[1]!.endsWith(',1.23,0,')).toBe(true)
-    expect(lines[2]!.endsWith(',0.5,0,true')).toBe(true)
+    expect(lines[0]!.endsWith(',supplementary,estimated,unpriced')).toBe(true)
+    expect(lines[1]!.endsWith(',1.23,0,,,')).toBe(true)
+    expect(lines[2]!.endsWith(',0.5,0,true,,')).toBe(true)
     expect(lines).toHaveLength(3)
   })
 
@@ -288,6 +288,38 @@ describe('exportCsv', () => {
 })
 
 describe('exportJson', () => {
+  it('reconciles daily rows, records, and summary per call, including a turn with no timestamp', async () => {
+    const project = makeProject('app')
+    const session = project.sessions[0]!
+    const baseTurn = session.turns[0]!
+    const baseCall = baseTurn.assistantCalls[0]!
+    const at = (d: number, h: number, m: number) => new Date(2026, 3, d, h, m).toISOString()
+    session.turns = [
+      { ...baseTurn, timestamp: '', assistantCalls: [{ ...baseCall, timestamp: at(14, 10, 0), costUSD: 1.23 }] },
+      {
+        ...baseTurn,
+        timestamp: at(14, 23, 59),
+        assistantCalls: [
+          { ...baseCall, timestamp: at(14, 23, 59), costUSD: 0.004, deduplicationKey: 'late' },
+          { ...baseCall, timestamp: at(15, 0, 1), costUSD: 2.006, deduplicationKey: 'after-midnight' },
+        ],
+      },
+    ]
+    session.totalCostUSD = 3.24
+    project.totalCostUSD = 3.24
+
+    const saved = await exportJson([{ label: '30 Days', projects: [project] }], join(tmpDir, 'reconcile.json'))
+    const data = JSON.parse(await readFile(saved, 'utf-8'))
+
+    const daily = data.periods[0].daily as Array<Record<string, number | string>>
+    expect(daily.map(d => [d.Date, d['Cost (USD)']])).toEqual([['2026-04-14', 1.23], ['2026-04-15', 2.01]])
+    const dailySum = daily.reduce((s, d) => s + (d['Cost (USD)'] as number), 0)
+    const recordSum = (data.records as Array<{ cost: number }>).reduce((s, r) => s + r.cost, 0)
+    expect(dailySum).toBeCloseTo(data.summary[0]['Cost (USD)'], 10)
+    expect(recordSum).toBeCloseTo(data.summary[0]['Cost (USD)'], 10)
+    expect(data.records[1].cost).toBe(0.004)
+  })
+
   it('adds per-call records with optional subagentType and model fields', async () => {
     const periods: PeriodExport[] = [{
       label: '30 Days',

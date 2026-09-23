@@ -198,7 +198,10 @@ import type { DateRange, ProjectSummary } from './types.js'
 // still exist (Warp's sqlite is durable, so effectively all of them) and
 // carries the rest forward untouched. Call counts are unchanged, so no
 // PENDING_REDERIVE entry is needed and the partial-survival guard is unaffected.
-export const DAILY_CACHE_VERSION = 34
+// v35: a non-Anthropic model with no published cache-write rate now bills
+// cache-write tokens at its input rate instead of a fabricated 1.25x. Days
+// finalized at v34 overstate those tokens; the bump re-derives surviving days.
+export const DAILY_CACHE_VERSION = 35
 const MIN_SUPPORTED_VERSION = 28
 
 /// Providers whose per-day CALL COUNT means something different at
