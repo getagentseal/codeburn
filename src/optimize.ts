@@ -3829,7 +3829,7 @@ export function detectSessionOutliers(projects: ProjectSummary[], excludedSessio
   }
 }
 
-export function detectLowCacheHitSessions(projects: ProjectSummary[], provider?: string): WasteFinding | null {
+export function detectLowCacheHitSessions(projects: ProjectSummary[]): WasteFinding | null {
   type Candidate = { project: string; sessionId: string; provider: string; hitPercent: number; totalInput: number; missedReads: number }
   const candidates: Candidate[] = []
 
@@ -3876,9 +3876,9 @@ export function detectLowCacheHitSessions(projects: ProjectSummary[], provider?:
     tokensSaved,
     fix: {
       type: 'paste',
-      destination: 'session-opener',
-      label: sessionOpenerLabel(optimizeRemediationCopy(provider)),
-      text: 'Keep the model, tools and instruction files unchanged for this whole session so the prompt cache stays valid.',
+      destination: 'manual',
+      label: 'Keep the prompt cache valid:',
+      text: 'Stay on one model per session, and start a new session after editing instruction files or MCP config instead of continuing the old one.',
     },
   }
 }
@@ -4084,7 +4084,7 @@ export async function scanAndDetect(
     () => detectLowWorthSessions(behavioralProjects, provider),
     () => detectContextBloat(behavioralProjects, lowWorthSessionIds, provider),
     () => detectSessionOutliers(behavioralProjects, outlierExclusions, provider),
-    () => detectLowCacheHitSessions(behavioralProjects, provider),
+    () => detectLowCacheHitSessions(behavioralProjects),
     claudeOnly(() => detectBloatedClaudeMd(projectCwds)),
     claudeOnly(() => detectBashBloat()),
     claudeOnly(() => detectRecurringContext(openers)),
