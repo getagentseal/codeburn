@@ -1770,11 +1770,16 @@ async function loadProvider(state: CacheState, provider: string, section: Provid
       else markPathDirty(state, provider, path)
     }
   }
+  // A key file is written without a sync, so one lost to a crash is rebuilt
+  // from its piece's members.
   for (const [day, rows] of asStubs) {
     const name = base.pieces[day]
     const keys = name ? await readKeys(state.dir, name) : null
+    const missing = rows.filter(([path]) => !isKeyList(keys?.[path]))
+    const files = name && missing.length > 0 ? await readMembersAt(join(state.dir, name), missing) : null
     for (const [path, row] of rows) {
-      const list = keys?.[path]
+      const file = files?.get(path)
+      const list = file ? keysOf(file) : keys?.[path]
       if (!isKeyList(list)) { markPathDirty(state, provider, path); continue }
       members.set(path, { fingerprint: row.fingerprint, hasPr: (row.flags & ROW_PR) !== 0, keys: list, lo: row.lo, hi: row.hi, seq: 0 })
     }
@@ -2023,7 +2028,7 @@ function indexFileName(provider: string): string {
 // The temp name carries a nonce: two processes writing the SAME final path
 // (the envelope, every save) would otherwise share one temp file and interleave
 // their writes into a torn or foreign payload.
-async function writeFileAtomic(finalPath: string, payload: string | AsyncIterable<string>): Promise<void> {
+async function writeFileAtomic(finalPath: string, payload: string | AsyncIterable<string>, sync = true): Promise<void> {
   const tempPath = `${finalPath}.${randomBytes(8).toString('hex')}.tmp`
   const handle = await open(tempPath, 'w', 0o600)
   try {
@@ -2039,7 +2044,7 @@ async function writeFileAtomic(finalPath: string, payload: string | AsyncIterabl
       }
       if (pending) await handle.writeFile(pending, { encoding: 'utf-8' })
     }
-    await handle.sync()
+    if (sync) await handle.sync()
   } finally {
     await handle.close()
   }
@@ -2161,7 +2166,7 @@ async function writePiece(dir: string, provider: string, day: string, from: stri
     return { name: from!, spans }
   }
   written.push(name)
-  await writeFileAtomic(join(dir, keysFileName(name)), shardPayload(keyLines))
+  await writeFileAtomic(join(dir, keysFileName(name)), shardPayload(keyLines), false)
   written.push(keysFileName(name))
   return { name, spans }
 }

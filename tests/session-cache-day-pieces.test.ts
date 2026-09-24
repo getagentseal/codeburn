@@ -99,6 +99,14 @@ describe('piece selection', () => {
     expect(stubs.get('/p/b.jsonl')!.keys).toEqual([['b-0'], ['b-1']])
     expect(stubs.get('/p/b.jsonl')!.fingerprint).toEqual(files['/p/b.jsonl'].fingerprint)
   })
+
+  it('rebuilds stub keys from the piece when its key file is gone (key files are not synced)', async () => {
+    const files = { '/p/a.jsonl': fileAt(['01'], 'a'), '/p/c.jsonl': fileAt(['20'], 'c') }
+    await publish(files)
+    await rm(join(sessionCacheDir(), (await pieces())['2026-05-01']!.replace(/\.json$/, '.keys.json')))
+    const cache = await loadCache(may('20'))
+    expect(cacheStubs(cache, 'claude')!.get('/p/a.jsonl')!.keys).toEqual([['a-0']])
+  })
 })
 
 describe('an append that crosses a day', () => {
