@@ -7,7 +7,7 @@ import { cachedProjectIdentitiesForRange } from './daily-cache.js'
 import { reportUnmatchedProjectPatterns } from './project-filter-warnings.js'
 import { getVercelGatewayApiKey } from './providers/vercel-gateway.js'
 import { BILLING_FILTER_VALUES, ROUTE_FILTER_VALUES, filterProjectsByBillingRoute } from './billing-filter.js'
-import { AGGREGATE_ONLY_PROVIDER, aggregateOnlyCostUSD, excludesAggregateOnlyProviders, parseAllSessions, filterProjectsByName, filterProjectsByDateRange, clearSessionCache, setInteractiveScanUI, computeCorpusFingerprint, isSessionHydrationComplete } from './parser.js'
+import { AGGREGATE_ONLY_PROVIDER, aggregateOnlyCostUSD, excludesAggregateOnlyProviders, parseAllSessions, filterProjectsByName, filterProjectsByDateRange, clearSessionCache, setInteractiveScanUI, computeCorpusFingerprint, isSessionHydrationComplete, withLoadWindow } from './parser.js'
 import { allProviderNames, getAllProviders } from './providers/index.js'
 import { getProvider } from './providers/index.js'
 import { getClaudeConfigDirs, getDesktopSessionsDirs } from './providers/claude.js'
@@ -1354,10 +1354,12 @@ program
 
     if (opts.format === 'json') {
       // Durable totals so the compact status matches the menubar / report.
-      const todayDurable = await buildDurablePeriod(getDateRange('today'), { provider: pf, project: opts.project, exclude: opts.exclude })
+      const [todayDurable, monthDurable] = await withLoadWindow(getDateRange('month').range, async () => [
+        await buildDurablePeriod(getDateRange('today'), { provider: pf, project: opts.project, exclude: opts.exclude }),
+        await buildDurablePeriod(getDateRange('month'), { provider: pf, project: opts.project, exclude: opts.exclude }),
+      ] as const)
       const todayData = todayDurable.data
       const todayProjects = todayDurable.liveProjects
-      const monthDurable = await buildDurablePeriod(getDateRange('month'), { provider: pf, project: opts.project, exclude: opts.exclude })
       await reportUnmatchedProjectPatterns([...todayDurable.knownProjects, ...monthDurable.knownProjects], opts.project, opts.exclude)
       const monthData = monthDurable.data
       const monthProjects = monthDurable.liveProjects
@@ -1391,8 +1393,10 @@ program
       return
     }
 
-    const todayDurable = await buildDurablePeriod(getDateRange('today'), { provider: pf, project: opts.project, exclude: opts.exclude })
-    const monthDurable = await buildDurablePeriod(getDateRange('month'), { provider: pf, project: opts.project, exclude: opts.exclude })
+    const [todayDurable, monthDurable] = await withLoadWindow(getDateRange('month').range, async () => [
+      await buildDurablePeriod(getDateRange('today'), { provider: pf, project: opts.project, exclude: opts.exclude }),
+      await buildDurablePeriod(getDateRange('month'), { provider: pf, project: opts.project, exclude: opts.exclude }),
+    ] as const)
     await reportUnmatchedProjectPatterns([...todayDurable.knownProjects, ...monthDurable.knownProjects], opts.project, opts.exclude)
     console.log(renderStatusBar([], {
       today: { cost: todayDurable.data.cost, calls: todayDurable.data.calls },

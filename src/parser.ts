@@ -46,6 +46,7 @@ import {
   markCacheDirty,
   markProviderComplete,
   monthScopeForRange,
+  type CacheLoadScope,
   reconcileFile,
   saveCache,
   sourcePathStatCandidates,
@@ -5626,6 +5627,33 @@ const dateFloorSkippedProviders = new Set<string>()
 type SinglePassScope = { range: DateRange; parses: Map<string, Promise<ProjectSummary[]>> }
 let singlePassScope: SinglePassScope | null = null
 
+// A command that asks for several ranges one after another (status: today,
+// then the month) declares their union here, so the session cache loads once
+// and every later request finds its range already held in full. Only the load
+// range widens: each request keeps its own month scope and summaries, and a
+// cached file the wider range holds in full instead of as a stub contributes
+// exactly what its stub would.
+let loadWindow: DateRange | null = null
+
+export async function withLoadWindow<T>(range: DateRange, fn: () => Promise<T>): Promise<T> {
+  const outer = loadWindow
+  loadWindow = range
+  try {
+    return await fn()
+  } finally {
+    loadWindow = outer
+  }
+}
+
+function withinLoadWindow(scope: CacheLoadScope): CacheLoadScope {
+  if (!loadWindow) return scope
+  return {
+    ...scope,
+    startMs: Math.min(scope.startMs!, loadWindow.start.getTime()),
+    endMs: Math.max(scope.endMs!, loadWindow.end.getTime()),
+  }
+}
+
 export async function withSinglePassParse<T>(range: DateRange, fn: () => Promise<T>): Promise<T> {
   const outer = singlePassScope
   singlePassScope = { range, parses: new Map() }
@@ -5904,7 +5932,7 @@ async function parseAllSessionsInCacheScope(dateRange?: DateRange, providerFilte
   // unaffected (a suppressed duplicate contributes nothing either way), but for
   // a proxied key emitted under two providers the attribution can land on a
   // different provider than a full load would pick.
-  const loadScope = dateRange ? monthScopeForRange(dateRange.start, dateRange.end) : undefined
+  const loadScope = dateRange ? withinLoadWindow(monthScopeForRange(dateRange.start, dateRange.end)) : undefined
   const rangeStartMs = dateRange?.start.getTime()
   const cacheLoadStarted = performance.now()
   let diskCache = await loadCache(loadScope)
