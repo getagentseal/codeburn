@@ -2,6 +2,7 @@ import { readFile, stat, open, rename, unlink, readdir, mkdir, rm } from 'fs/pro
 import { existsSync, readFileSync, unlinkSync } from 'fs'
 import { createHash, randomBytes } from 'crypto'
 import { join } from 'path'
+import { StringDecoder } from 'string_decoder'
 
 import { getCodeburnCacheDir } from './cache-dir.js'
 import { acquireCacheRefreshLock, releaseOwnedRefreshLocksForExit } from './cache-refresh-lock.js'
@@ -1252,10 +1253,10 @@ function splitMemberLine(line: string): [string, string] | null {
   return [JSON.parse(line.slice(0, i + 1)) as string, line.slice(i + 2, end)]
 }
 
-function shardLine(buf: Buffer, offset: number): ShardLine {
-  const split = splitMemberLine(buf.toString('utf-8'))
+function shardLine(text: string, offset: number, length: number): ShardLine {
+  const split = splitMemberLine(text)
   if (!split) throw new Error('malformed shard line')
-  return { key: split[0], value: split[1], offset, length: buf.length }
+  return { key: split[0], value: split[1], offset, length }
 }
 
 // A shard's members one at a time, without holding the file. A single-line
@@ -1272,30 +1273,32 @@ async function* shardLines(path: string): AsyncGenerator<ShardLine> {
       for (const [key, file] of Object.entries(files)) yield { key, file, offset: -1, length: 0 }
       return
     }
+    // One reused buffer, and a line that spans reads is carried as decoded text:
+    // per-line Buffers are off-heap memory only a GC returns, which shows up as
+    // RSS when members run to megabytes. A newline is always a character
+    // boundary, so the decoder never holds bytes across one.
+    const chunk = Buffer.allocUnsafe(SHARD_READ_CHUNK)
+    const decoder = new StringDecoder('utf-8')
     let pos = 2
     let lineStart = 2
-    let parts: Buffer[] = []
-    // One buffer for the whole read: a fresh one per chunk is off-heap memory
-    // that only a GC returns, which shows up as RSS on a large shard.
-    const chunk = Buffer.allocUnsafe(SHARD_READ_CHUNK)
+    let pending = ''
     for (;;) {
       const { bytesRead } = await handle.read(chunk, 0, SHARD_READ_CHUNK, pos)
       if (bytesRead === 0) break
       const view = chunk.subarray(0, bytesRead)
       let from = 0
       for (let nl = view.indexOf(10); nl !== -1; nl = view.indexOf(10, from)) {
-        const piece = view.subarray(from, nl)
-        const line = parts.length > 0 ? Buffer.concat([...parts, piece]) : piece
-        parts = []
-        if (line.length === 1 && line[0] === 0x7d) return
-        yield shardLine(line, lineStart)
+        const text = pending + decoder.write(view.subarray(from, nl))
+        pending = ''
+        if (text === '}') return
+        yield shardLine(text, lineStart, pos + nl - lineStart)
         from = nl + 1
         lineStart = pos + from
       }
-      if (from < bytesRead) parts.push(Buffer.from(view.subarray(from)))
+      if (from < bytesRead) pending += decoder.write(view.subarray(from))
       pos += bytesRead
     }
-    if (Buffer.concat(parts).toString('utf-8') !== '}') throw new Error('truncated shard')
+    if (pending + decoder.end() !== '}') throw new Error('truncated shard')
   } finally {
     await handle.close()
   }
@@ -1421,15 +1424,6 @@ function scopedMember(path: string, file: CachedFile, bucket: string, name: stri
     offset,
     length,
   }
-}
-
-// The range reaches back to the shard's oldest month, so nearly all of it is
-// needed: streaming it member by member would only cost more than main's
-// whole-file parse. Either way each member is still held full or as a stub.
-function shardWithinRange(bucket: string, startMs: number): boolean {
-  if (bucket === UNDATED_BUCKET) return false
-  const [y, m] = bucket.split('-').map(Number) as [number, number]
-  return Date.UTC(y, m - 1, 1) >= startMs
 }
 
 // Shards a resident process (codeburn serve) keeps parsed between requests,
@@ -1577,8 +1571,7 @@ export async function loadCache(scope?: CacheLoadScope): Promise<SessionCache> {
     for (const [bucket, ref] of Object.entries(meta.shards)) {
       if (loaded && !shardInScope(bucket, ref.until, scope!)) continue
       loaded?.add(bucket)
-      const streamed = stubs && !shardWithinRange(bucket, ranged!.startMs)
-      pending.push({ bucket, name: ref.name, files: streamed ? null : loadShardMemoized(dir, ref.name) })
+      pending.push({ bucket, name: ref.name, files: stubs ? null : loadShardMemoized(dir, ref.name) })
     }
     reads.push((async () => {
       let seq = 0
@@ -1586,10 +1579,7 @@ export async function loadCache(scope?: CacheLoadScope): Promise<SessionCache> {
         let members: Array<[string, CachedFile | CacheStub]> | null = null
         if (read) {
           const files = await read
-          if (files) {
-            members = Object.entries(files)
-            if (stubs) members = members.map(([path, file]) => [path, scopedMember(path, file as CachedFile, bucket, name, -1, 0, ranged!.startMs, ranged!.endMs)])
-          }
+          if (files) members = Object.entries(files)
         } else {
           const scoped = await readScopedShard(dir, name, bucket, ranged!.startMs, ranged!.endMs)
           if (scoped?.legacy) state.legacy.add(`${provider}\0${bucket}`)
