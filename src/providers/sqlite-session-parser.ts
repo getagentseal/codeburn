@@ -65,7 +65,8 @@ type V2MessageRow = {
  * primary generation (v2 when present), but on an upgraded DB the frozen legacy
  * rows are NOT dead: any legacy session whose id never made it into `session_v2`
  * is real history and is unioned in (see `discoverSqliteSessions` and the
- * per-session resolution in `parse`). v2 wins for any id present in both.
+ * per-session resolution in `parse`). For an id present in both, `parse` reads
+ * legacy first and adds only the v2 turns legacy does not hold.
  */
 function detectGeneration(db: SqliteDatabase): 'v2' | 'legacy' | null {
   try {
@@ -129,7 +130,10 @@ function v2RowsToLegacyShape(rows: V2MessageRow[]): { messages: MessageRow[]; pa
       const id = typeof ref['id'] === 'string' ? ref['id'] : ''
       const providerID = typeof ref['providerID'] === 'string' ? ref['providerID'] : ''
       if (providerID) data.providerID = providerID
-      if (id && providerID) data.modelID = `${providerID}/${id}`
+      // Bare id, as 1.x stored `modelID`: the provider prefix breaks pricing for
+      // ids like `opencode/claude-haiku-4-5` or `github-copilot/gpt-5`, and a
+      // migrated turn must price the same whichever table it is read from.
+      if (id) data.modelID = id
     }
     if (typeof payload['cost'] === 'number') data.cost = payload['cost']
     const tokens = payload['tokens']
@@ -282,33 +286,23 @@ export function createSqliteSessionParser(
         // legacy — reading it from session_message would find nothing and drop
         // its history. v2-only and legacy-only DBs resolve to `generation` as
         // before.
+        const legacyOk = generation === 'legacy' || validateSchemaDetailed(db).ok
         const gen: 'v2' | 'legacy' =
-          generation === 'v2' && !sessionInV2(db, sessionId) && validateSchemaDetailed(db).ok
+          generation === 'v2' && !sessionInV2(db, sessionId) && legacyOk
             ? 'legacy'
             : generation
 
-        let messages: MessageRow[]
-        let partsByMsg: Map<string, PartData[]>
+        let messages: MessageRow[] = []
+        const partsByMsg = new Map<string, PartData[]>()
 
-        if (gen === 'v2') {
-          const rows = db.query<V2MessageRow>(
-            `WITH RECURSIVE session_tree(id) AS (
-              SELECT id FROM session_v2 WHERE id = ?
-              UNION
-              SELECT child.id
-              FROM session_v2 child
-              JOIN session_tree parent ON child.parent_id = parent.id
-            )
-            SELECT session_id, id, type, seq, time_created, CAST(data AS BLOB) AS data
-            FROM session_message
-            WHERE session_id IN (SELECT id FROM session_tree)
-            ORDER BY time_created ASC, session_id ASC, seq ASC`,
-            [sessionId],
-          )
-          const normalized = v2RowsToLegacyShape(rows)
-          messages = normalized.messages
-          partsByMsg = normalized.partsByMsg
-        } else {
+        // A migrated session keeps its full pre-upgrade history in the frozen
+        // legacy tables, while session_message holds only what OpenCode's
+        // migration carried over (it drops compaction summaries, task-tool
+        // turns and any message it fails to decode, and can stop partway) plus
+        // turns added after the upgrade. Legacy is read first so pre-upgrade
+        // turns count exactly as on 1.x; migrated rows keep their legacy
+        // message ids, so the seenKeys dedup below skips the v2 copies.
+        if (legacyOk) {
           messages = db.query<MessageRow>(
             `WITH RECURSIVE session_tree(id) AS (
               SELECT id FROM session WHERE id = ?
@@ -339,7 +333,6 @@ export function createSqliteSessionParser(
             [sessionId],
           )
 
-          partsByMsg = new Map<string, PartData[]>()
           for (const part of parts) {
             try {
               const parsed = JSON.parse(blobToText(part.data)) as PartData
@@ -349,6 +342,28 @@ export function createSqliteSessionParser(
             } catch {
               // skip corrupt part data
             }
+          }
+        }
+
+        if (gen === 'v2') {
+          const rows = db.query<V2MessageRow>(
+            `WITH RECURSIVE session_tree(id) AS (
+              SELECT id FROM session_v2 WHERE id = ?
+              UNION
+              SELECT child.id
+              FROM session_v2 child
+              JOIN session_tree parent ON child.parent_id = parent.id
+            )
+            SELECT session_id, id, type, seq, time_created, CAST(data AS BLOB) AS data
+            FROM session_message
+            WHERE session_id IN (SELECT id FROM session_tree)
+            ORDER BY time_created ASC, session_id ASC, seq ASC`,
+            [sessionId],
+          )
+          const normalized = v2RowsToLegacyShape(rows)
+          messages.push(...normalized.messages)
+          for (const [id, parts] of normalized.partsByMsg) {
+            if (!partsByMsg.has(id)) partsByMsg.set(id, parts)
           }
         }
 
@@ -500,7 +515,7 @@ export async function discoverSqliteSessions(
 
       // On an upgraded DB, also surface legacy top-level sessions that never
       // migrated into session_v2 — their frozen history is otherwise dropped
-      // (#1293). Sessions present in both are excluded here so v2 wins.
+      // (#1293). Sessions present in both are excluded here so each is listed once.
       if (generation === 'v2' && validateSchemaDetailed(db).ok) {
         rows.push(...db.query<SessionRow>(
           `SELECT id, CAST(directory AS BLOB) AS directory, CAST(title AS BLOB) AS title, time_created

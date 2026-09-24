@@ -479,7 +479,11 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // parsed call as `route`: `openrouter` and `amazon-bedrock`. Cached calls hold
   // neither, so they must re-parse. v2 also invalidates the OpenRouter-only
   // fingerprint used by pre-merge builds of #1486.
-  opencode: 'session-model-v1-archived-subtree-v1-billing-routes-v2',
+  // v2-legacy-union-v1: a session present in both OpenCode 2.x `session_v2` and
+  // the frozen 1.x tables now reads its legacy turns too. Cached parses of an
+  // upgraded database hold only what the 2.x migration carried over, and v2
+  // turns now carry the bare model id 1.x used instead of `provider/model`.
+  opencode: 'session-model-v1-archived-subtree-v1-billing-routes-v2-v2-legacy-union-v1',
   quickdesk: 'emf-sqlite-v2-est-cost',
   // session-lineage-capture-v1: SessionLineage (CB-1, slice 1) is now carried
   // on the cached file for every kimicode wire. Child evidence is the
@@ -492,7 +496,7 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   kimicode: 'wire-usage-v1-est-cost-session-lineage-capture-v1',
   // archived-subtree-v1: KiloCode shares the SQLite parser and the same schema.
   // billing-routes-v2: its warm cache must move with both shared route fields.
-  'kilo-code': 'worktree-project-grouping-v1-session-model-v1-archived-subtree-v1-billing-routes-v2',
+  'kilo-code': 'worktree-project-grouping-v1-session-model-v1-archived-subtree-v1-billing-routes-v2-v2-legacy-union-v1',
   'roo-code': 'worktree-project-grouping-v1',
   // billing-cost-v1: Warp's own billing record (total_provider_cost_in_cents,
   // total_charged_usage, credits_spent) now rides on each call as
