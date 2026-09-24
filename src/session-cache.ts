@@ -1423,14 +1423,13 @@ function scopedMember(path: string, file: CachedFile, bucket: string, name: stri
   }
 }
 
-// Every turn month of the shard lies inside [startMs, endMs], so nearly all of
-// it is needed: streaming it member by member would only cost more than
-// main's whole-file parse.
-function shardWithinRange(bucket: string, until: string, startMs: number, endMs: number): boolean {
+// The range reaches back to the shard's oldest month, so nearly all of it is
+// needed: streaming it member by member would only cost more than main's
+// whole-file parse. Either way each member is still held full or as a stub.
+function shardWithinRange(bucket: string, startMs: number): boolean {
   if (bucket === UNDATED_BUCKET) return false
-  const [y1, m1] = bucket.split('-').map(Number) as [number, number]
-  const [y2, m2] = until.split('-').map(Number) as [number, number]
-  return Date.UTC(y1, m1 - 1, 1) >= startMs && Date.UTC(y2, m2, 1) - 1 <= endMs
+  const [y, m] = bucket.split('-').map(Number) as [number, number]
+  return Date.UTC(y, m - 1, 1) >= startMs
 }
 
 // Shards a resident process (codeburn serve) keeps parsed between requests,
@@ -1578,7 +1577,7 @@ export async function loadCache(scope?: CacheLoadScope): Promise<SessionCache> {
     for (const [bucket, ref] of Object.entries(meta.shards)) {
       if (loaded && !shardInScope(bucket, ref.until, scope!)) continue
       loaded?.add(bucket)
-      const streamed = stubs && !shardWithinRange(bucket, ref.until, ranged!.startMs, ranged!.endMs)
+      const streamed = stubs && !shardWithinRange(bucket, ranged!.startMs)
       pending.push({ bucket, name: ref.name, files: streamed ? null : loadShardMemoized(dir, ref.name) })
     }
     reads.push((async () => {
