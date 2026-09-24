@@ -1,6 +1,7 @@
 import os from 'node:os'
 import path from 'node:path'
 
+import { wslHomes } from '../wsl.js'
 import { fraction, quotaRequestSignal, readKeychainPassword, readSecureFile, sanitizeError } from './security.js'
 import type { KeychainOutcome } from './security.js'
 import type { QuotaProvider, QuotaWindow } from './types.js'
@@ -15,6 +16,8 @@ type CredentialSource = 'file' | 'keychain'
 export type ClaudeDeps = {
   fetch: typeof fetch
   credentialPath: string
+  /** Credential files inside running WSL distros (#1061); empty off Windows. */
+  wslCredentialPaths: () => string[]
   readFile: typeof readSecureFile
   keychain?: () => Promise<KeychainOutcome>
   now: () => number
@@ -23,6 +26,7 @@ export type ClaudeDeps = {
 const defaults: ClaudeDeps = {
   fetch: globalThis.fetch,
   credentialPath: path.join(os.homedir(), '.claude', '.credentials.json'),
+  wslCredentialPaths: () => wslHomes().map(home => `${home}\\.claude\\.credentials.json`),
   readFile: readSecureFile,
   now: Date.now,
 }
@@ -43,9 +47,40 @@ function parseCredential(raw: string): ClaudeCredential | null {
   }
 }
 
-async function credentialFromFile(deps: ClaudeDeps): Promise<ClaudeCredential | null> {
-  const raw = await deps.readFile(deps.credentialPath, 64 * 1024)
+async function credentialAt(file: string, deps: ClaudeDeps): Promise<ClaudeCredential | null> {
+  const raw = await deps.readFile(file, 64 * 1024)
   return raw ? parseCredential(raw) : null
+}
+
+// A 9P share whose distro is going down can stall a read; the quota poll must
+// never wait on it. The abandoned read settles (or not) on its own.
+const WSL_READ_TIMEOUT_MS = 2000
+
+function wslCredentialAt(file: string, deps: ClaudeDeps): Promise<ClaudeCredential | null> {
+  let timer: NodeJS.Timeout | undefined
+  const timeout = new Promise<null>(resolve => { timer = setTimeout(resolve, WSL_READ_TIMEOUT_MS, null) })
+  return Promise.race([credentialAt(file, deps).catch(() => null), timeout]).finally(() => clearTimeout(timer))
+}
+
+/**
+ * The Windows-home credential plus one per running WSL distro home. A user can
+ * be logged in on both sides; the one expiring last is the one Claude Code
+ * renewed most recently. A broken WSL file is skipped; a broken Windows file
+ * still surfaces its error when nothing else is usable.
+ */
+async function credentialFromFiles(deps: ClaudeDeps): Promise<{ credential: ClaudeCredential; path: string } | null> {
+  let nativeError: unknown
+  const native = credentialAt(deps.credentialPath, deps).catch(error => { nativeError = error; return null })
+  const paths = [deps.credentialPath, ...deps.wslCredentialPaths()]
+  const found = await Promise.all([native, ...paths.slice(1).map(file => wslCredentialAt(file, deps))])
+  let best: { credential: ClaudeCredential; path: string } | null = null
+  for (const [i, credential] of found.entries()) {
+    if (credential && (!best || (credential.expiresAt ?? -Infinity) > (best.credential.expiresAt ?? -Infinity))) {
+      best = { credential, path: paths[i]! }
+    }
+  }
+  if (!best && nativeError !== undefined) throw nativeError
+  return best
 }
 
 /**
@@ -55,8 +90,8 @@ async function credentialFromFile(deps: ClaudeDeps): Promise<ClaudeCredential | 
  * A denied Keychain on a re-read needs no state of its own: the first read
  * already decided whether that store is reachable.
  */
-async function credentialFrom(source: CredentialSource, deps: ClaudeDeps): Promise<ClaudeCredential | null> {
-  if (source === 'file') return credentialFromFile(deps)
+async function credentialFrom(source: CredentialSource, file: string, deps: ClaudeDeps): Promise<ClaudeCredential | null> {
+  if (source === 'file') return file === deps.credentialPath ? credentialAt(file, deps) : wslCredentialAt(file, deps)
   const outcome = await (deps.keychain ?? readClaudeKeychain)()
   return outcome.status === 'found' ? parseCredential(outcome.value) : null
 }
@@ -142,7 +177,8 @@ export type ClaudeResult = { quota: QuotaProvider; retryAfterSeconds?: number }
 export async function fetchClaudeQuota(options: Partial<ClaudeDeps> & { signal?: AbortSignal; allowKeychain?: boolean } = {}): Promise<ClaudeResult> {
   const deps = { ...defaults, ...options }
   try {
-    let credential = await credentialFromFile(deps)
+    const fromFile = await credentialFromFiles(deps)
+    let credential = fromFile?.credential ?? null
     let source: CredentialSource = 'file'
     if (!credential && options.allowKeychain && process.platform === 'darwin') {
       const outcome = await (deps.keychain ?? readClaudeKeychain)()
@@ -154,7 +190,7 @@ export async function fetchClaudeQuota(options: Partial<ClaudeDeps> & { signal?:
 
     let response = await request(credential.accessToken, deps, options.signal)
     if (response.status === 401) {
-      const reread = await credentialFrom(source, deps)
+      const reread = await credentialFrom(source, fromFile?.path ?? deps.credentialPath, deps)
       if (!reread || reread.accessToken === credential.accessToken) {
         // Nothing but a fresh login can clear a 401 on a credential whose life is
         // already over, so it is reported as terminal rather than as the blip its

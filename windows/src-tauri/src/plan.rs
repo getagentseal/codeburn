@@ -4,7 +4,7 @@
 //! snapshot file so a freshly reset window can still show last cycle's final.
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{bail, Context, Result};
@@ -147,6 +147,7 @@ impl PlanClient {
 
 struct StoredCredentials {
     access_token: String,
+    expires_at: Option<f64>,
     rate_limit_tier: Option<String>,
     subscription_type: Option<String>,
 }
@@ -161,6 +162,8 @@ struct CredentialsRoot {
 struct OAuthBlock {
     #[serde(rename = "accessToken")]
     access_token: Option<String>,
+    #[serde(rename = "expiresAt")]
+    expires_at: Option<serde_json::Value>,
     #[serde(rename = "rateLimitTier")]
     rate_limit_tier: Option<String>,
     #[serde(rename = "subscriptionType")]
@@ -171,12 +174,41 @@ fn credentials_path() -> Option<PathBuf> {
     dirs::home_dir().map(|h| h.join(CREDENTIALS_RELATIVE_PATH))
 }
 
-/// Ok(None) when the file does not exist (user never logged in); Err for malformed data.
+/// The Windows-home credential, or one from a running WSL distro when Claude Code lives
+/// there (#1061): whichever expires last, since that is the one most recently renewed.
 fn load_credentials() -> Result<Option<StoredCredentials>> {
-    let Some(path) = credentials_path() else {
-        return Ok(None);
+    let native = match credentials_path() {
+        Some(path) => read_credentials(&path),
+        None => Ok(None),
     };
-    let meta = match fs::symlink_metadata(&path) {
+    freshest(native, wsl_credentials())
+}
+
+/// A malformed Windows file only surfaces as an error when nothing else is usable.
+fn freshest(
+    native: Result<Option<StoredCredentials>>,
+    wsl: Vec<StoredCredentials>,
+) -> Result<Option<StoredCredentials>> {
+    let (native, error) = match native {
+        Ok(found) => (found, None),
+        Err(err) => (None, Some(err)),
+    };
+    let best = native.into_iter().chain(wsl).reduce(|best, next| {
+        if next.expires_at.unwrap_or(f64::MIN) > best.expires_at.unwrap_or(f64::MIN) {
+            next
+        } else {
+            best
+        }
+    });
+    match (best, error) {
+        (None, Some(err)) => Err(err),
+        (best, _) => Ok(best),
+    }
+}
+
+/// Ok(None) when the file does not exist (user never logged in); Err for malformed data.
+fn read_credentials(path: &Path) -> Result<Option<StoredCredentials>> {
+    let meta = match fs::symlink_metadata(path) {
         Ok(m) => m,
         Err(_) => return Ok(None),
     };
@@ -186,7 +218,7 @@ fn load_credentials() -> Result<Option<StoredCredentials>> {
     if meta.len() > MAX_CREDENTIAL_BYTES {
         bail!("credentials file is unexpectedly large");
     }
-    let bytes = fs::read(&path).with_context(|| "failed to read Claude credentials")?;
+    let bytes = fs::read(path).with_context(|| "failed to read Claude credentials")?;
     let root: CredentialsRoot =
         serde_json::from_slice(&bytes).with_context(|| "Claude credentials are malformed")?;
     let Some(oauth) = root.claude_ai_oauth else {
@@ -198,9 +230,110 @@ fn load_credentials() -> Result<Option<StoredCredentials>> {
     }
     Ok(Some(StoredCredentials {
         access_token: token,
+        expires_at: oauth.expires_at.as_ref().and_then(serde_json::Value::as_f64),
         rate_limit_tier: oauth.rate_limit_tier,
         subscription_type: oauth.subscription_type,
     }))
+}
+
+// ---- WSL (#1061) ------------------------------------------------------------------------
+// Mirrors src/wsl.ts: running distros only (touching a stopped distro's share boots it),
+// `CODEBURN_WSL=off|all` honoured, read-only.
+
+#[cfg(windows)]
+const WSL_SCAN_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// The scan runs on its own thread so a wedged wsl.exe or 9P share can never stall the
+/// Plan poll; a scan still stuck from an earlier poll suppresses new ones until it ends.
+#[cfg(windows)]
+fn wsl_credentials() -> Vec<StoredCredentials> {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+    let mode = std::env::var("CODEBURN_WSL").unwrap_or_default().trim().to_lowercase();
+    if mode == "off" || IN_FLIGHT.swap(true, Ordering::AcqRel) {
+        return Vec::new();
+    }
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(scan_wsl_credentials(mode == "all"));
+        IN_FLIGHT.store(false, Ordering::Release);
+    });
+    rx.recv_timeout(WSL_SCAN_TIMEOUT).unwrap_or_default()
+}
+
+#[cfg(not(windows))]
+fn wsl_credentials() -> Vec<StoredCredentials> {
+    Vec::new()
+}
+
+#[cfg(windows)]
+fn scan_wsl_credentials(all: bool) -> Vec<StoredCredentials> {
+    let mut cmd = crate::cli::system_command("wsl.exe");
+    cmd.args(["--list", "--quiet"]);
+    if !all {
+        cmd.arg("--running");
+    }
+    cmd.stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+    let Ok(out) = cmd.output() else { return Vec::new() };
+    if !out.status.success() {
+        return Vec::new();
+    }
+    let mut found = Vec::new();
+    for distro in parse_wsl_distros(&out.stdout) {
+        // `\\wsl$\` first: `wsl.localhost` is missing on older builds, where it stalls in DNS.
+        for prefix in [r"\\wsl$\", r"\\wsl.localhost\"] {
+            let homes = wsl_homes(&PathBuf::from(format!("{prefix}{distro}")));
+            if homes.is_empty() {
+                continue;
+            }
+            for home in homes {
+                if let Ok(Some(creds)) = read_credentials(&home.join(CREDENTIALS_RELATIVE_PATH)) {
+                    found.push(creds);
+                }
+            }
+            break;
+        }
+    }
+    found
+}
+
+#[cfg(windows)]
+fn wsl_homes(base: &Path) -> Vec<PathBuf> {
+    let mut homes: Vec<PathBuf> = fs::read_dir(base.join("home"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
+        .map(|e| e.path())
+        .collect();
+    let root = base.join("root");
+    if root.is_dir() {
+        homes.push(root);
+    }
+    homes
+}
+
+/// `wsl.exe --list --quiet` writes UTF-16LE (BOM optional) with CRLF; with nothing
+/// installed it prints prose instead, which the single-token name rule filters out.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn parse_wsl_distros(raw: &[u8]) -> Vec<String> {
+    let text = if raw.contains(&0) {
+        let units: Vec<u16> = raw.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+        String::from_utf16_lossy(&units)
+    } else {
+        String::from_utf8_lossy(raw).into_owned()
+    };
+    text.lines()
+        .map(|line| line.replace(['\0', '\u{feff}'], "").trim().to_string())
+        .filter(|name| {
+            !name.is_empty()
+                && !name.ends_with('.')
+                && !name.chars().any(|c| c.is_whitespace() || "\\/:*?\"<>|".contains(c))
+                && !["docker-desktop", "podman-machine", "rancher-desktop"]
+                    .iter()
+                    .any(|utility| name.starts_with(utility))
+        })
+        .collect()
 }
 
 fn tier_display(subscription_type: Option<&str>, rate_limit_tier: Option<&str>) -> String {
@@ -479,7 +612,63 @@ fn civil_from_unix(secs: i64) -> (i64, i64, i64, i64, i64, i64) {
 
 #[cfg(test)]
 mod tests {
-    use super::tier_display;
+    use super::{freshest, parse_wsl_distros, read_credentials, tier_display, StoredCredentials};
+
+    fn creds(token: &str, expires_at: Option<f64>) -> StoredCredentials {
+        StoredCredentials {
+            access_token: token.into(),
+            expires_at,
+            rate_limit_tier: None,
+            subscription_type: None,
+        }
+    }
+
+    fn token(result: anyhow::Result<Option<StoredCredentials>>) -> Option<String> {
+        result.unwrap().map(|c| c.access_token)
+    }
+
+    #[test]
+    fn freshest_credential_wins_across_windows_and_wsl() {
+        assert_eq!(token(freshest(Ok(Some(creds("win", Some(1.0)))), vec![])), Some("win".into()));
+        assert_eq!(token(freshest(Ok(None), vec![creds("wsl", Some(1.0))])), Some("wsl".into()));
+        let both = |win: f64| freshest(Ok(Some(creds("win", Some(win)))), vec![creds("wsl", Some(2.0))]);
+        assert_eq!(token(both(1.0)), Some("wsl".into()));
+        assert_eq!(token(both(3.0)), Some("win".into()));
+        assert_eq!(token(freshest(Ok(None), vec![])), None);
+    }
+
+    #[test]
+    fn malformed_windows_file_errors_only_without_a_wsl_fallback() {
+        let broken = || Err(anyhow::anyhow!("Claude credentials are malformed"));
+        assert!(freshest(broken(), vec![]).is_err());
+        assert_eq!(token(freshest(broken(), vec![creds("wsl", None)])), Some("wsl".into()));
+    }
+
+    #[test]
+    fn reads_expires_at_and_rejects_malformed_json() {
+        let dir = std::env::temp_dir().join(format!("codeburn-plan-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let good = dir.join("good.json");
+        std::fs::write(&good, r#"{"claudeAiOauth":{"accessToken":"t","expiresAt":1760000000000}}"#).unwrap();
+        let bad = dir.join("bad.json");
+        std::fs::write(&bad, "{not json").unwrap();
+        let read = read_credentials(&good).unwrap().unwrap();
+        assert_eq!(read.expires_at, Some(1_760_000_000_000.0));
+        assert!(read_credentials(&bad).is_err());
+        assert!(read_credentials(&dir.join("missing.json")).unwrap().is_none());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn parses_wsl_list_output() {
+        let utf16: Vec<u8> = "\u{feff}Ubuntu\r\ndocker-desktop\r\nDebian\r\n"
+            .encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .collect();
+        assert_eq!(parse_wsl_distros(&utf16), vec!["Ubuntu", "Debian"]);
+        let prose = b"Windows Subsystem for Linux has no installed distributions.\r\n";
+        assert!(parse_wsl_distros(prose).is_empty());
+    }
 
     #[test]
     fn tier_display_prefers_subscription_type() {
