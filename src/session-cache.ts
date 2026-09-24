@@ -783,6 +783,42 @@ export function cacheHiddenFingerprint(cache: SessionCache, provider: string, pa
   return hiddenOf(stateOf(cache), cache, provider)?.get(path)?.fingerprint
 }
 
+/** The dedup keys of hidden files, per turn. A transcript parsed now can replay
+ *  their message ids (a fork or resume of an old session), and the cached copy
+ *  must win, as it does for every loaded month. */
+export async function loadCacheHiddenKeys(cache: SessionCache, provider: string, paths: Iterable<string>): Promise<string[][][]> {
+  const state = stateOf(cache)
+  const hidden = hiddenOf(state, cache, provider)
+  const base = state.base.get(provider)
+  const out: string[][][] = []
+  if (!hidden || !base) return out
+  const byPiece = new Map<string, Array<[string, IndexRow]>>()
+  for (const path of paths) {
+    const row = hidden.get(path)
+    if (row) pushTo(byPiece, row.day, [path, row])
+  }
+  for (const [day, rows] of byPiece) {
+    const name = base.pieces[day]
+    if (name) for (const list of (await readKeyLists(state.dir, name, rows)).values()) out.push(list)
+  }
+  return out
+}
+
+// A key file is written without a sync, so one lost to a crash is rebuilt
+// from its piece's members.
+async function readKeyLists(dir: string, name: string, rows: Array<[string, IndexRow]>): Promise<Map<string, string[][]>> {
+  const keys = await readKeys(dir, name)
+  const missing = rows.filter(([path]) => !isKeyList(keys?.[path]))
+  const files = missing.length > 0 ? await readMembersAt(join(dir, name), missing) : null
+  const out = new Map<string, string[][]>()
+  for (const [path] of rows) {
+    const file = files?.get(path)
+    const list = file ? keysOf(file) : keys?.[path]
+    if (isKeyList(list)) out.set(path, list)
+  }
+  return out
+}
+
 /** True when `provider` has any cached entry, full or stubbed. */
 export function hasCachedEntries(cache: SessionCache, provider: string): boolean {
   const section = cache.providers[provider]
@@ -1770,17 +1806,11 @@ async function loadProvider(state: CacheState, provider: string, section: Provid
       else markPathDirty(state, provider, path)
     }
   }
-  // A key file is written without a sync, so one lost to a crash is rebuilt
-  // from its piece's members.
   for (const [day, rows] of asStubs) {
-    const name = base.pieces[day]
-    const keys = name ? await readKeys(state.dir, name) : null
-    const missing = rows.filter(([path]) => !isKeyList(keys?.[path]))
-    const files = name && missing.length > 0 ? await readMembersAt(join(state.dir, name), missing) : null
+    const lists = base.pieces[day] ? await readKeyLists(state.dir, base.pieces[day]!, rows) : null
     for (const [path, row] of rows) {
-      const file = files?.get(path)
-      const list = file ? keysOf(file) : keys?.[path]
-      if (!isKeyList(list)) { markPathDirty(state, provider, path); continue }
+      const list = lists?.get(path)
+      if (!list) { markPathDirty(state, provider, path); continue }
       members.set(path, { fingerprint: row.fingerprint, hasPr: (row.flags & ROW_PR) !== 0, keys: list, lo: row.lo, hi: row.hi, seq: 0 })
     }
   }

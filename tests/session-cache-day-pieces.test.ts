@@ -241,4 +241,27 @@ describe('a narrow query and an older transcript', () => {
     expect(await narrow()).toEqual([0])
     expect(await readFile(join(sessionCacheDir(), 'envelope.json'), 'utf-8')).toBe(envelope)
   })
+
+  it('lets the cached June file keep the calls a fork made today replays', async () => {
+    await session('june', '2099-06-10T10:00:00Z')
+    await parseAllSessions()
+    // A fork of the June session: its message id restated under today's date, then a new call.
+    const dir = join(home(), 'projects', 'proj')
+    await writeFile(join(dir, 'fork.jsonl'), [
+      { type: 'user', uuid: 'u-fork-0', sessionId: 'fork', timestamp: '2099-09-23T10:00:00Z', cwd: '/tmp/proj', message: { role: 'user', content: 'go' } },
+      { type: 'assistant', uuid: 'a-fork-0', sessionId: 'fork', timestamp: '2099-09-23T10:00:00Z', cwd: '/tmp/proj',
+        message: { id: 'msg-june', type: 'message', role: 'assistant', model: 'claude-sonnet-4-5', content: [], usage: { input_tokens: 100, output_tokens: 50 } } },
+      { type: 'user', uuid: 'u-fork-1', sessionId: 'fork', timestamp: '2099-09-23T10:01:00Z', cwd: '/tmp/proj', message: { role: 'user', content: 'more' } },
+      { type: 'assistant', uuid: 'a-fork-1', sessionId: 'fork', timestamp: '2099-09-23T10:01:00Z', cwd: '/tmp/proj',
+        message: { id: 'msg-fork', type: 'message', role: 'assistant', model: 'claude-sonnet-4-5', content: [], usage: { input_tokens: 100, output_tokens: 50 } } },
+    ].map(line => JSON.stringify(line)).join('\n') + '\n')
+    const calls = async (range?: { start: Date; end: Date }): Promise<number> => {
+      clearSessionCache()
+      clearLoadCacheMemo()
+      return (await parseAllSessions(range, 'claude')).reduce((n, p) => n + p.totalApiCalls, 0)
+    }
+    expect(await calls({ start: new Date('2099-09-23T00:00:00.000Z'), end: new Date('2099-09-23T23:59:59.999Z') })).toBe(1)
+    expect(await calls({ start: new Date('2099-06-01T00:00:00.000Z'), end: new Date('2099-06-30T23:59:59.999Z') })).toBe(1)
+    expect(await calls()).toBe(2)
+  })
 })
