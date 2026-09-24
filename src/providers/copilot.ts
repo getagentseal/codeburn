@@ -2448,7 +2448,7 @@ function createJetBrainsParser(
 // ---------------------------------------------------------------------------
 
 function createOtelParser(
-  source: SessionSource,
+  source: OTelSessionSource,
   seenKeys: Set<string>
 ): SessionParser {
   return {
@@ -2470,7 +2470,7 @@ function createOtelParser(
         }>(
           `SELECT DISTINCT
              sa_conv.value AS conversation_id,
-             COALESCE(sa_repo.value, 'copilot-chat') AS project,
+             sa_repo.value AS project,
              MIN(s.start_time_ms) AS min_start
            FROM spans s
            LEFT JOIN span_attributes sa_conv
@@ -2519,6 +2519,24 @@ function createOtelParser(
           // spans table once per chat span below (avoids an N+1).
           const traceIdArr = [...traceIds]
           const tracePlaceholders = traceIdArr.map(() => '?').join(',')
+
+          if (!convRow.project && source.workspaceBySessionId?.size) {
+            const sessionIds = db.query<{ value: string }>(
+              `SELECT DISTINCT sa.value FROM spans s
+               JOIN span_attributes sa ON s.span_id = sa.span_id
+               WHERE s.trace_id IN (${tracePlaceholders})
+                 AND sa.key IN ('copilot_chat.chat_session_id', 'copilot_chat.parent_chat_session_id')
+               ORDER BY sa.key, sa.value`,
+              traceIdArr
+            ).map(r => r.value)
+            for (const id of [conversationId, ...sessionIds]) {
+              const workspace = source.workspaceBySessionId.get(id)
+              if (workspace) {
+                project = workspace
+                break
+              }
+            }
+          }
           const traceSpans = db.query<{
             span_id: string
             trace_id: string
@@ -3026,6 +3044,9 @@ function createSessionStoreParser(
 interface OTelSessionSource extends SessionSource {
   conversationId?: string
   sourceType: 'otel'
+  // VS Code chat session id -> workspace name, for spans that carry no
+  // repository attribute (see mapChatSessionWorkspaces).
+  workspaceBySessionId?: Map<string, string>
 }
 
 interface JsonlSessionSource extends SessionSource {
@@ -3405,23 +3426,64 @@ export function getVSCodeGlobalStorageDirs(home: string, os: string): string[] {
   ]
 }
 
-async function resolveWorkspaceProject(wsDir: string, hashDir: string): Promise<string> {
-  let project = hashDir
+// workspace.json holds `folder` (single root) or `workspace` (a multi-root
+// .code-workspace file); either is a URI, local (file://) or remote
+// (vscode-remote://wsl%2Bubuntu/...). Untitled multi-root workspaces point at
+// an internal .../Workspaces/<id>/workspace.json that names nothing.
+async function readWorkspaceName(wsDir: string, hashDir: string): Promise<string | null> {
   try {
     const wsJson = await readSessionFile(join(wsDir, hashDir, 'workspace.json'))
-    if (wsJson) {
-      const data = JSON.parse(wsJson) as { folder?: string }
-      if (typeof data.folder === 'string') {
-        // folder is a URI like 'file:///home/user/myapp' or 'file:///C:/Users/...'
-        const folder = data.folder.replace(/^file:\/\//, '').replace(/\/+$/, '')
-        const name = basename(folder)
-        if (name) project = name
+    if (!wsJson) return null
+    const data = JSON.parse(wsJson) as { folder?: unknown; workspace?: unknown }
+    const uri = typeof data.folder === 'string' ? data.folder : typeof data.workspace === 'string' ? data.workspace : null
+    if (!uri) return null
+    const name = decodeURIComponent(basename(uri.replace(/^file:\/\//, '').replace(/\/+$/, '')))
+    if (!name || name === 'workspace.json') return null
+    return name.replace(/\.code-workspace$/, '') || null
+  } catch {
+    return null
+  }
+}
+
+async function resolveWorkspaceProject(wsDir: string, hashDir: string): Promise<string> {
+  return (await readWorkspaceName(wsDir, hashDir)) ?? hashDir
+}
+
+// VS Code chat session id -> workspace name. The session id is the
+// chatSessions/<id>.jsonl (or legacy .json) file name, and Copilot Chat puts
+// the same id on its OTel spans as gen_ai.conversation.id and
+// copilot_chat.chat_session_id. VS Code copies a session file when a
+// workspace's storage id changes, so an id found in two workspaces goes to the
+// most recently written copy.
+async function mapChatSessionWorkspaces(workspaceStorageDirs: string[]): Promise<Map<string, string>> {
+  const found = new Map<string, { project: string; mtimeMs: number }>()
+  for (const wsDir of workspaceStorageDirs) {
+    let hashDirs: string[]
+    try {
+      hashDirs = await readdir(wsDir)
+    } catch {
+      continue
+    }
+    for (const hashDir of hashDirs) {
+      let files: string[]
+      try {
+        files = await readdir(join(wsDir, hashDir, 'chatSessions'))
+      } catch {
+        continue
+      }
+      const project = await readWorkspaceName(wsDir, hashDir)
+      if (!project) continue
+      for (const file of files) {
+        const id = file.replace(/\.jsonl?$/, '')
+        if (id === file) continue
+        const s = await stat(join(wsDir, hashDir, 'chatSessions', file)).catch(() => null)
+        if (!s?.isFile()) continue
+        const prev = found.get(id)
+        if (!prev || s.mtimeMs > prev.mtimeMs) found.set(id, { project, mtimeMs: s.mtimeMs })
       }
     }
-  } catch {
-    // workspace.json may be absent or malformed
   }
-  return project
+  return new Map([...found].map(([id, v]) => [id, v.project]))
 }
 
 async function hasChatSessionFiles(chatSessionsDir: string): Promise<boolean> {
@@ -3650,6 +3712,10 @@ export function createCopilotProvider(
           try {
             const otelSources = await discoverOtelSessions(dbPath)
             discoveredOtel = otelSources.length > 0
+            if (discoveredOtel) {
+              const workspaceBySessionId = await mapChatSessionWorkspaces(getWsDirs())
+              for (const otelSource of otelSources) otelSource.workspaceBySessionId = workspaceBySessionId
+            }
             sources.push(...otelSources)
           } catch {
             // OTel discovery failed — fall through to JSONL

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtemp, mkdir, writeFile, rm } from 'fs/promises'
+import { mkdtemp, mkdir, writeFile, rm, utimes } from 'fs/promises'
 import { join, posix, win32 } from 'path'
 import { tmpdir } from 'os'
 import { createRequire } from 'node:module'
@@ -2006,6 +2006,157 @@ describe('copilot provider - OTel cache token parsing', () => {
     for (const kw of ['for', 'do', 'done']) {
       expect(bash).not.toContain(kw)
     }
+  })
+})
+
+describe('copilot provider - OTel workspace attribution (#1529)', () => {
+  let tmpDir: string
+  let dbPath: string
+  let wsDir: string
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'copilot-otel-ws-test-'))
+    dbPath = join(tmpDir, 'agent-traces.db')
+    wsDir = join(tmpDir, 'workspaceStorage')
+    vi.stubEnv('CODEBURN_COPILOT_OTEL_DB', dbPath)
+    vi.stubEnv('CODEBURN_COPILOT_DISABLE_OTEL', '')
+  })
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true })
+    vi.unstubAllEnvs()
+  })
+
+  async function workspace(hash: string, workspaceJson: object | null, sessionFiles: string[], mtime?: Date): Promise<void> {
+    const dir = join(wsDir, hash, 'chatSessions')
+    await mkdir(dir, { recursive: true })
+    if (workspaceJson) await writeFile(join(wsDir, hash, 'workspace.json'), JSON.stringify(workspaceJson))
+    for (const file of sessionFiles) {
+      const path = join(dir, file)
+      const sessionId = file.replace(/\.jsonl?$/, '')
+      await writeFile(path, JSON.stringify({ kind: 0, v: { version: 3, creationDate: 1780157113020, sessionId, requests: [] } }) + '\n')
+      if (mtime) await utimes(path, mtime, mtime)
+    }
+  }
+
+  function chatSpan(spanId: string, conversationId: string, extra: Record<string, string | number> = {}): void {
+    insertSpan(dbPath, {
+      spanId, traceId: `trace-${spanId}`, operationName: 'chat', startTimeMs: 1780157113020,
+      attrs: {
+        'gen_ai.conversation.id': conversationId,
+        'gen_ai.response.model': 'gpt-4.1',
+        'gen_ai.usage.input_tokens': 1000,
+        'gen_ai.usage.output_tokens': 100,
+        'copilot_chat.repo.head_branch_name': 'main',
+        'copilot_chat.repo.head_commit_hash': 'abc123',
+        ...extra,
+      },
+    })
+  }
+
+  async function projectsBySpan(): Promise<Record<string, string>> {
+    const provider = createCopilotProvider('/nonexistent/jsonl', wsDir, '/nonexistent/global')
+    const sources = await provider.discoverSessions()
+    const otel = sources.filter(s => s.path === dbPath)
+    expect(otel).toHaveLength(1)
+    const out: Record<string, string> = {}
+    for await (const call of provider.createSessionParser(otel[0]!, new Set()).parse()) {
+      out[call.deduplicationKey!.replace('copilot-otel:', '')] = call.project!
+    }
+    return out
+  }
+
+  it('attributes each conversation to the workspace whose chatSessions hold its id', async () => {
+    if (!isSqliteAvailable()) return
+    createOtelDb(dbPath)
+
+    await workspace('h-win', { folder: 'file:///c%3A/Users/dev/wkspace-example' }, ['conv-win.jsonl'])
+    await workspace('h-multi', { workspace: 'file:///home/dev/team%20apps.code-workspace' }, ['conv-multi.jsonl'])
+    await workspace('h-wsl', { folder: 'vscode-remote://wsl%2Bubuntu/home/dev/wsl-app' }, ['conv-wsl.jsonl'])
+    await workspace('h-ssh', { folder: 'vscode-remote://ssh-remote%2Bbox/srv/ssh-app/' }, ['conv-ssh.jsonl'])
+    await workspace('h-untitled', { workspace: 'file:///Users/dev/Library/Application%20Support/Code/Workspaces/1780000000000/workspace.json' }, ['conv-untitled.jsonl'])
+    await workspace('h-nojson', null, ['conv-nojson.jsonl'])
+    await workspace('h-legacy', { folder: 'file:///home/dev/legacy-app' }, ['conv-legacy.json'])
+    await workspace('h-repo', { folder: 'file:///home/dev/checkout-dir' }, ['conv-repo.jsonl'])
+
+    chatSpan('s-win', 'conv-win')
+    chatSpan('s-multi', 'conv-multi')
+    chatSpan('s-wsl', 'conv-wsl')
+    chatSpan('s-ssh', 'conv-ssh')
+    chatSpan('s-untitled', 'conv-untitled')
+    chatSpan('s-nojson', 'conv-nojson')
+    chatSpan('s-legacy', 'conv-legacy')
+    chatSpan('s-unknown', 'conv-unknown')
+    chatSpan('s-repo', 'conv-repo', { 'github.copilot.git.repository': 'org/real-repo' })
+
+    expect(await projectsBySpan()).toEqual({
+      's-win': 'wkspace-example',
+      's-multi': 'team apps',
+      's-wsl': 'wsl-app',
+      's-ssh': 'ssh-app',
+      's-untitled': 'copilot-chat',
+      's-nojson': 'copilot-chat',
+      's-legacy': 'legacy-app',
+      's-unknown': 'copilot-chat',
+      's-repo': 'real-repo',
+    })
+  })
+
+  it('links through copilot_chat.chat_session_id when the conversation id is a request id', async () => {
+    if (!isSqliteAvailable()) return
+    createOtelDb(dbPath)
+    await workspace('h1', { folder: 'file:///home/dev/app-one' }, ['vscode-session-1.jsonl'])
+    // Older Copilot Chat builds set gen_ai.conversation.id on chat spans to the
+    // request id; the VS Code session id rides on copilot_chat.chat_session_id.
+    chatSpan('s-req', 'request-7f3a', { 'copilot_chat.chat_session_id': 'vscode-session-1' })
+    // A subagent's chat span carries its invocation id as chat_session_id and
+    // the owning VS Code session as parent_chat_session_id.
+    chatSpan('s-sub', 'request-9c1d', {
+      'copilot_chat.chat_session_id': 'subagent-invocation-1',
+      'copilot_chat.parent_chat_session_id': 'vscode-session-1',
+    })
+
+    expect(await projectsBySpan()).toEqual({ 's-req': 'app-one', 's-sub': 'app-one' })
+  })
+
+  it('picks the most recently written copy when one conversation is in two workspaces', async () => {
+    if (!isSqliteAvailable()) return
+    createOtelDb(dbPath)
+    await workspace('h-old', { folder: 'file:///home/dev/old-name' }, ['conv-moved.jsonl'], new Date('2026-09-01T00:00:00Z'))
+    await workspace('h-new', { folder: 'file:///home/dev/new-name' }, ['conv-moved.jsonl'], new Date('2026-09-20T00:00:00Z'))
+    chatSpan('s-moved', 'conv-moved')
+
+    expect(await projectsBySpan()).toEqual({ 's-moved': 'new-name' })
+  })
+
+  it('changes only the project, never the tokens or cost', async () => {
+    if (!isSqliteAvailable()) return
+    createOtelDb(dbPath)
+    chatSpan('s-a', 'conv-a')
+    chatSpan('s-b', 'conv-b', { 'gen_ai.usage.cache_read.input_tokens': 5000 })
+
+    const parse = async (dir: string) => {
+      const provider = createCopilotProvider('/nonexistent/jsonl', dir, '/nonexistent/global')
+      const [source] = (await provider.discoverSessions()).filter(s => s.path === dbPath)
+      const calls: ParsedProviderCall[] = []
+      for await (const call of provider.createSessionParser(source!, new Set()).parse()) calls.push(call)
+      return calls.sort((x, y) => x.deduplicationKey!.localeCompare(y.deduplicationKey!))
+    }
+    const before = await parse('/nonexistent/ws')
+    await workspace('h-a', { folder: 'file:///home/dev/proj-a' }, ['conv-a.jsonl'])
+    const after = await parse(wsDir)
+
+    expect(before.map(c => c.project)).toEqual(['copilot-chat', 'copilot-chat'])
+    expect(after.map(c => c.project)).toEqual(['proj-a', 'copilot-chat'])
+    expect(after.map(c => ({ ...c, project: '' }))).toEqual(before.map(c => ({ ...c, project: '' })))
+  })
+
+  it('names a multi-root workspace after its .code-workspace file for chatSessions too', async () => {
+    await workspace('h-multi', { workspace: 'file:///home/dev/team.code-workspace' }, ['chat-multi-root.jsonl'])
+    vi.stubEnv('CODEBURN_COPILOT_DISABLE_OTEL', '1')
+    const provider = createCopilotProvider('/nonexistent/jsonl', wsDir, '/nonexistent/global')
+    const sources = await provider.discoverSessions()
+    expect(sources.filter(s => s.path.includes('chat-multi-root')).map(s => s.project)).toEqual(['team'])
   })
 })
 

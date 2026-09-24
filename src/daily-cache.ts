@@ -211,7 +211,13 @@ import type { DateRange, ProjectSummary } from './types.js'
 // OpenCode recorded instead of $0, and Vertex turns land on a "(Vertex)" row.
 // Days finalized at v36 hold $0 and the unrouted row; the bump re-derives
 // surviving days. Call counts are unchanged.
-export const DAILY_CACHE_VERSION = 37
+// v38: #1529 Copilot OTel conversations land on their VS Code workspace
+// instead of `copilot-chat`. Only the per-project split moves; cost, tokens and
+// calls are unchanged. Settled days keep the old split unless they re-derive,
+// and the session cache still holds their calls, so the bump re-derives them.
+// Calls whose spans were already pruned from agent-traces.db keep the old
+// label: the copilot re-parse only replaces calls the DB still holds.
+export const DAILY_CACHE_VERSION = 38
 const MIN_SUPPORTED_VERSION = 28
 
 /// Providers whose per-day CALL COUNT means something different at
