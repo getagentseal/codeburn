@@ -1275,8 +1275,10 @@ async function* shardLines(path: string): AsyncGenerator<ShardLine> {
     let pos = 2
     let lineStart = 2
     let parts: Buffer[] = []
+    // One buffer for the whole read: a fresh one per chunk is off-heap memory
+    // that only a GC returns, which shows up as RSS on a large shard.
+    const chunk = Buffer.allocUnsafe(SHARD_READ_CHUNK)
     for (;;) {
-      const chunk = Buffer.allocUnsafe(SHARD_READ_CHUNK)
       const { bytesRead } = await handle.read(chunk, 0, SHARD_READ_CHUNK, pos)
       if (bytesRead === 0) break
       const view = chunk.subarray(0, bytesRead)
@@ -1290,7 +1292,7 @@ async function* shardLines(path: string): AsyncGenerator<ShardLine> {
         from = nl + 1
         lineStart = pos + from
       }
-      if (from < bytesRead) parts.push(view.subarray(from))
+      if (from < bytesRead) parts.push(Buffer.from(view.subarray(from)))
       pos += bytesRead
     }
     if (Buffer.concat(parts).toString('utf-8') !== '}') throw new Error('truncated shard')
@@ -1387,37 +1389,48 @@ async function readScopedShard(dir: string, name: string, bucket: string, startM
       if (line.offset < 0) legacy = true
       const file = shardLineFile(line)
       if (!validateCachedFile(file)) return null
-      let lo = Infinity
-      let hi = -Infinity
-      for (const turn of file.turns) {
-        for (const call of turn.calls) {
-          const ms = Date.parse(call.timestamp)
-          if (ms < lo) lo = ms
-          if (ms > hi) hi = ms
-        }
-      }
-      if (fileNeeded(line.key, file, lo, hi, startMs, endMs)) {
-        members.push([line.key, file])
-        continue
-      }
-      members.push([line.key, {
-        fingerprint: file.fingerprint,
-        bucket,
-        until: cacheFileSpan(file).until,
-        hasPr: (file.prLinks?.length ?? 0) > 0,
-        keys: file.turns.map(turn => turn.calls.map(call => call.deduplicationKey)),
-        lo,
-        hi,
-        seq: 0,
-        name,
-        offset: line.offset,
-        length: line.length,
-      }])
+      members.push([line.key, scopedMember(line.key, file, bucket, name, line.offset, line.length, startMs, endMs)])
     }
     return { members, legacy }
   } catch {
     return null
   }
+}
+
+function scopedMember(path: string, file: CachedFile, bucket: string, name: string, offset: number, length: number, startMs: number, endMs: number): CachedFile | CacheStub {
+  let lo = Infinity
+  let hi = -Infinity
+  for (const turn of file.turns) {
+    for (const call of turn.calls) {
+      const ms = Date.parse(call.timestamp)
+      if (ms < lo) lo = ms
+      if (ms > hi) hi = ms
+    }
+  }
+  if (fileNeeded(path, file, lo, hi, startMs, endMs)) return file
+  return {
+    fingerprint: file.fingerprint,
+    bucket,
+    until: cacheFileSpan(file).until,
+    hasPr: (file.prLinks?.length ?? 0) > 0,
+    keys: file.turns.map(turn => turn.calls.map(call => call.deduplicationKey)),
+    lo,
+    hi,
+    seq: 0,
+    name,
+    offset,
+    length,
+  }
+}
+
+// Every turn month of the shard lies inside [startMs, endMs], so nearly all of
+// it is needed: streaming it member by member would only cost more than
+// main's whole-file parse.
+function shardWithinRange(bucket: string, until: string, startMs: number, endMs: number): boolean {
+  if (bucket === UNDATED_BUCKET) return false
+  const [y1, m1] = bucket.split('-').map(Number) as [number, number]
+  const [y2, m2] = until.split('-').map(Number) as [number, number]
+  return Date.UTC(y1, m1 - 1, 1) >= startMs && Date.UTC(y2, m2, 1) - 1 <= endMs
 }
 
 // Shards a resident process (codeburn serve) keeps parsed between requests,
@@ -1565,7 +1578,8 @@ export async function loadCache(scope?: CacheLoadScope): Promise<SessionCache> {
     for (const [bucket, ref] of Object.entries(meta.shards)) {
       if (loaded && !shardInScope(bucket, ref.until, scope!)) continue
       loaded?.add(bucket)
-      pending.push({ bucket, name: ref.name, files: stubs ? null : loadShardMemoized(dir, ref.name) })
+      const streamed = stubs && !shardWithinRange(bucket, ref.until, ranged!.startMs, ranged!.endMs)
+      pending.push({ bucket, name: ref.name, files: streamed ? null : loadShardMemoized(dir, ref.name) })
     }
     reads.push((async () => {
       let seq = 0
@@ -1573,7 +1587,10 @@ export async function loadCache(scope?: CacheLoadScope): Promise<SessionCache> {
         let members: Array<[string, CachedFile | CacheStub]> | null = null
         if (read) {
           const files = await read
-          if (files) members = Object.entries(files)
+          if (files) {
+            members = Object.entries(files)
+            if (stubs) members = members.map(([path, file]) => [path, scopedMember(path, file as CachedFile, bucket, name, -1, 0, ranged!.startMs, ranged!.endMs)])
+          }
         } else {
           const scoped = await readScopedShard(dir, name, bucket, ranged!.startMs, ranged!.endMs)
           if (scoped?.legacy) state.legacy.add(`${provider}\0${bucket}`)
