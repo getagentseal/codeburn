@@ -1162,6 +1162,12 @@ export function isExpectedFreeModel(model: string): boolean {
   return false
 }
 
+/// The cost a tool recorded for a call CodeBurn prices at $0, unless $0 is the
+/// declared price (local, local-savings, flat-rate, zero-rate override).
+export function recordedCostFallback(model: string, costUSD: number, recorded: number | undefined): number | undefined {
+  return costUSD === 0 && typeof recorded === 'number' && recorded > 0 && !isExpectedFreeModel(model) ? recorded : undefined
+}
+
 export function findUnpricedModels(
   rows: Iterable<{ model: string; calls: number; cost: number; tokens?: number }>,
 ): UnpricedModelUsage[] {

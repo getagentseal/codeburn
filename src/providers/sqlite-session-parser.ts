@@ -1,7 +1,7 @@
 import { readdir } from 'fs/promises'
 import { join } from 'path'
 
-import { billableOutputTokens, calculateCost, routeFromProviderField } from '../models.js'
+import { billableOutputTokens, calculateCost, recordedCostFallback, routeFromProviderField } from '../models.js'
 import {
   isSqliteAvailable,
   getSqliteLoadError,
@@ -432,7 +432,7 @@ export function createSqliteSessionParser(
               // per-message pricing in buildAssistantCall. (#1334)
               const outputForCost = billableOutputTokens(config.providerName, sessionTokens.output, sessionTokens.reasoning)
               let costUSD = calculateCost(model, sessionTokens.input, outputForCost, sessionTokens.cacheWrite, sessionTokens.cacheRead, 0)
-              const fallbackCostUSD = costUSD === 0 && sessionTokens.cost > 0 ? sessionTokens.cost : undefined
+              const fallbackCostUSD = recordedCostFallback(model, costUSD, sessionTokens.cost)
               if (fallbackCostUSD) costUSD = fallbackCostUSD
               yield {
                 provider: config.providerName,

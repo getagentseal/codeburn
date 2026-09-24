@@ -10,7 +10,7 @@ import { join } from 'path'
 import { tmpdir } from 'os'
 
 import { isSqliteAvailable } from '../src/sqlite.js'
-import { modelRowKey, setPriceOverrides } from '../src/models.js'
+import { modelRowKey, setFlatRateModels, setPriceOverrides } from '../src/models.js'
 import { clearSessionCache, parseAllSessions } from '../src/parser.js'
 
 const root = join(tmpdir(), `opencode-vertex-cost-${process.pid}-${Date.now()}`)
@@ -82,7 +82,7 @@ beforeEach(() => {
   writeDb()
 })
 
-afterEach(() => setPriceOverrides({}))
+afterEach(() => { setPriceOverrides({}); setFlatRateModels([]) })
 afterAll(() => rmSync(root, { recursive: true, force: true }))
 
 it.skipIf(!isSqliteAvailable())('prices Vertex ids from tokens on a Vertex row and keeps an unpriceable recorded cost cold and warm', async () => {
@@ -106,4 +106,16 @@ it.skipIf(!isSqliteAvailable())('lets a later price override win over the record
   clearSessionCache()
   const warm = await costByRow()
   expect(warm['vertex-private-model-x (Vertex)']).toBeCloseTo(1000 * 1e-6 + 100 * 2e-6, 12)
+})
+
+it.skipIf(!isSqliteAvailable())('drops the recorded cost once the user declares the id free (flat-rate or zero-rate override)', async () => {
+  clearSessionCache()
+  await costByRow()
+  setFlatRateModels(['vertex-private-model-x'])
+  clearSessionCache()
+  expect((await costByRow())['vertex-private-model-x (Vertex)']).toBe(0)
+  setFlatRateModels([])
+  setPriceOverrides({ 'vertex-private-model-x': { input: 0, output: 0 } })
+  clearSessionCache()
+  expect((await costByRow())['vertex-private-model-x (Vertex)']).toBe(0)
 })

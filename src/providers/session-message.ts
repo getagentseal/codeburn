@@ -1,4 +1,4 @@
-import { billableOutputTokens, calculateCost, routeFromProviderField } from '../models.js'
+import { billableOutputTokens, calculateCost, recordedCostFallback, routeFromProviderField } from '../models.js'
 import { extractBashCommands } from '../bash-utils.js'
 import type { ParsedProviderCall } from './types.js'
 
@@ -144,7 +144,7 @@ export function buildAssistantCall(opts: {
     0,
   )
 
-  const fallbackCostUSD = costUSD === 0 && typeof data.cost === 'number' && data.cost > 0 ? data.cost : undefined
+  const fallbackCostUSD = recordedCostFallback(model, costUSD, data.cost)
   if (fallbackCostUSD) costUSD = fallbackCostUSD
 
   return {

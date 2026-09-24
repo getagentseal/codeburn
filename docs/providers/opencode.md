@@ -86,8 +86,10 @@ this shared provider-field mapping changes, so warm and cold reads agree.
 - Each message's `parts` are indexed; preserving the order matters for reasoning-token correctness.
 - Tokens are reported across `input`, `output`, `reasoning`, `cache.read`, and `cache.write`. Anthropic semantics.
 - A turn or session rollup whose model CodeBurn cannot price keeps OpenCode's
-  recorded `cost` (as `fallbackCostUSD` on the cached call). Tokens still win
-  whenever the id prices, including after a catalog update or price override.
+  recorded `cost` (as `fallbackCostUSD` on the cached call), unless the user
+  declared the id free (`model-flat-rate`, a zero-rate price override, a local
+  model). Tokens still win whenever the id prices, including after a catalog
+  update or price override.
 - Assistant messages with missing router usage are kept as zero-cost calls
   when their parts contain non-empty text or tool activity. Empty zero-usage
   assistant placeholders are still skipped.
