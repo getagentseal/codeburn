@@ -26,6 +26,9 @@ export type UpdateStatus = {
   updateAvailable: boolean
   /** The release tag to link when an update is available (else null). */
   tag: string | null
+  /** A Microsoft Store (AppX) install: the Store delivers updates, on its own schedule, so
+   *  GitHub is never asked and nothing is offered. */
+  storeManaged?: boolean
 }
 
 type GitHubRelease = { tag_name?: string }
@@ -79,6 +82,7 @@ export type UpdateChecker = {
 
 export function createUpdateChecker(opts: {
   currentVersion: string
+  storeManaged?: boolean
   /** Injected in tests; defaults to the real GitHub read. */
   fetchReleasesImpl?: (signal: AbortSignal) => Promise<GitHubRelease[]>
   now?: () => number
@@ -91,6 +95,13 @@ export function createUpdateChecker(opts: {
   let cached = baselineStatus(opts.currentVersion)
   let lastCheckedAt = 0
   let inflight: Promise<UpdateStatus> | null = null
+
+  // A release is tagged on GitHub before the Store has certified it, so the GitHub feed would
+  // announce a version the Store cannot install yet (#1520).
+  if (opts.storeManaged) {
+    const status: UpdateStatus = { ...baselineStatus(opts.currentVersion), storeManaged: true }
+    return { getStatus: () => Promise.resolve(status), check: () => Promise.resolve(status) }
+  }
 
   const check = (): Promise<UpdateStatus> => {
     if (inflight) return inflight

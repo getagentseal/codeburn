@@ -1163,9 +1163,12 @@ async function uninstallWindowsMenubar(options: InstallOptions): Promise<Install
 /// or `reg` by bare name lets anything dropped next to the CLI impersonate a system tool. Same
 /// rule the tray app follows (windows/src-tauri/src/cli.rs: system32_path).
 export function resolveSystem32Path(exe: string, env: NodeJS.ProcessEnv = process.env): string {
+  return `${windowsDir(env)}\\System32\\${exe}`
+}
+
+function windowsDir(env: NodeJS.ProcessEnv): string {
   const root = env.SystemRoot
-  const base = root && /^[a-zA-Z]:[\\/]/.test(root) ? root.replace(/[\\/]+$/, '') : 'C:\\Windows'
-  return `${base}\\System32\\${exe}`
+  return root && /^[a-zA-Z]:[\\/]/.test(root) ? root.replace(/[\\/]+$/, '') : 'C:\\Windows'
 }
 
 /// Reads `reg query ... /s` output, which prints one blank-line separated block per subkey.
@@ -1205,6 +1208,8 @@ export const STORE_IDENTITY_NAME = 'Codeburn.CodeBurn'
 /// Where the tray app sits inside that package: electron-builder puts extraResources under
 /// `app\resources`, and app/build/appx-extensions.xml names the same path in its startup task.
 const STORE_TRAY_SEGMENTS = ['app', 'resources', 'menubar', WINDOWS_BINARY_NAME]
+/// The package's one Application (app/package.json, build.appx.applicationId). Same drift test.
+export const STORE_APP_ID = 'CodeBurn'
 /// Get-AppxPackage on a warm machine answers well inside a second, but a cold PowerShell behind
 /// a slow disk or a policy-loaded profile can take much longer, and `codeburn menubar` is
 /// interactive. Past this the answer is "no Store install" and the .msi route takes over.
@@ -1257,6 +1262,15 @@ export async function findStoreMenubar(
   if (!installLocation) return undefined
   const exePath = join(installLocation, ...STORE_TRAY_SEGMENTS)
   return (await exists(exePath)) ? { installLocation, exePath } : undefined
+}
+
+/// The AppUserModelID to activate the Store package by, read off its install folder, which
+/// Windows names after the package full name: `<Name>_<Version>_<Arch>_<ResourceId>_<PublisherId>`.
+/// The family name is `<Name>_<PublisherId>`.
+export function storeAppUserModelId(installLocation: string): string | undefined {
+  const folder = installLocation.split(/[\\/]/).filter(Boolean).pop() ?? ''
+  const match = /^([^_]+)_[^_]+_[^_]+_[^_]*_([^_]+)$/.exec(folder)
+  return match ? `${match[1]}_${match[2]}!${STORE_APP_ID}` : undefined
 }
 
 async function queryStoreInstallLocation(env: NodeJS.ProcessEnv): Promise<string> {
@@ -1435,8 +1449,15 @@ async function installWindowsMenubarApp(options: InstallOptions): Promise<Instal
     if (installed) {
       log(`A separate .msi install is also present at ${installed.exePath}; leaving it in place and using the Store copy.`)
     }
-    launch(store.exePath)
-    log('Launched CodeBurn Menubar.')
+    // Files under WindowsApps run only inside their package, so spawning the tray exe from a
+    // console fails with EPERM (#1520). Activating the package starts the desktop app, which
+    // starts the tray app when its Menu bar switch is on (the default).
+    const aumid = storeAppUserModelId(store.installLocation)
+    if (!aumid) {
+      throw new Error(`Could not work out how to open the Store package at ${store.installLocation}; open CodeBurn from the Start menu instead.`)
+    }
+    launch(`${windowsDir(env)}\\explorer.exe`, [`shell:AppsFolder\\${aumid}`])
+    log('Opened the CodeBurn desktop app, which starts CodeBurn Menubar. If the tray icon does not appear, turn on Menu bar in the app.')
     return { installedPath: store.exePath, launched: true }
   }
   if (decision.storePresent) {

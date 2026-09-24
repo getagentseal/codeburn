@@ -10,6 +10,7 @@ import {
   BUNDLED_RESULT_PREFIX,
   DESKTOP_APP_EXE,
   STAGED_MSI_FLAG,
+  STORE_APP_ID,
   STORE_IDENTITY_NAME,
   WINDOWS_RELEASE,
   assertStagedMsiPath,
@@ -23,6 +24,7 @@ import {
   menubarMarkerPath,
   parseInstalledWindowsMenubar,
   parseWindowsMsiVersion,
+  storeAppUserModelId,
   resolveLatestMenubarReleaseAssets,
   resolveSystem32Path,
   resolveVersionedMenubarReleaseAssets,
@@ -904,6 +906,26 @@ describe('the microsoft store identity', () => {
 
     expect(STORE_IDENTITY_NAME).toBe(appPackage.build?.appx?.identityName)
   })
+
+  it('matches build.appx.applicationId in app/package.json', async () => {
+    const packagePath = join(dirname(fileURLToPath(import.meta.url)), '..', 'app', 'package.json')
+    const appPackage = JSON.parse(await readFile(packagePath, 'utf8')) as {
+      build?: { appx?: { applicationId?: string } }
+    }
+
+    expect(STORE_APP_ID).toBe(appPackage.build?.appx?.applicationId)
+  })
+})
+
+describe('storeAppUserModelId', () => {
+  it('reads the family name off the package full name the install folder carries', () => {
+    expect(storeAppUserModelId('C:\\Program Files\\WindowsApps\\Codeburn.CodeBurn_0.9.24.0_x64__8wekyb3d8bbwe'))
+      .toBe('Codeburn.CodeBurn_8wekyb3d8bbwe!CodeBurn')
+  })
+
+  it('has no answer for a folder that is not a package full name', () => {
+    expect(storeAppUserModelId('C:\\dev\\codeburn\\app')).toBeUndefined()
+  })
 })
 
 /// The desktop app spawns this command and passes the staged installer by flag, so the flag's
@@ -999,6 +1021,7 @@ describe('findStoreMenubar', () => {
 
 describe('installMenubarApp with a store install', () => {
   const MSI_EXE = 'C:\\Program Files\\CodeBurn Menubar\\codeburn-menubar.exe'
+  const STORE_LAUNCH = `C:\\Windows\\explorer.exe shell:AppsFolder\\${STORE_IDENTITY_NAME}_8wekyb3d8bbwe!CodeBurn`
 
   let sandbox: string
   let packageDir: string
@@ -1013,7 +1036,7 @@ describe('installMenubarApp with a store install', () => {
       stagingDir: sandbox,
       env: { SystemRoot: 'C:\\Windows', LOCALAPPDATA: join(sandbox, 'Local') },
       log: (message: string) => { logs.push(message) },
-      launch: (exePath: string) => { launched.push(exePath) },
+      launch: (exePath: string, args: string[] = []) => { launched.push([exePath, ...args].join(' ')) },
       queryStorePackage: async () => { consulted.push('store'); return packageDir },
       queryRegistry: async () => { consulted.push('registry'); return '' },
       isTrayRunning: async () => false,
@@ -1045,7 +1068,9 @@ describe('installMenubarApp with a store install', () => {
     await rm(sandbox, { recursive: true, force: true })
   })
 
-  it('launches the packaged tray app instead of downloading an msi', async () => {
+  // The tray exe inside WindowsApps cannot be spawned from outside its package (spawn EPERM,
+  // #1520); the package is activated by its AppUserModelID instead.
+  it('opens the store package by its app id instead of downloading an msi', async () => {
     const result = await installMenubarApp({
       platform: 'win32',
       cliVersion: '0.9.20',
@@ -1055,10 +1080,10 @@ describe('installMenubarApp with a store install', () => {
     })
 
     expect(installerCalls).toEqual([])
-    expect(launched).toEqual([packagedExe])
+    expect(launched).toEqual([STORE_LAUNCH])
     expect(result).toEqual({ installedPath: packagedExe, launched: true })
     expect(logs.some(line => line.includes('Microsoft Store'))).toBe(true)
-    expect(logs).toContain('Launched CodeBurn Menubar.')
+    expect(logs.some(line => line.startsWith('Opened the CodeBurn desktop app'))).toBe(true)
   })
 
   // The uninstall registry is the one place a store install is invisible, so it must not be
@@ -1077,7 +1102,7 @@ describe('installMenubarApp with a store install', () => {
     })
 
     expect(installerCalls).toEqual([])
-    expect(launched).toEqual([packagedExe])
+    expect(launched).toEqual([STORE_LAUNCH])
     expect(result.installedPath).toBe(packagedExe)
     expect(logs.some(line => line.includes(MSI_EXE) && line.includes('leaving it in place'))).toBe(true)
   })

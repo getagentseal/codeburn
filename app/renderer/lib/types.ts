@@ -1052,6 +1052,8 @@ export type UpdateStatus = {
   latestVersion: string | null
   updateAvailable: boolean
   tag: string | null
+  /** A Microsoft Store install, which the Store updates; nothing is checked or offered. */
+  storeManaged?: boolean
 }
 
 /** The tray app and the Capacity Dock the Windows desktop app bundles (app/electron/menubar.ts).

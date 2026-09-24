@@ -1247,7 +1247,10 @@ function bootstrap(): void {
     // Update availability: check once at launch, then every 24h, pushing each
     // result to any open window. Never downloads/installs (unsigned builds);
     // errors are swallowed inside the checker as a silent no-op.
-    updateChecker = createUpdateChecker({ currentVersion: app.getVersion() })
+    updateChecker = createUpdateChecker({
+      currentVersion: app.getVersion(),
+      storeManaged: (process as NodeJS.Process & { windowsStore?: boolean }).windowsStore === true,
+    })
     const runUpdateCheck = () => { void updateChecker?.check().then(broadcastUpdateStatus) }
     runUpdateCheck()
     setInterval(runUpdateCheck, 24 * 60 * 60 * 1000)

@@ -38,6 +38,12 @@ describe('AboutModal update check', () => {
     expect(screen.queryByText(/latest version/i)).toBeNull()
   })
 
+  it('offers no update check on a store install', async () => {
+    mocks.getUpdateStatus.mockResolvedValue({ ...UNKNOWN, storeManaged: true })
+    renderAbout()
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Check for updates' })).toBeNull())
+  })
+
   it('reports up to date on the current version', async () => {
     mocks.getUpdateStatus.mockResolvedValue(SAME)
     renderAbout()

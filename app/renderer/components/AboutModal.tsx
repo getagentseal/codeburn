@@ -73,7 +73,7 @@ export function AboutModal({ socials = SOCIALS, openKey, onClose }: { socials?: 
                 </a>
               ))}
             </div>
-            <div className="about-modal-section about-modal-updates">
+            {!status?.storeManaged && <div className="about-modal-section about-modal-updates">
               <div className="about-modal-section-title">{t('shared.aboutModal.updatesTitle')}</div>
               <button
                 className="about-modal-update-button"
@@ -102,7 +102,7 @@ export function AboutModal({ socials = SOCIALS, openKey, onClose }: { socials?: 
                   )}
                 </p>
               )}
-            </div>
+            </div>}
           </div>
         </div>
         <div className="about-modal-credit">{t('shared.aboutModal.developedBy')}</div>
