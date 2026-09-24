@@ -488,7 +488,8 @@ function copilotRecords(outDir) {
   for (const r of exported.records ?? []) {
     if ((r.provider || '') !== 'copilot') continue
     acc.calls++
-    acc.cost += r.cost ?? 0
+    // 0.9.20 exported cents-rounded records; newer builds export them unrounded.
+    acc.cost += Math.round((r.cost ?? 0) * 100) / 100
     acc.inputTokens += r.inputTokens ?? 0
     acc.outputTokens += r.outputTokens ?? 0
     acc.cacheReadTokens += r.cacheReadTokens ?? 0
