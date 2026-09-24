@@ -246,16 +246,23 @@ function parseJsonlTranscript(raw: string): { turns: ParsedTurn[]; recognized: b
   let lastUserDisplay = ''
   let lastUserFull = ''
   let seenUser = false
+  let recognized = false
 
   for (const line of lines) {
-    let entry: { role?: string; message?: { content?: Array<{ type?: string; text?: string; name?: string; input?: unknown }> } }
+    let entry: { role?: string; type?: string; message?: { content?: Array<{ type?: string; text?: string; name?: string; input?: unknown }> } }
     try {
       entry = JSON.parse(line)
     } catch {
       continue
     }
 
+    // A turn that errored or was aborted before any assistant message leaves
+    // only a `turn_ended` line (or a user line and nothing else); that is a
+    // Cursor transcript with nothing to bill, not an unknown format.
+    if (entry.type === 'turn_ended') recognized = true
+
     if (entry.role === 'user') {
+      recognized = true
       const texts = normalizeContentBlocks(entry.message?.content)
         .filter(c => c.type === 'text')
         .map(c => c.text ?? '')
@@ -299,7 +306,7 @@ function parseJsonlTranscript(raw: string): { turns: ParsedTurn[]; recognized: b
     }
   }
 
-  return { turns, recognized: turns.length > 0 }
+  return { turns, recognized: recognized || turns.length > 0 }
 }
 
 function parseTranscript(raw: string): { turns: ParsedTurn[]; recognized: boolean } {

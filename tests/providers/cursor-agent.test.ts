@@ -247,6 +247,27 @@ describe('cursor-agent provider', () => {
     stderrSpy.mockRestore()
   })
 
+  it('does not warn for a jsonl transcript that ended before any assistant message', async () => {
+    const baseDir = await makeBaseDir()
+    const sessionDir = join(baseDir, 'projects', 'stub-proj', 'agent-transcripts', FIXED_UUID)
+    await mkdir(sessionDir, { recursive: true })
+    await writeFile(
+      join(sessionDir, `${FIXED_UUID}.jsonl`),
+      '{"type":"turn_ended","status":"error","error":"Other Models usage limit reached"}\n',
+    )
+
+    const provider = createCursorAgentProvider(baseDir)
+    const source = (await provider.discoverSessions())[0]!
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true)
+
+    const calls = await collectCalls(provider, source)
+
+    expect(calls).toHaveLength(0)
+    expect(stderrSpy).not.toHaveBeenCalled()
+
+    stderrSpy.mockRestore()
+  })
+
   it('discovers jsonl transcripts stored directly under project dir (workspace-less layout)', async () => {
     const baseDir = await makeBaseDir()
     const fixtureRoot = join(import.meta.dirname, '../fixtures/cursor-agent/workspace-less')
