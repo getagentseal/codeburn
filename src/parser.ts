@@ -5935,7 +5935,7 @@ async function parseAllSessionsInCacheScope(dateRange?: DateRange, providerFilte
   const loadScope = dateRange ? withinLoadWindow(monthScopeForRange(dateRange.start, dateRange.end)) : undefined
   const rangeStartMs = dateRange?.start.getTime()
   const cacheLoadStarted = performance.now()
-  let diskCache = await loadCache(loadScope)
+  let diskCache: SessionCache | null = await loadCache(loadScope)
   await cleanupOrphanedTempFiles()
   if (process.env['CODEBURN_VERBOSE'] === '1') {
     process.stderr.write(`codeburn: startup timing cache-load=${(performance.now() - cacheLoadStarted).toFixed(1)}ms complete=${isCacheComplete(diskCache, providerFilter, rangeStartMs)}\n`)
@@ -5972,7 +5972,6 @@ async function parseAllSessionsInCacheScope(dateRange?: DateRange, providerFilte
   // A complete cache refresh is a strict read/reconcile/parse/save transaction.
   // Keep the snapshot loaded before acquisition: timeout/unavailable paths serve
   // exactly this complete snapshot and never mutate or invalidate the holder.
-  const priorSnapshot = diskCache
   // Heartbeat the WAIT too, not just the parse behind it. This is the one place
   // a healthy process is deliberately idle for a long stretch, and the desktop
   // and menubar watchdogs read silence as a dead child - which is how a waiter
@@ -5990,8 +5989,11 @@ async function parseAllSessionsInCacheScope(dateRange?: DateRange, providerFilte
     process.stderr.write(`codeburn: startup timing refresh-lock=${(performance.now() - refreshWaitStarted).toFixed(1)}ms outcome=${refresh.outcome}\n`)
   }
   if (refresh.outcome === 'timed-out' || refresh.outcome === 'unavailable') {
-    return runParse(key, priorSnapshot, dateRange, providerFilter, { readOnly: true, burstSig, parseStartedAt })
+    return runParse(key, diskCache, dateRange, providerFilter, { readOnly: true, burstSig, parseStartedAt })
   }
+  // Every other outcome reloads, so the snapshot goes first: two views of a
+  // large cache are never held at once.
+  diskCache = null
   if (refresh.outcome === 'completed-by-other') {
     return runParse(key, await loadCache(loadScope), dateRange, providerFilter, { readOnly: true, burstSig, parseStartedAt })
   }
