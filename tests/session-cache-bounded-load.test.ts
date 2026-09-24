@@ -1,8 +1,7 @@
 // A ranged load holds the cached files its range cannot report on as stubs.
-// These pin what that must never cost: a save rewrites a bucket holding stubs
-// without losing or rebuilding their members, a single-line shard from an
-// older build converts on the next save, and a wider request in the same
-// process loads the members it now needs.
+// These pin what that must never cost: a save leaves the pieces of stubs
+// alone, a single-line v9 shard re-lays out into pieces, and a wider request
+// in the same process loads the members it now needs.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { mkdir, readFile, rm, writeFile } from 'fs/promises'
 import { existsSync } from 'fs'
@@ -70,22 +69,22 @@ async function publish(files: Record<string, CachedFile>): Promise<void> {
   clearLoadCacheMemo()
 }
 
-async function mayShard(): Promise<{ name: string; text: string }> {
-  const envelope = JSON.parse(await readFile(join(sessionCacheDir(), 'envelope.json'), 'utf-8'))
-  const name = envelope.providers.claude.shards['2026-05'].name as string
-  return { name, text: await readFile(join(sessionCacheDir(), name), 'utf-8') }
-}
-
-function memberLine(text: string, path: string): string | undefined {
-  return text.split('\n').find(line => line.startsWith(JSON.stringify(path) + ':'))?.replace(/,$/, '')
+async function pieceOf(day: string): Promise<{ name: string; text: string }> {
+  const dir = sessionCacheDir()
+  const envelope = JSON.parse(await readFile(join(dir, 'envelope.json'), 'utf-8'))
+  const index = JSON.parse(await readFile(join(dir, envelope.providers.claude.index), 'utf-8'))
+  const name = index.pieces[`2026-05-${day}`] as string
+  return { name, text: await readFile(join(dir, name), 'utf-8') }
 }
 
 describe('bounded ranged load', () => {
-  it('rewrites a bucket holding stubs by copying their lines, in full-load order', async () => {
+  it('rewrites only the pieces that changed, and keeps full-load order', async () => {
     await publish({ '/p/x.jsonl': fileAt('20', 'x'), '/p/y.jsonl': fileAt('02', 'y'), '/p/w.jsonl': fileAt('03', 'w') })
-    const before = await mayShard()
-    expect(before.text.startsWith('{\n')).toBe(true)
-    expect(JSON.parse(before.text)).toEqual({ '/p/x.jsonl': fileAt('20', 'x'), '/p/y.jsonl': fileAt('02', 'y'), '/p/w.jsonl': fileAt('03', 'w') })
+    const y = await pieceOf('02')
+    const w = await pieceOf('03')
+    const x = await pieceOf('20')
+    expect(x.text.startsWith('{\n')).toBe(true)
+    expect(JSON.parse(x.text)).toEqual({ '/p/x.jsonl': fileAt('20', 'x') })
 
     const cache = await loadCache(day20)
     const section = cache.providers['claude']!
@@ -100,53 +99,46 @@ describe('bounded ranged load', () => {
     markCacheDirty(cache, 'claude', '/p/z.jsonl')
     expect(await saveCache(cache)).toBe(true)
 
-    const after = await mayShard()
-    expect(after.name).not.toBe(before.name)
-    expect(memberLine(after.text, '/p/y.jsonl')).toBe(memberLine(before.text, '/p/y.jsonl'))
-    expect(memberLine(after.text, '/p/w.jsonl')).toBe(memberLine(before.text, '/p/w.jsonl'))
-    const parsed = JSON.parse(after.text) as Record<string, CachedFile>
-    // A full load would hold the re-parsed file after the loaded ones.
-    expect(Object.keys(parsed)).toEqual(['/p/y.jsonl', '/p/w.jsonl', '/p/x.jsonl', '/p/z.jsonl'])
-    expect(parsed['/p/x.jsonl']).toEqual(fileAt('20', 'x', 1))
-    expect(parsed['/p/y.jsonl']).toEqual(fileAt('02', 'y'))
+    // The stubs' pieces are not touched at all.
+    expect(await pieceOf('02')).toEqual(y)
+    expect(await pieceOf('03')).toEqual(w)
+    const after = await pieceOf('20')
+    expect(after.name).not.toBe(x.name)
+    expect(JSON.parse(after.text)).toEqual({ '/p/x.jsonl': fileAt('20', 'x', 1) })
 
-    // Dirty but unchanged: the published shard is kept.
+    // Dirty but unchanged: the published piece is kept.
     markCacheDirty(cache, 'claude', '/p/x.jsonl')
     expect(await saveCache(cache)).toBe(true)
-    expect((await mayShard()).name).toBe(after.name)
+    expect((await pieceOf('20')).name).toBe(after.name)
 
+    // A full load would hold the re-parsed file after the loaded ones.
     clearLoadCacheMemo()
     const full = await loadCache()
-    expect(full.providers['claude']!.files).toEqual(parsed)
+    expect(Object.keys(full.providers['claude']!.files)).toEqual(['/p/y.jsonl', '/p/w.jsonl', '/p/x.jsonl', '/p/z.jsonl'])
+    expect(full.providers['claude']!.files['/p/x.jsonl']).toEqual(fileAt('20', 'x', 1))
   })
 
-  it('converts a single-line shard from an older build on the next save and still loads stubs from it', async () => {
+  it('re-lays a single-line v9 shard out and still loads stubs from its pieces', async () => {
     const files = { '/p/x.jsonl': fileAt('20', 'x'), '/p/y.jsonl': fileAt('02', 'y') }
-    const dir = sessionCacheDir()
-    await mkdir(dir, { recursive: true })
-    await writeFile(join(dir, 'claude.2026-05.0123456789abcdef.json'), JSON.stringify(files))
-    await writeFile(join(dir, 'envelope.json'), JSON.stringify({
-      version: CACHE_VERSION, complete: true, nonce: 'legacy',
+    const v9 = join(TMP_DIR, 'session-cache.v9')
+    await mkdir(v9, { recursive: true })
+    await writeFile(join(v9, 'claude.2026-05.0123456789abcdef.json'), JSON.stringify(files))
+    await writeFile(join(v9, 'envelope.json'), JSON.stringify({
+      version: 9, complete: true, nonce: 'legacy',
       providers: { claude: { envFingerprint: computeEnvFingerprint('claude'), complete: true, shards: { '2026-05': { name: 'claude.2026-05.0123456789abcdef.json', until: '2026-05' } } } },
     }))
 
     const cache = await loadCache(day20)
+    expect(existsSync(v9)).toBe(false)
+    expect(Object.keys(cache.providers['claude']!.files)).toEqual(['/p/x.jsonl'])
     expect([...cacheStubs(cache, 'claude')!.keys()]).toEqual(['/p/y.jsonl'])
-    // Any save rewrites it, even one whose only change is elsewhere.
-    cache.providers['codex'] = { envFingerprint: computeEnvFingerprint('codex'), files: { '/c/r.jsonl': fileAt('20', 'r') } }
-    markCacheDirty(cache, 'codex', '/c/r.jsonl')
-    expect(await saveCache(cache)).toBe(true)
+    expect(JSON.parse((await pieceOf('02')).text)).toEqual({ '/p/y.jsonl': fileAt('02', 'y') })
 
-    const after = await mayShard()
-    expect(after.name).not.toBe('claude.2026-05.0123456789abcdef.json')
-    expect(after.text.startsWith('{\n')).toBe(true)
-    expect(JSON.parse(after.text)).toEqual(files)
-
-    // A wider request in this process loads the stub from its new line.
+    // A wider request in this process loads the stub from its piece.
     const wider = await loadCache(monthScopeForRange(new Date('2026-05-01T00:00:00.000Z'), new Date('2026-05-20T23:59:59.999Z')))
     expect(wider).toBe(cache)
     expect(cacheStubs(cache, 'claude')!.size).toBe(0)
-    expect(cache.providers['claude']!.files['/p/y.jsonl']).toEqual(fileAt('02', 'y'))
+    expect(cache.providers['claude']!.files).toEqual(files)
   })
 
   it('reads the same members as a full load for every range', async () => {

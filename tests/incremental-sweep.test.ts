@@ -2,7 +2,7 @@
 // watcher proved untouched, and coalesces shard publication. Both are freshness
 // trades, so what is pinned here is when they are NOT taken.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtemp, mkdir, readFile, writeFile, rm, rename } from 'fs/promises'
+import { mkdtemp, mkdir, writeFile, rm, rename } from 'fs/promises'
 import { join } from 'path'
 import { tmpdir } from 'os'
 
@@ -14,7 +14,8 @@ import {
   setShardPublishCoalescing,
   setSweepWatchSource,
 } from '../src/parser.js'
-import { clearLoadCacheMemo, fingerprintFileCount, loadCache, markCacheDirty, saveCache, sessionCacheDir } from '../src/session-cache.js'
+import { clearLoadCacheMemo, fingerprintFileCount, loadCache, markCacheDirty, saveCache } from '../src/session-cache.js'
+import { publishedMembers } from './fixtures/session-cache-io.js'
 
 let tmpDir: string
 
@@ -210,15 +211,7 @@ describe('incremental discovery sweep', () => {
 describe('coalesced shard publication', () => {
   // Read the published shards straight off disk: the usual test reader drops the
   // load memo, and dropping it is exactly what retires a held publish.
-  const publishedFiles = async (provider = 'claude'): Promise<Record<string, { turns: unknown[] }>> => {
-    const dir = sessionCacheDir()
-    const envelope = JSON.parse(await readFile(join(dir, 'envelope.json'), 'utf-8')) as
-      { providers: Record<string, { shards: Record<string, { name: string }> }> }
-    const names = Object.values(envelope.providers[provider]?.shards ?? {}).map(s => s.name)
-    const files: Record<string, { turns: unknown[] }> = {}
-    for (const name of names) Object.assign(files, JSON.parse(await readFile(join(dir, name), 'utf-8')))
-    return files
-  }
+  const publishedFiles = (provider = 'claude'): Promise<Record<string, { turns: unknown[] }>> => publishedMembers(provider)
   const claudeFiles = async (): Promise<string[]> => Object.keys(await publishedFiles())
 
   it('publishes the first time, holds the next, and flushes on shutdown', async () => {

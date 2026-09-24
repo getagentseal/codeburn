@@ -130,7 +130,7 @@ describe('vercel-gateway end-to-end (parseAllSessions network path)', () => {
     // halves of that round-trip — the total above is the read half, the stored
     // record is the write half.
     const { readdirSync, readFileSync } = await import('node:fs')
-    const cacheRoot = join(cacheDir, 'session-cache.v9')
+    const cacheRoot = join(cacheDir, 'session-cache.v10')
     const stored = readdirSync(cacheRoot)
       .map(f => readFileSync(join(cacheRoot, f), 'utf-8'))
       .join('')
