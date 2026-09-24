@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtemp, readFile, readdir, rm } from 'fs/promises'
+import { mkdtemp, readFile, readdir, rm, writeFile } from 'fs/promises'
 import { join } from 'path'
 import { tmpdir } from 'os'
 
@@ -173,6 +173,18 @@ describe('exportCsv', () => {
     expect(models).toContain(',1,100,0,')
   })
 
+  it('nests into a dated subfolder when the destination is an existing folder', async () => {
+    // The desktop app passes a real folder (e.g. Desktop) with unrelated files in it.
+    await writeFile(join(tmpDir, 'unrelated.txt'), 'keep me', 'utf-8')
+    const periods: PeriodExport[] = [{ label: '30 Days', projects: [makeProject('app')] }]
+
+    const folder = await exportCsv(periods, tmpDir)
+
+    expect(folder.startsWith(join(tmpDir, 'codeburn-export-'))).toBe(true)
+    expect(await readFile(join(tmpDir, 'unrelated.txt'), 'utf-8')).toBe('keep me')
+    expect(await readFile(join(folder, 'summary.csv'), 'utf-8')).toContain('Period')
+  })
+
   it('does not crash when periods array is empty', async () => {
     const outputPath = join(tmpDir, 'empty.csv')
     const folder = await exportCsv([], outputPath)
@@ -236,10 +248,23 @@ describe('exportCsv', () => {
 
     // The column exists on every row (undefined on normal ones), so rowsToCsv —
     // which reads headers off the first row — always emits it.
-    expect(lines[0]!.endsWith(',supplementary')).toBe(true)
-    expect(lines[1]!.endsWith(',1.23,0,')).toBe(true)
-    expect(lines[2]!.endsWith(',0.5,0,true')).toBe(true)
+    expect(lines[0]!.endsWith(',supplementary,estimated,unpriced')).toBe(true)
+    expect(lines[1]!.endsWith(',1.23,0,,,')).toBe(true)
+    expect(lines[2]!.endsWith(',0.5,0,true,,')).toBe(true)
     expect(lines).toHaveLength(3)
+  })
+
+  it('prints unrounded record costs as plain decimals, never float noise or exponent form', async () => {
+    const project = makeProject('app')
+    const turn = project.sessions[0]!.turns[0]!
+    turn.assistantCalls[0]!.costUSD = 0.1 + 0.2
+    turn.assistantCalls.push({ ...turn.assistantCalls[0]!, costUSD: 1e-7, deduplicationKey: 'tiny' })
+
+    const folder = await exportCsv([{ label: '30 Days', projects: [project] }], join(tmpDir, 'records.csv'))
+    const lines = (await readFile(join(folder, 'records.csv'), 'utf-8')).trimEnd().split('\n')
+
+    expect(lines[1]!.endsWith(',0.3,0,,,')).toBe(true)
+    expect(lines[2]!.endsWith(',0.0000001,0,,,')).toBe(true)
   })
 
   it('counts only behavioral turns in the sessions.csv Turns column', async () => {
@@ -276,6 +301,38 @@ describe('exportCsv', () => {
 })
 
 describe('exportJson', () => {
+  it('reconciles daily rows, records, and summary per call, including a turn with no timestamp', async () => {
+    const project = makeProject('app')
+    const session = project.sessions[0]!
+    const baseTurn = session.turns[0]!
+    const baseCall = baseTurn.assistantCalls[0]!
+    const at = (d: number, h: number, m: number) => new Date(2026, 3, d, h, m).toISOString()
+    session.turns = [
+      { ...baseTurn, timestamp: '', assistantCalls: [{ ...baseCall, timestamp: at(14, 10, 0), costUSD: 1.23 }] },
+      {
+        ...baseTurn,
+        timestamp: at(14, 23, 59),
+        assistantCalls: [
+          { ...baseCall, timestamp: at(14, 23, 59), costUSD: 0.004, deduplicationKey: 'late' },
+          { ...baseCall, timestamp: at(15, 0, 1), costUSD: 2.006, deduplicationKey: 'after-midnight' },
+        ],
+      },
+    ]
+    session.totalCostUSD = 3.24
+    project.totalCostUSD = 3.24
+
+    const saved = await exportJson([{ label: '30 Days', projects: [project] }], join(tmpDir, 'reconcile.json'))
+    const data = JSON.parse(await readFile(saved, 'utf-8'))
+
+    const daily = data.periods[0].daily as Array<Record<string, number | string>>
+    expect(daily.map(d => [d.Date, d['Cost (USD)']])).toEqual([['2026-04-14', 1.23], ['2026-04-15', 2.01]])
+    const dailySum = daily.reduce((s, d) => s + (d['Cost (USD)'] as number), 0)
+    const recordSum = (data.records as Array<{ cost: number }>).reduce((s, r) => s + r.cost, 0)
+    expect(dailySum).toBeCloseTo(data.summary[0]['Cost (USD)'], 10)
+    expect(recordSum).toBeCloseTo(data.summary[0]['Cost (USD)'], 10)
+    expect(data.records[1].cost).toBe(0.004)
+  })
+
   it('adds per-call records with optional subagentType and model fields', async () => {
     const periods: PeriodExport[] = [{
       label: '30 Days',
@@ -342,6 +399,42 @@ describe('exportJson', () => {
     expect(data.records).toHaveLength(2)
     expect(data.records[0]).not.toHaveProperty('supplementary')
     expect(data.records[1]).toMatchObject({ supplementary: true, cost: 0.5 })
+  })
+
+  it('writes a dated file inside the folder when the destination is an existing folder', async () => {
+    // The desktop app passes the folder the user picked; `${dir}.json` wrote a sibling of it.
+    await writeFile(join(tmpDir, 'unrelated.txt'), 'keep me', 'utf-8')
+    const periods: PeriodExport[] = [{ label: '30 Days', projects: [makeProject('app')] }]
+
+    const saved = await exportJson(periods, tmpDir)
+
+    expect(saved.startsWith(join(tmpDir, 'codeburn-export-'))).toBe(true)
+    expect(saved.endsWith('.json')).toBe(true)
+    expect(JSON.parse(await readFile(saved, 'utf-8')).schema).toBe('codeburn.export.v2')
+    expect(await readFile(join(tmpDir, 'unrelated.txt'), 'utf-8')).toBe('keep me')
+  })
+
+  it('creates a folder named with a trailing separator and writes inside it', async () => {
+    const periods: PeriodExport[] = [{ label: '30 Days', projects: [makeProject('app')] }]
+    const folder = join(tmpDir, 'new-exports')
+
+    const saved = await exportJson(periods, `${folder}/`)
+
+    expect(saved.startsWith(join(folder, 'codeburn-export-'))).toBe(true)
+    expect(JSON.parse(await readFile(saved, 'utf-8')).schema).toBe('codeburn.export.v2')
+  })
+
+  it('still appends .json to a destination that is not a folder', async () => {
+    const periods: PeriodExport[] = [{ label: '30 Days', projects: [makeProject('app')] }]
+    const saved = await exportJson(periods, join(tmpDir, 'report'))
+    expect(saved).toBe(join(tmpDir, 'report.json'))
+  })
+
+  it('still refuses to overwrite a file inside the folder that is not a codeburn export', async () => {
+    const periods: PeriodExport[] = [{ label: '30 Days', projects: [makeProject('app')] }]
+    const saved = await exportJson(periods, tmpDir)
+    await writeFile(saved, '{"schema": "something.else"}', 'utf-8')
+    await expect(exportJson(periods, tmpDir)).rejects.toThrow(/Refusing to overwrite/)
   })
 
   it('includes an mcp section with per-server usage', async () => {

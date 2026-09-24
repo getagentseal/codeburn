@@ -16,6 +16,7 @@ import { fetchGeminiQuota } from './gemini.js'
 import { fetchGrokQuota } from './grok.js'
 import { fetchGrokbotQuota, grokbotInstalled } from './grokbot.js'
 import { fetchKimiQuota } from './kimi.js'
+import { KEYCHAIN_TIMEOUT_MS } from './security.js'
 import type { ProviderName, QuotaProvider } from './types.js'
 import { fetchZaiQuota } from './zai.js'
 import { fetchZcodeQuota } from './zcode.js'
@@ -63,7 +64,12 @@ export function availableReaders(installed: () => boolean = grokbotInstalled): t
   return READERS.filter(entry => entry.id !== 'grokbot' || installed())
 }
 
-const DEFAULT_TIMEOUT_MS = 5_000
+// Must cover the slowest documented per-reader allowance - Claude's keychain
+// fallback waits up to KEYCHAIN_TIMEOUT_MS for the macOS "Allow" dialog - or
+// this outer race aborts a reader that is still legitimately waiting and
+// misreports it as disconnected. Derived rather than a separate literal so
+// the two cannot drift apart; the margin covers the request itself.
+const DEFAULT_TIMEOUT_MS = KEYCHAIN_TIMEOUT_MS + 5_000
 
 function errorFor(quota: QuotaProvider): string | undefined {
   switch (quota.connection) {
@@ -89,6 +95,16 @@ function toWindows(quota: QuotaProvider): QuotaCommandWindow[] {
 
 export function toCommandProvider(id: ProviderName, name: string, quota: QuotaProvider): QuotaCommandProvider {
   const error = errorFor(quota)
+  // errorFor() only surfaces footerLines on a non-connected state; a connected
+  // read (e.g. Grok Bot's "this is the Cursor account's allowance" disclosure)
+  // still needs its first line said out loud so it isn't shown as fact-free.
+  const baseNotes = quota.notes ?? []
+  const footerNote =
+    quota.connection === 'connected' && quota.footerLines.length > 0 ? quota.footerLines[0] : undefined
+  const notes = [
+    ...baseNotes,
+    ...(footerNote && !baseNotes.includes(footerNote) ? [footerNote] : []),
+  ]
   return {
     id,
     name,
@@ -96,7 +112,7 @@ export function toCommandProvider(id: ProviderName, name: string, quota: QuotaPr
     ...(quota.planLabel ? { plan: quota.planLabel } : {}),
     windows: toWindows(quota),
     ...(error ? { error } : {}),
-    ...(quota.notes?.length ? { notes: quota.notes } : {}),
+    ...(notes.length ? { notes } : {}),
   }
 }
 

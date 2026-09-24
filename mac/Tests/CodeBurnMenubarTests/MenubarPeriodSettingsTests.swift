@@ -44,7 +44,7 @@ struct MenubarPeriodSettingsTests {
     func periodsPersistCanonicalDefaultsValues() {
         let suiteName = "CodeBurnMenubarTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
-        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defer { TestDefaults.forget(suiteName) }
 
         Period.sevenDays.persistAsMenubarDefault(defaults: defaults)
         #expect(defaults.string(forKey: "CodeBurnMenubarPeriod") == "week")
@@ -63,7 +63,7 @@ struct MenubarPeriodSettingsTests {
     func menubarScopePersistenceDefaultsToLocalAndRoundTrips() {
         let suiteName = "CodeBurnMenubarTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
-        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defer { TestDefaults.forget(suiteName) }
 
         #expect(MenubarScope.savedMenubarScope(defaults: defaults) == .local)
 

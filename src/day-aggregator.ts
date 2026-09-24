@@ -1,7 +1,7 @@
 import type { DailyEntry, ProjectDayStats, ProviderDaySlice } from './daily-cache.js'
 import type { PeriodData } from './menubar-json.js'
 import { CATEGORY_LABELS, type ProjectSummary, type TaskCategory } from './types.js'
-import { isBehavioralCall, isBehavioralTurn } from './behavioral-weight.js'
+import { behavioralCallWeight, isBehavioralTurn } from './behavioral-weight.js'
 import { billableOutputTokens, modelRowKey } from './models.js'
 
 function emptyEntry(date: string): DailyEntry {
@@ -180,7 +180,7 @@ export function aggregateProjectsIntoDays(projects: ProjectSummary[], dateKeyFn:
           // accounting call contributes cost/tokens but is not a distinct
           // request, so it must not increment any `calls` counter the daily
           // cache seals (day, project, model, provider slice).
-          const callWeight = isBehavioralCall(call) ? 1 : 0
+          const callWeight = behavioralCallWeight(call)
           // Call-derived values bucket under the call's OWN day (see the
           // two-rule comment above). An unparseable call timestamp falls back
           // to the turn's anchor day rather than producing a garbage date key.

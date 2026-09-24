@@ -1,6 +1,6 @@
 import { homedir } from 'node:os'
 import { CATEGORY_LABELS, type ProjectSummary, type SessionSummary, type TaskCategory, type DateRange } from './types.js'
-import { isBehavioralCall } from './behavioral-weight.js'
+import { behavioralCallWeight } from './behavioral-weight.js'
 import { type PeriodData, type ProviderCost, type BreakdownArrays, type MenubarPayload, type ClaudeConfigSelector, type HydrationState, buildMenubarPayload } from './menubar-json.js'
 import { type SessionCountBasis } from './session-count-label.js'
 import { parseAllSessions, filterProjectsByName, filterProjectsByDays, filterProjectsByClaudeConfigSource, filterProjectsByDateRange, isSessionHydrationComplete, makeProjectFilter, type ProjectFilterTarget, sessionHydrationSnapshot } from './parser.js'
@@ -13,7 +13,7 @@ import { collectLiveSessions } from './live-sessions.js'
 import { claude, getClaudeConfigDirs, getDesktopSessionsDirs } from './providers/claude.js'
 import { stat } from 'node:fs/promises'
 import { aggregateProjectsIntoDays, buildPeriodDataFromDays, dateKeyInTz } from './day-aggregator.js'
-import { aggregateModelEfficiency } from './model-efficiency.js'
+import { aggregateModelEfficiency, buildRetryTax } from './model-efficiency.js'
 import { aggregateModels } from './models-report.js'
 import { aggregateModelTaskTurns, sessionDurationMinutes } from './telemetry-snapshot.js'
 import { scanUserCorrections, medianTimeToFirstEditMs, aggregateFileChurn, computePricingCoverage } from './workflow-insights.js'
@@ -25,6 +25,7 @@ import { activityStreak } from './streak.js'
 import { getDaysInRange, ensureCacheHydrated, loadDailyCache, cachedProjectIdentities, emptyCache, mergeDayEntries, BACKFILL_DAYS, toDateString, type DailyCache, type DailyEntry, type ProjectDayStats, type ProviderDaySlice } from './daily-cache.js'
 import { buildGranularHistory } from './granular-history.js'
 import { spendProjectIdentity } from './spend-flow.js'
+import { AGGREGATE_ONLY_PROVIDER, excludeAggregateOnlyProjects, excludesAggregateOnlyProviders } from './parser.js'
 
 // Row caps for the by-PR / by-branch payload aggregations, ranked by cost.
 const TOP_BRANCHES = 15
@@ -224,7 +225,10 @@ export function getDailyCacheConfigHash(): string {
 async function hydrateCache(): Promise<DailyCache> {
   try {
     return await ensureCacheHydrated(
-      (range) => parseAllSessions(range, 'all'),
+      // The cache writer seals whole days, gateway slice included: a past
+      // day's aggregate row can never be fetched again, so the opt-in has to
+      // work retroactively off what was stored.
+      (range) => parseAllSessions(range, 'all', { includeAggregateOnly: true }),
       aggregateProjectsIntoDays,
       getDailyCacheConfigHash(),
       // Never finalize the daily history off a partial (interrupted) session
@@ -433,6 +437,125 @@ function sliceDayToProvider(day: DailyEntry, provider: string): DailyEntry {
   }
 }
 
+/// Same rule as the parse-level corpus filter (see AGGREGATE_ONLY_PROVIDER in
+/// parser.ts), applied to day entries. The parse filter cannot be used on the
+/// paths below: they derive the day entries the daily cache seals, which must
+/// keep the gateway slice — it can never be re-fetched for a past day — so the
+/// provider is held out of the day's TOTALS here while its slice survives.
+export const excludesGatewayFromTotals = excludesAggregateOnlyProviders
+
+/// The complement of `sliceDayToProvider`: the day with one provider's slice
+/// subtracted out of every day-level rollup buildPeriodDataFromDays reads,
+/// while the slice itself stays under `day.providers` so the provider still
+/// reports its own (clearly labelled) total.
+///
+/// Read-side only. The daily cache seals the whole day including the gateway
+/// slice, so flipping `includeGatewayInTotals` re-includes sealed days with no
+/// re-fetch — which matters because a gateway row cannot be re-derived from
+/// anything on disk.
+export function excludeProviderFromDay(day: DailyEntry, provider: string): DailyEntry {
+  const s = Object.hasOwn(day.providers, provider) ? day.providers[provider] : undefined
+  if (!s) return day
+  // Clamped: a slice adopted from a cache generation that recorded more than
+  // the day-level field can account for must leave a zero, never a negative
+  // headline.
+  const sub = (total: number, part: number | undefined): number => Math.max(0, total - (part ?? 0))
+
+  const models: DailyEntry['models'] = {}
+  for (const [key, m] of Object.entries(day.models)) {
+    const mine = s.models?.[key]
+    const left = {
+      calls: sub(m.calls, mine?.calls),
+      cost: sub(m.cost, mine?.cost),
+      savingsUSD: sub(m.savingsUSD ?? 0, mine?.savingsUSD),
+      inputTokens: sub(m.inputTokens, mine?.inputTokens),
+      outputTokens: sub(m.outputTokens, mine?.outputTokens),
+      cacheReadTokens: sub(m.cacheReadTokens, mine?.cacheReadTokens),
+      cacheWriteTokens: sub(m.cacheWriteTokens, mine?.cacheWriteTokens),
+    }
+    // A model id the gateway shares with a locally-parsed provider keeps its
+    // remainder; one only the gateway saw drops out of the row list entirely.
+    if (Object.values(left).some(v => v > 0)) models[key] = left
+  }
+
+  // The provider's own synthetic project ("Vercel AI Gateway") must leave the
+  // day's project split too, or `buildPayloadProjects` and the JSON
+  // `projects[]` would list spend the headline beside them does not count.
+  const projects: DailyEntry['projects'] = day.projects ? {} : undefined
+  if (day.projects && projects) {
+    for (const [key, p] of Object.entries(day.projects)) {
+      const mine = s.projects?.[key]
+      const left = {
+        cost: sub(p.cost, mine?.cost),
+        calls: sub(p.calls, mine?.calls),
+        savingsUSD: sub(p.savingsUSD ?? 0, mine?.savingsUSD),
+        sessions: sub(p.sessions ?? 0, mine?.sessions),
+      }
+      if (Object.values(left).some(v => v > 0)) {
+        Object.defineProperty(projects, key, {
+          value: { ...left, ...(p.path ? { path: p.path } : {}) },
+          enumerable: true, writable: true, configurable: true,
+        })
+      }
+    }
+  }
+
+  const categories: DailyEntry['categories'] = {}
+  for (const [key, c] of Object.entries(day.categories)) {
+    const mine = s.categories?.[key]
+    const left = {
+      turns: sub(c.turns, mine?.turns),
+      cost: sub(c.cost, mine?.cost),
+      savingsUSD: sub(c.savingsUSD ?? 0, mine?.savingsUSD),
+      editTurns: sub(c.editTurns, mine?.editTurns),
+      oneShotTurns: sub(c.oneShotTurns, mine?.oneShotTurns),
+    }
+    if (Object.values(left).some(v => v > 0)) categories[key] = left
+  }
+
+  return {
+    ...day,
+    cost: sub(day.cost, s.cost),
+    savingsUSD: sub(day.savingsUSD, s.savingsUSD),
+    calls: sub(day.calls, s.calls),
+    sessions: sub(day.sessions, s.sessions),
+    inputTokens: sub(day.inputTokens, s.inputTokens),
+    outputTokens: sub(day.outputTokens, s.outputTokens),
+    cacheReadTokens: sub(day.cacheReadTokens, s.cacheReadTokens),
+    cacheWriteTokens: sub(day.cacheWriteTokens, s.cacheWriteTokens),
+    editTurns: sub(day.editTurns, s.editTurns),
+    oneShotTurns: sub(day.oneShotTurns, s.oneShotTurns),
+    models,
+    categories,
+    ...(projects ? { projects } : {}),
+  }
+}
+
+/// `days` read for totals, with the aggregate-only provider held out when the
+/// scope and the opt-in say so. The provider slices survive untouched, so the
+/// provider list built from the same day set still reports the full amount.
+export function excludeGatewayFromDays(days: DailyEntry[], providerFilter: string): DailyEntry[] {
+  if (!excludesGatewayFromTotals(providerFilter)) return days
+  return days.map(day => excludeProviderFromDay(day, AGGREGATE_ONLY_PROVIDER))
+}
+
+/// What the caller's day set is NOT counting, so every surface can show the
+/// gateway once, clearly labelled. All zero whenever nothing is excluded.
+export type ExcludedGatewayTotals = { costUSD: number; calls: number; tokens: number }
+
+export function excludedGatewayTotals(days: DailyEntry[], providerFilter: string): ExcludedGatewayTotals {
+  const totals: ExcludedGatewayTotals = { costUSD: 0, calls: 0, tokens: 0 }
+  if (!excludesGatewayFromTotals(providerFilter)) return totals
+  for (const day of days) {
+    const s = Object.hasOwn(day.providers, AGGREGATE_ONLY_PROVIDER) ? day.providers[AGGREGATE_ONLY_PROVIDER] : undefined
+    if (!s) continue
+    totals.costUSD += s.cost
+    totals.calls += s.calls
+    totals.tokens += (s.inputTokens ?? 0) + (s.outputTokens ?? 0) + (s.cacheReadTokens ?? 0) + (s.cacheWriteTokens ?? 0)
+  }
+  return totals
+}
+
 /// Overlay surviving provider-scoped source data onto the durable all-provider
 /// cache without touching unrelated providers. The result is provider-sliced so
 /// headline and history consumers cannot accidentally count unrelated providers.
@@ -617,6 +740,7 @@ export type IndexedDurableOverview = {
   cacheReadTokens: number
   cacheWriteTokens: number
   carriedCostUSD: number
+  excludedGateway: ExcludedGatewayTotals
 }
 
 /**
@@ -636,7 +760,10 @@ export function buildDurableOverviewFromNormalizedIndex(
   const hasProjectFilter = (opts.project?.length ?? 0) > 0 || (opts.exclude?.length ?? 0) > 0
   const matchesFilter = makeProjectFilter(opts.project, opts.exclude)
   const filteredProjects = filterProjectsByName(normalizedProjects, opts.project ?? [], opts.exclude ?? [])
-  const scanProjects = filterProjectsByDateRange(filteredProjects, periodInfo.range)
+  // Detail/enrichment population only: same exclusion as the headline below,
+  // while `normalizedDays` keeps the whole corpus so the day entries (and the
+  // durable cache they fill) still carry the gateway slice.
+  const scanProjects = excludeAggregateOnlyProjects(filterProjectsByDateRange(filteredProjects, periodInfo.range), pf)
   const now = new Date()
   const todayStr = toDateString(now)
   const normalizedDays = aggregateProjectsIntoDays(filteredProjects)
@@ -671,7 +798,7 @@ export function buildDurableOverviewFromNormalizedIndex(
     : []
   const allDays = [...cachedAllDays, ...normalizedHistoricalDays].sort((a, b) => a.date.localeCompare(b.date))
   const normalizedByDate = new Map(normalizedDays.map(day => [day.date, day]))
-  const days = pf === 'all' ? allDays : allDays.map(day => {
+  const days = excludeGatewayFromDays(pf === 'all' ? allDays : allDays.map(day => {
     if (Object.hasOwn(day.providers, pf)) return sliceDayToProvider(day, pf)
     const normalized = normalizedByDate.get(day.date)
     // The shared cache can be complete for a date while lacking this selected
@@ -683,7 +810,7 @@ export function buildDurableOverviewFromNormalizedIndex(
     return normalized && Object.hasOwn(normalized.providers, pf)
       ? sliceDayToProvider(normalized, pf)
       : sliceDayToProvider(day, pf)
-  })
+  }), pf)
   const data = buildPeriodDataFromDays(days, periodInfo.label)
 
   // Fields whose durable day rows cannot project under a project filter come
@@ -710,6 +837,7 @@ export function buildDurableOverviewFromNormalizedIndex(
     cacheReadTokens: data.cacheReadTokens,
     cacheWriteTokens: data.cacheWriteTokens,
     carriedCostUSD: days.reduce((sum, day) => sum + (day.carried ? day.cost : 0), 0),
+    excludedGateway: excludedGatewayTotals(days, pf),
   }
 }
 
@@ -741,6 +869,11 @@ export type DurablePeriod = {
   /// project filter is active. Reported so a filtered total that is short of the
   /// unfiltered one says so instead of just looking wrong.
   unattributedCostUSD: number
+  /// What `data` deliberately does NOT count (see `excludeProviderFromDay`).
+  /// All zero under `--provider vercel-gateway` or with
+  /// `includeGatewayInTotals` on, so a surface renders the labelled row
+  /// whenever `costUSD` is non-zero.
+  excludedGateway: ExcludedGatewayTotals
   /// Fresh per-period parse (provider + name filtered) for detail views that
   /// still need surviving session files.
   liveProjects: ProjectSummary[]
@@ -796,12 +929,12 @@ export async function buildDurablePeriod(periodInfo: PeriodInfo, opts: Aggregate
   let scanRange: DateRange
   if (pf === 'all') {
     if (isTodayOnly) {
-      const raw = fp(await parseAllSessions(todayRange, 'all'))
+      const raw = fp(await parseAllSessions(todayRange, 'all', { includeAggregateOnly: true }))
       liveProjects = raw
       scanRange = todayRange
       todayAllDays = aggregateProjectsIntoDays(raw).filter(d => d.date === todayStr)
     } else {
-      const raw = fp(await parseAllSessions(periodInfo.range, 'all'))
+      const raw = fp(await parseAllSessions(periodInfo.range, 'all', { includeAggregateOnly: true }))
       liveProjects = daysSelection ? filterProjectsByDays(raw, daysSelection.days) : raw
       scanRange = periodInfo.range
       // A period that reaches today contains today's turns already, so derive the
@@ -813,7 +946,7 @@ export async function buildDurablePeriod(periodInfo: PeriodInfo, opts: Aggregate
       // JSON daily turn count while the per-call cost/calls still bucket to today.
       todayAllDays = rangeEndStr >= todayStr
         ? aggregateProjectsIntoDays(filterProjectsByDays(raw, new Set([todayStr]))).filter(d => d.date === todayStr)
-        : aggregateProjectsIntoDays(fp(await parseAllSessions(todayRange, 'all'))).filter(d => d.date === todayStr)
+        : aggregateProjectsIntoDays(fp(await parseAllSessions(todayRange, 'all', { includeAggregateOnly: true }))).filter(d => d.date === todayStr)
     }
   } else {
     // Provider-filtered: one provider-scoped parse feeds both today's union
@@ -858,15 +991,24 @@ export async function buildDurablePeriod(periodInfo: PeriodInfo, opts: Aggregate
   // the union takes it from `todayAllDays`, which re-anchors a turn straddling
   // midnight (see the todayAllDays note above) and must stay the today source.
   const liveHistoricalDays = aggregateProjectsIntoDays(liveProjects).filter(d => d.date < todayStr)
+  // Day derivation above needed the whole corpus (the cache seals the gateway
+  // slice). Everything downstream of here is a DETAIL view of the same period
+  // the headline reports, so it drops the aggregate-only provider under the
+  // same rule — otherwise By Project / By Model / By Activity / topProjects /
+  // the JSON `projects[]` would over-report beside an excluded headline.
+  liveProjects = excludeAggregateOnlyProjects(liveProjects, pf)
   const allDays = unionDaysForPeriod(cache, todayAllDays, periodInfo, daysSelection?.days ?? null, sliceHistorical, liveHistoricalDays)
   const freshDaysInSelection = freshProviderDays.filter(day =>
     day.date >= rangeStartStr
       && day.date <= rangeEndStr
       && (!daysSelection || daysSelection.days.has(day.date)),
   )
-  const days = pf === 'all'
-    ? allDays
-    : overlayProviderDaySlices(allDays, freshDaysInSelection, pf)
+  // Slices stay on the day (the provider list below reads them); only the
+  // day-level rollups the headline is built from drop the gateway.
+  const days = excludeGatewayFromDays(
+    pf === 'all' ? allDays : overlayProviderDaySlices(allDays, freshDaysInSelection, pf),
+    pf,
+  )
   const data = buildPeriodDataFromDays(days, periodInfo.label)
 
   // Enrich the cache-authoritative headline with fields DailyEntry cannot carry.
@@ -924,7 +1066,10 @@ export async function buildDurablePeriod(periodInfo: PeriodInfo, opts: Aggregate
       .map(period => [period, getDateRange(period)] as const)
       .filter(([, info]) => toDateString(info.range.start) >= scanStartStr)
       .map(([period, info]) => {
-        const windowDays = unionDaysForPeriod(cache, todayAllDays, info, null, undefined, liveHistoricalDays)
+        const windowDays = excludeGatewayFromDays(
+          unionDaysForPeriod(cache, todayAllDays, info, null, undefined, liveHistoricalDays),
+          pf,
+        )
         const windowData = buildPeriodDataFromDays(windowDays, info.label)
         return [period, {
           cost: windowData.cost,
@@ -936,7 +1081,7 @@ export async function buildDurablePeriod(periodInfo: PeriodInfo, opts: Aggregate
         }]
       })) as PeriodTotals
     : undefined
-  return { data, days, carriedCostUSD, unattributedCostUSD, liveProjects, knownProjects, cache, todayAllDays, scanRange, periodTotals }
+  return { data, days, carriedCostUSD, unattributedCostUSD, excludedGateway: excludedGatewayTotals(days, pf), liveProjects, knownProjects, cache, todayAllDays, scanRange, periodTotals }
 }
 
 type PayloadProject = NonNullable<PeriodData['projects']>[number]
@@ -1438,7 +1583,7 @@ export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: 
 
   const getTodayAllProjects = async (): Promise<ProjectSummary[]> => {
     if (!todayAllProjects) {
-      todayAllProjects = fp(await parseAllSessions(todayRange, 'all'))
+      todayAllProjects = fp(await parseAllSessions(todayRange, 'all', { includeAggregateOnly: true }))
     }
     return todayAllProjects
   }
@@ -1559,8 +1704,16 @@ export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: 
     for (const d of allDaysForProviders) {
       for (const [name, p] of Object.entries(d.providers)) addProviderSlice(providerTotals, name, p)
     }
+    // The gateway slice is still on every day (only the day-level rollups drop
+    // it), so its row carries the full amount and says it is not in the total.
+    const gatewayExcluded = excludesGatewayFromTotals(pf)
     for (const [name, total] of Object.entries(providerTotals)) {
-      providers.push({ name, displayName: displayNameByName.get(name) ?? name, ...total })
+      providers.push({
+        name,
+        displayName: displayNameByName.get(name) ?? name,
+        ...total,
+        ...(gatewayExcluded && name === AGGREGATE_ONLY_PROVIDER ? { excludedFromTotal: true as const } : {}),
+      })
     }
     for (const p of allProviders) {
       if (providers.some(pc => pc.name === p.name)) continue
@@ -1630,7 +1783,7 @@ export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: 
     dailyHistory = dailyEntriesToHistory(aggregateProjectsIntoDays(historyProjects))
   } else if (isAllProviders) {
     const todayDays = (await getTodayAllDays()).filter(d => d.date === todayStr)
-    const fullHistory = [...allCacheDays, ...todayDays]
+    const fullHistory = excludeGatewayFromDays([...allCacheDays, ...todayDays], pf)
     dailyHistory = dailyEntriesToHistory(fullHistory)
   } else {
     const freshHistory = [...aggregateProjectsIntoDays(scanProjects), ...(todayAllDays ?? [])]
@@ -1665,21 +1818,7 @@ export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: 
     oneShotRate: eff.oneShotRate,
   }))
 
-  const retryTaxByModel = [...effMap.values()]
-    .filter(m => m.retries > 0 && m.editTurns > 0)
-    .map(m => ({
-      name: m.model,
-      taxUSD: m.retries * (m.editCostUSD / m.editTurns),
-      retries: m.retries,
-      retriesPerEdit: m.retriesPerEdit,
-    }))
-    .sort((a, b) => b.taxUSD - a.taxUSD)
-  const retryTax = {
-    totalUSD: retryTaxByModel.reduce((s, m) => s + m.taxUSD, 0),
-    retries: retryTaxByModel.reduce((s, m) => s + m.retries, 0),
-    editTurns: [...effMap.values()].filter(m => m.retries > 0).reduce((s, m) => s + m.editTurns, 0),
-    byModel: retryTaxByModel.slice(0, 5),
-  }
+  const retryTax = buildRetryTax(effMap.values())
 
   currentData.topSessions = scanProjects.flatMap(p =>
     p.sessions.map(s => ({
@@ -1816,7 +1955,7 @@ export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: 
         // request counts: a supplementary accounting call (copilot rollup /
         // paired store row) can carry configured model-savings too and must
         // not count as a request.
-        const callWeight = isBehavioralCall(call) ? 1 : 0
+        const callWeight = behavioralCallWeight(call)
         totalSavings += call.savingsUSD
         totalSavingsCalls += callWeight
         const modelKey = modelRowKey(call.model, call.route)

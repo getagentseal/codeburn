@@ -469,7 +469,7 @@ struct MenubarSecondRowTests {
     func preferencesRoundTrip() {
         let suiteName = "CodeBurnMenubarTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
-        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defer { TestDefaults.forget(suiteName) }
 
         #expect(MenubarRowPreferences.load(defaults: defaults) == MenubarRowSettings.default)
 

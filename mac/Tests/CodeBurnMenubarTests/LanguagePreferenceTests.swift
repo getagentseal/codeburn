@@ -29,6 +29,7 @@ struct LanguagePreferenceTests {
     @Test("nothing stored in the app's own domain reads as System")
     func unsetIsSystem() {
         let domain = domain("unset")
+        defer { TestDefaults.forget(domain) }
         store(nil, in: domain)
         // Every real Mac carries a language in the global domain. Falling
         // through to it is the bug; System has to survive that.
@@ -39,6 +40,7 @@ struct LanguagePreferenceTests {
     @Test("each shipped choice round-trips")
     func roundTrip() {
         let domain = domain("roundtrip")
+        defer { TestDefaults.forget(domain) }
         for choice in [LanguagePreference.english, .chineseSimplified] {
             store([choice.rawValue], in: domain)
             #expect(read(domain) == choice)
@@ -50,6 +52,7 @@ struct LanguagePreferenceTests {
     @Test("a language the app does not ship reads as System")
     func unknownIsSystem() {
         let domain = domain("unknown")
+        defer { TestDefaults.forget(domain) }
         store(["fr-CA"], in: domain)
         #expect(read(domain) == .system)
         store(nil, in: domain)
@@ -58,6 +61,7 @@ struct LanguagePreferenceTests {
     @Test("apply writes the key macOS reads, and System clears it")
     func applyWritesAppleLanguages() {
         let domain = domain("apply")
+        defer { TestDefaults.forget(domain) }
         let scratch = UserDefaults(suiteName: domain)!
         LanguagePreference.apply(.chineseSimplified, defaults: scratch)
         #expect(read(domain) == .chineseSimplified)
@@ -66,7 +70,6 @@ struct LanguagePreferenceTests {
         // system list again.
         #expect(UserDefaults.standard.persistentDomain(forName: domain)?[LanguagePreference.defaultsKey] == nil)
         #expect(read(domain) == .system)
-        scratch.removePersistentDomain(forName: domain)
     }
 
     @Test("every choice the picker offers is a shipped localization")

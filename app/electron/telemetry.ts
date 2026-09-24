@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+
+import { writeFileAtomic } from './tray-settings'
 
 // Anonymous, consent-gated product telemetry for the desktop app ONLY.
 // Runs entirely in the Electron main process. Like cli.ts, this module must
@@ -38,6 +40,28 @@ export function defaultEnabledFor(country: string | null | undefined): boolean {
   return !DEFAULT_OFF_COUNTRIES.has(country.toUpperCase())
 }
 
+/// Average CPU of the app over a session, as a percent of one core. Coarse
+/// enough that a session is never recognisable from it; the point is only
+/// whether a build runs light, warm or hot.
+/// Buckets: `<1`, `1-5`, `5-15`, `15-40`, `40+`.
+export function cpuBucket(percent: number): string {
+  if (!Number.isFinite(percent) || percent < 1) return '<1'
+  if (percent < 5) return '1-5'
+  if (percent < 15) return '5-15'
+  if (percent < 40) return '15-40'
+  return '40+'
+}
+
+/// Peak resident memory in MB, same treatment.
+/// Buckets: `<250`, `250-500`, `500-1k`, `1-3k`, `3k+`.
+export function memBucket(mb: number): string {
+  if (!Number.isFinite(mb) || mb < 250) return '<250'
+  if (mb < 500) return '250-500'
+  if (mb < 1000) return '500-1k'
+  if (mb < 3000) return '1-3k'
+  return '3k+'
+}
+
 export const EVENT_NAMES = new Set([
   'app_open',
   'app_close',
@@ -53,6 +77,11 @@ export const EVENT_NAMES = new Set([
   'compare_view',
   'settings_change',
 ])
+
+/// A few seconds of wall time is too short a base for a percent: one burst of startup work
+/// lands the whole session in a top bucket that says nothing about how the build runs. Under
+/// the floor the figure is omitted rather than sent as noise.
+const MIN_CPU_WALL_SECONDS = 30
 
 const MAX_QUEUE = 200
 const MAX_CLI_ERRORS_PER_KIND_PER_DAY = 20
@@ -74,6 +103,10 @@ export type TelemetryStatus = {
   defaultEnabled: boolean
   /** True once the user has been through the onboarding consent screen. */
   onboarded: boolean
+  /** Set by the setters only: whether the decision reached disk. False means it
+   *  holds for this session but the menu bar app, which reads the file, will
+   *  keep inheriting the old one. */
+  persisted?: boolean
 }
 
 type PersistedState = {
@@ -84,6 +117,14 @@ type PersistedState = {
   lastSnapshotDay?: string
   cliErrorDay?: string
   cliErrorCounts?: Record<string, number>
+}
+
+/** The slice of Electron's ProcessMetric this module reads. Injected, because
+ *  telemetry.ts must not import electron. workingSetSize is in KB,
+ *  cumulativeCPUUsage in seconds of CPU time. */
+export type ProcessMetricSample = {
+  cpu?: { percentCPUUsage?: number; cumulativeCPUUsage?: number }
+  memory?: { workingSetSize?: number }
 }
 
 type Deps = {
@@ -99,6 +140,11 @@ type Deps = {
   endpoint?: string
   fetchFn?: typeof fetch
   now?: () => Date
+  /** Electron `app.getAppMetrics()`. Covers the Electron processes only. */
+  getAppMetrics?: () => ProcessMetricSample[]
+  /** The resident `codeburn serve` child's own totals (app/electron/cli.ts),
+   *  which getAppMetrics cannot see. Null while it has not answered. */
+  getServeUsage?: () => { cpuSec: number; rssMb: number } | null
 }
 
 type QueuedEvent = { name: string; day: string; props: Record<string, unknown> }
@@ -171,11 +217,22 @@ export class Telemetry {
   private state: PersistedState
   private queue: QueuedEvent[] = []
   private openedAt: number
+  /** Total CPU seconds across the Electron processes, when the platform reports
+   *  it cumulatively. Null on a build that only reports instantaneous percent. */
+  private cpuSeconds: number | null = null
+  /** What the counters already stood at when this session's clock started. Both are
+   *  cumulative since their process began, and the wall time below is measured from here,
+   *  so only the growth since this point can be divided by it. */
+  private cpuSecondsAtOpen: number | null = null
+  private serveCpuSecAtOpen: number | null = null
+  private cpuPercentSamples: number[] = []
+  private peakMemMb = 0
 
   constructor(deps: Deps) {
     this.deps = deps
     this.state = this.load()
     this.openedAt = Date.now()
+    this.sampleResources()
   }
 
   private stateFile(): string {
@@ -199,12 +256,16 @@ export class Telemetry {
     return { version: 1, installId: randomUUID(), enabled: defaultEnabledFor(this.deps.country) }
   }
 
-  private save(): void {
+  /** Returns whether the state reached disk. Atomic because the macOS menu bar
+   *  app reads this file to inherit the decision and must never see a torn one. */
+  private save(): boolean {
     try {
-      const file = this.stateFile()
-      if (!existsSync(dirname(file))) mkdirSync(dirname(file), { recursive: true })
-      writeFileSync(file, JSON.stringify(this.state), { mode: 0o600 })
-    } catch { /* consent must still work in-memory */ }
+      writeFileAtomic(this.stateFile(), JSON.stringify(this.state), 0o600)
+      return true
+    } catch {
+      // Consent must still work in-memory, but the caller has to be told.
+      return false
+    }
   }
 
   status(): TelemetryStatus {
@@ -224,8 +285,8 @@ export class Telemetry {
       this.queue = []
       this.state.installId = randomUUID()
     }
-    this.save()
-    return this.status()
+    const persisted = this.save()
+    return { ...this.status(), persisted }
   }
 
   /** The onboarding consent screen's final decision. Unlocks sending. */
@@ -273,9 +334,75 @@ export class Telemetry {
     this.queue.push({ name, day, props: sanitizedProps })
   }
 
-  /** Record session duration; queued for the next (final) flush. */
+  /** One cheap read of how heavy this app run is. Called on the existing flush
+   *  beat and once at close, never on a timer of its own. */
+  sampleResources(): void {
+    try {
+      let cumulativeSec = 0
+      let hasCumulative = false
+      let percent = 0
+      let hasPercent = false
+      let workingSetKb = 0
+      for (const metric of this.deps.getAppMetrics?.() ?? []) {
+        const cumulative = metric.cpu?.cumulativeCPUUsage
+        if (typeof cumulative === 'number' && Number.isFinite(cumulative)) {
+          cumulativeSec += cumulative
+          hasCumulative = true
+        }
+        const share = metric.cpu?.percentCPUUsage
+        if (typeof share === 'number' && Number.isFinite(share)) {
+          percent += share
+          hasPercent = true
+        }
+        const workingSet = metric.memory?.workingSetSize
+        if (typeof workingSet === 'number' && Number.isFinite(workingSet)) workingSetKb += workingSet
+      }
+      if (hasCumulative) {
+        this.cpuSeconds = cumulativeSec
+        this.cpuSecondsAtOpen ??= cumulativeSec
+      } else if (hasPercent) this.cpuPercentSamples.push(percent)
+      this.peakMemMb = Math.max(this.peakMemMb, workingSetKb / 1024)
+      // Sampled here, not at close, because close is the only place the figure is read and
+      // a baseline taken then would be the reading itself. A serve child that restarted
+      // counts from zero again, so a reading below the baseline rebases to it.
+      const serveCpuSec = this.deps.getServeUsage?.()?.cpuSec
+      if (typeof serveCpuSec === 'number' && Number.isFinite(serveCpuSec)) {
+        if (this.serveCpuSecAtOpen === null || serveCpuSec < this.serveCpuSecAtOpen) this.serveCpuSecAtOpen = serveCpuSec
+      }
+    } catch { /* resource metrics are never worth a thrown quit */ }
+  }
+
+  /** Bucket labels only: how much CPU and memory this run cost, in the app and
+   *  in the serve child that does the parsing. A figure we could not measure is
+   *  omitted rather than sent as a zero, which would read as "free". */
+  private resourceProps(): Record<string, string> {
+    const props: Record<string, string> = {}
+    try {
+      this.sampleResources()
+      const wallSeconds = (Date.now() - this.openedAt) / 1000
+      const cpuMeasurable = wallSeconds >= MIN_CPU_WALL_SECONDS
+      if (cpuMeasurable) {
+        if (this.cpuSeconds !== null && this.cpuSecondsAtOpen !== null) {
+          props.cpu = cpuBucket(((this.cpuSeconds - this.cpuSecondsAtOpen) / wallSeconds) * 100)
+        } else if (this.cpuPercentSamples.length > 0) {
+          props.cpu = cpuBucket(this.cpuPercentSamples.reduce((a, b) => a + b, 0) / this.cpuPercentSamples.length)
+        }
+      }
+      if (this.peakMemMb > 0) props.mem = memBucket(this.peakMemMb)
+      const serve = this.deps.getServeUsage?.() ?? null
+      if (serve) {
+        if (cpuMeasurable && Number.isFinite(serve.cpuSec)) {
+          props.serveCpu = cpuBucket(((serve.cpuSec - (this.serveCpuSecAtOpen ?? serve.cpuSec)) / wallSeconds) * 100)
+        }
+        if (serve.rssMb > 0) props.serveMem = memBucket(serve.rssMb)
+      }
+    } catch { /* best effort: a partial answer beats none, and none beats a throw */ }
+    return props
+  }
+
+  /** Record session duration and resource cost; queued for the next (final) flush. */
   trackClose(): void {
-    this.track('app_close', { sessionMinutes: Math.round((Date.now() - this.openedAt) / 60_000) })
+    this.track('app_close', { sessionMinutes: Math.round((Date.now() - this.openedAt) / 60_000), ...this.resourceProps() })
   }
 
   /** Best-effort batch POST. Keeps the queue on failure, clears on success. */

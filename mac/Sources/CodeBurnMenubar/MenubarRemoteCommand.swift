@@ -13,8 +13,8 @@ enum MenubarRemoteCommand: String {
         self == .uninstall
     }
 
-    /// Whether this command should terminate the app. `settings` instead opens
-    /// the settings window and activates the app.
+    /// Whether this command should terminate the app for good. `settings`
+    /// instead opens the settings window and activates the app.
     var terminates: Bool {
         self == .quit || self == .uninstall
     }

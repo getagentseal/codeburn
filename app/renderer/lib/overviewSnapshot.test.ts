@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { __overviewSnapshotStorageKey, clearOverviewHeadlines, readOverviewHeadline, writeOverviewHeadline } from './overviewSnapshot'
+import { __overviewSnapshotStorageKey, clearHeadlinesOnUpgrade, clearOverviewHeadlines, readOverviewHeadline, writeOverviewHeadline } from './overviewSnapshot'
 import type { MenubarPayload } from './types'
 
 const NOW = Date.parse('2026-08-27T12:00:00.000Z')
@@ -94,5 +94,20 @@ describe('persisted Overview headline', () => {
     clearOverviewHeadlines()
     expect(localStorage.getItem(__overviewSnapshotStorageKey)).toBeNull()
     expect(localStorage.getItem('codeburn.overview-headlines.v1')).toBeNull()
+  })
+
+  it('clears cached headlines once on a version change, then leaves them on a matching version', () => {
+    writeOverviewHeadline('one', payload(), NOW)
+    clearHeadlinesOnUpgrade('0.9.25')
+    expect(localStorage.getItem(__overviewSnapshotStorageKey)).toBeNull()
+
+    // Same version on the next launch: a freshly written headline survives.
+    writeOverviewHeadline('two', payload(), NOW)
+    clearHeadlinesOnUpgrade('0.9.25')
+    expect(readOverviewHeadline('two', NOW)).not.toBeNull()
+
+    // A later upgrade wipes again.
+    clearHeadlinesOnUpgrade('0.9.26')
+    expect(localStorage.getItem(__overviewSnapshotStorageKey)).toBeNull()
   })
 })

@@ -33,17 +33,30 @@ jobs:
       # Scoping (tests/ only, app/ excluded) lives in the package.json test
       # script since #948, so CI and a contributor's `npm test` can never drift.
       - name: Test suite (parallel)
-        run: npm test
+        run: npm test -- --reporter=default --reporter=json --outputFile.json=test-report.json
+      - name: Slowest tests
+        if: always()
+        run: node scripts/slowest-tests.mjs test-report.json
       # Single forked worker, so lock contention comes only from the child
       # processes the tests spawn deliberately. Serial because the suite is
       # parallelism-sensitive (fails under full worker pressure, passes
       # serially). After #904 the loser of a stale-lock contest may be
       # timed-out or completed-by-other; this step gates CI.
-      # Step-level timeout so a stalled lock suite fails this job instead of
-      # eating the 15-minute budget and cancelling a green parallel suite.
+      # This step takes 12-18s on every Node version (64-job sample, no upward
+      # trend). Every failure so far has been a hang that printed nothing at
+      # all - not one line of vitest output after its RUN banner - which the
+      # 5-minute step limit then killed silently. Cap each attempt at 90s (5x
+      # the worst passing run) so the log shows a bounded failure, and retry
+      # once: a hang a change actually introduced reproduces on the second
+      # attempt and still fails the job, while the startup hang that has never
+      # once produced a wrong result costs 90s instead of a whole re-run. The
+      # warning keeps every occurrence visible rather than silently green.
       - name: Cache-lock suite (serial)
-        timeout-minutes: 5
-        run: npm run test:locks
+        timeout-minutes: 4
+        run: |
+          timeout 90 npm run test:locks && exit 0
+          echo "::warning::cache-lock suite did not finish in 90s (normal 12-18s) - retrying once"
+          timeout 90 npm run test:locks
 
   # The CLI is shipped to macOS and Windows users, and the Windows tray app depends on it
   # there. One run per platform on the newest Node 22, without the serial lock suite, which
@@ -67,7 +80,10 @@ jobs:
       - name: Typecheck
         run: npx tsc --noEmit
       - name: Test suite
-        run: npm test -- --maxWorkers=3
+        run: npm test -- --maxWorkers=3 --reporter=default --reporter=json --outputFile.json=test-report.json
+      - name: Slowest tests
+        if: always()
+        run: node scripts/slowest-tests.mjs test-report.json
 
   desktop:
     runs-on: ubuntu-latest

@@ -360,8 +360,8 @@ private func withAnnouncer(
 ) async throws {
     let suiteName = "codeburn.codex.bankedResets.\(UUID().uuidString)"
     let defaults = try #require(UserDefaults(suiteName: suiteName))
-    defaults.removePersistentDomain(forName: suiteName)
-    defer { defaults.removePersistentDomain(forName: suiteName) }
+    TestDefaults.forget(suiteName)
+    defer { TestDefaults.forget(suiteName) }
 
     let notifier = RecordingBankedResetNotifier()
     let store = MemoryBankedResetStore()

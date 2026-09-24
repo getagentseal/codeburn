@@ -1,6 +1,7 @@
-import { createContext, useContext } from 'react'
+import { createContext, useContext, useEffect, useState } from 'react'
 
 import { t } from '../i18n'
+import type { CodeburnBridge } from './types'
 
 // The auto-refresh cadence, chosen in Settings > General and persisted at
 // localStorage `codeburn.refreshInterval`. usePolled reads the resolved
@@ -43,6 +44,41 @@ export function readRefreshValue(): string {
 
 export function persistRefreshValue(value: string): void {
   try { globalThis.localStorage?.setItem(STORAGE_KEY, value) } catch { /* storage can be unavailable */ }
+}
+
+// The SLOW tier intervals, shared by every section that shows the same report.
+// Neither report moves minute to minute and each costs a full CLI spawn
+// (`act report --json` is not even served by the resident child), so they
+// refresh on mount, on a manual refresh, and on these timers — never on a live
+// tick. usePolled additionally floors them at the user's live cadence.
+export const ACT_SLOW_MS = 600_000
+export const YIELD_SLOW_MS = 300_000
+
+// On battery the live poll runs half as often. The user's choice stays the base
+// — only the resolved interval moves, and it moves back the moment AC returns.
+export const BATTERY_CADENCE_FACTOR = 2
+
+export function resolveCadenceMs(value: string, onBattery: boolean): number | null {
+  const base = refreshValueToMs(value)
+  return base == null ? null : base * (onBattery ? BATTERY_CADENCE_FACTOR : 1)
+}
+
+/** Whether the machine is running on battery, per Electron's powerMonitor.
+ *  Read from the bridge at call time (like lib/platform.ts) so a preload that
+ *  lacks the method, or no bridge at all, simply reads as AC. */
+export function useOnBattery(): boolean {
+  const [onBattery, setOnBattery] = useState(false)
+  useEffect(() => {
+    const bridge = typeof window === 'undefined'
+      ? undefined
+      : (window as unknown as { codeburn?: CodeburnBridge }).codeburn
+    if (typeof bridge?.powerStatus !== 'function') return
+    let live = true
+    bridge.powerStatus().then(value => { if (live) setOnBattery(value) }).catch(() => {})
+    const unsubscribe = bridge.onPowerStatus?.(value => { if (live) setOnBattery(value) })
+    return () => { live = false; unsubscribe?.() }
+  }, [])
+  return onBattery
 }
 
 export type RefreshCadence = {

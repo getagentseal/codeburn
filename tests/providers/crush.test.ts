@@ -116,9 +116,17 @@ function insertMessage(db: TestDb, sessionId: string, role: string, model: strin
   `).run(id, sessionId, role, model, 1_700_000_000, 1_700_000_000)
 }
 
-async function writeRegistry(globalDataDir: string, entries: Record<string, { path: string; data_dir: string }>): Promise<void> {
+type RegistryEntry = {
+  path: string
+  data_dir: string
+  last_accessed?: string
+}
+
+type Registry = RegistryEntry[] | Record<string, RegistryEntry> | { projects: RegistryEntry[] }
+
+async function writeRegistry(globalDataDir: string, registry: Registry): Promise<void> {
   await mkdir(globalDataDir, { recursive: true })
-  await writeFile(join(globalDataDir, 'projects.json'), JSON.stringify(entries))
+  await writeFile(join(globalDataDir, 'projects.json'), JSON.stringify(registry))
 }
 
 async function collect(parser: { parse(): AsyncGenerator<ParsedProviderCall> }): Promise<ParsedProviderCall[]> {
@@ -270,7 +278,7 @@ describe('crush provider', () => {
     expect(second).toHaveLength(0)
   })
 
-  it('accepts an array-shaped projects.json (legacy format)', async () => {
+  it('accepts an array-shaped projects.json for compatibility', async () => {
     if (!isSqliteAvailable()) return
 
     const projectDir = join(tmpRoot, 'project-e')
@@ -280,16 +288,59 @@ describe('crush provider', () => {
     })
 
     const globalData = join(tmpRoot, 'crush-global')
-    await mkdir(globalData, { recursive: true })
-    await writeFile(
-      join(globalData, 'projects.json'),
-      JSON.stringify([{ path: projectDir, data_dir: '.crush' }]),
-    )
+    await writeRegistry(globalData, [{ path: projectDir, data_dir: '.crush' }])
     process.env['CRUSH_GLOBAL_DATA'] = globalData
 
     const p = createCrushProvider()
     const sources = await p.discoverSessions()
     expect(sources).toHaveLength(1)
+    expect(sources[0]!.path).toBe(`${dbPath}:sess-arr`)
+  })
+
+  it('accepts an object keyed by project id for compatibility', async () => {
+    if (!isSqliteAvailable()) return
+
+    const projectDir = join(tmpRoot, 'project-f')
+    const dbPath = createCrushDb(join(projectDir, '.crush'))
+    withTestDb(dbPath, db => {
+      insertSession(db, { id: 'sess-keyed', cost: 0.01, promptTokens: 1, completionTokens: 1, createdAt: 1_700_000_900 })
+    })
+
+    const globalData = join(tmpRoot, 'crush-global')
+    await writeRegistry(globalData, {
+      project: { path: projectDir, data_dir: '.crush' },
+    })
+    process.env['CRUSH_GLOBAL_DATA'] = globalData
+
+    const p = createCrushProvider()
+    const sources = await p.discoverSessions()
+    expect(sources).toHaveLength(1)
+    expect(sources[0]!.path).toBe(`${dbPath}:sess-keyed`)
+  })
+
+  it('accepts the current Crush projects wrapper', async () => {
+    if (!isSqliteAvailable()) return
+
+    const projectDir = join(tmpRoot, 'project-g')
+    const dbPath = createCrushDb(join(projectDir, '.crush'))
+    withTestDb(dbPath, db => {
+      insertSession(db, { id: 'sess-wrapped', cost: 0.01, promptTokens: 1, completionTokens: 1, createdAt: 1_700_001_000 })
+    })
+
+    const globalData = join(tmpRoot, 'crush-global')
+    await writeRegistry(globalData, {
+      projects: [{
+        path: projectDir,
+        data_dir: '.crush',
+        last_accessed: '2025-12-15T12:34:56.789012Z',
+      }],
+    })
+    process.env['CRUSH_GLOBAL_DATA'] = globalData
+
+    const p = createCrushProvider()
+    const sources = await p.discoverSessions()
+    expect(sources).toHaveLength(1)
+    expect(sources[0]!.path).toBe(`${dbPath}:sess-wrapped`)
   })
 
   it('ignores registry entries whose db is missing', async () => {

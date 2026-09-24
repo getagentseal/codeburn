@@ -333,14 +333,30 @@ export function polledMemoTimestamp(key: string): number | null {
  * parallel full-history parse per section.
  *
  * `memoKey` opts into the instant-switch memo above.
+ *
+ * `cadence` picks the refresh speed. 'live' (the default, and what every caller
+ * that passes nothing gets) is the user's chosen cadence from Settings.
+ * `{ slowMs }` is a SLOW request: mount, deps change and refresh() still fetch
+ * immediately, but the timer runs at `slowMs` — never faster than the live
+ * cadence, and never at all under Manual, where the user asked for no timer.
  */
 export function usePolled<T>(
   fetcher: () => Promise<T>,
   deps: unknown[],
-  opts: { intervalMs?: number | null; enabled?: boolean; memoKey?: string } = {},
+  opts: {
+    intervalMs?: number | null
+    enabled?: boolean
+    memoKey?: string
+    cadence?: 'live' | { slowMs: number }
+  } = {},
 ): Polled<T> {
   const cadence = useContext(RefreshCadenceContext)
-  const intervalMs = opts.intervalMs !== undefined ? opts.intervalMs : cadence.intervalMs
+  const slow = opts.cadence && opts.cadence !== 'live' ? opts.cadence.slowMs : null
+  const intervalMs = opts.intervalMs !== undefined
+    ? opts.intervalMs
+    : slow == null || cadence.intervalMs == null
+      ? cadence.intervalMs
+      : Math.max(slow, cadence.intervalMs)
   const enabled = opts.enabled ?? true
   const memoKey = opts.memoKey
   const [data, setData] = useState<T | null>(() => (memoKey ? memoGet<T>(memoKey)?.value ?? null : null))
@@ -473,8 +489,25 @@ export function usePolled<T>(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled, memoKey, ...deps])
 
+  // FETCHING. Mount, and every change of the fetcher itself (deps, `enabled`,
+  // `memoKey`). Deliberately NOT keyed on the cadence: changing how OFTEN to
+  // poll is not a reason to poll now. Before the split, a power transition (or
+  // useOnBattery resolving a moment after launch) changed intervalMs and
+  // therefore re-ran this, spawning an immediate extra CLI process for every
+  // live hook — including a whole `act report` on its 10-minute tier.
   useEffect(() => {
     load()
+    return () => {
+      // Retire this generation so an in-flight fetch can't resolve into state
+      // after unmount or a deps change.
+      epochRef.current++
+    }
+  }, [load])
+
+  // TIMING. Arms (and re-arms) the interval and the visibility gate. Re-running
+  // this on a cadence change restarts the timer at the new interval without
+  // fetching.
+  useEffect(() => {
     // Poll only while the window is visible. Each tick drives a CLI re-parse in
     // the resident serve child, and on a machine with active agent sessions the
     // watched roots change constantly, so every tick is a full-core parse. A
@@ -502,9 +535,6 @@ export function usePolled<T>(
     return () => {
       stopTicking()
       if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisible)
-      // Retire this generation so an in-flight fetch can't resolve into state
-      // after unmount or a deps change.
-      epochRef.current++
     }
   }, [load, intervalMs])
 

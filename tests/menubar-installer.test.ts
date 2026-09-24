@@ -1,15 +1,20 @@
 import { createHash } from 'node:crypto'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { dirname, join } from 'node:path'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   buildPersistentCodeburnLookupPath,
   downloadToFile,
   formatGitHubReleaseLookupError,
   hasRunnableRecordedCli,
   isMissingDirectAssetError,
+  leftoverBundleLines,
   resolveLatestMenubarReleaseAssets,
+  pidIsLive,
+  placeMenubarBundle,
+  recoverPlacements,
+  resolveMacInstallTarget,
   resolveMenubarReleaseAssets,
   resolvePersistentCodeburnPathFromWhichOutput,
   resolveProxyUrlForUrl,
@@ -487,5 +492,310 @@ describe('hasRunnableRecordedCli', () => {
     const record = join(dir, 'record.v1')
     await writeFile(record, `${launcher}\n`)
     expect(await hasRunnableRecordedCli(record)).toBe(true)
+  })
+})
+
+// The desktop card and `codeburn menubar` have to agree on which bundle is "the" install,
+// or a user with a copy in /Applications gets a second one, and a second login item, in
+// ~/Applications.
+describe.skipIf(process.platform === 'win32')('resolveMacInstallTarget', () => {
+  let root: string
+  let userApps: string
+  let systemApps: string
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'codeburn-menubar-target-'))
+    userApps = join(root, 'user-applications')
+    systemApps = join(root, 'system-applications')
+    await mkdir(userApps, { recursive: true })
+    await mkdir(systemApps, { recursive: true })
+  })
+  afterEach(async () => {
+    await chmod(systemApps, 0o755).catch(() => {})
+    await rm(root, { recursive: true, force: true })
+  })
+
+  const bundle = (dir: string) => join(dir, 'CodeBurnMenubar.app')
+  const install = async (dir: string) => { await mkdir(bundle(dir), { recursive: true }) }
+
+  it('installs into ~/Applications when nothing is installed anywhere', async () => {
+    expect(await resolveMacInstallTarget([userApps, systemApps])).toEqual({
+      targetPath: bundle(userApps), installedPath: null, found: [],
+    })
+  })
+
+  it('replaces a writable copy in /Applications where it already is', async () => {
+    await install(systemApps)
+    expect(await resolveMacInstallTarget([userApps, systemApps])).toEqual({
+      targetPath: bundle(systemApps), installedPath: bundle(systemApps), found: [bundle(systemApps)],
+    })
+  })
+
+  // No sudo, ever: fall back to ~/Applications and name the copy left behind.
+  it('falls back to ~/Applications when /Applications cannot be written', async () => {
+    await install(systemApps)
+    await chmod(systemApps, 0o555)
+    expect(await resolveMacInstallTarget([userApps, systemApps])).toEqual({
+      targetPath: bundle(userApps), installedPath: bundle(systemApps), found: [bundle(systemApps)],
+    })
+  })
+
+  // Without --force nothing is installed, so what gets opened is installedPath, never
+  // targetPath: here targetPath is a fallback for an install that is not happening, and
+  // `open` on it would exit 1 and fail the command with the app sitting in /Applications.
+  it('names the copy that exists, not the fallback, when the only copy cannot be replaced', async () => {
+    await install(systemApps)
+    await chmod(systemApps, 0o555)
+    const resolved = await resolveMacInstallTarget([userApps, systemApps])
+    expect(await stat(resolved.installedPath!).catch(() => null)).not.toBeNull()
+    expect(await stat(resolved.targetPath).catch(() => null)).toBeNull()
+    // And the copy being opened is not also reported as one to move to the Trash.
+    expect(resolved.found.filter(path => path !== resolved.installedPath)).toEqual([])
+  })
+
+  it('replaces the copy the desktop card would find and reports the other', async () => {
+    await install(userApps)
+    await install(systemApps)
+    expect(await resolveMacInstallTarget([userApps, systemApps])).toEqual({
+      targetPath: bundle(userApps), installedPath: bundle(userApps), found: [bundle(userApps), bundle(systemApps)],
+    })
+  })
+})
+
+// Replacing a bundle used to be rm(old) then rename(new): a rename that fails — EXDEV when
+// staging and Applications are on different volumes, EPERM, a full disk — left the user with
+// no menu bar app at all.
+describe.skipIf(process.platform === 'win32')('placeMenubarBundle', () => {
+  let root: string
+  let staged: string
+  let target: string
+
+  const marker = (app: string) => join(app, 'Contents', 'marker')
+  const readMarker = (app: string) => readFile(marker(app), 'utf-8')
+  const makeBundle = async (app: string, text: string) => {
+    await mkdir(join(app, 'Contents'), { recursive: true })
+    await writeFile(marker(app), text, 'utf-8')
+  }
+  const exdev = () => Object.assign(new Error('EXDEV: cross-device link not permitted'), { code: 'EXDEV' })
+  const siblings = async () => (await readdir(dirname(target))).sort()
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'codeburn-menubar-place-'))
+    staged = join(root, 'staging', 'CodeBurnMenubar.app')
+    target = join(root, 'Applications', 'CodeBurnMenubar.app')
+    await mkdir(dirname(target), { recursive: true })
+    await makeBundle(staged, 'new')
+  })
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true })
+  })
+
+  it('renames the staged bundle into place and removes the copy it replaced', async () => {
+    await makeBundle(target, 'old')
+    await placeMenubarBundle(staged, target)
+    expect(await readMarker(target)).toBe('new')
+    expect(await siblings()).toEqual(['CodeBurnMenubar.app'])
+  })
+
+  it('copies into a sibling and renames that into place when the move crosses a volume', async () => {
+    await makeBundle(target, 'old')
+    const verified: string[] = []
+    await placeMenubarBundle(staged, target, {
+      rename: async (from, to) => { if (from === staged) throw exdev(); await rename(from, to) },
+      verify: async (app) => { verified.push(app) },
+    })
+    expect(await readMarker(target)).toBe('new')
+    // The staged source is gone, the aside copy is gone, and the final bundle was verified.
+    expect(await stat(staged).catch(() => null)).toBeNull()
+    expect(await siblings()).toEqual(['CodeBurnMenubar.app'])
+    expect(verified).toEqual([target])
+  })
+
+  it('puts the bundle it replaced back, untouched, when the placement fails', async () => {
+    await makeBundle(target, 'old')
+    const boom = Object.assign(new Error('read-only file system'), { code: 'EPERM' })
+    await expect(placeMenubarBundle(staged, target, {
+      rename: async (from, to) => { if (from === staged) throw boom; await rename(from, to) },
+    })).rejects.toThrow(boom)
+    expect(await readMarker(target)).toBe('old')
+    expect(await siblings()).toEqual(['CodeBurnMenubar.app'])
+  })
+
+  // The copy is where a signature breaks, so a bundle that no longer verifies is not an install.
+  it('restores the old bundle when the copied one fails verification', async () => {
+    await makeBundle(target, 'old')
+    await expect(placeMenubarBundle(staged, target, {
+      rename: async (from, to) => { if (from === staged) throw exdev(); await rename(from, to) },
+      verify: async () => { throw new Error('code object is not signed at all') },
+    })).rejects.toThrow(/not signed/)
+    expect(await readMarker(target)).toBe('old')
+    expect(await siblings()).toEqual(['CodeBurnMenubar.app'])
+  })
+
+  // Silence here is the worst case: no bundle at the real name, the user's app under a
+  // hidden one, and nothing said about it.
+  it('says where the old bundle is when it cannot be put back either', async () => {
+    await makeBundle(target, 'old')
+    const said: string[] = []
+    await expect(placeMenubarBundle(staged, target, {
+      rename: async (from, to) => {
+        if (to !== target) { await rename(from, to); return }
+        throw from === staged ? new Error('nope') : new Error('restore failed')
+      },
+      log: (line) => { said.push(line) },
+    })).rejects.toThrow('nope')
+    expect(said).toHaveLength(1)
+    expect(said[0]).toContain(`.CodeBurnMenubar.app.old-${process.pid}`)
+    expect(said[0]).toContain(target)
+    // And it is still on disk under that name, so the instructions work.
+    expect((await readdir(dirname(target)))[0]).toContain('.old-')
+  })
+
+  it('installs onto an empty Applications folder and leaves nothing behind on failure', async () => {
+    await placeMenubarBundle(staged, target)
+    expect(await readMarker(target)).toBe('new')
+
+    await makeBundle(staged, 'newer')
+    await rm(target, { recursive: true, force: true })
+    await expect(placeMenubarBundle(staged, target, {
+      rename: async () => { throw new Error('nope') },
+    })).rejects.toThrow('nope')
+    expect(await siblings()).toEqual([])
+  })
+})
+
+// An install that is killed between the two renames leaves the user's app under a hidden
+// name; a second install running at the same time would fight this one over the same files.
+// Both are answered by the pid in the name.
+describe.skipIf(process.platform === 'win32')('recoverPlacements', () => {
+  let dir: string
+  const app = () => join(dir, 'CodeBurnMenubar.app')
+  const aside = (pid: number) => join(dir, `.CodeBurnMenubar.app.old-${pid}`)
+  const staged = (pid: number) => join(dir, `.CodeBurnMenubar.app.new-${pid}`)
+  const DEAD = 424242
+  const bundleAt = async (path: string, text: string) => {
+    await mkdir(join(path, 'Contents'), { recursive: true })
+    await writeFile(join(path, 'Contents', 'marker'), text, 'utf-8')
+  }
+
+  beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'codeburn-menubar-recover-')) })
+  afterEach(async () => {
+    await chmod(dir, 0o755).catch(() => {})
+    await rm(dir, { recursive: true, force: true })
+  })
+
+  it('refuses to run while another install holds the directory, and changes nothing', async () => {
+    await bundleAt(aside(DEAD), 'old')
+    await bundleAt(staged(777), 'half-copied')
+    const refusal = recoverPlacements([dir], { isLivePid: pid => pid === 777 })
+    await expect(refusal).rejects.toThrow(/pid 777/)
+    // Naming the file is the difference between a user who can unstick themselves and one who cannot.
+    await expect(refusal).rejects.toThrow(staged(777))
+    // The dead-pid orphan is still there: the abort happens before anything is touched.
+    expect((await readdir(dir)).sort()).toEqual(['.CodeBurnMenubar.app.new-777', `.CodeBurnMenubar.app.old-${DEAD}`])
+  })
+
+  // A placement outlives its install whenever the last cleanup fails, and pids get reused.
+  // Without an age limit, one recycled pid refuses every install on that machine forever.
+  it('treats a placement whose pid was recycled long ago as dead, and recovers from it', async () => {
+    await bundleAt(aside(DEAD), 'the users app')
+    const anHourOn = Date.now() + 60 * 60_000
+    await recoverPlacements([dir], { isLivePid: () => true, now: () => anHourOn })
+    expect(await readFile(join(app(), 'Contents', 'marker'), 'utf-8')).toBe('the users app')
+    expect(await readdir(dir)).toEqual(['CodeBurnMenubar.app'])
+  })
+
+  it('still refuses when the live pid put its placement there just now', async () => {
+    await bundleAt(staged(777), 'half-copied')
+    await expect(recoverPlacements([dir], { isLivePid: () => true, now: () => Date.now() }))
+      .rejects.toThrow(/is working on/)
+  })
+
+  // An Applications folder we cannot write to is not a reason to fail the whole install:
+  // the install either lands somewhere else or fails later with a message of its own.
+  it('carries on, saying so, when an orphan cannot be cleared', async () => {
+    await bundleAt(aside(DEAD), 'old')
+    await chmod(dir, 0o555)
+    const said: string[] = []
+    await recoverPlacements([dir], { isLivePid: () => false, log: (line) => { said.push(line) } })
+    expect(said).toHaveLength(1)
+    expect(said[0]).toContain(aside(DEAD))
+    await chmod(dir, 0o755)
+  })
+
+  it('puts the app back when an install was killed between the two renames', async () => {
+    await bundleAt(aside(DEAD), 'the users app')
+    await recoverPlacements([dir], { isLivePid: () => false })
+    expect(await readFile(join(app(), 'Contents', 'marker'), 'utf-8')).toBe('the users app')
+    expect(await readdir(dir)).toEqual(['CodeBurnMenubar.app'])
+  })
+
+  it('clears what a dead install left behind once the real bundle is back', async () => {
+    await bundleAt(app(), 'new')
+    await bundleAt(aside(DEAD), 'old')
+    await bundleAt(staged(DEAD), 'half-copied')
+    await recoverPlacements([dir], { isLivePid: () => false })
+    expect(await readFile(join(app(), 'Contents', 'marker'), 'utf-8')).toBe('new')
+    expect(await readdir(dir)).toEqual(['CodeBurnMenubar.app'])
+  })
+
+  // A killed install into /Applications must not read as "nothing installed": that is what
+  // would quietly move the app to ~/Applications on the next run.
+  it('recovers before the install target is resolved, so the app keeps its folder', async () => {
+    const userApps = join(dir, 'user')
+    const systemApps = join(dir, 'system')
+    await mkdir(userApps, { recursive: true })
+    await mkdir(systemApps, { recursive: true })
+    await bundleAt(join(systemApps, '.CodeBurnMenubar.app.old-424242'), 'the users app')
+
+    await recoverPlacements([userApps, systemApps], { isLivePid: () => false })
+    const resolved = await resolveMacInstallTarget([userApps, systemApps])
+    expect(resolved.targetPath).toBe(join(systemApps, 'CodeBurnMenubar.app'))
+    expect(resolved.installedPath).toBe(join(systemApps, 'CodeBurnMenubar.app'))
+  })
+
+  it('ignores a directory that is not there and anything that is not a placement', async () => {
+    await bundleAt(app(), 'new')
+    await writeFile(join(dir, '.DS_Store'), '', 'utf-8')
+    await recoverPlacements([join(dir, 'missing'), dir], { isLivePid: () => false })
+    expect((await readdir(dir)).sort()).toEqual(['.DS_Store', 'CodeBurnMenubar.app'])
+  })
+})
+
+describe('pidIsLive', () => {
+  it('is true for a pid we can signal', () => {
+    expect(pidIsLive(process.pid)).toBe(true)
+  })
+
+  // Sending nothing (signal 0) to a pid nobody holds.
+  it('is false for a pid that is not running', () => {
+    expect(pidIsLive(2 ** 31 - 1)).toBe(false)
+  })
+
+  // A second `codeburn menubar` runs as the same user, so a pid we may not signal is not
+  // one of ours: it has been recycled by somebody else's process.
+  it('is false for a pid we are not allowed to signal', () => {
+    const denied = vi.spyOn(process, 'kill').mockImplementation(() => {
+      throw Object.assign(new Error('operation not permitted'), { code: 'EPERM' })
+    })
+    try {
+      expect(pidIsLive(4242)).toBe(false)
+    } finally {
+      denied.mockRestore()
+    }
+  })
+})
+
+describe('leftoverBundleLines', () => {
+  const path = '/Applications/CodeBurnMenubar.app'
+
+  it('tells a terminal in prose and nothing else', () => {
+    expect(leftoverBundleLines([path], {})).toEqual([
+      `An older copy is still at ${path}. Move it to the Trash; CodeBurn will not delete it for you.`,
+    ])
+  })
+
+  it('adds a machine-readable twin for the desktop app', () => {
+    expect(leftoverBundleLines([path], { CODEBURN_PROGRESS: '1' })[1]).toBe(`CODEBURN_LEFTOVER ${path}`)
   })
 })

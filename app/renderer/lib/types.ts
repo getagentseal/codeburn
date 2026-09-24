@@ -27,6 +27,9 @@ export interface CliError {
 
 export type AliasRow = { from: string; to: string }
 export type ActionResult = { ok: boolean; stdout: string; stderr: string; code: number | null }
+/** `savedPath` is where the CLI actually wrote, which is not the chosen folder:
+ *  CSV nests a dated subfolder, JSON appends the extension. */
+export type ExportResult = ActionResult & { savedPath?: string }
 
 export type QuotaWindow = {
   label: string
@@ -36,7 +39,11 @@ export type QuotaWindow = {
 
 export type QuotaProvider = {
   provider: 'claude' | 'codex' | 'gemini' | 'copilot' | 'antigravity' | 'kimi' | 'zcode' | 'grokbot'
-  connection: 'connected' | 'disconnected' | 'accessDenied' | 'loading' | 'stale' | 'transientFailure' | 'terminalFailure'
+  /** `keychainUnchecked` is darwin-only and distinct from `disconnected`: no
+   *  credential file was found and the keychain has NOT been looked at yet
+   *  (a keychain read raises a one-time macOS dialog, so only a user-initiated
+   *  forced refresh does one). It means "we do not know", not "logged out". */
+  connection: 'connected' | 'disconnected' | 'keychainUnchecked' | 'accessDenied' | 'loading' | 'stale' | 'transientFailure' | 'terminalFailure'
   primary: QuotaWindow | null
   details: QuotaWindow[]
   planLabel: string | null
@@ -140,6 +147,28 @@ export type HydrationState = {
   totalFiles: number
 }
 
+/** The optimize scan's figures. Carried by a full menubar payload, and — since
+ *  the poll runs with --no-optimize — cached on disk between daily recomputes. */
+export type OptimizeBlock = {
+  findingCount: number
+  savingsUSD: number
+  topFindings: Array<{
+    title: string
+    impact: 'high' | 'medium' | 'low'
+    savingsUSD: number
+  }>
+}
+
+/** A cached optimize scan: the figures plus WHEN and FOR WHICH query scope they
+ *  were computed, so a stored number is never shown as live or under another
+ *  period/provider/filter. */
+export type OptimizeSnapshot = {
+  scope: string
+  computedAt: string
+  appVersion: string
+  optimize: OptimizeBlock
+}
+
 export type MenubarPayload = {
   generated: string
   /** Consecutive active days across every provider, independent of the selected
@@ -204,7 +233,7 @@ export type MenubarPayload = {
     // Optional: older CLIs omit it. `id` is the internal provider name (round-trips
     // as --provider), `label` the display name. `hasUsage` distinguishes active $0
     // providers from detected-but-idle providers when present.
-    providerDetails?: Array<{ id: string; label: string; cost: number; calls?: number; hasUsage?: boolean; sessions?: number; sessionCountBasis?: 'identity' | 'partial' }>
+    providerDetails?: Array<{ id: string; label: string; cost: number; calls?: number; hasUsage?: boolean; excludedFromTotal?: boolean; sessions?: number; sessionCountBasis?: 'identity' | 'partial' }>
     topProjects: Array<{
       id?: string
       name: string
@@ -319,15 +348,7 @@ export type MenubarPayload = {
       unattributedCost?: number
     }
   }
-  optimize: {
-    findingCount: number
-    savingsUSD: number
-    topFindings: Array<{
-      title: string
-      impact: 'high' | 'medium' | 'low'
-      savingsUSD: number
-    }>
-  }
+  optimize: OptimizeBlock
   history: {
     daily: DailyHistoryEntry[]
     // Granular per-bucket timeline. Present only on the punchcard's dedicated
@@ -1009,6 +1030,9 @@ export type TelemetryStatus = {
   enabled: boolean
   defaultEnabled: boolean
   onboarded: boolean
+  /** Set by the setters only: false when the decision holds in memory but could
+   *  not be written to disk, so the menu bar app still inherits the old one. */
+  persisted?: boolean
 }
 
 /** Cold-start scan progress streamed from the CLI warmup (src/parser.ts).
@@ -1028,6 +1052,8 @@ export type UpdateStatus = {
   latestVersion: string | null
   updateAvailable: boolean
   tag: string | null
+  /** A Microsoft Store install, which the Store updates; nothing is checked or offered. */
+  storeManaged?: boolean
 }
 
 /** The tray app and the Capacity Dock the Windows desktop app bundles (app/electron/menubar.ts).
@@ -1069,7 +1095,13 @@ export type MacMenubarStatus = {
   outdated: boolean
 }
 
-export type MacMenubarInstall = { ok: boolean; error: string | null; status: MacMenubarStatus }
+export type MacMenubarInstall = {
+  ok: boolean
+  error: string | null
+  status: MacMenubarStatus
+  /** Older bundles the CLI found and left in place. Absent on the actions that never install. */
+  leftovers?: string[]
+}
 
 /** The tray app's own settings, from the two files it reads them from
  *  (windows-settings.json, windows-dock.json) plus the HKCU Run value. */
@@ -1152,6 +1184,14 @@ export interface CodeburnBridge {
   /** Spend per canonical project × branch (`spend --format branch-json`). */
   getBranchSpend(period: Period, provider: string, range?: DateRange, background?: boolean): Promise<BranchSpendReport>
   getOptimizeReport(period: Period, provider: string, range?: DateRange, background?: boolean): Promise<OptimizeJsonReport>
+  /** The once-a-day optimize scan for this query scope, cached on disk.
+   *  `maxAgeMs` 0 forces a recompute. Optional so an older preload degrades to
+   *  no coach figures rather than throwing. */
+  getOptimizeSnapshot?(period: Period, provider: string, range?: DateRange, configSource?: string | null, scope?: string, maxAgeMs?: number): Promise<OptimizeSnapshot>
+  /** Whether the machine is on battery. Optional: an older preload reads as AC. */
+  powerStatus?(): Promise<boolean>
+  /** Subscribe to power-source changes; returns an unsubscribe fn. */
+  onPowerStatus?(cb: (onBattery: boolean) => void): () => void
   getDevices(period: Period): Promise<CombinedUsage>
   getDevicesScan(): Promise<DeviceScanResult>
   getShareStatus(): Promise<ShareStatus>
@@ -1173,7 +1213,7 @@ export interface CodeburnBridge {
   removeDevice(name: string): Promise<ActionResult>
   setPlan(id: string, provider: string): Promise<ActionResult>
   resetPlan(provider: string): Promise<ActionResult>
-  exportData(format: string, provider: string, outPath: string): Promise<ActionResult>
+  exportData(format: string, provider: string, outPath: string): Promise<ExportResult>
   chooseDirectory(): Promise<string | null>
   cliStatus(): Promise<{ found: boolean; path: string | null; error?: string }>
   telemetryStatus(): Promise<TelemetryStatus | null>

@@ -149,8 +149,8 @@ private func withIsolatedCopilotStore(
 ) async throws {
     let suiteName = "codeburn.copilot.disconnect.\(UUID().uuidString)"
     let defaults = try #require(UserDefaults(suiteName: suiteName))
-    defaults.removePersistentDomain(forName: suiteName)
-    defer { defaults.removePersistentDomain(forName: suiteName) }
+    TestDefaults.forget(suiteName)
+    defer { TestDefaults.forget(suiteName) }
 
     let fetch = CopilotFetchStub()
     let store = AppStore(copilotQuotaRuntime: CopilotQuotaRuntime(

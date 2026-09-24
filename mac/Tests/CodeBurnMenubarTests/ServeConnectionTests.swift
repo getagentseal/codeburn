@@ -8,6 +8,14 @@ private let coldTimeoutNanoseconds: UInt64 = 10 * 60 * 1_000_000_000
 private let warmTimeoutNanoseconds: UInt64 = 45 * 1_000_000_000
 private let terminationGraceNanoseconds: UInt64 = 5 * 1_000_000_000
 
+/// Serve children are recorded to a pid file so a later run can reap an orphan.
+/// Tests get a scratch path; the production default is the user's cache directory.
+private func scratchPidFile() -> URL {
+    URL(fileURLWithPath: NSTemporaryDirectory())
+        .appendingPathComponent("serve-connection-pids", isDirectory: true)
+        .appendingPathComponent(UUID().uuidString)
+}
+
 private func currentSIGPIPEHandlerBits() -> UInt {
     var action = sigaction()
     _ = sigaction(SIGPIPE, nil, &action)
@@ -171,19 +179,104 @@ private func withHangGuard<T>(
     return try await operation()
 }
 
+private let idleWindowSeconds: Double = 600
+private let idleWindowNanoseconds: UInt64 = 600 * 1_000_000_000
+
+/// A serve fixture that answers every request line and records its pid. It
+/// ignores SIGTERM on purpose, so a test that sees it exit cleanly knows the
+/// connection closed its stdin rather than signalling it.
+private func makeEchoFixture(pidsFile: String) -> Process {
+    let child = Process()
+    child.executableURL = URL(fileURLWithPath: "/bin/sh")
+    child.arguments = ["-c", """
+        trap '' TERM
+        printf '%s\n' "$$" >> "$1"
+        while IFS= read -r line; do
+          id=$(printf '%s' "$line" | sed -E 's/.*"id":([0-9]+).*/\\1/')
+          printf '{"id":%s,"ok":true,"output":"reply-%s"}\n' "$id" "$id"
+        done
+        """, "serve-fixture", pidsFile]
+    return child
+}
+
+/// A serve fixture that RECORDS every SIGTERM it receives into `signalsFile`
+/// instead of dying from one, and exits on stdin EOF. `ignoreEOF` keeps it alive
+/// past EOF, modelling a child that only a signal can end.
+private func makeSignalRecordingFixture(pidsFile: String, signalsFile: String, ignoreEOF: Bool = false) -> Process {
+    let child = Process()
+    child.executableURL = URL(fileURLWithPath: "/bin/sh")
+    let tail = ignoreEOF ? "while :; do sleep 0.1; done" : "exit 0"
+    child.arguments = ["-c", """
+        trap 'printf T >> "$2"' TERM
+        printf '%s\n' "$$" >> "$1"
+        while IFS= read -r line; do
+          id=$(printf '%s' "$line" | sed -E 's/.*"id":([0-9]+).*/\\1/')
+          printf '{"id":%s,"ok":true,"output":"reply-%s"}\n' "$id" "$id"
+        done
+        \(tail)
+        """, "serve-fixture", pidsFile, signalsFile]
+    return child
+}
+
+private func recordedPids(_ pidsFile: String) throws -> [Substring] {
+    try String(contentsOfFile: pidsFile, encoding: .utf8).split(separator: "\n")
+}
+
+private func killIfRunning(_ processes: [Process]) {
+    for child in processes where child.isRunning {
+        _ = Darwin.kill(child.processIdentifier, SIGKILL)
+    }
+}
+
+/// An idle-window clock the test releases by hand. Deliberately NOT
+/// cancellation-aware: the connection cancels its idle task whenever a request
+/// is admitted, and releasing the sleep anyway is the only way to drive the
+/// retire path into a busy connection.
+private actor ReleaseGate {
+    private var continuations: [Int: CheckedContinuation<Void, Never>] = [:]
+    private var nextToken = 0
+    private var armed = 0
+
+    func wait(_ nanoseconds: UInt64) async {
+        armed += 1
+        let token = nextToken
+        nextToken += 1
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            continuations[token] = continuation
+        }
+    }
+
+    func armedCount() -> Int { armed }
+
+    /// The most recently armed window, i.e. the one the connection considers
+    /// live. Earlier ones belong to already-cancelled tasks.
+    func releaseNewest() {
+        guard let token = continuations.keys.max() else { return }
+        continuations.removeValue(forKey: token)?.resume()
+    }
+
+    func releaseAll() {
+        let all = Array(continuations.values)
+        continuations.removeAll()
+        for continuation in all { continuation.resume() }
+    }
+}
+
 @Suite("ServeConnection", .serialized)
 struct ServeConnectionTests {
     @Test("the resident child starts at user-initiated QoS")
     func residentChildUsesInteractiveQoS() async {
         let recorder = QualityOfServiceRecorder()
-        let connection = ServeConnection { _, qualityOfService in
-            recorder.record(qualityOfService)
-            let child = Process()
-            child.executableURL = URL(fileURLWithPath: "/bin/sh")
-            child.arguments = ["-c", "while IFS= read -r line; do :; done"]
-            child.qualityOfService = qualityOfService
-            return child
-        }
+        let connection = ServeConnection(
+            pidFile: scratchPidFile(),
+            makeProcess: { _, qualityOfService in
+                recorder.record(qualityOfService)
+                let child = Process()
+                child.executableURL = URL(fileURLWithPath: "/bin/sh")
+                child.arguments = ["-c", "while IFS= read -r line; do :; done"]
+                child.qualityOfService = qualityOfService
+                return child
+            })
 
         await connection.ensureStarted()
 
@@ -207,6 +300,7 @@ struct ServeConnectionTests {
         // its own would instead be retried on replacements until the death
         // budget surfaced ServeUnavailable.
         let connection = ServeConnection(
+            pidFile: scratchPidFile(),
             makeProcess: { _, qualityOfService in
                 let child = Process()
                 child.executableURL = URL(fileURLWithPath: "/bin/sh")
@@ -256,6 +350,7 @@ struct ServeConnectionTests {
         let clock = ManualTimeoutClock()
 
         let connection = ServeConnection(
+            pidFile: scratchPidFile(),
             makeProcess: { _, qualityOfService in
                 let child = Process()
                 child.executableURL = URL(fileURLWithPath: "/bin/sh")
@@ -378,6 +473,7 @@ struct ServeConnectionTests {
 
         let children = ProcessQueue([stuckChild, replacement])
         let connection = ServeConnection(
+            pidFile: scratchPidFile(),
             makeProcess: { _, qualityOfService in
                 children.take(qualityOfService: qualityOfService)
             },
@@ -476,6 +572,7 @@ struct ServeConnectionTests {
 
         let children = ProcessQueue([stuckChild])
         let connection = ServeConnection(
+            pidFile: scratchPidFile(),
             makeProcess: { _, qualityOfService in
                 children.take(qualityOfService: qualityOfService)
             },
@@ -546,6 +643,7 @@ struct ServeConnectionTests {
         }
         let children = ProcessQueue(processes)
         let connection = ServeConnection(
+            pidFile: scratchPidFile(),
             makeProcess: { _, qualityOfService in
                 children.take(qualityOfService: qualityOfService)
             },
@@ -610,6 +708,7 @@ struct ServeConnectionTests {
         // the late reply cannot beat the cancellation it is meant to follow
         // (#1333).
         let connection = ServeConnection(
+            pidFile: scratchPidFile(),
             makeProcess: { _, qualityOfService in
                 let child = Process()
                 child.executableURL = URL(fileURLWithPath: "/bin/sh")
@@ -689,6 +788,7 @@ struct ServeConnectionTests {
         let recorder = TimeoutRecorder()
 
         let connection = ServeConnection(
+            pidFile: scratchPidFile(),
             makeProcess: { _, qualityOfService in
                 let child = Process()
                 child.executableURL = URL(fileURLWithPath: "/bin/sh")
@@ -747,6 +847,7 @@ struct ServeConnectionTests {
         let requestMarker = dir + "/request-read"
         let recorder = TimeoutRecorder()
         let connection = ServeConnection(
+            pidFile: scratchPidFile(),
             makeProcess: { _, qualityOfService in
                 let child = Process()
                 child.executableURL = URL(fileURLWithPath: "/bin/sh")
@@ -796,6 +897,7 @@ struct ServeConnectionTests {
         let children = ProcessQueue([oldChild, newChild])
         let recorder = TimeoutRecorder()
         let connection = ServeConnection(
+            pidFile: scratchPidFile(),
             makeProcess: { _, qualityOfService in
                 children.take(qualityOfService: qualityOfService)
             },
@@ -840,6 +942,7 @@ struct ServeConnectionTests {
         let recorder = TimeoutRecorder()
 
         let connection = ServeConnection(
+            pidFile: scratchPidFile(),
             makeProcess: { _, qualityOfService in
                 let child = Process()
                 child.executableURL = URL(fileURLWithPath: "/bin/sh")
@@ -886,6 +989,7 @@ struct ServeConnectionTests {
     func failedTerminalResponseKeepsColdTimeout() async throws {
         let recorder = TimeoutRecorder()
         let connection = ServeConnection(
+            pidFile: scratchPidFile(),
             makeProcess: { _, qualityOfService in
                 let child = Process()
                 child.executableURL = URL(fileURLWithPath: "/bin/sh")
@@ -950,6 +1054,7 @@ struct ServeConnectionTests {
         let children = ProcessQueue([oldChild, replacement])
         let recorder = TimeoutRecorder()
         let connection = ServeConnection(
+            pidFile: scratchPidFile(),
             makeProcess: { _, qualityOfService in
                 children.take(qualityOfService: qualityOfService)
             },
@@ -981,6 +1086,7 @@ struct ServeConnectionTests {
             child.arguments = ["-c", "IFS= read -r line; sleep 5"]
             let recorder = TimeoutRecorder()
             let connection = ServeConnection(
+                pidFile: scratchPidFile(),
                 makeProcess: { _, qualityOfService in
                     child.qualityOfService = qualityOfService
                     return child
@@ -1033,6 +1139,7 @@ struct ServeConnectionTests {
         let children = ProcessQueue([oldChild, replacement])
         let recorder = TimeoutRecorder()
         let connection = ServeConnection(
+            pidFile: scratchPidFile(),
             makeProcess: { _, qualityOfService in
                 children.take(qualityOfService: qualityOfService)
             },
@@ -1078,6 +1185,7 @@ struct ServeConnectionTests {
         let children = ProcessQueue(processes)
         let recorder = TimeoutRecorder()
         let connection = ServeConnection(
+            pidFile: scratchPidFile(),
             makeProcess: { _, qualityOfService in
                 children.take(qualityOfService: qualityOfService)
             },
@@ -1183,23 +1291,25 @@ struct ServeConnectionTests {
         defer { try? FileManager.default.removeItem(atPath: dir) }
         let requestLog = dir + "/requests.log"
 
-        let connection = ServeConnection { _, qualityOfService in
-            let child = Process()
-            child.executableURL = URL(fileURLWithPath: "/bin/sh")
-            child.arguments = ["-c", """
-                while IFS= read -r line; do
-                  printf 'request\\n' >> "$1"
-                  id=$(printf '%s' "$line" | sed -E 's/.*\"id\":([0-9]+).*/\\1/')
-                  printf '{\"id\":%s,\"progress\":\"scanning\"}\\n' "$id"
-                  printf '{\"id\":%s,\"ok\":true,\"output\":\"served\"}\\n' "$id"
-                  # Emit READY after the terminal response. The client must
-                  # register and complete the first real request without it.
-                  printf '{\"ready\":true,\"pid\":1}\\n'
-                done
-                """, "serve-fixture", requestLog]
-            child.qualityOfService = qualityOfService
-            return child
-        }
+        let connection = ServeConnection(
+            pidFile: scratchPidFile(),
+            makeProcess: { _, qualityOfService in
+                let child = Process()
+                child.executableURL = URL(fileURLWithPath: "/bin/sh")
+                child.arguments = ["-c", """
+                    while IFS= read -r line; do
+                      printf 'request\\n' >> "$1"
+                      id=$(printf '%s' "$line" | sed -E 's/.*\"id\":([0-9]+).*/\\1/')
+                      printf '{\"id\":%s,\"progress\":\"scanning\"}\\n' "$id"
+                      printf '{\"id\":%s,\"ok\":true,\"output\":\"served\"}\\n' "$id"
+                      # Emit READY after the terminal response. The client must
+                      # register and complete the first real request without it.
+                      printf '{\"ready\":true,\"pid\":1}\\n'
+                    done
+                    """, "serve-fixture", requestLog]
+                child.qualityOfService = qualityOfService
+                return child
+            })
 
         await connection.ensureStarted()
         let payload = try await connection.request(args: ["status", "--format", "menubar-json"])
@@ -1232,9 +1342,11 @@ struct ServeConnectionTests {
             """]
 
         let children = ProcessQueue([first, replacement])
-        let connection = ServeConnection { _, qualityOfService in
-            children.take(qualityOfService: qualityOfService)
-        }
+        let connection = ServeConnection(
+            pidFile: scratchPidFile(),
+            makeProcess: { _, qualityOfService in
+                children.take(qualityOfService: qualityOfService)
+            })
 
         let drained = try await connection.request(args: ["status", "drain"])
         #expect(String(decoding: drained, as: UTF8.self) == "final-drain")
@@ -1252,13 +1364,15 @@ struct ServeConnectionTests {
         let closedMarker = dir + "/stdin-closed"
         let sigpipeHandlerBefore = currentSIGPIPEHandlerBits()
 
-        let connection = ServeConnection { _, qualityOfService in
-            let child = Process()
-            child.executableURL = URL(fileURLWithPath: "/bin/sh")
-            child.arguments = ["-c", "exec 0<&-; : > \"$1\"; sleep 2", "serve-fixture", closedMarker]
-            child.qualityOfService = qualityOfService
-            return child
-        }
+        let connection = ServeConnection(
+            pidFile: scratchPidFile(),
+            makeProcess: { _, qualityOfService in
+                let child = Process()
+                child.executableURL = URL(fileURLWithPath: "/bin/sh")
+                child.arguments = ["-c", "exec 0<&-; : > \"$1\"; sleep 2", "serve-fixture", closedMarker]
+                child.qualityOfService = qualityOfService
+                return child
+            })
 
         await connection.ensureStarted()
         #expect(currentSIGPIPEHandlerBits() == sigpipeHandlerBefore)
@@ -1275,6 +1389,435 @@ struct ServeConnectionTests {
             requestFailed = true
         }
         #expect(requestFailed)
+        await connection.shutdown()
+    }
+
+    // MARK: - idle retire
+
+    @Test("an idle resident retires and the next request respawns through the start path")
+    func idleWindowRetiresAndRespawnsResident() async throws {
+        let dir = NSTemporaryDirectory() + "serve-connection-idle-retire-test-" + UUID().uuidString
+        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let pidsFile = dir + "/pids"
+        let idleClock = ManualTimeoutClock()
+        let requestClock = ManualTimeoutClock()
+        // Never fired: with SIGTERM trapped in the fixture, the only thing that
+        // can end a child is the retire closing its stdin.
+        let graceClock = ManualTimeoutClock()
+        let first = makeEchoFixture(pidsFile: pidsFile)
+        let second = makeEchoFixture(pidsFile: pidsFile)
+        let children = ProcessQueue([first, second])
+        defer { killIfRunning([first, second]) }
+
+        let connection = ServeConnection(
+            pidFile: scratchPidFile(),
+            makeProcess: { _, qualityOfService in
+                children.take(qualityOfService: qualityOfService)
+            },
+            timeoutSleep: { nanoseconds in try await requestClock.sleep(nanoseconds) },
+            terminationGraceSleep: { nanoseconds in try await graceClock.sleep(nanoseconds) },
+            idleSeconds: idleWindowSeconds,
+            idleSleep: { nanoseconds in try await idleClock.sleep(nanoseconds) }
+        )
+
+        let firstPayload = try await connection.request(args: ["status", "--first"])
+        #expect(String(decoding: firstPayload, as: UTF8.self) == "reply-1")
+
+        let armed = await eventually { await idleClock.snapshot() == [idleWindowNanoseconds] }
+        #expect(armed)
+        await idleClock.fireOldest()
+
+        let retired = await eventually { await connection.residentChildForTesting == nil }
+        #expect(retired)
+        let firstExited = await eventually { !first.isRunning }
+        #expect(firstExited)
+        // A clean exit proves stdin was closed: the fixture ignores SIGTERM and
+        // the escalation grace never elapses.
+        #expect(first.terminationReason == .exit)
+
+        let secondPayload = try await connection.request(args: ["status", "--second"])
+        #expect(String(decoding: secondPayload, as: UTF8.self) == "reply-2")
+        #expect(await connection.residentChildForTesting === second)
+        #expect(children.remainingCount == 0)
+        #expect(try recordedPids(pidsFile).count == 2)
+        // A retire resets warmth with the generation, so the respawned child's
+        // first request gets the COLD silence allowance, not the warm 45s.
+        let coldTwice = await eventually {
+            await requestClock.history() == [coldTimeoutNanoseconds, coldTimeoutNanoseconds]
+        }
+        #expect(coldTwice)
+        await connection.shutdown()
+    }
+
+    @Test("an idle retire closes stdin first and signals nothing that exits on EOF")
+    func idleRetireClosesStdinBeforeSignalling() async throws {
+        let dir = NSTemporaryDirectory() + "serve-connection-retire-stdin-test-" + UUID().uuidString
+        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let pidsFile = dir + "/pids"
+        let signalsFile = dir + "/signals"
+        let idleClock = ManualTimeoutClock()
+        let graceClock = ManualTimeoutClock()
+        // EOF is what makes `serve --stdio` publish its coalesced shard window,
+        // and SIGTERM is caught only to unlink the cache lock before being
+        // re-raised — so a signal in the same hop kills the flush.
+        let first = makeSignalRecordingFixture(pidsFile: pidsFile, signalsFile: signalsFile)
+        let second = makeSignalRecordingFixture(pidsFile: pidsFile, signalsFile: signalsFile)
+        let children = ProcessQueue([first, second])
+        defer { killIfRunning([first, second]) }
+
+        let connection = ServeConnection(
+            pidFile: scratchPidFile(),
+            makeProcess: { _, qualityOfService in children.take(qualityOfService: qualityOfService) },
+            timeoutSleep: { nanoseconds in try await ManualTimeoutClock().sleep(nanoseconds) },
+            terminationGraceSleep: { nanoseconds in try await graceClock.sleep(nanoseconds) },
+            idleSeconds: idleWindowSeconds,
+            idleSleep: { nanoseconds in try await idleClock.sleep(nanoseconds) }
+        )
+
+        _ = try await connection.request(args: ["status", "--first"])
+        #expect(await eventually { await idleClock.snapshot() == [idleWindowNanoseconds] })
+        await idleClock.fireOldest()
+
+        let exited = await eventually { !first.isRunning }
+        #expect(exited)
+        #expect(first.terminationReason == .exit)
+        #expect(first.terminationStatus == 0)
+        // The grace was armed but never fired, and nothing was signalled.
+        #expect(await graceClock.firedCount() == 0)
+        #expect((try? String(contentsOfFile: signalsFile, encoding: .utf8)) == nil)
+
+        // The next request still gets a fresh resident.
+        _ = try await connection.request(args: ["status", "--second"])
+        #expect(await connection.residentChildForTesting === second)
+        await connection.shutdown()
+    }
+
+    @Test("a retired child that ignores EOF is still terminated after the grace")
+    func idleRetireTerminatesAChildThatIgnoresEOF() async throws {
+        let dir = NSTemporaryDirectory() + "serve-connection-retire-stuck-test-" + UUID().uuidString
+        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let pidsFile = dir + "/pids"
+        let signalsFile = dir + "/signals"
+        let idleClock = ManualTimeoutClock()
+        let graceClock = ManualTimeoutClock()
+        let stuck = makeSignalRecordingFixture(pidsFile: pidsFile, signalsFile: signalsFile, ignoreEOF: true)
+        let children = ProcessQueue([stuck])
+        defer { killIfRunning([stuck]) }
+
+        let connection = ServeConnection(
+            pidFile: scratchPidFile(),
+            makeProcess: { _, qualityOfService in children.take(qualityOfService: qualityOfService) },
+            timeoutSleep: { nanoseconds in try await ManualTimeoutClock().sleep(nanoseconds) },
+            terminationGraceSleep: { nanoseconds in try await graceClock.sleep(nanoseconds) },
+            idleSeconds: idleWindowSeconds,
+            idleSleep: { nanoseconds in try await idleClock.sleep(nanoseconds) }
+        )
+
+        _ = try await connection.request(args: ["status", "--first"])
+        #expect(await eventually { await idleClock.snapshot() == [idleWindowNanoseconds] })
+        await idleClock.fireOldest()
+
+        // The flush grace is armed; the child is still alive inside it.
+        #expect(await eventually { await graceClock.snapshot().count == 1 })
+        #expect(stuck.isRunning)
+        #expect((try? String(contentsOfFile: signalsFile, encoding: .utf8)) == nil)
+
+        // Grace elapses: only now is it signalled.
+        await graceClock.fireOldest()
+        let signalled = await eventually {
+            (try? String(contentsOfFile: signalsFile, encoding: .utf8)) == "T"
+        }
+        #expect(signalled)
+        await connection.shutdown()
+    }
+
+    @Test("idle retires are not deaths and never spend the resident budget")
+    func idleRetiresDoNotConsumeDeathBudget() async throws {
+        let dir = NSTemporaryDirectory() + "serve-connection-idle-budget-test-" + UUID().uuidString
+        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let pidsFile = dir + "/pids"
+        let idleClock = ManualTimeoutClock()
+        let graceClock = ManualTimeoutClock()
+        let fixtures = (0..<6).map { _ in makeEchoFixture(pidsFile: pidsFile) }
+        let children = ProcessQueue(fixtures)
+        defer { killIfRunning(fixtures) }
+
+        let connection = ServeConnection(
+            pidFile: scratchPidFile(),
+            makeProcess: { _, qualityOfService in
+                children.take(qualityOfService: qualityOfService)
+            },
+            terminationGraceSleep: { nanoseconds in try await graceClock.sleep(nanoseconds) },
+            idleSeconds: idleWindowSeconds,
+            idleSleep: { nanoseconds in try await idleClock.sleep(nanoseconds) }
+        )
+
+        for attempt in 1...5 {
+            let payload = try await connection.request(args: ["status", "--attempt", String(attempt)])
+            #expect(String(decoding: payload, as: UTF8.self) == "reply-\(attempt)")
+            let armed = await eventually { await idleClock.snapshot() == [idleWindowNanoseconds] }
+            #expect(armed)
+            await idleClock.fireOldest()
+            let retired = await eventually { await connection.residentChildForTesting == nil }
+            #expect(retired)
+        }
+
+        // Three deaths disable the resident for the app run, so a sixth live
+        // request is the proof that five retires cost nothing.
+        let sixth = try await connection.request(args: ["status", "--sixth"])
+        #expect(String(decoding: sixth, as: UTF8.self) == "reply-6")
+        #expect(children.remainingCount == 0)
+        await connection.shutdown()
+    }
+
+    @Test("the idle window firing while work is active or queued retires nothing")
+    func idleRetireIsInertWhileRequestsAreOutstanding() async throws {
+        let dir = NSTemporaryDirectory() + "serve-connection-idle-busy-test-" + UUID().uuidString
+        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let pidsFile = dir + "/pids"
+        let eventsFile = dir + "/events"
+        let releaseMarker = dir + "/release-second"
+        let gate = ReleaseGate()
+
+        // Blocks after reading request 2, so request 3 stays client-side queued
+        // while the test fires the idle window.
+        let child = Process()
+        child.executableURL = URL(fileURLWithPath: "/bin/sh")
+        child.arguments = ["-c", """
+            trap '' TERM
+            printf '%s\n' "$$" >> "$1"
+            while IFS= read -r line; do
+              id=$(printf '%s' "$line" | sed -E 's/.*"id":([0-9]+).*/\\1/')
+              printf '%s\n' "read-$id" >> "$2"
+              if [ "$id" = "2" ]; then
+                while [ ! -f "$3" ]; do sleep 0.01; done
+              fi
+              printf '{"id":%s,"ok":true,"output":"reply-%s"}\n' "$id" "$id"
+            done
+            """, "serve-fixture", pidsFile, eventsFile, releaseMarker]
+        let replacement = makeEchoFixture(pidsFile: pidsFile)
+        let children = ProcessQueue([child, replacement])
+        defer { killIfRunning([child, replacement]) }
+
+        let connection = ServeConnection(
+            pidFile: scratchPidFile(),
+            makeProcess: { _, qualityOfService in
+                children.take(qualityOfService: qualityOfService)
+            },
+            idleSeconds: idleWindowSeconds,
+            idleSleep: { nanoseconds in await gate.wait(nanoseconds) }
+        )
+
+        let firstPayload = try await connection.request(args: ["status", "--first"])
+        #expect(String(decoding: firstPayload, as: UTF8.self) == "reply-1")
+        let armed = await eventually { await gate.armedCount() == 2 }
+        #expect(armed)
+
+        let second = Task { try await connection.request(args: ["status", "--second"]) }
+        let secondRead = await eventually {
+            ((try? String(contentsOfFile: eventsFile, encoding: .utf8)) ?? "").contains("read-2\n")
+        }
+        #expect(secondRead)
+        let third = Task { try await connection.request(args: ["status", "--third"]) }
+        // Nothing observable happens while a request waits its turn, so this
+        // settle can only miss a regression, never fail a correct run.
+        try await Task.sleep(nanoseconds: 100_000_000)
+        #expect(try String(contentsOfFile: eventsFile, encoding: .utf8) == "read-1\nread-2\n")
+
+        // The idle task fires with one request active and one queued. The gate
+        // is deliberately not cancellation-aware, so the connection's own
+        // quiet check is what has to keep this inert.
+        await gate.releaseNewest()
+        try await Task.sleep(nanoseconds: 100_000_000)
+        #expect(await connection.residentChildForTesting === child)
+        #expect(child.isRunning)
+
+        _ = FileManager.default.createFile(atPath: releaseMarker, contents: Data())
+        let secondPayload = try await withHangGuard(onExpiry: { await connection.shutdown() }) {
+            try await second.value
+        }
+        let thirdPayload = try await withHangGuard(onExpiry: { await connection.shutdown() }) {
+            try await third.value
+        }
+        #expect(String(decoding: secondPayload, as: UTF8.self) == "reply-2")
+        #expect(String(decoding: thirdPayload, as: UTF8.self) == "reply-3")
+        #expect(try recordedPids(pidsFile).count == 1)
+        #expect(children.remainingCount == 1)
+        await gate.releaseAll()
+        await connection.shutdown()
+    }
+
+    @Test("a late EOF from a retired child cannot disturb its replacement")
+    func lateEOFFromRetiredChildIsInert() async throws {
+        let dir = NSTemporaryDirectory() + "serve-connection-idle-late-eof-test-" + UUID().uuidString
+        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let pidsFile = dir + "/pids"
+        let exitMarker = dir + "/let-first-exit"
+        let idleClock = ManualTimeoutClock()
+        let graceClock = ManualTimeoutClock()
+
+        // Holds its stdout open after its stdin closes, so the test decides when
+        // the retired generation's EOF reaches the connection.
+        let first = Process()
+        first.executableURL = URL(fileURLWithPath: "/bin/sh")
+        first.arguments = ["-c", """
+            trap '' TERM
+            printf '%s\n' "$$" >> "$1"
+            while IFS= read -r line; do
+              id=$(printf '%s' "$line" | sed -E 's/.*"id":([0-9]+).*/\\1/')
+              printf '{"id":%s,"ok":true,"output":"reply-%s"}\n' "$id" "$id"
+            done
+            while [ ! -f "$2" ]; do sleep 0.01; done
+            """, "serve-fixture", pidsFile, exitMarker]
+        let second = makeEchoFixture(pidsFile: pidsFile)
+        let children = ProcessQueue([first, second])
+        defer { killIfRunning([first, second]) }
+
+        let connection = ServeConnection(
+            pidFile: scratchPidFile(),
+            makeProcess: { _, qualityOfService in
+                children.take(qualityOfService: qualityOfService)
+            },
+            terminationGraceSleep: { nanoseconds in try await graceClock.sleep(nanoseconds) },
+            idleSeconds: idleWindowSeconds,
+            idleSleep: { nanoseconds in try await idleClock.sleep(nanoseconds) }
+        )
+
+        _ = try await connection.request(args: ["status", "--first"])
+        let armed = await eventually { await idleClock.snapshot() == [idleWindowNanoseconds] }
+        #expect(armed)
+        await idleClock.fireOldest()
+        let retired = await eventually { await connection.residentChildForTesting == nil }
+        #expect(retired)
+
+        let replacementPayload = try await connection.request(args: ["status", "--second"])
+        #expect(String(decoding: replacementPayload, as: UTF8.self) == "reply-2")
+        #expect(await connection.residentChildForTesting === second)
+
+        // The retired child's EOF only now reaches the reader, with a live
+        // replacement in place.
+        _ = FileManager.default.createFile(atPath: exitMarker, contents: Data())
+        let firstExited = await eventually { !first.isRunning }
+        #expect(firstExited)
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        #expect(await connection.residentChildForTesting === second)
+        let afterEOF = try await connection.request(args: ["status", "--third"])
+        #expect(String(decoding: afterEOF, as: UTF8.self) == "reply-3")
+        #expect(children.remainingCount == 0)
+        await connection.shutdown()
+    }
+
+    @Test("shutdown cancels the armed idle window")
+    func shutdownCancelsIdleRetire() async throws {
+        let dir = NSTemporaryDirectory() + "serve-connection-idle-shutdown-test-" + UUID().uuidString
+        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let pidsFile = dir + "/pids"
+        let idleClock = ManualTimeoutClock()
+        let child = makeEchoFixture(pidsFile: pidsFile)
+        let children = ProcessQueue([child])
+        defer { killIfRunning([child]) }
+
+        let connection = ServeConnection(
+            pidFile: scratchPidFile(),
+            makeProcess: { _, qualityOfService in
+                children.take(qualityOfService: qualityOfService)
+            },
+            idleSeconds: idleWindowSeconds,
+            idleSleep: { nanoseconds in try await idleClock.sleep(nanoseconds) }
+        )
+
+        _ = try await connection.request(args: ["status", "--only"])
+        let armed = await eventually { await idleClock.snapshot() == [idleWindowNanoseconds] }
+        #expect(armed)
+
+        await connection.shutdown()
+        let cancelled = await eventually { await idleClock.snapshot().isEmpty }
+        #expect(cancelled)
+        #expect(await idleClock.firedCount() == 0)
+    }
+
+    @Test("a non-positive idle window keeps the resident forever")
+    func disabledIdleWindowNeverRetires() async throws {
+        let dir = NSTemporaryDirectory() + "serve-connection-idle-disabled-test-" + UUID().uuidString
+        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let pidsFile = dir + "/pids"
+        let idleClock = ManualTimeoutClock()
+        let child = makeEchoFixture(pidsFile: pidsFile)
+        let children = ProcessQueue([child])
+        defer { killIfRunning([child]) }
+
+        let connection = ServeConnection(
+            pidFile: scratchPidFile(),
+            makeProcess: { _, qualityOfService in
+                children.take(qualityOfService: qualityOfService)
+            },
+            idleSeconds: 0,
+            idleSleep: { nanoseconds in try await idleClock.sleep(nanoseconds) }
+        )
+
+        _ = try await connection.request(args: ["status", "--first"])
+        try await Task.sleep(nanoseconds: 100_000_000)
+        #expect(await idleClock.history().isEmpty)
+        #expect(await connection.residentChildForTesting === child)
+        #expect(child.isRunning)
+        await connection.shutdown()
+    }
+
+    @Test("a request racing the idle window is served by exactly one live child")
+    func requestRacingIdleRetireKeepsOneChild() async throws {
+        let dir = NSTemporaryDirectory() + "serve-connection-idle-race-test-" + UUID().uuidString
+        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let pidsFile = dir + "/pids"
+        let gate = ReleaseGate()
+        let first = makeEchoFixture(pidsFile: pidsFile)
+        let second = makeEchoFixture(pidsFile: pidsFile)
+        let children = ProcessQueue([first, second])
+        defer { killIfRunning([first, second]) }
+
+        let connection = ServeConnection(
+            pidFile: scratchPidFile(),
+            makeProcess: { _, qualityOfService in
+                children.take(qualityOfService: qualityOfService)
+            },
+            terminationGraceSleep: { _ in },
+            idleSeconds: idleWindowSeconds,
+            idleSleep: { nanoseconds in await gate.wait(nanoseconds) }
+        )
+
+        _ = try await connection.request(args: ["status", "--first"])
+        let armed = await eventually { await gate.armedCount() == 2 }
+        #expect(armed)
+
+        // Whichever of the two reaches the actor first, the request must be
+        // served by a live child: a retire that wins is respawned through
+        // ensureStarted, and one that loses is a no-op.
+        async let released: Void = gate.releaseNewest()
+        // A retire that swallowed the racing request would strand it forever,
+        // so the guard turns that regression into a failure, not a hang.
+        let payload = try await withHangGuard(onExpiry: { await connection.shutdown() }) {
+            try await connection.request(args: ["status", "--racing"])
+        }
+        await released
+        #expect(String(decoding: payload, as: UTF8.self) == "reply-2")
+
+        let settled = await eventually {
+            [first, second].filter(\.isRunning).count == 1
+        }
+        #expect(settled)
+        // One original plus at most one replacement: the race never spawns two
+        // children for one request.
+        #expect(try recordedPids(pidsFile).count <= 2)
+        await gate.releaseAll()
         await connection.shutdown()
     }
 }

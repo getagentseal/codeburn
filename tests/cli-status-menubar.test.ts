@@ -47,8 +47,12 @@ async function plantRender5MissingBasis(snapshotPath: string): Promise<string> {
 
 // Every case here spawns the real CLI and does genuine multi-provider parse
 // work; the 5s default is fine on a dev laptop and not on a shared 2-core
-// runner, where individual cases have been observed needing 6-8s.
-vi.setConfig({ testTimeout: 30_000 })
+// runner, where individual cases have been observed needing 6-8s. On
+// windows-latest a single spawn has been measured between 1.4s and 12s (run
+// 35474746411), so a two-spawn case reached 23.9s under the old 30s ceiling.
+// runCli caps each CLI at 30s itself, so a real hang still fails here with the
+// child's stderr rather than riding this number.
+vi.setConfig({ testTimeout: 60_000 })
 
 function runCli(args: string[], home: string, extraEnv: Record<string, string | undefined> = {}) {
   return spawnSync(process.execPath, ['--import', 'tsx', 'src/cli.ts', ...args], {
@@ -805,6 +809,8 @@ describe('codeburn status --format menubar-json', () => {
     }
   })
 
+  // Four CLI spawns, the most in this file, against a windows-latest tail of
+  // ~12s per spawn: the file-wide 60s is not enough headroom for this one.
   it('serves a repeat identical query from the status snapshot, debounces a fresh change, then reflects it once settled', async () => {
     const home = await mkdtemp(join(tmpdir(), 'codeburn-menubar-snapshot-'))
 
@@ -869,7 +875,7 @@ describe('codeburn status --format menubar-json', () => {
     } finally {
       await rm(home, { recursive: true, force: true })
     }
-  })
+  }, 90_000)
 
   it('rejects a provider payload cached under the previous render contract', async () => {
     const home = await mkdtemp(join(tmpdir(), 'codeburn-menubar-provider-render-'))
@@ -1365,6 +1371,40 @@ describe('codeburn status --format menubar-json', () => {
       expect(after.status, `stderr: ${after.stderr}`).toBe(0)
       const afterPayload = JSON.parse(after.stdout) as { current: { unpricedModels: Array<{ model: string }> } }
       expect(afterPayload.current.unpricedModels.map(row => row.model)).not.toContain(model)
+    } finally {
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
+  it('invalidates the snapshot when the gateway totals opt-in flips', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'codeburn-menubar-gateway-optin-'))
+
+    try {
+      const projectDir = join(home, '.claude', 'projects', 'myapp')
+      await mkdir(projectDir, { recursive: true })
+      const now = new Date()
+      const todayUtcMidnight = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
+      const base = new Date(Math.max(todayUtcMidnight, now.getTime() - 2 * 3600_000))
+      const ts = (offset: number) => new Date(base.getTime() + offset).toISOString().replace(/\.\d+Z$/, 'Z')
+      await writeFile(
+        join(projectDir, 'session.jsonl'),
+        [userLine('s1', ts(0)), assistantLine('s1', ts(60_000), 'msg-1')].join('\n'),
+      )
+
+      const args = ['status', '--format', 'menubar-json', '--period', 'today', '--provider', 'all', '--no-optimize']
+      const cacheDir = join(home, '.cache', 'codeburn')
+
+      expect(runCli(args, home).status).toBe(0)
+      expect(findSnapshotFiles(cacheDir)).toHaveLength(1)
+      // An identical query reuses the record rather than writing a second one.
+      expect(runCli(args, home).status).toBe(0)
+      expect(findSnapshotFiles(cacheDir)).toHaveLength(1)
+
+      // The opt-in moves the headline without touching a session file or any
+      // pricing config, so it has to be part of the snapshot's query key.
+      expect(runCli(['gateway-totals', 'include'], home).status).toBe(0)
+      expect(runCli(args, home).status).toBe(0)
+      expect(findSnapshotFiles(cacheDir)).toHaveLength(2)
     } finally {
       await rm(home, { recursive: true, force: true })
     }

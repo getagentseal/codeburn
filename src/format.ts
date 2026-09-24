@@ -26,6 +26,17 @@ export function carriedCostNote(carriedCostUSD: number): string | null {
   return carriedCostUSD > 0 ? `includes ${formatCost(carriedCostUSD)} preserved from expired session logs` : null
 }
 
+/// Shared wording for the gateway-exclusion footnote. A Vercel AI Gateway row
+/// is a daily aggregate the local tools routed through the gateway already
+/// report, so it is shown but never added to a total. overview.ts and
+/// dashboard.tsx both print this so a headline that is short of the provider
+/// list explains itself.
+export function excludedGatewayNote(excludedGatewayCostUSD: number): string | null {
+  return excludedGatewayCostUSD > 0
+    ? `excludes ${formatCost(excludedGatewayCostUSD)} of Vercel AI Gateway daily totals (your local tools may already count it) — include with: codeburn gateway-totals include`
+    : null
+}
+
 export function formatTokens(n: number): string {
   // Guard against Infinity / NaN / negatives that would otherwise leak into
   // the UI as "Infinity" or "NaN" strings when an upstream calculation glitches.

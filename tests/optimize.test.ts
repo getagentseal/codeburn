@@ -21,6 +21,7 @@ import {
   detectCapabilityReliability,
   detectLowWorthSessions,
   detectSessionOutliers,
+  detectLowCacheHitSessions,
   scanAndDetect,
   cacheKey,
   computeHealth,
@@ -601,6 +602,45 @@ describe('detectContextBloat', () => {
 
     const finding = detectContextBloat([project], new Set(['s1']))
     expect(finding).toBeNull()
+  })
+})
+
+describe('detectLowCacheHitSessions', () => {
+  it('flags a big session under the 80% hit target', () => {
+    const project = projectWithContextSessions([
+      contextSession(0, { apiCalls: 10, totalInputTokens: 60_000, totalCacheReadTokens: 40_000 }),
+      contextSession(1, { apiCalls: 10, totalInputTokens: 5_000, totalCacheReadTokens: 95_000 }),
+    ])
+    const finding = detectLowCacheHitSessions([project])
+    expect(finding).not.toBeNull()
+    expect(finding!.id).toBe('low-cache-hit-sessions')
+    expect(finding!.title).toBe('1 session with a low cache hit rate')
+    expect(finding!.explanation).toContain('app/s1')
+    expect(finding!.explanation).toContain('40.0% of 100.0K input')
+    expect(finding!.explanation).not.toContain('app/s2')
+    expect(finding!.tokensSaved).toBe(36_000)
+  })
+
+  it('counts cache writes as misses', () => {
+    const project = projectWithContextSessions([
+      contextSession(0, { apiCalls: 10, totalInputTokens: 1_000, totalCacheWriteTokens: 60_000, totalCacheReadTokens: 39_000 }),
+    ])
+    expect(detectLowCacheHitSessions([project])!.explanation).toContain('39.0% of 100.0K input')
+  })
+
+  it('ignores sessions with no cache token fields', () => {
+    const project = projectWithContextSessions([
+      contextSession(0, { apiCalls: 10, totalInputTokens: 500_000 }),
+    ])
+    expect(detectLowCacheHitSessions([project])).toBeNull()
+  })
+
+  it('ignores tiny sessions', () => {
+    const project = projectWithContextSessions([
+      contextSession(0, { apiCalls: 10, totalInputTokens: 50_000, totalCacheReadTokens: 10_000 }),
+      contextSession(1, { apiCalls: 4, totalInputTokens: 500_000, totalCacheReadTokens: 10_000 }),
+    ])
+    expect(detectLowCacheHitSessions([project])).toBeNull()
   })
 })
 

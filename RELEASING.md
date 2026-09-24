@@ -149,7 +149,7 @@ The `.github/workflows/release-menubar.yml` workflow automatically detects the `
 
 1. Checks out the repo
 2. Runs `mac/Scripts/package-app.sh v0.9.8`
-3. Signs the app bundle (ad-hoc signing)
+3. Signs the app bundle with the Developer ID Application certificate, notarizes it with Apple, and staples the ticket
 4. Creates a zip file: `CodeBurnMenubar-v0.9.8.zip`
 5. Computes a SHA-256 checksum: `CodeBurnMenubar-v0.9.8.zip.sha256`
 6. Uploads both to a GitHub Release named "Menubar v0.9.8"

@@ -10,12 +10,16 @@ Native Swift + SwiftUI menubar app. The codeburn menubar surface.
 
 ## Language
 
-The app ships English and Simplified Chinese (`zh-Hans`) and follows your system
-language. Settings > General > Language overrides it for CodeBurn alone, with
-System as the default; the change applies on relaunch. It writes `AppleLanguages`
-into CodeBurn's own preferences domain, which is the same key System Settings >
-General > Language & Region > Applications writes, so the two are one setting
-rather than two.
+The app ships English, French, Japanese, Korean, Simplified Chinese (`zh-Hans`)
+and Traditional Chinese (`zh-Hant`), and follows your system language.
+Settings > General > Language overrides it for CodeBurn alone, with
+System as the default, and the change applies in place, with no relaunch:
+macOS resets the "access data from other apps" permission whenever the app
+quits, so a relaunch would re-prompt Warp users on every switch. It writes
+`AppleLanguages` into CodeBurn's own preferences domain, which is the same key
+System Settings > General > Language & Region > Applications writes, so the two
+are one setting rather than two. The desktop app's Language setting drives the
+same choice.
 
 Strings live in `Sources/CodeBurnMenubar/Resources/<locale>.lproj/Localizable.strings`
 and are reached through `L(_:)` / `L(_:_:)` (see `Localization.swift`). The key
@@ -37,7 +41,7 @@ One command:
 codeburn menubar
 ```
 
-That's it. The command records the persistent `codeburn` CLI path, downloads the latest `.app` from the newest `mac-v*` GitHub Release with a matching checksum, verifies it, drops it into `~/Applications`, clears Gatekeeper quarantine, and launches it. Re-running it upgrades in place with `--force`, or just launches the existing copy otherwise.
+That's it. The command records the persistent `codeburn` CLI path, downloads the latest `.app` from the newest `mac-v*` GitHub Release with a matching checksum, verifies it, installs it, clears Gatekeeper quarantine, and launches it. A bundle that is already in `/Applications` or `~/Applications` is replaced where it lives, so no second copy and no second login item appear; the old bundle is moved aside and restored on any failure, a cross-volume move falls back to a copy that is re-verified with `codesign`, and an unwritable location is never escalated into, the install goes to `~/Applications` and the leftover copy is named for you. An install killed part way is recovered on the next run, and a concurrent install is refused. Re-running it upgrades in place with `--force`, or just launches the copy that exists otherwise. `codeburn menubar --uninstall` removes it.
 
 ### Build from source
 
@@ -86,9 +90,15 @@ CODEBURN_ALLOW_DEV_BIN=1 CODEBURN_BIN="node $(pwd)/../dist/cli.js" swift run
 
 The app registers itself as a menubar accessory (`LSUIElement = true` at runtime). No Dock icon.
 
+A `swift run` or Xcode build is matched against the installed app by executable name, and
+being the newest start it retires the installed copy as it comes up. Pass `--keep-both` to
+run yours alongside it (`swift run CodeBurnMenubar --keep-both`).
+
 ## Data source
 
 On launch and every 60 seconds thereafter, the app spawns `codeburn status --format menubar-json --no-optimize` directly (argv, no shell) via `CodeburnCLI.makeProcess` and decodes the JSON into `MenubarPayload`. The manual refresh button in the footer invokes the same command without `--no-optimize`, which includes optimize findings but takes longer.
+
+Requests go through a resident `codeburn serve --stdio` child, which keeps the parsed corpus warm. After 15 idle minutes it is retired, without counting as an unexpected death, and the next request starts a new resident rather than a one-shot. `CodeBurnServeIdleSeconds` tunes or disables that.
 
 Release installs record a persistent absolute CLI path in `~/Library/Application Support/CodeBurn/codeburn-cli-path.v1`, then fall back to common Homebrew and Node-manager locations. GUI launches augment the minimal macOS PATH with Volta, npm-global, asdf, mise, and nvm runtime locations so a persisted JavaScript launcher also works when the app is opened from Spotlight. For development only, set `CODEBURN_ALLOW_DEV_BIN=1` with `CODEBURN_BIN`; the value is validated against a strict allowlist before use, so a malicious env var can't inject shell commands.
 
@@ -105,7 +115,11 @@ mac/
 │   ├── AppStore.swift                @Observable store + enums
 │   ├── Localization.swift            L(_:) lookups against the module bundle
 │   ├── Resources/en.lproj/           Localizable.strings (identity table)
+│   ├── Resources/fr.lproj/           Localizable.strings (français)
+│   ├── Resources/ja.lproj/           Localizable.strings (日本語)
+│   ├── Resources/ko.lproj/           Localizable.strings (한국어)
 │   ├── Resources/zh-Hans.lproj/      Localizable.strings (简体中文)
+│   ├── Resources/zh-Hant.lproj/      Localizable.strings (繁體中文)
 │   ├── Data/MenubarPayload.swift     Codable payload types + placeholder
 │   ├── Theme/Theme.swift             Design tokens (warm terracotta palette)
 │   └── Views/MenuBarContent.swift    Popover layout + footer action bar

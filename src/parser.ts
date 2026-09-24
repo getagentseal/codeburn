@@ -24,19 +24,29 @@ import {
   type CachedCall,
   type CachedFile,
   type CachedTurn,
+  type FileFingerprint,
   type ProviderSection,
   type SessionCache,
   beginColdHydration,
+  cacheEntriesInLoadOrder,
+  cacheStubs,
   cleanupOrphanedTempFiles,
   computeEnvFingerprint,
   DURABLE_PROVIDER_NAMES,
+  evictCacheStub,
   fingerprintFile,
+  hasCachedEntries,
+  hasDirtyDurableProvider,
   isCacheComplete,
+  isCacheCurrent,
   isCacheDirty,
+  isCacheStub,
   loadCache,
+  loadCacheStubs,
   markCacheDirty,
   markProviderComplete,
   monthScopeForRange,
+  type CacheLoadScope,
   reconcileFile,
   saveCache,
   sourcePathStatCandidates,
@@ -46,7 +56,8 @@ import { classifyWslCachePath, isWslUncPath, refreshWslHomes, wslMode } from './
 import { decideParseWorkers, parseFilesInOrder, ParseWorkerPool, type ClaudeWorkerParse, type ParseJob } from './parse-workers.js'
 import type { CodexFullParse } from './providers/codex.js'
 import { dateKey } from './day-aggregator.js'
-import { isBehavioralCall, isBehavioralTurn } from './behavioral-weight.js'
+import { behavioralCallWeight, isBehavioralTurn } from './behavioral-weight.js'
+import { gatewayIncludedInTotals } from './config.js'
 import type { ParsedProviderCall, Provider, SessionSource } from './providers/types.js'
 import type {
   ApiUsageIteration,
@@ -1226,7 +1237,7 @@ function applyLocalModelSavings(call: ParsedApiCall): ParsedApiCall {
   const savings = calculateLocalModelSavings(
     call.model,
     u.inputTokens,
-    u.outputTokens,
+    billableOutputTokens(call.provider, u.outputTokens, u.reasoningTokens),
     u.cacheCreationInputTokens,
     u.cacheReadInputTokens,
     u.webSearchRequests,
@@ -1798,7 +1809,7 @@ function buildSessionSummary(
       totalCacheWrite += call.usage.cacheCreationInputTokens
       // Supplementary accounting calls contribute tokens/cost above but are
       // not distinct requests: no api-call or per-model call weight.
-      if (isBehavioralCall(call)) apiCalls++
+      apiCalls += behavioralCallWeight(call)
 
       const modelKey = call.provider === 'devin' ? call.model : modelRowKey(call.model, call.route)
       if (!modelBreakdown[modelKey]) {
@@ -1810,7 +1821,7 @@ function buildSessionSummary(
           tokens: { inputTokens: 0, outputTokens: 0, cacheCreationInputTokens: 0, cacheReadInputTokens: 0, cachedInputTokens: 0, reasoningTokens: 0, webSearchRequests: 0 },
         }
       }
-      if (isBehavioralCall(call)) modelBreakdown[modelKey].calls++
+      modelBreakdown[modelKey].calls += behavioralCallWeight(call)
       modelBreakdown[modelKey].costUSD += call.costUSD
       modelBreakdown[modelKey].savingsUSD += callSavings
       modelBreakdown[modelKey].estimatedCostUSD = (modelBreakdown[modelKey].estimatedCostUSD ?? 0) + callEstimated
@@ -2019,8 +2030,12 @@ async function scanProjectDirs(
   // order: the reconcile loop feeds order-sensitive state (changedFiles order
   // drives the worker-result pairing, seenMsgIds pre-seeding), so only the
   // syscalls are allowed to overlap.
+  const gate = openSweepGate()
+  const sweptAt = Date.now()
   const walked = await mapWithConcurrency(dirs, FS_SCAN_CONCURRENCY, async ({ path: dirPath }) => {
-    const jsonlFiles = await collectJsonlFiles(dirPath)
+    const remembered = sweepDirFiles(gate, dirPath)
+    const jsonlFiles = remembered ?? await collectJsonlFiles(dirPath)
+    if (!remembered) rememberSweepDir(dirPath, jsonlFiles, sweptAt)
     dirsDone++
     await discoverProgress.tick(dirsDone)
     return jsonlFiles
@@ -2030,16 +2045,37 @@ async function scanProjectDirs(
     const { name: dirName, source } = dirs[i]!
     for (const filePath of walked[i]!) discovered.push({ filePath, dirName, source })
   }
-  const fingerprints = await mapWithConcurrency(discovered, FS_SCAN_CONCURRENCY, e => fingerprintFile(e.filePath))
+  const fingerprints = await mapWithConcurrency(discovered, FS_SCAN_CONCURRENCY, async (e) => {
+    const remembered = sweepFingerprint(gate, e.filePath)
+    if (remembered) return remembered
+    const fp = await fingerprintFile(e.filePath)
+    rememberSweepFingerprint(e.filePath, fp, sweptAt)
+    return fp
+  })
+  // A stub stands in for its entry. One whose file changed loads its member
+  // first, so the append or re-parse below runs exactly as on a full load.
+  const stubs = cacheStubs(diskCache, 'claude')
+  if (stubs?.size && !readOnly) {
+    await loadCacheStubs(diskCache, 'claude', discovered.flatMap(({ filePath }, i) => {
+      const stub = stubs.get(filePath)
+      return stub && fingerprints[i] && reconcileFile(fingerprints[i]!, stub).action !== 'unchanged' ? [filePath] : []
+    }))
+  }
+  const servedStubs: string[][][] = []
+
   for (const [i, { filePath, dirName, source }] of discovered.entries()) {
     allDiscoveredFiles.add(filePath)
     const fp = fingerprints[i]
     if (!fp) continue
 
     const cached = section.files[filePath]
-    const action = reconcileFile(fp, cached)
-    if (!readOnly && deferToBackgroundFill(filePath, fp, cached)) {
+    const stub = cached ? undefined : stubs?.get(filePath)
+    const action = reconcileFile(fp, cached ?? stub)
+    if (!readOnly && deferToBackgroundFill(filePath, fp, cached ?? stub)) {
       continue
+    } else if (stub && (readOnly || action.action === 'unchanged')) {
+      if (readOnly && action.action !== 'unchanged') readOnlyServedStale = true
+      servedStubs.push(stub.keys)
     } else if (cached && (readOnly || action.action === 'unchanged')) {
       if (readOnly && action.action !== 'unchanged') readOnlyServedStale = true
       unchangedFiles.push({ filePath, dirName, source, cached: section.files[filePath]! })
@@ -2069,8 +2105,13 @@ async function scanProjectDirs(
   // is gone and can never re-parse, but they carry attributable PR spend the by-PR
   // report must keep (as a legacy even-split); the eviction below preserves the
   // same set so `section.files` still holds them when summaries are built.
-  for (const [filePath, cached] of Object.entries(section.files)) {
+  for (const [filePath, cached] of cacheEntriesInLoadOrder(diskCache, 'claude')) {
     if (allDiscoveredFiles.has(filePath)) continue
+    if (isCacheStub(cached)) {
+      // Never a WSL path (those always load in full).
+      if (readOnly || cached.hasPr) servedStubs.push(cached.keys)
+      continue
+    }
     const wslStatus = classifyWslCachePath(filePath, wslHomesForOrphans)
     // A WSL path missing from discovery is retained only when its root is
     // currently offline (or WSL discovery is explicitly disabled). If the
@@ -2092,6 +2133,7 @@ async function scanProjectDirs(
       }
     }
   }
+  for (const keys of servedStubs) for (const turn of keys) for (const key of turn) seenMsgIds.add(key)
 
   const parseProgress = createScanProgress('parsing changed claude sessions', changedFiles.length)
   const progressTotal = changedFiles.length
@@ -2363,6 +2405,10 @@ async function scanProjectDirs(
       delete section.files[cachedPath]
       markCacheDirty(diskCache, 'claude', cachedPath)
     }
+    for (const [cachedPath, stub] of stubs ?? []) {
+      if (allDiscoveredFiles.has(cachedPath) || stub.hasPr || dirs.length === 0) continue
+      evictCacheStub(diskCache, 'claude', cachedPath)
+    }
   }
 
   const projectMap = new Map<string, { project: string; projectPath: string; sessions: SessionSummary[]; anchors: SessionSummary[]; dirNames: Set<string> }>()
@@ -2541,50 +2587,34 @@ export function extractPrUrlsFromText(text: string): string[] {
   return [...new Set(text.match(PR_URL_IN_TEXT_RE) ?? [])].sort()
 }
 
-function providerCallToTurn(call: ParsedProviderCall): ParsedTurn {
-  const tools = call.tools
-  const usage: TokenUsage = {
-    inputTokens: call.inputTokens,
-    outputTokens: call.outputTokens,
-    cacheCreationInputTokens: call.cacheCreationInputTokens,
-    cacheReadInputTokens: call.cacheReadInputTokens,
-    cachedInputTokens: call.cachedInputTokens,
-    reasoningTokens: call.reasoningTokens,
-    webSearchRequests: call.webSearchRequests,
-  }
-
-  const apiCall: ParsedApiCall = applyLocalModelSavings({
-    provider: call.provider,
-    model: call.model,
-    usage,
-    costUSD: call.costUSD,
-    tools,
-    mcpTools: extractMcpTools(tools),
-    skills: call.skills ?? [],
-    subagentTypes: call.subagentTypes ?? [],
-    hasAgentSpawn: tools.includes('Agent'),
-    hasPlanMode: tools.includes('EnterPlanMode'),
-    speed: call.speed,
-    timestamp: call.timestamp,
-    bashCommands: call.bashCommands,
-    deduplicationKey: call.deduplicationKey,
-    isEstimated: call.costIsEstimated,
-    ...(call.nanoAiu != null ? { nanoAiu: call.nanoAiu } : {}),
-    ...(call.route ? { route: call.route } : {}),
-    ...(call.billing ? { billing: call.billing } : {}),
-  })
-
-  const prRefs = extractPrUrlsFromText(call.userMessage)
-  return {
-    userMessage: call.userMessage,
-    assistantCalls: [apiCall],
-    timestamp: call.timestamp,
-    sessionId: call.sessionId,
-    ...(prRefs.length ? { prRefs } : {}),
-  }
-}
-
 // ── Cache Conversion ───────────────────────────────────────────────────
+
+// Providers whose every parsed call carries a cost the tool itself computed or
+// was billed, not one derived from that call's tokens. Their cost is stored on
+// the cached call and served verbatim; every other provider's is recomputed
+// from the cached tokens on read (cachedCallToApiCall), so a pricing update
+// still reaches it.
+//
+// A new provider should set `ParsedProviderCall.costFromBilling` instead of
+// joining this set. The flag decides per call, so a provider that reports a
+// cost for some calls and falls back to token pricing for the rest keeps that
+// fallback re-priceable; membership here is the whole-provider form of the
+// same rule, kept for the providers that adopted it before the flag existed.
+// Either way, adding a provider needs a `PROVIDER_PARSE_VERSIONS` bump: calls
+// cached before the change hold `costUSD: undefined` and would otherwise be
+// re-priced from tokens forever.
+export const REPORTED_COST_PROVIDERS: ReadonlySet<string> = new Set([
+  'mistral-vibe',
+  'antigravity',
+  'devin',
+  'vercel-gateway',
+  'hermes',
+  'kiro',
+  'codewhale',
+  'quickdesk',
+  'cline-cli',
+  'omp',
+])
 
 function providerCallToCachedCall(call: ParsedProviderCall): CachedCall {
   return {
@@ -2600,7 +2630,7 @@ function providerCallToCachedCall(call: ParsedProviderCall): CachedCall {
       webSearchRequests: call.webSearchRequests,
       cacheCreationOneHourTokens: 0,
     },
-    costUSD: (call.provider === 'mistral-vibe' || call.provider === 'antigravity' || call.provider === 'devin' || call.provider === 'vercel-gateway' || call.provider === 'hermes' || call.provider === 'kiro' || call.provider === 'codewhale' || call.provider === 'quickdesk' || call.provider === 'cline-cli' || call.provider === 'omp') ? call.costUSD : undefined,
+    costUSD: (REPORTED_COST_PROVIDERS.has(call.provider) || call.costFromBilling === true) ? call.costUSD : undefined,
     isEstimated: call.costIsEstimated || undefined,
     speed: call.speed,
     timestamp: call.timestamp,
@@ -2619,6 +2649,7 @@ function providerCallToCachedCall(call: ParsedProviderCall): CachedCall {
     ...(call.locRemoved ? { locRemoved: call.locRemoved } : {}),
     ...(call.editFailed ? { editFailed: call.editFailed } : {}),
     ...(call.nanoAiu != null ? { nanoAiu: call.nanoAiu } : {}),
+    ...(call.requestCount != null ? { requestCount: call.requestCount } : {}),
     ...(call.route ? { route: call.route } : {}),
     ...(call.billing ? { billing: call.billing } : {}),
     ...(call.requestMultiplier != null ? { requestMultiplier: call.requestMultiplier } : {}),
@@ -2790,6 +2821,7 @@ function cachedCallToApiCall(call: CachedCall): ParsedApiCall {
     activeGeneratedTokens: call.activeGeneratedTokens,
     toolWaitMs: call.toolWaitMs,
     ...(call.nanoAiu != null ? { nanoAiu: call.nanoAiu } : {}),
+    ...(call.requestCount != null ? { requestCount: call.requestCount } : {}),
     ...(call.route ? { route: call.route } : {}),
     ...(call.billing ? { billing: call.billing } : {}),
     ...(call.supplementaryAccounting || isHermesObservationKey(call.deduplicationKey)
@@ -3185,7 +3217,7 @@ function warnProviderParseFailure(providerName: string, sourcePath: string, err:
 // discovery errors are already isolated; this catches a provider-level throw so
 // one locked provider skips-and-continues instead of aborting the whole
 // hydration (which would empty the cache/daily backfill for every provider).
-function isPermissionError(err: unknown): boolean {
+export function isPermissionError(err: unknown): boolean {
   const code = (err as NodeJS.ErrnoException | undefined)?.code
   return code === 'EPERM' || code === 'EACCES'
 }
@@ -3414,9 +3446,31 @@ export async function parseProviderSources(
   // discovery order. Network sources on a write run never reach fingerprintFile
   // (they take the synthetic-fingerprint branch below), so they are skipped here.
   const skipFingerprint = provider.network && !readOnly
+  const gate = openSweepGate()
+  const sweptAt = Date.now()
   const sourceFingerprints = skipFingerprint
     ? []
-    : await mapWithConcurrency(sources, FS_SCAN_CONCURRENCY, s => fingerprintFile(s.path))
+    : await mapWithConcurrency(sources, FS_SCAN_CONCURRENCY, async (s) => {
+      const remembered = sweepFingerprint(gate, s.path)
+      if (remembered) return remembered
+      const fp = await fingerprintFile(s.path)
+      rememberSweepFingerprint(s.path, fp, sweptAt)
+      return fp
+    })
+
+  // As in scanProjectDirs: a changed stub (and every network source, which
+  // re-fetches on a write run) loads its member so the parse below runs as on
+  // a full load. An unchanged one only ever contributes its dedup keys.
+  const stubs = cacheStubs(diskCache, providerName)
+  const stubServed = new Set<string>()
+  if (stubs?.size && !readOnly) {
+    await loadCacheStubs(diskCache, providerName, sources.flatMap((s, i) => {
+      const stub = stubs.get(s.path)
+      if (!stub) return []
+      const fp = sourceFingerprints[i]
+      return skipFingerprint || (fp && reconcileFile(fp, stub).action !== 'unchanged') ? [s.path] : []
+    }))
+  }
 
   for (const [sourceIndex, source] of sources.entries()) {
     allDiscoveredFiles.add(source.path)
@@ -3457,12 +3511,16 @@ export async function parseProviderSources(
     }
 
     const cached = section.files[source.path]
-    const action = reconcileFile(fp, cached)
+    const stub = cached ? undefined : stubs?.get(source.path)
+    const action = reconcileFile(fp, cached ?? stub)
     // A cached parse failure at this same fingerprint stays skipped — don't
     // re-read a file that already threw and hasn't changed. It re-parses only
     // when the file changes (then `reconcileFile` reports non-'unchanged').
-    if (!readOnly && deferToBackgroundFill(source.path, fp, cached)) {
+    if (!readOnly && deferToBackgroundFill(source.path, fp, cached ?? stub)) {
       continue
+    } else if (stub && (readOnly || action.action === 'unchanged')) {
+      if (readOnly && action.action !== 'unchanged') readOnlyServedStale = true
+      stubServed.add(source.path)
     } else if (cached && (readOnly || (action.action === 'unchanged' && (cached.failed || !cachedFileNeedsProviderReparse(providerName, source.path, cached))))) {
       if (readOnly && action.action !== 'unchanged') readOnlyServedStale = true
       unchangedSources.push({ source, cached })
@@ -3477,8 +3535,14 @@ export async function parseProviderSources(
   const wslHomesForOrphans = refreshWslHomesForOrphans(Object.keys(section.files), allDiscoveredFiles)
 
   if (readOnly) {
-    for (const [path, cached] of Object.entries(section.files)) {
+    for (const [path, cached] of cacheEntriesInLoadOrder(diskCache, providerName)) {
       if (allDiscoveredFiles.has(path)) continue
+      if (isCacheStub(cached)) {
+        servedSources.push({ provider: providerName, path, project: providerName })
+        allDiscoveredFiles.add(path)
+        stubServed.add(path)
+        continue
+      }
       servedSources.push({
         provider: providerName,
         path,
@@ -3514,6 +3578,7 @@ export async function parseProviderSources(
       }
     }
   }
+  for (const path of stubServed) for (const turn of stubs?.get(path)?.keys ?? []) for (const key of turn) parserDedup.add(key)
 
   // Codex rollouts are the bulk of a cold parse (multi-GB against Claude's
   // hundreds of MB), so whole-file decodes go to worker threads. A file the
@@ -3806,6 +3871,11 @@ export async function parseProviderSources(
       delete section.files[cachedPath]
       markCacheDirty(diskCache, providerName, cachedPath)
     }
+    // Never a WSL path (those always load in full).
+    for (const [cachedPath] of stubs ?? []) {
+      if (allDiscoveredFiles.has(cachedPath) || sources.length === 0) continue
+      evictCacheStub(diskCache, providerName, cachedPath)
+    }
   }
   if (evictedCodexResultCache) await flushCodexCache()
 
@@ -4073,7 +4143,14 @@ export async function parseProviderSources(
 
   for (const source of servedSources) {
     const cachedFile = section.files[source.path]
-    if (!cachedFile) continue
+    if (!cachedFile) {
+      // Out of range: it adds nothing but the keys a full entry would claim here.
+      for (const keys of stubs?.get(source.path)?.keys ?? []) {
+        if (keys.some(k => seenKeys.has(k))) continue
+        for (const k of keys) seenKeys.add(k)
+      }
+      continue
+    }
 
     for (const rawTurn of cachedFile.turns) {
       const turn = reconcileCopilotCalls(rawTurn)
@@ -4436,6 +4513,152 @@ const VALIDATED_REUSE_CAP_MS = 5 * 60 * 1000
 
 export function setParseReuseValidator(validator: ParseReuseValidator | null): void {
   parseReuseValidator = validator
+}
+
+// ── Incremental discovery sweep (resident process only) ──────────────────────
+// Discovery re-readdirs every project directory and re-stats every transcript
+// on every parse. In a resident process the root watchers already know which
+// paths moved, so a directory listing / file fingerprint the watcher proved
+// untouched is reused instead of re-read. Nothing DERIVED is reused: only
+// dev/ino/mtime/size, and `reconcileFile` still runs for every file.
+export type SweepWatchSource = {
+  /** When watcher coverage began; anything remembered before it is unproven. */
+  startedAt: number
+  /** The roots actually armed. A path outside them is never event-covered. */
+  roots: readonly string[]
+  healthy: () => boolean
+  /** Paths changed since `sinceTs`, or null when coverage was unscoped. */
+  changedSince: (sinceTs: number) => string[] | null
+}
+// Held a little shorter than the watcher's own path retention so a remembered
+// entry can never outlive the event record that would have invalidated it.
+const SWEEP_MEMO_MAX_AGE_MS = VALIDATED_REUSE_CAP_MS - 30_000
+// A wall-clock jump this much larger than elapsed monotonic time means the
+// process was suspended (sleep/wake) and events could have been missed.
+const SWEEP_SUSPEND_SLACK_MS = 2_000
+let sweepWatchSource: SweepWatchSource | null = null
+let sweepDirMemo = new Map<string, { files: string[]; at: number }>()
+let sweepFpMemo = new Map<string, { fp: FileFingerprint; at: number }>()
+let sweepClockMark: { wall: number; mono: number } | null = null
+
+export function setSweepWatchSource(source: SweepWatchSource | null): void {
+  sweepWatchSource = source
+  sweepDirMemo = new Map()
+  sweepFpMemo = new Map()
+  sweepClockMark = null
+}
+
+type SweepGate = { minAt: number; changed: Set<string>; touched: Set<string>; roots: readonly string[] }
+
+/// The per-parse decision. Null means "sweep exactly as before": no watcher,
+/// degraded coverage, an unscoped event, a suspend, or a first parse.
+function openSweepGate(): SweepGate | null {
+  const src = sweepWatchSource
+  const now = Date.now()
+  for (const [key, entry] of sweepDirMemo) if (entry.at < now - SWEEP_MEMO_MAX_AGE_MS) sweepDirMemo.delete(key)
+  for (const [key, entry] of sweepFpMemo) if (entry.at < now - SWEEP_MEMO_MAX_AGE_MS) sweepFpMemo.delete(key)
+  const mark = sweepClockMark
+  const mono = Math.trunc(performance.now())
+  sweepClockMark = { wall: now, mono }
+  // A wall clock that moved backwards would keep extending `minAt` backwards
+  // too, so treat it the same way a forward jump is treated.
+  if (mark && Math.abs((now - mark.wall) - (mono - mark.mono)) > SWEEP_SUSPEND_SLACK_MS) {
+    // Nothing remembered before the gap is trustworthy, and the gap is only
+    // visible once — so drop it all rather than let the next gate bless it.
+    sweepDirMemo.clear()
+    sweepFpMemo.clear()
+    return null
+  }
+  if (!src || !src.healthy()) return null
+  const minAt = Math.max(now - SWEEP_MEMO_MAX_AGE_MS, src.startedAt)
+  const changed = src.changedSince(minAt)
+  if (!changed) return null
+  // A changed path invalidates its own fingerprint and every directory listing
+  // that could contain it — the path itself (a renamed directory) and every
+  // ancestor, so a created or deleted file is seen by the next readdir.
+  const touched = new Set<string>()
+  for (const path of changed) {
+    for (let dir = path; ;) {
+      touched.add(dir)
+      const parent = dirname(dir)
+      if (parent === dir) break
+      dir = parent
+    }
+  }
+  return { minAt, changed: new Set(changed), touched, roots: src.roots }
+}
+
+function sweepCovers(gate: SweepGate, path: string): boolean {
+  // WSL/UNC roots are reached over a network redirector fs.watch does not cover,
+  // and a path outside every armed root has no event source at all.
+  if (isWslUncPath(path)) return false
+  return gate.roots.some(root => path === root || path.startsWith(root.endsWith(sep) ? root : root + sep))
+}
+
+function sweepDirFiles(gate: SweepGate | null, dirPath: string): string[] | null {
+  if (!gate || gate.touched.has(dirPath) || !sweepCovers(gate, dirPath)) return null
+  const hit = sweepDirMemo.get(dirPath)
+  return hit && hit.at >= gate.minAt ? hit.files : null
+}
+
+function sweepFingerprint(gate: SweepGate | null, path: string): FileFingerprint | null {
+  // Only plain transcripts. A SQLite source folds its `-wal` sibling in, and a
+  // virtual-suffix source (`<db>#cursor-ws=…`, `<db>:<session>`) fingerprints
+  // the underlying database — in both cases the watcher would name a path that
+  // is not this key, so no event could ever invalidate the entry.
+  if (!path.endsWith('.jsonl')) return null
+  if (!gate || gate.changed.has(path) || !sweepCovers(gate, path)) return null
+  const hit = sweepFpMemo.get(path)
+  return hit && hit.at >= gate.minAt ? hit.fp : null
+}
+
+/// Remember what this sweep read. `at` is captured BEFORE the syscall, so an
+/// event that lands while the sweep runs still invalidates the entry.
+function rememberSweepDir(dirPath: string, files: string[], at: number): void {
+  if (sweepWatchSource) sweepDirMemo.set(dirPath, { files, at })
+}
+
+function rememberSweepFingerprint(path: string, fp: FileFingerprint | null, at: number): void {
+  // A null fingerprint means the file was missing or unreadable; remembering
+  // that would hide its later appearance behind a quiet watcher.
+  if (sweepWatchSource && fp && path.endsWith('.jsonl')) sweepFpMemo.set(path, { fp, at })
+}
+
+// ── Coalesced shard publication (resident process only) ─────────────────────
+// One appended transcript dirties one month bucket, and publishing that bucket
+// rewrites the whole month — the single most expensive thing on the live poll
+// path. A resident process publishes at most once per window and always on
+// clean shutdown. A skipped publish writes NOTHING, so the on-disk cache stays
+// exactly as consistent as it already was; the cost of losing a window is that
+// the next start re-parses those appends, never a wrong number.
+// Longer than the desktop's slowest poll (60s), or a window exactly as long as
+// the cadence would expire before every poll and coalesce nothing.
+const SHARD_PUBLISH_COALESCE_MS = 90_000
+let shardPublishCoalescing = false
+let lastShardPublishAt = 0
+let pendingShardPublish: SessionCache | null = null
+
+export function setShardPublishCoalescing(on: boolean): void {
+  shardPublishCoalescing = on
+  pendingShardPublish = null
+  lastShardPublishAt = 0
+}
+
+export function hasPendingShardPublish(): boolean {
+  return pendingShardPublish !== null
+}
+
+export async function flushPendingShardPublish(): Promise<void> {
+  const cache = pendingShardPublish
+  pendingShardPublish = null
+  if (!cache) return
+  lastShardPublishAt = Date.now()
+  // Unlike the deferral itself — which is published by a later refresh under
+  // that refresh's own fence — this one runs outside the lock, so it checks
+  // that nothing has been published since instead.
+  try {
+    if (await isCacheCurrent(cache)) await saveCache(cache)
+  } catch { /* a lost publish only costs a re-parse */ }
 }
 
 function burstReuse(dateRange: DateRange, sig: string): ProjectSummary[] | null {
@@ -5404,6 +5627,33 @@ const dateFloorSkippedProviders = new Set<string>()
 type SinglePassScope = { range: DateRange; parses: Map<string, Promise<ProjectSummary[]>> }
 let singlePassScope: SinglePassScope | null = null
 
+// A command that asks for several ranges one after another (status: today,
+// then the month) declares their union here, so the session cache loads once
+// and every later request finds its range already held in full. Only the load
+// range widens: each request keeps its own month scope and summaries, and a
+// cached file the wider range holds in full instead of as a stub contributes
+// exactly what its stub would.
+let loadWindow: DateRange | null = null
+
+export async function withLoadWindow<T>(range: DateRange, fn: () => Promise<T>): Promise<T> {
+  const outer = loadWindow
+  loadWindow = range
+  try {
+    return await fn()
+  } finally {
+    loadWindow = outer
+  }
+}
+
+function withinLoadWindow(scope: CacheLoadScope): CacheLoadScope {
+  if (!loadWindow) return scope
+  return {
+    ...scope,
+    startMs: Math.min(scope.startMs!, loadWindow.start.getTime()),
+    endMs: Math.max(scope.endMs!, loadWindow.end.getTime()),
+  }
+}
+
 export async function withSinglePassParse<T>(range: DateRange, fn: () => Promise<T>): Promise<T> {
   const outer = singlePassScope
   singlePassScope = { range, parses: new Map() }
@@ -5544,7 +5794,74 @@ function deferToBackgroundFill(path: string, fp: { mtimeMs: number }, cached: un
   return true
 }
 
-export function parseAllSessions(dateRange?: DateRange, providerFilter?: string): Promise<ProjectSummary[]> {
+/// Providers whose records are DAILY AGGREGATES instead of per-request rows:
+/// Vercel AI Gateway's `/v1/report` returns one cost/token/request_count per
+/// day per model, with no request id, timestamp or attribution. The local
+/// tools that were pointed at the gateway (Claude Code via
+/// ANTHROPIC_BASE_URL, Codex, OpenCode, Cline/Roo/Kilo, Cursor) record those
+/// same requests in their own session files, and nothing in an aggregate row
+/// can be matched against them — so a corpus holding both counts the same
+/// spend twice.
+export const AGGREGATE_ONLY_PROVIDER = 'vercel-gateway'
+export const AGGREGATE_ONLY_PROVIDERS: ReadonlySet<string> = new Set([AGGREGATE_ONLY_PROVIDER])
+
+/// True when an all-provider read must drop the aggregate-only corpus. A
+/// provider-scoped read never does: `--provider vercel-gateway` exists to
+/// inspect the full amount.
+export function excludesAggregateOnlyProviders(providerFilter?: string): boolean {
+  return (providerFilter ?? 'all') === 'all' && !gatewayIncludedInTotals()
+}
+
+function hasAggregateOnlyCall(projects: ProjectSummary[]): boolean {
+  return projects.some(project => project.sessions.some(session =>
+    session.turns.some(turn => turn.assistantCalls.some(call => AGGREGATE_ONLY_PROVIDERS.has(call.provider)))))
+}
+
+/// Drop the aggregate-only providers from a parsed corpus, rebuilding every
+/// nested total from the retained calls. Returns the SAME array when nothing
+/// matches, so a machine with no gateway credential pays nothing and its
+/// output is byte-identical to a build without this rule.
+export function excludeAggregateOnlyProjects(projects: ProjectSummary[], providerFilter?: string): ProjectSummary[] {
+  if (!excludesAggregateOnlyProviders(providerFilter)) return projects
+  if (!hasAggregateOnlyCall(projects)) return projects
+  return filterProjectsByCall(projects, call => !AGGREGATE_ONLY_PROVIDERS.has(call.provider))
+}
+
+/// Cost the aggregate-only providers contribute to a corpus, for the "what was
+/// left out" footnote. Read from the UNFILTERED parse.
+export function aggregateOnlyCostUSD(projects: ProjectSummary[]): number {
+  let total = 0
+  for (const project of projects) {
+    for (const session of project.sessions) {
+      for (const turn of session.turns) {
+        for (const call of turn.assistantCalls) {
+          if (AGGREGATE_ONLY_PROVIDERS.has(call.provider)) total += call.costUSD
+        }
+      }
+    }
+  }
+  return total
+}
+
+/// `includeAggregateOnly` is the WRITE-side opt-out. The session cache and the
+/// durable daily cache must keep sealing the gateway slice — it can never be
+/// re-fetched for a past day — so the cache writer, and the aggregator paths
+/// that derive day entries, ask for the full corpus and hold the provider out
+/// of the totals at read time instead (`excludeProviderFromDay`). Every other
+/// caller gets the shared default, which is what makes `models`, `sessions`,
+/// `export`, `compare`, `spend`, `yield`, `audit`, `budget` and the sync push
+/// agree with the headline without each one knowing the rule.
+export function parseAllSessions(
+  dateRange?: DateRange,
+  providerFilter?: string,
+  opts?: { includeAggregateOnly?: boolean },
+): Promise<ProjectSummary[]> {
+  const parsed = parseAllSessionsUnfiltered(dateRange, providerFilter)
+  if (opts?.includeAggregateOnly === true) return parsed
+  return parsed.then(projects => excludeAggregateOnlyProjects(projects, providerFilter))
+}
+
+function parseAllSessionsUnfiltered(dateRange?: DateRange, providerFilter?: string): Promise<ProjectSummary[]> {
   const scoped = singlePassParse(dateRange, providerFilter)
   if (scoped) return scoped
   // Capture synchronously, before the first await. AsyncLocalStorage keeps all
@@ -5559,7 +5876,7 @@ function canServeCompleteSnapshot(cache: SessionCache, providerFilter?: string, 
   const sections = providerFilter && providerFilter !== 'all'
     ? ([[providerFilter, cache.providers[providerFilter]]] as const).filter((entry): entry is readonly [string, ProviderSection] => entry[1] != null)
     : Object.entries(cache.providers)
-  return sections.some(([, section]) => Object.keys(section.files).length > 0)
+  return sections.some(([name]) => hasCachedEntries(cache, name))
     && sections.every(([name, section]) => section.envFingerprint === computeEnvFingerprint(name))
 }
 
@@ -5615,10 +5932,10 @@ async function parseAllSessionsInCacheScope(dateRange?: DateRange, providerFilte
   // unaffected (a suppressed duplicate contributes nothing either way), but for
   // a proxied key emitted under two providers the attribution can land on a
   // different provider than a full load would pick.
-  const loadScope = dateRange ? monthScopeForRange(dateRange.start, dateRange.end) : undefined
+  const loadScope = dateRange ? withinLoadWindow(monthScopeForRange(dateRange.start, dateRange.end)) : undefined
   const rangeStartMs = dateRange?.start.getTime()
   const cacheLoadStarted = performance.now()
-  let diskCache = await loadCache(loadScope)
+  let diskCache: SessionCache | null = await loadCache(loadScope)
   await cleanupOrphanedTempFiles()
   if (process.env['CODEBURN_VERBOSE'] === '1') {
     process.stderr.write(`codeburn: startup timing cache-load=${(performance.now() - cacheLoadStarted).toFixed(1)}ms complete=${isCacheComplete(diskCache, providerFilter, rangeStartMs)}\n`)
@@ -5655,7 +5972,6 @@ async function parseAllSessionsInCacheScope(dateRange?: DateRange, providerFilte
   // A complete cache refresh is a strict read/reconcile/parse/save transaction.
   // Keep the snapshot loaded before acquisition: timeout/unavailable paths serve
   // exactly this complete snapshot and never mutate or invalidate the holder.
-  const priorSnapshot = diskCache
   // Heartbeat the WAIT too, not just the parse behind it. This is the one place
   // a healthy process is deliberately idle for a long stretch, and the desktop
   // and menubar watchdogs read silence as a dead child - which is how a waiter
@@ -5673,8 +5989,11 @@ async function parseAllSessionsInCacheScope(dateRange?: DateRange, providerFilte
     process.stderr.write(`codeburn: startup timing refresh-lock=${(performance.now() - refreshWaitStarted).toFixed(1)}ms outcome=${refresh.outcome}\n`)
   }
   if (refresh.outcome === 'timed-out' || refresh.outcome === 'unavailable') {
-    return runParse(key, priorSnapshot, dateRange, providerFilter, { readOnly: true, burstSig, parseStartedAt })
+    return runParse(key, diskCache, dateRange, providerFilter, { readOnly: true, burstSig, parseStartedAt })
   }
+  // Every other outcome reloads, so the snapshot goes first: two views of a
+  // large cache are never held at once.
+  diskCache = null
   if (refresh.outcome === 'completed-by-other') {
     return runParse(key, await loadCache(loadScope), dateRange, providerFilter, { readOnly: true, burstSig, parseStartedAt })
   }
@@ -5741,6 +6060,12 @@ async function runParseInner(
   deferredRetryableSource = false
   firstPaintDeferredThisRun = 0
   dateFloorSkippedProviders.clear()
+  // Providers whose mid-scan read threw EPERM/EACCES: a recoverable permission
+  // error is "unknown", not "empty", so they are excluded from completeness
+  // marking (like a failed discovery) and block hydration-complete, so that
+  // restoring access later reopens the affected days instead of them staying
+  // sealed as fully scanned.
+  const permissionSkippedProviders = new Set<string>()
   const seenMsgIds = new Set<string>()
   const seenKeys = new Set<string>()
   const discovery = snapshotOnly
@@ -5808,6 +6133,7 @@ async function runParseInner(
       if (claudeSources.length > 0) emitScanProgress({ kind: 'provider', provider: 'claude', state: 'done', files: claudeSources.length })
     } catch (err) {
       if (!isPermissionError(err)) throw err
+      permissionSkippedProviders.add('claude')
       process.stderr.write(`codeburn: skipped claude data (permission denied; grant Full Disk Access to include it)\n`)
       emitScanProgress({ kind: 'provider', provider: 'claude', state: 'skipped' })
     }
@@ -5825,6 +6151,7 @@ async function runParseInner(
       // A permission-locked provider skips-and-continues; any other error is a
       // real bug and still aborts (per-file/DB-lock cases are handled deeper).
       if (!isPermissionError(err)) throw err
+      permissionSkippedProviders.add(providerName)
       process.stderr.write(`codeburn: skipped ${providerName} data (permission denied; grant Full Disk Access to include it)\n`)
       emitScanProgress({ kind: 'provider', provider: providerName, state: 'skipped' })
     }
@@ -5848,7 +6175,7 @@ async function runParseInner(
     // Skip if filtered to a different provider
     if (providerFilter && providerFilter !== 'all' && providerFilter !== providerName) continue
     const section = diskCache.providers[providerName]
-    if (!section || Object.keys(section.files).length === 0) continue
+    if (!section || !hasCachedEntries(diskCache, providerName)) continue
     const hasWslCachedSources = Object.keys(section.files).some(isWslUncPath)
     // Use the persisted durable flag (set by parseProviderSources when it first
     // processes a durableSources provider) OR the static DURABLE_PROVIDER_NAMES
@@ -5886,7 +6213,7 @@ async function runParseInner(
   const deferredForFirstPaint = firstPaintDeferredThisRun > 0
   const rangeStartMs = dateRange?.start.getTime()
   const scopedRun = !!providerFilter && providerFilter !== 'all'
-  const discoveryFailed = new Set(discovery.failedProviders)
+  const discoveryFailed = new Set([...discovery.failedProviders, ...permissionSkippedProviders])
   let completenessChanged = false
   if (!readOnly && !deferredForFirstPaint) {
     const walked = scopedRun ? [providerFilter!] : Object.keys(diskCache.providers)
@@ -5901,7 +6228,25 @@ async function runParseInner(
     }
   }
   if (!readOnly && (isCacheDirty(diskCache) || completenessChanged)) {
-    try {
+    // A superseded pre-image is dropped rather than carried: another process
+    // published, so this object's months were reloaded into a different one,
+    // and what the old one held is simply re-parsed.
+    if (pendingShardPublish && pendingShardPublish !== diskCache) pendingShardPublish = null
+    // A durable provider's cache entry is the only record of that spend once
+    // the provider prunes its own files, so its window is published on the poll
+    // that parsed it — exactly as it was before coalescing existed. Holding it
+    // would put the spend one `kill -9` away from being gone for good.
+    if (shardPublishCoalescing && !completenessChanged && !isCold
+      && !hasDirtyDurableProvider(diskCache)
+      && Date.now() - lastShardPublishAt < SHARD_PUBLISH_COALESCE_MS) {
+      // Held, not lost: the entries stay in this cache object — the one the
+      // next load memo hands back, dirty flags and all — until a later refresh
+      // publishes them under its own fence, or the shutdown flush does.
+      pendingShardPublish = diskCache
+      traceTiming('save', ' coalesced')
+    } else try {
+      pendingShardPublish = null
+      lastShardPublishAt = Date.now()
       const published = await saveCache(diskCache, refreshLock?.verifyStillOwner)
       if (!published) throw new RefreshFenceLostError()
     } catch (err) {
@@ -5913,7 +6258,7 @@ async function runParseInner(
   // files, or a write run that deferred a changed source on a retryable
   // failure, reached the end of the scan without hydrating everything, and
   // the daily backfill must not finalize history off it.
-  sessionHydrationComplete = (!readOnly || !readOnlyServedStale) && !deferredRetryableSource && !deferredForFirstPaint
+  sessionHydrationComplete = (!readOnly || !readOnlyServedStale) && !deferredRetryableSource && !deferredForFirstPaint && permissionSkippedProviders.size === 0
   sessionFirstPaintDeferred = deferredForFirstPaint
 
   // Merge across providers by normalised project path so the same repository

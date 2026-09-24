@@ -77,6 +77,12 @@ const MAX_RUNTIME_MS = 15 * 60_000
 // dead pid — self-healing, but via the stale-takeover path rather than a clean
 // release. Neither signal publishes a partial parse; nothing does.
 const KILL_GRACE_MS = 5_000
+// How long a deliberately retired serve child may take to publish its coalesced
+// shard window after stdin EOF before it is signalled anyway. Measured at
+// ~0.9-1.0s on a large corpus; 2.5s leaves headroom without making a retire
+// visible to anything (nothing waits on it — the next request starts a fresh
+// child immediately).
+const SERVE_FLUSH_GRACE_MS = 2_500
 // Quit has a stricter user-visible budget than ordinary request timeouts. Give
 // the CLI enough time to catch SIGTERM and release its cache locks, then reap
 // every remaining process-group member before Electron exits.
@@ -559,6 +565,28 @@ function killGracefully(child: ChildProcess): void {
   grace.unref?.()
 }
 
+/** Retire a serve child the way `serve --stdio` expects: EOF on stdin ends its
+ *  read loop, which publishes the coalesced shard window on the way out. No
+ *  signal is sent while that runs — SIGTERM is caught only to unlink the cache
+ *  lock and is then re-raised (src/session-cache.ts), so it kills the flush.
+ *  Only a child still alive after the grace is handed to {@link killGracefully}.
+ *  The child stays in `activeChildren` throughout, so a quit landing inside the
+ *  window still reaps it. */
+function retireWithFlush(child: ChildProcess): void {
+  activeChildren.add(child)
+  let grace: NodeJS.Timeout | undefined
+  const settle = () => { activeChildren.delete(child); if (grace) clearTimeout(grace) }
+  child.once('exit', () => { if (!ownedTreeAlive(child)) settle() })
+  // A child whose stdin is already gone never sees a new EOF; the grace still
+  // bounds it and the signal below still lands.
+  try { child.stdin?.end() } catch { /* already closed */ }
+  grace = setTimeout(() => {
+    if (ownedTreeAlive(child)) killGracefully(child)
+    else settle()
+  }, SERVE_FLUSH_GRACE_MS)
+  grace.unref?.()
+}
+
 /** Progress heartbeats share the stderr stream with real diagnostics, and every
  *  read spawn now enables them — so they must never become the error message. */
 function withoutProgressLines(stderr: string): string {
@@ -685,6 +713,8 @@ async function runScheduledCli(
 //    runs an artificial warm-up query beside a duplicate one-shot child;
 //  - progress frames from serve are forwarded through the same onStderr hook
 //    used by a one-shot cold start;
+//  - a child left idle for CODEBURN_SERVE_IDLE_MS retires; the next request
+//    restarts one through the same lazy path a crash uses;
 //  - any serve failure falls back to a normal spawn for that call;
 //  - three child deaths permanently disable serve for this app run.
 const SERVE_ROUTED = new Set(['status', 'models', 'sessions', 'compare', 'yield', 'spend', 'optimize', 'audit', 'report'])
@@ -712,6 +742,14 @@ class ServeClient {
   private warmed = false
   private destroyed = false
   private requestTail: Promise<void> = Promise.resolve()
+  private idleTimer: NodeJS.Timeout | undefined
+  // The renderer stops polling while the window is hidden, so an idle resident
+  // would otherwise hold its parsed cache (GBs on a large corpus) forever. After
+  // this much silence the child retires; the next request restarts it through
+  // the lazy path in spawnCli. 0 (or garbage) keeps the child resident for good.
+  // 15 minutes: longer than the slowest cadence a visible window can use (10 min),
+  // so only a window nobody is looking at gives the child up.
+  private readonly idleMs = Number(process.env.CODEBURN_SERVE_IDLE_MS ?? 900_000)
 
   constructor(private readonly spec: SpawnSpec, private readonly pidFile?: string) {}
 
@@ -745,6 +783,30 @@ class ServeClient {
       this.onDeath(child)
       killGracefully(child)
     })
+    this.armIdle()
+  }
+
+  /** (Re)start the retire countdown, and cancel any older one. Only an idle,
+   *  running client arms it, so a request in flight can never be retired out
+   *  from under its caller, and a stale timer from a previous generation is
+   *  always cleared by the start/death that replaced it. */
+  private armIdle(): void {
+    clearTimeout(this.idleTimer)
+    if (!(this.idleMs > 0) || this.pending.size > 0 || !this.child) return
+    this.idleTimer = setTimeout(() => {
+      const child = this.child
+      // A request admitted after the timer was armed clears it, but re-check
+      // anyway: nothing else may kill a child that has work on the wire.
+      if (this.pending.size > 0 || !child) return
+      // Deliberate, like a mutation restart: detach first so the exit event
+      // cannot spend the unexpected-death budget, then close its stdin so it
+      // publishes its held shard window and exits on its own. No restart here —
+      // the next request lazily starts one, and the outgoing child's late exit
+      // is inert once it is no longer `this.child`.
+      this.onDeath(child, false)
+      retireWithFlush(child)
+    }, this.idleMs)
+    this.idleTimer.unref?.()
   }
 
   private onData(child: ReturnType<typeof spawn>, chunk: string): void {
@@ -762,8 +824,15 @@ class ServeClient {
       }
       const line = rawLine.trim()
       if (!line) continue
-      let msg: { id?: number; ready?: boolean; progress?: string; ok?: boolean; refused?: boolean; output?: string; error?: string }
+      let msg: { id?: number; ready?: boolean; progress?: string; ok?: boolean; refused?: boolean; output?: string; error?: string; usage?: { cpuSec?: number; rssMb?: number } }
       try { msg = JSON.parse(line) } catch { continue }
+      if (msg.usage) {
+        // Kept as a running max: a replaced child's counters restart at zero.
+        serveUsagePeak = {
+          cpuSec: Math.max(serveUsagePeak?.cpuSec ?? 0, Number(msg.usage.cpuSec) || 0),
+          rssMb: Math.max(serveUsagePeak?.rssMb ?? 0, Number(msg.usage.rssMb) || 0),
+        }
+      }
       if (msg.ready) continue
       if (typeof msg.id !== 'number') continue
       const waiter = this.pending.get(msg.id)
@@ -789,6 +858,7 @@ class ServeClient {
       } else {
         waiter.reject(new CliError('nonzero', msg.error ?? 'serve request failed'))
       }
+      this.armIdle()
     }
     // Complete lines are bounded above before parsing. Bound the partial frame
     // too, otherwise a child that never emits '\n' can grow this buffer forever.
@@ -842,17 +912,21 @@ class ServeClient {
       waiter.reject(new CliError('nonzero', 'codeburn serve exited'))
     }
     this.pending.clear()
+    // No child left to retire: this only cancels a timer armed for the one that
+    // just went away, so a later generation cannot inherit its countdown.
+    this.armIdle()
   }
 
   restartAfterMutation(): void {
     const child = this.child
     if (child) {
       // This is an intentional replacement, not a crash. Detach first so the
-      // later exit event cannot consume the unexpected-death budget. The
-      // outgoing child may hold the refresh lock, so it gets the same SIGTERM
-      // grace a timed-out one does and can unlink that lock on its way out.
+      // later exit event cannot consume the unexpected-death budget, then close
+      // its stdin: the outgoing child publishes its held shard window and exits
+      // cleanly, releasing the refresh lock it may hold. Only if it is still
+      // alive after the grace does it get the old SIGTERM treatment.
       this.onDeath(child, false)
-      killGracefully(child)
+      retireWithFlush(child)
     }
     this.start()
   }
@@ -868,6 +942,7 @@ class ServeClient {
   }
 
   private requestNow(args: string[], timeoutMs: number, onStderr?: (chunk: string) => void): Promise<unknown> {
+    clearTimeout(this.idleTimer)
     const child = this.child
     if (!child?.stdin) return Promise.reject(new CliError('nonzero', 'serve not running'))
     const id = this.nextId++
@@ -908,6 +983,7 @@ class ServeClient {
   }
 
   destroy(): ChildProcess | null {
+    clearTimeout(this.idleTimer)
     this.destroyed = true
     this.deaths = SERVE_MAX_RESTARTS
     const child = this.child
@@ -918,6 +994,15 @@ class ServeClient {
 }
 
 let serveClient: ServeClient | null = null
+
+/** What the resident serve child has reported about itself (src/serve.ts), or
+ *  null when it never answered. Serve does the heavy parsing but is invisible to
+ *  Electron's app.getAppMetrics(), so the desktop's app_close event reads it here. */
+let serveUsagePeak: { cpuSec: number; rssMb: number } | null = null
+
+export function serveUsage(): { cpuSec: number; rssMb: number } | null {
+  return serveUsagePeak
+}
 
 /** Start the resident serve child without issuing a query. The first real panel
  *  request is accepted immediately (even before the ready frame) and performs

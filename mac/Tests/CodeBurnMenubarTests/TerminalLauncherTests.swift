@@ -267,7 +267,7 @@ struct TerminalLauncherTests {
     func defaultsToTerminalWhenUnset() {
         let suiteName = "CodeBurnMenubarTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
-        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defer { TestDefaults.forget(suiteName) }
 
         #expect(PreferredTerminal.saved(defaults: defaults) == .terminal)
         #expect(PreferredTerminal.default == .terminal)
@@ -277,7 +277,7 @@ struct TerminalLauncherTests {
     func preferenceRoundTripsAndRejectsGarbage() {
         let suiteName = "CodeBurnMenubarTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
-        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defer { TestDefaults.forget(suiteName) }
 
         PreferredTerminal.iTerm2.persist(defaults: defaults)
         #expect(defaults.string(forKey: PreferredTerminal.defaultsKey) == "iterm2")

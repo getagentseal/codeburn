@@ -3,15 +3,26 @@ import { homedir } from 'os'
 
 import { extractBashCommands } from '../bash-utils.js'
 import { calculateCost, getShortModelName } from '../models.js'
-import { blobToText, getSqliteLoadError, isBlockedDatabaseError, isSqliteAvailable, openDatabase, type SqliteDatabase } from '../sqlite.js'
+import { blobToText, getSqliteLoadError, isBlockedDatabaseError, isSqliteAvailable, isSqliteBusyError, openDatabase, type SqliteDatabase } from '../sqlite.js'
 import { estimateTokensFromChars } from '../token-estimate.js'
 import type { ProbeRoot, ParsedProviderCall, Provider, SessionParser, SessionSource } from './types.js'
-import { safeNumber } from '../parser.js'
+import { isPermissionError, safeNumber } from '../parser.js'
 
 const WARP_GROUP_CONTAINER = '2BBY89MBSN.dev.warp'
 const WARP_STABLE_BUNDLE_ID = 'dev.warp.Warp-Stable'
 const WARP_PREVIEW_BUNDLE_ID = 'dev.warp.Warp-Preview'
 const PRIMARY_AGENT_CATEGORY = 'primary_agent'
+// Warp bills agent usage in credits, not tokens. Warp's published pricing sets
+// the base rate at 1,500 credits for $20 (the Build/Business monthly allotment,
+// described on warp.dev/pricing as "$20 of included agent usage at API rates"),
+// i.e. $0.013333 per credit. Warp's authoritative per-account rate lives
+// server-side in `payg_cost_per_thousand_credits_cents` / `AddonCreditsOption`
+// (github.com/warpdotdev/warp, crates/graphql/src/api/billing.rs) and is NOT
+// shipped as a client constant, so the published allotment rate is the best
+// public evidence available.
+// ponytail: fixed public rate; the real per-account PAYG rate varies with
+// volume discounts. CONFIRM against Warp's current published pricing.
+const CREDIT_USD_RATE = 20 / 1500 // $0.013333 per credit ($13.33 / 1000 credits)
 const modelAliases: Record<string, string> = {
   'Claude Sonnet 4.6': 'claude-sonnet-4-6',
   'Claude Sonnet 4.5': 'claude-sonnet-4-5',
@@ -57,11 +68,32 @@ type WarpTokenUsageEntry = {
   byok_token_usage_by_category?: Record<string, unknown>
 }
 
+// Warp's ChargedUsageTotals (crates/persistence/src/model.rs): per-category
+// dollar breakdown Warp actually charged. total_cost_in_cents() sums these six
+// *_cost_in_cents fields.
+type WarpChargedUsageTotals = {
+  input_cost_in_cents?: number
+  output_cost_in_cents?: number
+  input_cache_read_cost_in_cents?: number
+  input_cache_write_cost_in_cents?: number
+  platform_cost_in_cents?: number
+  web_search_cost_in_cents?: number
+}
+
 type WarpConversationData = {
   conversation_usage_metadata?: {
     token_usage?: WarpTokenUsageEntry[]
+    // Server-authoritative cumulative provider cost, in US cents. Absent (not 0)
+    // when the server never provided it.
+    total_provider_cost_in_cents?: number
+    // Cumulative per-category charged usage across the conversation, in cents.
+    total_charged_usage?: WarpChargedUsageTotals
+    // Credits Warp deducted for the conversation (always populated today).
+    credits_spent?: number
   }
 }
+
+type WarpCost = { usd: number; estimated: boolean }
 
 type ParsedExchange = WarpQueryRow & {
   startMs: number
@@ -177,6 +209,56 @@ function extractTokenBudget(rawConversationData: string): { tokenBudget: number;
 
   const tokenBudget = primaryTotal > 0 ? primaryTotal : fallbackTotal
   return { tokenBudget: Math.max(0, Math.round(tokenBudget)), dominantModel: normalizeModel(dominantModel) }
+}
+
+// Warp records what it actually charged in the same blob as the token counts.
+// Prefer those real dollars over the token-floor estimate. Ladder, most to
+// least authoritative:
+//   (a) total_provider_cost_in_cents  — server-authoritative USD  (exact)
+//   (b) sum of total_charged_usage    — server per-category USD   (exact)
+//   (c) credits_spent × CREDIT_USD_RATE — credits at published rate (heuristic)
+//   (d) null → caller falls back to the token × LiteLLM estimate  (floor)
+// A value of 0/absent at a rung is treated as "not recorded here" and defers to
+// the next rung, so a zero never masks a real cost recorded elsewhere.
+function conversationCostUsd(rawConversationData: string): WarpCost | null {
+  let meta: WarpConversationData['conversation_usage_metadata']
+  try {
+    meta = (JSON.parse(rawConversationData) as WarpConversationData).conversation_usage_metadata
+  } catch {
+    return null
+  }
+  if (!meta) return null
+
+  const providerCents = safeNumber(meta.total_provider_cost_in_cents)
+  if (providerCents > 0) return { usd: providerCents / 100, estimated: false }
+
+  const charged = meta.total_charged_usage
+  if (charged) {
+    const cents =
+      safeNumber(charged.input_cost_in_cents) +
+      safeNumber(charged.output_cost_in_cents) +
+      safeNumber(charged.input_cache_read_cost_in_cents) +
+      safeNumber(charged.input_cache_write_cost_in_cents) +
+      safeNumber(charged.platform_cost_in_cents) +
+      safeNumber(charged.web_search_cost_in_cents)
+    if (cents > 0) return { usd: cents / 100, estimated: false }
+  }
+
+  const credits = safeNumber(meta.credits_spent)
+  if (credits > 0) return { usd: credits * CREDIT_USD_RATE, estimated: true }
+
+  return null
+}
+
+// Split a conversation-level USD total across exchanges by the same char-based
+// weights used to split tokens, so per-exchange cost tracks per-exchange size.
+function allocateCost(weights: number[], totalUsd: number): number[] {
+  if (weights.length === 0) return []
+  if (!(totalUsd > 0)) return weights.map(() => 0)
+  const normalized = weights.map(w => Math.max(0, w))
+  const totalWeight = normalized.reduce((sum, w) => sum + w, 0)
+  if (totalWeight === 0) return normalized.map(() => totalUsd / normalized.length)
+  return normalized.map(w => (totalUsd * w) / totalWeight)
 }
 
 function extractUserMessage(rawInput: string): string {
@@ -327,6 +409,9 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
       try {
         db = openDatabase(dbPath)
       } catch (err) {
+        // A busy/locked hit on Warp's continuously-written DB must reach the
+        // caller, not read as an empty session that seals the period.
+        if (isSqliteBusyError(err)) throw err
         process.stderr.write(`codeburn: cannot open Warp database: ${err instanceof Error ? err.message : err}\n`)
         return
       }
@@ -374,6 +459,8 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
         const weights = parsedExchanges.map(exchange => estimateWeight(exchange.input))
         const fallbackBudget = weights.reduce((sum, weight) => sum + weight, 0)
         const allocatedTokens = allocateTokens(weights, tokenBudget > 0 ? tokenBudget : fallbackBudget)
+        const conversationCost = conversationCostUsd(conversations[0]!.conversation_data)
+        const allocatedCosts = conversationCost ? allocateCost(weights, conversationCost.usd) : null
         const toolsByExchange = assignCommandBlocksToExchanges(blocks, parsedExchanges)
 
         for (let index = 0; index < parsedExchanges.length; index++) {
@@ -402,8 +489,11 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
             cachedInputTokens: 0,
             reasoningTokens: 0,
             webSearchRequests: 0,
-            costUSD: calculateCost(model, inputTokens, 0, 0, 0, 0),
-            costIsEstimated: true,
+            costUSD: allocatedCosts ? (allocatedCosts[index] ?? 0) : calculateCost(model, inputTokens, 0, 0, 0, 0),
+            costIsEstimated: conversationCost ? conversationCost.estimated : true,
+            // Rungs (a)-(c) are Warp's own billing record; keep them through
+            // the cache. Rung (d) is the token floor, which stays re-priceable.
+            ...(conversationCost ? { costFromBilling: true } : {}),
             tools: exchangeTools.tools,
             bashCommands: exchangeTools.bashCommands,
             timestamp,
@@ -427,9 +517,11 @@ async function discoverFromDb(dbPath: string): Promise<SessionSource[]> {
   try {
     db = openDatabase(dbPath)
   } catch (err) {
-    // A blocked database means "unknown", not "no sessions": let it reach the
-    // registry so the run is marked degraded instead of silently empty.
-    if (isBlockedDatabaseError(err)) throw err
+    // A blocked, busy, or permission-denied database means "unknown", not "no
+    // sessions": let it reach the registry so the run is marked degraded
+    // instead of silently empty. A plain EACCES/EPERM (e.g. a WARP_DB_PATH
+    // override the OS won't let us read) is recoverable once access is granted.
+    if (isBlockedDatabaseError(err) || isSqliteBusyError(err) || isPermissionError(err)) throw err
     return []
   }
 
@@ -462,7 +554,10 @@ async function discoverFromDb(dbPath: string): Promise<SessionSource[]> {
         provider: 'warp',
       }
     })
-  } catch {
+  } catch (err) {
+    // Warp writes this DB constantly, so a SQLITE_BUSY/LOCKED here is the likely
+    // spot: escalate rather than seal an empty discovery.
+    if (isSqliteBusyError(err)) throw err
     return []
   } finally {
     db.close()

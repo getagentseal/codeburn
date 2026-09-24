@@ -355,4 +355,118 @@ skipUnlessSqlite('warp provider', () => {
     expect(seen.has('warp:conv-3:ex-invalid-ts')).toBe(false)
     expect(seen.has('warp:conv-3:ex-pending')).toBe(false)
   })
+
+  // $0.013333 per credit: 1,500 credits for $20 (warp.dev/pricing Build/Business
+  // allotment). Mirror src/providers/warp.ts CREDIT_USD_RATE.
+  const CREDIT_USD_RATE = 20 / 1500
+
+  it('prices conversation from credits_spent, not the token estimate', async () => {
+    const dbPath = createWarpDb(tmpDir)
+    withTestDb(dbPath, (db) => {
+      insertConversation(db, 'conv-credits', {
+        conversation_usage_metadata: {
+          credits_spent: 1.44165,
+          token_usage: [
+            {
+              model_id: 'Claude Haiku 4.5',
+              warp_tokens: 51385,
+              byok_tokens: 0,
+              warp_token_usage_by_category: { primary_agent: 51385 },
+              byok_token_usage_by_category: {},
+            },
+          ],
+        },
+      })
+      insertQuery(db, {
+        exchangeId: 'ex-1',
+        conversationId: 'conv-credits',
+        startTs: '2026-05-18 10:00:00.000000',
+        input: JSON.stringify([{ Query: { text: 'do the thing' } }]),
+      })
+    })
+
+    const calls = await collectCalls(dbPath, 'conv-credits')
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.model).toBe('claude-haiku-4-5')
+    const totalCost = calls.reduce((sum, call) => sum + call.costUSD, 0)
+    // credits × rate ≈ $0.01922, well below the ~$0.0514 token-input floor.
+    expect(totalCost).toBeCloseTo(1.44165 * CREDIT_USD_RATE, 6)
+    expect(totalCost).toBeLessThan(0.03)
+    expect(calls[0]!.costIsEstimated).toBe(true)
+    // Tokens still reported as-is for display.
+    expect(calls[0]!.inputTokens).toBe(51385)
+  })
+
+  it('prefers server-authoritative total_provider_cost_in_cents over credits', async () => {
+    const dbPath = createWarpDb(tmpDir)
+    withTestDb(dbPath, (db) => {
+      insertConversation(db, 'conv-provider', {
+        conversation_usage_metadata: {
+          total_provider_cost_in_cents: 2.5,
+          credits_spent: 1.44165,
+          token_usage: [
+            {
+              model_id: 'Claude Haiku 4.5',
+              warp_tokens: 51385,
+              byok_tokens: 0,
+              warp_token_usage_by_category: { primary_agent: 51385 },
+              byok_token_usage_by_category: {},
+            },
+          ],
+        },
+      })
+      insertQuery(db, {
+        exchangeId: 'ex-1',
+        conversationId: 'conv-provider',
+        startTs: '2026-05-18 10:00:00.000000',
+        input: JSON.stringify([{ Query: { text: 'do the thing' } }]),
+      })
+    })
+
+    const calls = await collectCalls(dbPath, 'conv-provider')
+    expect(calls).toHaveLength(1)
+    const totalCost = calls.reduce((sum, call) => sum + call.costUSD, 0)
+    expect(totalCost).toBeCloseTo(0.025, 6)
+    expect(calls[0]!.costIsEstimated).toBe(false)
+  })
+
+  it('sums total_charged_usage cents when provider cost is absent', async () => {
+    const dbPath = createWarpDb(tmpDir)
+    withTestDb(dbPath, (db) => {
+      insertConversation(db, 'conv-charged', {
+        conversation_usage_metadata: {
+          credits_spent: 1.44165,
+          total_charged_usage: {
+            input_cost_in_cents: 1.0,
+            output_cost_in_cents: 2.0,
+            input_cache_read_cost_in_cents: 0.5,
+            platform_cost_in_cents: 0.5,
+            web_search_cost_in_cents: 1.0,
+          },
+          token_usage: [
+            {
+              model_id: 'Claude Haiku 4.5',
+              warp_tokens: 51385,
+              byok_tokens: 0,
+              warp_token_usage_by_category: { primary_agent: 51385 },
+              byok_token_usage_by_category: {},
+            },
+          ],
+        },
+      })
+      insertQuery(db, {
+        exchangeId: 'ex-1',
+        conversationId: 'conv-charged',
+        startTs: '2026-05-18 10:00:00.000000',
+        input: JSON.stringify([{ Query: { text: 'do the thing' } }]),
+      })
+    })
+
+    const calls = await collectCalls(dbPath, 'conv-charged')
+    expect(calls).toHaveLength(1)
+    const totalCost = calls.reduce((sum, call) => sum + call.costUSD, 0)
+    // (1 + 2 + 0.5 + 0.5 + 1) cents = 5 cents = $0.05.
+    expect(totalCost).toBeCloseTo(0.05, 6)
+    expect(calls[0]!.costIsEstimated).toBe(false)
+  })
 })

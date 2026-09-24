@@ -49,6 +49,8 @@ export const common: SectionCatalog = {
     'common.subject.modelUsage': 'model usage',
     'common.subject.tokenAudit': 'the token audit',
     'common.subject.optimize': 'optimize findings',
+    'common.asOf': 'as of {time}',
+    'common.asOfDate': 'as of {date}, {time}',
   },
   fr: {
     'common.period.today': "Aujourd'hui",
@@ -95,6 +97,8 @@ export const common: SectionCatalog = {
     'common.subject.modelUsage': 'l\'utilisation des modèles',
     'common.subject.tokenAudit': 'l\'audit des tokens',
     'common.subject.optimize': 'les résultats d\'optimisation',
+    'common.asOf': 'relevé à {time}',
+    'common.asOfDate': 'relevé le {date} à {time}',
   },
   ja: {
     'common.period.today': '今日',
@@ -141,6 +145,8 @@ export const common: SectionCatalog = {
     'common.subject.modelUsage': 'モデルの使用状況',
     'common.subject.tokenAudit': 'トークン監査',
     'common.subject.optimize': '最適化の分析結果',
+    'common.asOf': '{time} 時点',
+    'common.asOfDate': '{date} {time} 時点',
   },
   ko: {
     'common.period.today': '오늘',
@@ -187,6 +193,8 @@ export const common: SectionCatalog = {
     'common.subject.modelUsage': '모델 사용량',
     'common.subject.tokenAudit': '토큰 감사',
     'common.subject.optimize': '최적화 결과',
+    'common.asOf': '{time} 기준',
+    'common.asOfDate': '{date} {time} 기준',
   },
   zhCN: {
     'common.period.today': '今天',
@@ -233,6 +241,8 @@ export const common: SectionCatalog = {
     'common.subject.modelUsage': '模型用量',
     'common.subject.tokenAudit': 'Token 审计',
     'common.subject.optimize': '优化发现',
+    'common.asOf': '截至 {time}',
+    'common.asOfDate': '截至 {date} {time}',
   },
   zhTW: {
     'common.period.today': '今天',
@@ -279,5 +289,7 @@ export const common: SectionCatalog = {
     'common.subject.modelUsage': '模型用量',
     'common.subject.tokenAudit': 'Token 稽核',
     'common.subject.optimize': '最佳化發現',
+    'common.asOf': '截至 {time}',
+    'common.asOfDate': '截至 {date} {time}',
   },
 }

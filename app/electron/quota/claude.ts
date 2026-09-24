@@ -7,8 +7,11 @@ import type { QuotaProvider, QuotaWindow } from './types'
 
 const ENDPOINT = 'https://api.anthropic.com/api/oauth/usage'
 const KEYCHAIN_SERVICE = 'Claude Code-credentials'
+const EXPIRED_FOOTER = ['Claude Code login expired. Run Claude Code once, then refresh.']
 
 type ClaudeCredential = { accessToken: string; expiresAt?: number; rateLimitTier?: string; subscriptionType?: string }
+/** Where the credential in hand came from, so a rejected token is re-read from that same place. */
+type CredentialSource = 'file' | 'keychain'
 export type ClaudeDeps = {
   fetch: typeof fetch
   credentialPath: string
@@ -24,8 +27,8 @@ const defaults: ClaudeDeps = {
   now: Date.now,
 }
 
-function empty(connection: QuotaProvider['connection']): QuotaProvider {
-  return { provider: 'claude', connection, primary: null, details: [], planLabel: null, footerLines: [] }
+function empty(connection: QuotaProvider['connection'], footerLines: string[] = []): QuotaProvider {
+  return { provider: 'claude', connection, primary: null, details: [], planLabel: null, footerLines }
 }
 
 function parseCredential(raw: string): ClaudeCredential | null {
@@ -43,6 +46,35 @@ function parseCredential(raw: string): ClaudeCredential | null {
 async function credentialFromFile(deps: ClaudeDeps): Promise<ClaudeCredential | null> {
   const raw = await deps.readFile(deps.credentialPath, 64 * 1024)
   return raw ? parseCredential(raw) : null
+}
+
+/**
+ * Re-read whichever store the credential came from. On macOS the credential
+ * usually lives in the Keychain and no file exists at all, so re-reading the
+ * file could never see the token Claude Code has since renewed - and the
+ * desktop app never writes that Keychain item itself. A denied Keychain on a
+ * re-read needs no state of its own: the first read already decided whether
+ * that store is reachable.
+ */
+async function credentialFrom(source: CredentialSource, deps: ClaudeDeps): Promise<ClaudeCredential | null> {
+  if (source === 'file') return credentialFromFile(deps)
+  const outcome = await (deps.keychain ?? readClaudeKeychain)()
+  return outcome.status === 'found' ? parseCredential(outcome.value) : null
+}
+
+/**
+ * What a credential the endpoint will not honour, and which its own store cannot
+ * replace, should be reported as. An expired login is terminal: nothing but a
+ * fresh `claude` run can clear it, and a transient failure would leave the quota
+ * card holding the last connected numbers (`stabilizeQuota` in Plans.tsx) as
+ * though they were current. A credential still within its life is a real blip
+ * and keeps its backoff.
+ */
+function unrecoverable(credential: ClaudeCredential, deps: ClaudeDeps): QuotaProvider {
+  const expired = credential.expiresAt !== undefined && credential.expiresAt <= deps.now()
+  // An expired login is connectable here the way Kimi's and Gemini's are: the
+  // Plans card turns that flag into the reconnect affordance that clears it.
+  return expired ? { ...empty('terminalFailure', EXPIRED_FOOTER), connectable: true } : empty('transientFailure')
 }
 
 export async function readClaudeKeychain(): Promise<KeychainOutcome> {
@@ -127,23 +159,33 @@ export async function fetchClaudeQuota(options: Partial<ClaudeDeps> & { signal?:
   const deps = { ...defaults, ...options }
   try {
     let credential = await credentialFromFile(deps)
+    let source: CredentialSource = 'file'
     if (!credential && options.allowKeychain && process.platform === 'darwin') {
       const outcome = await (deps.keychain ?? readClaudeKeychain)()
       if (outcome.status === 'accessDenied') return { quota: empty('accessDenied') }
       credential = outcome.status === 'found' ? parseCredential(outcome.value) : null
+      source = 'keychain'
     }
-    if (!credential) return { quota: empty('disconnected') }
+    // A Claude Code 2.x login lives only in the macOS keychain: no credentials
+    // file at all. Since a background poll never reads the keychain, "no file"
+    // is not evidence of being logged out — say we have not looked yet, and let
+    // the card offer the forced check.
+    if (!credential) {
+      return { quota: empty(!options.allowKeychain && process.platform === 'darwin' ? 'keychainUnchecked' : 'disconnected') }
+    }
 
     let response: Response
-    if (credential.expiresAt !== undefined && credential.expiresAt - deps.now() <= 5 * 60_000) {
+    // A keychain read can raise a macOS prompt, so a keychain credential is only
+    // re-read after the endpoint has actually rejected it.
+    if (source === 'file' && credential.expiresAt !== undefined && credential.expiresAt - deps.now() <= 5 * 60_000) {
       const reread = await credentialFromFile(deps)
-      if (!reread || reread.accessToken === credential.accessToken) return { quota: empty('transientFailure') }
+      if (!reread || reread.accessToken === credential.accessToken) return { quota: unrecoverable(credential, deps) }
       credential = reread
     }
     response = await request(credential.accessToken, deps, options.signal)
     if (response.status === 401) {
-      const reread = await credentialFromFile(deps)
-      if (!reread || reread.accessToken === credential.accessToken) return { quota: empty('transientFailure') }
+      const reread = await credentialFrom(source, deps)
+      if (!reread || reread.accessToken === credential.accessToken) return { quota: unrecoverable(credential, deps) }
       credential = reread
       response = await request(credential.accessToken, deps, options.signal)
     }

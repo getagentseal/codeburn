@@ -357,6 +357,10 @@ export function registerSyncCommands(program: Command): void {
           process.exit(1)
         }
         const { range } = getDateRange(period)
+        // No provider scope, so parseAllSessions applies the shared
+        // aggregate-only rule: gateway daily aggregates are not pushed unless
+        // the user opted in. The backend would double count them exactly the
+        // way a local headline would. Payload schema is unchanged either way.
         const projects = (await parseAllSessions(range))
           .map(p => ({ ...p, project: wireProjectName(p.projectPath, p.project) }))
 
@@ -844,6 +848,10 @@ export function registerSyncCommands(program: Command): void {
         const { getDateRange } = await import('../cli-date.js')
 
         const range = getDateRange('week').range
+        // No provider scope, so parseAllSessions applies the shared
+        // aggregate-only rule: gateway daily aggregates are not pushed unless
+        // the user opted in. The backend would double count them exactly the
+        // way a local headline would. Payload schema is unchanged either way.
         const projects = (await parseAllSessions(range))
           .map(p => ({ ...p, project: wireProjectName(p.projectPath, p.project) }))
 

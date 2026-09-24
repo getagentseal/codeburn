@@ -612,8 +612,8 @@ private func withIsolatedMonitor(
 ) async throws {
     let suiteName = "codeburn.quota.earlyReset.\(UUID().uuidString)"
     let defaults = try #require(UserDefaults(suiteName: suiteName))
-    defaults.removePersistentDomain(forName: suiteName)
-    defer { defaults.removePersistentDomain(forName: suiteName) }
+    TestDefaults.forget(suiteName)
+    defer { TestDefaults.forget(suiteName) }
 
     let notifier = RecordingEarlyResetNotifier()
     let monitor = EarlyQuotaResetMonitor(defaults: defaults, makeNotifier: { notifier })
@@ -956,8 +956,8 @@ struct EarlyQuotaResetCodexWiringTests {
     ) async throws {
         let suiteName = "codeburn.quota.earlyReset.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))
-        defaults.removePersistentDomain(forName: suiteName)
-        defer { defaults.removePersistentDomain(forName: suiteName) }
+        TestDefaults.forget(suiteName)
+        defer { TestDefaults.forget(suiteName) }
 
         let notifier = RecordingEarlyResetNotifier()
         let store = AppStore()

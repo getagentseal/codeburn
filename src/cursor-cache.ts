@@ -62,7 +62,20 @@ async function readCacheFile(path: string): Promise<ResultCache | null> {
 async function getDbFingerprint(dbPath: string): Promise<{ mtimeMs: number; size: number } | null> {
   try {
     const s = await stat(dbPath)
-    return { mtimeMs: s.mtimeMs, size: s.size }
+    // Cursor writes chat usage through the WAL, so new activity lands in
+    // state.vscdb-wal while the main file's mtime/size stay put. Fold the WAL
+    // into the fingerprint (mirrors fingerprintDatabase in sqlite.ts).
+    let wal: Awaited<ReturnType<typeof stat>> | null = null
+    try {
+      wal = await stat(dbPath + '-wal')
+    } catch (err) {
+      // -wal absent (checkpointed) is expected; anything else fails the read.
+      if ((err as NodeJS.ErrnoException)?.code !== 'ENOENT') throw err
+    }
+    return {
+      mtimeMs: wal ? Math.max(s.mtimeMs, wal.mtimeMs) : s.mtimeMs,
+      size: s.size + (wal?.size ?? 0),
+    }
   } catch {
     return null
   }

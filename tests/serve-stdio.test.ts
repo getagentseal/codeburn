@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { spawn, type ChildProcess } from 'child_process'
-import { mkdir, readFile, writeFile } from 'fs/promises'
+import { appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'fs/promises'
+import { tmpdir } from 'os'
 import { join } from 'path'
 import { classifyRootReuse, createOutputMemoEntry, fileDaySpan, outputMemoKey, servedDayRange } from '../src/serve.js'
 
@@ -184,6 +185,15 @@ describe('codeburn serve --stdio', () => {
       expect([firstGen.n, secondGen.n + 1]).toContain(repeatGen.n)
     }
     expect(repeatGen.n).toBeGreaterThan(0)
+  }, 60_000)
+
+  // The desktop app buckets these into its consent-gated app_close event: serve
+  // is a plain CLI child, so Electron's own metrics cannot see this cost.
+  it('reports its own CPU seconds and peak RSS on an answer', async () => {
+    const res = await request(43, ['status', '--format', 'menubar-json', '--period', 'today'])
+    const usage = res['usage'] as { cpuSec: number; rssMb: number }
+    expect(usage.cpuSec).toBeGreaterThan(0)
+    expect(usage.rssMb).toBeGreaterThan(0)
   }, 60_000)
 
   it('refuses commands outside the read allowlist', async () => {
@@ -601,4 +611,131 @@ describe('servedDayRange', () => {
     expect(servedDayRange(['status', '--format', 'menubar-json', '--period', 'fortnight'])).toBeNull()
     expect(servedDayRange(['report', '--format', 'json', '--day', 'not-a-day'])).toBeNull()
   })
+})
+
+// Regression: the desktop polls `status --format menubar-json --no-optimize`,
+// and `--no-optimize` used to route the resident child through the on-disk
+// status snapshot. A poll landing inside that snapshot's settle window is
+// answered with the deliberately deferred PRE-change payload, which serve then
+// memoized; with the roots quiet again the memo stayed valid and replayed the
+// stale payload until the next write or the 5-minute memo cap. Measured: the
+// menubar stuck on the old cost for 40s+.
+describe('codeburn serve --stdio never defers a menubar poll', () => {
+  let child: ChildProcess
+  let home = ''
+  let sessionFile = ''
+  const waiters = new Map<number, (msg: Record<string, unknown>) => void>()
+  let readyResolve: () => void
+  const ready = new Promise<void>(resolve => { readyResolve = resolve })
+
+  const calls = (res: Record<string, unknown>): number =>
+    (JSON.parse(res['output'] as string) as { current: { calls: number } }).current.calls
+  const cost = (res: Record<string, unknown>): number =>
+    (JSON.parse(res['output'] as string) as { current: { cost: number } }).current.cost
+
+  function request(id: number, args: string[]): Promise<Record<string, unknown>> {
+    return new Promise(resolve => {
+      waiters.set(id, resolve)
+      child.stdin!.write(JSON.stringify({ id, args }) + '\n')
+    })
+  }
+
+  // The corpus fixture is shaped like the ones in cli-status-menubar.test.ts:
+  // two hours back, clamped inside the current UTC day (TZ is pinned to UTC),
+  // so a run started just after midnight still lands inside "today".
+  const now = new Date()
+  const todayUtcMidnight = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
+  const base = new Date(Math.max(todayUtcMidnight, now.getTime() - 2 * 3600_000))
+  const ts = (offset: number): string => new Date(base.getTime() + offset).toISOString().replace(/\.\d+Z$/, 'Z')
+  const pricedCall = (n: number, offset: number): string => [
+    JSON.stringify({ type: 'user', sessionId: 's1', timestamp: ts(offset), message: { role: 'user', content: 'go' } }),
+    JSON.stringify({
+      type: 'assistant', sessionId: 's1', timestamp: ts(offset + 60_000),
+      message: {
+        id: `msg-${n}`, type: 'message', role: 'assistant', model: 'claude-sonnet-4-5',
+        content: [{ type: 'text', text: 'done' }],
+        usage: { input_tokens: 500, output_tokens: 50 },
+      },
+    }),
+  ].join('\n')
+
+  beforeAll(async () => {
+    home = await mkdtemp(join(tmpdir(), 'codeburn-serve-freshness-'))
+    const projectDir = join(home, '.claude', 'projects', 'myapp')
+    await mkdir(projectDir, { recursive: true })
+    await mkdir(join(home, '.config', 'codeburn'), { recursive: true })
+    await writeFile(join(home, '.config', 'codeburn', 'config.json'), JSON.stringify({ currency: { code: 'USD' } }), 'utf8')
+    sessionFile = join(projectDir, 'session.jsonl')
+    await writeFile(sessionFile, pricedCall(1, 0) + '\n', 'utf8')
+
+    child = spawn(process.execPath, ['--import', 'tsx', join(__dirname, '..', 'src', 'cli.ts'), 'serve', '--stdio'], {
+      stdio: ['pipe', 'pipe', 'ignore'],
+      env: {
+        ...process.env,
+        HOME: home, USERPROFILE: home,
+        CLAUDE_CONFIG_DIR: join(home, '.claude'),
+        CODEBURN_CACHE_DIR: join(home, '.cache', 'codeburn'),
+        // Force the snapshot settle window wide open. The real one is 2s, and
+        // racing a 2s wall clock from a CI runner is how this test would rot;
+        // a window this large makes "the deferral must not happen in serve"
+        // deterministic instead of timing-dependent.
+        CODEBURN_STATUS_SNAPSHOT_SETTLE_MS: '600000',
+      },
+    })
+    let buffer = ''
+    child.stdout!.setEncoding('utf8')
+    child.stdout!.on('data', (chunk: string) => {
+      buffer += chunk
+      let idx: number
+      while ((idx = buffer.indexOf('\n')) >= 0) {
+        const line = buffer.slice(0, idx).trim()
+        buffer = buffer.slice(idx + 1)
+        if (!line) continue
+        let msg: Record<string, unknown>
+        try { msg = JSON.parse(line) } catch { continue }
+        if (msg['ready']) { readyResolve(); continue }
+        if (typeof msg['progress'] === 'string' && !('ok' in msg)) continue
+        const waiter = waiters.get(msg['id'] as number)
+        if (waiter) { waiters.delete(msg['id'] as number); waiter(msg) }
+      }
+    })
+    await ready
+  }, 120_000)
+
+  afterAll(async () => {
+    child?.kill('SIGKILL')
+    if (home) await rm(home, { recursive: true, force: true })
+  })
+
+  it('reflects a single appended call on the poll after it, and keeps reflecting it', async () => {
+    const args = ['status', '--format', 'menubar-json', '--period', 'today', '--no-timeline', '--no-optimize']
+
+    const first = await request(500, args)
+    expect(first['ok'], JSON.stringify(first)).toBe(true)
+    expect(calls(first)).toBe(1)
+    const firstCost = cost(first)
+
+    // One append, then nothing else touches the corpus for the rest of the
+    // test - exactly the protocol that pinned the menubar.
+    await appendFile(sessionFile, pricedCall(2, 120_000) + '\n', 'utf8')
+    // Let the root watcher observe the write before polling, so the poll below
+    // is the one that has to decide between deferring and answering. Generous
+    // rather than tight: nothing here races the settle window.
+    await new Promise(resolve => setTimeout(resolve, 3000))
+
+    // Inside the settle window: a one-shot CLI may debounce here, the resident
+    // process must not - it has the parse state and cannot be re-asked.
+    const inWindow = await request(501, args)
+    expect(inWindow['ok'], JSON.stringify(inWindow)).toBe(true)
+    expect(calls(inWindow)).toBe(2)
+    expect(cost(inWindow)).toBeGreaterThan(firstCost)
+
+    // The actual regression: with no further filesystem event the output memo
+    // stays valid, so whatever the previous poll answered is replayed. A
+    // deferred answer here is stale for the whole memo cap.
+    const memoed = await request(502, args)
+    expect(memoed['ok'], JSON.stringify(memoed)).toBe(true)
+    expect(calls(memoed)).toBe(2)
+    expect(cost(memoed)).toBeGreaterThan(firstCost)
+  }, 120_000)
 })

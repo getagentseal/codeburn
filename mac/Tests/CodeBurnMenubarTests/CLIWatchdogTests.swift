@@ -76,4 +76,24 @@ struct CLIWatchdogTests {
         ))
         #expect(!ServeOrphanReaper.serveCommandMatches(recorded: "", observed: "anything"))
     }
+
+    @Test("a pid record left by something other than a serve child is never signalled")
+    func orphanReapIgnoresNonServeRecord() throws {
+        let url = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("serve-reap-" + UUID().uuidString)
+        let child = Process()
+        child.executableURL = URL(fileURLWithPath: "/bin/sleep")
+        child.arguments = ["5"]
+        try child.run()
+        defer { if child.isRunning { child.terminate() } }
+
+        // The recorded argv matches this pid exactly, so only the serve suffix
+        // check stands between a test fixture's record and a stray SIGTERM.
+        ServeOrphanReaper.record(at: url, pid: child.processIdentifier, command: "/bin/sleep 5")
+        ServeOrphanReaper.reap(at: url)
+
+        Thread.sleep(forTimeInterval: 0.2)
+        #expect(child.isRunning)
+        #expect(!FileManager.default.fileExists(atPath: url.path))
+    }
 }

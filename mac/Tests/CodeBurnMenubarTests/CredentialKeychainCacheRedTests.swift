@@ -23,7 +23,7 @@ struct CredentialKeychainCacheRedTests {
         try FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
         let suiteName = "codeburn.0b.red.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
-        defaults.removePersistentDomain(forName: suiteName)
+        TestDefaults.forget(suiteName)
 
         let fakeKeychain = InMemoryKeychainCredentialCache()
         ClaudeCredentialStore.resetTestSeams()
@@ -38,7 +38,7 @@ struct CredentialKeychainCacheRedTests {
         defer {
             ClaudeCredentialStore.resetTestSeams()
             CodexCredentialStore.resetTestSeams()
-            defaults.removePersistentDomain(forName: suiteName)
+            TestDefaults.forget(suiteName)
             try? FileManager.default.removeItem(at: root)
         }
 

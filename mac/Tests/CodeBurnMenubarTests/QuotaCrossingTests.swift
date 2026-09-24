@@ -154,8 +154,8 @@ private func withMonitor(
 ) async throws {
     let suiteName = "codeburn.quota.crossing.\(UUID().uuidString)"
     let defaults = try #require(UserDefaults(suiteName: suiteName))
-    defaults.removePersistentDomain(forName: suiteName)
-    defer { defaults.removePersistentDomain(forName: suiteName) }
+    TestDefaults.forget(suiteName)
+    defer { TestDefaults.forget(suiteName) }
 
     let notifier = RecordingCrossingNotifier()
     let monitor = QuotaCrossingMonitor(defaults: defaults, makeNotifier: { notifier })

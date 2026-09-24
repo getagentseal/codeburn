@@ -14,7 +14,7 @@ const execFileAsync = promisify(execFile)
 // for) blocks until the user answers. Give them time to click Allow before we
 // give up - the old 10s kill fired while the dialog was still open and got
 // misread as "disconnected".
-const KEYCHAIN_TIMEOUT_MS = 90_000
+export const KEYCHAIN_TIMEOUT_MS = 90_000
 
 /** Outcome of a keychain lookup. `accessDenied` means the item exists but macOS
  * needs the user to grant access (dialog dismissed, denied, or not answered). */

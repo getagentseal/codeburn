@@ -1336,7 +1336,7 @@ private struct RetryTaxSection: View {
                     }
                 }
 
-                Text(L("%1$lld retries across %2$lld edits", retryTax.retries, retryTax.editTurns))
+                Text(L("%1$lld retries across %2$lld retried edits", retryTax.retries, retryTax.editTurns))
                     .font(.system(size: 9.5))
                     .foregroundStyle(.quaternary)
 

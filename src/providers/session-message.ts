@@ -160,6 +160,8 @@ export function buildAssistantCall(opts: {
     reasoningTokens: tokens.reasoning,
     webSearchRequests: 0,
     costUSD,
+    // A call with output but no usage recorded has unknown tokens, not zero.
+    ...(allZero && costUSD === 0 ? { costIsEstimated: true } : {}),
     tools,
     bashCommands,
     skills,

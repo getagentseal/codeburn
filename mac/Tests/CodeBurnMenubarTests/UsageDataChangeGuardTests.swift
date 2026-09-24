@@ -73,6 +73,33 @@ struct UsageDataChangeGuardTests {
         ))
     }
 
+    /// Warp's own database sits in a group container behind the "access data from
+    /// other apps" consent, where a stat blocks rather than fails, so the default
+    /// location is never watched. A path the person named themselves is.
+    @Test("WARP_DB_PATH is watched when set, and nothing Warp-shaped when it is not")
+    func warpIsWatchedOnlyWhenExplicitlyConfigured() throws {
+        let home = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("CodeBurnMenubarTests.\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: home) }
+        let database = home.appendingPathComponent("warp.sqlite")
+        try Data().write(to: database)
+
+        // Named so the guard never falls through to the real config on this Mac.
+        let environment = ["CLAUDE_CONFIG_DIR": home.path]
+
+        let unset = UsageDataChangeGuard.snapshot(environment: environment, homeDirectory: home.path)
+        #expect(!unset.modificationDates.keys.contains { $0.contains("Group Containers") })
+        #expect(unset.modificationDates[database.path] == nil)
+
+        let set = UsageDataChangeGuard.snapshot(
+            environment: environment.merging(["WARP_DB_PATH": database.path]) { _, new in new },
+            homeDirectory: home.path
+        )
+        #expect(set.modificationDates[database.path] != nil)
+        #expect(!set.modificationDates.keys.contains { $0.contains("Group Containers") })
+    }
+
     private func makeSnapshot(_ seconds: TimeInterval) -> UsageDataSnapshot {
         UsageDataSnapshot(modificationDates: ["provider-root": Date(timeIntervalSince1970: seconds)])
     }

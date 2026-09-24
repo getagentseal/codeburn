@@ -1992,7 +1992,11 @@ describe.skipIf(!isSqliteAvailable())('(c5) compaction-initiated store rows', ()
 // which is exactly the pre-anchor behaviour - the interval opens at -Infinity,
 // the PRE-compaction rows are subtracted from a rollup that never counted
 // them, and the residual clamps to zero and disappears.
-describe.skipIf(!isSqliteAvailable())('(c6) a migrated cache reconciles like a virgin one', () => {
+// The two heaviest cases in this file: each builds a store, then runs three or
+// four full parseAllSessions passes over it. On windows-latest they were the
+// only two to cross the 30s default (run 35474746411), with the next-heaviest
+// case in the file at 18.8s.
+describe.skipIf(!isSqliteAvailable())('(c6) a migrated cache reconciles like a virgin one', { timeout: 60_000 }, () => {
   const MODEL = 'mai-code-1-flash-picker'
 
   const createStore = (dbPath: string): void => {

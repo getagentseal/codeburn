@@ -37,9 +37,82 @@ import { isPathBlocked } from './sqlite.js'
 // ---------------------------------------------------------------------------
 
 // Past this resident-set size the serve loop drops its in-memory memos and
-// re-parses on the next request. 3GB leaves generous room for the largest
-// observed corpora while bounding a pathological one.
-const SERVE_MAX_RSS_BYTES = 3 * 1024 * 1024 * 1024
+// re-parses on the next request. 6GB default leaves generous room for the
+// largest observed corpora (a warm ~3GB cache survives) while bounding a
+// pathological one. CODEBURN_SERVE_MAX_RSS_MB (integer MB) overrides it.
+const DEFAULT_SERVE_MAX_RSS_MB = 6144
+const SERVE_MAX_RSS_BYTES = (() => {
+  const mb = Number(process.env['CODEBURN_SERVE_MAX_RSS_MB'])
+  return (Number.isInteger(mb) && mb > 0 ? mb : DEFAULT_SERVE_MAX_RSS_MB) * 1024 * 1024
+})()
+
+// A warm cache holds RSS above the ceiling as a steady state, so clearing on
+// every request would thrash the cache. Track the RSS at the last clear and
+// require meaningful growth before clearing again — clear once per growth
+// plateau, but still clear on real unbounded growth.
+const SERVE_RSS_CLEAR_MARGIN_BYTES = 256 * 1024 * 1024
+let lastClearRss = 0
+
+// V8 exposes gc() only to a process started with --expose-gc, and no codeburn
+// launcher passes it — so `globalThis.gc` was never there for the release below
+// to call. Ask V8 for the function directly instead. It is the difference
+// between the freed pages going back to the OS and the resident set sitting on
+// them for the life of the child: measured on a warm 170MB shard set, a release
+// that dropped 323MB of live objects moved RSS by 0MB without this and by
+// 712MB with it.
+let collect: (() => void) | null | undefined
+async function collectGarbage(): Promise<void> {
+  if (collect === undefined) {
+    try {
+      const v8 = await import('v8')
+      const vm = await import('vm')
+      v8.setFlagsFromString('--expose-gc')
+      collect = vm.runInNewContext('gc') as () => void
+      v8.setFlagsFromString('--no-expose-gc')
+    } catch {
+      collect = null
+    }
+  }
+  collect?.()
+}
+
+// V8 hands pages back a batch at a time, and only on a LATER collection: on a
+// cold start the collection that follows the release took the child from 2767MB
+// to 1292MB, one a minute after that to 668MB — with no allocation in between,
+// and with V8 returning none of it on its own across ten minutes of idle.
+// Calling gc() twice in a row buys nothing; the wait between is what does. So
+// keep passing while a pass is still worth the margin, bounded so this can
+// never become a standing timer.
+const RELEASE_SETTLE_MS = 60_000
+const RELEASE_SETTLE_MIN_GAIN_BYTES = 64 * 1024 * 1024
+const RELEASE_SETTLE_PASSES = 4
+
+/// Drop every in-memory memo this process can re-read from disk, then hand the
+/// pages back.
+///
+/// Ordering is load-bearing, and not the obvious one: the held shard-publish
+/// window strongly references the whole cache (so clearing without publishing
+/// it first frees nothing), and clearLoadCacheMemo() makes a later flush see a
+/// cache that is no longer current and DISCARD the window. Flushing here, while
+/// the memo still matches, publishes it instead. Dirty state therefore only
+/// ever leaves memory through a publish; a durable provider never waits in that
+/// window at all (parser.ts publishes its section on the poll that parsed it).
+/// Safe to await: requests and the background fill share one promise chain, so
+/// no parse can be mid-flight.
+export async function releaseResidentMemos(): Promise<void> {
+  const { clearSessionCache, flushPendingShardPublish } = await import('./parser.js')
+  const { clearLoadCacheMemo } = await import('./session-cache.js')
+  const { clearCodexMemCaches } = await import('./codex-cache.js')
+  const { clearAntigravityCacheStates } = await import('./providers/antigravity.js')
+  const { clearScanFileMemo } = await import('./optimize.js')
+  await flushPendingShardPublish()
+  clearSessionCache()
+  clearLoadCacheMemo()
+  clearCodexMemCaches()
+  clearAntigravityCacheStates()
+  clearScanFileMemo()
+  await collectGarbage()
+}
 
 // How long a closing serve child waits for an already-accepted request before
 // giving up and exiting. CODEBURN_SERVE_DRAIN_MS overrides it so the e2e can
@@ -381,6 +454,9 @@ async function getConfigFingerprint(): Promise<string | null> {
 /// generation; a root absent at setup is rechecked by the parser's hard cap.
 type RootWatcherState = {
   startedAt: number
+  /// The roots actually armed. A path outside them has no event source, so the
+  /// incremental sweep must not trust anything it remembered about it.
+  roots: string[]
   lastEventAt: () => number
   changedSince: (sinceTs: number) => string[] | null
   healthy: () => boolean
@@ -466,6 +542,7 @@ async function startRootWatchers(): Promise<RootWatcherState | null> {
   let healthy = true
   let closed = false
   const watchers: FSWatcher[] = []
+  const armedRoots: string[] = []
   // Changed paths, newest write per path, for day-scoped invalidation. An event
   // that arrives without a filename, or one past the tracking bound, leaves
   // `unscopedAt` behind: from then on nothing older than it can be day-scoped.
@@ -529,6 +606,7 @@ async function startRootWatchers(): Promise<RootWatcherState | null> {
         const watcher = watch(root, { recursive: info.isDirectory() }, (_event, filename) => { note(root, filename) })
         watcher.on('error', () => { healthy = false })
         watchers.push(watcher)
+        armedRoots.push(root)
       } catch {
         // stat proved this input exists, so failing to arm it invalidates the
         // global quiet predicate even when other roots remain watched.
@@ -548,6 +626,7 @@ async function startRootWatchers(): Promise<RootWatcherState | null> {
   const startedAt = Date.now()
   return {
     startedAt,
+    roots: armedRoots,
     lastEventAt: () => lastEventAt,
     changedSince,
     healthy: () => healthy && !closed,
@@ -574,6 +653,11 @@ export async function runStdioServe(buildProgram: () => Command): Promise<void> 
   // `complete: true` — so a consumer never has to infer completeness from a
   // missing field within a single source.
   process.env[SERVE_HYDRATION_ENV] = '1'
+  // Shard publication is coalesced for this process only: one-shot CLI runs
+  // keep writing the cache immediately. The flush below is the shutdown half
+  // of that contract.
+  const { setShardPublishCoalescing } = await import('./parser.js')
+  setShardPublishCoalescing(true)
   // Event-driven reuse: while no watched session root has changed, a previous
   // parse stays valid past the burst window (capped in parser.ts, so a missed
   // filesystem event self-heals within minutes). This is what turns a warm
@@ -588,7 +672,7 @@ export async function runStdioServe(buildProgram: () => Command): Promise<void> 
   const watcherSetup = startRootWatchers().then(async (w) => {
     watcherLifecycle.state = w
     if (!w) return
-    const { setParseReuseValidator } = await import('./parser.js')
+    const { setParseReuseValidator, setSweepWatchSource } = await import('./parser.js')
     // Clean means: the watchers were already armed when the parse happened,
     // and no filesystem event has landed since. lastEventAt of 0 is a quiet
     // system (clean for anything parsed after arming), not an unknown.
@@ -600,7 +684,11 @@ export async function runStdioServe(buildProgram: () => Command): Promise<void> 
     }, range)
     rootReuseValidation = validate
     setParseReuseValidator(validate)
-    watcherLifecycle.resetValidator = () => setParseReuseValidator(null)
+    // Same watcher, finer grain: the discovery sweep reuses the listing and
+    // fingerprint of every path no event has named, instead of re-reading the
+    // whole corpus on each poll.
+    setSweepWatchSource({ startedAt: w.startedAt, roots: w.roots, healthy: w.healthy, changedSince: w.changedSince })
+    watcherLifecycle.resetValidator = () => { setParseReuseValidator(null); setSweepWatchSource(null) }
   }).catch(() => {
     watcherLifecycle.state?.close()
     watcherLifecycle.state = null
@@ -627,6 +715,19 @@ export async function runStdioServe(buildProgram: () => Command): Promise<void> 
   const write = (value: unknown): void => { protocolWrite(JSON.stringify(value) + '\n') }
   write({ ready: true, pid: process.pid })
 
+  // What this resident child costs, riding along on the answers it already
+  // sends. The desktop app cannot measure it: serve is a plain CLI child, so it
+  // is absent from Electron's app.getAppMetrics(). The parent turns these into
+  // bucket labels for its consent-gated app_close event; the numbers themselves
+  // go no further than the pipe.
+  let peakRss = 0
+  const serveUsage = (): { cpuSec: number; rssMb: number } => {
+    const rss = process.memoryUsage().rss
+    if (rss > peakRss) peakRss = rss
+    const cpu = process.cpuUsage()
+    return { cpuSec: (cpu.user + cpu.system) / 1e6, rssMb: Math.round(peakRss / (1024 * 1024)) }
+  }
+
   // Strict serialization: each request chains on the previous one.
   let queue: Promise<void> = Promise.resolve()
 
@@ -642,6 +743,21 @@ export async function runStdioServe(buildProgram: () => Command): Promise<void> 
   let firstPaintSettled = false
   let fillTimer: ReturnType<typeof setTimeout> | undefined
 
+  /// Pass over the heap again a minute from now, and keep passing while each
+  /// one is still handing pages back. Queued, so a collection cannot land
+  /// inside a request; unref'd, so it cannot hold this child open past its app.
+  const scheduleSettlingCollection = (pass = 0): void => {
+    if (pass >= RELEASE_SETTLE_PASSES) return
+    const timer = setTimeout(() => {
+      queue = queue.then(async () => {
+        const before = process.memoryUsage().rss
+        await collectGarbage()
+        if (before - process.memoryUsage().rss >= RELEASE_SETTLE_MIN_GAIN_BYTES) scheduleSettlingCollection(pass + 1)
+      })
+    }, RELEASE_SETTLE_MS)
+    timer.unref?.()
+  }
+
   // The other half of the first paint: the same request, unfloored. It is an
   // ordinary parse, so what it writes to the session and daily caches is
   // exactly what a full cold parse would have written — the paint only
@@ -654,25 +770,42 @@ export async function runStdioServe(buildProgram: () => Command): Promise<void> 
       queue = queue.then(async () => {
         const { isColdCacheOnDisk } = await import('./session-cache.js')
         // A request that landed in front of the fill may already have done the
-        // full parse (only the menubar payload is ever floored).
-        if (!await isColdCacheOnDisk()) return
-        const { startProgressKeepalive, stopProgressKeepalive } = await import('./parser.js')
-        startProgressKeepalive()
-        const startedAt = Date.now()
-        try {
-          const { output, code } = await runCaptured(buildProgram, args, beat)
-          const fingerprint = await getConfigFingerprint()
-          // Memoized so the poll that follows the fill answers instantly with
-          // the converged payload instead of re-deriving it.
-          if (code === 0 && fingerprint !== null) {
-            outputMemo.set(outputMemoKey(args), createOutputMemoEntry(startedAt, Date.now(), output, fingerprint, { n: ++generationCounter, at: new Date().toISOString() }))
+        // full parse (only the menubar payload is ever floored) — then there is
+        // nothing left to fill, but the cold start is over just the same, so the
+        // release below still runs.
+        if (await isColdCacheOnDisk()) {
+          const { startProgressKeepalive, stopProgressKeepalive } = await import('./parser.js')
+          startProgressKeepalive()
+          const startedAt = Date.now()
+          try {
+            const { output, code } = await runCaptured(buildProgram, args, beat)
+            const fingerprint = await getConfigFingerprint()
+            // Memoized so the poll that follows the fill answers instantly with
+            // the converged payload instead of re-deriving it.
+            if (code === 0 && fingerprint !== null) {
+              outputMemo.set(outputMemoKey(args), createOutputMemoEntry(startedAt, Date.now(), output, fingerprint, { n: ++generationCounter, at: new Date().toISOString() }))
+            }
+          } catch {
+            // Best effort. A failed fill leaves the cache incomplete, which is
+            // exactly the state the next cold start knows how to resume from.
+          } finally {
+            stopProgressKeepalive()
           }
-        } catch {
-          // Best effort. A failed fill leaves the cache incomplete, which is
-          // exactly the state the next cold start knows how to resume from.
-        } finally {
-          stopProgressKeepalive()
         }
+        // The cold start's whole product is on disk: the daily cache holds the
+        // per-day summaries and the session cache holds the per-call detail,
+        // and the answers already derived are in the output memo above. What
+        // stays in memory otherwise is the detail those summaries were derived
+        // FROM — an unscoped SessionCache the load memo then serves to every
+        // later request, whatever range it asked for, plus the lifetime
+        // ProjectSummary trees the parse memo keeps with no sweep to retire
+        // them once requests stop. A poll needs neither: it re-reads the month
+        // shards its own range covers. Measured on a cold start over a 170MB
+        // shard set, holding them was 2198MB resident at idle against 364MB of
+        // live heap — and the pages only go back with the collection the
+        // release ends in.
+        await releaseResidentMemos()
+        scheduleSettlingCollection()
       })
     }, delayMs)
     // The app owning this child is gone once stdin closes; an unstarted fill
@@ -720,7 +853,7 @@ export async function runStdioServe(buildProgram: () => Command): Promise<void> 
         && Date.now() - memoHit.createdAt < OUTPUT_MEMO_CAP_MS
         && rootReuseValidation?.(memoHit.validatedFrom) === 'clean'
       ) {
-        write({ id: request.id, ok: true, output: memoHit.output, generation: memoHit.generation })
+        write({ id: request.id, ok: true, output: memoHit.output, generation: memoHit.generation, usage: serveUsage() })
         return
       }
       // Progressive cold start (#1110): on a cold cache the menubar payload is
@@ -734,6 +867,11 @@ export async function runStdioServe(buildProgram: () => Command): Promise<void> 
         const { isColdCacheOnDisk } = await import('./session-cache.js')
         floor = await isColdCacheOnDisk() ? paintFrom : null
         firstPaintSettled = true
+        // A warm start has no fill behind it to release after, but it has the
+        // same opening burst, and V8 sits on those pages just the same: 900MB
+        // resident against 356MB of live heap, with nothing further returned
+        // across ten minutes of idle. Nothing is dropped here — only collected.
+        if (!floor) scheduleSettlingCollection()
       }
       // Heartbeat the WHOLE request, not just its parse: the aggregation and
       // payload serialization after a parse measured ~8s of further silence, and
@@ -764,6 +902,17 @@ export async function runStdioServe(buildProgram: () => Command): Promise<void> 
           // A partial answer is never memoized. The roots stay quiet while the
           // fill converges, so a memo hit would pin the client to the first
           // paint for the whole memo cap.
+          //
+          // Same invariant, stated generally: nothing DELIBERATELY DEFERRED
+          // may enter this memo. A deferred answer is stale by construction
+          // and the event that would retire it has already landed, so the
+          // reuse check below it stays 'clean' and replays the stale payload
+          // until the cap. The one deferral a served command had was the
+          // status snapshot's settle window; main.ts now bypasses the whole
+          // snapshot path in this process (SERVE_HYDRATION_ENV), so the only
+          // remaining deferral is the cold first paint, counted right here.
+          // Any future debounce must either be bypassed in serve too or
+          // surface a count like `deferredFiles` for this gate.
           if (configFingerprint !== null && deferredFiles === 0) {
             outputMemo.set(memoKey, createOutputMemoEntry(parseStartedAt, Date.now(), output, configFingerprint, generation))
           }
@@ -771,7 +920,7 @@ export async function runStdioServe(buildProgram: () => Command): Promise<void> 
             const oldest = [...outputMemo.entries()].sort((a, b) => a[1].createdAt - b[1].createdAt)[0]
             if (oldest) outputMemo.delete(oldest[0])
           }
-          write({ id: request.id, ok: true, output, generation })
+          write({ id: request.id, ok: true, output, generation, usage: serveUsage() })
           if (deferredFiles > 0) scheduleBackgroundFill(request.args)
         }
         else write({ id: request.id, ok: false, error: `exit ${code}`, output })
@@ -786,18 +935,18 @@ export async function runStdioServe(buildProgram: () => Command): Promise<void> 
       // threshold, drop the in-memory memos — the next request re-parses
       // once (seconds), which beats an ever-growing child. The child itself
       // never exits here, so the client's death counter is untouched.
-      if (process.memoryUsage().rss > SERVE_MAX_RSS_BYTES) {
-        const { clearSessionCache } = await import('./parser.js')
-        const { clearLoadCacheMemo } = await import('./session-cache.js')
-        const { clearCodexMemCaches } = await import('./codex-cache.js')
-        const { clearAntigravityCacheStates } = await import('./providers/antigravity.js')
-        const { clearScanFileMemo } = await import('./optimize.js')
-        clearSessionCache()
-        clearLoadCacheMemo()
-        clearCodexMemCaches()
-        clearAntigravityCacheStates()
-        clearScanFileMemo()
-        if (typeof globalThis.gc === 'function') globalThis.gc()
+      const rss = process.memoryUsage().rss
+      if (rss > peakRss) peakRss = rss
+      if (rss > SERVE_MAX_RSS_BYTES) {
+        // Hysteresis: only clear when RSS has grown past the last clear by a
+        // margin, so a warm cache sitting above the ceiling is not dropped on
+        // every request.
+        if (rss > lastClearRss + SERVE_RSS_CLEAR_MARGIN_BYTES) {
+          await releaseResidentMemos()
+          lastClearRss = rss
+        }
+      } else {
+        lastClearRss = 0
       }
     }).finally(() => {
       if (waitingId !== null) awaiting.delete(waitingId)
@@ -831,6 +980,16 @@ export async function runStdioServe(buildProgram: () => Command): Promise<void> 
     let drainTimer: ReturnType<typeof setTimeout> | undefined
     await Promise.race([queue, new Promise<void>(resolve => { drainTimer = setTimeout(resolve, drainMs) })])
     clearTimeout(drainTimer)
+    // Publish whatever the coalescing window still holds. Bounded for the same
+    // reason the drain is, and non-fatal: an unpublished window costs the next
+    // start a re-parse of those appends, never a wrong number.
+    let flushTimer: ReturnType<typeof setTimeout> | undefined
+    const { flushPendingShardPublish } = await import('./parser.js')
+    await Promise.race([
+      flushPendingShardPublish().catch(() => undefined),
+      new Promise<void>(resolve => { flushTimer = setTimeout(resolve, drainMs) }),
+    ])
+    clearTimeout(flushTimer)
     // Bounded and non-fatal for the same reason the drain is: the app is gone,
     // and cleanup that hangs (watcher discovery on a stalled mount) or throws
     // must not stop this child from reaching its exit.

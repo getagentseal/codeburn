@@ -1,7 +1,7 @@
 import { join } from 'path'
 import { homedir } from 'os'
 
-import { calculateCost } from '../models.js'
+import { billableOutputTokens, calculateCost } from '../models.js'
 import { isSqliteAvailable, getSqliteLoadError, openDatabase, type SqliteDatabase } from '../sqlite.js'
 import type { Provider, SessionSource, SessionParser, ParsedProviderCall, ProbeRoot } from './types.js'
 
@@ -169,7 +169,11 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
           }
 
           const model = row.model_id
-          const costUSD = calculateCost(model, freshInput, output, cacheCreation, cacheRead, 0)
+          // ZCode reports reasoning as a separate bucket and 'zcode' is not in
+          // REASONING_INCLUDED_IN_OUTPUT, so bill it via the output-equivalent
+          // (billableOutputTokens adds it back). Not doing so left reasoning
+          // tokens unbilled.
+          const costUSD = calculateCost(model, freshInput, billableOutputTokens('zcode', output, reasoning), cacheCreation, cacheRead, 0)
 
           yield {
             provider: 'zcode',

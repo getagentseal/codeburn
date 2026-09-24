@@ -137,3 +137,43 @@ its own. The grade is a band over that score:
 
 The grade rates your setup, not your spending: an expensive month with a clean configuration still
 scores an A.
+
+## Usage
+
+```bash
+codeburn optimize                       # scan the last 30 days
+codeburn optimize -p today              # today only
+codeburn optimize -p week               # last 7 days
+codeburn optimize --provider claude     # restrict to one provider
+codeburn optimize --format json         # setup health + findings as JSON
+```
+
+## Claude Code session population
+
+For Claude Code, the optimize session count, the per-session findings, coaching,
+and model-default recommendations use user-started (main) sessions. Subagent
+sidechain transcripts are excluded from that population because their delegated
+context and delivery behavior are structurally different, and so is the re-read
+finding, since a subagent starts on a fresh context. Findings about how Claude
+uses tools (junk reads, read:edit ratio) and every spend, MCP, and
+configuration-overhead finding keep counting them.
+
+## More waste patterns
+
+- Wasted bash output (uncapped `BASH_MAX_OUTPUT_LENGTH`, trailing noise)
+- Cache creation overhead and junk directory reads
+- Context-heavy sessions where effective input/cache tokens swamp output
+- Possibly low-worth expensive sessions with no edit turns or repeated retries
+  when no `git`/`gh` delivery command is observed
+
+## Ranking and repeat runs
+
+Findings are ranked by urgency (impact weighted against observed waste) and rolled up into an A to F setup health grade. Repeat runs classify each finding as new, improving, or resolved against a 48-hour recent window.
+
+## Dashboard shortcut
+
+You can also open it inline from the dashboard: press `o` when a finding count appears in the status bar, `b` to return.
+
+## When results get checked
+
+The loop closes on honesty: once an applied fix is at least 3 days old, `codeburn act report` compares its estimated savings against what your sessions actually did, and every later `codeburn optimize` run lists it under `Applied fixes` with a plain verdict — worked, under its estimate, or did not help, with the undo command for that last case.

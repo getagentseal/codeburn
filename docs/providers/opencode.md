@@ -30,16 +30,24 @@ Precedence when no `dataDir` argument is passed (the production path):
 SQLite (older builds) or file-based JSON (OpenCode 1.1+, under `storage/`).
 
 OpenCode 2.x (mainline since 2.0.3, issue #1293) writes a second SQLite
-generation: `session_v2` + `session_message` (whose FK points at
-`session_v2(id)`; messages are tagged by a `type` column, ordered by `seq`,
-payload JSON in `data`). The legacy `session`/`message`/`part` tables freeze at
-upgrade — a post-upgrade session has rows in `session_message` and zero new
-rows in `message`. The parser branches per database on `sqlite_master`: when
-the v2 tables exist they win and the legacy tables are ignored entirely (the
-generations are never joined); otherwise the legacy path runs unchanged.
-Session-level cost/token rollups and the `parent_id` child-session walk exist
-in both generations, so discovery, parsing and dedup behave the same either
-way.
+generation into the same `opencode.db`: `session_v2` + `session_message`
+(messages tagged by a `type` column, ordered by `seq`, payload JSON in `data`;
+assistant rows carry `model: {id, providerID}`, `cost` and `tokens` inline).
+The desktop app (Electron) runs the same CLI as a background service, so CLI
+and GUI sessions land in the same file. On first start 2.x copies 1.x sessions
+into the new tables under their original session and message ids, but the
+legacy `session`/`message`/`part` tables stay and freeze. The copy is lossy:
+it drops compaction summary turns and task-tool turns, skips any message it
+fails to decode, and can stop partway, leaving `session_v2` rows with no
+`session_message` rows.
+
+So on a database with both generations the parser reads a session's legacy
+turns first and then adds the `session_message` turns legacy does not have
+(dedup by message id). Pre-upgrade history counts exactly as it did on 1.x and
+post-upgrade turns are added. Legacy sessions missing from `session_v2` are
+discovered from the legacy table. A 2.x-only database reads `session_message`
+alone; a 1.x database runs the legacy path unchanged. v2 model ids are used
+bare (as 1.x stored `modelID`) so a turn prices the same from either table.
 
 ## Caching
 

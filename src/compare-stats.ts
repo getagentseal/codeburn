@@ -2,7 +2,7 @@ import { readdir, readFile } from 'fs/promises'
 import { basename, join } from 'path'
 
 import type { ClassifiedTurn, ProjectSummary } from './types.js'
-import { isBehavioralCall } from './behavioral-weight.js'
+import { behavioralCallWeight, isBehavioralCall } from './behavioral-weight.js'
 import { modelRowKey } from './models.js'
 import { callBillableOutputTokens } from './session-output.js'
 
@@ -66,7 +66,7 @@ export function aggregateModelStats(projects: ProjectSummary[]): ModelStats[] {
         for (const call of turn.assistantCalls) {
           if (call.model === '<synthetic>') continue
           const cs = call.model === primaryModel ? ms : ensure(call.model)
-          if (isBehavioralCall(call)) cs.calls++
+          cs.calls += behavioralCallWeight(call)
           cs.cost += call.costUSD
           cs.outputTokens += callBillableOutputTokens(call)
           cs.inputTokens += call.usage.inputTokens

@@ -28,6 +28,14 @@ export const NO_ANSWER = 'The menu bar app did not respond. Update it and try ag
 /** The steps of an install worth naming while a person waits ~30s for it. */
 export type InstallPhase = 'Downloading' | 'Verifying' | 'Installing' | 'Starting'
 
+/** Wire marker for the CLI's leftover-bundle lines (src/menubar-installer.ts: LEFTOVER_LINE_PREFIX). */
+const LEFTOVER_LINE_PREFIX = 'CODEBURN_LEFTOVER '
+
+/** The path of an older bundle the CLI could not remove, or null for any other line. */
+export function leftoverBundle(line: string): string | null {
+  return line.startsWith(LEFTOVER_LINE_PREFIX) ? line.slice(LEFTOVER_LINE_PREFIX.length).trim() || null : null
+}
+
 /**
  * The CLI narrates its own install on stdout (src/menubar-installer.ts). Reading those lines
  * beats inventing a second progress protocol, and a line this does not know simply keeps the
@@ -45,8 +53,8 @@ export function installPhase(line: string): InstallPhase | null {
  *  a menubar that cannot be asked is one the card refuses to drive at all (see OLDEST_ASKABLE). */
 const EXIT_TIMEOUT_MS = 5000
 const EXIT_POLL_MS = 250
-/** How long a relaunch is given to bring the process up before `open` is retried. */
-const RELAUNCH_TIMEOUT_MS = 3000
+/** How long a restarted menubar is given to come back up before the card reports what it sees. */
+const RESTART_TIMEOUT_MS = 3000
 
 /**
  * The first menubar version that watches its own defaults: it acts on a Capacity Dock change
@@ -54,6 +62,10 @@ const RELAUNCH_TIMEOUT_MS = 3000
  * driven from here at all, so the card offers an update instead of switches that do nothing.
  * The release these ship in, compared against literally: a dev desktop built at 0.9.24 must
  * still treat a published 0.9.24 menubar as too old, so this never reads the desktop version.
+ *
+ * It is not a gate any later command inherits: a menubar that watches the key but does not
+ * know a command consumes it and drops it, so a command added here later needs a version
+ * floor of its own.
  */
 export const OLDEST_ASKABLE = '0.9.25'
 
@@ -96,7 +108,7 @@ export type MacMenubarDeps = {
   /** `process.mas` is true only inside a Mac App Store build. */
   mas: boolean
   home?: string
-  runCli?: (args: string[], opts?: { timeoutMs?: number; onStdout?: (chunk: string) => void }) => Promise<ActionResult>
+  runCli?: (args: string[], opts?: { timeoutMs?: number; extraEnv?: NodeJS.ProcessEnv; onStdout?: (chunk: string) => void }) => Promise<ActionResult>
   /** Named steps of a running install, pushed to the card so a 30-second wait says something. */
   onPhase?: (phase: InstallPhase) => void
   /** The desktop app's own executable, which is also the Node that runs the CLI it carries. */
@@ -229,35 +241,41 @@ export class MacMenubar {
    * the app's own SingleInstanceGuard retires anything that outlived that, so this cannot end
    * with two.
    */
-  async install(): Promise<{ ok: boolean; error: string | null; status: MacMenubarStatus }> {
-    if (!this.supported()) return { ok: false, error: 'The menu bar app is macOS only.', status: NOT_SUPPORTED }
+  async install(): Promise<{ ok: boolean; error: string | null; status: MacMenubarStatus; leftovers: string[] }> {
+    if (!this.supported()) return { ok: false, error: 'The menu bar app is macOS only.', status: NOT_SUPPORTED, leftovers: [] }
     if (this.deps.mas) {
-      return { ok: false, error: 'Get the menu bar app from the website.', status: await this.status() }
+      return { ok: false, error: 'Get the menu bar app from the website.', status: await this.status(), leftovers: [] }
     }
     const runCli = this.deps.runCli
-    if (!runCli) return { ok: false, error: 'The codeburn CLI is not available.', status: await this.status() }
+    if (!runCli) return { ok: false, error: 'The codeburn CLI is not available.', status: await this.status(), leftovers: [] }
     // Before the install, not after: the CLI records a persistent codeburn path for the
     // menubar and refuses to go on without one, and a desktop-only user has none on PATH.
     await this.writeCliLauncher()
     const already = Boolean(await this.locate())
     this.deps.onPhase?.('Downloading')
     let pending = ''
+    const leftovers: string[] = []
     const result = await runCli(already ? ['menubar', '--force'] : ['menubar'], {
       timeoutMs: INSTALL_TIMEOUT_MS,
+      // What turns the CLI's leftover-bundle advice into machine-readable lines.
+      extraEnv: { CODEBURN_PROGRESS: '1' },
       onStdout: chunk => {
         // Chunks split mid-line, so only whole lines are read and the tail is kept.
         pending += chunk
         const lines = pending.split('\n')
         pending = lines.pop() ?? ''
         for (const line of lines) {
-          const phase = installPhase(line.trim())
+          const text = line.trim()
+          const leftover = leftoverBundle(text)
+          if (leftover) leftovers.push(leftover)
+          const phase = installPhase(text)
           if (phase) this.deps.onPhase?.(phase)
         }
       },
     })
     const status = await this.status()
-    if (result.ok && status.installed) return { ok: true, error: null, status }
-    return { ok: false, error: installErrorMessage(result), status }
+    if (result.ok && status.installed) return { ok: true, error: null, status, leftovers }
+    return { ok: false, error: installErrorMessage(result), status, leftovers }
   }
 
   /** `open` on a running LSUIElement app activates the one that is up rather than starting a
@@ -276,28 +294,32 @@ export class MacMenubar {
   /**
    * Drive the menu bar's language the way it already honors it: AppleLanguages in
    * its own defaults domain. A concrete Apple tag (en/ja/ko/fr, or zh-Hans/zh-Hant)
-   * overrides; null (System) clears the override so the OS language decides. The
-   * menu bar ships en + zh-Hans and falls back to English for the rest, so this is
-   * correct with no Swift change. AppKit reads AppleLanguages once, at launch, so a
-   * running copy is quit first — `open` then relaunches it into the new locale.
+   * overrides; null (System) clears the override so the OS language decides.
+   *
+   * For a current menu bar the write is the whole switch: it watches the key with
+   * KVO, which carries a write made by another process, and re-points its own
+   * string lookups in place. Nothing is started, quit or reopened, because every
+   * restart re-asked a Warp user for "access data from other apps" — that consent
+   * lasts exactly as long as the process does (WWDC23 session 10053).
+   *
+   * Observing the key arrived in the same release as {@link OLDEST_ASKABLE}, so
+   * `outdated` is the floor for this too rather than a second version to keep in
+   * step. An older menu bar reads AppleLanguages only at launch, so for it — and
+   * only for it — the change still costs a restart and the prompt that comes with
+   * one; leaving it in the old language while the desktop says the menu bar
+   * follows would be worse. One that is not running reads the key at its own next
+   * launch either way, so there is nothing to do for it.
    */
   async setLanguage(appleLang: string | null): Promise<MacMenubarStatus> {
     if (appleLang) await this.run('/usr/bin/defaults', ['write', MENUBAR_BUNDLE_ID, 'AppleLanguages', '-array', appleLang])
     else await this.run('/usr/bin/defaults', ['delete', MENUBAR_BUNDLE_ID, 'AppleLanguages'])
-    const path = await this.locate()
-    if (!path) return this.open()
-    const executable = join(path, 'Contents', 'MacOS', 'CodeBurnMenubar')
-    if ((await this.status()).running) {
-      await this.run('/usr/bin/osascript', ['-e', 'quit app "CodeBurnMenubar"'])
-      await this.waitForExit(executable, EXIT_TIMEOUT_MS)
-    }
-    // `open` right after a quit can no-op while the OS still has the dying
-    // instance registered, leaving the menu bar down after a language switch.
-    // Open, confirm it came up, and open once more if it did not.
-    const status = await this.open()
-    if (await this.waitForRunning(executable, RELAUNCH_TIMEOUT_MS)) return status
-    await this.run('/usr/bin/open', [path])
-    await this.waitForRunning(executable, RELAUNCH_TIMEOUT_MS)
+    const status = await this.status()
+    if (!status.outdated || !status.running || !status.path) return status
+    const executable = join(status.path, 'Contents', 'MacOS', 'CodeBurnMenubar')
+    await this.run('/usr/bin/osascript', ['-e', 'quit app "CodeBurnMenubar"'])
+    await this.waitForExit(executable, EXIT_TIMEOUT_MS)
+    await this.run('/usr/bin/open', [status.path])
+    await this.waitForRunning(executable, RESTART_TIMEOUT_MS)
     return this.status()
   }
 
@@ -417,7 +439,7 @@ export class MacMenubar {
     }
   }
 
-  /** True once the menubar process is up, so a relaunch can confirm it took. */
+  /** True once the menubar process is up, so the one restart path can confirm it took. */
   private async waitForRunning(executable: string, timeoutMs: number): Promise<boolean> {
     const deadline = this.now() + timeoutMs
     for (;;) {

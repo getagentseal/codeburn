@@ -18,6 +18,10 @@ struct MenubarPayload: Codable, Sendable {
     /// Absent on payloads from a CLI that predates the block, so absence means
     /// "unknown", not "nothing running": the popover hides the section either way.
     let liveSessions: LiveSessionsBlock?
+    /// The CLI's anonymised daily aggregate (`src/telemetry-snapshot.ts`),
+    /// carried opaquely so telemetry forwards exactly what the CLI computed
+    /// rather than re-deriving any of it here. Absent on an older CLI.
+    let telemetrySnapshot: JSONValue?
 
     init(generated: String,
          current: CurrentBlock,
@@ -26,8 +30,10 @@ struct MenubarPayload: Codable, Sendable {
          combined: CombinedUsage?,
          claudeConfigs: ClaudeConfigSelector? = nil,
          stale: Bool? = nil,
-         liveSessions: LiveSessionsBlock? = nil) {
+         liveSessions: LiveSessionsBlock? = nil,
+         telemetrySnapshot: JSONValue? = nil) {
         self.liveSessions = liveSessions
+        self.telemetrySnapshot = telemetrySnapshot
         self.generated = generated
         self.stale = stale
         self.current = current
@@ -39,6 +45,7 @@ struct MenubarPayload: Codable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case generated, stale, current, optimize, history, combined, claudeConfigs, liveSessions
+        case telemetrySnapshot
     }
 
     init(from decoder: Decoder) throws {
@@ -51,6 +58,7 @@ struct MenubarPayload: Codable, Sendable {
         combined = try c.decodeIfPresent(CombinedUsage.self, forKey: .combined)
         claudeConfigs = try c.decodeIfPresent(ClaudeConfigSelector.self, forKey: .claudeConfigs)
         liveSessions = try c.decodeIfPresent(LiveSessionsBlock.self, forKey: .liveSessions)
+        telemetrySnapshot = try c.decodeIfPresent(JSONValue.self, forKey: .telemetrySnapshot)
     }
 }
 

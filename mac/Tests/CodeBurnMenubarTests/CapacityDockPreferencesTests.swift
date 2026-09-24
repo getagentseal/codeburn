@@ -4,14 +4,15 @@ import Testing
 
 @Suite("Capacity Dock preferences")
 struct CapacityDockPreferencesTests {
-    private func defaults() -> UserDefaults {
+    private func defaults() -> (UserDefaults, String) {
         let suiteName = "CodeBurnMenubarTests.CapacityDock.\(UUID().uuidString)"
-        return UserDefaults(suiteName: suiteName)!
+        return (UserDefaults(suiteName: suiteName)!, suiteName)
     }
 
     @Test("fresh installs keep the dock off with Codex as the only resting provider")
     func freshDefaults() {
-        let defaults = defaults()
+        let (defaults, suiteName) = defaults()
+        defer { TestDefaults.forget(suiteName) }
 
         let snapshot = CapacityDockPreferences.load(defaults: defaults)
 
@@ -31,7 +32,8 @@ struct CapacityDockPreferencesTests {
 
     @Test("dock material theme persists independently from placement")
     func persistsTheme() {
-        let defaults = defaults()
+        let (defaults, suiteName) = defaults()
+        defer { TestDefaults.forget(suiteName) }
 
         CapacityDockPreferences.setTheme(.liquidGlass, defaults: defaults)
         #expect(CapacityDockPreferences.load(defaults: defaults).theme == .liquidGlass)
@@ -42,7 +44,8 @@ struct CapacityDockPreferencesTests {
 
     @Test("gauge channel shape persists independently from the dock surface")
     func persistsGaugeShape() {
-        let defaults = defaults()
+        let (defaults, suiteName) = defaults()
+        defer { TestDefaults.forget(suiteName) }
 
         CapacityDockPreferences.setGaugeShape(.squircle, defaults: defaults)
         #expect(CapacityDockPreferences.load(defaults: defaults).gaugeShape == .squircle)
@@ -54,7 +57,8 @@ struct CapacityDockPreferencesTests {
 
     @Test("dock placement persists as one coherent preference")
     func persistsDockPlacement() {
-        let defaults = defaults()
+        let (defaults, suiteName) = defaults()
+        defer { TestDefaults.forget(suiteName) }
 
         CapacityDockPreferences.setPlacement(
             dockedEdge: nil,
@@ -93,7 +97,8 @@ struct CapacityDockPreferencesTests {
 
     @Test("unknown and duplicate providers are removed in fixed product order")
     func normalizesProviderIdentifiers() {
-        let defaults = defaults()
+        let (defaults, suiteName) = defaults()
+        defer { TestDefaults.forget(suiteName) }
         defaults.set(
             ["copilot", "unknown", "claude", "copilot", "gemini"],
             forKey: CapacityDockPreferences.selectedProvidersKey
@@ -108,7 +113,8 @@ struct CapacityDockPreferencesTests {
 
     @Test("an empty selection recovers to Codex")
     func neverAllowsEmptySelection() {
-        let defaults = defaults()
+        let (defaults, suiteName) = defaults()
+        defer { TestDefaults.forget(suiteName) }
 
         CapacityDockPreferences.setSelectedProviders([], defaults: defaults)
         let snapshot = CapacityDockPreferences.load(defaults: defaults)
@@ -119,7 +125,8 @@ struct CapacityDockPreferencesTests {
 
     @Test("removing the preferred provider picks the first remaining provider")
     func preferredProviderStaysSelected() {
-        let defaults = defaults()
+        let (defaults, suiteName) = defaults()
+        defer { TestDefaults.forget(suiteName) }
         CapacityDockPreferences.setSelectedProviders([.claude, .codex], defaults: defaults)
         CapacityDockPreferences.setPreferredProvider(.codex, defaults: defaults)
 
@@ -132,7 +139,8 @@ struct CapacityDockPreferencesTests {
 
     @Test("vertical offsets are clamped to the normalized range")
     func clampsVerticalOffset() {
-        let defaults = defaults()
+        let (defaults, suiteName) = defaults()
+        defer { TestDefaults.forget(suiteName) }
 
         CapacityDockPreferences.setNormalizedVerticalOffset(1.7, defaults: defaults)
         #expect(CapacityDockPreferences.load(defaults: defaults).normalizedVerticalOffset == 1)
@@ -146,7 +154,8 @@ struct CapacityDockPreferencesTests {
 
     @Test("dock size is persisted and clamped to the supported range")
     func clampsScale() {
-        let defaults = defaults()
+        let (defaults, suiteName) = defaults()
+        defer { TestDefaults.forget(suiteName) }
 
         CapacityDockPreferences.setScale(1.8, defaults: defaults)
         #expect(CapacityDockPreferences.load(defaults: defaults).scale == 1.2)
@@ -160,7 +169,8 @@ struct CapacityDockPreferencesTests {
 
     @Test("auto-seed mirrors connected subscriptions in product order, capped at five")
     func autoSeedCapsAndOrders() {
-        let defaults = defaults()
+        let (defaults, suiteName) = defaults()
+        defer { TestDefaults.forget(suiteName) }
         let connected = Array(CapacityDockPreferences.supportedProviders.prefix(6)).reversed()
 
         CapacityDockPreferences.autoSeedFromConnected(Array(connected), defaults: defaults)
@@ -173,7 +183,8 @@ struct CapacityDockPreferencesTests {
 
     @Test("auto-seed no-ops once the user has manually chosen providers")
     func autoSeedRespectsManualLatch() {
-        let defaults = defaults()
+        let (defaults, suiteName) = defaults()
+        defer { TestDefaults.forget(suiteName) }
         CapacityDockPreferences.setSelectedProviders([.claude], defaults: defaults)
 
         CapacityDockPreferences.autoSeedFromConnected([.codex, .gemini], defaults: defaults)
@@ -183,7 +194,8 @@ struct CapacityDockPreferencesTests {
 
     @Test("auto-seed no-ops when nothing is connected yet")
     func autoSeedIgnoresEmptyConnected() {
-        let defaults = defaults()
+        let (defaults, suiteName) = defaults()
+        defer { TestDefaults.forget(suiteName) }
 
         CapacityDockPreferences.autoSeedFromConnected([], defaults: defaults)
 
@@ -192,7 +204,8 @@ struct CapacityDockPreferencesTests {
 
     @Test("auto-seed skips ZCode while Z.ai is connected: same z.ai endpoint, one ring")
     func autoSeedZcodeYieldsToZai() {
-        let defaults = defaults()
+        let (defaults, suiteName) = defaults()
+        defer { TestDefaults.forget(suiteName) }
         let zai = CapacityDockProvider(rawValue: "zai")!
         let zcode = CapacityDockProvider(rawValue: "zcode")!
 
@@ -206,7 +219,8 @@ struct CapacityDockPreferencesTests {
 
     @Test("auto-seed keeps ZCode when Z.ai is not connected")
     func autoSeedKeepsZcodeWithoutZai() {
-        let defaults = defaults()
+        let (defaults, suiteName) = defaults()
+        defer { TestDefaults.forget(suiteName) }
         let zcode = CapacityDockProvider(rawValue: "zcode")!
 
         CapacityDockPreferences.autoSeedFromConnected([.codex, zcode], defaults: defaults)

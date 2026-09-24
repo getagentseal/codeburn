@@ -1,6 +1,6 @@
 import { describe, it, expect, afterAll } from 'vitest'
 import { createOpenClawProvider } from '../../src/providers/openclaw.js'
-import { writeFile, mkdir, rm } from 'fs/promises'
+import { writeFile, mkdir, rm, stat } from 'fs/promises'
 import { join } from 'path'
 import { tmpdir } from 'os'
 
@@ -154,7 +154,7 @@ describe('openclaw provider', () => {
     expect(calls[0].model).toBe('glm-5.1:cloud')
   })
 
-  it('skips entries with invalid timestamps', async () => {
+  it('falls back to file mtime when timestamps are unparseable', async () => {
     const lines = [
       JSON.stringify({ type: 'session', id: 'bad-ts', timestamp: 'not-a-date' }),
       JSON.stringify({
@@ -163,13 +163,16 @@ describe('openclaw provider', () => {
       }),
     ]
     const dir = join(baseDir, 'bad-ts')
-    await setupFixture(dir, 'proj', 'bad-ts', lines)
+    const filePath = await setupFixture(dir, 'proj', 'bad-ts', lines)
+    const { mtime } = await stat(filePath)
     const provider = createOpenClawProvider(dir)
     const sources = await provider.discoverSessions()
     const parser = provider.createSessionParser(sources[0], new Set())
     const calls: any[] = []
     for await (const c of parser.parse()) calls.push(c)
-    expect(calls.length).toBe(0)
+    // The call is kept (real spend), stamped with the file mtime rather than dropped.
+    expect(calls.length).toBe(1)
+    expect(calls[0].timestamp).toBe(mtime.toISOString())
   })
 
   it('tool and model display names work', () => {

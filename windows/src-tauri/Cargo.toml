@@ -1,6 +1,6 @@
 [package]
 name = "codeburn-menubar"
-version = "0.9.24"
+version = "0.9.25"
 description = "CodeBurn menubar (tray) app for Windows and Linux"
 authors = ["AgentSeal"]
 edition = "2021"

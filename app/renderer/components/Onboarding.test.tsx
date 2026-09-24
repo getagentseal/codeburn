@@ -64,7 +64,7 @@ describe('Onboarding', () => {
     next(); next(); next()
 
     // EU-style default: switch starts off.
-    const toggle = screen.getByRole('switch', { name: 'Anonymous telemetry' })
+    const toggle = screen.getByRole('switch', { name: 'Anonymous usage statistics' })
     expect(toggle).toHaveAttribute('aria-checked', 'false')
 
     // The user opts in, then finishes.

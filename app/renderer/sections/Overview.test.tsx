@@ -1,11 +1,11 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { Polled } from '../hooks/usePolled'
 import { setActiveCurrency } from '../lib/format'
 import type { OverviewHeadlineSnapshot } from '../lib/overviewSnapshot'
-import type { ActReportJson, DailyHistoryEntry, MenubarPayload, YieldJsonReport } from '../lib/types'
+import type { ActReportJson, DailyHistoryEntry, MenubarPayload, OptimizeBlock, OptimizeSnapshot, YieldJsonReport } from '../lib/types'
 import { __resetGeneration } from '../lib/generation'
 import { Overview, OverviewContent, deriveSignals, localDateKey } from './Overview'
 
@@ -16,15 +16,21 @@ function polled(data: MenubarPayload, lastSuccessAt = Date.now()): Polled<Menuba
 // Mock the typed bridge so the section fetches our payload instead of spawning
 // the CLI. `normalizeCliError` (used by usePolled) is kept from the real module.
 // `vi.hoisted` lets the hoisted `vi.mock` factory reference the spy safely.
-const { getOverview, getActReport, getYield } = vi.hoisted(() => ({
+const { getOverview, getActReport, getYield, getOptimizeSnapshot } = vi.hoisted(() => ({
   getOverview: vi.fn<(period: string, provider: string) => Promise<MenubarPayload>>(),
   getActReport: vi.fn<() => Promise<ActReportJson>>(),
   getYield: vi.fn<(period: string, provider: string) => Promise<YieldJsonReport>>(),
+  getOptimizeSnapshot: vi.fn<(...args: unknown[]) => Promise<OptimizeSnapshot>>(),
 }))
 vi.mock('../lib/ipc', async orig => {
   const actual = await orig<typeof import('../lib/ipc')>()
-  return { ...actual, codeburn: { getOverview, getActReport, getYield } }
+  return { ...actual, codeburn: { getOverview, getActReport, getYield, getOptimizeSnapshot } }
 })
+
+/** The on-disk daily scan the overview poll no longer carries. */
+function snapshot(optimize: OptimizeBlock, computedAt = new Date().toISOString()): OptimizeSnapshot {
+  return { scope: 'test', computedAt, appVersion: '0.0.0', optimize }
+}
 
 function makeYieldReport(): YieldJsonReport {
   return {
@@ -179,8 +185,10 @@ describe('Overview', () => {
     getOverview.mockReset()
     getActReport.mockReset()
     getYield.mockReset()
+    getOptimizeSnapshot.mockReset()
     getActReport.mockResolvedValue({ totals: { realizedCostUSD: 84.2, measuredActions: 11 } })
     getYield.mockResolvedValue(makeYieldReport())
+    getOptimizeSnapshot.mockResolvedValue(snapshot({ findingCount: 0, savingsUSD: 0, topFindings: [] }))
   })
   afterEach(() => {
     vi.useRealTimers()
@@ -288,7 +296,7 @@ describe('Overview', () => {
     // equal the saved figure on some dates, so an unscoped getByText('$84.20')
     // would match two cards.
     expect(within(kpis).getByText('$84.20')).toBeInTheDocument()
-    expect(within(kpis).getByText('across 11 fixes')).toBeInTheDocument()
+    expect(within(kpis).getByText(/across 11 fixes · as of /)).toBeInTheDocument()
     const statsRow = screen.getByText('Month to date').closest('.ov-stats3')
     expect(statsRow?.children).toHaveLength(2)
     expect(screen.getByText('Month to date').closest('.ov-card')).not.toBe(screen.getByText('Projected month').closest('.ov-card'))
@@ -929,7 +937,12 @@ describe('Overview', () => {
           { title: 'Route trivial edits to Haiku', impact: 'medium', savingsUSD: 8 },
         ],
       },
-    }), now, false)
+    }), now, false, {
+      topFindings: [
+        { title: 'Trim CLAUDE.md preamble', impact: 'high', savingsUSD: 12 },
+        { title: 'Route trivial edits to Haiku', impact: 'medium', savingsUSD: 8 },
+      ],
+    })
     expect(wins.wins.map(s => s.text)).toEqual([
       'Cache hit at 85%, most prompts reuse cache',
       '82% one-shot, edits land first try',
@@ -1032,19 +1045,20 @@ describe('Overview', () => {
         oneShotRate: 0.82,
         localModelSavings: { totalUSD: 15, calls: 4, byModel: [], byProvider: [] },
       },
-      optimize: {
-        findingCount: 1,
-        savingsUSD: 12,
-        topFindings: [{ title: 'Trim CLAUDE.md preamble', impact: 'high', savingsUSD: 12 }],
-      },
     })
+    getOptimizeSnapshot.mockResolvedValue(snapshot({
+      findingCount: 1,
+      savingsUSD: 12,
+      topFindings: [{ title: 'Trim CLAUDE.md preamble', impact: 'high', savingsUSD: 12 }],
+    }))
 
     render(<OverviewContent period="30days" provider="all" overview={polled(payload)} />)
 
     const signals = await screen.findByLabelText('Coaching signals')
     const wins = within(signals).getByText('Wins').closest('.ov-signal-group') as HTMLElement
     expect(within(wins).getByText(/Cache hit at 85%/)).toBeInTheDocument()
-    const improvements = within(signals).getByText('Improvements').closest('.ov-signal-group') as HTMLElement
+    // The findings arrive from the stored daily scan, one tick behind the poll.
+    const improvements = (await within(signals).findByText('Improvements')).closest('.ov-signal-group') as HTMLElement
     expect(within(improvements).getByText('Trim CLAUDE.md preamble')).toBeInTheDocument()
     expect(within(improvements).getByText('$12.00')).toBeInTheDocument()
   })
@@ -1255,5 +1269,248 @@ describe('Overview workflow card', () => {
     const card = await waitFor(() => workflowRegion())
     expect(within(card).getByText('Corrections, first-edit latency, and file churn across your sessions.')).toBeInTheDocument()
     expect(within(card).queryByText(/priced/)).not.toBeInTheDocument()
+  })
+})
+
+describe('Overview refresh tiers', () => {
+  beforeEach(() => {
+    setActiveCurrency({ code: 'USD', symbol: '$', rate: 1 })
+    getOverview.mockReset()
+    getActReport.mockReset().mockResolvedValue({ totals: { realizedCostUSD: 84.2, measuredActions: 11 } })
+    getYield.mockReset().mockResolvedValue(makeYieldReport())
+    getOptimizeSnapshot.mockReset()
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+    __resetGeneration()
+  })
+
+  it('shows the stored savings with its age, never as a live figure', async () => {
+    const computedAt = new Date(Date.now() - 90 * 60_000)
+    getOptimizeSnapshot.mockResolvedValue(snapshot(
+      { findingCount: 4, savingsUSD: 31.5, topFindings: [] },
+      computedAt.toISOString(),
+    ))
+
+    render(<OverviewContent period="30days" provider="all" overview={polled(makePayload(new Date()))} />)
+
+    const coach = (await screen.findByText('$31.50')).closest('.ov-coach') as HTMLElement
+    const time = computedAt.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+    expect(within(coach).getByText(`(as of ${time})`)).toBeInTheDocument()
+  })
+
+  it('omits the savings clause entirely until a scan exists, rather than showing $0.00', async () => {
+    getOptimizeSnapshot.mockRejectedValue({ kind: 'nonzero', message: 'no scan yet' })
+
+    const { container } = render(<OverviewContent period="30days" provider="all" overview={polled(makePayload(new Date()))} />)
+
+    const coach = await waitFor(() => container.querySelector('.ov-coach') as HTMLElement)
+    expect(within(coach).queryByText(/is recoverable/)).not.toBeInTheDocument()
+    expect(within(coach).queryByText('$0.00')).not.toBeInTheDocument()
+  })
+
+  it('never carries one period stored savings into another', async () => {
+    getOptimizeSnapshot.mockResolvedValue(snapshot({ findingCount: 1, savingsUSD: 31.5, topFindings: [] }))
+    const overview = polled(makePayload(new Date()))
+    const { rerender } = render(<OverviewContent period="30days" provider="all" overview={overview} />)
+    await screen.findByText('$31.50')
+
+    // A period switch re-asks for THAT period's scan; the previous figure is
+    // gone the moment the scope changes, not after the new one arrives.
+    let release: (value: OptimizeSnapshot) => void = () => {}
+    getOptimizeSnapshot.mockImplementation(() => new Promise<OptimizeSnapshot>(resolve => { release = resolve }))
+    rerender(<OverviewContent period="week" provider="all" overview={overview} />)
+    await waitFor(() => expect(screen.queryByText('$31.50')).not.toBeInTheDocument())
+
+    await act(async () => { release(snapshot({ findingCount: 1, savingsUSD: 4.25, topFindings: [] })) })
+    expect(await screen.findByText('$4.25')).toBeInTheDocument()
+  })
+
+  it('re-asks act, yield and the scan on a manual refresh, and forces a fresh scan', async () => {
+    getOptimizeSnapshot.mockResolvedValue(snapshot({ findingCount: 1, savingsUSD: 2, topFindings: [] }))
+    const overview = polled(makePayload(new Date()))
+    const { rerender } = render(<OverviewContent period="30days" provider="all" overview={overview} refreshToken={0} />)
+    await waitFor(() => expect(getOptimizeSnapshot).toHaveBeenCalledTimes(1))
+    // The first read may serve a cached scan (no forced maxAge).
+    expect(getOptimizeSnapshot.mock.calls[0]![5]).toBeUndefined()
+    const actCalls = getActReport.mock.calls.length
+    const yieldCalls = getYield.mock.calls.length
+
+    rerender(<OverviewContent period="30days" provider="all" overview={overview} refreshToken={1} />)
+
+    await waitFor(() => expect(getOptimizeSnapshot).toHaveBeenCalledTimes(2))
+    expect(getOptimizeSnapshot.mock.calls[1]![5]).toBe(0) // forced recompute
+    expect(getActReport.mock.calls.length).toBe(actCalls + 1)
+    expect(getYield.mock.calls.length).toBe(yieldCalls + 1)
+  })
+
+  it('does not re-ask act or yield on live cadence ticks', async () => {
+    vi.useFakeTimers()
+    try {
+      getOptimizeSnapshot.mockResolvedValue(snapshot({ findingCount: 0, savingsUSD: 0, topFindings: [] }))
+      render(<OverviewContent period="30days" provider="all" overview={polled(makePayload(new Date()))} />)
+      await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+      const actCalls = getActReport.mock.calls.length
+      const yieldCalls = getYield.mock.calls.length
+      expect(actCalls).toBe(1)
+      expect(yieldCalls).toBe(1)
+
+      // Four minutes of live ticks (the default 60s cadence) move neither, and
+      // the daily scan is never on a timer at all.
+      await act(async () => { await vi.advanceTimersByTimeAsync(4 * 60_000) })
+      expect(getActReport.mock.calls.length).toBe(actCalls)
+      expect(getYield.mock.calls.length).toBe(yieldCalls)
+      expect(getOptimizeSnapshot).toHaveBeenCalledTimes(1)
+
+      // Yield's own 5-minute tier comes due; act's 10-minute one does not.
+      await act(async () => { await vi.advanceTimersByTimeAsync(60_000) })
+      expect(getYield.mock.calls.length).toBe(yieldCalls + 1)
+      expect(getActReport.mock.calls.length).toBe(actCalls)
+
+      await act(async () => { await vi.advanceTimersByTimeAsync(5 * 60_000) })
+      expect(getActReport.mock.calls.length).toBe(actCalls + 1)
+      expect(getOptimizeSnapshot).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
+describe('Overview stored-figure honesty', () => {
+  beforeEach(() => {
+    setActiveCurrency({ code: 'USD', symbol: '$', rate: 1 })
+    getOverview.mockReset()
+    getActReport.mockReset().mockResolvedValue({ totals: { realizedCostUSD: 0, measuredActions: 0 } })
+    getYield.mockReset().mockResolvedValue(makeYieldReport())
+    getOptimizeSnapshot.mockReset().mockResolvedValue(snapshot({ findingCount: 0, savingsUSD: 0, topFindings: [] }))
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+    __resetGeneration()
+  })
+
+  it('dates the stored findings that sit beside live signals in the Signals card', async () => {
+    const now = new Date()
+    const computedAt = new Date(Date.now() - 3 * 60 * 60_000)
+    getOptimizeSnapshot.mockResolvedValue(snapshot(
+      { findingCount: 1, savingsUSD: 12, topFindings: [{ title: 'Trim CLAUDE.md preamble', impact: 'high', savingsUSD: 12 }] },
+      computedAt.toISOString(),
+    ))
+    const payload = signalsPayload(now, {
+      current: { cacheHitPercent: 85, oneShotRate: 0.82 },
+    })
+
+    render(<OverviewContent period="30days" provider="all" overview={polled(payload)} />)
+
+    const signals = await screen.findByLabelText('Coaching signals')
+    const improvements = (await within(signals).findByText('Improvements')).closest('.ov-signal-group') as HTMLElement
+    const row = within(improvements).getByText('Trim CLAUDE.md preamble').closest('.ov-signal') as HTMLElement
+    const time = computedAt.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+    expect(within(row).getByText(`as of ${time}`)).toBeInTheDocument()
+
+    // The live rows in the same card carry no age: they came from this poll.
+    const wins = within(signals).getByText('Wins').closest('.ov-signal-group') as HTMLElement
+    const liveRow = within(wins).getByText(/Cache hit at 85%/).closest('.ov-signal') as HTMLElement
+    expect(liveRow.querySelector('.ov-signal-age')).toBeNull()
+  })
+
+  it('dates the cold-boot headline by when THIS app verified it, not the payload generated stamp', async () => {
+    // The poll takes the CLI status snapshot path, so `generated` can be a day
+    // older than the moment these numbers were confirmed.
+    const capturedAt = new Date()
+    capturedAt.setHours(9, 15, 0, 0)
+    const cold: Polled<MenubarPayload> = { data: null, error: null, loading: true, switching: false, lastSuccessAt: null, refresh: vi.fn() }
+
+    render(<OverviewContent period="30days" provider="all" overview={cold} headlineSnapshot={{
+      version: 2,
+      key: 'k',
+      capturedAt: capturedAt.getTime(),
+      generated: new Date(capturedAt.getTime() - 26 * 60 * 60_000).toISOString(),
+      label: 'Last 30 days',
+      cost: 42,
+      calls: 10,
+      inputTokens: 1, outputTokens: 1, cacheReadTokens: 1, cacheWriteTokens: 1,
+    }} />)
+
+    const head = await screen.findByText(/^exact /)
+    const time = capturedAt.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+    expect(head).toHaveTextContent(`exact at ${time}`)
+  })
+})
+
+describe('Overview across local midnight', () => {
+  beforeEach(() => {
+    setActiveCurrency({ code: 'USD', symbol: '$', rate: 1 })
+    getOverview.mockReset()
+    getActReport.mockReset().mockResolvedValue({ totals: { realizedCostUSD: 0, measuredActions: 0 } })
+    getYield.mockReset().mockResolvedValue(makeYieldReport())
+    getOptimizeSnapshot.mockReset()
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+    __resetGeneration()
+  })
+
+  // An app left open past midnight must re-ask: every period the scan is
+  // computed for is anchored to the local day, so yesterday's figure would
+  // otherwise sit under "Today" until a remount or a manual refresh. Main's
+  // same-day rule only helps once something asks.
+  it('re-asks for the scan once on the first render of a new local day', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(new Date(2026, 8, 18, 23, 58, 0))
+      const yesterday = snapshot(
+        { findingCount: 2, savingsUSD: 31.5, topFindings: [] },
+        new Date(2026, 8, 18, 23, 58, 0).toISOString(),
+      )
+      getOptimizeSnapshot.mockResolvedValue(yesterday)
+      const overview = polled(makePayload(new Date()))
+      const view = () => <OverviewContent period="today" provider="all" overview={overview} />
+
+      const { container, rerender } = render(view())
+      await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+      const coach = () => container.querySelector('.ov-coach') as HTMLElement
+      expect(getOptimizeSnapshot).toHaveBeenCalledTimes(1)
+      expect(within(coach()).getByText('$31.50')).toBeInTheDocument()
+
+      // 23:59 — a live headline tick re-renders the tree. Same local day, so
+      // nothing is re-asked and the figure on screen never blinks.
+      vi.setSystemTime(new Date(2026, 8, 18, 23, 59, 0))
+      await act(async () => { rerender(view()) })
+      expect(within(coach()).getByText('$31.50')).toBeInTheDocument()
+      await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+      expect(getOptimizeSnapshot).toHaveBeenCalledTimes(1)
+      expect(within(coach()).getByText('$31.50')).toBeInTheDocument()
+
+      // 00:01 — the day flipped. Exactly one new request, and NOT a forced one:
+      // the stored row is simply from another day, which main decides.
+      vi.setSystemTime(new Date(2026, 8, 19, 0, 1, 0))
+      let release: (value: OptimizeSnapshot) => void = () => {}
+      getOptimizeSnapshot.mockImplementation(() => new Promise<OptimizeSnapshot>(resolve => { release = resolve }))
+      await act(async () => { rerender(view()) })
+      // Yesterday's figure is dropped the moment the day changes, the same way
+      // a period switch behaves — it is never painted as today's.
+      expect(within(coach()).queryByText('$31.50')).not.toBeInTheDocument()
+      await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+      expect(getOptimizeSnapshot).toHaveBeenCalledTimes(2)
+      expect(getOptimizeSnapshot.mock.calls[1]![5]).toBeUndefined()
+      expect(within(coach()).queryByText('$31.50')).not.toBeInTheDocument()
+
+      await act(async () => {
+        release(snapshot({ findingCount: 1, savingsUSD: 4.25, topFindings: [] }, new Date(2026, 8, 19, 0, 1, 0).toISOString()))
+      })
+      expect(within(coach()).getByText('$4.25')).toBeInTheDocument()
+      const time = new Date(2026, 8, 19, 0, 1, 0).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+      expect(within(coach()).getByText(`(as of ${time})`)).toBeInTheDocument()
+
+      // Later the same day a further re-render asks for nothing more.
+      vi.setSystemTime(new Date(2026, 8, 19, 8, 0, 0))
+      await act(async () => { rerender(view()) })
+      await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+      expect(getOptimizeSnapshot).toHaveBeenCalledTimes(2)
+      expect(within(coach()).getByText('$4.25')).toBeInTheDocument()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

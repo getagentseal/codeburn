@@ -27,6 +27,7 @@ struct CapacityDockPresentationTests {
     func presentationLengthInterpolates() {
         let suite = "CodeBurnMenubarTests.CapacityDock.Presentation.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
+        defer { TestDefaults.forget(suite) }
         CapacityDockPreferences.setSelectedProviders([.codex, .claude, .gemini], defaults: defaults)
         let model = CapacityDockViewModel(preferences: CapacityDockPreferences.load(defaults: defaults))
         model.interaction.setRailHovered(true)
@@ -44,6 +45,7 @@ struct CapacityDockPresentationTests {
     func restingProviderFollowsExpansionAnchor() {
         let suite = "CodeBurnMenubarTests.CapacityDock.AnchorOrder.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
+        defer { TestDefaults.forget(suite) }
         CapacityDockPreferences.setSelectedProviders([.codex, .claude, .gemini], defaults: defaults)
         let model = CapacityDockViewModel(preferences: CapacityDockPreferences.load(defaults: defaults))
         model.isRailPresentationExpanded = true
@@ -59,6 +61,7 @@ struct CapacityDockPresentationTests {
     func attachmentKeepsPanelSizeStable() {
         let suite = "CodeBurnMenubarTests.CapacityDock.EdgeSpread.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
+        defer { TestDefaults.forget(suite) }
         CapacityDockPreferences.setScale(1.2, defaults: defaults)
         let model = CapacityDockViewModel(preferences: CapacityDockPreferences.load(defaults: defaults))
 
@@ -78,7 +81,7 @@ struct CapacityDockPresentationTests {
     func supportedSettledGeometryIsIntegral() {
         let suite = "CodeBurnMenubarTests.CapacityDock.IntegralGeometry.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
-        defer { defaults.removePersistentDomain(forName: suite) }
+        defer { TestDefaults.forget(suite) }
         CapacityDockPreferences.setSelectedProviders([.codex, .claude, .gemini], defaults: defaults)
 
         for step in 0...12 {
@@ -227,6 +230,7 @@ struct CapacityDockPresentationTests {
     func selectedProviderIdentityStaysStable() {
         let suite = "CodeBurnMenubarTests.CapacityDock.Identity.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
+        defer { TestDefaults.forget(suite) }
         CapacityDockPreferences.setSelectedProviders([.codex, .claude, .gemini], defaults: defaults)
         CapacityDockPreferences.setPreferredProvider(.codex, defaults: defaults)
         let model = CapacityDockViewModel(preferences: CapacityDockPreferences.load(defaults: defaults))
@@ -250,6 +254,7 @@ struct CapacityDockPresentationTests {
     func restingProviderNeverFlashesToAnotherIcon() {
         let suite = "CodeBurnMenubarTests.CapacityDock.NoIconFlash.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
+        defer { TestDefaults.forget(suite) }
         CapacityDockPreferences.setSelectedProviders([.codex, .claude, .gemini], defaults: defaults)
         CapacityDockPreferences.setPreferredProvider(.codex, defaults: defaults)
         let model = CapacityDockViewModel(preferences: CapacityDockPreferences.load(defaults: defaults))

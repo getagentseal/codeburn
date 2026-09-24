@@ -62,26 +62,31 @@ describe('getModelCosts', () => {
     expect(costs!.inputCostPerToken).toBe(5e-6)
   })
 
-  it('prices lowercase glm-5.2 (Hermes spelling) the same as capitalized GLM-5.2', () => {
+  it('prices lowercase glm-5.2 (Hermes spelling) the same as capitalized GLM-5.2, at the z.ai discounted rate', () => {
     const lower = getModelCosts('glm-5.2')
     const upper = getModelCosts('GLM-5.2')
+    const zai = (snapshotData as Record<string, number[]>)['z-ai/glm-5.2']!
     expect(lower).not.toBeNull()
     expect(upper).not.toBeNull()
     expect(lower!.inputCostPerToken).toBe(upper!.inputCostPerToken)
     expect(lower!.outputCostPerToken).toBe(upper!.outputCostPerToken)
+    expect(lower!.inputCostPerToken).toBe(zai[0])
+    expect(lower!.outputCostPerToken).toBe(zai[1])
   })
 
-  it('prices glm-5.3 (Hermes / Cline spelling) instead of leaving it unpriced', () => {
+  it('prices glm-5.3 (Hermes / Cline spelling) at the z.ai discounted rate', () => {
     const lower = getModelCosts('glm-5.3')
     const upper = getModelCosts('GLM-5.3')
-    const sibling = getModelCosts('glm-5p2')
+    // Both spellings alias to `z-ai/glm-5.3`, the discounted row, not the bare
+    // `glm-5.3` list row nor the glm-5p2 sibling. Assert against the snapshot's
+    // own row so an upstream reprice or namespace rename can't flip this.
+    const zai = (snapshotData as Record<string, number[]>)['z-ai/glm-5.3']!
     expect(lower).not.toBeNull()
     expect(upper).not.toBeNull()
-    expect(sibling).not.toBeNull()
-    expect(lower!.inputCostPerToken).toBe(sibling!.inputCostPerToken)
-    expect(upper!.outputCostPerToken).toBe(sibling!.outputCostPerToken)
-    expect(getModelCosts('cp/cline-pass/glm-5.3')!.inputCostPerToken).toBe(sibling!.inputCostPerToken)
-    expect(getModelCosts('omniroute:cp/cline-pass/glm-5.3')!.inputCostPerToken).toBe(sibling!.inputCostPerToken)
+    expect(lower!.inputCostPerToken).toBe(zai[0])
+    expect(upper!.outputCostPerToken).toBe(zai[1])
+    expect(getModelCosts('cp/cline-pass/glm-5.3')!.inputCostPerToken).toBe(zai[0])
+    expect(getModelCosts('omniroute:cp/cline-pass/glm-5.3')!.inputCostPerToken).toBe(zai[0])
     expect(getModelCosts('cmd/deepseek/deepseek-v4-flash')).not.toBeNull()
     expect(getModelCosts('provider/org/glm-5.3')).toBeNull()
     expect(getModelCosts('provider/glm-5.3')).toBeNull()
@@ -89,12 +94,7 @@ describe('getModelCosts', () => {
     expect(getModelCosts('omniroute:provider/glm-5.3')).toBeNull()
     expect(getModelCosts('unknown/deepseek-v4-flash')).toBeNull()
     expect(getModelCosts('z-ai/glm-5.2')).not.toBeNull()
-    // 2026-09-19 refresh: LiteLLM now ships z-ai/glm-5.3 with its own distinct
-    // rate, so the prefixed spelling prices at ITS row, not the glm-5p2
-    // sibling's. Assert against the snapshot's own row so a later upstream
-    // reprice or namespace rename (z-ai/ -> zai/) can't flip this again.
-    expect(getModelCosts('z-ai/glm-5.3')!.inputCostPerToken)
-      .toBe((snapshotData as Record<string, number[]>)['z-ai/glm-5.3']![0])
+    expect(getModelCosts('z-ai/glm-5.3')!.inputCostPerToken).toBe(zai[0])
   })
 
   it('prices gpt-5.6-codex and gpt-5.6-codex-max, sourced directly from the snapshot (#1077)', () => {
@@ -251,7 +251,7 @@ describe('resolveCanonicalModelId', () => {
     expect(resolveCanonicalModelId('glm-5p2')).toBe('glm-5p2')
     expect(resolveCanonicalModelId('cliproxy/claude-fable-5-1')).toBe('claude-fable-5-1')
     expect(resolveCanonicalModelId('cliproxy/zcode/glm-5.3-flash')).toBe('glm-5.3-flash')
-    expect(resolveCanonicalModelId('GLM-5.2')).toBe('glm-5p1')
+    expect(resolveCanonicalModelId('GLM-5.2')).toBe('z-ai/glm-5.2')
     expect(resolveCanonicalModelId('gpt-5-fast')).toBe('gpt-5')
     expect(resolveCanonicalModelId('gpt-5-untracked-xyz')).toBe('gpt-5-untracked-xyz')
     expect(resolveCanonicalModelId('claude-opus-4.6')).toBe('claude-opus-4-6')
@@ -546,6 +546,19 @@ describe('user aliases via setModelAliases', () => {
     setModelAliases({ 'anthropic--claude-4.6-opus': 'claude-sonnet-4-5' })
     setModelAliases({})
     expect(getModelCosts('anthropic--claude-4.6-opus')).toEqual(getModelCosts('claude-opus-4-6'))
+  })
+})
+
+describe('implicit cache-write rate', () => {
+  it('bills cache writes at input for a non-Anthropic model with no published write rate', () => {
+    setPriceOverrides({
+      'zz-acme-no-write-rate': { input: 2, output: 8 },
+      'claude-zz-no-write-rate': { input: 2, output: 8 },
+      'zz-acme-explicit-write': { input: 2, output: 8, cacheCreation: 3 },
+    })
+    expect(calculateCost('zz-acme-no-write-rate', 0, 0, 1_000_000, 0, 0)).toBeCloseTo(2, 10)
+    expect(calculateCost('claude-zz-no-write-rate', 0, 0, 1_000_000, 0, 0)).toBeCloseTo(2.5, 10)
+    expect(calculateCost('zz-acme-explicit-write', 0, 0, 1_000_000, 0, 0)).toBeCloseTo(3, 10)
   })
 })
 

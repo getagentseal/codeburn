@@ -18,6 +18,14 @@ describe('codexCreditRate', () => {
     expect(codexCreditRate('claude-opus-4-8')).toBeNull()
   })
 
+  it('does not route sibling tiers to the base rate', () => {
+    // gpt-5.4-pro is much pricier and gpt-5.4-nano much cheaper than base
+    // gpt-5.4; an unanchored includes("5.4") wrongly billed both at base.
+    expect(codexCreditRate('gpt-5.4-pro')).toBeNull()
+    expect(codexCreditRate('gpt-5.4-nano')).toBeNull()
+    expect(codexCreditRate('gpt-5.5-pro')).toBeNull()
+  })
+
   it('resolves the auto-review activity id to the same rate as GPT-5.5', () => {
     expect(codexCreditRate('codex-auto-review')).toEqual(codexCreditRate('gpt-5.5'))
     expect(codexCreditRate('codex-auto-review')).not.toBeNull()

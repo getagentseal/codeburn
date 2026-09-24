@@ -6,6 +6,7 @@ import { createRequire } from 'node:module'
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { isSqliteAvailable } from '../../src/sqlite.js'
 import { createZcodeProvider } from '../../src/providers/zcode.js'
+import { calculateCost } from '../../src/models.js'
 import type { ParsedProviderCall } from '../../src/providers/types.js'
 
 const requireForTest = createRequire(import.meta.url)
@@ -121,6 +122,38 @@ describe('zcode provider', () => {
     expect(call.outputTokens).toBe(27)
     expect(call.tools).toEqual(['Bash', 'Read'])
     expect(call.costUSD).toBeGreaterThan(0)
+  })
+
+  it('bills reasoning tokens into the cost (GLM is reasoning-exclusive)', async () => {
+    if (!isSqliteAvailable()) return
+    const dbPath = createZcodeDb(tmpRoot)
+    const { DatabaseSync: Database } = requireForTest('node:sqlite')
+    const db = new Database(dbPath)
+    try {
+      db.prepare('INSERT INTO session (id, directory) VALUES (?, ?)').run('sess-r', '/Users/me/proj')
+      // 5000 input (2000 cached), 300 output, 1500 reasoning.
+      db.prepare(
+        `INSERT INTO model_usage
+         (id, session_id, turn_id, model_id, input_tokens, output_tokens, reasoning_tokens,
+          cache_creation_input_tokens, cache_read_input_tokens, started_at, completed_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run('mu-r', 'sess-r', 'turn-r', 'GLM-5.2', 5000, 300, 1500, 0, 2000, 1781981181862, 1781981202412)
+    } finally {
+      db.close()
+    }
+
+    const provider = createZcodeProvider(dbPath)
+    const [source] = await provider.discoverSessions()
+    const calls = await collect(provider.createSessionParser(source!, new Set<string>()))
+
+    expect(calls).toHaveLength(1)
+    const call = calls[0]!
+    expect(call.reasoningTokens).toBe(1500)
+    const freshInput = 5000 - 2000
+    const withReasoning = calculateCost('GLM-5.2', freshInput, 300 + 1500, 0, 2000, 0)
+    const withoutReasoning = calculateCost('GLM-5.2', freshInput, 300, 0, 2000, 0)
+    expect(withReasoning).toBeGreaterThan(withoutReasoning)
+    expect(call.costUSD).toBeCloseTo(withReasoning, 10)
   })
 
   it('does not re-emit rows already in the seen set', async () => {

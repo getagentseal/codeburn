@@ -178,14 +178,26 @@ type TurnTools = {
   subagentTypes?: string[]
 }
 
-const cachedServers = new Map<string, ServerInfo | null>()
-const cachedModelMaps = new Map<string, ModelMap>()
+// Server discovery and model maps are memoized for the process lifetime, which
+// in the resident `serve` daemon means a single transient miss (or an
+// Antigravity restart onto a new port/CSRF) would otherwise disable RPC
+// enrichment forever. Re-probe on a TTL: a good result is trusted for a while,
+// a null/empty (failed) one is retried soon.
+const DETECT_SUCCESS_TTL_MS = 60_000
+const DETECT_FAILURE_TTL_MS = 5_000
+type Cached<T> = { value: T; at: number }
+const cachedServers = new Map<string, Cached<ServerInfo | null>>()
+const cachedModelMaps = new Map<string, Cached<ModelMap>>()
 type AntigravityCacheState = { cache: AntigravityCache; dirty: boolean }
 const cacheStates = new Map<string, AntigravityCacheState>()
 
 // Dropped by the resident RSS guard. A dirty state holds cascades not yet on
-// disk, so it stays resident until its own flush publishes it.
+// disk, so it stays resident until its own flush publishes it. The server and
+// model-map memos carry no unflushed data, so drop them wholesale — the next
+// call re-probes.
 export function clearAntigravityCacheStates(): void {
+  cachedServers.clear()
+  cachedModelMaps.clear()
   for (const [dir, state] of cacheStates) {
     if (!state.dirty) cacheStates.delete(dir)
   }
@@ -557,24 +569,29 @@ export function antigravityAppDataDirFromSourcePath(path: string): 'antigravity'
   return 'antigravity'
 }
 
+function cachedValueIsFresh<T>(cached: Cached<T> | undefined, failed: (value: T) => boolean): boolean {
+  if (!cached) return false
+  const ttl = failed(cached.value) ? DETECT_FAILURE_TTL_MS : DETECT_SUCCESS_TTL_MS
+  return Date.now() - cached.at < ttl
+}
+
 async function detectServer(appDataDir: 'antigravity' | 'antigravity-cli' | 'antigravity-ide' = 'antigravity'): Promise<ServerInfo | null> {
-  if (cachedServers.has(appDataDir)) return cachedServers.get(appDataDir)!
+  const cached = cachedServers.get(appDataDir)
+  if (cachedValueIsFresh(cached, value => value === null)) return cached!.value
+  let resolved: ServerInfo | null = null
   try {
     const candidates = parseAntigravityServerCandidates(await readProcessCommandLines())
     const info = candidates.find(candidate => candidate.appDataDir === appDataDir)
       ?? (appDataDir === 'antigravity' ? candidates.find(candidate => candidate.appDataDir === undefined) : undefined)
       ?? null
     if (info && info.port > 0 && appDataDir !== 'antigravity-ide') {
-      cachedServers.set(appDataDir, { port: info.port, csrfToken: info.csrfToken })
+      resolved = { port: info.port, csrfToken: info.csrfToken }
     } else if (info) {
-      cachedServers.set(appDataDir, await resolveEphemeralPort(info.csrfToken, appDataDir))
-    } else {
-      cachedServers.set(appDataDir, null)
+      resolved = await resolveEphemeralPort(info.csrfToken, appDataDir)
     }
-    return cachedServers.get(appDataDir)!
   } catch { /* process discovery failed or timed out */ }
-  cachedServers.set(appDataDir, null)
-  return null
+  cachedServers.set(appDataDir, { value: resolved, at: Date.now() })
+  return resolved
 }
 
 async function rpc(server: ServerInfo, method: string, body: Record<string, unknown> = {}): Promise<unknown> {
@@ -627,14 +644,14 @@ async function rpc(server: ServerInfo, method: string, body: Record<string, unkn
 
 async function getModelMap(server: ServerInfo): Promise<ModelMap> {
   const cacheKey = `${server.port}:${server.csrfToken}`
-  const cachedModelMap = cachedModelMaps.get(cacheKey)
-  if (cachedModelMap) return cachedModelMap
+  const cached = cachedModelMaps.get(cacheKey)
+  if (cachedValueIsFresh(cached, value => Object.keys(value).length === 0)) return cached!.value
   try {
     const modelMap = extractAntigravityModelMap(await rpc(server, 'GetAvailableModels'))
-    cachedModelMaps.set(cacheKey, modelMap)
+    cachedModelMaps.set(cacheKey, { value: modelMap, at: Date.now() })
     return modelMap
   } catch { /* best-effort */ }
-  cachedModelMaps.set(cacheKey, {})
+  cachedModelMaps.set(cacheKey, { value: {}, at: Date.now() })
   return {}
 }
 

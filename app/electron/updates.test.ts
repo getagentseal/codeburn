@@ -47,6 +47,14 @@ describe('createUpdateChecker', () => {
   const checker = (releases: unknown[]) =>
     createUpdateChecker({ currentVersion: CURRENT, fetchReleasesImpl: async () => releases as never })
 
+  it('never asks GitHub for a store install, which the Store updates on its own schedule', async () => {
+    const fetchReleasesImpl = vi.fn(async () => [release('desktop-v0.9.17')] as never)
+    const store = createUpdateChecker({ currentVersion: CURRENT, storeManaged: true, fetchReleasesImpl })
+    expect(await store.check()).toEqual({ currentVersion: CURRENT, latestVersion: null, updateAvailable: false, tag: null, storeManaged: true })
+    expect(await store.getStatus()).toMatchObject({ updateAvailable: false, storeManaged: true })
+    expect(fetchReleasesImpl).not.toHaveBeenCalled()
+  })
+
   it('flags an update when a newer desktop release exists', async () => {
     const status = await checker([release('desktop-v0.9.17')]).getStatus()
     expect(status).toEqual({ currentVersion: '0.9.16', latestVersion: '0.9.17', updateAvailable: true, tag: 'desktop-v0.9.17' })

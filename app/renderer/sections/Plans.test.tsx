@@ -249,13 +249,33 @@ describe('Plans', () => {
 
     render(<Plans period="30days" />)
 
-    const connect = await screen.findByRole('button', { name: 'Connect' })
+    const connect = await screen.findByRole('button', { name: 'How to connect' })
     expect(screen.getByText('Not connected. Log in with the Codex CLI.')).toBeInTheDocument()
     fireEvent.click(connect)
     expect(screen.getByText('codex login')).toBeInTheDocument()
 
     getQuota.mockClear()
     fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
+    await waitFor(() => expect(getQuota).toHaveBeenCalledWith(true, []))
+  })
+
+  it('offers to read the Claude login instead of claiming it is disconnected', async () => {
+    getPlans.mockResolvedValue(baseStatus)
+    getQuota.mockResolvedValue([
+      { provider: 'claude', connection: 'keychainUnchecked', primary: null, details: [], planLabel: null, footerLines: [] },
+    ])
+
+    render(<Plans period="30days" />)
+
+    expect(await screen.findByText('CodeBurn has not read your Claude login yet.')).toBeInTheDocument()
+    expect(screen.getByText('macOS may ask once for keychain access.')).toBeInTheDocument()
+    expect(screen.getByText('not checked')).toBeInTheDocument()
+    // Never the log-in-again instructions: the user probably already is.
+    expect(screen.queryByText('Not connected. Log in with the Claude CLI.')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'How to connect' })).not.toBeInTheDocument()
+
+    getQuota.mockClear()
+    fireEvent.click(screen.getByRole('button', { name: 'Check now' }))
     await waitFor(() => expect(getQuota).toHaveBeenCalledWith(true, []))
   })
 
@@ -368,7 +388,7 @@ describe('Plans', () => {
     const q = within(container)
 
     expect(await q.findByText('Login expired. Run the Kimi CLI once, then refresh.')).toBeInTheDocument()
-    expect(q.getByRole('button', { name: 'Connect' })).toBeInTheDocument()
+    expect(q.getByRole('button', { name: 'How to connect' })).toBeInTheDocument()
   })
 
   it('leaves a genuinely terminal error (not auth) without a Connect affordance', async () => {
@@ -382,7 +402,7 @@ describe('Plans', () => {
     const q = within(container)
 
     expect(await q.findByText('Your Gemini tier was retired.')).toBeInTheDocument()
-    expect(q.queryByRole('button', { name: 'Connect' })).not.toBeInTheDocument()
+    expect(q.queryByRole('button', { name: 'How to connect' })).not.toBeInTheDocument()
   })
 
   it('keeps a connected provider\'s bars through a transient "waiting" poll (manual refresh race)', async () => {
@@ -418,13 +438,13 @@ describe('Plans', () => {
 
     const { rerender } = render(<Plans period="30days" refreshToken={0} />)
     expect(await screen.findByText('Waiting on the CLI…')).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Connect' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'How to connect' })).not.toBeInTheDocument()
 
     nowSpy.mockReturnValue(1_000_000 + 25_000) // past the 20s cap
     rerender(<Plans period="30days" refreshToken={1} />)
     await waitFor(() => expect(getQuota).toHaveBeenCalledTimes(2))
     expect(await screen.findByText("Couldn't reach the Gemini CLI.")).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Connect' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'How to connect' })).toBeInTheDocument()
     nowSpy.mockRestore()
   })
 })

@@ -41,11 +41,11 @@ function filePath(file: TraySettingsFile, home: string): string {
  * Nothing is left behind when the rename cannot happen, and the failure is passed on rather
  * than swallowed: a settings write that did not land must not read as one that did.
  */
-export function writeFileAtomic(path: string, contents: string): void {
+export function writeFileAtomic(path: string, contents: string, mode?: number): void {
   mkdirSync(dirname(path), { recursive: true })
   const temp = `${path}.${process.pid}.${Date.now()}.tmp`
   try {
-    writeFileSync(temp, contents)
+    writeFileSync(temp, contents, { mode })
     renameOnto(temp, path)
   } catch (err) {
     try { unlinkSync(temp) } catch { /* nothing to clean up */ }

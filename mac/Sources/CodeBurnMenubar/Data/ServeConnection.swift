@@ -15,6 +15,8 @@ import Foundation
 ///   serve for this app run.
 /// - The child's stdin closing (app quit, even SIGKILL) ends the server loop
 ///   on the CLI side, so no orphan survives the menubar.
+/// - A child with nothing to do for `idleSeconds` retires and gives its memory
+///   back; the next request respawns it lazily through `ensureStarted()`.
 actor ServeConnection {
     static let shared = ServeConnection()
 
@@ -57,10 +59,16 @@ actor ServeConnection {
     private var receivedTerminalResponse = false
     private var outputTasks: [ObjectIdentifier: Task<Void, Never>] = [:]
     private var terminationTasks: [ObjectIdentifier: Task<Void, Never>] = [:]
+    /// At most one armed idle-retire timer. Re-armed after every quiet moment,
+    /// cancelled the instant a request is admitted.
+    private var idleTask: Task<Void, Never>?
     private let makeProcess: ProcessFactory
     private let timeoutSleep: TimeoutSleep
     private let terminationGraceSleep: TimeoutSleep
+    private let idleSleep: TimeoutSleep
+    private let idleSeconds: Double
     private let responseLimitBytes: Int
+    private let pidFile: URL
 
     private static let maxDeaths = 3
     static let maxResponseBytes = 16 * 1024 * 1024
@@ -73,6 +81,26 @@ actor ServeConnection {
     /// one (a cold-cache pile-up spends all three in a minute). Let a later tick
     /// try again instead of leaving the resident dead for the whole app run.
     private static let deathBudgetResetSeconds: TimeInterval = 300
+    /// Quiet period after which the resident is retired and its ~1GB RSS given
+    /// back; the next request respawns it through `ensureStarted()`.
+    ///
+    /// Deliberately much longer than the slowest background tick (300s, and
+    /// `UsageDataChangeGuard` can skip ticks for up to 5 minutes). At a shorter
+    /// window every background tick during a coding session would be a cold
+    /// respawn — ~1.7s and ~2.5 CPU-seconds each — which trades energy for
+    /// memory. At 900s ticks keep the child warm while work is happening (the worst
+    /// gap between real requests is about 600s in Low Power Mode) and it
+    /// only goes away once the user has genuinely stopped.
+    static let defaultIdleSeconds: Double = 900
+    /// Calibration knob for a signed build: 0 or negative keeps the child
+    /// resident forever (the pre-retire behavior).
+    static let idleSecondsDefaultsKey = "CodeBurnServeIdleSeconds"
+
+    static func configuredIdleSeconds() -> Double {
+        let defaults = UserDefaults.standard
+        guard defaults.object(forKey: idleSecondsDefaultsKey) != nil else { return defaultIdleSeconds }
+        return defaults.double(forKey: idleSecondsDefaultsKey)
+    }
 
     private static func nanoseconds(_ seconds: Double) -> UInt64 {
         UInt64(seconds * 1_000_000_000)
@@ -94,6 +122,9 @@ actor ServeConnection {
     }
 
     init(
+        // First so tests, which all pass `makeProcess`, cannot silently inherit
+        // the real user cache directory.
+        pidFile: URL = ServeOrphanReaper.pidFileURL(),
         makeProcess: @escaping ProcessFactory = CodeburnCLI.makeProcess,
         timeoutSleep: @escaping TimeoutSleep = { nanoseconds in
             try await Task<Never, Never>.sleep(nanoseconds: nanoseconds)
@@ -101,11 +132,18 @@ actor ServeConnection {
         terminationGraceSleep: @escaping TimeoutSleep = { nanoseconds in
             try await Task<Never, Never>.sleep(nanoseconds: nanoseconds)
         },
-        responseLimitBytes: Int = ServeConnection.maxResponseBytes
+        responseLimitBytes: Int = ServeConnection.maxResponseBytes,
+        idleSeconds: Double = ServeConnection.configuredIdleSeconds(),
+        idleSleep: @escaping TimeoutSleep = { nanoseconds in
+            try await Task<Never, Never>.sleep(nanoseconds: nanoseconds)
+        }
     ) {
+        self.pidFile = pidFile
         self.makeProcess = makeProcess
         self.timeoutSleep = timeoutSleep
         self.terminationGraceSleep = terminationGraceSleep
+        self.idleSeconds = idleSeconds
+        self.idleSleep = idleSleep
         precondition(responseLimitBytes > 0)
         self.responseLimitBytes = responseLimitBytes
     }
@@ -132,7 +170,7 @@ actor ServeConnection {
         // Before adding a child, clear the one a crashed previous run (or an
         // earlier generation of this one) left behind. Idempotent: the recorded
         // pid is only signalled if it is still that exact serve command.
-        ServeOrphanReaper.reap()
+        ServeOrphanReaper.reap(at: pidFile)
         // This single resident serves both background and user-visible status
         // requests. Its cold hydration replaces the old interactive one-shot,
         // so keep the child at the same user-initiated QoS as visible fetches.
@@ -147,6 +185,7 @@ actor ServeConnection {
         // keeps a closed child stdin on the normal throwable EPIPE path.
         guard Darwin.fcntl(stdinWriter.fileDescriptor, F_SETNOSIGPIPE, 1) == 0 else {
             disabled = true
+            NSLog("CodeBurn: resident CLI disabled for this app run — could not suppress SIGPIPE on the child's stdin; every refresh now spawns a cold CLI")
             return
         }
         let stdoutPipe = Pipe()
@@ -158,6 +197,10 @@ actor ServeConnection {
             try child.run()
         } catch {
             disabled = true // spawn path can't produce the binary either better than makeProcess did
+            // Domain and code only: a Process launch error carries the path it
+            // tried, and the unified log is not the place for it.
+            let failure = error as NSError
+            NSLog("CodeBurn: resident CLI disabled for this app run — the serve child failed to launch (%@ %ld); every refresh now spawns a cold CLI", failure.domain, failure.code)
             return
         }
         process = child
@@ -166,6 +209,7 @@ actor ServeConnection {
         // Record the argv WITHOUT the `/usr/bin/env --` prefix: that is the part
         // exec rewrites away before `ps` can see it. See serveCommandMatches.
         ServeOrphanReaper.record(
+            at: pidFile,
             pid: child.processIdentifier,
             command: (child.arguments ?? []).drop(while: { $0 == "--" }).joined(separator: " ")
         )
@@ -191,6 +235,9 @@ actor ServeConnection {
             await self?.outputStreamEnded(for: child)
             await self?.outputStreamFinished(for: child)
         }
+        // Covers the eager start at app launch: a child nobody ever asks
+        // anything of must still be able to go away.
+        armIdleRetireIfQuiet()
     }
 
     /// Send the first real payload through the resident child. A request does
@@ -221,6 +268,7 @@ actor ServeConnection {
     func shutdown() {
         disabled = true
         deaths = Self.maxDeaths
+        cancelIdleRetire()
         for task in terminationTasks.values { task.cancel() }
         terminationTasks.removeAll()
         cancelAllTimeouts()
@@ -238,6 +286,10 @@ actor ServeConnection {
         // dead-pid takeover (src/cache-refresh-lock.ts).
         ServeChildRegistry.shared.reapAll()
     }
+
+    /// Test seam: from outside, a retired generation and one that was never
+    /// started look identical (no child), so the retire tests need this.
+    var residentChildForTesting: Process? { process }
 
     // MARK: - internals
 
@@ -279,6 +331,7 @@ actor ServeConnection {
         // budget while its predecessor is still hydrating or draining. The
         // budget bounds SILENCE: every frame carrying this id restarts it.
         let timeoutNanoseconds = Self.nanoseconds(CLIWatchdog.silenceWindow(warm: receivedTerminalResponse))
+        cancelIdleRetire()
         activeRequest = ActiveRequest(
             token: request.token,
             id: id,
@@ -371,6 +424,9 @@ actor ServeConnection {
         guard process === child else {
             if activeRequest?.id == id { activeRequest = nil }
             startNextRequestIfPossible()
+            // Only a stale generation timed out; the live child survived this
+            // failure and is now idle again.
+            armIdleRetireIfQuiet()
             return
         }
         // Retire the timed-out generation synchronously. Its stdout may never
@@ -416,14 +472,90 @@ actor ServeConnection {
     /// as long as this generation's reader or termination task holds the
     /// Process, so the write end stays open and the retired child never sees
     /// EOF. That is how a retired-but-alive serve child becomes an orphan.
-    private func retireCurrentGeneration() {
+    private func retireCurrentGeneration(countsAsDeath: Bool = true) {
         try? stdinHandle?.close()
         process = nil
         stdinHandle = nil
         buffer = Data()
         receivedTerminalResponse = false
+        guard countsAsDeath else { return }
         deaths += 1
         lastDeathAt = Date()
+    }
+
+    /// Hand the resident's memory back after `idleSeconds` of no work. Not a
+    /// death: the budget and its cooldown are untouched, so retiring all day
+    /// never costs the connection a life or delays a real crash's recovery.
+    private func retireForIdle() {
+        idleTask = nil
+        guard activeRequest == nil, queuedRequests.isEmpty, let child = process else { return }
+        retireCurrentGeneration(countsAsDeath: false)
+        cancelTimeouts(ownedBy: child)
+        flushThenTerminate(child)
+    }
+
+    /// Let a deliberately retired child exit on its own first. `retireCurrentGeneration`
+    /// has just closed our end of its stdin, and EOF is what makes `serve --stdio`
+    /// publish its coalesced shard window before exiting. SIGTERM in the same hop
+    /// kills that flush: the CLI catches it only to unlink its cache lock and then
+    /// re-raises (src/session-cache.ts). So wait out one grace and signal only a
+    /// child that is still running — reusing `terminationTasks`, so `shutdown()`
+    /// cancels this exactly like the termination grace it replaces and stays bounded.
+    private func flushThenTerminate(_ child: Process) {
+        guard child.isRunning else {
+            ServeChildRegistry.shared.remove(child)
+            return
+        }
+        let generation = ObjectIdentifier(child)
+        let sleep = terminationGraceSleep
+        terminationTasks[generation] = Task.detached { [weak self] in
+            do {
+                try await sleep(Self.terminationGraceNanoseconds)
+            } catch {
+                // Cancelled: either shutdown (which must not orphan a child that
+                // is ignoring EOF) or the child already died and its stream
+                // finished. Escalate either way; the isRunning guard inside makes
+                // the dead-child case a no-op.
+                await self?.forceKillAfterGrace(child)
+                return
+            }
+            await self?.terminateAfterFlushGrace(child)
+        }
+    }
+
+    private func terminateAfterFlushGrace(_ child: Process) {
+        terminationTasks.removeValue(forKey: ObjectIdentifier(child))
+        // Exited on its own inside the grace: it flushed, nothing left to signal.
+        guard child.isRunning else {
+            ServeChildRegistry.shared.remove(child)
+            return
+        }
+        terminateTimedOutChild(child)
+    }
+
+    /// Re-arm the idle window after every moment the connection falls quiet.
+    /// One task at a time; a sleeping Task costs nothing, a polling timer would.
+    private func armIdleRetireIfQuiet() {
+        cancelIdleRetire()
+        guard idleSeconds > 0, !disabled, process != nil,
+              activeRequest == nil, queuedRequests.isEmpty else { return }
+        let sleep = idleSleep
+        let nanoseconds = Self.nanoseconds(idleSeconds)
+        idleTask = Task { [weak self] in
+            do {
+                try await sleep(nanoseconds)
+            } catch {
+                return
+            }
+            // A cancellation that lands after the sleep has already returned is
+            // caught by retireForIdle's own quiet check, not here.
+            await self?.retireForIdle()
+        }
+    }
+
+    private func cancelIdleRetire() {
+        idleTask?.cancel()
+        idleTask = nil
     }
 
     private func outputStreamFinished(for child: Process) {
@@ -553,6 +685,7 @@ actor ServeConnection {
             // was cancelled: cancellation removes only the waiter, not the
             // active protocol lifecycle.
             startNextRequestIfPossible()
+            armIdleRetireIfQuiet()
     }
 
     private func accountResponseBytes(_ count: Int, id: Int, child: Process) -> Bool {
@@ -632,8 +765,7 @@ enum ServeOrphanReaper {
             .appendingPathComponent("menubar-serve.pid", isDirectory: false)
     }
 
-    static func record(pid: pid_t, command: String) {
-        let url = pidFileURL()
+    static func record(at url: URL = pidFileURL(), pid: pid_t, command: String) {
         try? FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(),
             withIntermediateDirectories: true
@@ -647,19 +779,22 @@ enum ServeOrphanReaper {
     /// recycled — signals it only after `ps` confirms the process is still that
     /// exact serve child. SIGTERM, never SIGKILL: the orphan may be holding the
     /// cache refresh lock and can release it on the way out.
-    static func reap() {
-        let url = pidFileURL()
+    static func reap(at url: URL = pidFileURL()) {
         defer { try? FileManager.default.removeItem(at: url) }
         guard let data = try? Data(contentsOf: url),
               let record = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let pid = record["pid"] as? Int,
               let cmd = record["cmd"] as? String,
               pid > 1, pid != Int(ProcessInfo.processInfo.processIdentifier),
-              !cmd.isEmpty,
+              cmd.hasSuffix(serveArgvSuffix),
               serveCommandMatches(recorded: cmd, observed: commandLine(of: pid_t(pid)))
         else { return }
         _ = Darwin.kill(pid_t(pid), SIGTERM)
     }
+
+    /// The tail every `codeburn serve` argv ends with. A record that does not
+    /// carry it was not written for a serve child and is never signalled.
+    static let serveArgvSuffix = "serve --stdio"
 
     /// Suffix match on the full recorded argv, not a keyword sniff: any looser
     /// test signals whatever unrelated process inherited the pid.

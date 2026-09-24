@@ -1098,6 +1098,10 @@ function createJsonlParser(
             reasoningTokens: 0,
             webSearchRequests: 0,
             costUSD,
+            // Only transcripts reach here with no token count: their usage is
+            // unknown, not zero. A counted output is measured; the shutdown
+            // rollup or store rows carry the input.
+            ...(outputTokens === 0 ? { costIsEstimated: true } : {}),
             tools,
             bashCommands,
             skills: skills.length > 0 ? skills : undefined,

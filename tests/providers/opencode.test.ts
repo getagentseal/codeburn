@@ -1190,7 +1190,7 @@ skipUnlessSqlite('opencode provider - v2 generation (session_v2 + session_messag
     const calls = await collectCalls(provider, dbPath, 'ses_v2_1')
     expect(calls).toHaveLength(1)
     const call = calls[0]!
-    expect(call.model).toBe('opencode/glm-5.3-flash')
+    expect(call.model).toBe('glm-5.3-flash')
     expect(call.inputTokens).toBe(21410)
     expect(call.outputTokens).toBe(2175)
     expect(call.cacheReadInputTokens).toBe(112128)
@@ -1198,6 +1198,89 @@ skipUnlessSqlite('opencode provider - v2 generation (session_v2 + session_messag
     expect(call.bashCommands).toEqual(['grep'])
     expect(call.userMessage).toBe('fix the login bug')
     expect(call.costUSD).toBeGreaterThan(0)
+  })
+
+  it('reads a real OpenCode 2.0.16 session (tool calls, reasoning, cache reads)', async () => {
+    // Rows written by `opencode run` 2.0.16 against the free opencode/big-pickle
+    // model; paths redacted, tool output trimmed.
+    const dbPath = createV2TestDb(tmpDir)
+    withTestDb(dbPath, (db) => {
+      insertV2Session(db, 'ses_f2cbda7f0ffevXtdfk20qxO7K9', { directory: '/home/user/proj', title: 'toolcall' })
+      insertV2Message(db, 'msg_0d3425814001k3LGlAKci24D6g', 'ses_f2cbda7f0ffevXtdfk20qxO7K9', 'user', 5, 1790250735642, {
+        time: { created: 1790250735642 }, text: '"Read the file notes.txt and tell me its contents in one line."',
+      })
+      insertV2Message(db, 'msg_0d342581b001xOcuI5GMMHjSQR', 'ses_f2cbda7f0ffevXtdfk20qxO7K9', 'assistant', 6, 1790250735647, {
+        agent: 'build',
+        model: { id: 'big-pickle', providerID: 'opencode', variant: 'default' },
+        content: [
+          { type: 'reasoning', text: 'The user wants me to read notes.txt and tell them its contents in one line. Let me find and read the file.' },
+          { type: 'text', text: '\n\n' },
+          { type: 'tool', name: 'glob', state: { status: 'completed', input: { pattern: '**/notes.txt' } } },
+        ],
+        cost: 0,
+        tokens: { input: 6323, output: 72, reasoning: 0, cache: { read: 256, write: 0 } },
+      })
+      insertV2Message(db, 'msg_0d342716c001bPgSpFdp38REPt', 'ses_f2cbda7f0ffevXtdfk20qxO7K9', 'assistant', 17, 1790250742127, {
+        agent: 'build',
+        model: { id: 'big-pickle', providerID: 'opencode', variant: 'default' },
+        content: [{ type: 'tool', name: 'read', state: { status: 'completed', input: { path: '/home/user/proj/notes.txt' } } }],
+        cost: 0,
+        tokens: { input: 318, output: 100, reasoning: 0, cache: { read: 6400, write: 0 } },
+      })
+      insertV2Message(db, 'msg_0d3427704001UBCn6YD3m0MlCQ', 'ses_f2cbda7f0ffevXtdfk20qxO7K9', 'assistant', 24, 1790250743559, {
+        agent: 'build',
+        model: { id: 'big-pickle', providerID: 'opencode', variant: 'default' },
+        content: [{ type: 'text', text: 'notes.txt contains: "hello world".' }],
+        cost: 0,
+        tokens: { input: 243, output: 10, reasoning: 0, cache: { read: 6656, write: 0 } },
+      })
+      insertV2Message(db, 'msg_0d3427a34001SSfPFcwFekJ10S', 'ses_f2cbda7f0ffevXtdfk20qxO7K9', 'idle', 29, 1790250744372, {
+        time: { created: 1790250744372 },
+      })
+    })
+
+    const provider = createOpenCodeProvider(tmpDir)
+    const sessions = await provider.discoverSessions()
+    expect(sessions).toEqual([{ path: `${dbPath}:ses_f2cbda7f0ffevXtdfk20qxO7K9`, project: 'home-user-proj', provider: 'opencode' }])
+
+    const calls = await collectCalls(provider, dbPath, 'ses_f2cbda7f0ffevXtdfk20qxO7K9')
+    expect(calls.map((c) => c.tools)).toEqual([['Glob'], ['Read'], []])
+    expect(calls.every((c) => c.model === 'big-pickle' && c.costUSD === 0)).toBe(true)
+    expect(calls[0]!.timestamp).toBe('2026-09-24T11:52:15.647Z')
+    // Matches OpenCode's own session_v2 rollup for this session.
+    const sum = (f: (c: ParsedProviderCall) => number) => calls.reduce((t, c) => t + f(c), 0)
+    expect(sum((c) => c.inputTokens)).toBe(6884)
+    expect(sum((c) => c.outputTokens)).toBe(182)
+    expect(sum((c) => c.cacheReadInputTokens)).toBe(13312)
+  })
+
+  it('prices a v2 turn the same as the identical 1.x turn', async () => {
+    const tokens = { input: 12_000, output: 800, reasoning: 0, cache: { read: 4_000, write: 0 } }
+    const v2Path = createV2TestDb(tmpDir)
+    withTestDb(v2Path, (db) => {
+      insertV2Session(db, 'ses_v2')
+      insertV2Message(db, 'msg_v2', 'ses_v2', 'assistant', 1, 1700000000000, {
+        model: { id: 'claude-haiku-4-5', providerID: 'opencode' },
+        content: [{ type: 'text', text: 'hi' }],
+        cost: 0,
+        tokens,
+      })
+    })
+    const [v2Call] = await collectCalls(createOpenCodeProvider(tmpDir), v2Path, 'ses_v2')
+
+    const legacyDir = join(tmpDir, 'legacy')
+    const legacyPath = createTestDb(legacyDir)
+    withTestDb(legacyPath, (db) => {
+      insertSession(db, 'ses_v1')
+      insertMessage(db, 'msg_v1', 'ses_v1', 1700000000000, {
+        role: 'assistant', modelID: 'claude-haiku-4-5', providerID: 'opencode', cost: 0, tokens,
+      })
+    })
+    const [legacyCall] = await collectCalls(createOpenCodeProvider(legacyDir), legacyPath, 'ses_v1')
+
+    expect(legacyCall!.costUSD).toBeGreaterThan(0)
+    expect(v2Call!.costUSD).toBe(legacyCall!.costUSD)
+    expect(v2Call!.model).toBe(legacyCall!.model)
   })
 
   it('preserves the OpenRouter provider field in v2 messages', async () => {
@@ -1215,7 +1298,7 @@ skipUnlessSqlite('opencode provider - v2 generation (session_v2 + session_messag
     const calls = await collectCalls(createOpenCodeProvider(tmpDir), dbPath, 'ses_v2_openrouter')
     expect(calls).toHaveLength(1)
     expect(calls[0]).toMatchObject({
-      model: 'openrouter/cohere/north-mini-code:free',
+      model: 'cohere/north-mini-code:free',
       route: 'openrouter',
       costUSD: 0,
     })
@@ -1249,10 +1332,10 @@ skipUnlessSqlite('opencode provider - v2 generation (session_v2 + session_messag
     const provider = createOpenCodeProvider(tmpDir)
     const calls = await collectCalls(provider, dbPath, 'ses_v2_1')
     expect(calls).toHaveLength(2)
-    expect(calls[0]!.model).toBe('opencode/glm-5.3-flash')
+    expect(calls[0]!.model).toBe('glm-5.3-flash')
     expect(calls[0]!.inputTokens).toBe(18100)
     expect(calls[0]!.costUSD).toBeGreaterThan(0)
-    expect(calls[1]!.model).toBe('openai/gpt-4o')
+    expect(calls[1]!.model).toBe('gpt-4o')
   })
 
   it('walks v2 child sessions through parent_id', async () => {
@@ -1295,7 +1378,7 @@ skipUnlessSqlite('opencode provider - v2 generation (session_v2 + session_messag
     expect(calls[0]!.inputTokens).toBe(11)
   })
 
-  it('unions un-migrated legacy sessions on an upgraded DB, v2 winning on collision (#1293)', async () => {
+  it('unions legacy and v2 turns on an upgraded DB, counting each turn once (#1293)', async () => {
     const dbPath = createV2TestDb(tmpDir, { withLegacy: true })
     withTestDb(dbPath, (db) => {
       // Live v2 session.
@@ -1306,8 +1389,7 @@ skipUnlessSqlite('opencode provider - v2 generation (session_v2 + session_messag
         tokens: { input: 100, output: 50, reasoning: 0, cache: { read: 0, write: 0 } },
       })
 
-      // Three frozen pre-upgrade sessions that never migrated into session_v2 —
-      // these were silently dropped before the union fix.
+      // Three frozen pre-upgrade sessions that never migrated into session_v2.
       for (const [i, id] of ['ses_frozen_1', 'ses_frozen_2', 'ses_frozen_3'].entries()) {
         insertSession(db, id, { title: `frozen ${i + 1}` })
         insertMessage(db, `lmsg_${id}`, id, 1690000000000 + i, {
@@ -1316,35 +1398,53 @@ skipUnlessSqlite('opencode provider - v2 generation (session_v2 + session_messag
         })
       }
 
-      // A session present in BOTH generations: v2 must win, and it must be
-      // counted once (not double-listed by discovery).
-      insertV2Session(db, 'ses_both')
-      insertV2Message(db, 'msg_both_v2', 'ses_both', 'assistant', 1, 1700000000500, {
-        model: { id: 'glm-5.3-flash', providerID: 'opencode' },
-        content: [{ type: 'text', text: 'v2 wins' }],
-        tokens: { input: 500, output: 10, reasoning: 0, cache: { read: 0, write: 0 } },
-      })
-      insertSession(db, 'ses_both', { title: 'stale legacy copy' })
+      // A migrated session continued on 2.x. OpenCode's migration copies each
+      // assistant turn under its legacy id, drops the compaction summary turn,
+      // and the post-upgrade turn exists only in session_message.
+      insertSession(db, 'ses_both', { title: 'migrated' })
       insertMessage(db, 'lmsg_both', 'ses_both', 1690000000500, {
-        role: 'assistant', modelID: 'opencode/old',
+        role: 'assistant', modelID: 'glm-5.3-flash', providerID: 'opencode',
         tokens: { input: 999, output: 1, reasoning: 0, cache: { read: 0, write: 0 } },
       })
+      insertMessage(db, 'lmsg_summary', 'ses_both', 1690000000600, {
+        role: 'assistant', modelID: 'glm-5.3-flash', providerID: 'opencode',
+        tokens: { input: 40, output: 1, reasoning: 0, cache: { read: 0, write: 0 } },
+      })
+      insertV2Session(db, 'ses_both')
+      insertV2Message(db, 'lmsg_both', 'ses_both', 'assistant', 0, 1690000000500, {
+        model: { id: 'glm-5.3-flash', providerID: 'opencode' },
+        content: [{ type: 'text', text: 'migrated copy' }],
+        tokens: { input: 999, output: 1, reasoning: 0, cache: { read: 0, write: 0 } },
+      })
+      insertV2Message(db, 'msg_both_new', 'ses_both', 'assistant', 5, 1700000000500, {
+        model: { id: 'glm-5.3-flash', providerID: 'opencode' },
+        content: [{ type: 'text', text: 'after the upgrade' }],
+        tokens: { input: 500, output: 10, reasoning: 0, cache: { read: 0, write: 0 } },
+      })
+
+      // Migration stopped before this session: its session_v2 row exists but
+      // no session_message rows were written.
+      insertSession(db, 'ses_stuck', { title: 'stuck' })
+      insertMessage(db, 'lmsg_stuck', 'ses_stuck', 1690000000700, {
+        role: 'assistant', modelID: 'glm-5.3-flash', providerID: 'opencode',
+        tokens: { input: 70, output: 1, reasoning: 0, cache: { read: 0, write: 0 } },
+      })
+      insertV2Session(db, 'ses_stuck')
     })
 
     const provider = createOpenCodeProvider(tmpDir)
     const sessions = await provider.discoverSessions()
-    // v2 sessions plus the three un-migrated legacy sessions; ses_both listed once.
     expect(sessions.map((s) => s.path).sort()).toEqual(
       [
         `${dbPath}:ses_both`,
         `${dbPath}:ses_frozen_1`,
         `${dbPath}:ses_frozen_2`,
         `${dbPath}:ses_frozen_3`,
+        `${dbPath}:ses_stuck`,
         `${dbPath}:ses_v2_live`,
       ].sort(),
     )
 
-    // Aggregate across every discovered session, as a real scan would.
     const seen = new Set<string>()
     let totalInput = 0
     let totalCalls = 0
@@ -1355,16 +1455,13 @@ skipUnlessSqlite('opencode provider - v2 generation (session_v2 + session_messag
         totalCalls++
       }
     }
-    // 100 (v2) + 500 (v2 wins on ses_both) + 10 + 20 + 30 (legacy) = 660; the
-    // stale legacy 999 for ses_both is never counted. Before the fix the three
-    // frozen sessions were dropped: total was 600 over 2 calls.
-    expect(totalCalls).toBe(5)
-    expect(totalInput).toBe(660)
+    // 100 + (10 + 20 + 30) + (999 + 40 + 500) + 70
+    expect(totalCalls).toBe(8)
+    expect(totalInput).toBe(1769)
 
-    // ses_both resolves to v2, not the stale legacy row.
     const bothCalls = await collectCalls(provider, dbPath, 'ses_both')
-    expect(bothCalls).toHaveLength(1)
-    expect(bothCalls[0]!.inputTokens).toBe(500)
+    expect(bothCalls.map((c) => c.inputTokens)).toEqual([999, 40, 500])
+    expect(bothCalls.map((c) => c.model)).toEqual(['glm-5.3-flash', 'glm-5.3-flash', 'glm-5.3-flash'])
   })
 
   it('keeps fallback model prefixes normalized without accepting malformed routes', async () => {

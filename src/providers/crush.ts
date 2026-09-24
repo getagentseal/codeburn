@@ -54,13 +54,14 @@ async function loadRegistry(path: string): Promise<ProjectEntry[]> {
   } catch {
     return []
   }
-  // Crush writes projects.json as an object keyed by project id. Older builds
-  // (and tokscale's sample fixtures) emit an array. Accept both shapes.
   let entries: unknown[]
   if (Array.isArray(parsed)) {
     entries = parsed
   } else if (parsed && typeof parsed === 'object') {
-    entries = Object.values(parsed)
+    const registry = parsed as Record<string, unknown>
+    // Crush has used a {"projects": [...]} wrapper since the registry began.
+    // Array and keyed-object forms remain for compatibility with existing users.
+    entries = Array.isArray(registry['projects']) ? registry['projects'] : Object.values(registry)
   } else {
     return []
   }

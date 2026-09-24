@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtemp, mkdir, writeFile, rm } from 'fs/promises'
+import { mkdtemp, mkdir, writeFile, rm, stat } from 'fs/promises'
 import { join } from 'path'
 import { tmpdir } from 'os'
 
@@ -8,7 +8,8 @@ import type { ParsedProviderCall } from '../../src/providers/types.js'
 import { classifyTurn } from '../../src/classifier.js'
 import type { ParsedApiCall, ParsedTurn } from '../../src/types.js'
 
-// Mirrors src/parser.ts providerCallToTurn so we can assert that a Pi call's
+// Mirrors the parsed-call -> turn shape src/parser.ts builds so we can assert
+// that a Pi call's
 // skills survive the classifier into `subCategory`, which is the sole input the
 // session summary reads to build the "Skills & Agents" breakdown (#588).
 function turnFromPiCall(call: ParsedProviderCall, userMessage = ''): ParsedTurn {
@@ -351,6 +352,30 @@ describe('pi provider - JSONL parsing', () => {
     expect(call.costUSD).toBeGreaterThan(0)
     expect(call.deduplicationKey).toContain('pi:')
     expect(call.deduplicationKey).toContain('resp-abc')
+  })
+
+  it('falls back to file mtime when a call has no usable timestamp', async () => {
+    const projectDir = join(tmpDir, '--Users-test-myproject--')
+    const filePath = await writeSession(projectDir, 'session.jsonl', [
+      JSON.stringify({ type: 'session', version: 3, id: 'sess-nots', cwd: '/Users/test/myproject' }),
+      JSON.stringify({
+        type: 'message', id: 'a1',
+        message: {
+          role: 'assistant', model: 'gpt-5.4', responseId: 'resp-nots',
+          usage: { input: 100, output: 50, cacheRead: 0, cacheWrite: 0 },
+        },
+      }),
+    ])
+    const { mtime } = await stat(filePath)
+    const provider = createPiProvider(tmpDir)
+    const source = { path: filePath, project: 'myproject', provider: 'pi' }
+    const calls: ParsedProviderCall[] = []
+    for await (const call of provider.createSessionParser(source, new Set()).parse()) {
+      calls.push(call)
+    }
+    // Real spend is kept, stamped with the file mtime instead of being dropped.
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.timestamp).toBe(mtime.toISOString())
   })
 
   it('does not crash when a user message content is a string instead of an array (issue #441)', async () => {

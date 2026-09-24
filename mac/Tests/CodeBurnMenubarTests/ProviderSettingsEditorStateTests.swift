@@ -130,7 +130,7 @@ struct ProviderSettingsEditorStateTests {
         }
         defer {
             NotificationCenter.default.removeObserver(observer)
-            defaults.removePersistentDomain(forName: suiteName)
+            TestDefaults.forget(suiteName)
         }
 
         DispatchQueue.global(qos: .userInitiated).async {

@@ -40,7 +40,7 @@ struct CredentialKeychainContinuityTests {
         try FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
         let suiteName = "codeburn.0b.cont.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
-        defaults.removePersistentDomain(forName: suiteName)
+        TestDefaults.forget(suiteName)
         let fake = InMemoryKeychainCredentialCache()
 
         ClaudeCredentialStore.resetTestSeams()
@@ -61,7 +61,7 @@ struct CredentialKeychainContinuityTests {
             CodexCredentialStore.resetTestSeams()
             CapacityDockProviderCredentialStore.keychainCache = LiveKeychainCredentialCache()
             CapacityDockProviderCredentialStore.userDefaults = .standard
-            defaults.removePersistentDomain(forName: suiteName)
+            TestDefaults.forget(suiteName)
             try? FileManager.default.removeItem(at: root)
         }
 
@@ -169,8 +169,8 @@ struct CredentialKeychainContinuityTests {
         let suiteName = "codeburn.capacity-dock-presence.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
         let defaultsBox = SendableUserDefaults(defaults)
-        defaults.removePersistentDomain(forName: suiteName)
-        defer { defaults.removePersistentDomain(forName: suiteName) }
+        TestDefaults.forget(suiteName)
+        defer { TestDefaults.forget(suiteName) }
         let providerIDs = Array(CapacityDockPreferences.supportedProviders.prefix(24).map(\.id))
 
         await withTaskGroup(of: Void.self) { group in

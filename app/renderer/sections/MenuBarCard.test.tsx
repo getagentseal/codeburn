@@ -109,6 +109,21 @@ describe('MenuBarCard actions', () => {
     expect(screen.getByText('v1.0.0')).toBeTruthy()
   })
 
+  it('says where an older copy was left behind, without calling the install a failure', async () => {
+    let current = status()
+    bridge.macMenubarStatus.mockImplementation(async () => current)
+    bridge.macMenubarInstall.mockImplementation(async () => {
+      current = status({ installed: true, version: '1.0.0', running: true })
+      return { ok: true, error: null, status: current, leftovers: ['/Applications/CodeBurnMenubar.app'] }
+    })
+    render(<MenuBarCard />)
+    await userEvent.click(await screen.findByRole('button', { name: 'Install' }))
+    await waitFor(() => expect(
+      screen.getByText('An older copy is still at /Applications/CodeBurnMenubar.app. Move it to the Trash.'),
+    ).toBeTruthy())
+    expect(screen.getByText('Running')).toBeTruthy()
+  })
+
   it('shows a failed install in plain words and keeps the Install button', async () => {
     bridge.macMenubarStatus.mockResolvedValue(status())
     bridge.macMenubarInstall.mockResolvedValue({

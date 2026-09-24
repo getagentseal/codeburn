@@ -1294,6 +1294,7 @@ final class AppStore {
                 return false
             }
             cache[key] = CachedPayload(payload: fresh.payload, fetchedAt: Date(), contradictsAll: fresh.contradictsAll)
+            Telemetry.shared.trackUsageSnapshot(fresh.payload.telemetrySnapshot)
             reconcileClaudeConfigSelection(from: fresh.payload, for: key)
             lastSuccessByKey[key] = Date()
             lastErrorByKey[key] = nil
@@ -1413,6 +1414,7 @@ final class AppStore {
                 return false
             }
             cache[key] = CachedPayload(payload: fresh.payload, fetchedAt: Date(), contradictsAll: fresh.contradictsAll)
+            Telemetry.shared.trackUsageSnapshot(fresh.payload.telemetrySnapshot)
             reconcileClaudeConfigSelection(from: fresh.payload, for: key)
             lastSuccessByKey[key] = Date()
             lastErrorByKey[key] = nil

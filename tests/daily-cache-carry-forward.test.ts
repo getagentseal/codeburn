@@ -736,6 +736,11 @@ describe('adoption union across older cache files', () => {
 // Numbers below are kelchm's isolated machine-A day (2026-08-07): the v17
 // slice deep-equalled the migrated v21 one field-for-field, and a virgin-cache
 // run of the same build derived the store-backed slice instead.
+// The last daily-cache version written before the #1450 route contract, which
+// is what these two cases seed. Pinned, not DAILY_CACHE_VERSION - 1: a later
+// bump must not silently move the boundary they are asserting.
+const PRE_ROUTE_CONTRACT_VERSION = 32
+
 describe('#946: a migration re-derives copilot instead of carrying it', () => {
   const settled = daysAgoStr(33)
   const PRE_STORE = slice(0.630267, 37, { sessions: 6, cacheWriteTokens: 125987 })
@@ -793,9 +798,9 @@ describe('#946: a migration re-derives copilot instead of carrying it', () => {
 
   it('does not re-open Copilot re-derivation for a cache already past its contract change', async () => {
     await writeFile(
-      join(TMP_CACHE_ROOT, `daily-cache.v${DAILY_CACHE_VERSION - 1}.json`),
+      join(TMP_CACHE_ROOT, `daily-cache.v${PRE_ROUTE_CONTRACT_VERSION}.json`),
       JSON.stringify({
-        version: DAILY_CACHE_VERSION - 1,
+        version: PRE_ROUTE_CONTRACT_VERSION,
         savingsConfigHash: 'cfg-A',
         tzKey: currentTzKey(),
         lastComputedDate: daysAgoStr(1),
@@ -814,9 +819,9 @@ describe('#946: a migration re-derives copilot instead of carrying it', () => {
 
   it('preserves an older cache pending repair while adding a newer provider repair', async () => {
     await writeFile(
-      join(TMP_CACHE_ROOT, `daily-cache.v${DAILY_CACHE_VERSION - 1}.json`),
+      join(TMP_CACHE_ROOT, `daily-cache.v${PRE_ROUTE_CONTRACT_VERSION}.json`),
       JSON.stringify({
-        version: DAILY_CACHE_VERSION - 1,
+        version: PRE_ROUTE_CONTRACT_VERSION,
         savingsConfigHash: 'cfg-A',
         tzKey: currentTzKey(),
         lastComputedDate: daysAgoStr(1),

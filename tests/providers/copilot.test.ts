@@ -474,6 +474,7 @@ describe('copilot provider - JSONL parsing', () => {
     ])
     const calls = await collectCalls({ path: eventsPath, project: 'test', provider: 'copilot', sourceType: 'jsonl' })
     expect(calls.map(c => c.subagentTypes)).toEqual([['refactor'], ['refactor']])
+    expect(calls.map(c => c.costIsEstimated)).toEqual([undefined, undefined])
   })
 
   it('infers OpenAI auto bucket for transcript toolCallId prefix call_', async () => {
@@ -493,6 +494,8 @@ describe('copilot provider - JSONL parsing', () => {
 
     expect(calls).toHaveLength(1)
     expect(calls[0]!.model).toBe('copilot-openai-auto')
+    // A transcript records no tokens: the $0 is unknown usage, not a measured zero.
+    expect(calls[0]!.costIsEstimated).toBe(true)
     // Each transcript is its own session, keyed by file basename — NOT the
     // shared parent dir name 'transcripts', which would collapse every
     // transcript into one session and one dedup namespace.

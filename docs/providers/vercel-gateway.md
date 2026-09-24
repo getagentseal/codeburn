@@ -31,11 +31,49 @@ None. Each parse issues one API request for the requested date range.
 
 Per `vercel-gateway:<day>:<model>`.
 
+## Not counted in totals by default
+
+A report row is a **daily aggregate per model**: one cost, one token count and
+one `request_count` for a whole day, with no request ids, timestamps or
+attribution. Nothing in it can be matched against the local tools you pointed at
+the gateway — Claude Code (`ANTHROPIC_BASE_URL`), Codex, OpenCode,
+Cline/Roo/Kilo, Cursor — which already record those same requests from their own
+session files. Counting both double counts the same spend.
+
+So gateway spend is:
+
+- **always shown** as its own provider row (marked "not in total" in the app),
+  and as `overview.excludedGatewayCost` in `--format json`;
+- **excluded** from every headline total, per-model row, daily row and history
+  point by default;
+- **unaffected** under `--provider vercel-gateway`, which reports the full
+  amount so you can inspect it.
+
+The exclusion is one rule in one place (`parseAllSessions`), so every surface
+follows it: the report, the interactive dashboard, the menubar payload, `models`,
+`sessions`, `export`, `compare`, `compare-periods`, `spend`, `yield`, `audit`,
+`budget`, and the Teams sync push (which would otherwise hand the backend the
+same double count). The session cache and the daily cache are the deliberate
+exception — they keep storing the gateway slice, because a past day's aggregate
+row can never be fetched again.
+
+To include it in totals instead:
+
+```
+codeburn gateway-totals include     # codeburn gateway-totals exclude to undo
+codeburn gateway-totals             # show the current setting
+```
+
+The setting is read-side only. The daily cache always stores the gateway slice,
+so flipping it applies retroactively to sealed days without re-fetching.
+
 ## Quirks
 
 - Requires Pro/Enterprise Custom Reporting on your Vercel account.
 - Data can lag by a few minutes after requests complete.
-- Rows are daily aggregates per model, not per chat session.
+- Rows are daily aggregates per model, not per chat session (see above).
+- `request_count` is used as the row's call count, so one row can stand for many
+  requests while carrying a single cost and token figure.
 - `total_cost` is used as `costUSD`; token fields map directly when present.
 
 ## When fixing a bug here

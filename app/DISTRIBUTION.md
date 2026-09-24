@@ -1,9 +1,10 @@
 # Distributing CodeBurn Desktop
 
 This document describes how to produce distributable macOS, Windows, and Linux
-builds of the Electron desktop app. The macOS build is ad-hoc-signed and
-**not notarized** (no paid Apple Developer account); the Windows and Linux
-builds are **unsigned**. Windows NSIS packages are built and checked by the
+builds of the Electron desktop app. Release macOS builds are signed with a
+Developer ID Application certificate and notarized by Apple (see "macOS code
+signing and notarization" below); the Windows and Linux builds are
+**unsigned**. Windows NSIS packages are built and checked by the
 `Build Windows installer` GitHub Actions workflow; the other desktop packages
 are still produced by hand. All three targets are produced by
 `electron-builder`.
@@ -272,17 +273,23 @@ separate `electron-builder.yml`):
 - `afterPack: "./scripts/after-pack.cjs"` — copies the staged CLI bundle
   (`app/build/cli`) into `Contents/Resources/cli` after packaging and before
   signing.
-- `mac.identity: "-"` — forces ad-hoc signing. **`identity: null` does NOT
-  ad-hoc sign — it skips signing entirely**, which produces a bundle with a
-  broken/absent seal (`codesign --verify --deep --strict` fails with
+- `mac.identity: "-"` — forces ad-hoc signing by default. **`identity: null`
+  does NOT ad-hoc sign — it skips signing entirely**, which produces a bundle
+  with a broken/absent seal (`codesign --verify --deep --strict` fails with
   `code has no resources but signature indicates they must be present`, and
   Apple Silicon refuses to run it at all). `"-"` is the same ad-hoc identity
-  `mac/Scripts/package-app.sh` uses for the menubar app's local/CI builds.
-- `mac.hardenedRuntime: false` — hardened runtime is for notarized builds;
-  leaving it on for an ad-hoc signature with no entitlements can prevent the
-  app from launching.
+  `mac/Scripts/package-app.sh` falls back to for the menubar app's local/CI
+  builds. This is the local/dev default; signed release builds pass the real
+  Developer ID identity as a CLI override instead of changing this file (see
+  "macOS code signing and notarization" below) — worth baking into `build.mac`
+  directly so a release can't accidentally ship ad-hoc.
+- `mac.hardenedRuntime: false` — matches the ad-hoc default above (hardened
+  runtime needs a Developer ID signature). Signed release builds turn this on
+  via the same CLI override.
 - `mac.gatekeeperAssess: false` — skips electron-builder's post-sign
-  `spctl` check, which would always fail for an unnotarized app.
+  `spctl` check, which always fails for an ad-hoc/unnotarized build. A signed,
+  notarized release build passes Gatekeeper's real check regardless of this
+  setting.
 - `icon: build/icon.png` — a pre-existing 1024x1024 PNG at
   `app/build/icon.png`. No `.icns` exists in the repo; electron-builder
   generates one from the PNG at build time. This is the same source PNG
@@ -467,10 +474,14 @@ existing `desktop-v<version>` tag and require the verification job to pass.
 ```sh
 codesign -dv --verbose=2 app/release/mac-arm64/CodeBurn.app
 codesign --verify --deep --strict app/release/mac-arm64/CodeBurn.app
+spctl --assess --type execute --verbose app/release/mac-arm64/CodeBurn.app
 ```
 
-Expect `Signature=adhoc`, a real `Identifier=org.agentseal.codeburn-desktop`,
-and `Sealed Resources` present. The deep-verify command should exit 0.
+A local ad-hoc build shows `Signature=adhoc`; a signed release build shows
+`Authority=Developer ID Application: Resham Joshi (XRVP7P7F9M)` and `spctl`
+reports `source=Notarized Developer ID` once the notarization ticket is
+stapled. Either way expect a real `Identifier=org.agentseal.codeburn-desktop`
+and `Sealed Resources` present, and the deep-verify command should exit 0.
 
 To smoke-test that the packaged renderer actually loads (the classic failure
 is a white screen from a wrong `loadFile` path once assets are behind
@@ -488,73 +499,92 @@ processes and keeps running with no stderr output. `main.ts`'s
 prints to that same stderr if the packaged `loadFile(path.join(__dirname,
 '..', 'renderer', 'index.html'))` path is ever wrong.
 
-## The Gatekeeper story (no paid Apple Developer account)
+## macOS code signing and notarization
 
-Ad-hoc signing satisfies the *kernel's* code-signing requirement (Apple
-Silicon refuses to execute anything with no signature at all), but it is not
-a Developer ID signature and the app is not notarized. Concretely:
+Release macOS builds — the desktop `.dmg`/`.zip` files and the
+`CodeBurnMenubar-<version>.zip` menubar app — are signed with the Developer
+ID Application certificate **"Developer ID Application: Resham Joshi
+(XRVP7P7F9M)"** (team `XRVP7P7F9M`), built with hardened runtime **on**, and
+notarized by Apple via `xcrun notarytool` (using the `codeburn-notary`
+keychain profile), then stapled. `spctl --assess` reports
+`source=Notarized Developer ID`, and the app opens with **no Gatekeeper
+warning at all** — no right-click → Open, no quarantine removal, no
+"unidentified developer" dialog.
 
-- `spctl --assess --type execute` on the built app returns **`rejected`**,
-  ad-hoc-signed or not, quarantined or not. `spctl`'s static assessment
-  checks for a Developer ID + notarization ticket, which this build does
-  not have and cannot have without a paid account.
-- Any file downloaded through a browser (or unzipped by Finder's Archive
-  Utility from a browser download) gets a `com.apple.quarantine` extended
-  attribute. The first time a quarantined, non-notarized app is opened,
-  Gatekeeper blocks a plain double-click with "Apple could not verify that
-  \[CodeBurn] is free of malware."
-- **This is expected and correct for an unpaid, unnotarized build.** Being
-  a known GitHub author, signing the repo's commits, or ad-hoc signing the
-  binary does **not** change this — none of that is a substitute for an
-  Apple-issued Developer ID certificate plus notarization.
+### Entitlements
 
-### First-open instructions for users
+Hardened runtime needs a handful of entitlements or Electron's JIT-compiled
+renderer fails to start:
 
-**Field-verified on macOS 15+ (Sequoia/Tahoe): an ad-hoc-signed, quarantined
-app gets the harsher "\[CodeBurn] is damaged and can't be opened. You should
-move it to the Trash." dialog, and the classic right-click → Open bypass does
-NOT work for it** (that trick only helps Developer-ID-signed, unnotarized
-apps). The reliable path is stripping the quarantine attribute:
+- `com.apple.security.cs.allow-jit`
+- `com.apple.security.cs.allow-unsigned-executable-memory`
+- `com.apple.security.cs.allow-dyld-environment-variables`
+- `com.apple.security.cs.disable-library-validation`
+
+### Two gotchas
+
+- **electron-builder rejects the `Developer ID Application:` prefix in the
+  identity argument.** Pass the bare certificate common name —
+  `"Resham Joshi (XRVP7P7F9M)"` — not the full
+  `"Developer ID Application: Resham Joshi (XRVP7P7F9M)"` string `codesign`
+  itself accepts.
+- **electron-builder notarizes the `.app`, not the `.dmg`.** Once
+  `electron-builder --mac` finishes signing and notarizing the app bundle,
+  the `.dmg` it produces around that app still needs its own
+  codesign + notarize + staple pass:
+  ```sh
+  codesign --force --sign "Resham Joshi (XRVP7P7F9M)" CodeBurn-<version>-arm64.dmg
+  xcrun notarytool submit CodeBurn-<version>-arm64.dmg --keychain-profile codeburn-notary --wait
+  xcrun stapler staple CodeBurn-<version>-arm64.dmg
+  ```
+  (repeat for the `x64` dmg).
+
+### Release builds vs. the committed config
+
+`app/package.json`'s committed `build.mac` still declares `identity: "-"`
+and `hardenedRuntime: false` — the ad-hoc/local-dev default described in
+"Build configuration" above. A signed release build passes the real
+Developer ID settings as `electron-builder` CLI overrides instead of
+changing that file:
 
 ```sh
-# after dragging CodeBurn.app from the dmg into /Applications
-xattr -cr /Applications/CodeBurn.app
+npx electron-builder --mac \
+  -c.mac.identity="Resham Joshi (XRVP7P7F9M)" \
+  -c.mac.hardenedRuntime=true \
+  -c.mac.entitlements=build/entitlements.mac.plist \
+  -c.mac.entitlementsInherit=build/entitlements.mac.plist \
+  -c.mac.gatekeeperAssess=true
 ```
 
-One time only; subsequent launches work normally. **System Settings →
-Privacy & Security → "Open Anyway"** may also appear after a blocked attempt
-and works when offered, but is not shown in all cases for ad-hoc builds —
-document the `xattr` path as primary anywhere user-facing.
+This works, but it is easy to forget on a manual release — baking these
+settings into `build.mac` directly (falling back to ad-hoc only when no
+Developer ID identity is present in the keychain) would remove the risk of a
+release accidentally shipping unsigned.
 
-None of these steps are needed for a `dmg`/`zip` built and opened locally on
-the same machine (no quarantine attribute is applied to files that were never
-downloaded) — they only apply to a build distributed to someone else, e.g.
-via a GitHub Release.
+The menubar app (`mac/Scripts/package-app.sh`) picks up the same identity
+through its existing `CODESIGN_IDENTITY` environment variable — set
+`CODESIGN_IDENTITY="Resham Joshi (XRVP7P7F9M)"` before running it — and then
+needs the same notarize-and-staple pass as the dmg above, run against the
+built `.app` before it is zipped.
 
-### Folder-access prompts re-appear on every update
+### Ad-hoc is still the fallback
+
+Building locally with no Developer ID identity in the keychain (or in CI,
+where none is configured) falls back to ad-hoc signing, same as before:
+enough to satisfy the kernel's code-signing check on Apple Silicon, but not
+Gatekeeper. A quarantined ad-hoc build still shows the "Apple could not
+verify..." / "is damaged and can't be opened" dialogs, and stripping the
+quarantine attribute (`xattr -cr /Applications/CodeBurn.app`) is still the
+workaround for a build tested this way. This path is for local development
+only — the distributed release builds are signed and notarized and never
+hit it.
+
+### Folder-access prompts
 
 CodeBurn requests access to folders like Documents, Desktop, and Downloads
 (via `mac.extendInfo` in `app/package.json`) to read local AI coding tool
-session logs. Because each ad-hoc/unsigned build has no stable Developer ID,
-macOS TCC treats every rebuild as a new app identity, so users get
-re-prompted for folder access after each update even though nothing else
-changed. Signing with a stable Developer ID certificate (see "Upgrade path"
-below) fixes this — TCC grants persist across updates once the app's
-identity is stable.
-
-## Upgrade path: paid account + notarization
-
-When a paid Apple Developer Program membership is available, the same
-`electron-builder` config takes the upgrade with a few changes, no new
-tooling:
-
-- Set `mac.identity` to the real `"Developer ID Application: <Name> (<TEAMID>)"`
-  certificate name (or let electron-builder auto-discover it from the
-  keychain by removing `identity` entirely), and set `mac.hardenedRuntime:
-  true` with an entitlements file.
-- Add a `notarize` block (or the `afterSign` hook electron-builder's
-  `@electron/notarize` integration expects) with an app-specific password or
-  API key, and remove `gatekeeperAssess: false` so electron-builder verifies
-  the notarized result itself.
-- Everything else — `appId`, `files`, `mac.target` (dmg/zip, arm64+x64),
-  `icon`, `directories.output` — stays as-is.
+session logs. Signed release builds use the stable Developer ID identity
+above, so macOS TCC treats every release build as the same app and folder
+grants persist across updates. This only regresses for an ad-hoc/local-dev
+build: with no stable Developer ID, TCC treats each rebuild as a new app
+identity and re-prompts for folder access every time.

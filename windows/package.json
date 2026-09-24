@@ -1,7 +1,7 @@
 {
   "name": "codeburn-menubar",
   "private": true,
-  "version": "0.9.24",
+  "version": "0.9.25",
   "description": "CodeBurn menubar (tray) app for Windows, with experimental Linux support. Shares design tokens with the native macOS app under mac/.",
   "type": "module",
   "scripts": {

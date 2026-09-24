@@ -6,16 +6,24 @@ import { Panel } from '../components/Panel'
 import { SectionSkeleton } from '../components/Skeleton'
 import { SegTabs } from '../components/SegTabs'
 import { StaleBanner } from '../components/StaleBanner'
+import { useOptimizeSnapshot } from '../hooks/useOptimizeSnapshot'
 import { type Polled, usePolled } from '../hooks/usePolled'
-import { formatCompact, formatCount, formatUsd } from '../lib/format'
+import { asOfLabel, formatCompact, formatCount, formatUsd } from '../lib/format'
 import { codeburn } from '../lib/ipc'
+import { YIELD_SLOW_MS } from '../lib/refreshCadence'
 import { reportMemoKey } from '../lib/reportMemoKey'
 import { trackEvent } from '../lib/track'
-import type { DateRange, FindingClass, MenubarPayload, OptimizeJsonReport, Period, SessionYieldJson, WasteAction, YieldJsonReport } from '../lib/types'
+import type { CliError, DateRange, FindingClass, MenubarPayload, OptimizeBlock, OptimizeJsonReport, Period, SessionYieldJson, WasteAction, YieldJsonReport } from '../lib/types'
 import { Icon, type IconName } from '../components/icons'
 import { t } from '../i18n'
 
 type OptimizeTab = 'waste' | 'reverts' | 'abandoned' | 'fixes'
+
+/** The header title, with the age of the figures below it when they are not
+ *  live (the daily scan, the 5-minute yield tier). */
+function panelTitle(tab: OptimizeTab, age: string | null): string {
+  return age ? `${tabTitle(tab)} · ${age}` : tabTitle(tab)
+}
 
 /** The card's header title: the tab the list below is showing. Computed at
  *  call time (not a module-level const) so it re-reads the current locale. */
@@ -43,6 +51,8 @@ export function OptimizeContent({
   overview,
   refreshToken = 0,
   ready = true,
+  configSource = null,
+  scope = 'local',
 }: {
   period: Period
   provider?: string
@@ -50,6 +60,10 @@ export function OptimizeContent({
   overview: Polled<MenubarPayload>
   refreshToken?: number
   ready?: boolean
+  /** Scoped Claude config and device scope, so the optimize cache key here is
+   *  the same one the Overview page uses for the same view. */
+  configSource?: string | null
+  scope?: string
 }) {
   // Gate on app-level readiness so boot hydrates the cache once (default true
   // keeps standalone renders/tests polling normally).
@@ -61,8 +75,18 @@ export function OptimizeContent({
   const yieldReport = usePolled<YieldJsonReport>(
     () => range ? codeburn.getYield(period, provider, range) : codeburn.getYield(period, provider),
     [period, provider, range?.from, range?.to, refreshToken],
-    { enabled: ready, memoKey: reportMemoKey('yield', period, provider, range) },
+    { enabled: ready, memoKey: reportMemoKey('yield', period, provider, range), cadence: { slowMs: YIELD_SLOW_MS } },
   )
+  // This page is the one place the scan is always recomputed on open, so it
+  // behaves exactly as it did when the overview poll still carried the block —
+  // and its result is what the Overview page's daily figures then read.
+  const optimizeSnapshot = useOptimizeSnapshot(
+    { period, provider, range, configSource, scope },
+    { enabled: ready, alwaysFresh: true, refreshToken },
+  )
+  const optimizeBlock: OptimizeBlock | null = optimizeSnapshot.data?.optimize ?? null
+  const optimizeAge = asOfLabel(optimizeSnapshot.data?.computedAt ?? null)
+  const yieldAge = asOfLabel(yieldReport.lastSuccessAt)
   const [tab, setTab] = useState<OptimizeTab>('waste')
 
   if (!overview.data) {
@@ -74,18 +98,18 @@ export function OptimizeContent({
   const revertedTotal = yieldData ? formatUsd(yieldData.summary.reverted.costUSD) : '—'
   const abandonedTotal = yieldData ? formatUsd(yieldData.summary.abandoned.costUSD) : '—'
   const options = [
-    { value: 'waste', label: t('spend.optimize.tabOption.waste', { amount: formatUsd(overview.data.optimize.savingsUSD) }) },
+    { value: 'waste', label: t('spend.optimize.tabOption.waste', { amount: optimizeBlock ? formatUsd(optimizeBlock.savingsUSD) : '—' }) },
     { value: 'reverts', label: t('spend.optimize.tabOption.reverts', { amount: revertedTotal }) },
     { value: 'abandoned', label: t('spend.optimize.tabOption.abandoned', { amount: abandonedTotal }) },
     // The Fixes tab renders topFindings (capped list), so label the count that shows.
-    { value: 'fixes', label: t('spend.optimize.tabOption.fixes', { count: overview.data.optimize.topFindings.length.toLocaleString('en-US') }) },
+    { value: 'fixes', label: t('spend.optimize.tabOption.fixes', { count: (optimizeBlock?.topFindings.length ?? 0).toLocaleString('en-US') }) },
   ]
 
   return (
     <>
       {overview.error && <StaleBanner error={overview.error} />}
       <Panel
-        title={tabTitle(tab)}
+        title={panelTitle(tab, tab === 'reverts' || tab === 'abandoned' ? yieldAge : optimizeAge)}
         right={<SegTabs options={options} value={tab} onChange={value => setTab(value as OptimizeTab)} />}
       >
         {tab === 'waste' ? (
@@ -95,7 +119,7 @@ export function OptimizeContent({
         ) : tab === 'abandoned' ? (
           <YieldRows report={yieldReport} category="abandoned" empty={t('spend.optimize.abandoned.empty')} />
         ) : (
-          <FixesRows data={overview.data} />
+          <FixesRows block={optimizeBlock} error={optimizeSnapshot.error} />
         )}
       </Panel>
     </>
@@ -333,6 +357,10 @@ function YieldRows({
   )
 }
 
-function FixesRows({ data }: { data: MenubarPayload }) {
-  return <FindingRows findings={data.optimize.topFindings} empty={t('spend.optimize.fixes.empty')} />
+function FixesRows({ block, error }: { block: OptimizeBlock | null; error: CliError | null }) {
+  // A failed scan is not a scan still running: say so, so the dash on the tab
+  // label has a reason on screen. A manual refresh re-runs it.
+  if (error) return <CliErrorPanel error={error} subject={t('common.subject.optimize')} />
+  if (!block) return <EmptyNote>{t('spend.optimize.waste.scanning')}</EmptyNote>
+  return <FindingRows findings={block.topFindings} empty={t('spend.optimize.fixes.empty')} />
 }

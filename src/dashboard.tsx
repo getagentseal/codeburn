@@ -4,14 +4,14 @@ import { EventEmitter } from 'node:events'
 import React, { Fragment, useState, useCallback, useEffect, useLayoutEffect, useMemo, useRef } from 'react'
 import { render, Box, Text, measureElement, useInput, useApp, useWindowSize, type DOMElement, type Instance, type RenderOptions } from 'ink'
 import { CATEGORY_LABELS, type DateRange, type ProjectSummary, type TaskCategory } from './types.js'
-import { formatCost, formatTokens, markEstimated, carriedCostNote } from './format.js'
+import { formatCost, formatTokens, markEstimated, carriedCostNote, excludedGatewayNote } from './format.js'
 import { maxOf } from './math-utils.js'
 import { formatSessionCount } from './session-count-label.js'
 import { aggregateModelEfficiency } from './model-efficiency.js'
-import { parseAllSessions, filterProjectsByDateRange, filterProjectsByName, setInteractiveScanUI, withSinglePassParse, withColdFirstPaintFloor, filesParsedFromSourceCount, isCompleteSessionSnapshotAvailable } from './parser.js'
+import { parseAllSessions, excludeAggregateOnlyProjects, filterProjectsByDateRange, filterProjectsByName, setInteractiveScanUI, withSinglePassParse, withColdFirstPaintFloor, filesParsedFromSourceCount, isCompleteSessionSnapshotAvailable } from './parser.js'
 import { findUnpricedModels, isExpectedFreeModel, loadPricing } from './models.js'
 import { aggregateModelTotals } from './model-breakdown.js'
-import { buildDurableOverviewFromNormalizedIndex, buildDurablePeriod, hydrateDailyCacheFromNormalizedProjects } from './usage-aggregator.js'
+import { buildDurableOverviewFromNormalizedIndex, buildDurablePeriod, hydrateDailyCacheFromNormalizedProjects, type ExcludedGatewayTotals } from './usage-aggregator.js'
 import { loadDailyCache, type DailyCache } from './daily-cache.js'
 import { exitAfterCacheCleanup } from './session-cache.js'
 import { getAllProviders } from './providers/index.js'
@@ -373,6 +373,10 @@ export type DurableOverview = {
   // its total may exceed what the (live-scan-bounded) Daily Activity panel
   // below can show. See carriedCostNote in format.ts.
   carriedCostUSD: number
+  // Gateway spend shown on its own labelled row but held out of `cost`.
+  // Optional like OverviewDurable's: a fixture or an older persisted shape
+  // simply has nothing to footnote. See excludedGatewayNote in format.ts.
+  excludedGateway?: ExcludedGatewayTotals
 }
 
 function getDurableRange(period: Period, customRange: DateRange | null | undefined, day: string | null): DateRange {
@@ -388,7 +392,7 @@ async function computeDurableOverview(
   day: string | null,
 ): Promise<DurableOverview> {
   const range = getDurableRange(period, customRange, day)
-  const { data, carriedCostUSD } = await buildDurablePeriod(
+  const { data, carriedCostUSD, excludedGateway } = await buildDurablePeriod(
     { range, label: PERIOD_LABELS[period] },
     { provider, project: projectFilter ?? [], exclude: excludeFilter ?? [] },
   )
@@ -403,6 +407,7 @@ async function computeDurableOverview(
     cacheReadTokens: data.cacheReadTokens,
     cacheWriteTokens: data.cacheWriteTokens,
     carriedCostUSD,
+    excludedGateway,
   }
 }
 
@@ -637,6 +642,9 @@ function Overview({ projects, label, width, planUsages, durable }: { projects: P
       )}
       {durable && carriedCostNote(durable.carriedCostUSD) && (
         <Text dimColor wrap="truncate-end">  {carriedCostNote(durable.carriedCostUSD)}</Text>
+      )}
+      {durable && excludedGatewayNote(durable.excludedGateway?.costUSD ?? 0) && (
+        <Text dimColor wrap="truncate-end">  {excludedGatewayNote(durable.excludedGateway?.costUSD ?? 0)}</Text>
       )}
       {activePlanUsages.length > 0 && (
         <>
@@ -2339,7 +2347,10 @@ export async function buildDashboardHistoryIndex(
 ): Promise<DashboardHistoryIndex> {
   const readyThrough = options.readyThrough ?? 'lifetime'
   const range = dashboardIndexScanRange(readyThrough)
-  const parse = () => parseAllSessions(range, provider)
+  // Feeds hydrateDailyCacheFromNormalizedProjects below, so it takes the whole
+  // corpus; the period projection holds the aggregate-only provider out of its
+  // totals instead (buildDurableOverviewFromNormalizedIndex).
+  const parse = () => parseAllSessions(range, provider, { includeAggregateOnly: true })
   const normalizedProjects = options.preferCompleteSnapshot || options.progressiveSource
     ? (await withColdFirstPaintFloor(
         range.start,
@@ -2364,7 +2375,8 @@ export function selectDashboardHistoryIndex(
   period: Period,
 ): { projects: ProjectSummary[]; durable: DurableOverview } {
   const filtered = filterProjectsByName(index.normalizedProjects, index.projectFilter, index.excludeFilter)
-  const projects = filterProjectsByDateRange(filtered, getPeriodRange(period))
+  // The index holds the whole corpus for the cache fill; the panels follow the headline.
+  const projects = excludeAggregateOnlyProjects(filterProjectsByDateRange(filtered, getPeriodRange(period)), index.provider)
   const durable = buildDurableOverviewFromNormalizedIndex(
     { range: getPeriodRange(period), label: PERIOD_LABELS[period] },
     index.normalizedProjects,

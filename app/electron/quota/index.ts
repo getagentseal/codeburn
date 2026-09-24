@@ -79,6 +79,9 @@ export class QuotaService {
   private readonly deps: QuotaDeps
   private cache: { at: number; value: QuotaProvider[] } | null = null
   private flight: Promise<QuotaProvider[]> | null = null
+  /** Whether `flight` was allowed to read the keychain, so a later call can tell
+   *  whether that run can answer it. */
+  private flightAllowKeychain = false
   private generations: Record<ProviderName, number> = Object.fromEntries(PROVIDERS.map(p => [p, 0])) as Record<ProviderName, number>
   private controllers: Partial<Record<ProviderName, AbortController>> = {}
 
@@ -95,13 +98,30 @@ export class QuotaService {
   }
 
   async getQuota(options: { force?: boolean; allowKeychain?: boolean; disabled?: string[] } = {}): Promise<QuotaProvider[]> {
-    if (options.force) this.invalidate()
+    const allowKeychain = Boolean(options.allowKeychain)
     if (!options.force && this.cache && this.deps.now() - this.cache.at < this.deps.refreshMs) return this.cache.value
-    if (this.flight) return this.flight
+    // Join an in-flight run only when it can already answer this call. A
+    // keychain-allowed call may not join a keychain-less poll, and must not
+    // invalidate its way past one either: invalidate() aborts that poll, every
+    // provider in it then fails its generation check and resolves
+    // `disconnected`, so the click would repaint every card as logged out
+    // without the keychain it asked for ever being read. A second forced click
+    // on top of a forced run does join it — same answer, and no second macOS
+    // keychain prompt.
+    if (this.flight && (!allowKeychain || this.flightAllowKeychain)) return this.flight
+    if (options.force) this.invalidate()
     // IPC names are untrusted strings; only known providers may be skipped.
     const disabled = new Set((options.disabled ?? []).filter((p): p is ProviderName => PROVIDERS.includes(p as ProviderName)))
-    this.flight = this.fetchAll(Boolean(options.allowKeychain), disabled).finally(() => { this.flight = null })
-    return this.flight
+    let flight: Promise<QuotaProvider[]>
+    flight = this.fetchAll(allowKeychain, disabled)
+      // Superseded: this run was aborted by the one that replaced it, so its
+      // rows are abort artefacts rather than an answer. Hand the caller the
+      // replacement instead of a card that falsely reads "not connected".
+      .then(value => (this.flight !== flight && this.flight) ? this.flight : value)
+      .finally(() => { if (this.flight === flight) this.flight = null })
+    this.flight = flight
+    this.flightAllowKeychain = allowKeychain
+    return flight
   }
 
   private async readBlocked(): Promise<Blocked> {
@@ -126,6 +146,14 @@ export class QuotaService {
     const run = async (provider: ProviderName): Promise<QuotaProvider> => {
       const retainOnFailure = (next: QuotaProvider): QuotaProvider => {
         const previous = prior.find(item => item.provider === provider)
+        // A keychain-less poll reporting `keychainUnchecked` is saying "I did not
+        // look", which is never news: it must not overwrite what a forced check
+        // established — neither a live connection nor the keychain-denied
+        // guidance, which would otherwise be replaced by "Check now" one poll
+        // after the user denied it, nor an expired login's reconnect prompt.
+        if (!allowKeychain && next.connection === 'keychainUnchecked'
+          && (previous?.connection === 'connected' || previous?.connection === 'accessDenied'
+            || previous?.connection === 'terminalFailure')) return previous
         if (previous?.connection !== 'connected') return next
         // Keychain-only credentials are invisible to a background (keychain-less)
         // poll; keep showing the live connection rather than flapping to

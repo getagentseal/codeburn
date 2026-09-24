@@ -1,10 +1,10 @@
 // @vitest-environment node
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { defaultEnabledFor, Telemetry } from './telemetry'
+import { cpuBucket, defaultEnabledFor, memBucket, Telemetry } from './telemetry'
 
 let dir: string
 
@@ -91,6 +91,31 @@ describe('consent gating', () => {
     telemetry.track('app_open', {})
     expect(await telemetry.flush()).toBe(true)
     expect(posts.length).toBe(1)
+  })
+
+  it('reports whether the decision reached disk, and never tears the file', () => {
+    const { telemetry } = make()
+    const file = join(dir, 'telemetry.v1.json')
+    expect(telemetry.completeOnboarding(false).persisted).toBe(true)
+    const before = readFileSync(file, 'utf-8')
+
+    // The menu bar app inherits the decision from this file, so a write that
+    // cannot land must be reported, not swallowed behind an in-memory success.
+    chmodSync(dir, 0o500)
+    let status
+    try {
+      status = telemetry.setEnabled(true)
+    } finally {
+      chmodSync(dir, 0o700)
+    }
+
+    expect(status).toMatchObject({ enabled: true, persisted: false })
+    // Old file wholly intact, and no half-written temp left beside it.
+    expect(readFileSync(file, 'utf-8')).toBe(before)
+    expect(readdirSync(dir)).toEqual(['telemetry.v1.json'])
+
+    // And the in-memory decision still holds for this session.
+    expect(telemetry.status().enabled).toBe(true)
   })
 
   it('persists consent + install id across instances', () => {
@@ -296,5 +321,108 @@ describe('events', () => {
     expect(typeof body.installId).toBe('string')
     expect(body.app).toMatchObject({ name: 'codeburn-desktop', version: '1.0.0', country: 'US' })
     expect(Array.isArray(body.events)).toBe(true)
+  })
+})
+
+describe('resource usage buckets', () => {
+  it('places every CPU boundary in the higher bucket', () => {
+    expect(cpuBucket(0)).toBe('<1')
+    expect(cpuBucket(0.99)).toBe('<1')
+    expect(cpuBucket(1)).toBe('1-5')
+    expect(cpuBucket(4.99)).toBe('1-5')
+    expect(cpuBucket(5)).toBe('5-15')
+    expect(cpuBucket(14.99)).toBe('5-15')
+    expect(cpuBucket(15)).toBe('15-40')
+    expect(cpuBucket(39.99)).toBe('15-40')
+    expect(cpuBucket(40)).toBe('40+')
+    expect(cpuBucket(1200)).toBe('40+')
+    // Unmeasurable reads as the lowest bucket, never as a thrown close.
+    expect(cpuBucket(Number.NaN)).toBe('<1')
+    expect(cpuBucket(-5)).toBe('<1')
+  })
+
+  it('places every memory boundary in the higher bucket', () => {
+    expect(memBucket(0)).toBe('<250')
+    expect(memBucket(249.9)).toBe('<250')
+    expect(memBucket(250)).toBe('250-500')
+    expect(memBucket(499.9)).toBe('250-500')
+    expect(memBucket(500)).toBe('500-1k')
+    expect(memBucket(999.9)).toBe('500-1k')
+    expect(memBucket(1000)).toBe('1-3k')
+    expect(memBucket(2999.9)).toBe('1-3k')
+    expect(memBucket(3000)).toBe('3k+')
+    expect(memBucket(Number.NaN)).toBe('<250')
+  })
+})
+
+describe('app_close resource usage', () => {
+  const SESSION_MS = 10 * 60_000
+  const OPENED_AT = Date.parse('2026-09-19T09:00:00Z')
+  /// Both counters are cumulative since their own process started, so the mocks below grow
+  /// with the clock and carry a head start from before telemetry was constructed.
+  const elapsedSec = () => (Date.now() - OPENED_AT) / 1000
+
+  afterEach(() => { vi.useRealTimers() })
+
+  async function closeWith(over: Partial<ConstructorParameters<typeof Telemetry>[0]>, sample = false, sessionMs = SESSION_MS) {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-09-19T09:00:00Z'))
+    const { telemetry, posts } = make(over)
+    telemetry.completeOnboarding(true)
+    vi.setSystemTime(new Date(Date.now() + sessionMs))
+    if (sample) telemetry.sampleResources()
+    telemetry.trackClose()
+    await telemetry.flush()
+    const body = posts[0]!.body as { events: Array<{ name: string; props: Record<string, unknown> }> }
+    return body.events.find(event => event.name === 'app_close')!.props
+  }
+
+  it('carries app and serve buckets when both report metrics', async () => {
+    const props = await closeWith({
+      // 30 CPU-seconds over a 600s session is 5% of one core; 600MB of working set. The
+      // 400 and 100 already on the clocks belong to the time before this session.
+      getAppMetrics: () => [
+        { cpu: { cumulativeCPUUsage: 400 + elapsedSec() * 0.03, percentCPUUsage: 0 }, memory: { workingSetSize: 400 * 1024 } },
+        { cpu: { cumulativeCPUUsage: 100 + elapsedSec() * 0.02, percentCPUUsage: 0 }, memory: { workingSetSize: 200 * 1024 } },
+      ],
+      getServeUsage: () => ({ cpuSec: 900 + elapsedSec() * 0.2, rssMb: 1200 }),
+    })
+    expect(props).toEqual({ sessionMinutes: 10, cpu: '5-15', mem: '500-1k', serveCpu: '15-40', serveMem: '1-3k' })
+  })
+
+  // The counters run from each process's own start, the wall clock from telemetry's: a
+  // desktop app that had been open for hours read as pinned CPU for a session that did
+  // nothing at all.
+  it('reports the CPU spent during the session, not what was already on the clock', async () => {
+    const props = await closeWith({
+      getAppMetrics: () => [{ cpu: { cumulativeCPUUsage: 500, percentCPUUsage: 0 }, memory: { workingSetSize: 300 * 1024 } }],
+      getServeUsage: () => ({ cpuSec: 900, rssMb: 300 }),
+    })
+    expect(props).toMatchObject({ cpu: '<1', serveCpu: '<1' })
+  })
+
+  it('averages sampled percentages when the platform reports no cumulative CPU', async () => {
+    const props = await closeWith({
+      getAppMetrics: () => [{ cpu: { percentCPUUsage: 8 }, memory: { workingSetSize: 300 * 1024 } }],
+      getServeUsage: () => null,
+    }, true)
+    expect(props).toMatchObject({ cpu: '5-15', mem: '250-500' })
+    expect(props.serveCpu).toBeUndefined()
+    expect(props.serveMem).toBeUndefined()
+  })
+
+  // CPU seconds count from process start, the wall clock from telemetry init, so a
+  // ten-second session read '40+' however idle the app was. Memory is unaffected.
+  it('omits both CPU figures on a session too short to divide by', async () => {
+    const props = await closeWith({
+      getAppMetrics: () => [{ cpu: { cumulativeCPUUsage: 20, percentCPUUsage: 0 }, memory: { workingSetSize: 400 * 1024 } }],
+      getServeUsage: () => ({ cpuSec: 120, rssMb: 1200 }),
+    }, false, 10_000)
+    expect(props).toEqual({ sessionMinutes: 0, mem: '250-500', serveMem: '1-3k' })
+  })
+
+  it('omits every field it could not measure rather than sending zeros', async () => {
+    const props = await closeWith({})
+    expect(props).toEqual({ sessionMinutes: 10 })
   })
 })

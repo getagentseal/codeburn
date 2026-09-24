@@ -59,6 +59,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
     private var popover: NSPopover!
     private var capacityDockController: CapacityDockController?
     private var remoteCommandObserver: DefaultsKeyObserver?
+    private var languageObserver: DefaultsKeyObserver?
     private var rightClickMonitor: Any?
     private var lastContextMenuPresentedAt: Date = .distantPast
     /// Held only while the right-click menu is open. Cleared in menuDidClose so
@@ -87,6 +88,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
     private var providerSettingsObserver: NSObjectProtocol?
 
     func applicationWillTerminate(_ notification: Notification) {
+        // Bounded by its own timeout, so a slow network can never hold up quit.
+        Telemetry.shared.flushOnQuit()
         // Synchronously, before the actor hop: the app can exit before a
         // detached Task is ever scheduled, and a serve child that outlives us
         // is the orphan in #1117. shutdown() still runs for the tidy case.
@@ -131,7 +134,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        SingleInstanceGuard.retireOlderInstances()
+        guard SingleInstanceGuard.enforceSingleInstance() else { return }
         ProcessInfo.processInfo.automaticTerminationSupportEnabled = false
         ProcessInfo.processInfo.disableSuddenTermination()
         // Deliberately NO app-lifetime beginActivity here. A permanent
@@ -167,6 +170,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
         observeSubscriptionDisconnect()
         observeCapacityDockProviderSettingsRequests()
         setupUpdateNotifications()
+        Telemetry.shared.start()
         Task { await updateChecker.checkIfNeeded() }
     }
 
@@ -329,6 +333,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
         }
         // A command written while this app was not running is answered at launch, not ignored.
         handleRemoteCommand()
+
+        // The desktop app's language switch writes AppleLanguages into this app's
+        // domain and nothing else. KVO on UserDefaults carries a write made by
+        // another process (that is the whole reason the remote-command key works),
+        // so the switch lands here while the app keeps running. It used to restart
+        // instead, and every restart re-asked a Warp user for "access data from
+        // other apps": that consent lasts only as long as the process does.
+        languageObserver = DefaultsKeyObserver(defaults: .standard, key: LanguagePreference.defaultsKey) { [weak self] in
+            Task { @MainActor [weak self] in self?.applyLanguage() }
+        }
+    }
+
+    /// Re-point `L(_:)` and refresh everything that is not rebuilt on demand.
+    /// The right-click menu is built from scratch each time it opens, and the
+    /// Settings window and Capacity Dock rail rebuild their SwiftUI content off
+    /// `LanguageGeneration`, which `L10n.use` bumps. That leaves the status item,
+    /// whose title and tooltip are set once per refresh tick, and the popover,
+    /// whose content is built once and kept until it closes.
+    @MainActor
+    private func applyLanguage() {
+        // A language change rebuilds the rail's SwiftUI view, which destroys a
+        // DragGesture in flight before it can report its end. Settle it first,
+        // or the controller stays stuck mid-drag.
+        capacityDockController?.settleActiveDrag()
+        L10n.use(LanguagePreference.current())
+        if popover?.isShown == true {
+            // refreshStatusButton() refuses to touch the title while the popover
+            // is anchored to the button, and the popover's own content was built
+            // in the old language, so close it: popoverDidClose drops the content
+            // view and refreshes the button.
+            popover.performClose(nil)
+        } else {
+            // setupPopover builds the content once at launch and popoverDidClose
+            // drops it, so the only stale copy is one that has never been shown.
+            popover?.contentViewController = nil
+        }
+        refreshStatusButton()
     }
 
     @MainActor
@@ -391,9 +432,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
             lastSuccessAt: lastSuccessfulUsageDataSnapshotAt,
             force: false
         )
+#if DEBUG
         if shouldSkip {
             NSLog("CodeBurn: skipping unchanged background usage refresh")
         }
+#endif
         return shouldSkip
     }
 
@@ -1326,10 +1369,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
         }
     }
 
-    /// Loads the bundled binary-flame PNG (Resources/ProviderIcons/flame.png) at the
-    /// menubar text point size. With no tint it stays a template image so the system
-    /// auto-adapts to the menu bar; a tint returns a recolored non-template copy for
-    /// the budget/quota warning states.
+    /// Loads the menubar flame at the menubar text point size. With no tint it stays a
+    /// template image so the system auto-adapts to the menu bar; a tint returns a
+    /// recolored non-template copy for the budget/quota warning states.
     private static func menubarFlameImage(
         tint: NSColor?,
         pointSize: CGFloat = menubarTitleFontSize
@@ -1679,6 +1721,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
                 popover.contentViewController = makePopoverContent()
             }
             store.menuPopoverVisible = true
+            Telemetry.shared.track("popover_open")
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
             if let window = popover.contentViewController?.view.window {
                 // Pin the popover's window above the status-bar layer but tag
@@ -1801,6 +1844,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
     }
 
     @objc private func openSettings() {
+        Telemetry.shared.track("settings_open")
         // Accessory-policy apps (no Dock icon, no main menu) don't get the
         // SwiftUI Settings scene wired into the responder chain reliably, so
         // the standard `showSettingsWindow:` selector silently no-ops. We host
@@ -1815,22 +1859,51 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
             rootView: SettingsView().environment(store).environment(updateChecker)
         )
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 520, height: 380),
+            // The view's own minimum, so the window is never positioned at a
+            // placeholder size that SwiftUI then grows away from the screen.
+            contentRect: NSRect(
+                x: 0,
+                y: 0,
+                width: SettingsView.windowWidth,
+                height: SettingsView.windowHeight
+            ),
             styleMask: [.titled, .closable, .miniaturizable],
             backing: .buffered,
             defer: false
         )
         window.title = L("CodeBurn Settings")
         window.contentViewController = hosting
-        window.center()
         window.isReleasedWhenClosed = false
+        let savedFrame = window.setFrameUsingName(Self.settingsFrameAutosaveName) ? window.frame : nil
+        window.setFrameAutosaveName(Self.settingsFrameAutosaveName)
+        placeSettingsWindow(window, savedFrame: savedFrame)
         let controller = NSWindowController(window: window)
+        // Cascading would walk the window away from where we just put it.
+        controller.shouldCascadeWindows = false
         settingsWindowController = controller
         NSApp.activate(ignoringOtherApps: true)
         controller.showWindow(nil)
-        // SwiftUI resizes the window past the initial contentRect after first
-        // layout, which drifts the earlier center(). Re-center once that settles.
-        DispatchQueue.main.async { [weak window] in window?.center() }
+        // SwiftUI can still resize the window past the initial contentRect after
+        // first layout, and a resize keeps the top-left corner. Place it again
+        // once that settles, at whatever size it ended up.
+        DispatchQueue.main.async { [weak self, weak window] in
+            guard let self, let window else { return }
+            self.placeSettingsWindow(window, savedFrame: savedFrame)
+        }
+    }
+
+    private static let settingsFrameAutosaveName = "CodeBurnMenubar.SettingsWindow"
+
+    private func placeSettingsWindow(_ window: NSWindow, savedFrame: NSRect?) {
+        // The popover's screen is the one the user is looking at.
+        let active = statusItem?.button?.window?.screen ?? NSScreen.main
+        guard let active else { return }
+        window.setFrameOrigin(SettingsWindowPlacement.origin(
+            savedFrame: savedFrame,
+            size: window.frame.size,
+            activeVisibleFrame: active.visibleFrame,
+            screenVisibleFrames: NSScreen.screens.map(\.visibleFrame)
+        ))
     }
 
     @objc private func refreshNowAction() {
@@ -1838,19 +1911,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
     }
 
     private func codeburnAlertIcon() -> NSImage? {
-        let config = NSImage.SymbolConfiguration(pointSize: 32, weight: .medium)
-        guard let symbol = NSImage(systemSymbolName: "flame.fill", accessibilityDescription: "CodeBurn")?
-            .withSymbolConfiguration(config) else { return nil }
-        let size = NSSize(width: 64, height: 64)
-        let img = NSImage(size: size, flipped: false) { rect in
-            let symbolSize = symbol.size
-            let x = (rect.width - symbolSize.width) / 2
-            let y = (rect.height - symbolSize.height) / 2
-            symbol.draw(in: NSRect(x: x, y: y, width: symbolSize.width, height: symbolSize.height))
-            return true
-        }
-        img.isTemplate = false
-        return img
+        guard let flame = AboutFlameImage.load(), let icon = flame.copy() as? NSImage else { return nil }
+        icon.size = NSSize(width: 64, height: 64 * flame.size.height / flame.size.width)
+        icon.isTemplate = false
+        return icon
     }
 
     @objc private func checkForUpdates() {

@@ -44,6 +44,17 @@ const bridge = {
   getSpendFlow: (period: string, provider: string, range?: DateRange, background?: boolean) => invoke('codeburn:getSpendFlow', period, provider, range, background),
   getBranchSpend: (period: string, provider: string, range?: DateRange, background?: boolean) => invoke('codeburn:getBranchSpend', period, provider, range, background),
   getOptimizeReport: (period: string, provider: string, range?: DateRange, background?: boolean) => invoke('codeburn:getOptimizeReport', period, provider, range, background),
+  // The once-a-day optimize scan, cached on disk per query scope. `maxAgeMs` 0
+  // forces a recompute (Optimize page, manual refresh).
+  getOptimizeSnapshot: (period: string, provider: string, range?: DateRange, configSource?: string | null, scope?: string, maxAgeMs?: number) =>
+    invoke('codeburn:getOptimizeSnapshot', period, provider, range, configSource, scope, maxAgeMs),
+  // Power source for the battery-aware live cadence: one read plus a push.
+  powerStatus: () => invoke('codeburn:powerStatus'),
+  onPowerStatus: (cb: (onBattery: boolean) => void) => {
+    const listener = (_e: unknown, onBattery: boolean) => cb(onBattery)
+    ipcRenderer.on('codeburn:power', listener)
+    return () => { ipcRenderer.removeListener('codeburn:power', listener) }
+  },
   getDevices: (period: string) => invoke('codeburn:getDevices', period),
   getDevicesScan: () => invoke('codeburn:getDevicesScan'),
   getShareStatus: () => invoke('codeburn:getShareStatus'),

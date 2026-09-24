@@ -1,4 +1,4 @@
-import { isBehavioralCall } from './behavioral-weight.js'
+import { behavioralCallWeight } from './behavioral-weight.js'
 import { dateKey } from './day-aggregator.js'
 import { spendProjectIdentity } from './spend-flow.js'
 import type { ProjectSummary, SessionSummary } from './types.js'
@@ -118,7 +118,7 @@ export function buildSessionContributions(session: SessionSummary): SessionContr
       const savings = call.savingsUSD ?? 0
       const inputTokens = call.usage.inputTokens
       const outputTokens = callBillableOutputTokens(call)
-      const calls = isBehavioralCall(call) ? 1 : 0
+      const calls = behavioralCallWeight(call)
       if (cost === 0 && calls === 0 && savings === 0 && inputTokens === 0 && outputTokens === 0) continue
       const day = Number.isNaN(new Date(call.timestamp).getTime()) ? turnDay : dateKey(call.timestamp)
       const key = modelKeyFor(call)

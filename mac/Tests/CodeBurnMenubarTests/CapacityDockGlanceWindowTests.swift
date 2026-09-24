@@ -171,14 +171,15 @@ struct CapacityDockGlanceWindowTests {
 
     // MARK: - Persistence
 
-    private func defaults() -> UserDefaults {
+    private func defaults() -> (UserDefaults, String) {
         let suiteName = "CodeBurnMenubarTests.CapacityDockGlance.\(UUID().uuidString)"
-        return UserDefaults(suiteName: suiteName)!
+        return (UserDefaults(suiteName: suiteName)!, suiteName)
     }
 
     @Test("the glance window defaults to the billing horizon for every provider")
     func defaultsToBilling() {
-        let defaults = defaults()
+        let (defaults, suiteName) = defaults()
+        defer { TestDefaults.forget(suiteName) }
 
         let snapshot = CapacityDockPreferences.load(defaults: defaults)
         #expect(snapshot.glanceWindows.isEmpty)
@@ -188,7 +189,8 @@ struct CapacityDockGlanceWindowTests {
 
     @Test("the glance window round-trips per provider")
     func roundTripsPerProvider() {
-        let defaults = defaults()
+        let (defaults, suiteName) = defaults()
+        defer { TestDefaults.forget(suiteName) }
 
         CapacityDockPreferences.setGlanceWindow(.burst, for: .claude, defaults: defaults)
         var snapshot = CapacityDockPreferences.load(defaults: defaults)
@@ -205,7 +207,8 @@ struct CapacityDockGlanceWindowTests {
 
     @Test("the glance window persists independently of the other dock preferences")
     func persistsIndependently() {
-        let defaults = defaults()
+        let (defaults, suiteName) = defaults()
+        defer { TestDefaults.forget(suiteName) }
 
         CapacityDockPreferences.setGlanceWindow(.burst, for: .claude, defaults: defaults)
         CapacityDockPreferences.setGaugeShape(.circle, defaults: defaults)
@@ -219,7 +222,8 @@ struct CapacityDockGlanceWindowTests {
 
     @Test("stored entries for unknown providers and unknown horizons are dropped")
     func ignoresForeignStoredValues() {
-        let defaults = defaults()
+        let (defaults, suiteName) = defaults()
+        defer { TestDefaults.forget(suiteName) }
 
         let stored: [String: Any] = [
             "claude": "burst",

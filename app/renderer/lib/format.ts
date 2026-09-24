@@ -100,3 +100,19 @@ export function formatDuration(ms: number): string {
   if (totalMin >= 2_880) return t('common.duration.days', { count: Math.round(totalMin / 1_440) })
   return `${Math.floor(totalMin / 60)}h ${totalMin % 60}m`
 }
+
+/**
+ * "as of HH:MM" for a figure that is NOT live — a stored or slowly-polled
+ * value. Never returns a bare time that could read as now: a value from another
+ * day carries its date. Null in, null out (nothing to date yet, so no label).
+ */
+export function asOfLabel(at: number | string | null | undefined): string | null {
+  if (at === null || at === undefined) return null
+  const when = new Date(at)
+  if (Number.isNaN(when.getTime())) return null
+  const time = when.toLocaleTimeString(localeTag(), { hour: 'numeric', minute: '2-digit' })
+  const sameDay = when.toDateString() === new Date().toDateString()
+  return sameDay
+    ? t('common.asOf', { time })
+    : t('common.asOfDate', { date: when.toLocaleDateString(localeTag(), { month: 'short', day: 'numeric' }), time })
+}

@@ -102,8 +102,8 @@ private func withIsolatedChecker(
 ) async throws {
     let suiteName = "codeburn.update.notifications.\(UUID().uuidString)"
     let defaults = try #require(UserDefaults(suiteName: suiteName))
-    defaults.removePersistentDomain(forName: suiteName)
-    defer { defaults.removePersistentDomain(forName: suiteName) }
+    TestDefaults.forget(suiteName)
+    defer { TestDefaults.forget(suiteName) }
 
     let notifier = RecordingUpdateNotifier()
     let checker = UpdateChecker(defaults: defaults, makeNotifier: { notifier })

@@ -2,6 +2,7 @@ import { readFile, stat, open, rename, unlink, readdir, mkdir, rm } from 'fs/pro
 import { existsSync, readFileSync, unlinkSync } from 'fs'
 import { createHash, randomBytes } from 'crypto'
 import { join } from 'path'
+import { StringDecoder } from 'string_decoder'
 
 import { getCodeburnCacheDir } from './cache-dir.js'
 import { acquireCacheRefreshLock, releaseOwnedRefreshLocksForExit } from './cache-refresh-lock.js'
@@ -74,6 +75,8 @@ export type CachedCall = {
   // depend on the `:obs:` key regex alone. Copilot still assigns the flag
   // at serve time and does not persist it.
   supplementaryAccounting?: boolean
+  // Requests this one call stands for (see ParsedProviderCall.requestCount).
+  requestCount?: number
   // Billing route id the provider recorded (see ParsedProviderCall).
   // Persisted so the row key survives the cache; a cached call without it is
   // a direct-door call or one parsed before the provider carried the column
@@ -327,6 +330,13 @@ export const PROVIDER_ENV_VARS: Record<string, string[]> = {
 // disappear — they are preserved so month-to-date totals never drop.
 export const DURABLE_PROVIDER_NAMES: ReadonlySet<string> = new Set(['copilot'])
 
+// Read in full by a ranged load, like the durable providers: their parse reads
+// cached entries no report shows. hermes seeds its ledger cursors from every
+// cached call, quickdesk has durable sources before its section is stamped
+// durable, and antigravity, devin and gemini decide a re-parse from the cached
+// entry itself (cachedFileNeedsProviderReparse in parser.ts).
+const FULL_LOAD_PROVIDER_NAMES: ReadonlySet<string> = new Set(['hermes', 'quickdesk', 'antigravity', 'devin', 'gemini'])
+
 // Estimated-cost surfacing (#639): providers that set `costIsEstimated` carry a
 // `-est-cost` suffix (or a new entry) so their already-cached sessions reparse
 // once and the flag lands, instead of silently reading as measured. Copilot
@@ -413,7 +423,9 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // otel-trace-metadata-once-v1: trace-level tool/skill/bash metadata is now
   // attributed to one chat span per trace instead of every span, so cached
   // calls carry the old per-span duplication - force one re-parse.
-  copilot: 'cli-shutdown-cost-v1-skills-source-provenance-v1-session-store-v3-chatsession-otel-skills-v1-otel-trace-metadata-once-v1',
+  // transcript-unknown-usage-v1: a transcript call with no token count is
+  // marked estimated; cached entries hold no flag and must re-parse once.
+  copilot: 'cli-shutdown-cost-v1-skills-source-provenance-v1-session-store-v3-chatsession-otel-skills-v1-otel-trace-metadata-once-v1-transcript-unknown-usage-v1',
   // authoritative-usage-v4: persist one Grok session call from top-level
   // authoritative totals, use modelUsage only for priced attribution, clamp
   // reasoning per record, and label mixed sessions estimated.
@@ -433,6 +445,11 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // `billing` (`included` -> subscription, `actual` -> metered). Cached calls
   // hold none, so they must re-parse.
   hermes: 'reasoning-output-accounting-v1-est-cost-routed-ids-workspace-pr-v5-cost-provenance-v3-billing-route-v1-billing-mode-v1',
+  // reported-cost-v1: OpenClaw's per-message `usage.cost.total` is now
+  // preserved through the cache via `costFromBilling`. This is OpenClaw's
+  // first parse version; adding it moves the provider's env fingerprint,
+  // which is what forces the one re-parse that lands the reported dollars.
+  openclaw: 'reported-cost-v1',
   'lingtai-tui': 'token-ledger-registry-activity-v3',
   'ibm-bob': 'worktree-project-grouping-v1',
   // project-path-v1: the parser now records the session's full working
@@ -459,7 +476,12 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // projectPath/workingDirectory instead of basename-only identity.
   // project-group-by-abs-v1 (#1260): parseProviderSources groups by abs
   // projectPath/workingDirectory so same-basename distinct roots stay apart.
-  pi: 'cwd-project-path-v1-project-group-by-abs-v1',
+  // reported-cost-v1: Pi writes a per-message `usage.cost.total`, which is now
+  // preserved through the cache via `costFromBilling` instead of being
+  // re-priced from tokens on every read. (omp, the same parser, has carried
+  // reported costs since reported-cost-v2 below.) Cached calls hold
+  // costUSD: undefined, so they must re-parse once.
+  pi: 'cwd-project-path-v1-project-group-by-abs-v1-reported-cost-v1',
   // project-group-by-abs-v1: shared Pi/OMP serve grouping uses abs identity.
   omp: 'nested-agent-v1-reported-cost-v2-cwd-project-path-v1-project-group-by-abs-v1',
   // archived-subtree-v1 (#1362): the subtree walk no longer filters
@@ -472,7 +494,12 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // parsed call as `route`: `openrouter` and `amazon-bedrock`. Cached calls hold
   // neither, so they must re-parse. v2 also invalidates the OpenRouter-only
   // fingerprint used by pre-merge builds of #1486.
-  opencode: 'session-model-v1-archived-subtree-v1-billing-routes-v2',
+  // unknown-usage-v1: a message with output but no usage is marked estimated.
+  // v2-legacy-union-v1: a session present in both OpenCode 2.x `session_v2` and
+  // the frozen 1.x tables now reads its legacy turns too. Cached parses of an
+  // upgraded database hold only what the 2.x migration carried over, and v2
+  // turns now carry the bare model id 1.x used instead of `provider/model`.
+  opencode: 'session-model-v1-archived-subtree-v1-billing-routes-v2-v2-legacy-union-v1-unknown-usage-v1',
   quickdesk: 'emf-sqlite-v2-est-cost',
   // session-lineage-capture-v1: SessionLineage (CB-1, slice 1) is now carried
   // on the cached file for every kimicode wire. Child evidence is the
@@ -485,9 +512,15 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   kimicode: 'wire-usage-v1-est-cost-session-lineage-capture-v1',
   // archived-subtree-v1: KiloCode shares the SQLite parser and the same schema.
   // billing-routes-v2: its warm cache must move with both shared route fields.
-  'kilo-code': 'worktree-project-grouping-v1-session-model-v1-archived-subtree-v1-billing-routes-v2',
+  'kilo-code': 'worktree-project-grouping-v1-session-model-v1-archived-subtree-v1-billing-routes-v2-v2-legacy-union-v1-unknown-usage-v1',
   'roo-code': 'worktree-project-grouping-v1',
-  warp: 'worktree-project-grouping-v1-est-cost',
+  // billing-cost-v1: Warp's own billing record (total_provider_cost_in_cents,
+  // total_charged_usage, credits_spent) now rides on each call as
+  // `costFromBilling` and is preserved by providerCallToCachedCall. Entries
+  // cached before this hold costUSD: undefined and are re-priced from the
+  // token floor on every read, so they must re-parse once for the real dollars
+  // to land.
+  warp: 'worktree-project-grouping-v1-est-cost-billing-cost-v1',
   antigravity: 'worktree-project-grouping-v6',
 }
 
@@ -560,6 +593,28 @@ export function cacheBucketMonth(file: CachedFile): string {
   return cacheFileSpan(file).bucket
 }
 
+/** A cached file a ranged load held back because the range cannot report on
+ *  it. It keeps what reconcile, the dedup pre-seeds and replays, orphan
+ *  handling and the save need, plus where its member line lives so it can be
+ *  loaded on demand. Never persisted. */
+export type CacheStub = {
+  fingerprint: FileFingerprint
+  bucket: string
+  until: string
+  hasPr: boolean
+  /** Dedup keys per turn, in turn order. */
+  keys: string[][]
+  /** Oldest and newest call timestamp (ms). */
+  lo: number
+  hi: number
+  /** Load position, shared with full entries (see `CacheState.seq`). */
+  seq: number
+  name: string
+  /** Byte span of the member line in `name`; offset -1 in a single-line shard. */
+  offset: number
+  length: number
+}
+
 // Save bookkeeping, held beside the cache rather than on it so it never lands in
 // a shard's JSON or in a caller's deep-equality.
 type CacheState = {
@@ -577,6 +632,19 @@ type CacheState = {
   bucketOf: Map<string, string>
   /** The load scope this cache was read under, for the cross-request memo. */
   scope: string
+  /** The shard directory this cache was read from. */
+  dir: string
+  /** provider -> stubbed paths, valid only while `section` is still the provider's section. */
+  stubs: Map<string, { section: ProviderSection; byPath: Map<string, CacheStub> }>
+  /** Load position of every entry read from disk. An entry replaced since has
+   *  none, and sorts after all loaded ones, which is where a full load's
+   *  `files` object would hold it. */
+  seq: WeakMap<CachedFile, number>
+  /** Every cached file with a call in this range is held in full; null when
+   *  nothing was stubbed. */
+  covered: { startMs: number; endMs: number } | null
+  /** `provider\0bucket` of loaded single-line shards, rewritten by the next save. */
+  legacy: Set<string>
 }
 const cacheStates = new WeakMap<SessionCache, CacheState>()
 
@@ -591,6 +659,11 @@ function stateOf(cache: SessionCache): CacheState {
       fingerprints: new Map(),
       bucketOf: new Map(),
       scope: 'all',
+      dir: sessionCacheDir(),
+      stubs: new Map(),
+      seq: new WeakMap(),
+      covered: null,
+      legacy: new Set(),
     }
     cacheStates.set(cache, state)
   }
@@ -629,6 +702,118 @@ export function markCacheDirty(cache: SessionCache, provider: string, filePath?:
 /** True when any provider section changed since the last save. */
 export function isCacheDirty(cache: SessionCache): boolean {
   return stateOf(cache).dirty
+}
+
+function stubsOf(state: CacheState, cache: SessionCache, provider: string): Map<string, CacheStub> | undefined {
+  const held = state.stubs.get(provider)
+  return held && held.section === cache.providers[provider] ? held.byPath : undefined
+}
+
+/** The paths of `provider` a ranged load holds as stubs (see {@link CacheStub}). */
+export function cacheStubs(cache: SessionCache, provider: string): ReadonlyMap<string, CacheStub> | undefined {
+  return stubsOf(stateOf(cache), cache, provider)
+}
+
+/** True when `provider` has any cached entry, full or stubbed. */
+export function hasCachedEntries(cache: SessionCache, provider: string): boolean {
+  const section = cache.providers[provider]
+  if (!section) return false
+  for (const _ in section.files) return true
+  return (stubsOf(stateOf(cache), cache, provider)?.size ?? 0) > 0
+}
+
+/** Drop a stub whose source is gone, exactly as deleting its entry would. */
+export function evictCacheStub(cache: SessionCache, provider: string, path: string): void {
+  stubsOf(stateOf(cache), cache, provider)?.delete(path)
+  markCacheDirty(cache, provider, path)
+}
+
+function entriesInLoadOrder(state: CacheState, section: ProviderSection, stubs: Map<string, CacheStub> | undefined): Array<[string, CachedFile | CacheStub]> {
+  if (!stubs) return Object.entries(section.files)
+  const loaded: Array<[string, CachedFile | CacheStub, number]> = []
+  const later: Array<[string, CachedFile]> = []
+  for (const [path, file] of Object.entries(section.files)) {
+    const seq = state.seq.get(file)
+    if (seq === undefined) later.push([path, file])
+    else loaded.push([path, file, seq])
+  }
+  for (const [path, stub] of stubs) loaded.push([path, stub, stub.seq])
+  loaded.sort((a, b) => a[2] - b[2])
+  return [...loaded.map(([path, entry]): [string, CachedFile | CacheStub] => [path, entry]), ...later]
+}
+
+/** Every cached entry of `provider`, full or stubbed, in the order a full load
+ *  would hold them in `files`: loaded entries in shard order, then entries
+ *  written since in the order they were written. */
+export function cacheEntriesInLoadOrder(cache: SessionCache, provider: string): Array<[string, CachedFile | CacheStub]> {
+  const section = cache.providers[provider]
+  if (!section) return []
+  const state = stateOf(cache)
+  return entriesInLoadOrder(state, section, stubsOf(state, cache, provider))
+}
+
+export function isCacheStub(entry: CachedFile | CacheStub): entry is CacheStub {
+  return 'keys' in entry
+}
+
+/** Load stubbed members in full, in place, at their load position. A member
+ *  that can no longer be read loses its stub, so the file re-parses like any
+ *  uncached one and the save drops its line. */
+export async function loadCacheStubs(cache: SessionCache, provider: string, paths: Iterable<string>): Promise<void> {
+  const state = stateOf(cache)
+  const stubs = stubsOf(state, cache, provider)
+  const section = cache.providers[provider]
+  if (!stubs || !section) return
+  const byName = new Map<string, Array<[string, CacheStub]>>()
+  for (const path of paths) {
+    const stub = stubs.get(path)
+    if (!stub) continue
+    const list = byName.get(stub.name)
+    if (list) list.push([path, stub])
+    else byName.set(stub.name, [[path, stub]])
+  }
+  for (const [name, list] of byName) {
+    const members = await readMembersAt(join(state.dir, name), list.map(([path, stub]) => [path, stub.offset, stub.length]))
+    for (const [path, stub] of list) {
+      stubs.delete(path)
+      const file = members.get(path)
+      if (file) {
+        section.files[path] = file
+        state.seq.set(file, stub.seq)
+      } else {
+        markBucketDirty(state, provider, stub.bucket)
+      }
+    }
+  }
+}
+
+// Widen what a memoized ranged load holds in full to [startMs, endMs] (and
+// whatever it already covered), loading the stubs that range can report on.
+async function coverRange(cache: SessionCache, startMs: number, endMs: number): Promise<void> {
+  const state = stateOf(cache)
+  const covered = state.covered
+  if (!covered || (startMs >= covered.startMs && endMs <= covered.endMs)) return
+  const from = Math.min(startMs, covered.startMs)
+  const to = Math.max(endMs, covered.endMs)
+  for (const provider of Object.keys(cache.providers)) {
+    const stubs = stubsOf(state, cache, provider)
+    if (!stubs) continue
+    const wanted: string[] = []
+    for (const [path, stub] of stubs) if (stub.hi >= from && stub.lo <= to) wanted.push(path)
+    await loadCacheStubs(cache, provider, wanted)
+  }
+  state.covered = { startMs: from, endMs: to }
+}
+
+/** True when a dirty bucket belongs to a provider whose cache entry is the ONLY
+ *  surviving record of that spend (see {@link DURABLE_PROVIDER_NAMES}): the
+ *  source can be pruned before the next publish, so such a window must never be
+ *  held back by the resident process's coalescing. */
+export function hasDirtyDurableProvider(cache: SessionCache): boolean {
+  for (const provider of stateOf(cache).dirtyBuckets.keys()) {
+    if (DURABLE_PROVIDER_NAMES.has(provider) || cache.providers[provider]?.durable) return true
+  }
+  return false
 }
 
 // ── Env Fingerprint ────────────────────────────────────────────────────
@@ -814,6 +999,7 @@ function validateCall(c: unknown): c is CachedCall {
     && isOptionalNum(o['toolErrors'])
     && isOptionalNum(o['editFailed'])
     && isOptionalBool(o['supplementaryAccounting'])
+    && isOptionalNum(o['requestCount'])
     && isOptionalString(o['route'])
     && (o['billing'] === undefined || parseBillingMode(o['billing'] as string) !== undefined)
     && validateUsage(o['usage'])
@@ -977,15 +1163,27 @@ export function clearLoadCacheMemo(): void {
   clearShardMemo()
 }
 
+/// Is this in-memory cache still the one the published envelope describes? A
+/// holder that deferred its publish (see the coalescing window in parser.ts)
+/// asks before writing: if another process has published since, this object is
+/// a stale pre-image and saving it could drop that process's entries. Dropping
+/// the deferred write instead costs a re-parse, never a wrong number.
+export async function isCacheCurrent(cache: SessionCache): Promise<boolean> {
+  if (!cacheMemo || cacheMemo.cache !== cache) return false
+  const live = await readEnvelope(cacheMemo.dir)
+  return live?.nonce === cacheMemo.nonce
+}
+
 /** Months (UTC `YYYY-MM`, inclusive) a query can possibly report on. The load
  *  widens this by one month BELOW `fromMonth` and none above (see
  *  shardInScope): every cross-range carry in the report reads BACKWARDS from the
  *  first in-range turn, never forwards, so there is nothing above the range to
- *  reach for. */
-export type CacheLoadScope = { fromMonth: string; toMonth: string }
+ *  reach for. `startMs`/`endMs` are the range itself: a cached file the range
+ *  cannot report on is then held as a {@link CacheStub}, not in full. */
+export type CacheLoadScope = { fromMonth: string; toMonth: string; startMs?: number; endMs?: number }
 
 export function monthScopeForRange(start: Date, end: Date): CacheLoadScope {
-  return { fromMonth: monthKey(start.toISOString())!, toMonth: monthKey(end.toISOString())! }
+  return { fromMonth: monthKey(start.toISOString())!, toMonth: monthKey(end.toISOString())!, startMs: start.getTime(), endMs: end.getTime() }
 }
 
 function previousMonth(month: string): string {
@@ -1039,15 +1237,197 @@ async function readEnvelope(dir: string): Promise<CacheEnvelope | null> {
   }
 }
 
+// A shard is written one member per line: `{`, then `"path":{...}` lines
+// comma-terminated except the last, then `}`. It is still one JSON object, so
+// an older build's JSON.parse reads it unchanged, and it never has to exist as
+// one string, which a shard past V8's ~512MB string limit cannot.
+type ShardLine = { key: string; value?: string; file?: unknown; offset: number; length: number }
+
+const SHARD_READ_CHUNK = 1 << 20
+
+function splitMemberLine(line: string): [string, string] | null {
+  if (line.charCodeAt(0) !== 34) return null
+  let i = 1
+  for (; i < line.length; i++) {
+    const c = line.charCodeAt(i)
+    if (c === 92) i++
+    else if (c === 34) break
+  }
+  if (line.charCodeAt(i + 1) !== 58) return null
+  const end = line.charCodeAt(line.length - 1) === 44 ? line.length - 1 : line.length
+  return [JSON.parse(line.slice(0, i + 1)) as string, line.slice(i + 2, end)]
+}
+
+function shardLine(text: string, offset: number, length: number): ShardLine {
+  const split = splitMemberLine(text)
+  if (!split) throw new Error('malformed shard line')
+  return { key: split[0], value: split[1], offset, length }
+}
+
+// A shard's members one at a time, without holding the file. A single-line
+// shard an older build wrote is parsed whole (offset -1). Throws on anything
+// malformed, as JSON.parse would.
+async function* shardLines(path: string): AsyncGenerator<ShardLine> {
+  const handle = await open(path, 'r')
+  try {
+    const head = Buffer.alloc(2)
+    await handle.read(head, 0, 2, 0)
+    if (head[0] !== 0x7b || head[1] !== 0x0a) {
+      const files = JSON.parse(await readFile(path, 'utf-8')) as unknown
+      if (!files || typeof files !== 'object' || Array.isArray(files)) throw new Error('shard is not an object')
+      for (const [key, file] of Object.entries(files)) yield { key, file, offset: -1, length: 0 }
+      return
+    }
+    // One reused buffer, and a line that spans reads is carried as decoded text:
+    // per-line Buffers are off-heap memory only a GC returns, which shows up as
+    // RSS when members run to megabytes. A newline is always a character
+    // boundary, so the decoder never holds bytes across one.
+    const chunk = Buffer.allocUnsafe(SHARD_READ_CHUNK)
+    const decoder = new StringDecoder('utf-8')
+    let pos = 2
+    let lineStart = 2
+    let pending = ''
+    for (;;) {
+      const { bytesRead } = await handle.read(chunk, 0, SHARD_READ_CHUNK, pos)
+      if (bytesRead === 0) break
+      const view = chunk.subarray(0, bytesRead)
+      let from = 0
+      for (let nl = view.indexOf(10); nl !== -1; nl = view.indexOf(10, from)) {
+        const text = pending + decoder.write(view.subarray(from, nl))
+        pending = ''
+        if (text === '}') return
+        yield shardLine(text, lineStart, pos + nl - lineStart)
+        from = nl + 1
+        lineStart = pos + from
+      }
+      if (from < bytesRead) pending += decoder.write(view.subarray(from))
+      pos += bytesRead
+    }
+    if (pending + decoder.end() !== '}') throw new Error('truncated shard')
+  } finally {
+    await handle.close()
+  }
+}
+
+function shardLineFile(line: ShardLine): unknown {
+  return line.file ?? JSON.parse(line.value!)
+}
+
+function shardLineText(line: ShardLine): string {
+  return `${JSON.stringify(line.key)}:${line.value ?? JSON.stringify(line.file)}`
+}
+
+// The writer's side of the format above. `positions`, when given, receives each
+// member's byte span, which is what lets a stub be loaded without the shard.
+async function* shardPayload(members: AsyncIterable<string> | Iterable<string>, positions?: Array<[number, number]>): AsyncGenerator<string> {
+  let pos = 0
+  let first = true
+  for await (const member of members) {
+    const head = first ? '{\n' : ',\n'
+    first = false
+    if (positions) {
+      const length = Buffer.byteLength(member)
+      positions.push([pos + 2, length])
+      pos += 2 + length
+    }
+    yield head + member
+  }
+  yield first ? '{}' : '\n}'
+}
+
+function* memberTexts(files: Record<string, CachedFile>): Generator<string> {
+  for (const [path, file] of Object.entries(files)) yield `${JSON.stringify(path)}:${JSON.stringify(file)}`
+}
+
 // A shard that is missing or malformed costs exactly the provider-months it
 // held, not the provider and never the whole cache: those files re-parse while
 // every other month keeps serving.
 async function loadShard(path: string): Promise<Record<string, CachedFile> | null> {
   try {
-    const parsed = JSON.parse(await readFile(path, 'utf-8'))
-    return validateFiles(parsed) ? parsed : null
+    const files: Record<string, unknown> = {}
+    for await (const line of shardLines(path)) files[line.key] = shardLineFile(line)
+    return validateFiles(files) ? files : null
   } catch {
     return null
+  }
+}
+
+async function readMembersAt(path: string, wanted: Array<[string, number, number]>): Promise<Map<string, CachedFile>> {
+  const out = new Map<string, CachedFile>()
+  try {
+    if (wanted.some(([, offset]) => offset < 0)) {
+      const files = await loadShard(path)
+      for (const [key] of wanted) if (files?.[key]) out.set(key, files[key]!)
+      return out
+    }
+    const handle = await open(path, 'r')
+    try {
+      for (const [key, offset, length] of wanted) {
+        const buf = Buffer.allocUnsafe(length)
+        const { bytesRead } = await handle.read(buf, 0, length, offset)
+        const split = splitMemberLine(buf.toString('utf-8', 0, bytesRead))
+        if (!split || split[0] !== key) continue
+        const file: unknown = JSON.parse(split[1])
+        if (validateCachedFile(file)) out.set(key, file)
+      }
+    } finally {
+      await handle.close()
+    }
+  } catch { /* unreadable: the caller treats every wanted member as gone */ }
+  return out
+}
+
+// Needed by a query over [startMs, endMs]: a call in the range, or something a
+// report reads whatever the range: a spawn anchor (an in-range child folds into
+// it), a failure marker or turn-less file, and a WSL path (its orphan handling
+// depends on the root being online). `lo`/`hi` span the file's call timestamps.
+function fileNeeded(path: string, file: CachedFile, lo: number, hi: number, startMs: number, endMs: number): boolean {
+  if (file.failed || file.turns.length === 0 || isWslUncPath(path)) return true
+  if (file.prLinks?.length && file.isSidechain !== true && file.turns.some(t => t.spawnToolUseIds?.length)) return true
+  return hi === -Infinity || (hi >= startMs && lo <= endMs)
+}
+
+// One in-scope shard of a ranged load: members the range needs in full, the
+// rest as stubs. Null when any member is malformed, as loadShard would be.
+async function readScopedShard(dir: string, name: string, bucket: string, startMs: number, endMs: number): Promise<{ members: Array<[string, CachedFile | CacheStub]>; legacy: boolean } | null> {
+  const members: Array<[string, CachedFile | CacheStub]> = []
+  let legacy = false
+  try {
+    for await (const line of shardLines(join(dir, name))) {
+      if (line.offset < 0) legacy = true
+      const file = shardLineFile(line)
+      if (!validateCachedFile(file)) return null
+      members.push([line.key, scopedMember(line.key, file, bucket, name, line.offset, line.length, startMs, endMs)])
+    }
+    return { members, legacy }
+  } catch {
+    return null
+  }
+}
+
+function scopedMember(path: string, file: CachedFile, bucket: string, name: string, offset: number, length: number, startMs: number, endMs: number): CachedFile | CacheStub {
+  let lo = Infinity
+  let hi = -Infinity
+  for (const turn of file.turns) {
+    for (const call of turn.calls) {
+      const ms = Date.parse(call.timestamp)
+      if (ms < lo) lo = ms
+      if (ms > hi) hi = ms
+    }
+  }
+  if (fileNeeded(path, file, lo, hi, startMs, endMs)) return file
+  return {
+    fingerprint: file.fingerprint,
+    bucket,
+    until: cacheFileSpan(file).until,
+    hasPr: (file.prLinks?.length ?? 0) > 0,
+    keys: file.turns.map(turn => turn.calls.map(call => call.deduplicationKey)),
+    lo,
+    hi,
+    seq: 0,
+    name,
+    offset,
+    length,
   }
 }
 
@@ -1105,8 +1485,10 @@ export async function loadShardMemoized(dir: string, name: string): Promise<Reco
   let raw: string
   try {
     raw = await readFile(join(dir, name), 'utf-8')
-  } catch {
-    return null
+  } catch (err) {
+    // Past the string limit a shard can still be read a member at a time. It is
+    // far over the memo budget, so it is not memoized.
+    return err instanceof RangeError ? loadShard(join(dir, name)) : null
   }
   let files: Record<string, CachedFile>
   try {
@@ -1145,10 +1527,19 @@ export async function loadCache(scope?: CacheLoadScope): Promise<SessionCache> {
   if (!envelope) return afterMissingShardCache()
   const scopeKey = scope ? `${scope.fromMonth}..${scope.toMonth}` : 'all'
   if (cacheMemo && cacheMemo.dir === dir && cacheMemo.nonce === envelope.nonce
-    && (cacheMemo.scope === 'all' || cacheMemo.scope === scopeKey)) return cacheMemo.cache
+    && (cacheMemo.scope === 'all' || cacheMemo.scope === scopeKey)) {
+    if (scope) await coverRange(cacheMemo.cache, scope.startMs ?? -Infinity, scope.endMs ?? Infinity)
+    return cacheMemo.cache
+  }
+  // Released before the new view is read, so the two are never held at once.
+  cacheMemo = null
 
   const cache: SessionCache = { version: CACHE_VERSION, providers: {}, complete: envelope.complete === true }
   const state = stateOf(cache)
+  state.dir = dir
+  const ranged = scope?.startMs !== undefined && scope.endMs !== undefined
+    ? { startMs: scope.startMs, endMs: scope.endMs }
+    : null
   const reads: Promise<void>[] = []
   for (const [provider, meta] of Object.entries(envelope.providers)) {
     const section: ProviderSection = {
@@ -1170,33 +1561,62 @@ export async function loadCache(scope?: CacheLoadScope): Promise<SessionCache> {
     // make pairing range-dependent. The name check closes that window.
     const full = !scope || meta.durable === true || DURABLE_PROVIDER_NAMES.has(provider) || meta.envFingerprint !== computeEnvFingerprint(provider)
     const loaded: Set<string> | null = full ? null : new Set()
+    const stubs = loaded && ranged && !FULL_LOAD_PROVIDER_NAMES.has(provider) ? new Map<string, CacheStub>() : undefined
+    if (stubs) {
+      state.stubs.set(provider, { section, byPath: stubs })
+      state.covered = ranged
+    }
     // Shards are read concurrently but merged in envelope order, so the result
     // never depends on which read finished first. A path that somehow ended up
     // in two shards resolves to the FRESHEST fingerprint and dirties both
     // buckets, so the next save prunes the loser instead of letting it linger.
-    const pending: { bucket: string; files: Promise<Record<string, CachedFile> | null> }[] = []
+    // A ranged load streams its shards one after another instead, so it never
+    // holds more than one shard's needed members beyond what it keeps.
+    const pending: { bucket: string; name: string; files: Promise<Record<string, CachedFile> | null> | null }[] = []
     for (const [bucket, ref] of Object.entries(meta.shards)) {
       if (loaded && !shardInScope(bucket, ref.until, scope!)) continue
       loaded?.add(bucket)
-      pending.push({ bucket, files: loadShardMemoized(dir, ref.name) })
+      pending.push({ bucket, name: ref.name, files: stubs ? null : loadShardMemoized(dir, ref.name) })
     }
     reads.push((async () => {
-      for (const { bucket, files: read } of pending) {
-        const files = await read
+      let seq = 0
+      for (const { bucket, name, files: read } of pending) {
+        let members: Array<[string, CachedFile | CacheStub]> | null = null
+        if (read) {
+          const files = await read
+          if (files) members = Object.entries(files)
+        } else {
+          const scoped = await readScopedShard(dir, name, bucket, ranged!.startMs, ranged!.endMs)
+          if (scoped?.legacy) state.legacy.add(`${provider}\0${bucket}`)
+          members = scoped?.members ?? null
+        }
         // Unreadable: the bucket counts as loaded-and-empty and is marked
         // dirty, so the re-parsed files replace it instead of the stale shard
         // being carried forward forever.
-        if (!files) { markBucketDirty(state, provider, bucket); continue }
-        for (const [path, file] of Object.entries(files)) {
+        if (!members) { markBucketDirty(state, provider, bucket); continue }
+        for (const [path, entry] of members) {
           const key = `${provider}\0${path}`
           const seenIn = state.bucketOf.get(key)
+          let at = seq++
           if (seenIn !== undefined) {
             markBucketDirty(state, provider, seenIn)
             markBucketDirty(state, provider, bucket)
-            if (section.files[path]!.fingerprint.mtimeMs >= file.fingerprint.mtimeMs) continue
+            const prior = section.files[path] ?? stubs!.get(path)!
+            if (prior.fingerprint.mtimeMs >= entry.fingerprint.mtimeMs) continue
+            at = isCacheStub(prior) ? prior.seq : state.seq.get(prior) ?? at
+            if (isCacheStub(prior) !== isCacheStub(entry)) {
+              delete section.files[path]
+              stubs?.delete(path)
+            }
           }
           state.bucketOf.set(key, bucket)
-          section.files[path] = file
+          if (isCacheStub(entry)) {
+            entry.seq = at
+            stubs!.set(path, entry)
+          } else {
+            if (stubs) state.seq.set(entry, at)
+            section.files[path] = entry
+          }
         }
       }
     })())
@@ -1301,11 +1721,22 @@ function shardFileName(provider: string, bucket: string): string {
 // The temp name carries a nonce: two processes writing the SAME final path
 // (the envelope, every save) would otherwise share one temp file and interleave
 // their writes into a torn or foreign payload.
-async function writeFileAtomic(finalPath: string, payload: string): Promise<void> {
+async function writeFileAtomic(finalPath: string, payload: string | AsyncIterable<string>): Promise<void> {
   const tempPath = `${finalPath}.${randomBytes(8).toString('hex')}.tmp`
   const handle = await open(tempPath, 'w', 0o600)
   try {
-    await handle.writeFile(payload, { encoding: 'utf-8' })
+    if (typeof payload === 'string') {
+      await handle.writeFile(payload, { encoding: 'utf-8' })
+    } else {
+      let pending = ''
+      for await (const chunk of payload) {
+        pending += chunk
+        if (pending.length < SHARD_READ_CHUNK) continue
+        await handle.writeFile(pending, { encoding: 'utf-8' })
+        pending = ''
+      }
+      if (pending) await handle.writeFile(pending, { encoding: 'utf-8' })
+    }
     await handle.sync()
   } finally {
     await handle.close()
@@ -1327,10 +1758,16 @@ async function writeFileAtomic(finalPath: string, payload: string): Promise<void
   }
 }
 
-function bucketFiles(section: ProviderSection): { groups: Map<string, Record<string, CachedFile>>; until: Map<string, string> } {
+// A stub opens its bucket's group (at the position a full load would) but
+// never joins it: its member stays on disk until the bucket is rewritten.
+function bucketFiles(entries: Array<[string, CachedFile | CacheStub]>): { groups: Map<string, Record<string, CachedFile>>; until: Map<string, string> } {
   const groups = new Map<string, Record<string, CachedFile>>()
   const until = new Map<string, string>()
-  for (const [path, file] of Object.entries(section.files)) {
+  for (const [path, file] of entries) {
+    if (isCacheStub(file)) {
+      if (!groups.has(file.bucket)) groups.set(file.bucket, {})
+      continue
+    }
     const span = cacheFileSpan(file)
     let group = groups.get(span.bucket)
     if (!group) { group = {}; groups.set(span.bucket, group) }
@@ -1366,6 +1803,13 @@ type ProviderPlan = {
   /** bucket -> the shard name the merge was built from, for the retry below. */
   mergedFrom: Map<string, string | undefined>
   refs: Record<string, ShardRef>
+  stubs: Map<string, CacheStub> | undefined
+  /** Buckets holding a stub, which memory alone cannot rewrite. */
+  partial: Set<string>
+  /** Stub lines a rewrite moved, applied once the envelope publishes. */
+  relocated: Array<[CacheStub, string, number, number]>
+  /** Partial buckets rewritten without their stubs' lines (the source shard was gone). */
+  lost: Set<string>
 }
 
 // Surrender the event loop without microtask overhead. Used inside saveCache
@@ -1385,9 +1829,66 @@ export async function saveCache(cache: SessionCache, verifyStillOwner?: () => Pr
 
   const writeShard = async (provider: string, bucket: string, files: Record<string, CachedFile>): Promise<ShardRef> => {
     const name = shardFileName(provider, bucket)
-    await writeFileAtomic(join(dir, name), JSON.stringify(files))
+    await writeFileAtomic(join(dir, name), shardPayload(memberTexts(files)))
     written.add(name)
     return { name, until: untilMonth(files) }
+  }
+
+  // A bucket holding stubs is written as a full load would write it, members in
+  // load order and entries written since after them, but a stub's member is
+  // copied from the shard it was loaded from instead of rebuilt from memory.
+  // Unchanged, the published shard is kept (#1032).
+  const writePartialShard = async (provider: string, plan: ProviderPlan, bucket: string, from: string | undefined): Promise<ShardRef> => {
+    const files = plan.groups.get(bucket)!
+    if (!from || !existsSync(join(dir, from))) {
+      plan.lost.add(bucket)
+      return writeShard(provider, bucket, files)
+    }
+    const stubs = plan.stubs!
+    let changed = state.legacy.has(`${provider}\0${bucket}`)
+    let until = UNDATED_BUCKET
+    const copied: Array<[CacheStub, number]> = []
+    const members = async function* (): AsyncGenerator<string> {
+      const done = new Set<string>()
+      let index = 0
+      for await (const line of shardLines(join(dir, from))) {
+        const file = files[line.key]
+        const stub = file ? undefined : stubs.get(line.key)
+        if (file && state.seq.has(file)) {
+          const text = `${JSON.stringify(line.key)}:${JSON.stringify(file)}`
+          if (text !== shardLineText(line)) changed = true
+          done.add(line.key)
+          const month = cacheFileSpan(file).until
+          if (month > until) until = month
+          index++
+          yield text
+        } else if (stub && stub.bucket === bucket) {
+          copied.push([stub, index++])
+          if (stub.until > until) until = stub.until
+          yield shardLineText(line)
+        } else {
+          // Replaced, moved or deleted since the load.
+          changed = true
+        }
+      }
+      for (const [path, file] of Object.entries(files)) {
+        if (done.has(path)) continue
+        changed = true
+        const month = cacheFileSpan(file).until
+        if (month > until) until = month
+        yield `${JSON.stringify(path)}:${JSON.stringify(file)}`
+      }
+    }
+    const name = shardFileName(provider, bucket)
+    const positions: Array<[number, number]> = []
+    await writeFileAtomic(join(dir, name), shardPayload(members(), positions))
+    if (!changed) {
+      await retryCacheFileMutation(() => unlink(join(dir, name)))
+      return plan.priorRefs[bucket] ?? { name: from, until }
+    }
+    written.add(name)
+    for (const [stub, index] of copied) plan.relocated.push([stub, name, positions[index]![0], positions[index]![1]])
+    return { name, until }
   }
 
   // Overlay this run's entries for `bucket` onto the published shard `from`,
@@ -1421,8 +1922,11 @@ export async function saveCache(cache: SessionCache, verifyStillOwner?: () => Pr
       // null here in practice; the guard is what makes that safe to rely on.
       const priorFingerprint = state.fingerprints.get(provider)
       const reset = priorFingerprint !== undefined && priorFingerprint !== section.envFingerprint
-      const { groups } = bucketFiles(section)
-      const plan: ProviderPlan = { section, groups, loaded, priorRefs, reset, moved: new Set(), deferred: [], mergedFrom: new Map(), refs: {} }
+      const stubs = stubsOf(state, cache, provider)
+      const { groups } = bucketFiles(entriesInLoadOrder(state, section, stubs))
+      const partial = new Set<string>()
+      for (const stub of stubs?.values() ?? []) partial.add(stub.bucket)
+      const plan: ProviderPlan = { section, groups, loaded, priorRefs, reset, moved: new Set(), deferred: [], mergedFrom: new Map(), refs: {}, stubs, partial, relocated: [], lost: new Set() }
       plans.set(provider, plan)
 
       // An entry whose bucket this run never loaded may ALSO still exist, under
@@ -1446,7 +1950,8 @@ export async function saveCache(cache: SessionCache, verifyStillOwner?: () => Pr
         // ANOTHER process may have republished that shard since, unlinking the
         // file we are about to name — so reuse is conditional on the file still
         // being there, and a vanished one is rewritten from memory.
-        if (prior && !isBucketDirty(state, provider, bucket) && existsSync(join(dir, prior.name))) {
+        const legacy = state.legacy.has(`${provider}\0${bucket}`)
+        if (prior && !isBucketDirty(state, provider, bucket) && !legacy && existsSync(join(dir, prior.name))) {
           plan.refs[bucket] = prior
           continue
         }
@@ -1455,7 +1960,9 @@ export async function saveCache(cache: SessionCache, verifyStillOwner?: () => Pr
         // merged back in or the save would drop them. Deferred to phase two so
         // the read happens against the CURRENT shard, not a stale name.
         if (loaded && !loaded.has(bucket) && prior) { plan.deferred.push(bucket); continue }
-        plan.refs[bucket] = await writeShard(provider, bucket, files)
+        plan.refs[bucket] = partial.has(bucket)
+          ? await writePartialShard(provider, plan, bucket, prior?.name)
+          : await writeShard(provider, bucket, files)
         // Surrender the event loop between shard writes so an interactive
         // TTY's stdin handler (Ink's useInput) can run while a long save
         // publishes a 21k-file cache. The yield is BETWEEN shards - never
@@ -1548,7 +2055,9 @@ export async function saveCache(cache: SessionCache, verifyStillOwner?: () => Pr
         // A carried month whose file vanished and whose content was never in
         // memory cannot be rewritten; dropping the reference is the only honest
         // option, and the sweep retires the name.
-        if (files) shards[bucket] = await writeShard(provider, bucket, files)
+        if (!files) continue
+        if (plan.partial.has(bucket)) plan.lost.add(bucket)
+        shards[bucket] = await writeShard(provider, bucket, files)
       }
       providers[provider] = {
         envFingerprint: plan.section.envFingerprint,
@@ -1585,11 +2094,25 @@ export async function saveCache(cache: SessionCache, verifyStillOwner?: () => Pr
     state.bucketOf.clear()
     // `loaded` deliberately survives: a merged-and-rewritten shard is complete
     // on disk but still partial in memory, so the next save has to merge again.
+    state.legacy.clear()
     for (const [provider, meta] of Object.entries(providers)) {
       state.shards.set(provider, meta.shards)
       state.fingerprints.set(provider, meta.envFingerprint)
       for (const [path, file] of Object.entries(cache.providers[provider]!.files)) {
         state.bucketOf.set(`${provider}\0${path}`, cacheFileSpan(file).bucket)
+      }
+      const plan = plans.get(provider)!
+      if (!plan.stubs) continue
+      for (const [stub, name, offset, length] of plan.relocated) Object.assign(stub, { name, offset, length })
+      for (const [path, stub] of plan.stubs) {
+        if (plan.lost.has(stub.bucket)) plan.stubs.delete(path)
+        else state.bucketOf.set(`${provider}\0${path}`, stub.bucket)
+      }
+      // What was just written is the new load order.
+      let seq = 0
+      for (const [, entry] of entriesInLoadOrder(state, plan.section, plan.stubs)) {
+        if (isCacheStub(entry)) entry.seq = seq++
+        else state.seq.set(entry, seq++)
       }
     }
     // Write-through: the object just published IS the freshest state, so the
@@ -1736,7 +2259,7 @@ export type ReconcileAction =
 
 export function reconcileFile(
   current: FileFingerprint,
-  cached: CachedFile | undefined,
+  cached: Pick<CachedFile, 'fingerprint' | 'lastCompleteLineOffset'> | undefined,
 ): ReconcileAction {
   if (!cached) return { action: 'new' }
 

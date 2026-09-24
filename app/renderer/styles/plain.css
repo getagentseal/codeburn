@@ -28,6 +28,10 @@
   --bar-hi: #3a3a3c;
   --fill: #f0f0f1;
   --hover: #f0f0f1;
+  /* Secondary button face and edge. Light keeps the panel fill and the hairline;
+     dark lifts the face above the card and firms the edge (see the dark blocks). */
+  --btn-face: var(--panel);
+  --btn-line: var(--line);
   --nav-on: rgba(0,0,0,.06);
   --nav-hover: rgba(0,0,0,.035);
   --nav-ink: #181b20;
@@ -84,6 +88,8 @@
     --bar-hi: #cacacd;
     --fill: #2f2f31;
     --hover: #2f2f31;
+    --btn-face: var(--fill);
+    --btn-line: color-mix(in srgb, var(--ink) 22%, transparent);
     --nav-on: rgba(255,255,255,.08);
     --nav-hover: rgba(255,255,255,.04);
     --nav-ink: #ffffff;
@@ -104,6 +110,7 @@
   --ink: #f4f4f5; --mut: #a1a1a6; --mut2: #9a9a9f; --ok: #3ecf8e;
   --warn: #e8b93e; --bad: #f26d6d; --bar: #343436; --bar-hi: #cacacd;
   --fill: #2f2f31; --hover: #2f2f31;
+  --btn-face: var(--fill); --btn-line: color-mix(in srgb, var(--ink) 22%, transparent);
   --nav-on: rgba(255,255,255,.08); --nav-hover: rgba(255,255,255,.04); --nav-ink: #ffffff;
   --tip-bg: #ebebec; --tip-ink: #1b1b1c;
 }
@@ -120,6 +127,7 @@
   --ink: #121214; --mut: #5f5f63; --mut2: #646467; --ok: #0f7455;
   --warn: #925b00; --bad: #c2382f; --bar: #dcdcde; --bar-hi: #3a3a3c;
   --fill: #f0f0f1; --hover: #f0f0f1;
+  --btn-face: var(--panel); --btn-line: var(--line);
   --nav-on: rgba(0,0,0,.06); --nav-hover: rgba(0,0,0,.035); --nav-ink: #181b20;
   --tip-bg: #1b1b1c; --tip-ink: #ffffff;
 }
@@ -438,6 +446,7 @@ body { overflow: hidden; background: var(--bg); color: var(--ink); }
 .about-sec-h { font-size: var(--fs-eyebrow); font-weight: var(--fw-subhead); color: var(--mut2); text-transform: uppercase; letter-spacing: .05em; margin-bottom: 8px; }
 .about-row { display: flex; align-items: center; gap: 12px; padding: 8px 0; font-size: var(--fs-body); color: var(--ink); }
 .about-row .tx small { display: block; color: var(--mut2); font-size: var(--fs-meta); font-weight: 400; margin-top: 2px; }
+.about-row .tx { min-width: 0; }
 .about-row .r { margin-left: auto; display: flex; align-items: center; justify-content: flex-end; gap: var(--sp-2); }
 .about-row .r .set-cap { text-align: right; }
 .set-prov-head { display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-3); }
@@ -463,7 +472,7 @@ body { overflow: hidden; background: var(--bg); color: var(--ink); }
 .set-search-form { border-top: 0; padding-top: 0; padding-bottom: 11px; margin: 0 0 2px; border-bottom: 1px solid var(--line2); }
 .set-input { border: 1px solid var(--line); border-radius: 7px; padding: 6px 10px; font: inherit; font-size: var(--fs-meta); background: var(--panel); color: var(--ink); min-width: 0; }
 .set-input:focus-visible { border-color: var(--accent); }
-.btnp { font-size: var(--fs-meta); font-weight: var(--fw-medium); color: var(--ink); border: 1px solid var(--line); border-radius: 7px; padding: 5px 11px; background: var(--panel); cursor: pointer; }
+.btnp { font-size: var(--fs-meta); font-weight: var(--fw-medium); color: var(--ink); border: 1px solid var(--btn-line); border-radius: 7px; padding: 5px 11px; background: var(--btn-face); cursor: pointer; }
 .btnp-primary { background: var(--accent); color: #fff; border-color: var(--accent); }
 .btnp:disabled { opacity: .45; cursor: default; }
 .set-text-button { padding: 0; border: 0; background: transparent; color: var(--accent-text); text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--accent-text) 42%, transparent); text-underline-offset: 2px; font: inherit; font-size: var(--fs-meta); cursor: pointer; }
@@ -479,11 +488,35 @@ body { overflow: hidden; background: var(--bg); color: var(--ink); }
 .tgl.on { background: var(--accent); }
 .tgl::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: #fff; }
 .tgl.on::after { left: 14px; }
-.set-claim { display: flex; gap: var(--sp-3); padding: var(--sp-3); border-top: 1px solid var(--line2); }
-.set-claim:first-child { border-top: 0; }
-.set-claim > svg { width: 18px; height: 18px; flex: 0 0 auto; color: var(--accent); margin-top: 1px; }
-.set-claim-t { font-size: var(--fs-body); font-weight: var(--fw-medium); color: var(--ink); }
-.set-claim-d { font-size: var(--fs-meta); color: var(--mut); line-height: 1.55; margin-top: 3px; }
+/* Bounded reading column: a wide window must not strand the controls a screen away
+   from the rows they belong to. Left-aligned on the pane's edge, never centred.
+   Every pane is bounded; the panes that hold a table or a multi-field form widen
+   --set-max instead of opting out (.set-p-wide below). */
+.set-p { --set-measure: 392px; --set-max: 760px; }
+.set-p > * { max-width: var(--set-max); }
+.set-p .set-sub, .set-p > .set-cap { max-width: var(--set-measure); }
+/* Row hints are prose and read at the same measure. An identifier — a project path,
+   a model name — is not prose and keeps its own width. */
+.about-row .tx:not(.set-mono) small { max-width: var(--set-measure); }
+/* A table row or a form of five fields needs more than the reading measure. */
+.set-p-wide { --set-max: 980px; }
+.set-p .card > .set-rows { padding: 0 var(--sp-5); }
+.set-rows > .about-row { padding: var(--sp-5) 0; border-top: 1px solid var(--line2); }
+.set-rows > .about-row:first-child { border-top: 0; }
+.set-rows .tx { font-weight: var(--fw-medium); }
+.set-rows .tx small { color: var(--mut); line-height: 1.5; margin-top: var(--sp-1); }
+.set-rows .r .btnp { white-space: nowrap; }
+.set-row-link { display: block; width: fit-content; margin-top: var(--sp-2); }
+/* The window floors at 800px (.win) and 900px (Electron minWidth), so the viewport media
+   query below can never reach these rows: drop the control under the text on row width.
+   Both surfaces a row can sit on are containers, so every .about-row is measured. 540px is
+   the width below which the reading measure plus a control no longer fit side by side; it
+   is reached at a window of about 1060px and below. */
+.set-p .card, .set-p .card > .about-sec { container-type: inline-size; }
+@container (max-width: 540px) {
+  .about-row { flex-direction: column; align-items: flex-start; }
+  .about-row .r { margin-left: 0; flex-wrap: wrap; }
+}
 .set-p .seg { overflow: hidden; padding: 0; border-radius: 8px; }
 .set-p .seg button { border: 0; border-right: 1px solid var(--line2); background: transparent; padding: 5px 11px; font: inherit; font-size: var(--fs-body); color: var(--mut); cursor: pointer; }
 .set-p .seg button:last-child { border-right: 0; }
@@ -493,8 +526,6 @@ body { overflow: hidden; background: var(--bg); color: var(--ink); }
   .set-rail { flex-basis: 58px; padding-inline: 8px; }
   .set-rail-item { justify-content: center; font-size: 0; padding-inline: 8px; }
   .set-pane { padding: 16px; }
-  .about-row { align-items: flex-start; flex-direction: column; }
-  .about-row .r { margin-left: 0; flex-wrap: wrap; }
   .set-alias { grid-template-columns: minmax(0, 1fr) 12px minmax(0, 1fr); }
   .set-alias .btnp { grid-column: 3; justify-self: end; }
 }
@@ -528,6 +559,7 @@ body { overflow: hidden; background: var(--bg); color: var(--ink); }
 .stat .v small { font-size: var(--fs-body); }
 .li .lx b { font-size: var(--fs-body); font-weight: var(--fw-medium); }
 .li .lx span { font-size: var(--fs-label); }
+.li .lx span + span { display: block; }
 .li .val { font-size: var(--fs-body); font-weight: var(--fw-body); }
 th { font-size: var(--fs-label); font-weight: var(--fw-body); padding: 0 var(--sp-3) var(--sp-2); }
 td { font-size: var(--fs-meta); padding: var(--sp-2) var(--sp-3); }

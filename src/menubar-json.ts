@@ -108,6 +108,10 @@ export type ProviderCost = {
   calls?: number
   /** True when the selected period contains cost, calls, sessions, savings, or tokens. */
   hasUsage?: boolean
+  /** Set only on a provider whose spend the headline deliberately leaves out
+   *  (daily aggregates that local tools already report — see
+   *  `excludeProviderFromDay`). Add-only: absent means "counted". */
+  excludedFromTotal?: boolean
   /** Provider-scoped tokens for the period. Absent (not zero) when no day in the
    *  period carried a per-provider token breakdown, so a consumer can tell
    *  "no token data" from "no tokens". */
@@ -134,7 +138,7 @@ import type { ReworkedFile } from './workflow-insights.js'
 import type { PrRow, BranchRow } from './sessions-report.js'
 import type { LiveSessionsBlock } from './live-sessions.js'
 import { buildTelemetrySnapshot, type TelemetrySnapshot, type TelemetrySnapshotInput } from './telemetry-snapshot.js'
-import { sessionCountIsExact, type SessionCountBasis } from './session-count-label.js'
+import type { SessionCountBasis } from './session-count-label.js'
 
 const TOP_ACTIVITIES_LIMIT = 20
 const TOP_FINDINGS_LIMIT = 10
@@ -353,6 +357,12 @@ export type MenubarPayload = {
       cost: number
       calls: number
       hasUsage: boolean
+      /// Present (and always `true`) only on a provider this payload's totals
+      /// deliberately exclude: its rows are daily aggregates the local tools
+      /// pointed at it already report, so counting both double counts. The
+      /// row still carries the real `cost` — a consumer must label it, never
+      /// add it to `cost`.
+      excludedFromTotal?: boolean
       inputTokens?: number
       outputTokens?: number
       sessions?: number
@@ -367,9 +377,10 @@ export type MenubarPayload = {
       cost: number
       savingsUSD: number
       sessions: number
-      /// Present only when `sessionCountBasis` is `identity` and sessions > 0.
-      /// Omitted for lower-bound counts so clients cannot treat cost/count as exact.
-      avgCostPerSession?: number
+      /// Always present: menubar 0.9.14-0.9.24 decode it as required (#1541).
+      /// Exact only when `sessionCountBasis` is `identity`; a client must not
+      /// show it for any other basis.
+      avgCostPerSession: number
       /// How `sessions` was derived. Omitted on older producers. `identity` is
       /// an exact unique count from surviving source files; `partial` is a lower bound.
       sessionCountBasis?: SessionCountBasis
@@ -650,6 +661,7 @@ function buildProviderDetails(providers: ProviderCost[]): MenubarPayload['curren
       cost: p.cost,
       calls: p.calls ?? 0,
       hasUsage: p.hasUsage ?? (p.cost > 0 || (p.calls ?? 0) > 0),
+      ...(p.excludedFromTotal ? { excludedFromTotal: true as const } : {}),
       ...(p.inputTokens === undefined ? {} : { inputTokens: p.inputTokens }),
       ...(p.outputTokens === undefined ? {} : { outputTokens: p.outputTokens }),
       ...(p.sessions === undefined ? {} : { sessions: p.sessions }),
@@ -676,9 +688,7 @@ function buildTopProjects(projects: PeriodData['projects']): MenubarPayload['cur
       cost: p.cost,
       savingsUSD: p.savingsUSD,
       sessions: p.sessions,
-      ...(sessionCountIsExact(p.sessionCountBasis) && p.sessions > 0
-        ? { avgCostPerSession: p.cost / p.sessions }
-        : {}),
+      avgCostPerSession: p.sessions > 0 ? p.cost / p.sessions : 0,
       ...(p.sessionCountBasis ? { sessionCountBasis: p.sessionCountBasis } : {}),
       sessionDetails: (p.sessionDetails ?? []).map(s => ({
         cost: s.cost,

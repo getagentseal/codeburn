@@ -8,16 +8,23 @@ import Testing
 ///
 /// It writes to a throwaway service name (`…menubar.selftest.oauth.v1`) that no
 /// build ever reads, never touches the Claude/Codex production items, and deletes
-/// what it created. If the login Keychain is locked or unavailable — headless CI,
-/// SSH session, no login Keychain — the whole suite is SKIPPED rather than failed;
-/// look for "live Keychain unavailable" in the output to tell a skip from a pass.
+/// what it created. A plain `swift test` never touches the real Keychain at all:
+/// these tests run only with `CODEBURN_TEST_REAL_KEYCHAIN=1` set. Under that flag,
+/// if the login Keychain is locked or unavailable — headless CI, SSH session, no
+/// login Keychain — the whole suite is SKIPPED rather than failed; look for
+/// "live Keychain unavailable" in the output to tell a skip from a pass.
 @Suite("Live Keychain adapter", .serialized)
 struct LiveKeychainCredentialCacheTests {
     private static let service = "org.agentseal.codeburn.menubar.selftest.oauth.v1"
     private static let account = "selftest"
 
+    private static let realKeychainTestsRequested =
+        ProcessInfo.processInfo.environment["CODEBURN_TEST_REAL_KEYCHAIN"] == "1"
+
     /// True when this machine can round-trip a generic password right now.
+    /// Never probes the real Keychain unless explicitly opted into.
     private static let isAvailable: Bool = {
+        guard realKeychainTestsRequested else { return false }
         let live = LiveKeychainCredentialCache()
         do {
             try live.upsert(service: service, account: account, data: Data("probe".utf8))
@@ -33,7 +40,7 @@ struct LiveKeychainCredentialCacheTests {
     @Test("live adapter round-trips write → read → update → delete")
     func liveRoundTrip() throws {
         guard Self.isAvailable else {
-            print("SKIP: live Keychain unavailable on this host")
+            print("SKIP: live Keychain unavailable or CODEBURN_TEST_REAL_KEYCHAIN not set")
             return
         }
         let live = LiveKeychainCredentialCache()
@@ -81,7 +88,7 @@ struct LiveKeychainCredentialCacheTests {
     @Test("live reads never block on an interactive prompt")
     func liveReadIsNonInteractive() throws {
         guard Self.isAvailable else {
-            print("SKIP: live Keychain unavailable on this host")
+            print("SKIP: live Keychain unavailable or CODEBURN_TEST_REAL_KEYCHAIN not set")
             return
         }
         let live = LiveKeychainCredentialCache()

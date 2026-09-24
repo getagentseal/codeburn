@@ -33,10 +33,19 @@ const ACTIVITY_CREDIT_MODELS: Record<string, string> = {
 export function codexCreditRate(model: string): CodexCreditRate | null {
   const mapped = ACTIVITY_CREDIT_MODELS[model] ?? ACTIVITY_CREDIT_MODELS[model.toLowerCase()]
   const m = (mapped ?? model).toLowerCase()
-  if (m.includes('5.4') && m.includes('mini')) return CREDITS_PER_MILLION['gpt-5.4-mini']!
-  if (m.includes('5.4')) return CREDITS_PER_MILLION['gpt-5.4']!
-  if (m.includes('5.5')) return CREDITS_PER_MILLION['gpt-5.5']!
-  return null
+  // Match the version only at a token boundary (start/'-' before, '-'/end
+  // after) so a bare `includes('5.4')` can't catch a substring. The tokens
+  // AFTER the version give the SKU tier: only the base and `-mini` SKUs have
+  // credit rates, so a distinct sibling tier (gpt-5.4-pro, gpt-5.4-nano) must
+  // fall through to the unknown fallback instead of billing at the base rate.
+  const match = m.match(/(?:^|-)(5\.[45])(?:-|$)/)
+  if (!match) return null
+  const version = match[1]!
+  const tierTokens = m.slice(match.index! + match[0].length).split('-')
+  if (tierTokens.includes('pro') || tierTokens.includes('nano')) return null
+  if (version === '5.4' && tierTokens.includes('mini')) return CREDITS_PER_MILLION['gpt-5.4-mini']!
+  if (version === '5.4') return CREDITS_PER_MILLION['gpt-5.4']!
+  return CREDITS_PER_MILLION['gpt-5.5']!
 }
 
 export type CodexCreditTokens = {

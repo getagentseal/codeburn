@@ -52,8 +52,8 @@ struct CopilotQuotaPresentationTests {
     func explicitDisconnectDiffersFromFirstUseAndClears() throws {
         let suiteName = "codeburn.copilot.presentation.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))
-        defaults.removePersistentDomain(forName: suiteName)
-        defer { defaults.removePersistentDomain(forName: suiteName) }
+        TestDefaults.forget(suiteName)
+        defer { TestDefaults.forget(suiteName) }
 
         #expect(!CopilotExplicitDisconnect.isSet(defaults: defaults))
         let firstUse = Presentation.planContent(

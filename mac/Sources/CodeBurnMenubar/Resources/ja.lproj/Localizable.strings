@@ -344,7 +344,7 @@
 "Tracked spend (last %lld days)" = "追跡された支出（過去%lld日間）";
 "Costliest session" = "最も費用のかかったセッション";
 "Retry tax" = "リトライコスト";
-"%1$lld retries across %2$lld edits" = "%2$lld件の編集で%1$lld回のリトライ";
+"%1$lld retries across %2$lld retried edits" = "リトライした%2$lld件の編集で%1$lld回のリトライ";
 "%@ ret/edit" = "%@回/編集";
 "Hides session details" = "セッションの詳細を非表示";
 "Shows session details" = "セッションの詳細を表示";
@@ -658,8 +658,6 @@
 /* MARK: Language picker */
 "Language" = "言語";
 "System" = "システムに従う";
-"Relaunch to apply." = "適用するには再起動してください。";
-"Relaunch" = "再起動";
 "Follows System Settings > Language & Region unless you pick one here." = "ここで選択しない限り、「システム設定 > 言語と地域」の設定に従います。";
 
 /* MARK: Quota pace captions (#1267) */
@@ -714,3 +712,9 @@
 "%1$@ · %2$@ at 80%%" = "%1$@ · %2$@が80%%到達";
 "%1$@ · %2$@ limit reached" = "%1$@ · %2$@が上限到達";
 "Quota crossings (%1$lld%% and %2$lld%%)" = "クォータ通知しきい値（%1$lld%%と%2$lld%%）";
+
+/* MARK: Privacy */
+"Privacy" = "プライバシー";
+"Anonymous usage statistics" = "匿名の利用統計";
+"Managed by the CodeBurn desktop app. Change it there under Settings → Privacy & data." = "CodeBurn デスクトップアプリで管理されています。設定 → プライバシーとデータで変更できます。";
+"Optional usage statistics: the names of the models, tools and providers you use, with bucketed counts of how often each one came up, plus when the app is opened. A random install id, the app version and your country code travel with them. Never your prompts, your code, your project and file names, or exact amounts." = "任意の利用統計です:使用したモデル、ツール、プロバイダーの名前と、それぞれの出現回数を区分けした集計、およびアプリを開いた回数。これらにはランダムなインストールID、アプリのバージョン、国コードが付随します。プロンプト、コード、プロジェクト名やファイル名、正確な金額は一切含まれません。";

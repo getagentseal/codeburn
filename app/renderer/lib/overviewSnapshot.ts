@@ -112,4 +112,18 @@ export function clearOverviewHeadlines(): void {
   } catch { /* storage can be unavailable */ }
 }
 
+const APP_VERSION_KEY = 'codeburn.app-version'
+
+/** On the first launch after an upgrade the cached per-period headlines belong to
+ * the old build; wipe them once so that launch never flashes a stale headline
+ * before the fresh value arrives. No-op when the stored version already matches. */
+export function clearHeadlinesOnUpgrade(currentVersion: string): void {
+  try {
+    const store = storage()
+    if (!store || store.getItem(APP_VERSION_KEY) === currentVersion) return
+    clearOverviewHeadlines()
+    store.setItem(APP_VERSION_KEY, currentVersion)
+  } catch { /* storage can be unavailable */ }
+}
+
 export const __overviewSnapshotStorageKey = STORAGE_KEY

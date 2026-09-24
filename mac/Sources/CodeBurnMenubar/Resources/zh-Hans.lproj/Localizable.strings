@@ -345,7 +345,7 @@
 "Tracked spend (last %lld days)" = "已跟踪支出（最近 %lld 天）";
 "Costliest session" = "花费最高的会话";
 "Retry tax" = "重试成本";
-"%1$lld retries across %2$lld edits" = "%1$lld 次重试，涉及 %2$lld 次编辑";
+"%1$lld retries across %2$lld retried edits" = "%2$lld 次需要重试的编辑中共 %1$lld 次重试";
 "%@ ret/edit" = "%@ 次重试/编辑";
 "Hides session details" = "隐藏会话详情";
 "Shows session details" = "显示会话详情";
@@ -656,8 +656,6 @@
 /* MARK: Language picker */
 "Language" = "语言";
 "System" = "跟随系统";
-"Relaunch to apply." = "重新启动后生效。";
-"Relaunch" = "重新启动";
 "Follows System Settings > Language & Region unless you pick one here." = "除非在此处选择，否则将跟随“系统设置 > 语言与地区”。";
 
 /* MARK: Quota pace captions (#1267) */
@@ -712,3 +710,9 @@
 "%1$@ · %2$@ at 80%%" = "%1$@ · %2$@ 已达 80%%";
 "%1$@ · %2$@ limit reached" = "%1$@ · %2$@ 已达上限";
 "Quota crossings (%1$lld%% and %2$lld%%)" = "配额跨越（%1$lld%% 与 %2$lld%%）";
+
+/* MARK: Privacy */
+"Privacy" = "隐私";
+"Anonymous usage statistics" = "匿名使用统计";
+"Managed by the CodeBurn desktop app. Change it there under Settings → Privacy & data." = "由 CodeBurn 桌面应用管理。请在设置 → 隐私与数据中更改。";
+"Optional usage statistics: the names of the models, tools and providers you use, with bucketed counts of how often each one came up, plus when the app is opened. A random install id, the app version and your country code travel with them. Never your prompts, your code, your project and file names, or exact amounts." = "可选的使用统计信息:您使用的模型、工具和服务商的名称,以及每项出现频率的分段计数,还有应用的打开次数。随附的还有随机安装 ID、应用版本和国家/地区代码。绝不包含您的提示词、代码、项目与文件名称或确切金额。";

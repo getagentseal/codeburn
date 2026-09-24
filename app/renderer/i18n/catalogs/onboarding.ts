@@ -13,7 +13,7 @@ export const onboarding: SectionCatalog = {
 
     'onboarding.consent.title': 'Help improve CodeBurn',
     'onboarding.consent.body': "Share anonymous usage statistics: model and provider mix, task success rates, performance and errors. The daily report includes the names of the models, tools, skills and MCP servers you use, alongside bucketed counts of how often each one came up. Never your prompts, your code, or your project and file names.",
-    'onboarding.consent.label': 'Anonymous telemetry',
+    'onboarding.consent.label': 'Anonymous usage statistics',
     'onboarding.consent.dataLink': 'What data we collect',
     'onboarding.consent.hint': 'Tip: if a provider looks empty, grant Full Disk Access in System Settings › Privacy & Security.',
 
@@ -61,7 +61,7 @@ export const onboarding: SectionCatalog = {
 
     'onboarding.consent.title': 'Aidez à améliorer CodeBurn',
     'onboarding.consent.body': "Partagez des statistiques d'utilisation anonymes : répartition des modèles et fournisseurs, taux de réussite des tâches, performance et erreurs. Le rapport quotidien inclut les noms des modèles, outils, compétences et serveurs MCP que vous utilisez, ainsi que des compteurs groupés indiquant la fréquence de chacun. Jamais vos prompts, votre code, ni les noms de vos projets et fichiers.",
-    'onboarding.consent.label': 'Télémétrie anonyme',
+    'onboarding.consent.label': "Statistiques d'usage anonymes",
     'onboarding.consent.dataLink': 'Quelles données nous collectons',
     'onboarding.consent.hint': "Astuce : si un fournisseur semble vide, autorisez l'accès complet au disque dans Réglages Système › Confidentialité et sécurité.",
 
@@ -109,7 +109,7 @@ export const onboarding: SectionCatalog = {
 
     'onboarding.consent.title': 'CodeBurn の改善にご協力ください',
     'onboarding.consent.body': '匿名の利用統計を共有します:モデルとプロバイダーの構成比、タスクの成功率、パフォーマンスとエラー。日次レポートには、使用しているモデル、ツール、スキル、MCPサーバーの名前と、それぞれの出現回数を区分けした件数が含まれます。プロンプト、コード、プロジェクト名やファイル名は一切含まれません。',
-    'onboarding.consent.label': '匿名テレメトリ',
+    'onboarding.consent.label': '匿名の利用統計',
     'onboarding.consent.dataLink': '収集するデータについて',
     'onboarding.consent.hint': 'ヒント:プロバイダーが空に見える場合は、システム設定 › プライバシーとセキュリティ でフルディスクアクセスを許可してください。',
 
@@ -157,7 +157,7 @@ export const onboarding: SectionCatalog = {
 
     'onboarding.consent.title': 'CodeBurn 개선에 참여하기',
     'onboarding.consent.body': '익명 사용 통계를 공유합니다: 모델 및 제공자 비율, 작업 성공률, 성능 및 오류. 일일 보고서에는 사용 중인 모델, 도구, 스킬, MCP 서버의 이름과 각 항목의 발생 빈도를 구간별로 집계한 수치가 포함됩니다. 프롬프트, 코드, 프로젝트 및 파일 이름은 절대 포함되지 않습니다.',
-    'onboarding.consent.label': '익명 원격 측정',
+    'onboarding.consent.label': '익명 사용 통계',
     'onboarding.consent.dataLink': '수집하는 데이터 안내',
     'onboarding.consent.hint': '팁: 제공자가 비어 있는 것처럼 보이면 시스템 설정 › 개인정보 보호 및 보안에서 전체 디스크 접근 권한을 허용하세요.',
 
@@ -205,7 +205,7 @@ export const onboarding: SectionCatalog = {
 
     'onboarding.consent.title': '帮助改进 CodeBurn',
     'onboarding.consent.body': '分享匿名使用统计:模型与提供商占比、任务成功率、性能与错误。每日报告包含你使用的模型、工具、技能和 MCP 服务器的名称,以及每项出现频率的分档计数。绝不包含你的提示词、代码或项目和文件名称。',
-    'onboarding.consent.label': '匿名遥测',
+    'onboarding.consent.label': '匿名使用统计',
     'onboarding.consent.dataLink': '我们收集哪些数据',
     'onboarding.consent.hint': '提示:如果某个提供商看起来是空的,请在系统设置 › 隐私与安全性 中授予完全磁盘访问权限。',
 
@@ -253,7 +253,7 @@ export const onboarding: SectionCatalog = {
 
     'onboarding.consent.title': '協助改善 CodeBurn',
     'onboarding.consent.body': '分享匿名使用統計:模型與供應商占比、工作成功率、效能與錯誤。每日報告包含你使用的模型、工具、技能和 MCP 伺服器的名稱,以及每項出現頻率的分級計數。絕不包含你的提示詞、程式碼或專案和檔案名稱。',
-    'onboarding.consent.label': '匿名遙測',
+    'onboarding.consent.label': '匿名使用統計',
     'onboarding.consent.dataLink': '我們收集哪些資料',
     'onboarding.consent.hint': '提示:如果某個供應商看起來是空的,請在系統設定 › 隱私權與安全性 中授予完整磁碟取用權。',
 

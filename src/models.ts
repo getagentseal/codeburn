@@ -73,7 +73,8 @@ const CACHE_TTL_MS = 24 * 60 * 60 * 1000
 // Also folded into getPricingGenerationKey() below: a resident/snapshot-caching
 // consumer needs the same "pricing behavior changed" signal this already gives
 // the on-disk LiteLLM cache, not just the on-disk cache itself.
-export const CACHE_SCHEMA_VERSION = 3
+// 4: calculateCost bills an implicit cache-write rate as input for non-Anthropic models.
+export const CACHE_SCHEMA_VERSION = 4
 const WEB_SEARCH_COST = 0.01
 const ONE_HOUR_CACHE_WRITE_MULTIPLIER_FROM_FIVE_MINUTE_RATE = 1.6
 
@@ -502,17 +503,14 @@ const BUILTIN_ALIASES: Record<string, string> = {
   'gemini-3-pro':                   'gemini-3-pro-preview',
   'gemini-3.1-flash-image':         'gemini-3.1-flash-image-preview',
   'gemini-3.1-flash-lite':          'gemini-3.1-flash-lite-preview',
-  // ZCode runs GLM-5.2 through z.ai's start-plan subscription; it isn't in
-  // LiteLLM yet. Price as the nearest released sibling (GLM-5.1) until it is.
-  'GLM-5.2':                        'glm-5p1',
-  // Hermes Agent stores the same model id lowercased (`glm-5.2`) in its
-  // sessions table, so it misses the capitalized alias above and goes
-  // unpriced. Map the lowercase spelling to the same sibling.
-  'glm-5.2':                        'glm-5p1',
-  // GLM-5.3 is not in the LiteLLM snapshot yet. Price as the nearest
-  // released sibling (GLM-5.2 / glm-5p2). Hermes stores the id lowercased.
-  'GLM-5.3':                        'glm-5p2',
-  'glm-5.3':                        'glm-5p2',
+  // ZCode reports GLM-5.2/5.3 capitalized; Hermes/Cline use lowercase. The
+  // snapshot's bare `glm-5.2`/`glm-5.3` rows carry the LIST rate ($1.4/$4.4);
+  // z.ai's own `z-ai/glm-5.2`/`z-ai/glm-5.3` rows are the discounted rate we
+  // actually pay. Point every spelling at the z-ai rows.
+  'glm-5.2':                        'z-ai/glm-5.2',
+  'GLM-5.2':                        'z-ai/glm-5.2',
+  'glm-5.3':                        'z-ai/glm-5.3',
+  'GLM-5.3':                        'z-ai/glm-5.3',
 }
 
 let userAliases: Record<string, string> = {}
@@ -1208,6 +1206,14 @@ export function sanitizeModelForDisplay(model: string): string {
   return model.replace(/[\x00-\x1F\x7F-\x9F]/g, '?').slice(0, 200)
 }
 
+/// The fabricated 1.25x-input write rate only holds for Anthropic models. Any
+/// other model without a published write rate bills those tokens as plain
+/// input, the same rule codex.ts applies when it routes them.
+export function cacheWriteCostPerToken(model: string, costs: ModelCosts): number {
+  if (costs.cacheWriteCostIsExplicit || /claude|anthropic/i.test(model)) return costs.cacheWriteCostPerToken
+  return costs.inputCostPerToken
+}
+
 export function calculateCost(
   model: string,
   inputTokens: number,
@@ -1246,17 +1252,20 @@ export function calculateCost(
   // count would otherwise produce a negative cost that silently subtracts
   // from real spend in aggregate totals. NaN is also handled here; the
   // arithmetic below short-circuits to 0 when any operand is non-finite.
+  const cacheWriteRate = cacheWriteCostPerToken(model, tieredCosts)
   return multiplier * (
     safe(inputTokens) * tieredCosts.inputCostPerToken +
     safe(outputTokens) * tieredCosts.outputCostPerToken +
-    safeFiveMinuteCacheCreation * tieredCosts.cacheWriteCostPerToken +
-    safeOneHourCacheCreation * tieredCosts.cacheWriteCostPerToken * ONE_HOUR_CACHE_WRITE_MULTIPLIER_FROM_FIVE_MINUTE_RATE +
+    safeFiveMinuteCacheCreation * cacheWriteRate +
+    safeOneHourCacheCreation * cacheWriteRate * ONE_HOUR_CACHE_WRITE_MULTIPLIER_FROM_FIVE_MINUTE_RATE +
     safe(cacheReadTokens) * tieredCosts.cacheReadCostPerToken +
     safe(webSearchRequests) * tieredCosts.webSearchCostPerRequest
   )
 }
 
 const autoModelNames: Record<string, string> = {
+  'glm-5.2': 'GLM-5.2',
+  'GLM-5.2': 'GLM-5.2',
   'glm-5.3': 'GLM-5.3',
   'GLM-5.3': 'GLM-5.3',
   'cursor-auto': 'Cursor (auto)',

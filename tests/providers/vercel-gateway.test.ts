@@ -65,6 +65,9 @@ describe('vercel-gateway provider', () => {
     expect(calls).toHaveLength(1)
     expect(calls[0]?.costUSD).toBe(1.25)
     expect(calls[0]?.model).toBe('anthropic/claude-sonnet-4.6')
+    // One row stands for the whole day's requests for that model. There is no
+    // per-request record to yield, so the count rides on the single call.
+    expect(calls[0]?.requestCount).toBe(3)
   })
 
   it('resolves vendor/slug ids through the global short-name table', () => {
@@ -118,5 +121,30 @@ describe('vercel-gateway end-to-end (parseAllSessions network path)', () => {
     const total = projects.reduce((sum, p) => sum + p.totalCostUSD, 0)
 
     expect(total).toBeCloseTo(12.34, 2)
+    // request_count was parsed and then dropped, so a day+model row with three
+    // requests counted as one call on every surface.
+    expect(projects.reduce((sum, p) => sum + p.totalApiCalls, 0)).toBe(3)
+
+    // The network source is written into the session cache as CachedTurns and
+    // served back through cachedCallToApiCall, so the count has to survive both
+    // halves of that round-trip — the total above is the read half, the stored
+    // record is the write half.
+    const { readdirSync, readFileSync } = await import('node:fs')
+    const cacheRoot = join(cacheDir, 'session-cache.v9')
+    const stored = readdirSync(cacheRoot)
+      .map(f => readFileSync(join(cacheRoot, f), 'utf-8'))
+      .join('')
+    expect(stored).toContain('"requestCount":3')
+  })
+
+  it('emits no gateway rows at all without a credential', async () => {
+    delete process.env.AI_GATEWAY_API_KEY
+    delete process.env.VERCEL_OIDC_TOKEN
+    globalThis.fetch = vi.fn(async () => { throw new Error('must not be called') }) as unknown as typeof fetch
+
+    const projects = await parseAllSessions(getDashboardScanRange('week', null, null), 'vercel-gateway')
+
+    expect(projects).toEqual([])
+    expect(globalThis.fetch).not.toHaveBeenCalled()
   })
 })

@@ -70,6 +70,29 @@ export type CodeburnConfig = {
   // Matched against the canonical project path: prefix on a path-segment
   // boundary, case-insensitive, trailing-slash and backslash tolerant.
   proxyPaths?: string[]
+  // Vercel AI Gateway rows are DAILY AGGREGATES per model with no request id,
+  // timestamp or attribution (see src/providers/vercel-gateway.ts), so they
+  // cannot be matched against the local tools that were pointed at the gateway
+  // (Claude Code via ANTHROPIC_BASE_URL, Codex, OpenCode, Cline/Roo/Kilo,
+  // Cursor) — counting both double counts the same spend. Gateway rows are
+  // therefore always shown as their own labelled row but kept OUT of every
+  // headline total unless this is true. Read-side only: the daily cache always
+  // seals the gateway slice, so flipping this re-includes sealed days without
+  // re-fetching anything.
+  includeGatewayInTotals?: boolean
+}
+
+// Read synchronously by the aggregator on every period build, so it is set
+// once per process from config.json (the `preAction` hook), the same way
+// models.ts holds the pricing config.
+let includeGatewayInTotals = false
+
+export function setIncludeGatewayInTotals(value: boolean): void {
+  includeGatewayInTotals = value
+}
+
+export function gatewayIncludedInTotals(): boolean {
+  return includeGatewayInTotals
 }
 
 function getConfigDir(): string {

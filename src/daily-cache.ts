@@ -4,6 +4,7 @@ import { mkdir, open, readdir, readFile, rename, stat, unlink } from 'fs/promise
 import { join } from 'path'
 
 import { getCodeburnCacheDir } from './cache-dir.js'
+import { sweepSupersededCacheFiles } from './cache-sweep.js'
 import type { ProjectFilterTarget } from './parser.js'
 import type { DateRange, ProjectSummary } from './types.js'
 
@@ -189,7 +190,18 @@ import type { DateRange, ProjectSummary } from './types.js'
 // which re-derive to the same rows for direct calls and to "(Bedrock)" rows
 // for Bedrock-shaped ids, but its Hermes column routes are unrecoverable
 // without a re-parse, so hermes joins PENDING_REDERIVE_PROVIDER_VERSIONS.
-export const DAILY_CACHE_VERSION = 33
+// v34: Warp cost accounting changed the same way kiro's did at v11 - Warp's
+// own billing record (provider cost / charged usage / metered credits) now
+// passes through the session cache instead of being re-priced from the token
+// floor, which understated or overstated every Warp day. Days finalized at v33
+// carry the floor figure; the bump re-derives those whose Warp conversations
+// still exist (Warp's sqlite is durable, so effectively all of them) and
+// carries the rest forward untouched. Call counts are unchanged, so no
+// PENDING_REDERIVE entry is needed and the partial-survival guard is unaffected.
+// v35: a non-Anthropic model with no published cache-write rate now bills
+// cache-write tokens at its input rate instead of a fabricated 1.25x. Days
+// finalized at v34 overstate those tokens; the bump re-derives surviving days.
+export const DAILY_CACHE_VERSION = 35
 const MIN_SUPPORTED_VERSION = 28
 
 /// Providers whose per-day CALL COUNT means something different at
@@ -698,6 +710,8 @@ export async function saveDailyCache(cache: DailyCache): Promise<void> {
     try { await unlink(tempPath) } catch { /* ignore */ }
     throw err
   }
+  // Off the hot path and at most once a day: the save is already done.
+  await sweepSupersededCacheFiles()
 }
 
 export function addNewDays(cache: DailyCache, incoming: DailyEntry[], newestDate: string): DailyCache {
@@ -1270,6 +1284,36 @@ export function getDaysInRange(cache: DailyCache, start: string, end: string): D
   return cache.days.filter(d => d.date >= start && d.date <= end)
 }
 
+function phantomAmountBucket(cost: number): string {
+  if (cost < 1) return '<$1'
+  if (cost < 10) return '$1-10'
+  if (cost < 100) return '$10-100'
+  if (cost < 1000) return '$100-1000'
+  return '>$1000'
+}
+
+/// DETECTION-ONLY tripwire for the "phantom spend" anomaly: a rare, non-repro
+/// over-count that attributed cost/calls to days with ZERO underlying source
+/// records. Pure observer — never changes a day, a total, or any output; it only
+/// warns (at most once per run). A non-carried day is expected to be backed by a
+/// fresh source record for its date; a carried/preserved day legitimately has
+/// spend with no live records (its session files expired), so it is never
+/// suspect. `datesWithSourceRecords` is the set of dates the fresh parse
+/// actually produced records for (a date is in it iff it had >=1 record).
+export function detectPhantomSpend(
+  days: DailyEntry[],
+  datesWithSourceRecords: ReadonlySet<string>,
+  warn: (message: string) => void = message => console.warn(message),
+): void {
+  for (const day of days) {
+    if (day.carried === true) continue
+    if (day.cost <= 0 && day.calls <= 0) continue
+    if (datesWithSourceRecords.has(day.date)) continue
+    warn(`codeburn: phantom-spend guard tripped — ${day.date} has spend without source records (${phantomAmountBucket(day.cost)}); totals unchanged, please report`)
+    return
+  }
+}
+
 let lockChain: Promise<unknown> = Promise.resolve()
 
 export function withDailyCacheLock<T>(fn: () => Promise<T>): Promise<T> {
@@ -1472,6 +1516,14 @@ export async function ensureCacheHydrated(
       const merged = parseWasComplete
         ? mergeDayEntries(freshDays, baseline, true, tzSubtraction, true, pendingRederive)
         : mergeDayEntries(baseline, freshDays, false)
+      // Only the complete re-derive re-parses the whole window, so freshDays is
+      // the authoritative record set and every non-carried merged day should be
+      // one of them; the partial path only fills gaps and cannot vouch for
+      // record presence, so it is not checked. Observer only — wrapped so it can
+      // never affect hydration.
+      if (parseWasComplete) {
+        try { detectPhantomSpend(merged, new Set(freshDays.map(d => d.date))) } catch { /* detection must never break hydration */ }
+      }
       c = {
         version: DAILY_CACHE_VERSION,
         savingsConfigHash,

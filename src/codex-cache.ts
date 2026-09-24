@@ -53,6 +53,12 @@ export const CODEX_LEGACY_CACHE_FILE = 'codex-results.json'
 export function codexCacheFileName(version = CODEX_CACHE_VERSION): string {
   return `codex-results.v${version}.json`
 }
+// Discovery only needs each rollout's project, so it reads this small index
+// instead of the whole results file. Keyed by the same fingerprint, so an
+// index that lags the results file only misses, never answers wrong.
+export function codexProjectsFileName(version = CODEX_CACHE_VERSION): string {
+  return `codex-projects.v${version}.json`
+}
 
 export type CodexFileFingerprint = { dev: number; ino: number; mtimeMs: number; sizeBytes: number }
 type FileFingerprint = CodexFileFingerprint
@@ -82,6 +88,8 @@ type ResultCache = {
   version: number
   files: Record<string, FileEntry>
 }
+
+type ProjectEntry = Pick<FileEntry, 'dev' | 'ino' | 'mtimeMs' | 'sizeBytes' | 'project'>
 
 const cacheDirContext = new AsyncLocalStorage<string>()
 
@@ -119,6 +127,57 @@ const memCaches = new Map<string, ResultCache>()
 export function clearCodexMemCaches(): void {
   memCaches.clear()
   inFlightLoads.clear()
+  projectIndexes.clear()
+}
+
+const projectIndexes = new Map<string, Promise<Record<string, ProjectEntry>>>()
+
+function loadProjectIndex(cacheDir: string): Promise<Record<string, ProjectEntry>> {
+  let index = projectIndexes.get(cacheDir)
+  if (!index) {
+    index = readProjectIndex(cacheDir)
+    projectIndexes.set(cacheDir, index)
+  }
+  return index
+}
+
+// Missing (a cache written before the index existed): built once from the
+// results file, which is what discovery read before.
+async function readProjectIndex(cacheDir: string): Promise<Record<string, ProjectEntry>> {
+  try {
+    const parsed = JSON.parse(await readFile(join(cacheDir, codexProjectsFileName()), 'utf-8')) as { version?: unknown; files?: unknown }
+    if (parsed.version === CODEX_CACHE_VERSION && parsed.files && typeof parsed.files === 'object') return parsed.files as Record<string, ProjectEntry>
+  } catch {}
+  const cache = await loadCache(cacheDir)
+  if (Object.keys(cache.files).length > 0) await writeProjectIndex(cacheDir, cache)
+  return cache.files
+}
+
+async function writeProjectIndex(cacheDir: string, cache: ResultCache): Promise<void> {
+  const files: Record<string, ProjectEntry> = {}
+  for (const [path, e] of Object.entries(cache.files)) {
+    files[path] = { dev: e.dev, ino: e.ino, mtimeMs: e.mtimeMs, sizeBytes: e.sizeBytes, project: e.project }
+  }
+  try {
+    await writeFileAtomic(join(cacheDir, codexProjectsFileName()), JSON.stringify({ version: CODEX_CACHE_VERSION, files }))
+  } catch {}
+}
+
+async function writeFileAtomic(finalPath: string, payload: string): Promise<void> {
+  const tempPath = `${finalPath}.${randomBytes(8).toString('hex')}.tmp`
+  const handle = await open(tempPath, 'w', 0o600)
+  try {
+    await handle.writeFile(payload, { encoding: 'utf-8' })
+    await handle.sync()
+  } finally {
+    await handle.close()
+  }
+  try {
+    await rename(tempPath, finalPath)
+  } catch (err) {
+    try { await unlink(tempPath) } catch {}
+    throw err
+  }
 }
 
 // Concurrent callers must share one load. The memo below is only populated
@@ -168,10 +227,16 @@ async function loadCacheFromDisk(cacheDir: string): Promise<ResultCache> {
   return empty
 }
 
-function getEntry(cache: ResultCache, filePath: string, fp: FileFingerprint): FileEntry | null {
-  if (!Object.hasOwn(cache.files, filePath)) return null
-  const entry = cache.files[filePath]
-  if (entry && entry.mtimeMs === fp.mtimeMs && entry.sizeBytes === fp.sizeBytes) {
+function getEntry<T extends ProjectEntry>(files: Record<string, T>, filePath: string, fp: FileFingerprint): T | null {
+  if (!Object.hasOwn(files, filePath)) return null
+  const entry = files[filePath]
+  if (
+    entry
+    && entry.dev === fp.dev
+    && entry.ino === fp.ino
+    && entry.mtimeMs === fp.mtimeMs
+    && entry.sizeBytes === fp.sizeBytes
+  ) {
     return entry
   }
   return null
@@ -212,7 +277,7 @@ export async function readCachedCodexResults(
     const s = await stat(filePath)
     const cache = await loadCache(currentCacheDir())
     const fp = fingerprintFromStat(filePath, s)
-    const entry = getEntry(cache, filePath, fp)
+    const entry = getEntry(cache.files, filePath, fp)
     if (entry) return { kind: 'exact', calls: entry.calls }
     // Rollouts are append-only: the same inode, grown past a boundary we
     // recorded, can be picked up from that boundary instead of re-read whole.
@@ -239,8 +304,9 @@ export async function getCachedCodexProject(
 ): Promise<string | null> {
   try {
     const s = await stat(filePath)
-    const cache = await loadCache(currentCacheDir())
-    const entry = getEntry(cache, filePath, fingerprintFromStat(filePath, s))
+    const cacheDir = currentCacheDir()
+    const files = memCaches.get(cacheDir)?.files ?? await loadProjectIndex(cacheDir)
+    const entry = getEntry(files, filePath, fingerprintFromStat(filePath, s))
     return entry?.project ?? null
   } catch {}
   return null
@@ -317,21 +383,8 @@ export async function flushCodexCache(): Promise<void> {
     }
 
     if (!existsSync(cacheDir)) await mkdir(cacheDir, { recursive: true })
-    const finalPath = getCachePath(cacheDir)
-    const tempPath = `${finalPath}.${randomBytes(8).toString('hex')}.tmp`
-    const payload = JSON.stringify(memCache)
-    const handle = await open(tempPath, 'w', 0o600)
-    try {
-      await handle.writeFile(payload, { encoding: 'utf-8' })
-      await handle.sync()
-    } finally {
-      await handle.close()
-    }
-    try {
-      await rename(tempPath, finalPath)
-    } catch (err) {
-      try { await unlink(tempPath) } catch {}
-      throw err
-    }
+    await writeFileAtomic(getCachePath(cacheDir), JSON.stringify(memCache))
+    await writeProjectIndex(cacheDir, memCache)
+    projectIndexes.delete(cacheDir)
   } catch {}
 }

@@ -28,6 +28,18 @@ describe('detectedProviders', () => {
     expect(entries.every(entry => !entry.idle)).toBe(true)
   })
 
+  it('drops a detail entry whose id cannot round-trip as --provider', () => {
+    // Same rule as the fallback below: the main process rejects anything that
+    // is not a bare lowercase id, so offering it as a filter or an export
+    // target is offering a button that is guaranteed to error.
+    const entries = detectedProviders(payload([
+      { id: 'claude', label: 'Claude', cost: 10, hasUsage: true },
+      { id: 'Cursor Agent', label: 'Cursor Agent', cost: 9, hasUsage: true },
+      { id: 'kilo-code', label: 'KiloCode', cost: 8, hasUsage: true },
+    ]))
+    expect(entries.map(entry => entry.id)).toEqual(['claude', 'kilo-code'])
+  })
+
   it('falls back to the providers map, dropping keys that cannot round-trip as --provider', () => {
     const entries = detectedProviders(payload(undefined, { claude: 4, 'grok build': 2, gemini: 0 }))
     expect(entries).toEqual([{ id: 'claude', label: 'Claude', cost: 4, idle: false }])

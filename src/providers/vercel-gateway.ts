@@ -3,6 +3,13 @@ import type { DateRange } from '../types.js'
 import type { Provider, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
 import { fetchWithTimeout } from '../fetch-utils.js'
 
+// The report is a DAILY AGGREGATE per model: no request ids, no timestamps, no
+// attribution. Nothing in a row can be matched against the local tools that
+// were pointed at the gateway (Claude Code via ANTHROPIC_BASE_URL, Codex,
+// OpenCode, Cline/Roo/Kilo, Cursor), which record the same requests
+// themselves. Gateway spend is therefore shown as its own row and kept out of
+// headline totals unless `includeGatewayInTotals` is set — see
+// `excludeProviderFromDay` in src/usage-aggregator.ts.
 const REPORT_URL = 'https://ai-gateway.vercel.sh/v1/report'
 
 type ReportRow = {
@@ -93,9 +100,14 @@ function createParser(
         if (seenKeys.has(deduplicationKey)) continue
         seenKeys.add(deduplicationKey)
 
+        // One row is a whole day of requests for one model, so it stands for
+        // `request_count` of them. Cost and tokens stay whole on this single
+        // call; only request counters read the count (behavioralCallWeight).
+        const requestCount = row.request_count
         yield {
           provider: 'vercel-gateway',
           model,
+          ...(typeof requestCount === 'number' && requestCount > 1 ? { requestCount } : {}),
           inputTokens,
           outputTokens,
           cacheCreationInputTokens: row.cache_creation_input_tokens ?? 0,

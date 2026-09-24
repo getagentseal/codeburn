@@ -56,6 +56,9 @@ export function MenuBarCard({ art = menubarArt, artLight = menubarArtLight }: { 
   const [status, apply, refresh] = useMacMenubarStatus()
   const [busy, setBusy] = useState<Action | null>(null)
   const [error, setError] = useState<string | null>(null)
+  // Advice, not a failure: the install worked, an older copy is still on disk. The CLI says
+  // this on stdout, where only terminal users ever saw it.
+  const [notice, setNotice] = useState<string | null>(null)
   // Quit and Uninstall confirm in the card, the same way removing a plugin does on this page.
   const [confirming, setConfirming] = useState<'quit' | 'uninstall' | null>(null)
   // What the install is doing right now, from the CLI's own narration. An install takes about
@@ -70,6 +73,7 @@ export function MenuBarCard({ art = menubarArt, artLight = menubarArtLight }: { 
     if (busy) return
     setBusy(kind)
     setError(null)
+    setNotice(null)
     setPhase(null)
     try {
       await call()
@@ -92,6 +96,7 @@ export function MenuBarCard({ art = menubarArt, artLight = menubarArtLight }: { 
       // back as the outdated state rather than a cheerful Running.
       apply(result.status)
       if (!result.ok) setError(result.error ?? t('plugins.menuBar.errorInstall'))
+      else if (result.leftovers?.length) setNotice(t('plugins.menuBar.leftoverNote', { path: result.leftovers[0]! }))
     } finally {
       stop?.()
     }
@@ -161,8 +166,8 @@ export function MenuBarCard({ art = menubarArt, artLight = menubarArtLight }: { 
         </div>
         {/* One note row, always present, so the card is the same height in every state. An
             error answers something the person just pressed, so it wins over the hint. */}
-        <div className={styles.note} data-kind={error ? 'error' : 'hint'} title={error ?? undefined}>
-          {error ?? (status.outdated ? t('plugins.menuBar.updateHint') : '')}
+        <div className={styles.note} data-kind={error ? 'error' : 'hint'} title={error ?? notice ?? undefined}>
+          {error ?? notice ?? (status.outdated ? t('plugins.menuBar.updateHint') : '')}
         </div>
         {/* The status line rides the bottom-left of the card, clear of the wordmark baked into
             the artwork's bottom-right. */}

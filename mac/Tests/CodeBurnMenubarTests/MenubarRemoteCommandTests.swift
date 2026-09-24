@@ -24,6 +24,13 @@ struct MenubarRemoteCommandTests {
         #expect(command?.unregistersLoginItem == true)
     }
 
+    /// The language switch is applied in-process now, so there is no command
+    /// for it: an older desktop that still writes one is simply ignored.
+    @Test("relaunch is not a command any more")
+    func relaunchNoLongerParses() {
+        #expect(MenubarRemoteCommand(rawValue: "relaunch") == nil)
+    }
+
     @Test("settings neither terminates nor unregisters the login item")
     func settingsNeitherTerminatesNorUnregisters() {
         let command = MenubarRemoteCommand(rawValue: "settings")

@@ -1,7 +1,8 @@
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
+import { once } from 'node:events'
 import { createWriteStream, constants as fsConstants } from 'node:fs'
-import { access, chmod, lstat, mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { access, chmod, cp, lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { homedir, platform, tmpdir } from 'node:os'
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import { pipeline } from 'node:stream/promises'
@@ -224,6 +225,206 @@ export {
 
 function userApplicationsDir(): string {
   return join(homedir(), 'Applications')
+}
+
+/// Where a bundle may already live, in the order the desktop app's Menu bar card looks
+/// (app/electron/mac-menubar.ts, locate()). Its Spotlight fallback is deliberately not
+/// mirrored: replacing a bundle is destructive, and a Spotlight hit can name anything.
+function macApplicationsDirs(): string[] {
+  return [userApplicationsDir(), '/Applications']
+}
+
+export type MacInstallTarget = {
+  /// The bundle path the install writes.
+  targetPath: string
+  /// The copy that is already installed, or null. Not the same as targetPath when the
+  /// folder it sits in cannot be written: then it is opened and left alone, not replaced.
+  installedPath: string | null
+  /// Every copy found, in precedence order. Whichever one is not kept gets the notice.
+  found: string[]
+}
+
+/// Replace a copy where it already lives, so a user with CodeBurnMenubar.app in
+/// /Applications does not end up with a second bundle, and a second login item, under
+/// ~/Applications. A directory we cannot write to is never escalated into: the install
+/// falls back to ~/Applications and the copy left behind is reported instead.
+export async function resolveMacInstallTarget(dirs: string[] = macApplicationsDirs()): Promise<MacInstallTarget> {
+  const present: string[] = []
+  for (const dir of dirs) {
+    const candidate = join(dir, APP_BUNDLE_NAME)
+    if (await exists(candidate)) present.push(candidate)
+  }
+  const chosen = present[0]
+  const writable = chosen ? await access(dirname(chosen), fsConstants.W_OK).then(() => true, () => false) : false
+  const targetPath = chosen && writable ? chosen : join(dirs[0]!, APP_BUNDLE_NAME)
+  return { targetPath, installedPath: chosen ?? null, found: present }
+}
+
+/// The copies the user is told about: everything except the one being kept.
+function otherCopies(found: string[], kept: string): string[] {
+  return found.filter(path => path !== kept)
+}
+
+/// Injected by the tests: the placement below has to be driven through failures a real
+/// filesystem will not produce on demand.
+export type BundlePlacementHooks = {
+  rename?: (from: string, to: string) => Promise<void>
+  copy?: (from: string, to: string) => Promise<void>
+  verify?: (appPath: string) => Promise<void>
+  isLivePid?: (pid: number) => boolean
+  now?: () => number
+  log?: (line: string) => void
+}
+
+/// The two names a placement can leave in the target directory, each carrying the pid of the
+/// install that made it. Dot-prefixed, so neither is a second launchable .app.
+const ASIDE_PREFIX = `.${APP_BUNDLE_NAME}.old-`
+const STAGED_PREFIX = `.${APP_BUNDLE_NAME}.new-`
+
+function placementPid(name: string): number | null {
+  const prefix = [ASIDE_PREFIX, STAGED_PREFIX].find(p => name.startsWith(p))
+  if (!prefix) return null
+  const pid = Number(name.slice(prefix.length))
+  return Number.isInteger(pid) && pid > 0 ? pid : null
+}
+
+/// How long a placement whose pid is still live is taken at face value. A placement outlives
+/// its install whenever the last cleanup fails or the process is killed, and pids are reused,
+/// so without a window one recycled pid would refuse every install on that machine from then
+/// on. Ten minutes is far longer than a placement takes and far shorter than a pid cycle.
+const ACTIVE_PLACEMENT_WINDOW_MS = 10 * 60_000
+
+/// Only a pid we can signal is an install of ours: a second `codeburn menubar` runs as the
+/// same user, so EPERM means the pid has been recycled by somebody else's process.
+export function pidIsLive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/// What an install finds of the installs before it. One question answers all of it: is the
+/// pid in the name still alive. A live one means a second install is running right now, and
+/// this one stops before touching anything; a dead one left its files behind, and if the
+/// real name is free its aside copy *is* the user's app, waiting to be put back. Run before
+/// the target is resolved, or a killed install into /Applications would look like no install
+/// at all and the app would quietly move to ~/Applications.
+export async function recoverPlacements(dirs: string[], hooks: BundlePlacementHooks = {}): Promise<void> {
+  const move = hooks.rename ?? rename
+  const isLive = hooks.isLivePid ?? pidIsLive
+  const now = hooks.now ?? Date.now
+  const log = hooks.log ?? console.log
+  const orphans: Array<{ path: string; dir: string; name: string; pid: number }> = []
+  for (const dir of dirs) {
+    for (const name of await readdir(dir).catch(() => [] as string[])) {
+      const pid = placementPid(name)
+      if (pid !== null && pid !== process.pid) orphans.push({ path: join(dir, name), dir, name, pid })
+    }
+  }
+  for (const orphan of orphans) {
+    if (!isLive(orphan.pid)) continue
+    // ctime, not mtime: renaming a bundle aside leaves its own mtime at whenever the app was
+    // last written, which can be months back, while ctime is the moment of the rename.
+    const placed = (await stat(orphan.path).catch(() => null))?.ctimeMs
+    if (placed === undefined || now() - placed > ACTIVE_PLACEMENT_WINDOW_MS) continue
+    throw new Error(
+      `Another CodeBurn Menubar install (pid ${orphan.pid}) is working on ${orphan.path}. ` +
+      `Nothing was changed; try again once it has finished, or delete that file if no install is running.`
+    )
+  }
+  for (const { path, dir, name } of orphans) {
+    const target = join(dir, APP_BUNDLE_NAME)
+    try {
+      if (name.startsWith(ASIDE_PREFIX) && !(await exists(target))) await move(path, target)
+      else await rm(path, { recursive: true, force: true })
+    } catch {
+      // A folder we cannot write to is not a reason to stop: the install either lands
+      // somewhere else or fails on its own terms, with its own message.
+      log(`Could not clear ${path}, left by an earlier install. Delete it by hand when you can.`)
+    }
+  }
+}
+
+/// Put the staged bundle at targetPath, leaving the user with a working app whatever fails.
+/// The copy that is there is renamed aside first, never deleted, so a failed placement can
+/// put it back; only a placement that worked removes it. The aside name is dot-prefixed:
+/// one we cannot remove is still not a second launchable .app sitting in Applications.
+export async function placeMenubarBundle(
+  stagedApp: string,
+  targetPath: string,
+  hooks: BundlePlacementHooks = {},
+): Promise<void> {
+  const move = hooks.rename ?? rename
+  // verbatimSymlinks keeps the framework symlinks inside the bundle as links rather than
+  // resolving them into copies, which is one of the ways a copied bundle stops verifying.
+  const copy = hooks.copy ?? ((from: string, to: string) => cp(from, to, {
+    recursive: true, verbatimSymlinks: true, preserveTimestamps: true,
+  }))
+  const verify = hooks.verify ?? verifyBundleSignature
+  const log = hooks.log ?? console.log
+
+  const dir = dirname(targetPath)
+  const aside = join(dir, `${ASIDE_PREFIX}${process.pid}`)
+  const replacing = await exists(targetPath)
+  if (replacing) await move(targetPath, aside)
+
+  try {
+    try {
+      await move(stagedApp, targetPath)
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'EXDEV') throw err
+      // Staging is on another volume, so the move has to be a copy. Copy into a sibling of
+      // the target and rename that into place: a rename within one directory is atomic, and
+      // nothing half-copied is ever visible under the real name.
+      const sibling = join(dir, `${STAGED_PREFIX}${process.pid}`)
+      try {
+        await rm(sibling, { recursive: true, force: true })
+        await copy(stagedApp, sibling)
+        await move(sibling, targetPath)
+        // A copy is where a signature breaks, and what the stager verified was the staged
+        // bundle, not this one.
+        await verify(targetPath)
+        await rm(stagedApp, { recursive: true, force: true })
+      } finally {
+        await rm(sibling, { recursive: true, force: true }).catch(() => {})
+      }
+    }
+  } catch (err) {
+    await rm(targetPath, { recursive: true, force: true }).catch(() => {})
+    if (replacing) {
+      await move(aside, targetPath).catch(() => {
+        log(`The menu bar app could not be put back. It is at ${aside}; rename it to ${targetPath} to restore it.`)
+      })
+    }
+    throw err
+  }
+
+  if (replacing) {
+    await rm(aside, { recursive: true, force: true }).catch(() => {
+      log(`The previous bundle is still at ${aside}; it is hidden and not running, delete it when you can.`)
+    })
+  }
+}
+
+/// Machine-readable twin of the sentence below, for the desktop app's install
+/// reader (app/electron/mac-menubar.ts), which would otherwise have to match
+/// English prose. Gated the same way scan progress is, so a terminal sees only
+/// the sentence.
+export const LEFTOVER_LINE_PREFIX = 'CODEBURN_LEFTOVER '
+
+export function leftoverBundleLines(leftovers: string[], env: NodeJS.ProcessEnv = process.env): string[] {
+  const lines: string[] = []
+  for (const path of leftovers) {
+    lines.push(`An older copy is still at ${path}. Move it to the Trash; CodeBurn will not delete it for you.`)
+    if (env['CODEBURN_PROGRESS'] === '1') lines.push(`${LEFTOVER_LINE_PREFIX}${path}`)
+  }
+  return lines
+}
+
+function reportLeftoverBundles(leftovers: string[]): void {
+  for (const line of leftoverBundleLines(leftovers)) console.log(line)
 }
 
 async function exists(path: string): Promise<boolean> {
@@ -498,6 +699,10 @@ async function verifyBundleIdentity(appPath: string): Promise<void> {
   if (bundleID !== EXPECTED_BUNDLE_ID) {
     throw new Error(`Unexpected menubar bundle id ${bundleID}; expected ${EXPECTED_BUNDLE_ID}.`)
   }
+  await verifyBundleSignature(appPath)
+}
+
+async function verifyBundleSignature(appPath: string): Promise<void> {
   await runCommand('/usr/bin/codesign', ['--verify', '--deep', '--strict', appPath])
 }
 
@@ -547,24 +752,103 @@ export async function hasRunnableRecordedCli(recordPath: string = PERSISTED_CLI_
   }
 }
 
-async function isAppRunning(): Promise<boolean> {
-  return new Promise((resolve) => {
-    const proc = spawn('/usr/bin/pgrep', ['-f', APP_PROCESS_NAME])
-    proc.on('close', (code) => resolve(code === 0))
-    proc.on('error', () => resolve(false))
-  })
+/// `-x`, not `-f`: the executable inside the bundle is named exactly CodeBurnMenubar, and
+/// matching the whole command line instead would also hit an editor with the bundle's
+/// Info.plist open, or a tail on a log path. The name is the same from either Applications
+/// folder, so a copy running from the other one is still matched. `-a`: pgrep leaves out its
+/// own ancestors by default, and the app's Update button runs this install as the app's
+/// child, so without it the app asking for the update is never seen (#1541).
+export async function runningAppPids(name: string = APP_PROCESS_NAME): Promise<number[]> {
+  const out = await captureCommand('/usr/bin/pgrep', ['-a', '-x', name]).catch(() => '')
+  return out.split('\n').map(Number).filter(pid => Number.isInteger(pid) && pid > 0)
 }
 
-async function killRunningApp(): Promise<void> {
-  await new Promise<void>((resolve) => {
-    const proc = spawn('/usr/bin/pkill', ['-f', APP_PROCESS_NAME])
-    proc.on('close', () => resolve())
-    proc.on('error', () => resolve())
-  })
-  for (let i = 0; i < 10; i++) {
-    if (!(await isAppRunning())) return
+async function isAppRunning(): Promise<boolean> {
+  return (await runningAppPids()).length > 0
+}
+
+/// Every ancestor of `pid` in `ps -A -o pid= -o ppid=` output, nearest first, stopping at
+/// launchd.
+export function ancestorsOf(pid: number, psOutput: string): Set<number> {
+  const parent = new Map<number, number>()
+  for (const line of psOutput.split('\n')) {
+    const [child, ppid] = line.trim().split(/\s+/).map(Number)
+    if (child && ppid !== undefined && Number.isInteger(ppid)) parent.set(child, ppid)
+  }
+  const ancestors = new Set<number>()
+  for (let p = parent.get(pid); p !== undefined && p > 1 && !ancestors.has(p); p = parent.get(p)) ancestors.add(p)
+  return ancestors
+}
+
+async function killRunningApp(pids: number[]): Promise<void> {
+  for (const pid of pids) {
+    try { process.kill(pid, 'SIGTERM') } catch {}
+  }
+  for (let i = 0; i < 10 && pids.some(pidIsLive); i++) {
     await new Promise(r => setTimeout(r, 500))
   }
+}
+
+/// Runs detached in its own session, so nothing that happens to the app or to this CLI
+/// reaches it. Waits for the CLI ($1) to exit first: the app reads the CLI's stderr and waits
+/// on its exit status, so the app must outlive it. Then asks the app ($2) to go, forces it
+/// after 5s, and launches the new bundle only once no old copy is left for `open` to
+/// re-activate instead.
+const RELAUNCH_SCRIPT = `cli=$1 pids=$2; shift 2
+alive() { for p in $pids; do kill -0 "$p" 2>/dev/null && return 0; done; return 1; }
+i=0; while kill -0 "$cli" 2>/dev/null && [ $i -lt 100 ]; do sleep 0.1; i=$((i+1)); done
+kill -TERM $pids 2>/dev/null
+i=0; while alive && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done
+kill -KILL $pids 2>/dev/null
+i=0; while alive && [ $i -lt 20 ]; do sleep 0.1; i=$((i+1)); done
+exec "$@"`
+
+async function relaunchAfterExit(appPids: number[], launch: string[]): Promise<void> {
+  const child = spawn('/bin/sh', ['-c', RELAUNCH_SCRIPT, 'codeburn-relaunch', String(process.pid), appPids.join(' '), ...launch], {
+    detached: true,
+    stdio: 'ignore',
+  })
+  await once(child, 'spawn')
+  child.unref()
+}
+
+export type RelaunchHooks = {
+  processName?: string
+  /// Replaces `open` (and `open -n`); the target path is appended.
+  launchCommand?: string[]
+}
+
+/// Put the staged bundle in place and restart the app into it. From a terminal the running
+/// copy is stopped first, as it always was. From the app's own Update button the running copy
+/// is this process's ancestor: stopping it here would take down the reader of this process's
+/// stderr, so the bundle is swapped while it runs (it keeps running from the unlinked copy)
+/// and a detached helper stops and relaunches it after this process has exited.
+export async function replaceAndRelaunch(
+  unpackedApp: string,
+  targetPath: string,
+  stopRunning: boolean,
+  hooks: RelaunchHooks = {},
+): Promise<void> {
+  const running = stopRunning ? await runningAppPids(hooks.processName) : []
+  if (running.length > 0) {
+    const ancestors = ancestorsOf(process.pid, await captureCommand('/bin/ps', ['-A', '-o', 'pid=', '-o', 'ppid=']).catch(() => ''))
+    if (running.some(pid => ancestors.has(pid))) {
+      await placeMenubarBundle(unpackedApp, targetPath)
+      // -n: the old copy is gone by now, but Launch Services can take a moment to notice,
+      // and a plain `open` in that window re-activates it instead of launching anything.
+      await relaunchAfterExit(running, [...(hooks.launchCommand ?? ['/usr/bin/open', '-n']), targetPath])
+      console.log('CodeBurn Menubar will restart into the new version.')
+      return
+    }
+  }
+  await killRunningApp(running)
+  // Only now, with the new bundle downloaded, checksummed and its identity verified, is
+  // the installed copy touched at all — and it is moved aside, not deleted, until this
+  // returns.
+  await placeMenubarBundle(unpackedApp, targetPath)
+  console.log('Launching CodeBurn Menubar...')
+  const [command, ...args] = hooks.launchCommand ?? ['/usr/bin/open']
+  await runCommand(command!, [...args, targetPath])
 }
 
 /// Windows mirror of the mac install below: pin the release to the CLI's own version, fall back
@@ -954,9 +1238,12 @@ async function uninstallWindowsMenubar(options: InstallOptions): Promise<Install
 /// or `reg` by bare name lets anything dropped next to the CLI impersonate a system tool. Same
 /// rule the tray app follows (windows/src-tauri/src/cli.rs: system32_path).
 export function resolveSystem32Path(exe: string, env: NodeJS.ProcessEnv = process.env): string {
+  return `${windowsDir(env)}\\System32\\${exe}`
+}
+
+function windowsDir(env: NodeJS.ProcessEnv): string {
   const root = env.SystemRoot
-  const base = root && /^[a-zA-Z]:[\\/]/.test(root) ? root.replace(/[\\/]+$/, '') : 'C:\\Windows'
-  return `${base}\\System32\\${exe}`
+  return root && /^[a-zA-Z]:[\\/]/.test(root) ? root.replace(/[\\/]+$/, '') : 'C:\\Windows'
 }
 
 /// Reads `reg query ... /s` output, which prints one blank-line separated block per subkey.
@@ -996,6 +1283,8 @@ export const STORE_IDENTITY_NAME = 'Codeburn.CodeBurn'
 /// Where the tray app sits inside that package: electron-builder puts extraResources under
 /// `app\resources`, and app/build/appx-extensions.xml names the same path in its startup task.
 const STORE_TRAY_SEGMENTS = ['app', 'resources', 'menubar', WINDOWS_BINARY_NAME]
+/// The package's one Application (app/package.json, build.appx.applicationId). Same drift test.
+export const STORE_APP_ID = 'CodeBurn'
 /// Get-AppxPackage on a warm machine answers well inside a second, but a cold PowerShell behind
 /// a slow disk or a policy-loaded profile can take much longer, and `codeburn menubar` is
 /// interactive. Past this the answer is "no Store install" and the .msi route takes over.
@@ -1048,6 +1337,15 @@ export async function findStoreMenubar(
   if (!installLocation) return undefined
   const exePath = join(installLocation, ...STORE_TRAY_SEGMENTS)
   return (await exists(exePath)) ? { installLocation, exePath } : undefined
+}
+
+/// The AppUserModelID to activate the Store package by, read off its install folder, which
+/// Windows names after the package full name: `<Name>_<Version>_<Arch>_<ResourceId>_<PublisherId>`.
+/// The family name is `<Name>_<PublisherId>`.
+export function storeAppUserModelId(installLocation: string): string | undefined {
+  const folder = installLocation.split(/[\\/]/).filter(Boolean).pop() ?? ''
+  const match = /^([^_]+)_[^_]+_[^_]+_[^_]*_([^_]+)$/.exec(folder)
+  return match ? `${match[1]}_${match[2]}!${STORE_APP_ID}` : undefined
 }
 
 async function queryStoreInstallLocation(env: NodeJS.ProcessEnv): Promise<string> {
@@ -1226,8 +1524,15 @@ async function installWindowsMenubarApp(options: InstallOptions): Promise<Instal
     if (installed) {
       log(`A separate .msi install is also present at ${installed.exePath}; leaving it in place and using the Store copy.`)
     }
-    launch(store.exePath)
-    log('Launched CodeBurn Menubar.')
+    // Files under WindowsApps run only inside their package, so spawning the tray exe from a
+    // console fails with EPERM (#1520). Activating the package starts the desktop app, which
+    // starts the tray app when its Menu bar switch is on (the default).
+    const aumid = storeAppUserModelId(store.installLocation)
+    if (!aumid) {
+      throw new Error(`Could not work out how to open the Store package at ${store.installLocation}; open CodeBurn from the Start menu instead.`)
+    }
+    launch(`${windowsDir(env)}\\explorer.exe`, [`shell:AppsFolder\\${aumid}`])
+    log('Opened the CodeBurn desktop app, which starts CodeBurn Menubar. If the tray icon does not appear, turn on Menu bar in the app.')
     return { installedPath: store.exePath, launched: true }
   }
   if (decision.storePresent) {
@@ -1315,15 +1620,17 @@ export async function installMenubarApp(options: InstallOptions = {}): Promise<I
   await ensureSupportedPlatform()
   await persistCodeburnPath()
 
-  const appsDir = userApplicationsDir()
-  const targetPath = join(appsDir, APP_BUNDLE_NAME)
-  const alreadyInstalled = await exists(targetPath)
+  await recoverPlacements(macApplicationsDirs())
+  const { targetPath, installedPath, found } = await resolveMacInstallTarget()
 
-  if (alreadyInstalled && !options.force) {
+  if (installedPath && !options.force) {
+    // The copy that is actually there, which is not targetPath when its folder cannot be
+    // written: `open` on a path with nothing at it fails the command for no reason.
     if (!(await isAppRunning())) {
-      await runCommand('/usr/bin/open', [targetPath])
+      await runCommand('/usr/bin/open', [installedPath])
     }
-    return { installedPath: targetPath, launched: true }
+    reportLeftoverBundles(otherCopies(found, installedPath))
+    return { installedPath, launched: true }
   }
 
   const cliVersion = options.cliVersion ? normalizeCliVersion(options.cliVersion) : ''
@@ -1348,17 +1655,11 @@ export async function installMenubarApp(options: InstallOptions = {}): Promise<I
       unpackedApp = await stageMenubarApp(assets, stagingDir)
     }
 
-    await mkdir(appsDir, { recursive: true })
-    if (alreadyInstalled) {
-      // Kill the running copy before replacing its bundle so `mv` can proceed cleanly and the
-      // user ends up on the new version.
-      await killRunningApp()
-      await rm(targetPath, { recursive: true, force: true })
-    }
-    await rename(unpackedApp, targetPath)
-
-    console.log('Launching CodeBurn Menubar...')
-    await runCommand('/usr/bin/open', [targetPath])
+    await mkdir(dirname(targetPath), { recursive: true })
+    // The match is on the process name, so a copy running from the other Applications
+    // folder is asked to go too.
+    await replaceAndRelaunch(unpackedApp, targetPath, Boolean(installedPath))
+    reportLeftoverBundles(otherCopies(found, targetPath))
     return { installedPath: targetPath, launched: true }
   } finally {
     await rm(stagingDir, { recursive: true, force: true })
