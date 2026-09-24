@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
+import { once } from 'node:events'
 import { createWriteStream, constants as fsConstants } from 'node:fs'
 import { access, chmod, cp, lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { homedir, platform, tmpdir } from 'node:os'
@@ -754,26 +755,100 @@ export async function hasRunnableRecordedCli(recordPath: string = PERSISTED_CLI_
 /// `-x`, not `-f`: the executable inside the bundle is named exactly CodeBurnMenubar, and
 /// matching the whole command line instead would also hit an editor with the bundle's
 /// Info.plist open, or a tail on a log path. The name is the same from either Applications
-/// folder, so a copy running from the other one is still matched. killRunningApp must use
-/// the same matcher, or this reports a process that was never signalled.
-async function isAppRunning(): Promise<boolean> {
-  return new Promise((resolve) => {
-    const proc = spawn('/usr/bin/pgrep', ['-x', APP_PROCESS_NAME])
-    proc.on('close', (code) => resolve(code === 0))
-    proc.on('error', () => resolve(false))
-  })
+/// folder, so a copy running from the other one is still matched. `-a`: pgrep leaves out its
+/// own ancestors by default, and the app's Update button runs this install as the app's
+/// child, so without it the app asking for the update is never seen (#1541).
+export async function runningAppPids(name: string = APP_PROCESS_NAME): Promise<number[]> {
+  const out = await captureCommand('/usr/bin/pgrep', ['-a', '-x', name]).catch(() => '')
+  return out.split('\n').map(Number).filter(pid => Number.isInteger(pid) && pid > 0)
 }
 
-async function killRunningApp(): Promise<void> {
-  await new Promise<void>((resolve) => {
-    const proc = spawn('/usr/bin/pkill', ['-x', APP_PROCESS_NAME])
-    proc.on('close', () => resolve())
-    proc.on('error', () => resolve())
-  })
-  for (let i = 0; i < 10; i++) {
-    if (!(await isAppRunning())) return
+async function isAppRunning(): Promise<boolean> {
+  return (await runningAppPids()).length > 0
+}
+
+/// Every ancestor of `pid` in `ps -A -o pid= -o ppid=` output, nearest first, stopping at
+/// launchd.
+export function ancestorsOf(pid: number, psOutput: string): Set<number> {
+  const parent = new Map<number, number>()
+  for (const line of psOutput.split('\n')) {
+    const [child, ppid] = line.trim().split(/\s+/).map(Number)
+    if (child && ppid !== undefined && Number.isInteger(ppid)) parent.set(child, ppid)
+  }
+  const ancestors = new Set<number>()
+  for (let p = parent.get(pid); p !== undefined && p > 1 && !ancestors.has(p); p = parent.get(p)) ancestors.add(p)
+  return ancestors
+}
+
+async function killRunningApp(pids: number[]): Promise<void> {
+  for (const pid of pids) {
+    try { process.kill(pid, 'SIGTERM') } catch {}
+  }
+  for (let i = 0; i < 10 && pids.some(pidIsLive); i++) {
     await new Promise(r => setTimeout(r, 500))
   }
+}
+
+/// Runs detached in its own session, so nothing that happens to the app or to this CLI
+/// reaches it. Waits for the CLI ($1) to exit first: the app reads the CLI's stderr and waits
+/// on its exit status, so the app must outlive it. Then asks the app ($2) to go, forces it
+/// after 5s, and launches the new bundle only once no old copy is left for `open` to
+/// re-activate instead.
+const RELAUNCH_SCRIPT = `cli=$1 pids=$2; shift 2
+alive() { for p in $pids; do kill -0 "$p" 2>/dev/null && return 0; done; return 1; }
+i=0; while kill -0 "$cli" 2>/dev/null && [ $i -lt 100 ]; do sleep 0.1; i=$((i+1)); done
+kill -TERM $pids 2>/dev/null
+i=0; while alive && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done
+kill -KILL $pids 2>/dev/null
+i=0; while alive && [ $i -lt 20 ]; do sleep 0.1; i=$((i+1)); done
+exec "$@"`
+
+async function relaunchAfterExit(appPids: number[], launch: string[]): Promise<void> {
+  const child = spawn('/bin/sh', ['-c', RELAUNCH_SCRIPT, 'codeburn-relaunch', String(process.pid), appPids.join(' '), ...launch], {
+    detached: true,
+    stdio: 'ignore',
+  })
+  await once(child, 'spawn')
+  child.unref()
+}
+
+export type RelaunchHooks = {
+  processName?: string
+  /// Replaces `open` (and `open -n`); the target path is appended.
+  launchCommand?: string[]
+}
+
+/// Put the staged bundle in place and restart the app into it. From a terminal the running
+/// copy is stopped first, as it always was. From the app's own Update button the running copy
+/// is this process's ancestor: stopping it here would take down the reader of this process's
+/// stderr, so the bundle is swapped while it runs (it keeps running from the unlinked copy)
+/// and a detached helper stops and relaunches it after this process has exited.
+export async function replaceAndRelaunch(
+  unpackedApp: string,
+  targetPath: string,
+  stopRunning: boolean,
+  hooks: RelaunchHooks = {},
+): Promise<void> {
+  const running = stopRunning ? await runningAppPids(hooks.processName) : []
+  if (running.length > 0) {
+    const ancestors = ancestorsOf(process.pid, await captureCommand('/bin/ps', ['-A', '-o', 'pid=', '-o', 'ppid=']).catch(() => ''))
+    if (running.some(pid => ancestors.has(pid))) {
+      await placeMenubarBundle(unpackedApp, targetPath)
+      // -n: the old copy is gone by now, but Launch Services can take a moment to notice,
+      // and a plain `open` in that window re-activates it instead of launching anything.
+      await relaunchAfterExit(running, [...(hooks.launchCommand ?? ['/usr/bin/open', '-n']), targetPath])
+      console.log('CodeBurn Menubar will restart into the new version.')
+      return
+    }
+  }
+  await killRunningApp(running)
+  // Only now, with the new bundle downloaded, checksummed and its identity verified, is
+  // the installed copy touched at all — and it is moved aside, not deleted, until this
+  // returns.
+  await placeMenubarBundle(unpackedApp, targetPath)
+  console.log('Launching CodeBurn Menubar...')
+  const [command, ...args] = hooks.launchCommand ?? ['/usr/bin/open']
+  await runCommand(command!, [...args, targetPath])
 }
 
 /// Windows mirror of the mac install below: pin the release to the CLI's own version, fall back
@@ -1581,19 +1656,9 @@ export async function installMenubarApp(options: InstallOptions = {}): Promise<I
     }
 
     await mkdir(dirname(targetPath), { recursive: true })
-    if (installedPath) {
-      // Kill the running copy before replacing its bundle so `mv` can proceed cleanly and the
-      // user ends up on the new version. The match is on the process name, so a copy running
-      // from the other Applications folder is asked to go too.
-      await killRunningApp()
-    }
-    // Only now, with the new bundle downloaded, checksummed and its identity verified, is
-    // the installed copy touched at all — and it is moved aside, not deleted, until this
-    // returns.
-    await placeMenubarBundle(unpackedApp, targetPath)
-
-    console.log('Launching CodeBurn Menubar...')
-    await runCommand('/usr/bin/open', [targetPath])
+    // The match is on the process name, so a copy running from the other Applications
+    // folder is asked to go too.
+    await replaceAndRelaunch(unpackedApp, targetPath, Boolean(installedPath))
     reportLeftoverBundles(otherCopies(found, targetPath))
     return { installedPath: targetPath, launched: true }
   } finally {
