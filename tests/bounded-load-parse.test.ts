@@ -113,16 +113,17 @@ describe('bounded load through the provider parse', () => {
     expect(JSON.stringify(boundedSnapshot)).toBe(JSON.stringify(await snapshot('all')))
   })
 
-  it('evicts a deleted transcript that was only a stub from its shard on disk', async () => {
+  it('evicts a deleted transcript that was only a stub from its piece on disk', async () => {
     const doomed = rollout('04-10', 'aadoomed', '2099-04-10T10:00:00.000Z', 2)
-    const kept = rollout('04-12', 'cckept', '2099-04-12T10:00:00.000Z', 2)
+    const kept = rollout('04-10', 'cckept', '2099-04-10T12:00:00.000Z', 2)
     rollout('05-01', 'bbtoday', '2099-05-01T10:00:00.000Z', 2)
     await parseAllSessions(undefined, 'codex')
-    const aprilShard = async (): Promise<string> => {
+    const aprilPiece = async (): Promise<string> => {
       const envelope = JSON.parse(await readFile(join(sessionCacheDir(), 'envelope.json'), 'utf-8'))
-      return readFile(join(sessionCacheDir(), envelope.providers.codex.shards['2099-04'].name), 'utf-8')
+      const index = JSON.parse(await readFile(join(sessionCacheDir(), envelope.providers.codex.index), 'utf-8'))
+      return readFile(join(sessionCacheDir(), index.pieces['2099-04-10']), 'utf-8')
     }
-    const before = await aprilShard()
+    const before = await aprilPiece()
     const line = (text: string, path: string) => text.split('\n').find(l => l.startsWith(JSON.stringify(path) + ':'))?.replace(/,$/, '')
     expect(line(before, doomed)).toBeDefined()
 
@@ -132,7 +133,7 @@ describe('bounded load through the provider parse', () => {
 
     rmSync(doomed)
     await reparse(may1)
-    const after = await aprilShard()
+    const after = await aprilPiece()
     expect(after).not.toContain(doomed)
     expect(line(after, kept)).toBe(line(before, kept))
     expect(Object.keys(JSON.parse(after))).toEqual([kept])

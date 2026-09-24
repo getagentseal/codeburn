@@ -8,7 +8,7 @@
 //                               discovered source stays, flagged or not
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtemp, mkdir, writeFile, rm, unlink } from 'fs/promises'
+import { mkdtemp, mkdir, readFile, writeFile, rm, unlink } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { createRequire } from 'node:module'
@@ -18,8 +18,8 @@ import { calculateCost } from '../src/models.js'
 import { aggregateProjectsIntoDays } from '../src/day-aggregator.js'
 import { DAILY_CACHE_VERSION, currentTzKey, ensureCacheHydrated, saveDailyCache } from '../src/daily-cache.js'
 import { clearSessionCache, isSessionHydrationComplete, parseAllSessions, setParseReuseValidator } from '../src/parser.js'
-import { CACHE_VERSION, clearLoadCacheMemo, computeEnvFingerprint, loadCache, PROVIDER_PARSE_VERSIONS, saveCache } from '../src/session-cache.js'
-import { cacheDirSnapshot, readCacheOnDisk, writeCacheOnDisk } from './fixtures/session-cache-io.js'
+import { CACHE_VERSION, clearLoadCacheMemo, computeEnvFingerprint, loadCache, PROVIDER_PARSE_VERSIONS, saveCache, sessionCacheDir } from '../src/session-cache.js'
+import { publishedPieces, readCacheOnDisk, writeCacheOnDisk } from './fixtures/session-cache-io.js'
 import type { SessionSource, SessionParser, ParsedProviderCall } from '../src/providers/types.js'
 import { setHome } from './setup/home.js'
 
@@ -3555,20 +3555,19 @@ describe.skipIf(!isSqliteAvailable())('(sc) month-sharded cache integration for 
     // retainWhilePresent: >90d rows serve and the entry survives its save.
     expect(sumInput(await parseAllSessions(undefined, 'copilot'))).toBe(200)
 
-    // Appending an OLDER row moves the file's oldest-turn month, which
-    // re-buckets the shard. The path must live in exactly ONE shard file —
-    // a stale copy in the old bucket would resurrect dropped data on a
-    // partial load. cacheDirSnapshot exposes raw shard bytes; the merged
+    // Appending an OLDER row moves the file's oldest-turn month. The path must
+    // live in exactly ONE piece file — a stale copy would resurrect dropped
+    // data on a partial load. The raw piece bytes show it; the merged
     // loadCache view (which collapses duplicates) cannot see this.
     insertStoreRow(dbPath, 'sess-ret', 150, 0, 0, at(130))
     clearSessionCache()
     clearLoadCacheMemo()
     expect(sumInput(await parseAllSessions(undefined, 'copilot'))).toBe(350)
 
-    const snapshot = await cacheDirSnapshot()
-    const shardSections = snapshot.split('\n').filter(s => s.length > 0 && !s.startsWith('envelope.json:'))
-    // The shards are JSON, so a Windows path appears with its separators escaped.
-    const holding = shardSections.filter(s => s.includes(JSON.stringify(dbPath).slice(1, -1)))
+    const pieces = Object.values(await publishedPieces('copilot'))
+    const bodies = await Promise.all(pieces.map(name => readFile(join(sessionCacheDir(), name), 'utf-8')))
+    // The pieces are JSON, so a Windows path appears with its separators escaped.
+    const holding = bodies.filter(s => s.includes(JSON.stringify(dbPath).slice(1, -1)))
     expect(holding).toHaveLength(1)
     const disk = await readCacheOnDisk()
     expect(disk.providers['copilot']!.files[dbPath]!.turns.flatMap(t => t.calls)).toHaveLength(3)

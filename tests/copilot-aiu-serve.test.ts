@@ -78,7 +78,7 @@ describe.skipIf(!isSqliteAvailable())('cachedCallToApiCall threads nanoAiu', () 
   })
 
   it('serves nanoAiu on a cold parse and a warm cache read without a CACHE_VERSION bump', async () => {
-    expect(CACHE_VERSION).toBe(9)
+    expect(CACHE_VERSION).toBe(10)
 
     clearSessionCache()
     const cold = await parseAllSessions(undefined, 'copilot')
@@ -88,6 +88,6 @@ describe.skipIf(!isSqliteAvailable())('cachedCallToApiCall threads nanoAiu', () 
     clearSessionCache()
     const warm = await parseAllSessions(undefined, 'copilot')
     expect(collectNanoAiu(warm)).toEqual([1_500_000_000])
-    expect(CACHE_VERSION).toBe(9)
+    expect(CACHE_VERSION).toBe(10)
   })
 })

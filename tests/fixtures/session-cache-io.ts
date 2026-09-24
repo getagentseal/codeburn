@@ -10,6 +10,7 @@ import {
   markCacheDirty,
   saveCache,
   sessionCacheDir,
+  type CachedFile,
   type SessionCache,
 } from '../../src/session-cache.js'
 
@@ -32,4 +33,21 @@ export async function cacheDirSnapshot(): Promise<string> {
   const names = (await readdir(dir)).sort()
   const parts = await Promise.all(names.map(async name => `${name}:${await readFile(join(dir, name), 'utf-8')}`))
   return parts.join('\n')
+}
+
+/** The published pieces of `provider` (UTC day -> file name), straight off disk. */
+export async function publishedPieces(provider: string): Promise<Record<string, string>> {
+  const dir = sessionCacheDir()
+  const envelope = JSON.parse(await readFile(join(dir, 'envelope.json'), 'utf-8')) as { providers: Record<string, { index: string }> }
+  const index = envelope.providers[provider]?.index
+  if (!index) return {}
+  return (JSON.parse(await readFile(join(dir, index), 'utf-8')) as { pieces: Record<string, string> }).pieces
+}
+
+/** Every member the published pieces of `provider` hold, straight off disk. */
+export async function publishedMembers(provider: string): Promise<Record<string, CachedFile>> {
+  const dir = sessionCacheDir()
+  const files: Record<string, CachedFile> = {}
+  for (const name of Object.values(await publishedPieces(provider))) Object.assign(files, JSON.parse(await readFile(join(dir, name), 'utf-8')))
+  return files
 }

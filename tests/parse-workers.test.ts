@@ -220,14 +220,15 @@ async function writeForkedCodexPair(codexHome: string, day: string, tag: string,
   for (const [name, body] of order) await writeCodexRollout(codexHome, day, name, body)
 }
 
-/// Cache shard file names carry a random nonce, so compare bodies keyed by
-/// `<provider>.<month>` instead of by file name.
+/// Cache piece file names carry a random nonce, so compare bodies keyed by
+/// `<provider>.<day>` instead of by file name. An index names pieces by their
+/// nonce, so it is compared through the pieces it names.
 async function shardBodies(cacheDir: string): Promise<Record<string, string>> {
-  const dir = join(cacheDir, 'session-cache.v9')
+  const dir = join(cacheDir, 'session-cache.v10')
   const out: Record<string, string> = {}
   for (const name of (await readdir(dir).catch(() => []))) {
-    if (name === 'envelope.json' || !name.endsWith('.json')) continue
-    const key = name.split('.').slice(0, 2).join('.')
+    if (name === 'envelope.json' || name.startsWith('index.') || !name.endsWith('.json')) continue
+    const key = name.split('.').slice(0, 2).join('.') + (name.endsWith('.keys.json') ? '.keys' : '')
     out[key] = createHash('sha256').update(await readFile(join(dir, name))).digest('hex')
   }
   return out

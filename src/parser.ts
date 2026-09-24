@@ -29,6 +29,7 @@ import {
   type SessionCache,
   beginColdHydration,
   cacheEntriesInLoadOrder,
+  cacheHiddenFingerprint,
   cacheStubs,
   cleanupOrphanedTempFiles,
   computeEnvFingerprint,
@@ -42,6 +43,7 @@ import {
   isCacheDirty,
   isCacheStub,
   loadCache,
+  loadCacheHiddenKeys,
   loadCacheStubs,
   markCacheDirty,
   markProviderComplete,
@@ -2062,6 +2064,7 @@ async function scanProjectDirs(
     }))
   }
   const servedStubs: string[][][] = []
+  const hiddenUnchanged: string[] = []
 
   for (const [i, { filePath, dirName, source }] of discovered.entries()) {
     allDiscoveredFiles.add(filePath)
@@ -2071,7 +2074,13 @@ async function scanProjectDirs(
     const cached = section.files[filePath]
     const stub = cached ? undefined : stubs?.get(filePath)
     const action = reconcileFile(fp, cached ?? stub)
-    if (!readOnly && deferToBackgroundFill(filePath, fp, cached ?? stub)) {
+    // Cached, but in no month this range reports on, and unchanged: nothing to
+    // parse or serve. A changed one re-parses as if uncached, as it always did.
+    const hidden = cached || stub || readOnly ? undefined : cacheHiddenFingerprint(diskCache, 'claude', filePath)
+    if (hidden && reconcileFile(fp, { fingerprint: hidden }).action === 'unchanged') {
+      hiddenUnchanged.push(filePath)
+      continue
+    } else if (!readOnly && deferToBackgroundFill(filePath, fp, cached ?? stub)) {
       continue
     } else if (stub && (readOnly || action.action === 'unchanged')) {
       if (readOnly && action.action !== 'unchanged') readOnlyServedStale = true
@@ -2134,6 +2143,11 @@ async function scanProjectDirs(
     }
   }
   for (const keys of servedStubs) for (const turn of keys) for (const key of turn) seenMsgIds.add(key)
+  // Only a whole-file parse can replay an older transcript's message ids (a
+  // fork or resume); an append's new region never does, so it reads no keys.
+  if (hiddenUnchanged.length > 0 && changedFiles.some(f => !f.append)) {
+    for (const keys of await loadCacheHiddenKeys(diskCache, 'claude', hiddenUnchanged)) for (const turn of keys) for (const key of turn) seenMsgIds.add(key)
+  }
 
   const parseProgress = createScanProgress('parsing changed claude sessions', changedFiles.length)
   const progressTotal = changedFiles.length
