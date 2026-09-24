@@ -48,9 +48,10 @@ describe('probeRoots mirrors discovery resolution', () => {
     ])
   })
 
-  it('cursor-agent reports the projects dir and the attribution db', async () => {
+  it('cursor-agent reports the projects dir, the chats dir and the attribution db', async () => {
     expect(await createCursorAgentProvider('/tmp/ca').probeRoots!()).toEqual([
       { path: join('/tmp/ca', 'projects'), label: 'projects' },
+      { path: join('/tmp/ca', 'chats'), label: 'chats' },
       { path: join('/tmp/ca', 'ai-tracking', 'ai-code-tracking.db'), label: 'db' },
     ])
   })

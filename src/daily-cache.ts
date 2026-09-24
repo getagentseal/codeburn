@@ -217,7 +217,10 @@ import type { DateRange, ProjectSummary } from './types.js'
 // and the session cache still holds their calls, so the bump re-derives them.
 // Calls whose spans were already pruned from agent-traces.db keep the old
 // label: the copilot re-parse only replaces calls the DB still holds.
-export const DAILY_CACHE_VERSION = 38
+// v39: #986 Cursor Agent reads CLI sessions that exist only in
+// ~/.cursor/chats/*/*/store.db. Days finalized at v38 miss those calls; the
+// bump re-derives surviving days. Call counts only rise.
+export const DAILY_CACHE_VERSION = 39
 const MIN_SUPPORTED_VERSION = 28
 
 /// Providers whose per-day CALL COUNT means something different at

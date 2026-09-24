@@ -407,7 +407,9 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // instead of the 500-char display truncation. Cached sessions hold a
   // fraction of their turns, so they must re-parse. v2 bills the user text
   // once per user message instead of once per assistant message.
-  'cursor-agent': 'workspaceless-transcript-v1-full-turn-accounting-v2',
+  // store-db-v1 (#986): sessions with no exported transcript are read from
+  // ~/.cursor/chats/*/*/store.db.
+  'cursor-agent': 'workspaceless-transcript-v1-full-turn-accounting-v2-store-db-v1',
   // source-provenance-v1 (#944): CLI sessions were misread as VS Code
   // transcripts (both carry producer 'copilot-agent'), skipping the shutdown
   // input/cache rollup; this bump re-parses them so the missing tokens land.

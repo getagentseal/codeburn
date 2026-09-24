@@ -1,11 +1,11 @@
 import { createHash } from 'crypto'
 import { existsSync } from 'fs'
 import { readdir, readFile, stat } from 'fs/promises'
-import { join, basename } from 'path'
+import { join, basename, dirname } from 'path'
 import { homedir } from 'os'
 
-import { calculateCost, getShortModelName } from '../models.js'
-import { openDatabase, type SqliteDatabase } from '../sqlite.js'
+import { calculateCost, getModelCosts, getShortModelName } from '../models.js'
+import { blobToText, openDatabase, type SqliteDatabase } from '../sqlite.js'
 import { normalizeContentBlocks } from '../content-utils.js'
 import { estimateTokensFromChars } from '../token-estimate.js'
 import type {
@@ -50,6 +50,16 @@ const TOOL_RESULT_MARKER = /^\s*\[Tool result\]\b/i
 const USER_QUERY_OPEN = '<user_query>'
 const USER_QUERY_CLOSE = '</user_query>'
 const warnedUnrecognizedTranscripts = new Set<string>()
+const STORE_DB_NAME = 'store.db'
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+// Cursor stamps each prompt with the local wall-clock minute and its offset:
+// `<timestamp>Thursday, Sep 3, 2026, 6:52 AM (UTC-7)</timestamp>`.
+const PROMPT_TIMESTAMP = /<timestamp>[A-Za-z]+, ([A-Za-z]{3}) (\d{1,2}), (\d{4}), (\d{1,2}):(\d{2}) (AM|PM) \(UTC(?:([+-]\d{1,2})(?::(\d{2}))?)?\)<\/timestamp>/
+// Root conversation-state blob (protobuf): field 1 repeats the message blob
+// ids in order, field 9 is the workspace URI, field 26 a millisecond stamp.
+const ROOT_MESSAGE_FIELD = 1
+const ROOT_WORKSPACE_FIELD = 9
+const ROOT_TIMESTAMP_FIELD = 26
 const CONVERSATION_SUMMARY_QUERY = `
   SELECT conversationId, model, title, updatedAt
   FROM conversation_summaries
@@ -79,6 +89,10 @@ function getCursorAgentBaseDir(baseDirOverride?: string): string {
 
 function getProjectsDir(baseDir: string): string {
   return join(baseDir, 'projects')
+}
+
+function getChatsDir(baseDir: string): string {
+  return join(baseDir, 'chats')
 }
 
 function getAttributionDbPath(baseDir: string): string {
@@ -418,6 +432,318 @@ function parseTranscript(raw: string): { turns: ParsedTurn[]; recognized: boolea
   return { turns, recognized }
 }
 
+function parsePromptTimestamp(text: string): string | null {
+  const m = PROMPT_TIMESTAMP.exec(text)
+  if (!m) return null
+  const month = MONTHS.indexOf(m[1]!)
+  if (month < 0) return null
+  const hour = (Number(m[4]) % 12) + (m[6] === 'PM' ? 12 : 0)
+  const sign = m[7]?.startsWith('-') ? -1 : 1
+  const offsetMinutes = sign * (Math.abs(Number(m[7] ?? 0)) * 60 + Number(m[8] ?? 0))
+  const ms = Date.UTC(Number(m[3]), month, Number(m[2]), hour, Number(m[5])) - offsetMinutes * 60_000
+  return Number.isNaN(ms) ? null : new Date(ms).toISOString()
+}
+
+type ProtoField = { field: number; value: number | Uint8Array }
+
+function readVarint(buf: Uint8Array, pos: number): [number, number] | null {
+  let result = 0
+  let scale = 1
+  while (pos < buf.length) {
+    const byte = buf[pos++]!
+    result += (byte & 0x7f) * scale
+    if (byte < 0x80) return [result, pos]
+    scale *= 128
+    if (scale > 2 ** 63) return null
+  }
+  return null
+}
+
+function readProtoFields(buf: Uint8Array): ProtoField[] | null {
+  const fields: ProtoField[] = []
+  let pos = 0
+  while (pos < buf.length) {
+    const key = readVarint(buf, pos)
+    if (!key) return null
+    pos = key[1]
+    const field = Math.floor(key[0] / 8)
+    const wire = key[0] % 8
+    if (wire === 0) {
+      const v = readVarint(buf, pos)
+      if (!v) return null
+      fields.push({ field, value: v[0] })
+      pos = v[1]
+    } else if (wire === 2) {
+      const len = readVarint(buf, pos)
+      if (!len || len[1] + len[0] > buf.length) return null
+      fields.push({ field, value: buf.subarray(len[1], len[1] + len[0]) })
+      pos = len[1] + len[0]
+    } else if (wire === 1) {
+      pos += 8
+    } else if (wire === 5) {
+      pos += 4
+    } else {
+      return null
+    }
+  }
+  return pos === buf.length ? fields : null
+}
+
+type StoreMessage = {
+  role?: string
+  content?: unknown
+}
+
+type StoreContentBlock = {
+  type?: string
+  text?: string
+  toolName?: string
+  args?: unknown
+  providerOptions?: { cursor?: { modelName?: unknown } }
+}
+
+type StoreTurn = ParsedTurn & { timestamp: string; model: string | null }
+
+type StoreSession = {
+  agentId: string
+  workspacePath: string | null
+  turns: StoreTurn[]
+}
+
+function toBytes(value: unknown): Uint8Array | null {
+  if (value instanceof Uint8Array) return value
+  if (typeof value === 'string') return Buffer.from(value, 'utf-8')
+  return null
+}
+
+// Every conversation-state root still in the store, oldest first, merged into
+// one message order. The latest root alone drops what Cursor summarized away
+// on a long session; older roots still hold those messages.
+function readStoreMessages(db: SqliteDatabase): { messages: StoreMessage[]; workspaceUri: string | null } {
+  const rows = db.query<{ id: string; data: unknown }>('SELECT id, data FROM blobs ORDER BY rowid')
+  const jsonBlobs = new Map<string, Uint8Array>()
+  const others: Uint8Array[] = []
+  for (const row of rows) {
+    const data = toBytes(row.data)
+    if (!data || typeof row.id !== 'string') continue
+    if (data[0] === 0x7b) jsonBlobs.set(row.id, data)
+    else others.push(data)
+  }
+
+  const order: string[] = []
+  const seen = new Set<string>()
+  let workspaceUri: string | null = null
+  for (const data of others) {
+    const fields = readProtoFields(data)
+    if (!fields || !fields.some(f => f.field === ROOT_TIMESTAMP_FIELD && typeof f.value === 'number')) continue
+    const ids: string[] = []
+    for (const f of fields) {
+      if (f.field !== ROOT_MESSAGE_FIELD || typeof f.value === 'number' || f.value.length !== 32) continue
+      ids.push(Buffer.from(f.value).toString('hex'))
+    }
+    if (ids.length === 0 || !ids.every(id => jsonBlobs.has(id))) continue
+    for (const id of ids) {
+      if (seen.has(id)) continue
+      seen.add(id)
+      order.push(id)
+    }
+    const ws = fields.find(f => f.field === ROOT_WORKSPACE_FIELD && typeof f.value !== 'number')
+    if (ws) workspaceUri = blobToText(ws.value as Uint8Array)
+  }
+
+  const messages: StoreMessage[] = []
+  for (const id of order) {
+    try {
+      messages.push(JSON.parse(blobToText(jsonBlobs.get(id)!)) as StoreMessage)
+    } catch {
+      // A blob that is not a message contributes nothing.
+    }
+  }
+  return { messages, workspaceUri }
+}
+
+function readStoreSession(dbPath: string, fallbackTimestamp: string): StoreSession | null {
+  let db: SqliteDatabase | null = null
+  try {
+    db = openDatabase(dbPath)
+    const metaRow = db.query<{ value: unknown }>(`SELECT value FROM meta WHERE key = '0'`)[0]
+    if (!metaRow || typeof metaRow.value !== 'string' || !/^(?:[0-9a-f]{2})+$/i.test(metaRow.value)) return null
+    const meta = JSON.parse(Buffer.from(metaRow.value, 'hex').toString('utf-8')) as { agentId?: unknown; createdAt?: unknown }
+    const agentId = meta.agentId
+    if (typeof agentId !== 'string' || agentId !== basename(dirname(dbPath))) return null
+
+    const { messages, workspaceUri } = readStoreMessages(db)
+    let timestamp = typeof meta.createdAt === 'number' ? normalizeTimestamp(meta.createdAt) ?? fallbackTimestamp : fallbackTimestamp
+    let lastUserFull = ''
+    let userBilled = true
+    let model: string | null = null
+    const turns: StoreTurn[] = []
+
+    for (const message of messages) {
+      const blocks = (typeof message.content === 'string'
+        ? [{ type: 'text', text: message.content }]
+        : Array.isArray(message.content) ? message.content : []) as StoreContentBlock[]
+
+      if (message.role === 'user') {
+        const text = blocks.filter(b => b.type === 'text').map(b => b.text ?? '').join(' ')
+        const query = extractUserQuery(text, Number.POSITIVE_INFINITY)
+        // Cursor-injected context (<user_info>, conversation summaries) is
+        // not a prompt and never appears in the exported transcript.
+        if (!query) continue
+        lastUserFull = query
+        userBilled = false
+        timestamp = parsePromptTimestamp(text) ?? timestamp
+        continue
+      }
+
+      if (message.role !== 'assistant') continue
+      const bodyParts: string[] = []
+      const reasoningParts: string[] = []
+      const tools: string[] = []
+      for (const block of blocks) {
+        if (block.type === 'text' && block.text) {
+          bodyParts.push(block.text)
+        } else if (block.type === 'reasoning') {
+          if (block.text) reasoningParts.push(block.text)
+          const name = block.providerOptions?.cursor?.modelName
+          if (typeof name === 'string' && name) model = name
+        } else if (block.type === 'tool-call' && block.toolName) {
+          tools.push(`cursor:${block.toolName.toLowerCase()}`)
+          if (block.args !== undefined) {
+            try {
+              bodyParts.push(JSON.stringify(block.args))
+            } catch {
+              // Unserializable tool input contributes its name only (above).
+            }
+          }
+        }
+      }
+      const body = bodyParts.join('\n').trim()
+      const reasoning = reasoningParts.join('\n').trim()
+      // Empty placeholders (an aborted or errored step) never reach the transcript.
+      if (!body && !reasoning && tools.length === 0) continue
+
+      turns.push({
+        userMessage: lastUserFull.slice(0, MAX_USER_TEXT_LENGTH),
+        userTextFull: lastUserFull,
+        carried: userBilled,
+        assistant: { body, reasoning, tools },
+        timestamp,
+        model,
+      })
+      userBilled = true
+    }
+
+    // The model is named on reasoning blocks only; steps before the first one
+    // ran on the same model.
+    const firstModel = turns.find(t => t.model)?.model ?? null
+    for (const turn of turns) {
+      if (turn.model) break
+      turn.model = firstModel
+    }
+
+    let workspacePath: string | null = null
+    if (workspaceUri?.startsWith('file://')) {
+      try {
+        // Not fileURLToPath: on Windows it rejects a drive-less file URI, and
+        // only the dash-joined project name is needed here.
+        workspacePath = decodeURIComponent(new URL(workspaceUri).pathname)
+      } catch {
+        workspacePath = null
+      }
+    }
+    return { agentId, workspacePath, turns }
+  } finally {
+    db?.close()
+  }
+}
+
+function resolveStoreModel(raw: string | null): string {
+  // A slug CodeBurn cannot price would show as $0; the Auto estimate is the
+  // same fallback transcripts use.
+  return raw && getModelCosts(raw) ? raw : 'cursor-agent-auto'
+}
+
+function createStoreParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
+  return {
+    async *parse(): AsyncGenerator<ParsedProviderCall> {
+      const fallbackTimestamp = (await stat(source.path)).mtime.toISOString()
+      let session: StoreSession | null
+      try {
+        session = readStoreSession(source.path, fallbackTimestamp)
+      } catch {
+        session = null
+      }
+      if (!session) {
+        if (!warnedUnrecognizedTranscripts.has(source.path)) {
+          warnedUnrecognizedTranscripts.add(source.path)
+          process.stderr.write(`codeburn: skipped ${basename(dirname(source.path))}/${STORE_DB_NAME}: unrecognized cursor-agent store\n`)
+        }
+        return
+      }
+
+      // Same derivation as the dash-joined projects/ directory name transcripts use.
+      const project = session.workspacePath
+        ? prettifyProjectId(session.workspacePath.replace(/[^A-Za-z0-9]+/g, '-'))
+        : undefined
+
+      for (let turnIndex = 0; turnIndex < session.turns.length; turnIndex++) {
+        const turn = session.turns[turnIndex]!
+        const deduplicationKey = `cursor-agent:${session.agentId}:${turnIndex}`
+        if (seenKeys.has(deduplicationKey)) continue
+        seenKeys.add(deduplicationKey)
+
+        const model = resolveStoreModel(turn.model)
+        const inputTokens = turn.carried ? 0 : estimateTokens(turn.userTextFull.length)
+        const outputTokens = estimateTokens(turn.assistant.body.length)
+        const reasoningTokens = estimateTokens(turn.assistant.reasoning.length)
+
+        yield {
+          provider: 'cursor-agent',
+          model,
+          inputTokens,
+          outputTokens,
+          cacheCreationInputTokens: 0,
+          cacheReadInputTokens: 0,
+          cachedInputTokens: 0,
+          reasoningTokens,
+          webSearchRequests: 0,
+          costUSD: calculateCost(costModel(model), inputTokens, outputTokens + reasoningTokens, 0, 0, 0),
+          costIsEstimated: true,
+          tools: turn.assistant.tools,
+          bashCommands: [],
+          timestamp: turn.timestamp,
+          speed: 'standard',
+          deduplicationKey,
+          userMessage: turn.userMessage,
+          sessionId: session.agentId,
+          ...(project ? { project } : {}),
+        }
+      }
+    },
+  }
+}
+
+// Store-only sessions: a session whose transcript was exported is read from the
+// transcript alone, so the two can never both count.
+async function appendStoreSources(
+  chatsDir: string,
+  transcriptIds: Set<string>,
+  sources: SessionSource[],
+): Promise<void> {
+  const hashDirs = await readdir(chatsDir, { withFileTypes: true }).catch(() => [])
+  for (const hashDir of hashDirs) {
+    if (!hashDir.isDirectory()) continue
+    const agentDirs = await readdir(join(chatsDir, hashDir.name), { withFileTypes: true }).catch(() => [])
+    for (const agentDir of agentDirs) {
+      if (!agentDir.isDirectory() || !UUID_LIKE.test(agentDir.name) || transcriptIds.has(agentDir.name)) continue
+      const path = join(chatsDir, hashDir.name, agentDir.name, STORE_DB_NAME)
+      if (!existsSync(path)) continue
+      sources.push({ path, project: 'cursor-agent', provider: 'cursor-agent' })
+    }
+  }
+}
+
 function createParser(
   source: SessionSource,
   seenKeys: Set<string>,
@@ -528,6 +854,7 @@ function createParser(
 export function createCursorAgentProvider(baseDirOverride?: string): Provider {
   const baseDir = getCursorAgentBaseDir(baseDirOverride)
   const projectsDir = getProjectsDir(baseDir)
+  const chatsDir = getChatsDir(baseDir)
   const dbPath = getAttributionDbPath(baseDir)
   const summariesByConversationId = new Map<string, ConversationSummary>()
 
@@ -548,14 +875,13 @@ export function createCursorAgentProvider(baseDirOverride?: string): Provider {
     async probeRoots(): Promise<ProbeRoot[]> {
       return [
         { path: projectsDir, label: 'projects' },
+        { path: chatsDir, label: 'chats' },
         { path: dbPath, label: 'db' },
       ]
     },
 
     async discoverSessions(): Promise<SessionSource[]> {
-      if (!existsSync(projectsDir)) return []
-
-      const projectEntries = await readdir(projectsDir, { withFileTypes: true })
+      const projectEntries = existsSync(projectsDir) ? await readdir(projectsDir, { withFileTypes: true }) : []
       const sources: SessionSource[] = []
 
       for (const entry of projectEntries) {
@@ -573,10 +899,13 @@ export function createCursorAgentProvider(baseDirOverride?: string): Provider {
         await appendTranscriptSources(transcriptDir, projectId, sources)
       }
 
+      const transcriptIds = new Set(sources.map(s => toConversationId(s.path)))
+      await appendStoreSources(chatsDir, transcriptIds, sources)
       return sources
     },
 
     createSessionParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
+      if (basename(source.path) === STORE_DB_NAME) return createStoreParser(source, seenKeys)
       return createParser(source, seenKeys, dbPath, summariesByConversationId)
     },
   }
