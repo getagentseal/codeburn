@@ -55,4 +55,4 @@ None at the provider level; the metadata file is the cached source path and the 
 
 1. Reproduce with a minimal session directory: `<id>.json` plus `<id>.messages.json`.
 2. Run `tests/providers/cline-cli.test.ts`.
-3. This provider shares no code with `vscode-cline-parser.ts` — changes here cannot affect Cline, Roo Code, KiloCode, or IBM Bob.
+3. This provider shares no code with `vscode-cline-parser.ts` — changes here cannot affect Cline, KiloCode, or IBM Bob.

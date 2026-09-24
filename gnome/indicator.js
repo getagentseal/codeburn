@@ -51,7 +51,6 @@ const PROVIDERS = [
   { id: 'kilo-code', label: 'Kilo Code' },
   { id: 'kiro', label: 'Kiro' },
   { id: 'kimi', label: 'Kimi' },
-  { id: 'roo-code', label: 'Roo Code' },
 ];
 
 const CURRENCIES = [

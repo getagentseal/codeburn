@@ -37,7 +37,7 @@ A report row is a **daily aggregate per model**: one cost, one token count and
 one `request_count` for a whole day, with no request ids, timestamps or
 attribution. Nothing in it can be matched against the local tools you pointed at
 the gateway — Claude Code (`ANTHROPIC_BASE_URL`), Codex, OpenCode,
-Cline/Roo/Kilo, Cursor — which already record those same requests from their own
+Cline/Kilo, Cursor — which already record those same requests from their own
 session files. Counting both double counts the same spend.
 
 So gateway spend is:

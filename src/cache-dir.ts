@@ -13,6 +13,10 @@ export function getCodeburnCacheDir(): string {
   return override?.trim() ? override : join(homedir(), '.cache', 'codeburn')
 }
 
+/** Providers CodeBurn no longer reads. Their session cache sections and daily
+ *  history slices are dropped on load, so a removed tool leaves nothing behind. */
+export const RETIRED_PROVIDER_NAMES: ReadonlySet<string> = new Set(['roo-code'])
+
 /** A versioned cache file is the only source when it exists. Legacy adoption is ENOENT-only. */
 export type ExistingTextFile =
   | { status: 'absent' }

@@ -37,7 +37,6 @@ For the architectural picture, see `../architecture.md`.
 | [OMP](omp.md) | JSONL | `src/providers/pi.ts` | `tests/providers/omp.test.ts` |
 | [Qwen](qwen.md) | JSONL | `src/providers/qwen.ts` | none |
 | [Quick Desktop](quickdesk.md) | EMF JSONL + SQLite | `src/providers/quickdesk.ts` | `tests/providers/quickdesk.test.ts` |
-| [Roo Code](roo-code.md) | JSON | `src/providers/roo-code.ts` | `tests/providers/roo-code.test.ts` |
 | [Zerostack](zerostack.md) | JSON | `src/providers/zerostack.ts` | `tests/providers/zerostack.test.ts` |
 | [Grok Build](grok.md) | JSON/JSONL | `src/providers/grok.ts` | `tests/providers/grok.test.ts` |
 | [Grok Bot](grokbot.md) | JSON | `src/providers/grokbot.ts` | `tests/providers/grokbot.test.ts` |
@@ -62,7 +61,7 @@ For the architectural picture, see `../architecture.md`.
 
 | Helper | Used by | Source |
 |---|---|---|
-| [vscode-cline-parser](vscode-cline-parser.md) | `cline`, `ibm-bob`, `kilo-code`, `roo-code` | `src/providers/vscode-cline-parser.ts` |
+| [vscode-cline-parser](vscode-cline-parser.md) | `cline`, `ibm-bob`, `kilo-code` | `src/providers/vscode-cline-parser.ts` |
 
 ## File Format
 

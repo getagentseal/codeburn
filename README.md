@@ -156,7 +156,7 @@ That registers a local MCP server over stdio. Your agent can then answer "where 
 
 It reads the same files on disk that the CLI reads. The server answers from that local data and makes no network call of its own, and project names are pseudonymized unless the agent asks for them.
 
-## Works with 41 tools
+## Works with 40 tools
 
 CodeBurn detects the tools you already use. There is nothing to configure and no folder to point it at. If a tool is installed and has sessions on disk, it shows up. Each logo links to that tool's page.
 
@@ -179,7 +179,6 @@ CodeBurn detects the tools you already use. There is nothing to configure and no
   <a href="docs/providers/pi.md" title="Pi"><img src="https://raw.githubusercontent.com/getagentseal/codeburn/main/assets/providers/pi.png" alt="Pi" height="34" /></a>
   <a href="docs/providers/omp.md" title="OMP (Oh My Pi)"><img src="https://raw.githubusercontent.com/getagentseal/codeburn/main/assets/providers/omp.svg" alt="OMP (Oh My Pi)" height="34" /></a>
   <a href="docs/providers/droid.md" title="Droid"><img src="https://raw.githubusercontent.com/getagentseal/codeburn/main/assets/providers/droid.png" alt="Droid" height="34" /></a>
-  <a href="docs/providers/roo-code.md" title="Roo Code"><img src="https://raw.githubusercontent.com/getagentseal/codeburn/main/assets/providers/roo-code.png" alt="Roo Code" height="34" /></a>
   <a href="docs/providers/kilo-code.md" title="KiloCode"><img src="https://raw.githubusercontent.com/getagentseal/codeburn/main/assets/providers/kilo-code.png" alt="KiloCode" height="34" /></a>
   <a href="docs/providers/qwen.md" title="Qwen"><img src="https://raw.githubusercontent.com/getagentseal/codeburn/main/assets/providers/qwen.png" alt="Qwen" height="34" /></a>
   <a href="docs/providers/kimi.md" title="Kimi Code CLI"><img src="https://raw.githubusercontent.com/getagentseal/codeburn/main/assets/providers/kimi.svg" alt="Kimi Code CLI" height="34" /></a>
@@ -199,7 +198,7 @@ CodeBurn detects the tools you already use. There is nothing to configure and no
 </p>
 
 <details>
-<summary><strong>All 41 tools</strong></summary>
+<summary><strong>All 40 tools</strong></summary>
 
 Each page lists where that tool keeps its data, the format it uses, and the quirks CodeBurn works around.
 
@@ -209,7 +208,7 @@ Each page lists where that tool keeps its data, the format it uses, and the quir
 [Grok Build](docs/providers/grok.md) &middot; [Hermes Agent](docs/providers/hermes.md) &middot; [IBM Bob](docs/providers/ibm-bob.md) &middot; [KiloCode](docs/providers/kilo-code.md) &middot; [Kimi](docs/providers/kimi.md) &middot; [Kimi Code](docs/providers/kimicode.md) &middot;
 [Kiro](docs/providers/kiro.md) &middot; [LingTai TUI](docs/providers/lingtai-tui.md) &middot; [Mistral Vibe](docs/providers/mistral-vibe.md) &middot; [Mux](docs/providers/mux.md) &middot; [OMP](docs/providers/omp.md) &middot; [Open Design](docs/providers/open-design.md) &middot;
 [OpenClaude](docs/providers/openclaude.md) &middot; [OpenClaw](docs/providers/openclaw.md) &middot; [OpenCode](docs/providers/opencode.md) &middot; [Pi](docs/providers/pi.md) &middot; [Qwen](docs/providers/qwen.md) &middot; [Quick Desktop](docs/providers/quickdesk.md) &middot;
-[Roo Code](docs/providers/roo-code.md) &middot; [Warp](docs/providers/warp.md) &middot; [ZCode](docs/providers/zcode.md) &middot; [Zed](docs/providers/zed.md) &middot; [Zerostack](docs/providers/zerostack.md)
+[Warp](docs/providers/warp.md) &middot; [ZCode](docs/providers/zcode.md) &middot; [Zed](docs/providers/zed.md) &middot; [Zerostack](docs/providers/zerostack.md)
 
 CodeBurn also reads the [Vercel AI Gateway](docs/providers/vercel-gateway.md) reporting API, which is a gateway rather than a tool, so its spend is shown on its own row and left out of your totals by default.
 

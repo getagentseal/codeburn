@@ -12,7 +12,7 @@ Sessions from the Cline **command-line** agent use an unrelated layout and are h
 
 These task roots are scanned:
 
-1. VS Code extension globalStorage for `saoudrizwan.claude-dev`, in every supported VS Code variant: stable (`Code`), Insiders (`Code - Insiders`), and VSCodium. The per-platform paths come from `getVSCodeGlobalStoragePaths` in `src/providers/vscode-cline-parser.ts`, the same helper Roo Code and KiloCode use.
+1. VS Code extension globalStorage for `saoudrizwan.claude-dev`, in every supported VS Code variant: stable (`Code`), Insiders (`Code - Insiders`), and VSCodium. The per-platform paths come from `getVSCodeGlobalStoragePaths` in `src/providers/vscode-cline-parser.ts`, the same helper KiloCode uses.
 2. Cline's home-data root at `~/.cline/data`.
 
 Every root is expected to contain a `tasks/` child directory. Discovery is delegated to `discoverClineTasks` in `src/providers/vscode-cline-parser.ts`, so a task is only included when it has a `ui_messages.json` file.
@@ -44,10 +44,10 @@ Discovery deduplicates by task id across all Cline roots so a task that exists i
 - This provider is intentionally a thin wrapper over the shared Cline-family parser.
 - Cline can keep data in both VS Code globalStorage and `~/.cline/data`, depending on version and workflow.
 - A user can run Cline in VS Code stable, Insiders, and VSCodium at the same time; each variant has its own globalStorage tree, so all of them must be scanned.
-- If Cline changes the JSON shape, fix `vscode-cline-parser.ts` only if Roo Code and KiloCode still pass. Branch provider-specific parsing rather than duplicating the whole parser.
+- If Cline changes the JSON shape, fix `vscode-cline-parser.ts` only if KiloCode and IBM Bob still pass. Branch provider-specific parsing rather than duplicating the whole parser.
 
 ## When fixing a bug here
 
 1. Reproduce with a minimal task directory containing `ui_messages.json` and `api_conversation_history.json`.
-2. Run `tests/providers/cline.test.ts`, plus `tests/providers/roo-code.test.ts` and `tests/providers/kilo-code.test.ts` if the shared parser changes.
+2. Run `tests/providers/cline.test.ts`, plus `tests/providers/kilo-code.test.ts` and `tests/providers/ibm-bob.test.ts` if the shared parser changes.
 3. Keep the provider name `cline`; downstream filters and dedup keys depend on it.

@@ -3084,7 +3084,6 @@ enum ProviderFilter: String, CaseIterable, Identifiable {
     case pi = "Pi"
     case qwen = "Qwen"
     case omp = "OMP"
-    case rooCode = "Roo Code"
     case crush = "Crush"
     case antigravity = "Antigravity"
     case goose = "Goose"
@@ -3106,7 +3105,6 @@ enum ProviderFilter: String, CaseIterable, Identifiable {
         case .cursorAgent: ["cursor-agent", "cursor agent"]
         case .cline: ["cline"]
         case .codewhale: ["codewhale"]
-        case .rooCode: ["roo-code", "roo code"]
         case .kiloCode: ["kilo-code", "kilocode"]
         case .ibmBob: ["ibm-bob", "ibm bob"]
         case .openclaw: ["openclaw"]
@@ -3145,7 +3143,6 @@ enum ProviderFilter: String, CaseIterable, Identifiable {
         case .pi: "pi"
         case .qwen: "qwen"
         case .omp: "omp"
-        case .rooCode: "roo-code"
         case .crush: "crush"
         case .antigravity: "antigravity"
         case .goose: "goose"

@@ -1960,7 +1960,7 @@ program
 
 program
   .command('gateway-totals [mode]')
-  .description('Include or exclude Vercel AI Gateway spend in headline totals. Gateway reports are daily per-model aggregates with no request identity, so the same spend is usually already counted by the local tools you pointed at the gateway (Claude Code, Codex, OpenCode, Cline/Roo/Kilo, Cursor). Excluded by default; the gateway is always shown as its own row either way. Modes: include, exclude.')
+  .description('Include or exclude Vercel AI Gateway spend in headline totals. Gateway reports are daily per-model aggregates with no request identity, so the same spend is usually already counted by the local tools you pointed at the gateway (Claude Code, Codex, OpenCode, Cline/Kilo, Cursor). Excluded by default; the gateway is always shown as its own row either way. Modes: include, exclude.')
   .option('--format <format>', 'Output format: text, json', 'text')
   .action(async (mode?: string, opts?: { format?: string }) => {
     const format = opts?.format ?? 'text'

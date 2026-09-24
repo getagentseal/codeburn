@@ -30,7 +30,6 @@ import openaiLight from '../assets/providers/openai-light.svg'
 import pi from '../assets/providers/pi.png'
 import qwenDark from '../assets/providers/qwen-dark.svg'
 import qwenLight from '../assets/providers/qwen-light.svg'
-import rooCode from '../assets/providers/roo-code.png'
 import vercelGateway from '../assets/providers/vercel-gateway.png'
 import warp from '../assets/providers/warp.jpg'
 import zcode from '../assets/providers/zcode.jpg'
@@ -64,7 +63,6 @@ const SINGLE_LOGOS: Record<string, string> = {
   mux,
   openclaw,
   pi,
-  'roo-code': rooCode,
   'vercel-gateway': vercelGateway,
   warp,
   zcode,

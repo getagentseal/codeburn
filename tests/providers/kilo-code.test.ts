@@ -54,9 +54,4 @@ describe('kilo-code provider - metadata', () => {
     expect(kiloCode.name).toBe('kilo-code')
     expect(kiloCode.displayName).toBe('KiloCode')
   })
-
-  it('uses different extension ID than roo-code', () => {
-    expect(kiloCode.name).toBe('kilo-code')
-    expect(kiloCode.name).not.toBe('roo-code')
-  })
 })

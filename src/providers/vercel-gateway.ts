@@ -6,7 +6,7 @@ import { fetchWithTimeout } from '../fetch-utils.js'
 // The report is a DAILY AGGREGATE per model: no request ids, no timestamps, no
 // attribution. Nothing in a row can be matched against the local tools that
 // were pointed at the gateway (Claude Code via ANTHROPIC_BASE_URL, Codex,
-// OpenCode, Cline/Roo/Kilo, Cursor), which record the same requests
+// OpenCode, Cline/Kilo, Cursor), which record the same requests
 // themselves. Gateway spend is therefore shown as its own row and kept out of
 // headline totals unless `includeGatewayInTotals` is set — see
 // `excludeProviderFromDay` in src/usage-aggregator.ts.

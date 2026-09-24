@@ -3,8 +3,8 @@
 Shared discovery and parsing for Cline and VS Code extensions descended from Cline.
 
 - **Source:** `src/providers/vscode-cline-parser.ts`
-- **Loading:** not a provider; imported by `cline.ts`, `ibm-bob.ts`, `kilo-code.ts`, and `roo-code.ts`.
-- **Test:** none directly. Coverage comes from `tests/providers/cline.test.ts`, `tests/providers/ibm-bob.test.ts`, `tests/providers/kilo-code.test.ts`, and `tests/providers/roo-code.test.ts`.
+- **Loading:** not a provider; imported by `cline.ts`, `ibm-bob.ts`, and `kilo-code.ts`.
+- **Test:** none directly. Coverage comes from `tests/providers/cline.test.ts`, `tests/providers/ibm-bob.test.ts`, and `tests/providers/kilo-code.test.ts`.
 
 ## What it does
 
@@ -45,6 +45,6 @@ Per `<providerName>:<taskId>:<index>` where `index` is the position of the `api_
 
 ## When fixing a bug here
 
-1. A change here ripples to Cline, IBM Bob, KiloCode, and Roo Code. Run all four provider test files before opening a PR.
+1. A change here ripples to Cline, IBM Bob, and KiloCode. Run all three provider test files before opening a PR.
 2. If you find that one of the extensions emits a different shape, branch on the extension ID parameter that the discovery function already takes; do not duplicate the parser.
-3. If you add support for another Cline-family task store, register it as a thin wrapper file in the same shape as `cline.ts`, `ibm-bob.ts`, `kilo-code.ts`, and `roo-code.ts`.
+3. If you add support for another Cline-family task store, register it as a thin wrapper file in the same shape as `cline.ts`, `ibm-bob.ts`, and `kilo-code.ts`.

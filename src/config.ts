@@ -73,7 +73,7 @@ export type CodeburnConfig = {
   // Vercel AI Gateway rows are DAILY AGGREGATES per model with no request id,
   // timestamp or attribution (see src/providers/vercel-gateway.ts), so they
   // cannot be matched against the local tools that were pointed at the gateway
-  // (Claude Code via ANTHROPIC_BASE_URL, Codex, OpenCode, Cline/Roo/Kilo,
+  // (Claude Code via ANTHROPIC_BASE_URL, Codex, OpenCode, Cline/Kilo,
   // Cursor) — counting both double counts the same spend. Gateway rows are
   // therefore always shown as their own labelled row but kept OUT of every
   // headline total unless this is true. Read-side only: the daily cache always

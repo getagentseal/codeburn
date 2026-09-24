@@ -3,7 +3,7 @@ import { existsSync } from 'fs'
 import { mkdir, open, readdir, readFile, rename, stat, unlink } from 'fs/promises'
 import { join } from 'path'
 
-import { getCodeburnCacheDir } from './cache-dir.js'
+import { getCodeburnCacheDir, RETIRED_PROVIDER_NAMES } from './cache-dir.js'
 import { sweepSupersededCacheFiles } from './cache-sweep.js'
 import type { ProjectFilterTarget } from './parser.js'
 import type { DateRange, ProjectSummary } from './types.js'
@@ -534,6 +534,15 @@ function migrateDays(days: Record<string, unknown>[]): DailyEntry[] {
       ...(sanitizeProjects(d.projects)),
       ...(d.carried === true ? { carried: true as const } : {}),
     }))
+    .filter(day => {
+      let retired = false
+      for (const provider of RETIRED_PROVIDER_NAMES) {
+        if (!Object.hasOwn(day.providers, provider)) continue
+        subtractSliceFromDay(day, provider, day.providers[provider]!)
+        retired = true
+      }
+      return !retired || hasPositiveDayContent(day)
+    })
     // Day and slices are summed independently: a day can hold the full model
     // split while one of its slices was written before slices carried one (or
     // the reverse), and a provider-scoped view reads the slice's map alone.

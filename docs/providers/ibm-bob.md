@@ -24,7 +24,7 @@ The `Bob-IDE` paths cover the preview-era app name that some installs used befor
 
 Each task is a directory under `tasks/<task-id>/` and must contain `ui_messages.json`.
 
-CodeBurn parses the same Cline-family UI event format used by Roo Code and KiloCode:
+CodeBurn parses the same Cline-family UI event format used by Cline and KiloCode:
 
 - `ui_messages.json` entries with `type: "say"` and `say: "api_req_started"` contain serialized token/cost metrics.
 - `ui_messages.json` user text entries seed the turn's first user message.
@@ -45,11 +45,11 @@ Per `<providerName>:<taskId>:<apiRequestIndex>` via `vscode-cline-parser.ts`.
 
 - IBM Bob has shipped under both `IBM Bob` and `Bob-IDE` application data folder names.
 - This provider intentionally covers the IDE task-history format. Bob Shell's `~/.bob` checkpoint data is a separate storage surface and is not parsed until we have a stable usage schema fixture.
-- The shared Cline parser does not currently extract individual tool names from UI messages, so tool breakdowns are empty for IBM Bob just like Roo Code and KiloCode.
+- The shared Cline parser does not currently extract individual tool names from UI messages, so tool breakdowns are empty for IBM Bob just like Cline and KiloCode.
 
 ## When Fixing A Bug Here
 
 1. Check whether the install uses `IBM Bob` or `Bob-IDE` as the application data directory.
 2. Confirm the task folder still contains `ui_messages.json` and `api_conversation_history.json`.
 3. If the UI message schema changed, add a focused fixture to `tests/providers/ibm-bob.test.ts`.
-4. If the change also affects Roo Code or KiloCode, update `src/providers/vscode-cline-parser.ts` and run all three provider test files.
+4. If the change also affects Cline or KiloCode, update `src/providers/vscode-cline-parser.ts` and run all three provider test files.

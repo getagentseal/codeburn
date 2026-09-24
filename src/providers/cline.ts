@@ -39,8 +39,8 @@ async function dedupeTaskSources(sources: SessionSource[]): Promise<SessionSourc
 export function createClineProvider(overrideDirs?: string | string[]): Provider {
   const configuredDirs = normalizeOverrideDirs(overrideDirs)
   // Cline may be installed in any VS Code variant (stable, Insiders, VSCodium),
-  // so every globalStorage root is scanned - same as the Roo Code and KiloCode
-  // siblings - plus Cline's own home-data root. Shared by discovery and
+  // so every globalStorage root is scanned - same as the KiloCode
+  // sibling - plus Cline's own home-data root. Shared by discovery and
   // probeRoots so doctor can never report a root discovery does not read.
   const taskRoots = (): string[] => configuredDirs ?? [
     ...clineTaskRoots(EXTENSION_ID),

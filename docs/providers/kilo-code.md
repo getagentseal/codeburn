@@ -29,6 +29,6 @@ Delegated. Per `<providerName>:<taskId>:<index>` (handled in `vscode-cline-parse
 
 ## When fixing a bug here
 
-1. If the bug is "Cline, KiloCode, and Roo Code all broken in the same way", fix it in `vscode-cline-parser.ts`.
-2. If the bug is "KiloCode broken, Roo Code fine", the difference is upstream (KiloCode's emitted JSON differs slightly). Reproduce with a fixture and consider whether the cline parser needs to branch on extension ID.
+1. If the bug is "Cline and KiloCode both broken in the same way", fix it in `vscode-cline-parser.ts`.
+2. If the bug is "KiloCode broken, Cline fine", the difference is upstream (KiloCode's emitted JSON differs slightly). Reproduce with a fixture and consider whether the cline parser needs to branch on extension ID.
 3. Read [`vscode-cline-parser.md`](vscode-cline-parser.md) before editing.

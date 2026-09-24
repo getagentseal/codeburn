@@ -19,7 +19,6 @@ const PROVIDERS = [
   { id: 'opencode', label: 'OpenCode' },
   { id: 'pi', label: 'Pi' },
   { id: 'qwen', label: 'Qwen' },
-  { id: 'roo-code', label: 'Roo Code' },
   { id: 'antigravity', label: 'Antigravity' },
 ];
 

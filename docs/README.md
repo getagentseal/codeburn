@@ -69,7 +69,6 @@ One line per file in this directory, recursively.
 - [providers/pi.md](providers/pi.md) — Pi agent CLI.
 - [providers/quickdesk.md](providers/quickdesk.md) — Amazon Quick Desktop local usage and session history.
 - [providers/qwen.md](providers/qwen.md) — Qwen Code CLI.
-- [providers/roo-code.md](providers/roo-code.md) — Roo Code VS Code extension.
 - [providers/vercel-gateway.md](providers/vercel-gateway.md) — Cloud usage for [Vercel AI Gateway](https://vercel.com/docs/ai-gateway) via the reporting API.
 - [providers/vscode-cline-parser.md](providers/vscode-cline-parser.md) — Shared discovery and parsing for Cline and VS Code extensions descended from Cline.
 - [providers/warp.md](providers/warp.md) — Warp Oz agent sessions from Warp's local SQLite database.

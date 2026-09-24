@@ -15,7 +15,7 @@ import type { ParsedProviderCall, ProbeRoot, Provider, SessionParser, SessionSou
 //   <sessions>/<sessionId>/<sessionId>.messages.json  per-message metrics
 //
 // Kept as its own provider rather than a third root on `cline` so the shared
-// Cline-family parser (also serving Roo Code and KiloCode) stays untouched.
+// Cline-family parser (also serving KiloCode and IBM Bob) stays untouched.
 
 const PROVIDER_NAME = 'cline-cli'
 const DISPLAY_NAME = 'Cline CLI'

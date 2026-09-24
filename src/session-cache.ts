@@ -4,7 +4,7 @@ import { createHash, randomBytes } from 'crypto'
 import { join } from 'path'
 import { StringDecoder } from 'string_decoder'
 
-import { getCodeburnCacheDir } from './cache-dir.js'
+import { getCodeburnCacheDir, RETIRED_PROVIDER_NAMES } from './cache-dir.js'
 import { acquireCacheRefreshLock, releaseOwnedRefreshLocksForExit } from './cache-refresh-lock.js'
 import { parseBillingMode, type BillingMode } from './models.js'
 import type { ToolCall } from './types.js'
@@ -522,7 +522,6 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // archived-subtree-v1: KiloCode shares the SQLite parser and the same schema.
   // billing-routes-v2: its warm cache must move with both shared route fields.
   'kilo-code': 'worktree-project-grouping-v1-session-model-v1-archived-subtree-v1-billing-routes-v2-v2-legacy-union-v1-unknown-usage-v1',
-  'roo-code': 'worktree-project-grouping-v1',
   // billing-cost-v1: Warp's own billing record (total_provider_cost_in_cents,
   // total_charged_usage, credits_spent) now rides on each call as
   // `costFromBilling` and is preserved by providerCallToCachedCall. Entries
@@ -1732,6 +1731,13 @@ export async function loadCache(scope?: CacheLoadScope): Promise<SessionCache> {
     : null
   const reads: Promise<void>[] = []
   for (const [provider, meta] of Object.entries(envelope.providers)) {
+    if (RETIRED_PROVIDER_NAMES.has(provider)) {
+      // Kept only in the base, so the next save leaves it out of the envelope
+      // and deletes its index and pieces.
+      state.base.set(provider, await readIndex(dir, meta.index) ?? { ...emptyBase(), index: meta.index })
+      state.dirty = true
+      continue
+    }
     const section: ProviderSection = {
       envFingerprint: meta.envFingerprint,
       files: {},

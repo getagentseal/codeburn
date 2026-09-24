@@ -193,7 +193,7 @@ type Provider = {
 
 `src/providers/index.ts` registers providers across two tiers:
 
-- **Eager**: `claude`, `cline`, `cline-cli`, `codewhale`, `codebuff`, `codex`, `copilot`, `devin`, `droid`, `dsh`, `gemini`, `hermes`, `ibm-bob`, `kilo-code`, `kiro`, `kimi`, `kimicode`, `lingtai-tui`, `mistral-vibe`, `mux`, `openclaw`, `openclaude`, `open-design`, `pi`, `omp`, `qwen`, `quickdesk`, `roo-code`, `zerostack`, `grok`. Imported at module load.
+- **Eager**: `claude`, `cline`, `cline-cli`, `codewhale`, `codebuff`, `codex`, `copilot`, `devin`, `droid`, `dsh`, `gemini`, `hermes`, `ibm-bob`, `kilo-code`, `kiro`, `kimi`, `kimicode`, `lingtai-tui`, `mistral-vibe`, `mux`, `openclaw`, `openclaude`, `open-design`, `pi`, `omp`, `qwen`, `quickdesk`, `zerostack`, `grok`. Imported at module load.
 - **Lazy**: `antigravity`, `forge`, `goose`, `cursor`, `opencode`, `cursor-agent`, `crush`, `warp`, `vercel-gateway`, `zcode`, `zed`. Imported via dynamic `import()` so the heavy dependencies (SQLite, protobuf, network clients) do not touch users who do not have those tools installed.
 
 Both lists hit the same `getAllProviders()` aggregator. A failed lazy import is silent and excludes that provider from the run.
@@ -212,7 +212,7 @@ Two knock-on rules:
 
 Session `cwd` values recorded inside WSL are Linux paths (`/home/me/proj`) that name nothing on the Windows filesystem. `resolveCanonicalProjectPath` (`src/parser.ts`) already refuses to walk a path that is not absolute *on the current platform*, so those are attributed to the recorded `cwd` verbatim instead of being walked or canonicalized.
 
-`src/providers/vscode-cline-parser.ts` is a shared helper consumed by `cline`, `ibm-bob`, `kilo-code`, and `roo-code`. It is not registered as a provider on its own.
+`src/providers/vscode-cline-parser.ts` is a shared helper consumed by `cline`, `ibm-bob`, and `kilo-code`. It is not registered as a provider on its own.
 
 For the per-provider data location, storage format, parser quirks, and test coverage, see `docs/providers/`.
 

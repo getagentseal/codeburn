@@ -5812,7 +5812,7 @@ function deferToBackgroundFill(path: string, fp: { mtimeMs: number }, cached: un
 /// Vercel AI Gateway's `/v1/report` returns one cost/token/request_count per
 /// day per model, with no request id, timestamp or attribution. The local
 /// tools that were pointed at the gateway (Claude Code via
-/// ANTHROPIC_BASE_URL, Codex, OpenCode, Cline/Roo/Kilo, Cursor) record those
+/// ANTHROPIC_BASE_URL, Codex, OpenCode, Cline/Kilo, Cursor) record those
 /// same requests in their own session files, and nothing in an aggregate row
 /// can be matched against them — so a corpus holding both counts the same
 /// spend twice.
