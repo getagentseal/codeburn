@@ -28,6 +28,8 @@ export type CachedCall = {
   model: string
   usage: CachedUsage
   costUSD?: number
+  /// See ParsedProviderCall.fallbackCostUSD.
+  fallbackCostUSD?: number
   /// True when `costUSD` (or the tokens it is priced from) is estimated rather
   /// than metered. Persisted so the estimated-cost marker survives the cache.
   isEstimated?: boolean
@@ -508,7 +510,11 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // the frozen 1.x tables now reads its legacy turns too. Cached parses of an
   // upgraded database hold only what the 2.x migration carried over, and v2
   // turns now carry the bare model id 1.x used instead of `provider/model`.
-  opencode: 'session-model-v1-archived-subtree-v1-billing-routes-v2-v2-legacy-union-v1-unknown-usage-v1',
+  // vertex-fallback-cost-v1 (#1547): the recorded `cost` of a turn CodeBurn
+  // cannot price rides on the cached call as `fallbackCostUSD`, the session-level
+  // rollup uses the bare model id, and `google-vertex`/`google-vertex-anthropic`
+  // ride as the `vertex` route. Cached calls hold none of these.
+  opencode: 'session-model-v1-archived-subtree-v1-billing-routes-v2-v2-legacy-union-v1-unknown-usage-v1-vertex-fallback-cost-v1',
   quickdesk: 'emf-sqlite-v2-est-cost',
   // session-lineage-capture-v1: SessionLineage (CB-1, slice 1) is now carried
   // on the cached file for every kimicode wire. Child evidence is the
@@ -521,7 +527,7 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   kimicode: 'wire-usage-v1-est-cost-session-lineage-capture-v1',
   // archived-subtree-v1: KiloCode shares the SQLite parser and the same schema.
   // billing-routes-v2: its warm cache must move with both shared route fields.
-  'kilo-code': 'worktree-project-grouping-v1-session-model-v1-archived-subtree-v1-billing-routes-v2-v2-legacy-union-v1-unknown-usage-v1',
+  'kilo-code': 'worktree-project-grouping-v1-session-model-v1-archived-subtree-v1-billing-routes-v2-v2-legacy-union-v1-unknown-usage-v1-vertex-fallback-cost-v1',
   // billing-cost-v1: Warp's own billing record (total_provider_cost_in_cents,
   // total_charged_usage, credits_spent) now rides on each call as
   // `costFromBilling` and is preserved by providerCallToCachedCall. Entries
@@ -1090,6 +1096,7 @@ function validateCall(c: unknown): c is CachedCall {
     && typeof o['timestamp'] === 'string'
     && (o['speed'] === 'standard' || o['speed'] === 'fast')
     && isOptionalNum(o['costUSD'])
+    && isOptionalNum(o['fallbackCostUSD'])
     && isOptionalBool(o['isEstimated'])
     && isOptionalNum(o['activeDurationMs'])
     && isOptionalNum(o['activeGeneratedTokens'])

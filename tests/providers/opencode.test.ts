@@ -895,7 +895,7 @@ skipUnlessSqlite('opencode provider - session parsing', () => {
     expect(calls[0]!.cacheReadInputTokens).toBe(3000)
     expect(calls[0]!.cacheCreationInputTokens).toBe(1000)
     expect(calls[0]!.costUSD).toBeGreaterThan(0)
-    expect(calls[0]!.model).toBe('anthropic/claude-sonnet-4-20250514')
+    expect(calls[0]!.model).toBe('claude-sonnet-4-20250514')
     expect(calls[0]!.deduplicationKey).toBe('opencode:sess-1:session-level')
   })
 
@@ -1481,7 +1481,7 @@ skipUnlessSqlite('opencode provider - v2 generation (session_v2 + session_messag
 
     const calls = await collectCalls(createOpenCodeProvider(tmpDir), dbPath, 'ses_spaced_provider')
     expect(calls).toHaveLength(1)
-    expect(calls[0]!.model).toBe('openai/gpt-4o')
+    expect(calls[0]!.model).toBe('gpt-4o')
     expect(calls[0]!.route).toBeUndefined()
     expect(calls[0]!.costUSD).toBeGreaterThan(0)
   })
@@ -1504,11 +1504,37 @@ skipUnlessSqlite('opencode provider - v2 generation (session_v2 + session_messag
     const calls = await collectCalls(createOpenCodeProvider(tmpDir), dbPath, 'ses_openrouter_roll')
     expect(calls).toHaveLength(1)
     expect(calls[0]).toMatchObject({
-      model: 'openrouter/cohere/north-mini-code:free',
+      model: 'cohere/north-mini-code:free',
       route: 'openrouter',
       inputTokens: 22_928,
       costUSD: 0,
     })
+  })
+
+  it('prices a Vertex session-level rollup on the bare id and keeps an unpriceable recorded cost as the fallback (#1547)', async () => {
+    const dbPath = createV2TestDb(tmpDir)
+    withTestDb(dbPath, (db) => {
+      const insert = db.prepare(`
+        INSERT INTO session_v2 (id, project_id, parent_id, slug, directory, title, version,
+          cost, tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write,
+          model, time_created, time_updated, time_archived)
+        VALUES (?, 'proj-1', NULL, 'slug-1', '/home/user/myproject', 't', '2.0.16',
+          ?, 1000, 100, 0, 0, 0, ?, 1700000000000, 1700000000000, NULL)
+      `)
+      insert.run('ses_vx_sonnet', 0.5, JSON.stringify({ id: 'claude-sonnet-5@default', providerID: 'google-vertex-anthropic' }))
+      insert.run('ses_vx_private', 0.5, JSON.stringify({ id: 'vertex-private-model-x@default', providerID: 'google-vertex' }))
+      insertV2Message(db, 'msg_vx_1', 'ses_vx_sonnet', 'assistant', 1, 1700000000100, { model: { id: 'claude-sonnet-5@default', providerID: 'google-vertex-anthropic' } })
+      insertV2Message(db, 'msg_vx_2', 'ses_vx_private', 'assistant', 1, 1700000000100, { model: { id: 'vertex-private-model-x@default', providerID: 'google-vertex' } })
+    })
+
+    const provider = createOpenCodeProvider(tmpDir)
+    const [sonnet] = await collectCalls(provider, dbPath, 'ses_vx_sonnet')
+    expect(sonnet).toMatchObject({ model: 'claude-sonnet-5@default', route: 'vertex' })
+    expect(sonnet!.costUSD).toBeCloseTo(1000 * 2e-6 + 100 * 10e-6, 12)
+    expect(sonnet!.fallbackCostUSD).toBeUndefined()
+
+    const [priv] = await collectCalls(provider, dbPath, 'ses_vx_private')
+    expect(priv).toMatchObject({ model: 'vertex-private-model-x@default', route: 'vertex', costUSD: 0.5, fallbackCostUSD: 0.5 })
   })
 
   it('falls back to session_v2 rollups when v2 messages carry no tokens', async () => {
@@ -1530,7 +1556,7 @@ skipUnlessSqlite('opencode provider - v2 generation (session_v2 + session_messag
     const provider = createOpenCodeProvider(tmpDir)
     const calls = await collectCalls(provider, dbPath, 'ses_roll')
     expect(calls).toHaveLength(1)
-    expect(calls[0]!.model).toBe('opencode/glm-5.3-flash')
+    expect(calls[0]!.model).toBe('glm-5.3-flash')
     expect(calls[0]!.inputTokens).toBe(21410)
     expect(calls[0]!.cacheReadInputTokens).toBe(112128)
     expect(calls[0]!.costUSD).toBeCloseTo(0.0077, 4)

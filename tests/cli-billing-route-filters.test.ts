@@ -233,7 +233,7 @@ describe('codeburn --route / --billing: validation happens before anything is re
       const badRoute = runCli([command, '--route', 'bedrok'], home)
       expect(badRoute.status, command).toBe(1)
       expect(badRoute.stderr, command).toContain(`codeburn ${command}: unknown route "bedrok"`)
-      expect(badRoute.stderr, command).toContain('Valid values: direct, bedrock, openrouter.')
+      expect(badRoute.stderr, command).toContain('Valid values: direct, bedrock, openrouter, vertex.')
 
       const badBilling = runCli([command, '--billing', 'included'], home)
       expect(badBilling.status, command).toBe(1)
@@ -259,7 +259,7 @@ describe('codeburn --route / --billing: validation happens before anything is re
     for (const command of ['models', 'sessions', 'export', 'audit']) {
       const help = runCli([command, '--help'], home)
       expect(help.status, command).toBe(0)
-      expect(help.stdout, command).toContain('direct includes unknown')
+      expect(help.stdout.replace(/\s+/g, ' '), command).toContain('direct includes unknown')
     }
   })
 

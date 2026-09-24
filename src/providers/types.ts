@@ -49,6 +49,11 @@ export type ParsedProviderCall = {
   // update still reaches it. Orthogonal to `costIsEstimated`: a credit rate is
   // an estimate of dollars, but it is still billing-derived.
   costFromBilling?: boolean
+  // A cost the tool recorded for this call, used only while CodeBurn prices
+  // the call's tokens at $0 (an id the catalog does not know). Kept on the
+  // cached call so the fallback survives the cache, while a later catalog row
+  // or price override for the id still wins.
+  fallbackCostUSD?: number
   tools: string[]
   bashCommands: string[]
   // Subagent types spawned in this call (e.g. 'general-purpose'). Feeds the

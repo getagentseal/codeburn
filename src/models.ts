@@ -1470,6 +1470,7 @@ type RouteEntry = ModelRoute & {
 const ROUTES: readonly RouteEntry[] = [
   { id: 'bedrock', label: 'Bedrock', billing: 'metered', providerFields: ['bedrock', 'amazon-bedrock'] },
   { id: 'openrouter', label: 'OpenRouter', billing: 'metered', providerFields: ['openrouter'] },
+  { id: 'vertex', label: 'Vertex', billing: 'metered', providerFields: ['google-vertex', 'google-vertex-anthropic'] },
 ]
 
 const ROUTES_BY_ID = new Map(ROUTES.map(route => [route.id, route]))
@@ -1518,7 +1519,7 @@ export function routeFromProviderField(value: string | null | undefined): ModelR
   // Only the literal values exist in usage-bearing OpenCode/OpenRouter sessions.
   // Keep Hermes' shipped `bedrock` case/whitespace normalization, but do not
   // invent aliases for the provider spellings OpenCode records.
-  if ((normalized === 'openrouter' || normalized === 'amazon-bedrock') && value !== normalized) return undefined
+  if (normalized !== 'bedrock' && value !== normalized) return undefined
   return ROUTES_BY_FIELD.get(normalized)
 }
 

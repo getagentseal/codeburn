@@ -207,7 +207,11 @@ import type { DateRange, ProjectSummary } from './types.js'
 // provider parse version alone re-parses sessions but never reopens a
 // finalized day, so the bump re-derives surviving days. Call counts only
 // rise, so no PENDING_REDERIVE entry is needed.
-export const DAILY_CACHE_VERSION = 36
+// v37: #1547 OpenCode/KiloCode. A turn CodeBurn cannot price keeps the cost
+// OpenCode recorded instead of $0, and Vertex turns land on a "(Vertex)" row.
+// Days finalized at v36 hold $0 and the unrouted row; the bump re-derives
+// surviving days. Call counts are unchanged.
+export const DAILY_CACHE_VERSION = 37
 const MIN_SUPPORTED_VERSION = 28
 
 /// Providers whose per-day CALL COUNT means something different at

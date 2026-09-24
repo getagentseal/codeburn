@@ -88,6 +88,14 @@ describe('routeFromProviderField - the provider column', () => {
     expect(routeFromProviderField(' openrouter ')).toBeUndefined()
   })
 
+  it('maps OpenCode Vertex provider ids exactly (#1547)', () => {
+    expect(routeFromProviderField('google-vertex-anthropic')).toMatchObject({ id: 'vertex', label: 'Vertex', billing: 'metered' })
+    expect(routeFromProviderField('google-vertex')).toMatchObject({ id: 'vertex', label: 'Vertex' })
+    expect(routeFromProviderField('Google-Vertex')).toBeUndefined()
+    expect(routeFromProviderField(' google-vertex ')).toBeUndefined()
+    expect(modelRowKey('claude-sonnet-5@default', 'vertex')).toBe('Sonnet 5 (Vertex)')
+  })
+
   it('returns undefined for the direct doors, subscription doors and doors with no sessions yet', () => {
     // Direct: the unsuffixed row IS the direct row. Subscription: a ChatGPT
     // plan does not change which row a model lands on. `bedrock-mantle` is a
@@ -201,7 +209,7 @@ describe('effectiveRouteId - the door that actually applies', () => {
   })
 
   it('lists the registered ids for the CLI to validate against', () => {
-    expect(registeredRouteIds()).toEqual(['bedrock', 'openrouter'])
+    expect(registeredRouteIds()).toEqual(['bedrock', 'openrouter', 'vertex'])
   })
 })
 

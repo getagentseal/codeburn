@@ -65,8 +65,9 @@ preserves the exact usage-bearing values across legacy SQLite, v2
 
 - `openrouter` → OpenRouter, metered
 - `amazon-bedrock` → Bedrock, metered
+- `google-vertex`, `google-vertex-anthropic` → Vertex, metered
 
-Case or whitespace variants of those two values are not inferred. The Bedrock
+Case or whitespace variants of those values are not inferred. The Bedrock
 model-id detector remains a fallback for recognised Anthropic and OpenAI
 foundation-model ids, but `providerID=amazon-bedrock` also covers model families
 such as Nova whose ids do not match that detector. Direct provider values remain
@@ -84,6 +85,9 @@ this shared provider-field mapping changes, so warm and cold reads agree.
   token, and tool usage back to the root session.
 - Each message's `parts` are indexed; preserving the order matters for reasoning-token correctness.
 - Tokens are reported across `input`, `output`, `reasoning`, `cache.read`, and `cache.write`. Anthropic semantics.
+- A turn or session rollup whose model CodeBurn cannot price keeps OpenCode's
+  recorded `cost` (as `fallbackCostUSD` on the cached call). Tokens still win
+  whenever the id prices, including after a catalog update or price override.
 - Assistant messages with missing router usage are kept as zero-cost calls
   when their parts contain non-empty text or tool activity. Empty zero-usage
   assistant placeholders are still skipped.

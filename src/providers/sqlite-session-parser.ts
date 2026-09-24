@@ -174,7 +174,8 @@ function parseSessionModel(value: Uint8Array | string | undefined): { model: str
     const id = typeof model['id'] === 'string' ? model['id'].trim() : ''
     const providerID = typeof model['providerID'] === 'string' ? model['providerID'] : ''
     const normalizedProviderID = providerID.trim()
-    return id && normalizedProviderID ? { model: `${normalizedProviderID}/${id}`, providerID } : undefined
+    // Bare id, the same one the per-message path prices.
+    return id && normalizedProviderID ? { model: id, providerID } : undefined
   } catch {
     return undefined
   }
@@ -431,7 +432,8 @@ export function createSqliteSessionParser(
               // per-message pricing in buildAssistantCall. (#1334)
               const outputForCost = billableOutputTokens(config.providerName, sessionTokens.output, sessionTokens.reasoning)
               let costUSD = calculateCost(model, sessionTokens.input, outputForCost, sessionTokens.cacheWrite, sessionTokens.cacheRead, 0)
-              if (costUSD === 0 && sessionTokens.cost > 0) costUSD = sessionTokens.cost
+              const fallbackCostUSD = costUSD === 0 && sessionTokens.cost > 0 ? sessionTokens.cost : undefined
+              if (fallbackCostUSD) costUSD = fallbackCostUSD
               yield {
                 provider: config.providerName,
                 model,
@@ -444,6 +446,7 @@ export function createSqliteSessionParser(
                 reasoningTokens: sessionTokens.reasoning,
                 webSearchRequests: 0,
                 costUSD,
+                ...(fallbackCostUSD ? { fallbackCostUSD } : {}),
                 tools: [],
                 bashCommands: [],
                 timestamp: parseTimestamp(messages[0]!.time_created),
