@@ -138,7 +138,7 @@ import type { ReworkedFile } from './workflow-insights.js'
 import type { PrRow, BranchRow } from './sessions-report.js'
 import type { LiveSessionsBlock } from './live-sessions.js'
 import { buildTelemetrySnapshot, type TelemetrySnapshot, type TelemetrySnapshotInput } from './telemetry-snapshot.js'
-import { sessionCountIsExact, type SessionCountBasis } from './session-count-label.js'
+import type { SessionCountBasis } from './session-count-label.js'
 
 const TOP_ACTIVITIES_LIMIT = 20
 const TOP_FINDINGS_LIMIT = 10
@@ -377,9 +377,10 @@ export type MenubarPayload = {
       cost: number
       savingsUSD: number
       sessions: number
-      /// Present only when `sessionCountBasis` is `identity` and sessions > 0.
-      /// Omitted for lower-bound counts so clients cannot treat cost/count as exact.
-      avgCostPerSession?: number
+      /// Always present: menubar 0.9.14-0.9.24 decode it as required (#1541).
+      /// Exact only when `sessionCountBasis` is `identity`; a client must not
+      /// show it for any other basis.
+      avgCostPerSession: number
       /// How `sessions` was derived. Omitted on older producers. `identity` is
       /// an exact unique count from surviving source files; `partial` is a lower bound.
       sessionCountBasis?: SessionCountBasis
@@ -687,9 +688,7 @@ function buildTopProjects(projects: PeriodData['projects']): MenubarPayload['cur
       cost: p.cost,
       savingsUSD: p.savingsUSD,
       sessions: p.sessions,
-      ...(sessionCountIsExact(p.sessionCountBasis) && p.sessions > 0
-        ? { avgCostPerSession: p.cost / p.sessions }
-        : {}),
+      avgCostPerSession: p.sessions > 0 ? p.cost / p.sessions : 0,
       ...(p.sessionCountBasis ? { sessionCountBasis: p.sessionCountBasis } : {}),
       sessionDetails: (p.sessionDetails ?? []).map(s => ({
         cost: s.cost,

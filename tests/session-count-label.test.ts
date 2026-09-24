@@ -41,7 +41,7 @@ describe('payload serialization', () => {
     }],
   })
 
-  it('omits average when the count is a bound and keeps numeric sessions', () => {
+  it('keeps the average numeric for a bound count and labels it partial', () => {
     const payload = buildMenubarPayload(emptyPeriod(), [], null)
     const json = JSON.parse(JSON.stringify(payload)) as {
       current: { sessions: number, sessionCountBasis?: string, topProjects: Array<{ sessions: number, avgCostPerSession?: number, sessionCountBasis?: string }> }
@@ -50,7 +50,7 @@ describe('payload serialization', () => {
     expect(json.current.sessionCountBasis).toBe('partial')
     expect(json.current.topProjects[0]!.sessions).toBe(3)
     expect(json.current.topProjects[0]!.sessionCountBasis).toBe('partial')
-    expect(json.current.topProjects[0]!.avgCostPerSession).toBeUndefined()
+    expect(json.current.topProjects[0]!.avgCostPerSession).toBeCloseTo(4 / 3)
     expect(sessionCountIsExact('partial')).toBe(false)
   })
 
