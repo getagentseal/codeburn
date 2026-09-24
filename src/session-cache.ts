@@ -1533,22 +1533,34 @@ async function loadShard(path: string): Promise<Record<string, CachedFile> | nul
   }
 }
 
-// The members of `rows` from one piece, read by byte span into one buffer.
-async function readMembersAt(path: string, rows: Array<[string, IndexRow]>): Promise<Map<string, CachedFile>> {
+// The members of `rows` from one piece. Neighbouring members are read together,
+// up to SHARD_READ_CHUNK a read, into one reused buffer: Buffers are off-heap
+// memory only a GC returns, which shows up as RSS when members run to megabytes.
+async function readMembersAt(path: string, rows: Array<[string, IndexRow]>, scratch: { buf: Buffer } = { buf: Buffer.allocUnsafe(0) }): Promise<Map<string, CachedFile>> {
   const out = new Map<string, CachedFile>()
   try {
     const handle = await open(path, 'r')
     try {
       const sorted = [...rows].sort((a, b) => a[1].offset - b[1].offset)
-      const buf = Buffer.allocUnsafe(sorted.reduce((n, [, row]) => Math.max(n, row.length), 0))
-      for (const [key, row] of sorted) {
-        const { bytesRead } = await handle.read(buf, 0, row.length, row.offset)
-        const split = splitMemberLine(buf.toString('utf-8', 0, bytesRead))
-        if (!split || split[0] !== key) continue
-        try {
-          const file: unknown = JSON.parse(split[1])
-          if (validateCachedFile(file)) out.set(key, file)
-        } catch { /* a malformed member re-parses */ }
+      for (let i = 0; i < sorted.length;) {
+        const from = sorted[i]![1].offset
+        let j = i + 1
+        while (j < sorted.length && sorted[j]![1].offset + sorted[j]![1].length - from <= SHARD_READ_CHUNK) j++
+        const to = sorted[j - 1]![1].offset + sorted[j - 1]![1].length
+        if (scratch.buf.length < to - from) scratch.buf = Buffer.allocUnsafe(to - from)
+        const buf = scratch.buf
+        const { bytesRead } = await handle.read(buf, 0, to - from, from)
+        for (const [key, row] of sorted.slice(i, j)) {
+          const start = row.offset - from
+          if (start + row.length > bytesRead) continue
+          const split = splitMemberLine(buf.toString('utf-8', start, start + row.length))
+          if (!split || split[0] !== key) continue
+          try {
+            const file: unknown = JSON.parse(split[1])
+            if (validateCachedFile(file)) out.set(key, file)
+          } catch { /* a malformed member re-parses */ }
+        }
+        i = j
       }
     } finally {
       await handle.close()
@@ -1556,6 +1568,7 @@ async function readMembersAt(path: string, rows: Array<[string, IndexRow]>): Pro
   } catch { /* unreadable: the caller treats every wanted member as gone */ }
   return out
 }
+
 // Shards a resident process (codeburn serve) keeps parsed between requests,
 // keyed by shard FILE NAME. A name carries a fresh nonce on every write
 // (shardFileName), so a name that is still published names the same bytes and
@@ -1742,11 +1755,15 @@ async function loadProvider(state: CacheState, provider: string, section: Provid
   const members = new Map<string, CachedFile | CacheStub>()
   // A member or key list that cannot be read is dirtied without an entry: the
   // save drops its line and the file re-parses like any uncached one.
-  for (const [day, rows] of inFull) {
+  // A full read takes every piece at once, as v9 read its shards; a ranged one
+  // goes piece by piece, so it holds one read buffer at a time.
+  const whole = ranged ? [] : [...inFull.keys()].map(day => base.pieces[day] ? loadShardMemoized(state.dir, base.pieces[day]!) : null)
+  const scratch = { buf: Buffer.allocUnsafe(0) }
+  for (const [i, [day, rows]] of [...inFull].entries()) {
     const name = base.pieces[day]
     let files: Map<string, CachedFile> | Record<string, CachedFile> | null = null
-    if (name && ranged) files = await readMembersAt(join(state.dir, name), rows)
-    else if (name) files = await loadShardMemoized(state.dir, name)
+    if (!ranged) files = await whole[i] ?? null
+    else if (name) files = await readMembersAt(join(state.dir, name), rows, scratch)
     for (const [path] of rows) {
       const file = files instanceof Map ? files.get(path) : files?.[path]
       if (file) members.set(path, file)
