@@ -1397,6 +1397,10 @@ const SORTED_SHORT_NAMES: [string, string][] = Object.entries(SHORT_NAMES)
 // Anthropic's id scheme is `claude-<family>-<major>[-<minor>]`, so every new
 // version is derivable — no hand-maintained entry per release. (Legacy 3.x ids
 // put the family last, e.g. `claude-3-5-sonnet`, and stay in SHORT_NAMES.)
+// Some doors write the minor with a dot instead of a dash (GitHub Copilot's
+// session store: `claude-opus-4.8`), so both spellings derive the same name
+// (#1530); the dotted aliases in BUILTIN_ALIASES below predate this and stay
+// only because pricing also resolves through them.
 const CLAUDE_FAMILY: Record<string, string> = {
   opus: 'Opus',
   sonnet: 'Sonnet',
@@ -1405,10 +1409,30 @@ const CLAUDE_FAMILY: Record<string, string> = {
   mythos: 'Mythos',
 }
 function deriveClaudeShortName(canonical: string): string | undefined {
-  const m = canonical.match(/^claude-(opus|sonnet|haiku|fable|mythos)-(\d+)(?:-(\d+))?/)
+  const m = canonical.match(/^claude-(opus|sonnet|haiku|fable|mythos)-(\d+)(?:[-.](\d+))?/)
   if (!m) return undefined
   const [, family, major, minor] = m
   return `${CLAUDE_FAMILY[family]} ${major}${minor ? `.${minor}` : ''}`
+}
+
+// OpenAI's id scheme is `gpt-<version>[-<variant>]` with a numeric version and
+// lowercase variant segments, so it derives the same way Anthropic's does — a
+// new release needs no hand-maintained entry (#1530). Consulted only after
+// SHORT_NAMES misses, so curated labels (GPT-5 Pro, GPT-5.1 Codex Mini, the
+// individually listed GPT-5.6 variants) keep winning. Guarded to the modern
+// dotted-version scheme (`gpt-5.7-terra`): bare-major ids are the legacy
+// date-packaged shape (`gpt-4-1106-preview`) and stay raw, and purely numeric
+// segments (1106, 0125, 20261105) are packaging, not the model's name.
+const GPT_DERIVED_ID = /^gpt-(\d+\.\d+(?:\.\d+)*)(?:-([a-z0-9][a-z0-9-]*))?$/
+function deriveGptShortName(id: string): string | undefined {
+  const m = id.match(GPT_DERIVED_ID)
+  if (!m) return undefined
+  const [, version, variant] = m
+  const segments = (variant ?? '')
+    .split('-')
+    .filter(seg => seg !== '' && !/^\d+$/.test(seg))
+    .map(seg => seg.charAt(0).toUpperCase() + seg.slice(1))
+  return ['GPT-' + version, ...segments].join(' ')
 }
 
 function lookupShortName(id: string): string | undefined {
@@ -1417,7 +1441,18 @@ function lookupShortName(id: string): string | undefined {
   for (const [key, name] of SORTED_SHORT_NAMES) {
     if (id === key || id.startsWith(key + '-')) return name
   }
-  return undefined
+  return deriveGptShortName(id)
+}
+
+/// Segment-boundary key match for provider display tables: `key` must be the
+/// whole id or a whole dash-segment of it, never mid-number or mid-version —
+/// so `gpt-5` cannot capture `gpt-5.5` or `gpt-5.6-luna`, exactly as the
+/// global table's `id === key || id.startsWith(key + '-')` cannot (#1530).
+/// Providers match their local tables with this so one model id resolves to
+/// one display name on every provider.
+export function modelKeyMatches(model: string, key: string): boolean {
+  const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return new RegExp(`(?<![\\w.-])${escaped}(?=$|-)`).test(model)
 }
 
 // Public API stays unary so Array.map/forEach cannot feed index as cycle state.

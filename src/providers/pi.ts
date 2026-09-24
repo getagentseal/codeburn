@@ -9,15 +9,6 @@ import { extractBashCommands } from '../bash-utils.js'
 import { normalizeContentBlocks } from '../content-utils.js'
 import type { ProbeRoot, Provider, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
 
-const modelDisplayNames: Record<string, string> = {
-  'gpt-5.4': 'GPT-5.4',
-  'gpt-5.4-mini': 'GPT-5.4 Mini',
-  'gpt-5.5': 'GPT-5.5',
-  'gpt-5': 'GPT-5',
-  'gpt-4o': 'GPT-4o',
-  'gpt-4o-mini': 'GPT-4o Mini',
-}
-
 const toolNameMap: Record<string, string> = {
   bash: 'Bash',
   read: 'Read',
@@ -32,9 +23,6 @@ const toolNameMap: Record<string, string> = {
   todo: 'TodoWrite',
   patch: 'Patch',
 }
-
-// Pre-sorted by key length descending so longer/more-specific keys match first
-const modelDisplayEntries = Object.entries(modelDisplayNames).sort((a, b) => b[0].length - a[0].length)
 
 // Pi/OMP have no dedicated skill tool the way Claude Code does. A native skill
 // load is emitted as an ordinary `read` tool call whose path points at the
@@ -373,10 +361,13 @@ export function createPiProvider(sessionsDir?: string): Provider {
     },
     displayName: 'Pi',
 
+    // No local display table (#1530): every entry one used to carry exists in
+    // the global SHORT_NAMES with the same label, and a local list that lags
+    // behind it re-creates the #1530 inconsistency (a bare `gpt-5` key
+    // swallowing `gpt-5-mini` into "GPT-5"). Echoing the raw id lets the
+    // report layer's fallbackRawModelDisplayName resolve every id with the
+    // one global getShortModelName all providers share.
     modelDisplayName(model: string): string {
-      for (const [key, name] of modelDisplayEntries) {
-        if (model.startsWith(key)) return name
-      }
       return model
     },
 
@@ -408,9 +399,6 @@ export function createOmpProvider(sessionsDir?: string): Provider {
     displayName: 'OMP',
 
     modelDisplayName(model: string): string {
-      for (const [key, name] of modelDisplayEntries) {
-        if (model.startsWith(key)) return name
-      }
       return model
     },
 

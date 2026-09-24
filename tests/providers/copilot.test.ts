@@ -6,7 +6,7 @@ import { createRequire } from 'node:module'
 import { dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { copilot, createCopilotProvider, getVSCodeGlobalStorageDirs, getVSCodeWorkspaceStorageDirs } from '../../src/providers/copilot.js'
+import { copilot, createCopilotProvider, findJetBrainsModelToken, getVSCodeGlobalStorageDirs, getVSCodeWorkspaceStorageDirs } from '../../src/providers/copilot.js'
 import { isSqliteAvailable, isSqliteBusyError } from '../../src/sqlite.js'
 import { calculateCost } from '../../src/models.js'
 import type { ParsedProviderCall } from '../../src/providers/types.js'
@@ -3500,5 +3500,28 @@ describe('copilot deduplication key prefixes (durable-union contract)', () => {
     // position renames under insertion, and a renamed key double-counts at a
     // receiver that was already sent the old name.
     expect(/:shutdown-residual:[^:]+:\d{13}$/.test(residual)).toBe(true)
+  })
+})
+
+describe('copilot provider - JetBrains model token scan', () => {
+  // #1530: a token must not capture a newer version — `gpt-5` is not
+  // `gpt-5.6-luna`, nor `claude-opus-4` `claude-opus-4.8`. A dot only counts
+  // as a version continuation when a digit follows it; an end-of-sentence
+  // period or a file extension stays a token boundary.
+  it('does not match a token inside a newer dotted version', () => {
+    expect(findJetBrainsModelToken('running on gpt-5.6-luna for coding')).toBe('')
+    expect(findJetBrainsModelToken('switched to claude-opus-4.8 today')).toBe('')
+    expect(findJetBrainsModelToken('gpt-5.4.1 beta')).toBe('')
+  })
+
+  it('still matches tokens followed by sentence punctuation or file extensions', () => {
+    expect(findJetBrainsModelToken('switched to gpt-5. thanks')).toBe('gpt-5')
+    expect(findJetBrainsModelToken('see configs/gpt-5.json for details')).toBe('gpt-5')
+    expect(findJetBrainsModelToken('running on claude-opus-4.5.')).toBe('claude-opus-4-5')
+    expect(findJetBrainsModelToken('"model":"gpt-5"')).toBe('gpt-5')
+  })
+
+  it('does not match inside words', () => {
+    expect(findJetBrainsModelToken('iso3166 codes')).toBe('')
   })
 })
