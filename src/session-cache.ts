@@ -1082,13 +1082,108 @@ async function readEnvelope(dir: string): Promise<CacheEnvelope | null> {
   }
 }
 
+// A shard is written one member per line: `{`, then `"path":{...}` lines
+// comma-terminated except the last, then `}`. It is still one JSON object, so
+// an older build's JSON.parse reads it unchanged, and it never has to exist as
+// one string, which a shard past V8's ~512MB string limit cannot.
+type ShardLine = { key: string; value?: string; file?: unknown; offset: number; length: number }
+
+const SHARD_READ_CHUNK = 1 << 20
+
+function splitMemberLine(line: string): [string, string] | null {
+  if (line.charCodeAt(0) !== 34) return null
+  let i = 1
+  for (; i < line.length; i++) {
+    const c = line.charCodeAt(i)
+    if (c === 92) i++
+    else if (c === 34) break
+  }
+  if (line.charCodeAt(i + 1) !== 58) return null
+  const end = line.charCodeAt(line.length - 1) === 44 ? line.length - 1 : line.length
+  return [JSON.parse(line.slice(0, i + 1)) as string, line.slice(i + 2, end)]
+}
+
+function shardLine(buf: Buffer, offset: number): ShardLine {
+  const split = splitMemberLine(buf.toString('utf-8'))
+  if (!split) throw new Error('malformed shard line')
+  return { key: split[0], value: split[1], offset, length: buf.length }
+}
+
+// A shard's members one at a time, without holding the file. A single-line
+// shard an older build wrote is parsed whole (offset -1). Throws on anything
+// malformed, as JSON.parse would.
+async function* shardLines(path: string): AsyncGenerator<ShardLine> {
+  const handle = await open(path, 'r')
+  try {
+    const head = Buffer.alloc(2)
+    await handle.read(head, 0, 2, 0)
+    if (head[0] !== 0x7b || head[1] !== 0x0a) {
+      const files = JSON.parse(await readFile(path, 'utf-8')) as unknown
+      if (!files || typeof files !== 'object' || Array.isArray(files)) throw new Error('shard is not an object')
+      for (const [key, file] of Object.entries(files)) yield { key, file, offset: -1, length: 0 }
+      return
+    }
+    let pos = 2
+    let lineStart = 2
+    let parts: Buffer[] = []
+    for (;;) {
+      const chunk = Buffer.allocUnsafe(SHARD_READ_CHUNK)
+      const { bytesRead } = await handle.read(chunk, 0, SHARD_READ_CHUNK, pos)
+      if (bytesRead === 0) break
+      const view = chunk.subarray(0, bytesRead)
+      let from = 0
+      for (let nl = view.indexOf(10); nl !== -1; nl = view.indexOf(10, from)) {
+        const piece = view.subarray(from, nl)
+        const line = parts.length > 0 ? Buffer.concat([...parts, piece]) : piece
+        parts = []
+        if (line.length === 1 && line[0] === 0x7d) return
+        yield shardLine(line, lineStart)
+        from = nl + 1
+        lineStart = pos + from
+      }
+      if (from < bytesRead) parts.push(view.subarray(from))
+      pos += bytesRead
+    }
+    if (Buffer.concat(parts).toString('utf-8') !== '}') throw new Error('truncated shard')
+  } finally {
+    await handle.close()
+  }
+}
+
+function shardLineFile(line: ShardLine): unknown {
+  return line.file ?? JSON.parse(line.value!)
+}
+
+// The writer's side of the format above. `positions`, when given, receives each
+// member's byte span, which is what lets a stub be loaded without the shard.
+async function* shardPayload(members: AsyncIterable<string> | Iterable<string>, positions?: Array<[number, number]>): AsyncGenerator<string> {
+  let pos = 0
+  let first = true
+  for await (const member of members) {
+    const head = first ? '{\n' : ',\n'
+    first = false
+    if (positions) {
+      const length = Buffer.byteLength(member)
+      positions.push([pos + 2, length])
+      pos += 2 + length
+    }
+    yield head + member
+  }
+  yield first ? '{}' : '\n}'
+}
+
+function* memberTexts(files: Record<string, CachedFile>): Generator<string> {
+  for (const [path, file] of Object.entries(files)) yield `${JSON.stringify(path)}:${JSON.stringify(file)}`
+}
+
 // A shard that is missing or malformed costs exactly the provider-months it
 // held, not the provider and never the whole cache: those files re-parse while
 // every other month keeps serving.
 async function loadShard(path: string): Promise<Record<string, CachedFile> | null> {
   try {
-    const parsed = JSON.parse(await readFile(path, 'utf-8'))
-    return validateFiles(parsed) ? parsed : null
+    const files: Record<string, unknown> = {}
+    for await (const line of shardLines(path)) files[line.key] = shardLineFile(line)
+    return validateFiles(files) ? files : null
   } catch {
     return null
   }
@@ -1148,8 +1243,10 @@ export async function loadShardMemoized(dir: string, name: string): Promise<Reco
   let raw: string
   try {
     raw = await readFile(join(dir, name), 'utf-8')
-  } catch {
-    return null
+  } catch (err) {
+    // Past the string limit a shard can still be read a member at a time. It is
+    // far over the memo budget, so it is not memoized.
+    return err instanceof RangeError ? loadShard(join(dir, name)) : null
   }
   let files: Record<string, CachedFile>
   try {
@@ -1344,11 +1441,22 @@ function shardFileName(provider: string, bucket: string): string {
 // The temp name carries a nonce: two processes writing the SAME final path
 // (the envelope, every save) would otherwise share one temp file and interleave
 // their writes into a torn or foreign payload.
-async function writeFileAtomic(finalPath: string, payload: string): Promise<void> {
+async function writeFileAtomic(finalPath: string, payload: string | AsyncIterable<string>): Promise<void> {
   const tempPath = `${finalPath}.${randomBytes(8).toString('hex')}.tmp`
   const handle = await open(tempPath, 'w', 0o600)
   try {
-    await handle.writeFile(payload, { encoding: 'utf-8' })
+    if (typeof payload === 'string') {
+      await handle.writeFile(payload, { encoding: 'utf-8' })
+    } else {
+      let pending = ''
+      for await (const chunk of payload) {
+        pending += chunk
+        if (pending.length < SHARD_READ_CHUNK) continue
+        await handle.writeFile(pending, { encoding: 'utf-8' })
+        pending = ''
+      }
+      if (pending) await handle.writeFile(pending, { encoding: 'utf-8' })
+    }
     await handle.sync()
   } finally {
     await handle.close()
@@ -1428,7 +1536,7 @@ export async function saveCache(cache: SessionCache, verifyStillOwner?: () => Pr
 
   const writeShard = async (provider: string, bucket: string, files: Record<string, CachedFile>): Promise<ShardRef> => {
     const name = shardFileName(provider, bucket)
-    await writeFileAtomic(join(dir, name), JSON.stringify(files))
+    await writeFileAtomic(join(dir, name), shardPayload(memberTexts(files)))
     written.add(name)
     return { name, until: untilMonth(files) }
   }
