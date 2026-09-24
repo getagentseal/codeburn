@@ -50,6 +50,7 @@ const FILE_PROVIDERS: Record<string, string[]> = {
   'warp.ts': ['warp'],
   'antigravity.ts': ['antigravity'],
   'kilo-code.ts': ['kilo-code'],
+  'kinetaios.ts': ['kinetaios'],
   'kimi.ts': ['kimi'],
   'kiro.ts': ['kiro'],
   'mistral-vibe.ts': ['mistral-vibe'],

@@ -55,6 +55,7 @@ One line per file in this directory, recursively.
 - [providers/hermes.md](providers/hermes.md) — Hermes Agent CLI profiles.
 - [providers/ibm-bob.md](providers/ibm-bob.md) — IBM Bob IDE task history.
 - [providers/kilo-code.md](providers/kilo-code.md) — KiloCode VS Code extension.
+- [providers/kinetaios.md](providers/kinetaios.md) — KinetAios desktop agent history database.
 - [providers/kimi.md](providers/kimi.md) — Kimi Code CLI session parser.
 - [providers/kimicode.md](providers/kimicode.md) — MoonshotAI Kimi Code local session usage and tool activity.
 - [providers/kiro.md](providers/kiro.md) — Kiro IDE chat history.

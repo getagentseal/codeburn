@@ -15,6 +15,7 @@ import { kiloCode } from './kilo-code.js'
 import { kiro } from './kiro.js'
 import { kimi } from './kimi.js'
 import { kimicode } from './kimicode.js'
+import { kinetaios } from './kinetaios.js'
 import { lingtaiTui } from './lingtai-tui.js'
 import { mistralVibe } from './mistral-vibe.js'
 import { mux } from './mux.js'
@@ -195,7 +196,7 @@ async function loadZed(): Promise<Provider | null> {
   }
 }
 
-const coreProviders: Provider[] = [claude, cline, clineCli, codewhale, codebuff, codex, copilot, devin, droid, dsh, gemini, hermes, ibmBob, kiloCode, kiro, kimi, kimicode, lingtaiTui, mistralVibe, mux, openclaw, openclaude, openDesign, pi, omp, qwen, quickdesk, rooCode, zerostack, grok, grokbot]
+const coreProviders: Provider[] = [claude, cline, clineCli, codewhale, codebuff, codex, copilot, devin, droid, dsh, gemini, hermes, ibmBob, kiloCode, kimicode, kinetaios, kiro, kimi, lingtaiTui, mistralVibe, mux, openclaw, openclaude, openDesign, pi, omp, qwen, quickdesk, rooCode, zerostack, grok, grokbot]
 
 // Lazily loaded providers, listed by name so --provider validation works even
 // when an optional module fails to load. Must stay in sync with getAllProviders.
