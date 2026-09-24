@@ -32,7 +32,7 @@ const WORK = process.env['UPGRADE_PATH_WORK'] || join(tmpdir(), 'codeburn upgrad
 // else these two are the knobs to move, and the assertions below will say so.
 const OLD_SESSION_CACHE = 'session-cache.v7.json'
 const OLD_DAILY_CACHE = 'daily-cache.v17.json'
-const NEW_SESSION_CACHE_DIR = 'session-cache.v9'
+const NEW_SESSION_CACHE_DIR = 'session-cache.v10'
 
 const HOME = join(WORK, 'user home')
 const PAYLOADS = join(WORK, 'payloads')
@@ -136,24 +136,34 @@ function capture(bin, cacheDir, outDir, extra = {}) {
 // product, so two invocations legitimately differ there.
 const stripGenerated = obj => JSON.parse(JSON.stringify(obj, (k, v) => (k.startsWith('generated') || k === 'liveSessions' ? undefined : v)))
 
-// Shards carry real stat data and are published under a random filename, so
-// "identical" means identical after normalizing both away.
+// Pieces, their key files and the indexes carry real stat data and are
+// published under a random filename, so "identical" means identical after
+// normalizing both away. An index row is
+// [path, day, month, until, dev, ino, mtimeMs, size, first, last, flags, offset, length].
+// Rows are compared by path, not position: a date-ranged run reorders them
+// exactly as v9 reordered its month shards, and v9's check ignored order too.
 function shardSnapshot(cacheDir) {
   const dir = join(cacheDir, NEW_SESSION_CACHE_DIR)
   if (!existsSync(dir)) return null
   const out = {}
   for (const name of readdirSync(dir).sort()) {
-    if (name === 'envelope.json') continue
+    if (name === 'envelope.json' || name.endsWith('.tmp')) continue
     const body = JSON.parse(readFileSync(join(dir, name), 'utf8'))
-    for (const entry of Object.values(body)) {
-      if (entry && typeof entry === 'object' && entry.fingerprint) {
-        delete entry.fingerprint.dev
-        delete entry.fingerprint.ino
-        delete entry.fingerprint.mtimeMs
+    if (name.startsWith('index.')) {
+      body.pieces = Object.keys(body.pieces).sort()
+      for (const row of body.rows) row.splice(4, 3)
+      body.rows.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
+    } else {
+      for (const entry of Object.values(body)) {
+        if (entry && typeof entry === 'object' && entry.fingerprint) {
+          delete entry.fingerprint.dev
+          delete entry.fingerprint.ino
+          delete entry.fingerprint.mtimeMs
+        }
       }
     }
-    // Key the bucket off the shard's provider.month prefix, dropping the nonce.
-    out[name.replace(/\.[0-9a-f]{16}\.json$/, '')] = sortDeep(body)
+    // Key by provider.day (or index.provider), dropping the nonce.
+    out[name.replace(/\.[0-9a-f]{16}(\.keys)?\.json$/, '$1')] = sortDeep(body)
   }
   return out
 }
@@ -211,9 +221,26 @@ check(!existsSync(join(upgradeCache, OLD_SESSION_CACHE)), `${OLD_SESSION_CACHE} 
 check(existsSync(join(upgradeCache, NEW_SESSION_CACHE_DIR)), `${NEW_SESSION_CACHE_DIR}/ present`)
 check(existsSync(join(upgradeCache, NEW_SESSION_CACHE_DIR, 'envelope.json')), `${NEW_SESSION_CACHE_DIR}/envelope.json present`)
 const envelope = JSON.parse(readFileSync(join(upgradeCache, NEW_SESSION_CACHE_DIR, 'envelope.json'), 'utf8'))
-check(envelope.version === 9 && Object.keys(envelope.providers ?? {}).length > 0,
+check(envelope.version === 10 && Object.keys(envelope.providers ?? {}).length > 0,
   `envelope at version ${envelope.version} with ${Object.keys(envelope.providers ?? {}).length} providers`)
-check(readdirSync(join(upgradeCache, NEW_SESSION_CACHE_DIR)).some(n => n !== 'envelope.json'), 'shards published alongside the envelope')
+// Every provider names an index, every index names its pieces, and every piece
+// has its key file; together they hold one member per index row.
+{
+  const dir = join(upgradeCache, NEW_SESSION_CACHE_DIR)
+  let rows = 0, members = 0, missing = []
+  for (const [provider, meta] of Object.entries(envelope.providers ?? {})) {
+    if (!meta.index || !existsSync(join(dir, meta.index))) { missing.push(`${provider} index`); continue }
+    const index = JSON.parse(readFileSync(join(dir, meta.index), 'utf8'))
+    rows += index.rows.length
+    for (const piece of Object.values(index.pieces)) {
+      const keys = piece.replace(/\.json$/, '.keys.json')
+      if (!existsSync(join(dir, piece)) || !existsSync(join(dir, keys))) { missing.push(piece); continue }
+      members += Object.keys(JSON.parse(readFileSync(join(dir, piece), 'utf8'))).length
+    }
+  }
+  check(missing.length === 0 && rows > 0, `indexes, pieces and key files published alongside the envelope${missing.length ? ` (missing: ${missing.join(', ')})` : ''}`)
+  check(rows === members, `every index row has its member: ${rows} rows, ${members} members`)
+}
 const newDailyCache = newestDailyCacheAfter(upgradeCache, OLD_DAILY_CACHE)
 check(newDailyCache !== null, `${newDailyCache ?? 'current daily cache'} re-derived`)
 check(existsSync(join(upgradeCache, OLD_DAILY_CACHE)), `${OLD_DAILY_CACHE} kept as the carry-forward baseline`)
@@ -301,7 +328,7 @@ const readExport = dir => stripGenerated(JSON.parse(readFileSync(join(PAYLOADS, 
 check(JSON.stringify(readExport('workers-0')) === JSON.stringify(readExport('workers-3')),
   'export payload identical with and without workers')
 check(JSON.stringify(shardSnapshot(serialCache)) === JSON.stringify(shardSnapshot(parallelCache)),
-  'shard bodies identical with and without workers (fingerprint stat data and shard nonces normalized)')
+  'piece, key file and index bodies identical with and without workers (fingerprint stat data and nonces normalized)')
 
 // A forced pool that never actually spawned would make the check above vacuous.
 const verbose = run(newBin.cmd, [...newBin.args, 'status', '--format', 'json', '--period', 'all'], {
@@ -329,7 +356,7 @@ if (pending.length === 0) skip('no "parse workers=" line on a warm run; cannot c
 else check(pending.every(l => /0 pending files|no full parses pending/.test(l)),
   `nothing re-parsed on the warm run: ${pending.map(l => l.replace(/^codeburn: /, '').trim()).join(' | ')}`)
 
-check(JSON.stringify(shardSnapshot(upgradeCache)) === JSON.stringify(beforeBodies), 'warm run left every shard body unchanged')
+check(JSON.stringify(shardSnapshot(upgradeCache)) === JSON.stringify(beforeBodies), 'warm run left every piece, key file and index unchanged')
 check(JSON.stringify(stripGenerated(warm.menubar)) === JSON.stringify(stripGenerated(upgraded.menubar)),
   'warm run reports the same payload as the run that migrated the cache')
 
