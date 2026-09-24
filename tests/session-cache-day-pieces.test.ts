@@ -1,7 +1,8 @@
 // Day pieces (CACHE_VERSION 10): a ranged load reads the index, the key files,
 // and only the members the range reports on; an append that crosses a day
-// moves the file between pieces; and v9 month shards re-lay out losslessly.
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+// moves the file between pieces; v9 month shards re-lay out losslessly; and a
+// narrow query no longer re-parses cached transcripts outside its months.
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdir, readFile, readdir, rm, writeFile } from 'fs/promises'
 import { existsSync } from 'fs'
 import { tmpdir } from 'os'
@@ -21,6 +22,7 @@ import {
   type CachedFile,
   type SessionCache,
 } from '../src/session-cache.js'
+import { clearSessionCache, parseAllSessions } from '../src/parser.js'
 
 let TMP_DIR: string
 
@@ -173,5 +175,62 @@ describe('v9 -> v10 migration', () => {
     await loadCache().catch(() => null)
     expect(existsSync(join(v9(), 'envelope.json'))).toBe(true)
     expect(await readdir(v9())).toHaveLength(3)
+  })
+})
+
+describe('a narrow query and an older transcript', () => {
+  const home = () => join(TMP_DIR, 'home')
+  const saved = { dir: process.env['CLAUDE_CONFIG_DIR'], desktop: process.env['CODEBURN_DESKTOP_SESSIONS_DIR'] }
+
+  beforeEach(() => {
+    process.env['CLAUDE_CONFIG_DIR'] = home()
+    process.env['CODEBURN_DESKTOP_SESSIONS_DIR'] = join(TMP_DIR, 'no-desktop')
+    clearSessionCache()
+  })
+  afterEach(() => {
+    if (saved.dir === undefined) delete process.env['CLAUDE_CONFIG_DIR']; else process.env['CLAUDE_CONFIG_DIR'] = saved.dir
+    if (saved.desktop === undefined) delete process.env['CODEBURN_DESKTOP_SESSIONS_DIR']; else process.env['CODEBURN_DESKTOP_SESSIONS_DIR'] = saved.desktop
+    delete process.env['CODEBURN_PROGRESS']
+    clearSessionCache()
+  })
+
+  async function session(name: string, iso: string): Promise<void> {
+    const dir = join(home(), 'projects', 'proj')
+    await mkdir(dir, { recursive: true })
+    await writeFile(join(dir, `${name}.jsonl`), [
+      { type: 'user', uuid: `u-${name}`, sessionId: name, timestamp: iso, cwd: '/tmp/proj', message: { role: 'user', content: 'go' } },
+      { type: 'assistant', uuid: `a-${name}`, sessionId: name, timestamp: iso, cwd: '/tmp/proj',
+        message: { id: `msg-${name}`, type: 'message', role: 'assistant', model: 'claude-sonnet-4-5', content: [], usage: { input_tokens: 100, output_tokens: 50 } } },
+    ].map(line => JSON.stringify(line)).join('\n') + '\n')
+  }
+
+  it('does not re-parse a cached June file on a September day, and writes nothing', async () => {
+    await session('june', '2099-06-10T10:00:00Z')
+    await session('today', '2099-09-23T10:00:00Z')
+    await parseAllSessions()
+    const day = { start: new Date('2099-09-23T00:00:00.000Z'), end: new Date('2099-09-23T23:59:59.999Z') }
+    const narrow = async (): Promise<number[]> => {
+      clearSessionCache()
+      clearLoadCacheMemo()
+      const totals: number[] = []
+      process.env['CODEBURN_PROGRESS'] = '1'
+      const spy = vi.spyOn(process.stderr, 'write').mockImplementation(((chunk: unknown) => {
+        const m = /"kind":"tick","provider":"claude","done":0,"total":(\d+)/.exec(String(chunk))
+        if (m) totals.push(Number(m[1]))
+        return true
+      }) as typeof process.stderr.write)
+      try {
+        const projects = await parseAllSessions(day, 'claude')
+        expect(projects.reduce((n, p) => n + p.totalApiCalls, 0)).toBe(1)
+      } finally {
+        spy.mockRestore()
+        delete process.env['CODEBURN_PROGRESS']
+      }
+      return totals
+    }
+    await narrow()
+    const envelope = await readFile(join(sessionCacheDir(), 'envelope.json'), 'utf-8')
+    expect(await narrow()).toEqual([0])
+    expect(await readFile(join(sessionCacheDir(), 'envelope.json'), 'utf-8')).toBe(envelope)
   })
 })

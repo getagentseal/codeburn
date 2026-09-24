@@ -29,6 +29,7 @@ import {
   type SessionCache,
   beginColdHydration,
   cacheEntriesInLoadOrder,
+  cacheHiddenFingerprint,
   cacheStubs,
   cleanupOrphanedTempFiles,
   computeEnvFingerprint,
@@ -2071,7 +2072,12 @@ async function scanProjectDirs(
     const cached = section.files[filePath]
     const stub = cached ? undefined : stubs?.get(filePath)
     const action = reconcileFile(fp, cached ?? stub)
-    if (!readOnly && deferToBackgroundFill(filePath, fp, cached ?? stub)) {
+    // Cached, but in no month this range reports on, and unchanged: nothing to
+    // parse or serve. A changed one re-parses as if uncached, as it always did.
+    const hidden = cached || stub || readOnly ? undefined : cacheHiddenFingerprint(diskCache, 'claude', filePath)
+    if (hidden && reconcileFile(fp, { fingerprint: hidden }).action === 'unchanged') {
+      continue
+    } else if (!readOnly && deferToBackgroundFill(filePath, fp, cached ?? stub)) {
       continue
     } else if (stub && (readOnly || action.action === 'unchanged')) {
       if (readOnly && action.action !== 'unchanged') readOnlyServedStale = true
