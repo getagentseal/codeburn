@@ -201,7 +201,13 @@ import type { DateRange, ProjectSummary } from './types.js'
 // v35: a non-Anthropic model with no published cache-write rate now bills
 // cache-write tokens at its input rate instead of a fabricated 1.25x. Days
 // finalized at v34 overstate those tokens; the bump re-derives surviving days.
-export const DAILY_CACHE_VERSION = 35
+// v36: Cursor Agent counts every assistant message of an agentic loop, not
+// just the first after each user message, and bills tool_use inputs and the
+// full user text. Days finalized at v35 hold a fraction of those calls; the
+// provider parse version alone re-parses sessions but never reopens a
+// finalized day, so the bump re-derives surviving days. Call counts only
+// rise, so no PENDING_REDERIVE entry is needed.
+export const DAILY_CACHE_VERSION = 36
 const MIN_SUPPORTED_VERSION = 28
 
 /// Providers whose per-day CALL COUNT means something different at

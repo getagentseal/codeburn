@@ -391,12 +391,13 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // Compose all four — a take-ours merge would drop #1075, #1079, or #1092.
   codex: 'mcp-attribution-v5-est-cost-active-timing-mcp-wait-rich-capture-v1-cross-provider-pr-v1-session-meta-model-v1-session-meta-fields-v1-codex-pricing-v1-codex-tps-v1-codex-mcp-skills-v1-activity-price-v1',
   cursor: 'composer-anchored-crediting-v1-est-cost',
-  // full-turn-accounting-v1: every assistant message counts as a turn
+  // full-turn-accounting: every assistant message counts as a turn
   // (previously only the first after each user message survived), tool_use
   // inputs join the output text, and input tokens use the full user text
   // instead of the 500-char display truncation. Cached sessions hold a
-  // fraction of their turns, so they must re-parse.
-  'cursor-agent': 'workspaceless-transcript-v1-full-turn-accounting-v1',
+  // fraction of their turns, so they must re-parse. v2 bills the user text
+  // once per user message instead of once per assistant message.
+  'cursor-agent': 'workspaceless-transcript-v1-full-turn-accounting-v2',
   // source-provenance-v1 (#944): CLI sessions were misread as VS Code
   // transcripts (both carry producer 'copilot-agent'), skipping the shutdown
   // input/cache rollup; this bump re-parses them so the missing tokens land.
