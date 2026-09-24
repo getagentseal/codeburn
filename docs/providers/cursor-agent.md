@@ -32,7 +32,7 @@ Per `<provider>:<conversationId>:<turnIndex>` (`cursor-agent.ts:379`).
 
 - A file with a UUID-shaped name is treated as the conversation ID directly (`cursor-agent.ts:142-143`); other names are derived from the parent directory.
 - Token counts are estimated from char count (`CHARS_PER_TOKEN = 4`, `cursor-agent.ts:35`, `:81-84`). The legacy text format never reports real tokens.
-- Every assistant message counts as a turn: agentic loops emit dozens of assistant messages per user message, and each carries the last user message forward. Tool_use inputs are serialized into the output text; input tokens use the full user text while the displayed message stays truncated at 500 chars.
+- Every assistant message counts as a turn: agentic loops emit dozens of assistant messages per user message, and each carries the last user message forward. Tool_use inputs are serialized into the output text; input tokens use the full user text, billed once on the first assistant message after it, while the displayed message stays truncated at 500 chars.
 - The text parser is regex-driven and brittle. It is easier to fix a Composer 2 (JSONL) bug than a legacy (text) bug.
 
 ## When fixing a bug here

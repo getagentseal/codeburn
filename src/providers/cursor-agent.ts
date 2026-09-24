@@ -32,6 +32,9 @@ type AssistantTurn = {
 type ParsedTurn = {
   userMessage: string
   userTextFull: string
+  // The user text was already billed on an earlier assistant message of the
+  // same agentic loop; this turn only carries it for display.
+  carried: boolean
   assistant: AssistantTurn
 }
 
@@ -246,6 +249,7 @@ function parseJsonlTranscript(raw: string): { turns: ParsedTurn[]; recognized: b
   let lastUserDisplay = ''
   let lastUserFull = ''
   let seenUser = false
+  let userBilled = false
   let recognized = false
 
   for (const line of lines) {
@@ -271,6 +275,7 @@ function parseJsonlTranscript(raw: string): { turns: ParsedTurn[]; recognized: b
       lastUserFull = full
       lastUserDisplay = full.slice(0, MAX_USER_TEXT_LENGTH)
       seenUser = true
+      userBilled = false
       continue
     }
 
@@ -297,12 +302,14 @@ function parseJsonlTranscript(raw: string): { turns: ParsedTurn[]; recognized: b
       turns.push({
         userMessage: lastUserDisplay,
         userTextFull: lastUserFull,
+        carried: userBilled,
         assistant: {
           body: bodyParts.join('\n').trim(),
           reasoning: '',
           tools,
         },
       })
+      userBilled = true
     }
   }
 
@@ -356,13 +363,15 @@ function parseTranscript(raw: string): { turns: ParsedTurn[]; recognized: boolea
       output += `${line}\n`
     }
 
-    const userMessage = pendingUsers.length > 0 ? pendingUsers.shift()! : lastUserMessage
+    const carried = pendingUsers.length === 0
+    const userMessage = carried ? lastUserMessage : pendingUsers.shift()!
     if (userMessage !== null) {
       lastUserMessage = userMessage
       const tools = Array.from(toolsByTurn.keys())
       turns.push({
         userMessage: userMessage.slice(0, MAX_USER_TEXT_LENGTH),
         userTextFull: userMessage,
+        carried,
         assistant: {
           body: output.trim(),
           reasoning: reasoning.trim(),
@@ -472,7 +481,7 @@ function createParser(
 
         for (let turnIndex = 0; turnIndex < parsed.turns.length; turnIndex++) {
           const turn = parsed.turns[turnIndex]!
-          const inputTokens = estimateTokens(turn.userTextFull.length)
+          const inputTokens = turn.carried ? 0 : estimateTokens(turn.userTextFull.length)
           const outputTokens = estimateTokens(turn.assistant.body.length)
           const reasoningTokens = estimateTokens(turn.assistant.reasoning.length)
           const deduplicationKey = `cursor-agent:${conversationId}:${turnIndex}`

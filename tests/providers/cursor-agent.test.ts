@@ -342,6 +342,7 @@ describe('cursor-agent provider', () => {
       `cursor-agent:${FIXED_UUID}:2`,
     ])
     expect(calls.every(c => c.userMessage === 'do it')).toBe(true)
+    expect(calls.map(c => c.inputTokens)).toEqual([estimateTokensFromChars('do it'.length), 0, 0])
   })
 
   it('counts tool_use inputs in output tokens (jsonl)', async () => {
@@ -401,6 +402,7 @@ describe('cursor-agent provider', () => {
 
     expect(calls).toHaveLength(2)
     expect(calls.every(c => c.userMessage === 'go')).toBe(true)
+    expect(calls.map(c => c.inputTokens)).toEqual([estimateTokensFromChars('go'.length), 0])
   })
 })
 
