@@ -15,7 +15,7 @@ const savedCodexHome = process.env['CODEX_HOME']
 process.env['CODEX_HOME'] = join(tmpDir, 'codex')
 
 const { cacheStubs, clearLoadCacheMemo, loadCache, markCacheDirty, monthScopeForRange, saveCache, sessionCacheDir } = await import('../src/session-cache.js')
-const { clearSessionCache, parseAllSessions } = await import('../src/parser.js')
+const { clearSessionCache, parseAllSessions, withColdFirstPaintFloor } = await import('../src/parser.js')
 const { clearCodexMemCaches } = await import('../src/codex-cache.js')
 
 const ENV_KEYS = ['CODEBURN_CACHE_DIR', 'CLAUDE_CONFIG_DIR', 'CLAUDE_CONFIG_DIRS', 'CODEBURN_DESKTOP_SESSIONS_DIR', 'CODEBURN_CACHE_SCOPE'] as const
@@ -99,6 +99,18 @@ describe('bounded load through the provider parse', () => {
     expect(calls(bounded)).toBe(1)
     expect(calls(bounded)).toBe(calls(reference))
     expect(cost(bounded)).toBe(cost(reference))
+
+    // The first-paint snapshot serves every cached entry as an orphan, in load
+    // order: the stub has to take its full entry's place in that order too.
+    const snapshot = async (scope?: 'all') => {
+      clearSessionCache(); clearLoadCacheMemo(); clearCodexMemCaches()
+      if (scope) process.env['CODEBURN_CACHE_SCOPE'] = scope
+      else delete process.env['CODEBURN_CACHE_SCOPE']
+      return (await withColdFirstPaintFloor(may1.start, () => parseAllSessions(may1, 'codex'), true, true)).result
+    }
+    const boundedSnapshot = await snapshot()
+    expect(calls(boundedSnapshot)).toBe(1)
+    expect(JSON.stringify(boundedSnapshot)).toBe(JSON.stringify(await snapshot('all')))
   })
 
   it('evicts a deleted transcript that was only a stub from its shard on disk', async () => {
