@@ -35,6 +35,23 @@ const successBody = {
   },
 }
 
+// Key-for-key the Enterprise team payload reported in #1546; amounts are synthetic.
+const enterpriseTeamBody = {
+  billingCycleStart: '2026-09-01T00:00:00.000Z',
+  billingCycleEnd: '2026-10-01T00:00:00.000Z',
+  membershipType: 'enterprise',
+  limitType: 'team',
+  isUnlimited: false,
+  autoModelSelectedDisplayMessage: "You've used 0% of your included total usage",
+  namedModelSelectedDisplayMessage: "You've used 0% of your included API usage",
+  individualUsage: {
+    overall: { enabled: false, used: 0, limit: null, remaining: null },
+  },
+  teamUsage: {
+    onDemand: { enabled: true, used: 2500, limit: 10000, remaining: 7500 },
+  },
+}
+
 function jsonResponse(body: unknown, status = 200, headers: Record<string, string> = {}): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json', ...headers } })
 }
@@ -120,6 +137,28 @@ describe('Cursor quota decoding', () => {
     expect(quota?.details.map(row => row.percent)).toEqual([0.1, 0.25, 0.3])
   })
 
+  it('connects an Enterprise team seat on its team on-demand meter', () => {
+    const quota = decodeCursorUsage(enterpriseTeamBody)
+    expect(quota?.connection).toBe('connected')
+    expect(quota?.planLabel).toBe('Enterprise')
+    expect(quota?.primary).toEqual({ label: 'Team on-demand', percent: 0.25, resetsAt: '2026-10-01T00:00:00.000Z' })
+    expect(quota?.details.map(row => row.label)).toEqual(['Team on-demand'])
+  })
+
+  it('keeps the monthly window primary and lists the team on-demand meter beside it', () => {
+    const quota = decodeCursorUsage({
+      individualUsage: { plan: { totalPercentUsed: 10 } },
+      teamUsage: { onDemand: { enabled: true, used: 1, limit: 4 } },
+    })
+    expect(quota?.primary?.label).toBe('Monthly')
+    expect(quota?.details.map(row => [row.label, row.percent])).toEqual([['Monthly', 0.1], ['Team on-demand', 0.25]])
+  })
+
+  it('ignores a disabled or limitless team on-demand meter', () => {
+    expect(decodeCursorUsage({ teamUsage: { onDemand: { enabled: false, used: 1, limit: 4 } } })).toBeNull()
+    expect(decodeCursorUsage({ teamUsage: { onDemand: { enabled: true, used: 1, limit: null } } })).toBeNull()
+  })
+
   it('reads an unlimited plan as an empty monthly window and rejects a payload with no usage at all', () => {
     expect(decodeCursorUsage({ isUnlimited: true })?.primary?.percent).toBe(0)
     expect(decodeCursorUsage({ membershipType: 'pro' })).toBeNull()
@@ -144,6 +183,17 @@ describe('Cursor quota fetch', () => {
     expect(seen[0]!.url).toBe('https://cursor.com/api/usage-summary')
     expect(seen[0]!.headers['Authorization']).toBeUndefined()
     expect(seen[0]!.headers['Cookie']).toBe(`WorkosCursorSessionToken=user_123%3A%3A${token}`)
+  })
+
+  it('connects an Enterprise team seat instead of reporting an unrecognized response', async () => {
+    const result = await fetchCursorQuota({
+      loadAccessToken: async () => syntheticJWT(),
+      now: () => NOW,
+      fetch: (async () => jsonResponse(enterpriseTeamBody)) as unknown as typeof fetch,
+    })
+    expect(result.quota.connection).toBe('connected')
+    expect(result.quota.planLabel).toBe('Enterprise')
+    expect(result.quota.footerLines).toEqual(['Source: Cursor app'])
   })
 
   it('reports disconnected without a signed-in app and never fetches', async () => {

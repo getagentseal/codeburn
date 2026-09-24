@@ -144,6 +144,7 @@ enum CursorSubscriptionService {
         let plan = summary.individualUsage?.plan
         let overall = summary.individualUsage?.overall
         let pooled = summary.teamUsage?.pooled
+        let teamOnDemand = summary.teamUsage?.onDemand
         let autoPercent = normalizedProviderPercent(plan?.autoPercentUsed)
         let apiPercent = normalizedProviderPercent(plan?.apiPercentUsed)
 
@@ -160,10 +161,19 @@ enum CursorSubscriptionService {
             if summary.isUnlimited == true { return 0 }
             return nil
         }()
-        guard let monthlyPercent else { throw FetchError.parseFailure }
+        // Enterprise team seats report no individual meter; the team
+        // on-demand meter is the only structured used/limit pair they carry.
+        let teamOnDemandPercent = teamOnDemand?.enabled == false
+            ? nil
+            : ratio(used: teamOnDemand?.used, limit: teamOnDemand?.limit)
+        guard let primaryPercent = monthlyPercent ?? teamOnDemandPercent else { throw FetchError.parseFailure }
 
         let reset = parseDate(summary.billingCycleEnd)
-        let primary = QuotaSummary.Window(label: "Monthly", percent: monthlyPercent, resetsAt: reset)
+        let primary = QuotaSummary.Window(
+            label: monthlyPercent == nil ? "Team on-demand" : "Monthly",
+            percent: primaryPercent,
+            resetsAt: reset
+        )
         var details = [primary]
         if let autoPercent {
             details.append(QuotaSummary.Window(label: "Auto", percent: autoPercent, resetsAt: reset))
@@ -178,6 +188,9 @@ enum CursorSubscriptionService {
         }
         if let percent = ratio(used: pooled?.used, limit: pooled?.limit) {
             details.append(QuotaSummary.Window(label: "Team pool", percent: percent, resetsAt: reset))
+        }
+        if monthlyPercent != nil, let teamOnDemandPercent {
+            details.append(QuotaSummary.Window(label: "Team on-demand", percent: teamOnDemandPercent, resetsAt: reset))
         }
 
         return QuotaSummary(
@@ -231,9 +244,9 @@ enum CursorSubscriptionService {
         return min(1, value / 100)
     }
 
-    private static func ratio(used: Int?, limit: Int?) -> Double? {
-        guard let used, let limit, used >= 0, limit > 0 else { return nil }
-        return min(1, max(0, Double(used) / Double(limit)))
+    private static func ratio(used: Double?, limit: Double?) -> Double? {
+        guard let used, let limit, used.isFinite, limit.isFinite, used >= 0, limit > 0 else { return nil }
+        return min(1, max(0, used / limit))
     }
 
     private static func parseDate(_ raw: String?) -> Date? {
@@ -276,12 +289,15 @@ enum CursorSubscriptionService {
 
     private struct TeamUsage: Decodable {
         let pooled: Meter?
+        let onDemand: Meter?
     }
 
     private struct Meter: Decodable {
         let enabled: Bool?
-        let used: Int?
-        let limit: Int?
+        // Double, not Int: one fractional amount would otherwise fail the
+        // whole decode and surface as an unrecognized response.
+        let used: Double?
+        let limit: Double?
         let autoPercentUsed: Double?
         let apiPercentUsed: Double?
         let totalPercentUsed: Double?

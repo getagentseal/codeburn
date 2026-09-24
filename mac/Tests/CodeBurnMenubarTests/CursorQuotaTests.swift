@@ -129,6 +129,50 @@ final class CursorQuotaTests: XCTestCase {
         XCTAssertEqual(summary.primary?.percent ?? -1, 0.65, accuracy: 0.0001)
     }
 
+    func testEnterpriseTeamSeatConnectsOnTeamOnDemandMeter() throws {
+        // Key-for-key the Enterprise payload reported in #1546; amounts are synthetic.
+        let body = """
+        {
+          "billingCycleStart": "2026-09-01T00:00:00.000Z",
+          "billingCycleEnd": "2026-10-01T00:00:00.000Z",
+          "membershipType": "enterprise",
+          "limitType": "team",
+          "isUnlimited": false,
+          "autoModelSelectedDisplayMessage": "You've used 0% of your included total usage",
+          "namedModelSelectedDisplayMessage": "You've used 0% of your included API usage",
+          "individualUsage": {
+            "overall": { "enabled": false, "used": 0, "limit": null, "remaining": null }
+          },
+          "teamUsage": {
+            "onDemand": { "enabled": true, "used": 2500.5, "limit": 10000, "remaining": 7499.5 }
+          }
+        }
+        """
+
+        let summary = try CursorSubscriptionService.decode(Data(body.utf8))
+
+        XCTAssertEqual(summary.connection, .connected)
+        XCTAssertEqual(summary.planLabel, "Enterprise")
+        XCTAssertEqual(summary.primary?.label, "Team on-demand")
+        XCTAssertEqual(summary.primary?.percent ?? -1, 0.25005, accuracy: 0.0001)
+        XCTAssertEqual(summary.details.map(\.label), ["Team on-demand"])
+    }
+
+    func testTeamOnDemandMeterSitsBesideTheMonthlyWindow() throws {
+        let body = """
+        {
+          "individualUsage": { "plan": { "totalPercentUsed": 10 } },
+          "teamUsage": { "onDemand": { "enabled": true, "used": 1, "limit": 4 } }
+        }
+        """
+
+        let summary = try CursorSubscriptionService.decode(Data(body.utf8))
+
+        XCTAssertEqual(summary.primary?.label, "Monthly")
+        XCTAssertEqual(summary.details.map(\.label), ["Monthly", "Team on-demand"])
+        XCTAssertEqual(summary.details.map(\.percent), [0.1, 0.25])
+    }
+
     func testCursorAuthenticationResponsesAreTerminal() async throws {
         for status in [401, 403] {
             let deps = CursorSubscriptionService.Deps(

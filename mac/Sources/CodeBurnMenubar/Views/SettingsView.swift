@@ -2079,6 +2079,9 @@ private struct GenericProviderConnectionSections: View {
             return L("%@ is catalogued, but CodeBurn cannot fetch its live quota yet.", provider.displayName)
         }
         if let error = store.capacityDockProviderErrors[provider.id], !error.isEmpty {
+            // A rate limit, outage or unrecognized response is not a sign-in
+            // problem; the sign-in guidance would send the user the wrong way.
+            if store.capacityDockProviderTransientFailures.contains(provider.id) { return error }
             return "\(error) \(ProviderConnectionGuidance.instruction(for: provider))"
         }
         guard let summary else {

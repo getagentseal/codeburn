@@ -120,12 +120,13 @@ function planLabel(value: unknown): string | null {
   return known[raw.toLowerCase()] ?? raw
 }
 
-/** `null` when the payload carries no usable overall percentage. */
+/** `null` when the payload carries no usable percentage. */
 export function decodeCursorUsage(body: unknown): QuotaProvider | null {
   const data = body && typeof body === 'object' ? body as Record<string, any> : {}
   const plan = data.individualUsage?.plan
   const overall = data.individualUsage?.overall
   const pooled = data.teamUsage?.pooled
+  const teamOnDemand = data.teamUsage?.onDemand
   const auto = providerPercent(plan?.autoPercentUsed)
   const api = providerPercent(plan?.apiPercentUsed)
 
@@ -137,10 +138,14 @@ export function decodeCursorUsage(body: unknown): QuotaProvider | null {
     ?? ratio(overall?.used, overall?.limit)
     ?? ratio(pooled?.used, pooled?.limit)
     ?? (data.isUnlimited === true ? 0 : null)
-  if (monthly === null) return null
+  // Enterprise team seats report no individual meter; the team on-demand
+  // meter is the only structured used/limit pair in their payload.
+  const teamOnDemandPercent = teamOnDemand?.enabled === false ? null : ratio(teamOnDemand?.used, teamOnDemand?.limit)
+  const primaryPercent = monthly ?? teamOnDemandPercent
+  if (primaryPercent === null) return null
 
   const reset = resetsAt(data.billingCycleEnd)
-  const primary: QuotaWindow = { label: 'Monthly', percent: monthly, resetsAt: reset }
+  const primary: QuotaWindow = { label: monthly === null ? 'Team on-demand' : 'Monthly', percent: primaryPercent, resetsAt: reset }
   const details = [primary]
   if (auto !== null) details.push({ label: 'Auto', percent: auto, resetsAt: reset })
   if (api !== null) details.push({ label: 'API', percent: api, resetsAt: reset })
@@ -149,6 +154,7 @@ export function decodeCursorUsage(body: unknown): QuotaProvider | null {
   if (onDemandPercent !== null) details.push({ label: 'On-demand', percent: onDemandPercent, resetsAt: reset })
   const teamPercent = ratio(pooled?.used, pooled?.limit)
   if (teamPercent !== null) details.push({ label: 'Team pool', percent: teamPercent, resetsAt: reset })
+  if (monthly !== null && teamOnDemandPercent !== null) details.push({ label: 'Team on-demand', percent: teamOnDemandPercent, resetsAt: reset })
 
   return {
     provider: 'cursor', connection: 'connected',
