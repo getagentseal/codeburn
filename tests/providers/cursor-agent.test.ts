@@ -533,7 +533,7 @@ skipUnlessSqlite('cursor-agent store.db sessions', () => {
     expect(calls[0]!.outputTokens).toBe(estimateTokensFromChars(JSON.stringify({ command: 'npm run build' }).length))
     expect(calls[0]!.reasoningTokens).toBe(estimateTokensFromChars('Looking at the build.'.length))
     expect(calls[0]!.tools).toEqual(['cursor:shell'])
-    expect(calls[1]!.model).toBe('claude-4.6-sonnet')
+    expect(calls.every(c => c.model === CURSOR_AGENT_DEFAULT_MODEL)).toBe(true)
     expect(calls.every(c => c.timestamp === '2026-09-03T13:52:00.000Z')).toBe(true)
     expect(calls.every(c => c.costIsEstimated && c.sessionId === STORE_AGENT_ID && c.project === 'app')).toBe(true)
     expect(calls[0]!.userMessage).toBe('fix the build')

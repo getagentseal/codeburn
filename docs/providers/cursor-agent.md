@@ -13,7 +13,7 @@ Cursor's background agent transcripts (separate from the regular chat).
 1. **Legacy:** `*.txt` flat files.
 2. **Composer 2:** UUID-named subdirectories, each containing JSONL.
 
-Sessions with no exported transcript are read from `~/.cursor/chats/<hash>/<agentId>/store.db` (#986). A store whose `agentId` has a transcript is skipped at discovery, so a session is counted from one source only. `meta['0']` is hex JSON (`agentId`, `createdAt`, and a `blobEncryptionKey` that is never read); `blobs` holds JSON messages and protobuf conversation roots (field 1: message blob ids in order, 9: workspace URI, 26: ms stamp). Every root is merged in rowid order, because the latest root drops what Cursor summarized away. Turn time comes from the prompt's `<timestamp>` tag, the model from `providerOptions.cursor.modelName` on reasoning blocks.
+Sessions with no exported transcript are read from `~/.cursor/chats/<hash>/<agentId>/store.db` (#986). A store whose `agentId` has a transcript is skipped at discovery, so a session is counted from one source only. `meta['0']` is hex JSON (`agentId`, `createdAt`, and a `blobEncryptionKey` that is never read); `blobs` holds JSON messages and protobuf conversation roots (field 1: message blob ids in order, 9: workspace URI, 26: ms stamp). Every root is merged in rowid order, because the latest root drops what Cursor summarized away. Turn time comes from the prompt's `<timestamp>` tag. Store turns are priced at the Cursor (auto) rate, like transcripts, so a session does not change price when Cursor writes its transcript at the end.
 
 Subagents (delegated runs) live in `subagents/` subdirectories under the parent (`cursor-agent.ts:479-490`). They are picked up too.
 

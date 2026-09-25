@@ -4,7 +4,7 @@ import { readdir, readFile, stat } from 'fs/promises'
 import { join, basename, dirname } from 'path'
 import { homedir } from 'os'
 
-import { calculateCost, getModelCosts, getShortModelName } from '../models.js'
+import { calculateCost, getShortModelName } from '../models.js'
 import { blobToText, openDatabase, type SqliteDatabase } from '../sqlite.js'
 import { normalizeContentBlocks } from '../content-utils.js'
 import { estimateTokensFromChars } from '../token-estimate.js'
@@ -499,10 +499,9 @@ type StoreContentBlock = {
   text?: string
   toolName?: string
   args?: unknown
-  providerOptions?: { cursor?: { modelName?: unknown } }
 }
 
-type StoreTurn = ParsedTurn & { timestamp: string; model: string | null }
+type StoreTurn = ParsedTurn & { timestamp: string }
 
 type StoreSession = {
   agentId: string
@@ -576,7 +575,6 @@ function readStoreSession(dbPath: string, fallbackTimestamp: string): StoreSessi
     let timestamp = typeof meta.createdAt === 'number' ? normalizeTimestamp(meta.createdAt) ?? fallbackTimestamp : fallbackTimestamp
     let lastUserFull = ''
     let userBilled = true
-    let model: string | null = null
     const turns: StoreTurn[] = []
 
     for (const message of messages) {
@@ -605,8 +603,6 @@ function readStoreSession(dbPath: string, fallbackTimestamp: string): StoreSessi
           bodyParts.push(block.text)
         } else if (block.type === 'reasoning') {
           if (block.text) reasoningParts.push(block.text)
-          const name = block.providerOptions?.cursor?.modelName
-          if (typeof name === 'string' && name) model = name
         } else if (block.type === 'tool-call' && block.toolName) {
           tools.push(`cursor:${block.toolName.toLowerCase()}`)
           if (block.args !== undefined) {
@@ -629,17 +625,8 @@ function readStoreSession(dbPath: string, fallbackTimestamp: string): StoreSessi
         carried: userBilled,
         assistant: { body, reasoning, tools },
         timestamp,
-        model,
       })
       userBilled = true
-    }
-
-    // The model is named on reasoning blocks only; steps before the first one
-    // ran on the same model.
-    const firstModel = turns.find(t => t.model)?.model ?? null
-    for (const turn of turns) {
-      if (turn.model) break
-      turn.model = firstModel
     }
 
     let workspacePath: string | null = null
@@ -656,12 +643,6 @@ function readStoreSession(dbPath: string, fallbackTimestamp: string): StoreSessi
   } finally {
     db?.close()
   }
-}
-
-function resolveStoreModel(raw: string | null): string {
-  // A slug CodeBurn cannot price would show as $0; the Auto estimate is the
-  // same fallback transcripts use.
-  return raw && getModelCosts(raw) ? raw : 'cursor-agent-auto'
 }
 
 function createStoreParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
@@ -693,7 +674,9 @@ function createStoreParser(source: SessionSource, seenKeys: Set<string>): Sessio
         if (seenKeys.has(deduplicationKey)) continue
         seenKeys.add(deduplicationKey)
 
-        const model = resolveStoreModel(turn.model)
+        // Priced like transcripts, so a session keeps one price whichever file
+        // it is read from (Cursor writes the transcript when the session ends).
+        const model = 'cursor-agent-auto'
         const inputTokens = turn.carried ? 0 : estimateTokens(turn.userTextFull.length)
         const outputTokens = estimateTokens(turn.assistant.body.length)
         const reasoningTokens = estimateTokens(turn.assistant.reasoning.length)
