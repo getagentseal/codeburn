@@ -30,17 +30,25 @@ describe('ancestorsOf', () => {
 // A stand-in for the menubar app: a real process with a unique name, so the pgrep, kill and
 // ancestry code runs for real without going near the installed CodeBurnMenubar. It runs an
 // optional command as its child (the Update button's `codeburn menubar --force`), records the
-// exit status, then idles until signalled.
-const DUMMY_C = `#include <stdio.h>
+// exit status, then idles until signalled. SIGTERM is held off until the status is on disk:
+// the helper signals the app as soon as its child is reaped, and a real app handles that
+// termination itself rather than dying between two lines of C.
+const DUMMY_C = `#include <signal.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <sys/wait.h>
 #include <unistd.h>
 int main(int argc, char **argv) {
   if (argc > 2) {
+    sigset_t term;
+    sigemptyset(&term);
+    sigaddset(&term, SIGTERM);
+    sigprocmask(SIG_BLOCK, &term, NULL);
     int status = system(argv[2]);
     FILE *f = fopen(argv[1], "w");
     fprintf(f, "%d", WEXITSTATUS(status));
     fclose(f);
+    sigprocmask(SIG_UNBLOCK, &term, NULL);
   }
   for (;;) pause();
 }
@@ -87,12 +95,12 @@ describe.skipIf(!canRun)('replaceAndRelaunch with a stand-in app', () => {
 
   async function waitFor(path: string, ms = 30_000): Promise<string> {
     const until = Date.now() + ms
-    while (!existsSync(path)) {
+    for (;;) {
+      const text = existsSync(path) ? await readFile(path, 'utf-8') : ''
+      if (text.endsWith('\n')) return text.trim()
       if (Date.now() > until) throw new Error(`timed out waiting for ${path}`)
       await new Promise(r => setTimeout(r, 100))
     }
-    await new Promise(r => setTimeout(r, 100))
-    return (await readFile(path, 'utf-8')).trim()
   }
 
   it('from a terminal: stops the app, swaps, then launches, before returning', async () => {
