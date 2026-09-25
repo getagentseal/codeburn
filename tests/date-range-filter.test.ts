@@ -35,14 +35,16 @@ describe('parseDateRangeFlags', () => {
     // 55-year scan window that was almost never what the user meant. The
     // default is now 6 months back from now, matching the dashboard's
     // "6 Months" period boundary.
-    const range = parseDateRangeFlags(undefined, '2026-04-10')
+    const to = new Date(Date.now() - 24 * 3600_000)
+    const toDay = `${to.getFullYear()}-${String(to.getMonth() + 1).padStart(2, '0')}-${String(to.getDate()).padStart(2, '0')}`
+    const range = parseDateRangeFlags(undefined, toDay)
     expect(range).not.toBeNull()
     expect(range!.start.getTime()).toBeGreaterThan(new Date(0).getTime())
     const sixMonthsMs = 6 * 31 * 24 * 60 * 60 * 1000
     const ageMs = Date.now() - range!.start.getTime()
     expect(ageMs).toBeLessThanOrEqual(sixMonthsMs + 1000)
     expect(ageMs).toBeGreaterThanOrEqual(sixMonthsMs - 1000)
-    expect(range!.end.getDate()).toBe(10)
+    expect(range!.end.getDate()).toBe(to.getDate())
   })
 
   it('throws when --from > --to', () => {

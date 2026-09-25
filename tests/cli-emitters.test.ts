@@ -5,6 +5,8 @@ import { join } from 'node:path'
 
 import { describe, expect, it, vi } from 'vitest'
 
+import { utcDaysAgo } from './fixtures/clock.js'
+
 // These specs spawn the real CLI (tsx compile + full parse) per test, which
 // blows the 5s default under full parallel suite load while passing cleanly
 // in isolation — the exact flake class #948 documented and CI has hit
@@ -46,17 +48,19 @@ function assistantLine(sessionId: string, timestamp: string, messageId: string, 
   })
 }
 
+const DAY = utcDaysAgo(30)
+
 async function makeHome(): Promise<string> {
   const home = await mkdtemp(join(tmpdir(), 'codeburn-cli-emitters-'))
   const projectDir = join(home, '.claude', 'projects', 'app')
   await mkdir(projectDir, { recursive: true })
   await writeFile(join(projectDir, 'session-a.jsonl'), [
-    userLine('session-a', '2026-04-10T09:00:00Z'),
-    assistantLine('session-a', '2026-04-10T09:01:00Z', 'msg-a', 'claude-sonnet-4-5'),
+    userLine('session-a', `${DAY}T09:00:00Z`),
+    assistantLine('session-a', `${DAY}T09:01:00Z`, 'msg-a', 'claude-sonnet-4-5'),
   ].join('\n'))
   await writeFile(join(projectDir, 'session-b.jsonl'), [
-    userLine('session-b', '2026-04-10T10:00:00Z'),
-    assistantLine('session-b', '2026-04-10T10:01:00Z', 'msg-b', 'claude-opus-4-5'),
+    userLine('session-b', `${DAY}T10:00:00Z`),
+    assistantLine('session-b', `${DAY}T10:01:00Z`, 'msg-b', 'claude-opus-4-5'),
   ].join('\n'))
   return home
 }

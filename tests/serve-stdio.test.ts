@@ -4,7 +4,7 @@ import { appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'fs/promises
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { classifyRootReuse, createOutputMemoEntry, fileDaySpan, outputMemoKey, servedDayRange } from '../src/serve.js'
-import { noonTz } from './fixtures/noon-tz.js'
+import { noonTz } from './fixtures/clock.js'
 
 it('timestamps a completed output memo before parsing begins', () => {
   const parseStartedAt = 100

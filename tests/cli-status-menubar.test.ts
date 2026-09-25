@@ -7,7 +7,7 @@ import { spawnSync } from 'node:child_process'
 import { describe, expect, it, vi } from 'vitest'
 import { CACHE_SCHEMA_VERSION } from '../src/models.js'
 import { STATUS_SNAPSHOT_RENDER_VERSION } from '../src/status-snapshot-semantic.js'
-import { noonTz } from './fixtures/noon-tz.js'
+import { noonTz, utcDaysAgo } from './fixtures/clock.js'
 
 // Derive the revision tags rather than hard-coding them: a snapshot revision
 // bump on one branch would otherwise leave another branch's assertion pinned
@@ -297,21 +297,22 @@ describe('codeburn status --format menubar-json', () => {
       const work = join(home, 'claude-work')
       const personal = join(home, 'claude-personal')
       const slug = 'shared-app'
+      const day = utcDaysAgo(30)
       await mkdir(join(work, 'projects', slug), { recursive: true })
       await mkdir(join(personal, 'projects', slug), { recursive: true })
 
       await writeFile(
         join(work, 'projects', slug, 'work.jsonl'),
         [
-          userLine('work', '2026-04-10T11:59:00Z'),
-          assistantLine('work', '2026-04-10T12:00:00Z', 'msg-work'),
+          userLine('work', `${day}T11:59:00Z`),
+          assistantLine('work', `${day}T12:00:00Z`, 'msg-work'),
         ].join('\n'),
       )
       await writeFile(
         join(personal, 'projects', slug, 'personal.jsonl'),
         [
-          userLine('personal', '2026-04-10T12:59:00Z'),
-          assistantLine('personal', '2026-04-10T13:00:00Z', 'msg-personal'),
+          userLine('personal', `${day}T12:59:00Z`),
+          assistantLine('personal', `${day}T13:00:00Z`, 'msg-personal'),
         ].join('\n'),
       )
 
@@ -535,19 +536,20 @@ describe('codeburn status --format menubar-json', () => {
     try {
       const work = join(home, 'claude-work')
       const personal = join(home, 'claude-personal')
+      const day = utcDaysAgo(30)
       await mkdir(join(work, 'projects', 'app'), { recursive: true })
       await mkdir(join(personal, 'projects', 'app'), { recursive: true })
       await writeFile(join(work, 'projects', 'app', 'w.jsonl'),
-        [userLine('w', '2026-04-10T11:59:00Z'), assistantLine('w', '2026-04-10T12:00:00Z', 'mw')].join('\n'))
+        [userLine('w', `${day}T11:59:00Z`), assistantLine('w', `${day}T12:00:00Z`, 'mw')].join('\n'))
       await writeFile(join(personal, 'projects', 'app', 'p.jsonl'),
-        [userLine('p', '2026-04-10T12:59:00Z'), assistantLine('p', '2026-04-10T13:00:00Z', 'mp')].join('\n'))
+        [userLine('p', `${day}T12:59:00Z`), assistantLine('p', `${day}T13:00:00Z`, 'mp')].join('\n'))
 
       // A fake Claude Desktop sessions tree.
       const desktop = join(home, 'desktop-sessions')
       const dProj = join(desktop, 'appid', 'ws', 'local_s1', '.claude', 'projects', 'space')
       await mkdir(dProj, { recursive: true })
       await writeFile(join(dProj, 'd.jsonl'),
-        [userLine('d', '2026-04-10T13:59:00Z'), assistantLine('d', '2026-04-10T14:00:00Z', 'md')].join('\n'))
+        [userLine('d', `${day}T13:59:00Z`), assistantLine('d', `${day}T14:00:00Z`, 'md')].join('\n'))
 
       const env = {
         CLAUDE_CONFIG_DIRS: [work, personal].join(pathDelimiter),

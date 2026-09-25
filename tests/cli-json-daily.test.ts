@@ -5,6 +5,8 @@ import { spawnSync } from 'node:child_process'
 
 import { describe, expect, it, vi } from 'vitest'
 
+import { utcDaysAgo } from './fixtures/clock.js'
+
 // These specs spawn the real CLI (tsx compile + full parse) per test, which
 // blows the 5s default under full parallel suite load while passing cleanly
 // in isolation — the exact flake class #948 documented and CI has hit
@@ -249,13 +251,15 @@ describe('codeburn report --format json daily[] one-shot fields (issue #279)', (
       const projectDir = join(home, '.claude', 'projects', 'app')
       await mkdir(projectDir, { recursive: true })
 
+      const oldDay = utcDaysAgo(400)
+      const recentDay = utcDaysAgo(30)
       await writeFile(
         join(projectDir, 'history.jsonl'),
         [
-          userLine('old', '2025-10-01T09:00:00Z'),
-          assistantEditLine('old', '2025-10-01T09:01:00Z', 'm-old'),
-          userLine('recent', '2026-06-01T09:00:00Z'),
-          assistantEditLine('recent', '2026-06-01T09:01:00Z', 'm-recent'),
+          userLine('old', `${oldDay}T09:00:00Z`),
+          assistantEditLine('old', `${oldDay}T09:01:00Z`, 'm-old'),
+          userLine('recent', `${recentDay}T09:00:00Z`),
+          assistantEditLine('recent', `${recentDay}T09:01:00Z`, 'm-recent'),
         ].join('\n'),
       )
 
@@ -269,7 +273,7 @@ describe('codeburn report --format json daily[] one-shot fields (issue #279)', (
         daily: Array<{ date: string; calls: number }>
         projects: Array<{ calls: number }>
       }
-      expect(allReport.daily.map(d => d.date)).toEqual(['2026-06-01'])
+      expect(allReport.daily.map(d => d.date)).toEqual([recentDay])
       expect(allReport.projects[0]?.calls).toBe(1)
 
       const lifetimeResult = runCli([
@@ -282,7 +286,7 @@ describe('codeburn report --format json daily[] one-shot fields (issue #279)', (
         daily: Array<{ date: string; calls: number }>
         projects: Array<{ calls: number }>
       }
-      expect(lifetimeReport.daily.map(d => d.date)).toEqual(['2025-10-01', '2026-06-01'])
+      expect(lifetimeReport.daily.map(d => d.date)).toEqual([oldDay, recentDay])
       expect(lifetimeReport.projects[0]?.calls).toBe(2)
     } finally {
       await rm(home, { recursive: true, force: true })

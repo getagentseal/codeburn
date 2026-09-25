@@ -5,7 +5,7 @@
  * 401 auth rejection, 5xx server errors, and the flatten→filter pipeline.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { createServer, type Server } from 'http'
 import { mkdtemp, rm } from 'fs/promises'
 import { join } from 'path'
@@ -93,9 +93,13 @@ beforeEach(async () => {
   // env-isolation.ts redirects XDG_CACHE_HOME to a per-worker sandbox shared
   // across tests — the ledger honors XDG, so point it at the per-test dir.
   process.env.XDG_CACHE_HOME = join(tmpDir, '.cache')
+  // The ledger prunes entries older than six months; the fixtures are July 2026.
+  vi.useFakeTimers({ toFake: ['Date'] })
+  vi.setSystemTime(new Date('2026-07-15T12:00:00Z'))
 })
 
 afterEach(async () => {
+  vi.useRealTimers()
   setHome(originalHome)
   await rm(tmpDir, { recursive: true, force: true })
 })

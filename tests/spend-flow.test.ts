@@ -6,6 +6,7 @@ import { spawnSync } from 'node:child_process'
 import { describe, expect, it, vi } from 'vitest'
 
 import type { DateRange, ProjectSummary, SessionSummary, TokenUsage } from '../src/types.js'
+import { utcDaysAgo } from './fixtures/clock.js'
 
 // These specs spawn the real CLI (tsx compile + full parse) per test, which
 // blows the 5s default under full parallel suite load while passing cleanly
@@ -273,8 +274,8 @@ describe('codeburn spend --format flow-json', () => {
       await writeFile(
         join(projectDir, 'session.jsonl'),
         [
-          userLine('s1', '2026-04-10T09:00:00Z'),
-          assistantLine('s1', '2026-04-10T09:01:00Z', 'msg-1', 'claude-sonnet-4-5'),
+          userLine('s1', `${utcDaysAgo(30)}T09:00:00Z`),
+          assistantLine('s1', `${utcDaysAgo(30)}T09:01:00Z`, 'msg-1', 'claude-sonnet-4-5'),
         ].join('\n'),
       )
 

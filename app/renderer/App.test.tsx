@@ -217,6 +217,7 @@ describe('App shortcuts', () => {
   })
 
   afterEach(() => {
+    vi.useRealTimers()
     clearPlatform()
     vi.useRealTimers()
   })
@@ -721,6 +722,9 @@ describe('App shortcuts', () => {
   })
 
   it('applies a calendar range to overview and visible section polls', async () => {
+    // Mid-month: the picker shows this month only, so "two days back" must be in it.
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date(2026, 8, 17, 12, 0, 0))
     render(<App />)
 
     fireEvent.keyDown(document, { key: '4', metaKey: true })
@@ -746,6 +750,9 @@ describe('App shortcuts', () => {
   })
 
   it('names a selected custom range on the Pull requests empty note', async () => {
+    // Mid-month: the picker shows this month only, so "two days back" must be in it.
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date(2026, 8, 17, 12, 0, 0))
     render(<App />)
     fireEvent.keyDown(document, { key: '3', metaKey: true })
     expect(await screen.findByText(/No sessions in Last 30 days mentioned a pull request URL/)).toBeInTheDocument()

@@ -6,7 +6,7 @@ import { spawn, spawnSync } from 'node:child_process'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { DAILY_CACHE_VERSION, currentTzKey } from '../src/daily-cache.js'
-import { noonTz } from './fixtures/noon-tz.js'
+import { noonTz } from './fixtures/clock.js'
 
 // Each test spawns `tsx src/cli.ts`, which re-transpiles the CLI per spawn.
 vi.setConfig({ testTimeout: 30_000 })

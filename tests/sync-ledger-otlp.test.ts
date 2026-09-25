@@ -281,9 +281,13 @@ describe('ledger', () => {
     tmpDir = await mkdtemp(join(tmpdir(), 'codeburn-ledger-'))
     setHome(tmpDir)
     process.env.CODEBURN_CACHE_DIR = join(tmpDir, '.cache', 'codeburn')
+    // The ledger prunes entries older than six months; the fixtures are July 2026.
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-07-15T12:00:00Z'))
   })
 
   afterEach(async () => {
+    vi.useRealTimers()
     setHome(originalHome)
     if (originalCacheDir === undefined) delete process.env.CODEBURN_CACHE_DIR
     else process.env.CODEBURN_CACHE_DIR = originalCacheDir

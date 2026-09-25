@@ -5,6 +5,7 @@ import { spawnSync } from 'node:child_process'
 import { pathToFileURL } from 'node:url'
 
 import { describe, expect, it, vi } from 'vitest'
+import { utcDaysAgo } from './fixtures/clock.js'
 
 // node --import takes a module specifier, and an absolute Windows path parses as
 // a URL with scheme 'c:', so the loader rejects it. A file:// URL works on both.
@@ -133,8 +134,8 @@ describe('devices/share/identity JSON CLI output', () => {
       await writeFile(
         join(projectDir, 'session.jsonl'),
         [
-          userLine('s1', '2026-04-10T09:00:00Z'),
-          assistantLine('s1', '2026-04-10T09:01:00Z', 'msg-1'),
+          userLine('s1', `${utcDaysAgo(30)}T09:00:00Z`),
+          assistantLine('s1', `${utcDaysAgo(30)}T09:01:00Z`, 'msg-1'),
         ].join('\n'),
       )
 

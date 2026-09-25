@@ -6,7 +6,7 @@ import { spawnSync } from 'node:child_process'
 import { describe, expect, it } from 'vitest'
 
 import { getDateRange } from '../src/cli-date.js'
-import { noonTz } from './fixtures/noon-tz.js'
+import { noonTz } from './fixtures/clock.js'
 
 const CLI_TIMEOUT_MS = 30_000
 const CLI_TZ = noonTz()

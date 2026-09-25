@@ -19,7 +19,7 @@ import { delimiter, join } from 'path'
 
 import { acquireCacheRefreshLock } from '../src/cache-refresh-lock.js'
 import { loadStatusSnapshot, saveStatusSnapshot } from '../src/session-cache.js'
-import { noonTz } from './fixtures/noon-tz.js'
+import { noonTz } from './fixtures/clock.js'
 
 let TMP_DIR: string
 const SEMANTIC_KEY = 'test-render-v1'
