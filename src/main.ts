@@ -1602,6 +1602,57 @@ program
   })
 
 program
+  .command('import <tool> [file]')
+  .description('Replace local estimates with usage a tool exported itself. Supported: cursor (Export CSV at cursor.com/dashboard/usage)')
+  .option('--from <date>', 'Start of the exported range (date, ISO time or epoch ms). Default: the first event\'s UTC day')
+  .option('--to <date>', 'End of the exported range (date, ISO time or epoch ms). Default: the last event\'s UTC day')
+  .option('--remove', 'Delete the imported usage and go back to local estimates')
+  .action(async (tool: string, file: string | undefined, opts: { from?: string; to?: string; remove?: boolean }) => {
+    if (tool !== 'cursor') {
+      console.error(`\n  Unknown import "${tool}". Supported: cursor\n`)
+      process.exitCode = 1
+      return
+    }
+    const { cursorImportPath, importCursorCsv, parseBoundary, removeCursorImport, replacedProviders } = await import('./cursor-import.js')
+    const { invalidateProviderDays } = await import('./daily-cache.js')
+    const invalidate = async (ranges: Array<{ start: string; end: string }>) => {
+      for (const r of ranges) {
+        await invalidateProviderDays(replacedProviders(), toDateString(new Date(r.start)), toDateString(new Date(r.end)))
+      }
+    }
+    try {
+      if (opts.remove) {
+        const ranges = await removeCursorImport()
+        if (!ranges) {
+          console.log('\n  No Cursor import to remove.\n')
+          return
+        }
+        await invalidate(ranges)
+        console.log('\n  Removed the Cursor import. Local Cursor estimates are back for the days it covered.\n')
+        return
+      }
+      if (!file) throw new Error('give the path of the CSV exported at cursor.com/dashboard/usage')
+      const summary = await importCursorCsv(file, {
+        ...(opts.from ? { from: parseBoundary(opts.from, 'from') } : {}),
+        ...(opts.to ? { to: parseBoundary(opts.to, 'to') } : {}),
+      })
+      await invalidate([summary.coverage])
+      const pct = summary.tokens > 0 ? ` (${(summary.grokBotTokens / summary.tokens * 100).toFixed(1)}%)` : ''
+      console.log(`\n  Imported Cursor usage from ${file}`)
+      console.log(`  Events:   ${summary.added.toLocaleString()} added, ${summary.skipped.toLocaleString()} already imported (${summary.total.toLocaleString()} stored)`)
+      console.log(`  Covers:   ${summary.coverage.start} to ${summary.coverage.end} UTC`)
+      if (summary.coverage.inferred) console.log('            (range taken from the events; pass --from/--to from the export to set it)')
+      console.log(`  Events:   ${summary.firstEvent} to ${summary.lastEvent}`)
+      console.log(`  Tokens:   ${summary.tokens.toLocaleString()}, Grok Bot ${summary.grokBotTokens.toLocaleString()} in ${summary.grokBotEvents.toLocaleString()} events${pct}`)
+      console.log(`  Local Cursor, Cursor Agent${summary.grokBotEvents > 0 ? ' and Grok Bot' : ''} estimates in that window are replaced by these events.`)
+      console.log(`  Stored in ${cursorImportPath()}. Nothing was uploaded.\n`)
+    } catch (err) {
+      console.error(`\n  codeburn import cursor: ${err instanceof Error ? err.message : String(err)}\n`)
+      process.exitCode = 1
+    }
+  })
+
+program
   .command('model-alias [from] [to]')
   .description('Map a provider model name to a canonical one for pricing (e.g. codeburn model-alias my-model claude-opus-4-6)')
   .option('--remove <from>', 'Remove an alias')

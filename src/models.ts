@@ -412,6 +412,10 @@ const BUILTIN_ALIASES: Record<string, string> = {
   // product, so it prices at xAI's published grok-4.6 rate ($2.00/M in,
   // $6.00/M out, $0.50/M cached). Every grokbot call is costIsEstimated.
   'grokbot-auto':                  'grok-4.6',
+  // The same Grok Bot work as Cursor's usage export names it, per bot kind.
+  'grok-bot-automation':           'grok-4.6',
+  'grok-bot-cua':                  'grok-4.6',
+  'grok-bot-default':              'grok-4.6',
   'GPT-5.3 Codex (low reasoning)': 'gpt-5.3-codex',
   'GPT-5.3 Codex (medium reasoning)': 'gpt-5.3-codex',
   'GPT-5.3 Codex (high reasoning)': 'gpt-5.3-codex',
@@ -1288,6 +1292,9 @@ const autoModelNames: Record<string, string> = {
   'kiro-auto': 'Kiro (auto)',
   'quickdesk-auto': 'Quick Desktop (auto)',
   'grokbot-auto': 'Grok Bot (auto)',
+  'grok-bot-automation': 'Grok Bot (automation)',
+  'grok-bot-cua': 'Grok Bot (computer use)',
+  'grok-bot-default': 'Grok Bot (default)',
   'cline-auto': 'Cline (auto)',
   'openclaw-auto': 'OpenClaw (auto)',
   'qwen-auto': 'Qwen (auto)',

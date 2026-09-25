@@ -60,6 +60,7 @@ import type { CodexFullParse } from './providers/codex.js'
 import { dateKey } from './day-aggregator.js'
 import { behavioralCallWeight, isBehavioralTurn } from './behavioral-weight.js'
 import { gatewayIncludedInTotals } from './config.js'
+import { coverageFor, cursorImportPath, dropImportCoveredCalls, loadCursorImport, replacedProviders } from './cursor-import.js'
 import type { ParsedProviderCall, Provider, SessionSource } from './providers/types.js'
 import type {
   ApiUsageIteration,
@@ -4152,6 +4153,17 @@ export async function parseProviderSources(
     return { ...turn, calls: kept, ...(turnTsValid ? {} : { timestamp: kept[0]!.timestamp }) }
   }
 
+  // An imported Cursor usage export replaces this provider's local estimates
+  // for the time it covers. Decided here, at serve time, so the cached local
+  // calls stay intact and removing the import restores them.
+  const importCoverage = replacedProviders().includes(providerName)
+    ? await loadCursorImport().then(store => store && coverageFor(store), () => null)
+    : null
+  const serveTurn = (rawTurn: CachedTurn): CachedTurn | null => {
+    const turn = reconcileCopilotCalls(rawTurn)
+    return turn && dropImportCoveredCalls(providerName, turn, importCoverage)
+  }
+
   // Query-time: derive SessionSummary from all cached turns.
   // Uses seenKeys (shared across providers) for cross-provider dedup.
   const sessionMap = new Map<string, { project: string; projectPath?: string; workingDirectory?: string; turns: ClassifiedTurn[]; prLinks?: Set<string>; title?: string; lineage?: SessionLineage; agentName?: string; agentStartedAt?: string }>()
@@ -4168,7 +4180,7 @@ export async function parseProviderSources(
     }
 
     for (const rawTurn of cachedFile.turns) {
-      const turn = reconcileCopilotCalls(rawTurn)
+      const turn = serveTurn(rawTurn)
       if (!turn) continue
       const hasDup = turn.calls.some(c => seenKeys.has(c.deduplicationKey))
       if (hasDup) continue
@@ -4256,7 +4268,7 @@ export async function parseProviderSources(
       if (wslStatus === 'active' && !provider.durableSources) continue
 
       for (const rawTurn of cachedFile.turns) {
-        const turn = reconcileCopilotCalls(rawTurn)
+        const turn = serveTurn(rawTurn)
         if (!turn) continue
         const hasDup = turn.calls.some(c => seenKeys.has(c.deduplicationKey))
         if (hasDup) continue
@@ -5600,6 +5612,9 @@ export async function computeCorpusFingerprint(providerFilter?: string): Promise
     }
     await record(source.path)
   }
+  // Cursor Agent output depends on the Cursor import too (it replaces the
+  // agent's estimates), so a snapshot scoped to it must move with the import.
+  await record(cursorImportPath())
   entries.sort()
   const hash = createHash('sha256').update(entries.join('\n')).digest('hex')
   return { hash, newestMtimeMs, observedAtMs }

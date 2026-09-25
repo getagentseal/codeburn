@@ -5,6 +5,7 @@ import { homedir } from 'os'
 import { calculateCost } from '../models.js'
 import { extractBashCommands } from '../bash-utils.js'
 import { readCachedResults, writeCachedResults } from '../cursor-cache.js'
+import { importSource, importSourceParser } from '../cursor-import.js'
 import {
   isSqliteAvailable,
   isSqliteBusyError,
@@ -1060,10 +1061,11 @@ export function createCursorProvider(dbPathOverride?: string): Provider {
     },
 
     async discoverSessions(): Promise<SessionSource[]> {
-      if (!isSqliteAvailable()) return []
+      const imported = importSource('cursor')
+      if (!isSqliteAvailable()) return imported
 
       const dbPath = dbPathOverride ?? getCursorDbPath()
-      if (!existsSync(dbPath)) return []
+      if (!existsSync(dbPath)) return imported
 
       const wsMap = loadWorkspaceMap(getCursorWorkspaceStorageDir(dbPath))
       const sources: SessionSource[] = []
@@ -1085,11 +1087,11 @@ export function createCursorProvider(dbPathOverride?: string): Provider {
         project: ORPHAN_PROJECT,
         provider: 'cursor',
       })
-      return sources
+      return [...sources, ...imported]
     },
 
     createSessionParser(source: SessionSource, seenKeys: Set<string>, dateRange?: DateRange): SessionParser {
-      return createParser(source, seenKeys, dateRange)
+      return importSourceParser(source, seenKeys, 'cursor') ?? createParser(source, seenKeys, dateRange)
     },
   }
 }

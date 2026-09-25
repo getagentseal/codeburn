@@ -1308,6 +1308,28 @@ export function mergeDayEntries(
   return [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date))
 }
 
+/// Forget the given providers' slices on the local days `start`..`end` and pull
+/// the watermark back before them, so the next hydration re-derives those days
+/// from sources. For a provider whose data changed on settled days by the
+/// user's own hand (a usage import added or removed), which the partial-
+/// survival guard would otherwise read as sources aging out and keep the old
+/// slices over.
+export async function invalidateProviderDays(providers: readonly string[], start: string, end: string): Promise<void> {
+  await withDailyCacheLock(async () => {
+    if (!existsSync(getCachePath())) return
+    const c = await loadDailyCache()
+    for (const day of c.days) {
+      if (day.date < start || day.date > end) continue
+      for (const provider of providers) {
+        if (Object.hasOwn(day.providers, provider)) subtractSliceFromDay(day, provider, day.providers[provider]!)
+      }
+    }
+    const before = toDateString(new Date(Number(start.slice(0, 4)), Number(start.slice(5, 7)) - 1, Number(start.slice(8, 10)) - 1))
+    const lastComputedDate = c.lastComputedDate !== null && c.lastComputedDate > before ? before : c.lastComputedDate
+    await saveDailyCache({ ...c, days: c.days.filter(hasPositiveDayContent), lastComputedDate })
+  })
+}
+
 export function getDaysInRange(cache: DailyCache, start: string, end: string): DailyEntry[] {
   return cache.days.filter(d => d.date >= start && d.date <= end)
 }

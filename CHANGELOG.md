@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Added
+- **`codeburn import cursor <file.csv>` replaces the local Cursor estimates with Cursor's own usage export.** The local database has no per-request token counts and none of the cache reads Cursor re-sends, so on one real month CodeBurn saw about 7M Cursor tokens where the dashboard showed 644M. Export CSV at cursor.com/dashboard/usage and import it: for the time the export covers, its events replace the local Cursor, Cursor Agent and (when the export holds Grok Bot events) Grok Bot estimates, and outside it the estimates stay. Dollar amounts in the export are kept as billed; included usage is priced at API rates like every other local call. Pass `--from`/`--to` with the range you exported, re-import overlapping exports without double counting, and `--remove` to go back. Stored locally, nothing is uploaded. Reported in #1545.
+
 ### Removed
 - Roo Code support. Roo Code was discontinued in May 2026 (its repository is archived).
 

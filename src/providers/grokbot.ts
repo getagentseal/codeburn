@@ -5,6 +5,7 @@ import { join } from 'path'
 import { FS_SCAN_CONCURRENCY, mapWithConcurrency, readSessionFile } from '../fs-utils.js'
 import { calculateCost, getShortModelName } from '../models.js'
 import { estimateTokensFromChars } from '../token-estimate.js'
+import { importSource, importSourceParser } from '../cursor-import.js'
 import type { ParsedProviderCall, ProbeRoot, Provider, SessionParser, SessionSource } from './types.js'
 
 // Grok Bot is xAI's Electron desktop agent app (bundle id com.anysphere.sand),
@@ -293,11 +294,11 @@ export function createGrokbotProvider(persistenceDir?: string): Provider {
     },
 
     async discoverSessions(): Promise<SessionSource[]> {
-      return discoverSessions(resolveDir())
+      return [...await discoverSessions(resolveDir()), ...importSource('grokbot')]
     },
 
     createSessionParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
-      return createParser(source, seenKeys)
+      return importSourceParser(source, seenKeys, 'grokbot') ?? createParser(source, seenKeys)
     },
   }
 }
