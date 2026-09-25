@@ -2836,6 +2836,9 @@ program
       process.stdout.write(renderMarkdown(renderRows, { byTask: !!opts.byTask, byAgent: !!opts.byAgent, showTotals: opts.totals !== false }) + '\n')
     } else if (fmt === 'table') {
       process.stdout.write(renderTable(renderRows, { byTask: !!opts.byTask, byAgent: !!opts.byAgent, showTotals: opts.totals !== false }) + '\n')
+      if (renderRows.some(r => r.peakUSD != null || r.offPeakUSD != null)) {
+        process.stdout.write('Peak / Off-peak: DeepSeek peak hours are Mon–Fri 01:00–04:00 and 06:00–10:00 UTC (excl. Chinese public holidays), off-peak billed at 0.5x. GLM/Z.ai peak hours are Mon–Fri 14:00–18:00 Singapore time; the 0.5x off-peak discount applies to plan credits, so the split shows the consumption share behind it.\n')
+      }
       // Never advise aliasing unconditionally: a subscription or flat-rate model
       // is correctly $0, and mapping it onto another model's rate invents spend.
       if (opts.unpriced) process.stdout.write(unpricedModelHint() + '\n')

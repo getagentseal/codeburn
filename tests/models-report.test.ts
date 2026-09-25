@@ -41,6 +41,7 @@ function makeCall(opts: {
   cacheRead?: number
   savingsUSD?: number
   savingsBaselineModel?: string
+  timestamp?: string
 }): ParsedApiCall {
   return {
     provider: opts.provider,
@@ -60,9 +61,9 @@ function makeCall(opts: {
     hasAgentSpawn: false,
     hasPlanMode: false,
     speed: 'standard',
-    timestamp: '2026-05-09T00:00:00.000Z',
+    timestamp: opts.timestamp ?? '2026-05-09T00:00:00.000Z',
     bashCommands: [],
-    deduplicationKey: `${opts.provider}-${opts.model}-${opts.costUSD}`,
+    deduplicationKey: `${opts.provider}-${opts.model}-${opts.costUSD}-${opts.timestamp ?? 'default'}`,
     savingsUSD: opts.savingsUSD,
     savingsBaselineModel: opts.savingsBaselineModel,
   }
@@ -198,6 +199,60 @@ describe('aggregateModels', () => {
     } finally {
       setModelAliases({})
     }
+  })
+
+  it('splits DeepSeek usage into peak and repriced off-peak dollars', async () => {
+    const rows = await aggregateModels([makeProject([
+      // Monday 2026-09-28: 02:00 UTC = peak, 12:00 UTC = off-peak.
+      makeTurn('feature', [
+        makeCall({ provider: 'dsh', model: 'deepseek-chat', input: 1000, output: 100, costUSD: 2, timestamp: '2026-09-28T02:00:00Z' }),
+      ]),
+      makeTurn('feature', [
+        makeCall({ provider: 'dsh', model: 'deepseek-chat', input: 1000, output: 100, costUSD: 4, timestamp: '2026-09-28T12:00:00Z' }),
+      ]),
+    ])])
+    expect(rows).toHaveLength(1)
+    const row = rows[0]!
+    // Stored cost is untouched (list rate); the split carries the bill.
+    expect(row.costUSD).toBeCloseTo(6, 6)
+    expect(row.peakUSD).toBeCloseTo(2, 6)
+    expect(row.offPeakUSD).toBeCloseTo(2, 6)
+    expect(row.peakKind).toBe('deepseek-usd')
+    expect(row.peakCalls).toBe(1)
+    expect(row.offPeakCalls).toBe(1)
+    const parsed = JSON.parse(renderJson(rows))
+    expect(parsed[0].peakUSD).toBeCloseTo(2, 6)
+    expect(parsed[0].offPeakUSD).toBeCloseTo(2, 6)
+    expect(parsed[0].peakKind).toBe('deepseek-usd')
+  })
+
+  it('splits GLM usage as a consumption share without repricing dollars', async () => {
+    const rows = await aggregateModels([makeProject([
+      makeTurn('feature', [
+        makeCall({ provider: 'zcode', model: 'glm-5.3', input: 1000, output: 100, costUSD: 3, timestamp: '2026-09-28T08:00:00Z' }),
+      ]),
+      makeTurn('feature', [
+        makeCall({ provider: 'zcode', model: 'glm-5.3', input: 1000, output: 100, costUSD: 5, timestamp: '2026-09-28T12:00:00Z' }),
+      ]),
+    ])])
+    expect(rows).toHaveLength(1)
+    const row = rows[0]!
+    expect(row.costUSD).toBeCloseTo(8, 6)
+    expect(row.peakUSD).toBeCloseTo(3, 6)
+    expect(row.offPeakUSD).toBeCloseTo(5, 6)
+    expect(row.peakKind).toBe('zai-credits')
+  })
+
+  it('leaves rows without a peak regime or timestamp unsplit', async () => {
+    const rows = await aggregateModels([makeProject([
+      makeTurn('feature', [
+        makeCall({ provider: 'claude', model: 'claude-sonnet-4-6', input: 100, output: 10, costUSD: 1, timestamp: '2026-09-28T02:00:00Z' }),
+      ]),
+    ])])
+    expect(rows).toHaveLength(1)
+    expect(rows[0]!.peakUSD).toBeNull()
+    expect(rows[0]!.offPeakUSD).toBeNull()
+    expect(rows[0]!.peakKind).toBeUndefined()
   })
 
   it('includes credits in the JSON output', async () => {

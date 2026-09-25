@@ -98,5 +98,7 @@ export function decodeZaiPlanUsage(provider: 'zai' | 'zcode', body: unknown): Za
     details,
     planLabel: planLabel(payload.level),
     footerLines: ['Source: Z.ai Coding Plan'],
+    // Peak-hours note (#peak-hours): the off-peak discount is in plan credits.
+    notes: ['Off-peak (Mon–Fri outside 14:00–18:00 Singapore time) consumes plan credits at 0.5x. See the Peak / Off-peak split in `codeburn models`.'],
   }
 }
