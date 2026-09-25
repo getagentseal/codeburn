@@ -2836,6 +2836,9 @@ program
       process.stdout.write(renderMarkdown(renderRows, { byTask: !!opts.byTask, byAgent: !!opts.byAgent, showTotals: opts.totals !== false }) + '\n')
     } else if (fmt === 'table') {
       process.stdout.write(renderTable(renderRows, { byTask: !!opts.byTask, byAgent: !!opts.byAgent, showTotals: opts.totals !== false }) + '\n')
+      if (renderRows.some(r => r.peakUSD != null || r.offPeakUSD != null)) {
+        process.stdout.write('Peak / Off-peak: DeepSeek peak hours are Mon–Fri 01:00–04:00 and 06:00–10:00 UTC (excl. Chinese public holidays), off-peak billed at 0.5x. GLM/Z.ai peak hours are Mon–Fri 14:00–18:00 Singapore time; the 0.5x off-peak discount applies to plan credits, so the split shows the consumption share behind it.\n')
+      }
       // Never advise aliasing unconditionally: a subscription or flat-rate model
       // is correctly $0, and mapping it onto another model's rate invents spend.
       if (opts.unpriced) process.stdout.write(unpricedModelHint() + '\n')
@@ -3112,6 +3115,115 @@ program
       return
     }
     process.stdout.write(renderDoctorTable(report, { color: opts.color }))
+  })
+
+program
+  .command('peak')
+  .description('Live peak / off-peak status for DeepSeek API and GLM/Z.ai plan pricing')
+  .option('--vendor <vendor>', 'Which schedule: deepseek, glm, or both', 'both')
+  .option('--format <format>', 'Output format: text, compact, json', 'text')
+  .option('--at <iso>', 'Evaluate a moment instead of now (replay/diagnose a boundary)')
+  .option('--watch', 'Live countdown, ticking every second until interrupted')
+  .option('--wait', 'Block until both vendors are off-peak, then exit 0 (gate cheap jobs)')
+  .option('--notify', 'Ring the terminal bell when the state flips (use with --watch)')
+  .option('--no-color', 'Disable ANSI colors')
+  .action(async (opts) => {
+    const { peakStatus, describePeakStatus, formatCountdown, formatFlipSgt } = await import('./peak-hours.js')
+    type PeakVendor = 'deepseek' | 'glm'
+    const vendorOpt = String(opts.vendor ?? 'both').toLowerCase()
+    const vendors: PeakVendor[] =
+      vendorOpt === 'both' ? ['deepseek', 'glm']
+      : vendorOpt === 'deepseek' || vendorOpt === 'ds' ? ['deepseek']
+      : vendorOpt === 'glm' || vendorOpt === 'zai' || vendorOpt === 'z.ai' ? ['glm']
+      : []
+    if (vendors.length === 0) {
+      process.stderr.write('codeburn: --vendor must be deepseek, glm, or both\n')
+      process.exit(1)
+    }
+    let at = new Date()
+    if (opts.at) {
+      const parsed = Date.parse(String(opts.at))
+      if (!Number.isFinite(parsed)) {
+        process.stderr.write('codeburn: --at must be a valid ISO timestamp\n')
+        process.exit(1)
+      }
+      at = new Date(parsed)
+    }
+    const startMs = Date.now()
+    const baseAtMs = at.getTime()
+    // One-shot (and --wait) evaluate `at` once. --watch advances it with the
+    // wall clock so the countdown ticks.
+    const snap = () => vendors.map(v => peakStatus(v, new Date(opts.watch ? baseAtMs + (Date.now() - startMs) : baseAtMs)))
+    const paint = (text: string, state: string): string => {
+      if (opts.color === false || !process.stdout.isTTY) return text
+      // Red for peak (expensive), green for off-peak (cheap) — matches the
+      // status-page convention (red/blue) as close as ANSI gets.
+      return state === 'peak' ? `\u001b[31m${text}\u001b[0m` : `\u001b[32m${text}\u001b[0m`
+    }
+    const fmt = String(opts.format ?? 'text').toLowerCase()
+    if (!['text', 'compact', 'json'].includes(fmt)) {
+      process.stderr.write('codeburn: --format must be text, compact, or json\n')
+      process.exit(1)
+    }
+    const renderJson = (statuses: ReturnType<typeof peakStatus>[]): string => JSON.stringify(
+      statuses.map(s => ({
+        vendor: s.vendor,
+        state: s.state,
+        flipsAt: s.flipsAt.toISOString(),
+        flipSgt: formatFlipSgt(s.flipsAt),
+        secondsUntilFlip: s.secondsUntilFlip,
+        countdown: formatCountdown(s.secondsUntilFlip),
+      })),
+      null,
+      2,
+    ) + '\n'
+    const renderText = (statuses: ReturnType<typeof peakStatus>[]): string => {
+      if (fmt === 'compact') return statuses.map(s => describePeakStatus(s, { compact: true })).join('\n') + '\n'
+      return statuses.map(s => paint(describePeakStatus(s), s.state)).join('\n') + '\n'
+    }
+    const exitCode = (statuses: ReturnType<typeof peakStatus>[]): number =>
+      statuses.some(s => s.state === 'peak') ? 2 : 0
+
+    if (opts.wait) {
+      // Gate: poll every 5s until every selected vendor is off-peak. Cheap
+      // jobs chain as `codeburn peak --wait && <expensive run>`.
+      for (;;) {
+        const statuses = vendors.map(v => peakStatus(v))
+        if (statuses.every(s => s.state === 'off-peak')) {
+          process.stdout.write(renderText(statuses))
+          process.exit(0)
+        }
+        await new Promise(resolve => setTimeout(resolve, 5000))
+      }
+    }
+
+    if (opts.watch) {
+      const bell = opts.notify ? '\u0007' : ''
+      let last = snap().map(s => s.state).join(',')
+      process.stdout.write(renderText(snap()))
+      const timer = setInterval(() => {
+        const statuses = snap()
+        const key = statuses.map(s => s.state).join(',')
+        // Reprint on its own line on flip (with bell), else rewrite the line.
+        if (key !== last) {
+          last = key
+          process.stdout.write('\n' + renderText(statuses) + bell)
+        } else {
+          const line = fmt === 'json'
+            ? JSON.stringify(statuses.map(s => ({ vendor: s.vendor, state: s.state, countdown: formatCountdown(s.secondsUntilFlip) })))
+            : statuses.map(s => paint(describePeakStatus(s, { compact: fmt === 'compact' }), s.state)).join('  ')
+          process.stdout.write('\r\u001b[K' + line)
+        }
+      }, 1000)
+      await new Promise(() => {})
+      clearInterval(timer)
+      return
+    }
+
+    const statuses = snap()
+    if (fmt === 'json') process.stdout.write(renderJson(statuses))
+    else process.stdout.write(renderText(statuses))
+    process.exit(exitCode(statuses))
   })
 
 program

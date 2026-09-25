@@ -5,6 +5,7 @@ import { behavioralCallWeight } from './behavioral-weight.js'
 import { codexCredits } from './codex-credits.js'
 import { formatCost, formatTokens } from './format.js'
 import { billableOutputTokens, fallbackRawModelDisplayName, getModelRoute, getRouteById, getShortModelName, modelRowKey, resolveCanonicalModelId, routeSuffix, sanitizeModelForDisplay } from './models.js'
+import { classifyPeak, OFF_PEAK_MULTIPLIER, peakBillingKind } from './peak-hours.js'
 import { getProvider } from './providers/index.js'
 import { CATEGORY_LABELS, type ProjectSummary, type TaskCategory } from './types.js'
 
@@ -45,6 +46,20 @@ export type ModelReportRow = {
   /// True when `credits` is a partial sum because some contributing buckets
   /// had no known credit rate.
   creditsIncomplete?: boolean
+  /// Peak-hours split (#peak-hours): stored `costUSD` stays at the peak (list)
+  /// rate for every call; these additive fields say how much of it ran during
+  /// peak vs off-peak windows instead. DeepSeek rows carry off-peak USD at
+  /// 0.5x (peakUSD + offPeakUSD == costUSD); GLM/Z.ai rows split the same way
+  /// as consumption shares, since their discount is in plan credits, not $.
+  /// Null on rows whose model has no peak regime or whose calls all landed in
+  /// `unknown` (missing/invalid timestamps) — never guessed.
+  peakUSD?: number | null
+  offPeakUSD?: number | null
+  peakCalls?: number | null
+  offPeakCalls?: number | null
+  /// 'deepseek-usd' when offPeakUSD is repriced dollars, 'zai-credits' when the
+  /// split is a consumption share of plan-credit usage. Absent with the split.
+  peakKind?: 'deepseek-usd' | 'zai-credits'
   topCategory?: TaskCategory
   topCategoryCost?: number
   topCategoryShare?: number
@@ -83,6 +98,16 @@ type Bucket = {
   savingsUSD: number
   savingsBaselineModel: string
   calls: number
+  /// Peak-hours split (#peak-hours): additive per-window cost/calls resolved
+  /// from each call's own timestamp. Stored `costUSD` stays at the peak (list)
+  /// rate; peakCostUSD + offPeakCostUSD == costUSD for classified DeepSeek
+  /// calls (off-peak at 0.5x), and the same identity for GLM/Z.ai rows as a
+  /// consumption share (their discount is in plan credits, not $).
+  peakKind: 'deepseek-usd' | 'zai-credits' | null
+  peakCostUSD: number
+  offPeakCostUSD: number
+  peakCalls: number
+  offPeakCalls: number
 }
 
 type ModelKey = string
@@ -119,6 +144,32 @@ function routedDisplayName(providerLabel: string, model: string, routeId: string
 
 function bucketKey(provider: string, model: string, route: string | null, category: TaskCategory | null, agentType: string | null): string {
   return `${provider} ${model} ${route ?? ''} ${category ?? ''} ${agentType ?? ''}`
+}
+
+/// Additive peak-hours merge (#peak-hours): buckets fold into a row only when
+/// they share one canonical id, so the split sums cleanly across folded
+/// aliases. A row whose calls all landed `unknown` keeps null fields (never
+/// guessed); the kind is set only while the split is non-empty.
+function peakSplitForRow(bucket: Bucket): Pick<ModelReportRow, 'peakUSD' | 'offPeakUSD' | 'peakCalls' | 'offPeakCalls' | 'peakKind'> {
+  if (!bucket.peakKind || (bucket.peakCostUSD === 0 && bucket.offPeakCostUSD === 0)) {
+    return { peakUSD: null, offPeakUSD: null, peakCalls: null, offPeakCalls: null }
+  }
+  return {
+    peakUSD: bucket.peakCostUSD,
+    offPeakUSD: bucket.offPeakCostUSD,
+    peakCalls: bucket.peakCalls,
+    offPeakCalls: bucket.offPeakCalls,
+    peakKind: bucket.peakKind,
+  }
+}
+
+function mergePeakSplit(row: ModelReportRow, bucket: Bucket): void {
+  if (!bucket.peakKind || (bucket.peakCostUSD === 0 && bucket.offPeakCostUSD === 0)) return
+  row.peakUSD = (row.peakUSD ?? 0) + bucket.peakCostUSD
+  row.offPeakUSD = (row.offPeakUSD ?? 0) + bucket.offPeakCostUSD
+  row.peakCalls = (row.peakCalls ?? 0) + bucket.peakCalls
+  row.offPeakCalls = (row.offPeakCalls ?? 0) + bucket.offPeakCalls
+  row.peakKind = bucket.peakKind
 }
 
 /// Walks every parsed turn, attributes each assistant call to a
@@ -168,6 +219,11 @@ export async function aggregateModels(projects: ProjectSummary[], opts: Aggregat
               savingsUSD: 0,
               savingsBaselineModel: '',
               calls: 0,
+              peakKind: peakBillingKind(model),
+              peakCostUSD: 0,
+              offPeakCostUSD: 0,
+              peakCalls: 0,
+              offPeakCalls: 0,
             }
             buckets.set(key, bucket)
           }
@@ -186,7 +242,22 @@ export async function aggregateModels(projects: ProjectSummary[], opts: Aggregat
           }
           // Supplementary accounting calls keep their tokens and cost above but are not
           // distinct requests, so they add no call weight (see behavioral-weight.ts).
-          bucket.calls += behavioralCallWeight(call)
+          const callWeight = behavioralCallWeight(call)
+          bucket.calls += callWeight
+          // Peak-hours split (#peak-hours): classify from the call's own
+          // timestamp, never guessed — unknown when the model has no peak
+          // regime or the timestamp is missing/invalid. The stored cost stays
+          // at the peak (list) rate; the off-peak leg carries the 0.5x bill.
+          if (bucket.peakKind) {
+            const peak = classifyPeak(model, call.timestamp)
+            if (peak === 'peak') {
+              bucket.peakCostUSD += call.costUSD
+              bucket.peakCalls += callWeight
+            } else if (peak === 'off-peak') {
+              bucket.offPeakCostUSD += bucket.peakKind === 'deepseek-usd' ? call.costUSD * OFF_PEAK_MULTIPLIER : call.costUSD
+              bucket.offPeakCalls += callWeight
+            }
+          }
 
           const modelKey = `${provider} ${model} ${route ?? ''}`
           let perCat = perModelCategoryCost.get(modelKey)
@@ -268,6 +339,7 @@ export async function aggregateModels(projects: ProjectSummary[], opts: Aggregat
       existing.costUSD += bucket.costUSD
       existing.savingsUSD += bucket.savingsUSD
       existing.calls += bucket.calls
+      mergePeakSplit(existing, bucket)
       existing.savingsBaselineModel = resolvedBaseline
       if (!existing.rawModels.includes(bucket.model)) existing.rawModels.push(bucket.model)
       const existingRated = existing.credits !== null
@@ -294,6 +366,7 @@ export async function aggregateModels(projects: ProjectSummary[], opts: Aggregat
         calls: bucket.calls,
         rawModels: [bucket.model],
         credits: bucketCredits,
+        ...peakSplitForRow(bucket),
       })
     }
 
@@ -363,6 +436,15 @@ export async function aggregateModels(projects: ProjectSummary[], opts: Aggregat
   return filtered
 }
 
+/// One-line "peak X / off-peak Y" cell (#peak-hours). For DeepSeek rows the
+/// amounts are billed dollars (off-peak at 0.5x); for GLM/Z.ai rows they are
+/// the list-rate consumption share behind the 0.5x plan-credit discount.
+/// '-' when the row carries no split.
+export function formatPeakSplit(row: Pick<ModelReportRow, 'peakUSD' | 'offPeakUSD' | 'peakKind'>): string {
+  if (row.peakUSD == null && row.offPeakUSD == null) return '-'
+  return `${formatCost(row.peakUSD ?? 0)} / ${formatCost(row.offPeakUSD ?? 0)}`
+}
+
 function visibleLength(text: string): number {
   return stripAnsi(text).length
 }
@@ -402,7 +484,7 @@ type Column = {
   /// Drop priority. 0 = always shown; higher numbers get dropped first when
   /// the terminal is narrow.
   priority: number
-  key: 'provider' | 'model' | 'task' | 'input' | 'output' | 'cacheWrite' | 'cacheRead' | 'total' | 'cost' | 'saved'
+  key: 'provider' | 'model' | 'task' | 'input' | 'output' | 'cacheWrite' | 'cacheRead' | 'total' | 'cost' | 'saved' | 'peak'
 }
 
 type TableRenderOptions = {
@@ -427,13 +509,14 @@ const DROP_COLUMN_GROUPS: Array<Array<Column['key']>> = [
   ['saved'],
 ]
 
-function defaultColumns(byTask: boolean, byAgent: boolean, showSaved: boolean): Column[] {
+function defaultColumns(byTask: boolean, byAgent: boolean, showSaved: boolean, showPeak = false): Column[] {
   // Higher priority numbers drop FIRST when the terminal is narrow.
   // Cache columns are the cheapest to lose, then input/output, then top-task.
   // Provider/Model/Total/Cost stay regardless. The Saved column only appears
   // when local-model savings actually exist (a `codeburn model-savings`
   // mapping produced nonzero avoided spend); otherwise it would be a column of
-  // dashes for the majority of users, so it is omitted entirely.
+  // dashes for the majority of users, so it is omitted entirely. Same rule
+  // for Peak: only when some row carries a peak/off-peak split.
   // Widths are MINIMUMS; sizeColumnsToContent() expands them to fit cell text.
   return [
     { key: 'provider',   header: 'Provider',                          align: 'left',  width: 8,  priority: 0 },
@@ -446,6 +529,7 @@ function defaultColumns(byTask: boolean, byAgent: boolean, showSaved: boolean): 
     { key: 'total',      header: 'Total',                      align: 'right', width: 6,  priority: 0 },
     { key: 'cost',       header: 'Cost',                       align: 'right', width: 6,  priority: 0 },
     ...(showSaved ? [{ key: 'saved' as const, header: 'Saved', align: 'right' as const, width: 6, priority: 0 }] : []),
+    ...(showPeak ? [{ key: 'peak' as const, header: 'Peak / Off-peak', align: 'right' as const, width: 15, priority: 1 }] : []),
   ]
 }
 
@@ -470,8 +554,8 @@ function frameWidth(columns: Column[]): number {
   return 2 + columns.reduce((acc, c) => acc + c.width + 2, 0) + (columns.length - 1)
 }
 
-function chooseColumns(byTask: boolean, byAgent: boolean, available: number, showSaved: boolean): Column[] {
-  const all = defaultColumns(byTask, byAgent, showSaved)
+function chooseColumns(byTask: boolean, byAgent: boolean, available: number, showSaved: boolean, showPeak = false): Column[] {
+  const all = defaultColumns(byTask, byAgent, showSaved, showPeak)
   if (frameWidth(all) <= available) return all
 
   // Drop in this order so the table degrades sensibly. Cache columns drop as
@@ -578,6 +662,8 @@ export function renderTable(
   const fullWidth = opts.fullWidth ?? true
   // Only render the Saved column when something was actually saved.
   const showSaved = rows.some(r => r.savingsUSD > 0)
+  // Same rule for the Peak column: only when a row carries a split.
+  const showPeak = rows.some(r => r.peakUSD != null || r.offPeakUSD != null)
 
   const valueOf = (row: ModelReportRow, key: Column['key'], isNewGroup: boolean): string => {
     switch (key) {
@@ -596,6 +682,8 @@ export function renderTable(
       case 'total':      return formatTokens(row.totalTokens)
       case 'cost':       return formatCost(row.costUSD)
       case 'saved':      return row.savingsUSD > 0 ? formatCost(row.savingsUSD) : chalk.dim('-')
+      case 'peak':
+        return (row.peakUSD != null || row.offPeakUSD != null) ? formatPeakSplit(row) : chalk.dim('-')
     }
   }
 
@@ -607,7 +695,7 @@ export function renderTable(
     const groupKey = `${row.provider} ${row.modelDisplayName}`
     const isNewGroup = !grouped || groupKey !== prevProviderModel
     prevProviderModel = groupKey
-    const allCells = defaultColumns(byTask, byAgent, showSaved).map(col => {
+    const allCells = defaultColumns(byTask, byAgent, showSaved, showPeak).map(col => {
       const raw = valueOf(row, col.key, isNewGroup)
       if (col.key === 'provider' && raw) return chalk.dim(raw)
       return raw
@@ -626,11 +714,14 @@ export function renderTable(
         acc.total += r.totalTokens
         acc.cost += r.costUSD
         acc.savings += r.savingsUSD
+        acc.peak += r.peakUSD ?? 0
+        acc.offPeak += r.offPeakUSD ?? 0
         return acc
       },
-      { input: 0, output: 0, cacheWrite: 0, cacheRead: 0, total: 0, cost: 0, savings: 0 },
+      { input: 0, output: 0, cacheWrite: 0, cacheRead: 0, total: 0, cost: 0, savings: 0, peak: 0, offPeak: 0 },
     )
-    const cells = defaultColumns(byTask, byAgent, showSaved).map(col => {
+    const totalsPeak = { peakUSD: totals.peak, offPeakUSD: totals.offPeak, peakKind: undefined } as const
+    const cells: string[] = defaultColumns(byTask, byAgent, showSaved, showPeak).map(col => {
       switch (col.key) {
         case 'provider':   return ''
         case 'model':      return chalk.yellow.bold('Total')
@@ -642,6 +733,7 @@ export function renderTable(
         case 'total':      return chalk.yellow.bold(formatTokens(totals.total))
         case 'cost':       return chalk.yellow.bold(formatCost(totals.cost))
         case 'saved':      return totals.savings > 0 ? chalk.yellow.bold(formatCost(totals.savings)) : chalk.dim('-')
+        case 'peak':       return showPeak ? chalk.yellow.bold(formatPeakSplit(totalsPeak)) : chalk.dim('-')
       }
     })
     totalsEntry = { kind: 'totals', cells, isNewGroup: true }
@@ -650,9 +742,9 @@ export function renderTable(
   // Pick which columns to include based on terminal width, then size them.
   // We index into `cells` by the column key to avoid object-identity pitfalls
   // across defaultColumns() invocations.
-  const allKeys = defaultColumns(byTask, byAgent, showSaved).map(c => c.key)
+  const allKeys = defaultColumns(byTask, byAgent, showSaved, showPeak).map(c => c.key)
   const indexByKey = new Map(allKeys.map((k, i) => [k, i]))
-  const columns = chooseColumns(byTask, byAgent, available, showSaved)
+  const columns = chooseColumns(byTask, byAgent, available, showSaved, showPeak)
   const projectColumns = (cols: Column[], entry: RowCells) =>
     cols.map(c => entry.cells[indexByKey.get(c.key)!] ?? '')
   const cellMatrix = [
@@ -729,6 +821,11 @@ export function renderJson(rows: ModelReportRow[]): string {
       savingsBaselineModel: r.savingsBaselineModel,
       credits: r.credits,
       creditsIncomplete: r.creditsIncomplete === true,
+      peakUSD: r.peakUSD ?? null,
+      offPeakUSD: r.offPeakUSD ?? null,
+      peakCalls: r.peakCalls ?? null,
+      offPeakCalls: r.offPeakCalls ?? null,
+      peakKind: r.peakKind ?? null,
     })),
     null,
     2,
@@ -757,8 +854,9 @@ export function renderMarkdown(rows: ModelReportRow[], opts: { byTask?: boolean;
   const byAgent = opts.byAgent ?? false
   const showTotals = opts.showTotals ?? true
 
-  const header = ['Provider', 'Model', thirdColumnHeader(byTask, byAgent), 'Input', 'Output', 'Cache Write', 'Cache Read', 'Total', 'Cost', 'Saved']
-  const align = ['---', '---', '---', '---:', '---:', '---:', '---:', '---:', '---:', '---:']
+  const showPeak = rows.some(r => r.peakUSD != null || r.offPeakUSD != null)
+  const header = ['Provider', 'Model', thirdColumnHeader(byTask, byAgent), 'Input', 'Output', 'Cache Write', 'Cache Read', 'Total', 'Cost', 'Saved', ...(showPeak ? ['Peak / Off-peak'] : [])]
+  const align = ['---', '---', '---', '---:', '---:', '---:', '---:', '---:', '---:', '---:', ...(showPeak ? ['---:'] : [])]
 
   const lines: string[] = []
   lines.push(`| ${header.join(' | ')} |`)
@@ -783,6 +881,7 @@ export function renderMarkdown(rows: ModelReportRow[], opts: { byTask?: boolean;
       formatTokens(row.totalTokens),
       formatCost(row.costUSD),
       row.savingsUSD > 0 ? formatCost(row.savingsUSD) : '-',
+      ...(showPeak ? [formatPeakSplit(row)] : []),
     ]
     lines.push(`| ${cells.join(' | ')} |`)
   }
@@ -797,9 +896,11 @@ export function renderMarkdown(rows: ModelReportRow[], opts: { byTask?: boolean;
         acc.total += r.totalTokens
         acc.cost += r.costUSD
         acc.savings += r.savingsUSD
+        acc.peak += r.peakUSD ?? 0
+        acc.offPeak += r.offPeakUSD ?? 0
         return acc
       },
-      { input: 0, output: 0, cacheWrite: 0, cacheRead: 0, total: 0, cost: 0, savings: 0 },
+      { input: 0, output: 0, cacheWrite: 0, cacheRead: 0, total: 0, cost: 0, savings: 0, peak: 0, offPeak: 0 },
     )
     const totalCells = [
       '',
@@ -812,6 +913,7 @@ export function renderMarkdown(rows: ModelReportRow[], opts: { byTask?: boolean;
       `**${formatTokens(totals.total)}**`,
       `**${formatCost(totals.cost)}**`,
       totals.savings > 0 ? `**${formatCost(totals.savings)}**` : '-',
+      ...(showPeak ? [`**${formatPeakSplit({ peakUSD: totals.peak, offPeakUSD: totals.offPeak })}**`] : []),
     ]
     lines.push(`| ${totalCells.join(' | ')} |`)
   }
@@ -824,12 +926,27 @@ export function renderCsv(rows: ModelReportRow[], opts: { byTask?: boolean; byAg
   const byAgent = opts.byAgent ?? false
   // CSV intentionally repeats provider/model on every row so downstream
   // consumers can sort/filter without first reconstructing the grouping.
+  // Peak columns are appended only when a row carries a split, so existing
+  // consumers never see new columns on data that has no peak-hours content.
+  const showPeak = rows.some(r => r.peakUSD != null || r.offPeakUSD != null)
+  const peakHeader = ['peak_usd', 'off_peak_usd', 'peak_calls', 'off_peak_calls', 'peak_kind']
   const header = byAgent
-    ? ['provider', 'model', 'agent', 'input_tokens', 'output_tokens', 'cache_write_tokens', 'cache_read_tokens', 'total_tokens', 'calls', 'cost_usd', 'savings_usd', 'savings_baseline_model']
+    ? ['provider', 'model', 'agent', 'input_tokens', 'output_tokens', 'cache_write_tokens', 'cache_read_tokens', 'total_tokens', 'calls', 'cost_usd', 'savings_usd', 'savings_baseline_model', ...(showPeak ? peakHeader : [])]
     : byTask
-    ? ['provider', 'model', 'task', 'input_tokens', 'output_tokens', 'cache_write_tokens', 'cache_read_tokens', 'total_tokens', 'calls', 'cost_usd', 'savings_usd', 'savings_baseline_model']
-    : ['provider', 'model', 'top_task', 'top_task_share', 'input_tokens', 'output_tokens', 'cache_write_tokens', 'cache_read_tokens', 'total_tokens', 'calls', 'cost_usd', 'savings_usd', 'savings_baseline_model']
+    ? ['provider', 'model', 'task', 'input_tokens', 'output_tokens', 'cache_write_tokens', 'cache_read_tokens', 'total_tokens', 'calls', 'cost_usd', 'savings_usd', 'savings_baseline_model', ...(showPeak ? peakHeader : [])]
+    : ['provider', 'model', 'top_task', 'top_task_share', 'input_tokens', 'output_tokens', 'cache_write_tokens', 'cache_read_tokens', 'total_tokens', 'calls', 'cost_usd', 'savings_usd', 'savings_baseline_model', ...(showPeak ? peakHeader : [])]
   const lines: string[] = [header.join(',')]
+  // Peak cells appended only with the peak header, so rows without a split
+  // keep the exact historical shape.
+  const peakCells = (r: ModelReportRow): string[] => showPeak
+    ? [
+        r.peakUSD != null ? r.peakUSD.toFixed(6) : '',
+        r.offPeakUSD != null ? r.offPeakUSD.toFixed(6) : '',
+        r.peakCalls != null ? String(r.peakCalls) : '',
+        r.offPeakCalls != null ? String(r.offPeakCalls) : '',
+        r.peakKind ?? '',
+      ]
+    : []
   for (const r of rows) {
     const cells = byAgent
       ? [
@@ -845,6 +962,7 @@ export function renderCsv(rows: ModelReportRow[], opts: { byTask?: boolean; byAg
           r.costUSD.toFixed(6),
           (r.savingsUSD ?? 0).toFixed(6),
           csvEscape(r.savingsBaselineModel),
+          ...peakCells(r),
         ]
       : byTask
       ? [
@@ -860,6 +978,7 @@ export function renderCsv(rows: ModelReportRow[], opts: { byTask?: boolean; byAg
           r.costUSD.toFixed(6),
           (r.savingsUSD ?? 0).toFixed(6),
           csvEscape(r.savingsBaselineModel),
+          ...peakCells(r),
         ]
       : [
           csvEscape(r.providerDisplayName),
@@ -875,6 +994,7 @@ export function renderCsv(rows: ModelReportRow[], opts: { byTask?: boolean; byAg
           r.costUSD.toFixed(6),
           (r.savingsUSD ?? 0).toFixed(6),
           csvEscape(r.savingsBaselineModel),
+          ...peakCells(r),
         ]
     lines.push(cells.join(','))
   }

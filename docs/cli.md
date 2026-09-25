@@ -93,6 +93,20 @@ Sync sends token counts, costs, models, and projects, never prompts or code. Thi
 | `codeburn models --task feature` | Filter to feature-development work |
 | `codeburn models --provider claude` | Filter to a single provider |
 
+DeepSeek and GLM/Z.ai rows carry a Peak / Off-peak column when their calls have usable timestamps. DeepSeek peak hours are Mon–Fri 01:00–04:00 and 06:00–10:00 UTC (excluding Chinese public holidays); off-peak usage bills at 0.5x. GLM/Z.ai peak hours are Mon–Fri 14:00–18:00 Singapore time; the 0.5x off-peak discount applies to plan credits, so the split shows the consumption share behind it. Stored costs stay at the peak (list) rate.
+
+**Peak status**
+
+| Command | What it does |
+|---------|--------------|
+| `codeburn peak` | One-shot live status: PEAK/OFF-PEAK per vendor + countdown to the next flip (exit 0 = all off-peak, 2 = any peak, so `codeburn peak && <cheap job>` gates on off-peak) |
+| `codeburn peak --vendor glm` | Only one schedule (deepseek, glm, or both) |
+| `codeburn peak --format json` | Machine-readable `{vendor, state, flipsAt, flipSgt, secondsUntilFlip, countdown}` for agents and scripts |
+| `codeburn peak --format compact` | One short line per vendor (`◉ PEAK 2:00:00`) for prompt segments and tmux |
+| `codeburn peak --watch` | Live 1s countdown; `--notify` rings the bell on a flip |
+| `codeburn peak --wait` | Block until every selected vendor is off-peak, then exit 0 |
+| `codeburn peak --at <ISO>` | Replay a moment (diagnose a boundary, verify a bill) |
+
 Left/right arrow keys switch between Today, 7 Days, 30 Days, Month, 6 Months, and Lifetime (use `--from` / `--to` for an exact historical window). Up/down scroll the full dashboard one line, Page Up/Page Down move one screen, and Home/End jump to either end. The main Daily Activity panel shows at least 10 dates from scrollable full history: use `j`/`k` to move one day, Shift+Space/Space to page, and `g`/`G` to jump to either end. Panels flow in the same order across three columns at maximum width, two at medium width, and one when narrow. In the three-column layout, all panels widen equally by one character for every three additional terminal columns until the dashboard reaches the lesser of 256 characters or the widest renderable source row. Press `q` to quit, `1` `2` `3` `4` `5` `6` as period shortcuts, `c` to open model comparison, or `o` to open optimize. Today, 7 Days, and concrete-day views refresh in place at most once per minute by default (`--refresh 0` to disable) without changing the active view or scroll position. The heavier aggregate views remain static between deliberate navigation changes. The dashboard also shows average cost per session and the five most expensive sessions across all projects.
 
 ## Your month at a glance
