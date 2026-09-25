@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { mkdir, mkdtemp, readFile, rm, stat, utimes, writeFile } from 'fs/promises'
 import { existsSync, mkdtempSync } from 'fs'
 import { join } from 'path'
-import { tmpdir } from 'os'
+import { homedir, tmpdir } from 'os'
 
 import {
   CURSOR_CSV_HEADER,
@@ -61,7 +61,7 @@ async function writeCsv(rows: Row[], name = 'usage.csv', savedAt = base + 30 * D
 // Cursor Agent transcripts carry no timestamps without their summary db, so
 // each one is stamped with its file mtime.
 async function writeAgentTranscript(id: string, mtimeMs: number): Promise<void> {
-  const dir = join(process.env['HOME']!, '.cursor', 'projects', 'proj', 'agent-transcripts')
+  const dir = join(homedir(), '.cursor', 'projects', 'proj', 'agent-transcripts')
   await mkdir(dir, { recursive: true })
   const path = join(dir, `${id}.txt`)
   await writeFile(path, `user:\n<user_query>question ${id}</user_query>\nA:\nanswer ${'x'.repeat(400)}\n`)
@@ -93,7 +93,9 @@ beforeEach(async () => {
   process.env['CODEBURN_CACHE_DIR'] = join(root, 'cache')
   // The Cursor Agent provider resolves its home once, when it first loads,
   // so every test shares one home and starts from an empty one.
+  // os.homedir() reads USERPROFILE on Windows and HOME elsewhere.
   process.env['HOME'] = HOME
+  process.env['USERPROFILE'] = HOME
   await rm(HOME, { recursive: true, force: true })
   await loadPricing()
   csvPath = await writeCsv(ROWS)
