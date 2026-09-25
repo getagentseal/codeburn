@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { spawn } from 'child_process'
 import { chmod, mkdir, mkdtemp, readFile, rm, stat, unlink, utimes, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
@@ -372,6 +372,28 @@ describe('warm session-cache refresh lock', () => {
     }
     await result.handle.release()
     await rm(dir, { recursive: true, force: true })
+  })
+
+  it('coalesces heartbeat ticks that fire faster than a tick completes', async () => {
+    // Every queued tick used to run in full, so an interval outpacing the
+    // tick grew the serializer without bound and the fence waited behind the
+    // whole backlog (the 1ms-heartbeat test above then stalled for minutes
+    // on a loaded runner). Counting wallNow calls counts lock-file writes.
+    const dir = await tempDir()
+    let writes = 0
+    const clock = { monotonicNow: () => performance.now(), wallNow: () => { writes++; return Date.now() } }
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    try {
+      const result = await acquireCacheRefreshLock({ cacheDir: dir, clock, heartbeatMs: 1_000 })
+      if (result.outcome !== 'acquired') throw new Error(`expected acquired, got ${result.outcome}`)
+      vi.advanceTimersByTime(50_000)
+      writes = 0
+      expect(await result.handle.verifyStillOwner()).toBe(true)
+      expect(writes).toBeLessThanOrEqual(4)
+      await result.handle.release()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 

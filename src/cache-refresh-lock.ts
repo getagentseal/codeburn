@@ -370,10 +370,14 @@ export async function acquireCacheRefreshLock(options: RefreshLockOptions = {}):
     let heartbeatRunning = false
     ownedLockPaths.add(lockPath)
     armSignalCleanup()
+    // One tick at a time, counted from when it is queued, not when it runs:
+    // an interval that fires faster than a tick completes would otherwise
+    // pile ticks up in the serializer, and the fence waits behind all of them.
     const heartbeat = setInterval(() => {
+      if (released || heartbeatRunning) return
+      heartbeatRunning = true
       void serializeOwnerOp(async () => {
-        if (released || heartbeatRunning) return
-        heartbeatRunning = true
+        if (released) { heartbeatRunning = false; return }
         const guard = await acquireTakeoverGuard()
         if (guard !== 'created') { heartbeatRunning = false; return }
         try {
