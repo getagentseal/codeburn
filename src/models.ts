@@ -420,6 +420,8 @@ const BUILTIN_ALIASES: Record<string, string> = {
   // so it takes grok-4.6's 200k-prompt tier like the local Cursor rows do.
   'grok-4.6-high':                 'grok-4.6',
   'grok-4.6-high-fast':            'grok-4.6',
+  'cursor-grok-4.6-high':          'grok-4.6',
+  'cursor-grok-4.6-high-fast':     'grok-4.6',
   'GPT-5.3 Codex (low reasoning)': 'gpt-5.3-codex',
   'GPT-5.3 Codex (medium reasoning)': 'gpt-5.3-codex',
   'GPT-5.3 Codex (high reasoning)': 'gpt-5.3-codex',

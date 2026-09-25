@@ -1636,7 +1636,7 @@ program
         ...(opts.from ? { from: parseBoundary(opts.from, 'from') } : {}),
         ...(opts.to ? { to: parseBoundary(opts.to, 'to') } : {}),
       })
-      await invalidate([summary.coverage])
+      if (summary.changed) await invalidate([summary.coverage])
       const pct = summary.tokens > 0 ? ` (${(summary.grokBotTokens / summary.tokens * 100).toFixed(1)}%)` : ''
       console.log(`\n  Imported Cursor usage from ${file}`)
       console.log(`  Events:   ${summary.added.toLocaleString()} added, ${summary.skipped.toLocaleString()} already imported (${summary.total.toLocaleString()} stored)`)

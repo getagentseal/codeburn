@@ -206,6 +206,7 @@ async function saveCursorImport(store: CursorImportStore): Promise<void> {
 }
 
 export type CursorImportSummary = {
+  changed: boolean
   added: number
   skipped: number
   total: number
@@ -235,12 +236,16 @@ export async function importCursorCsv(csvPath: string, opts: { from?: number; to
   }
   events.sort((a, b) => a.date.localeCompare(b.date))
   const range = { start: new Date(coverage.start).toISOString(), end: new Date(coverage.end).toISOString() }
-  await saveCursorImport({ version: 1, ranges: mergeRanges([...(existing?.ranges ?? []), range]), events })
+  const ranges = mergeRanges([...(existing?.ranges ?? []), range])
+  // An unchanged store keeps its mtime, so a repeat import re-parses nothing.
+  const changed = added > 0 || JSON.stringify(ranges) !== JSON.stringify(existing?.ranges)
+  if (changed) await saveCursorImport({ version: 1, ranges, events })
 
   const tokensOf = (e: CursorUsageEvent) => e.inputCacheWrite + e.input + e.cacheRead + e.output
   const bot = incoming.filter(e => isGrokBotModel(e.model))
   const times = incoming.map(e => e.date).sort()
   return {
+    changed,
     added,
     skipped: incoming.length - added,
     total: events.length,

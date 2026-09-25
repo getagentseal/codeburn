@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest'
-import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'fs/promises'
+import { mkdir, mkdtemp, readFile, rm, stat, utimes, writeFile } from 'fs/promises'
 import { existsSync, mkdtempSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
@@ -124,8 +124,10 @@ describe('importCursorCsv', () => {
   it('re-importing an overlapping export never double counts', async () => {
     const first = await importCursorCsv(csvPath)
     expect(first).toMatchObject({ added: 5, skipped: 0, total: 5 })
+    const savedAt = (await stat(cursorImportPath())).mtimeMs
     const again = await importCursorCsv(csvPath)
-    expect(again).toMatchObject({ added: 0, skipped: 5, total: 5 })
+    expect(again).toMatchObject({ changed: false, added: 0, skipped: 5, total: 5 })
+    expect((await stat(cursorImportPath())).mtimeMs).toBe(savedAt)
     const overlap = await writeCsv([...ROWS.slice(3), { date: iso(3, 8), model: 'auto', input: 7 }], 'later.csv')
     expect(await importCursorCsv(overlap)).toMatchObject({ added: 1, skipped: 2, total: 6 })
     const stored = JSON.parse(await readFile(cursorImportPath(), 'utf-8'))
