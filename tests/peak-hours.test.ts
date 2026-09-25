@@ -2,11 +2,15 @@ import { describe, expect, it } from 'vitest'
 
 import {
   classifyPeak,
+  describePeakStatus,
+  formatCountdown,
+  formatFlipSgt,
   isDeepSeekPeak,
   isZaiPeak,
   OFF_PEAK_MULTIPLIER,
   peakBillingKind,
   peakCostMultiplier,
+  peakStatus,
 } from '../src/peak-hours.js'
 
 const at = (iso: string): Date => new Date(iso)
@@ -113,5 +117,53 @@ describe('peakCostMultiplier', () => {
   it('never reprices GLM in dollars', () => {
     expect(peakCostMultiplier('glm-5.3', '2026-09-28T12:00:00Z')).toBe(1)
     expect(peakCostMultiplier('glm-5.3', '2026-09-28T08:00:00Z')).toBe(1)
+  })
+})
+
+describe('peakStatus', () => {
+  it('reports peak with the window end as the flip', () => {
+    // Monday 2026-09-21 02:00 UTC: inside DeepSeek 01-04 and GLM off-peak.
+    const ds = peakStatus('deepseek', at('2026-09-21T02:00:00Z'))
+    expect(ds.state).toBe('peak')
+    expect(ds.flipsAt.toISOString()).toBe('2026-09-21T04:00:00.000Z')
+    expect(ds.secondsUntilFlip).toBe(7200)
+    const glm = peakStatus('glm', at('2026-09-21T02:00:00Z'))
+    expect(glm.state).toBe('off-peak')
+    expect(glm.flipsAt.toISOString()).toBe('2026-09-21T06:00:00.000Z')
+  })
+
+  it('bridges the mid-day gap to the second DeepSeek window', () => {
+    // 05:00 UTC Monday: between windows, next flip is 06:00.
+    const ds = peakStatus('deepseek', at('2026-09-21T05:00:00Z'))
+    expect(ds.state).toBe('off-peak')
+    expect(ds.flipsAt.toISOString()).toBe('2026-09-21T06:00:00.000Z')
+  })
+
+  it('skips the weekend to Monday morning', () => {
+    const ds = peakStatus('deepseek', at('2026-09-26T12:00:00Z'))
+    expect(ds.state).toBe('off-peak')
+    expect(ds.flipsAt.toISOString()).toBe('2026-09-28T01:00:00.000Z')
+    const glm = peakStatus('glm', at('2026-09-26T12:00:00Z'))
+    expect(glm.state).toBe('off-peak')
+    expect(glm.flipsAt.toISOString()).toBe('2026-09-28T06:00:00.000Z')
+  })
+
+  it('treats a Chinese holiday as whole-day off-peak', () => {
+    // Friday 2026-09-25 (Mid-Autumn): next DeepSeek flip is Monday 01:00.
+    const ds = peakStatus('deepseek', at('2026-09-25T02:00:00Z'))
+    expect(ds.state).toBe('off-peak')
+    expect(ds.flipsAt.toISOString()).toBe('2026-09-28T01:00:00.000Z')
+  })
+
+  it('formats countdowns and SGT flip labels', () => {
+    expect(formatCountdown(7200)).toBe('2:00:00')
+    expect(formatCountdown(90)).toBe('1:30')
+    expect(formatFlipSgt(at('2026-09-21T04:00:00Z'))).toBe('Mon 12:00 SGT')
+  })
+
+  it('describes one-line and compact status', () => {
+    const ds = peakStatus('deepseek', at('2026-09-21T02:00:00Z'))
+    expect(describePeakStatus(ds)).toBe('◉ PEAK — off-peak in 2:00:00 (DeepSeek flips Mon 12:00 SGT / 04:00 UTC)')
+    expect(describePeakStatus(ds, { compact: true })).toBe('◉ PEAK 2:00:00')
   })
 })

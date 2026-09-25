@@ -162,3 +162,136 @@ export function peakCostMultiplier(model: string, timestamp: string | undefined)
   if (peakBillingKind(model) !== 'deepseek-usd') return 1
   return classifyPeak(model, timestamp) === 'off-peak' ? OFF_PEAK_MULTIPLIER : 1
 }
+
+// --- Live status -----------------------------------------------------------
+//
+// One-shot / watch / gate math for `codeburn peak`. Pure functions of an
+// instant (default: now), so `--at <ISO>` replays any moment deterministically
+// and tests pin the boundaries without touching the clock.
+
+export type PeakVendor = 'deepseek' | 'glm'
+
+export type PeakStatus = {
+  vendor: PeakVendor
+  /// 'peak' | 'off-peak' right now (holidays/weekends already folded in).
+  state: Exclude<PeakClass, 'unknown'>
+  /// The instant the state next flips, always in the future.
+  flipsAt: Date
+  /// Whole seconds from `at` until flipsAt.
+  secondsUntilFlip: number
+}
+
+/// Minute-of-day window edges in UTC. DeepSeek peak is 01:00-04:00 and
+/// 06:00-10:00 UTC; the Z.ai 14:00-18:00 SGT window is 06:00-10:00 UTC
+/// (SGT = UTC+8, no DST).
+const DEEPSEEK_WINDOWS: Array<[number, number]> = [[60, 240], [360, 600]]
+const ZAI_WINDOWS: Array<[number, number]> = [[360, 600]]
+
+function isHolidayUtcDay(date: Date): boolean {
+  return CHINESE_PUBLIC_HOLIDAYS.has(utcDateKey(date))
+}
+
+/// Weekday on the vendor's billing calendar. Z.ai bills on Singapore days;
+/// DeepSeek's docs state the windows in UTC, so both read here in UTC except
+/// the DeepSeek holiday check, which is a UTC calendar date.
+function isBillingWeekday(vendor: PeakVendor, date: Date): boolean {
+  void vendor
+  return isWeekdayUtc(date)
+}
+
+function windowsFor(vendor: PeakVendor): Array<[number, number]> {
+  return vendor === 'deepseek' ? DEEPSEEK_WINDOWS : ZAI_WINDOWS
+}
+
+function inWindows(windows: Array<[number, number]>, minutes: number): boolean {
+  return windows.some(([start, end]) => minutes >= start && minutes < end)
+}
+
+function startOfUtcDay(date: Date): number {
+  return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate())
+}
+
+/// Next UTC instant (strictly after `fromMs`) whose minute-of-day equals
+/// `targetMinutes`, honoring the caller's day filter.
+function nextDayWithMinute(fromMs: number, targetMinutes: number, dayOk: (day: Date) => boolean): number {
+  const from = new Date(fromMs)
+  const todayStart = startOfUtcDay(from)
+  const fromMinutes = from.getUTCHours() * 60 + from.getUTCMinutes() + from.getUTCSeconds() / 60 + from.getUTCMilliseconds() / 60000
+  if (targetMinutes > fromMinutes && dayOk(from)) return todayStart + targetMinutes * 60_000
+  let dayStart = todayStart + 86_400_000
+  for (let i = 0; i < 366; i++) {
+    if (dayOk(new Date(dayStart))) return dayStart + targetMinutes * 60_000
+    dayStart += 86_400_000
+  }
+  // Unreachable: a full year always contains a weekday. Fail closed on a far
+  // future flip rather than throwing inside a status command.
+  return dayStart + targetMinutes * 60_000
+}
+
+/// Live peak state for one vendor at `at` (default: now), plus the next flip.
+/// A Chinese-holiday DeepSeek day is off-peak whole-day: the next flip is the
+/// next working day's first window edge.
+export function peakStatus(vendor: PeakVendor, at: Date = new Date()): PeakStatus {
+  const windows = windowsFor(vendor)
+  const minutes = at.getUTCHours() * 60 + at.getUTCMinutes()
+  const holiday = vendor === 'deepseek' && isHolidayUtcDay(at)
+  const weekday = isBillingWeekday(vendor, at)
+  const peak = !holiday && weekday && inWindows(windows, minutes)
+  const state = peak ? 'peak' : 'off-peak'
+
+  let flipsAtMs: number
+  if (peak) {
+    // End of the window we are inside.
+    const end = windows.find(([start, end]) => minutes >= start && minutes < end)![1]!
+    flipsAtMs = startOfUtcDay(at) + end * 60_000
+  } else {
+    const dayOk = (day: Date): boolean => {
+      if (!isBillingWeekday(vendor, day)) return false
+      if (vendor === 'deepseek' && isHolidayUtcDay(day)) return false
+      return true
+    }
+    // Next window start strictly after now: a same-day edge at exactly-now
+    // minute precision would read as "0s" only when the seconds already
+    // passed it; nextDayWithMinute compares with sub-minute precision.
+    const starts = windows.map(([start]) => start).sort((a, b) => a - b)
+    flipsAtMs = Number.POSITIVE_INFINITY
+    for (const start of starts) {
+      const candidate = nextDayWithMinute(at.getTime(), start, dayOk)
+      if (candidate < flipsAtMs) flipsAtMs = candidate
+    }
+  }
+  const flipsAt = new Date(flipsAtMs)
+  return { vendor, state, flipsAt, secondsUntilFlip: Math.max(0, Math.round((flipsAtMs - at.getTime()) / 1000)) }
+}
+
+/// 'H:MM:SS' (or 'M:SS' under an hour) for countdown display.
+export function formatCountdown(totalSeconds: number): string {
+  const s = Math.max(0, Math.floor(totalSeconds))
+  const hours = Math.floor(s / 3600)
+  const minutes = Math.floor((s % 3600) / 60)
+  const seconds = s % 60
+  const mm = hours > 0 ? String(minutes).padStart(2, '0') : String(minutes)
+  return `${hours > 0 ? `${hours}:` : ''}${mm}:${String(seconds).padStart(2, '0')}`
+}
+
+/// 'Mon 14:00 SGT' style label for a flip instant, disambiguating the
+/// weekend boundary the UTC clock hides (Fri 16:00 UTC = Fri 24:00 SGT).
+export function formatFlipSgt(instant: Date): string {
+  const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+  const sgt = new Date(instant.getTime() + 8 * 3_600_000)
+  const label = `${days[sgt.getUTCDay()]} ${String(sgt.getUTCHours()).padStart(2, '0')}:${String(sgt.getUTCMinutes()).padStart(2, '0')} SGT`
+  return label
+}
+
+/// One-line status: `● OFF-PEAK — peak in 2h14m (GLM 14:00 SGT / 06:00 UTC)`.
+/// `compact` drops the parenthetical for prompt segments (`🐋 OFF-PEAK 1:35:06`).
+export function describePeakStatus(status: PeakStatus, opts: { compact?: boolean } = {}): string {
+  const dot = status.state === 'peak' ? '◉' : '●'
+  const label = status.state === 'peak' ? 'PEAK' : 'OFF-PEAK'
+  const countdown = formatCountdown(status.secondsUntilFlip)
+  if (opts.compact) return `${dot} ${label} ${countdown}`
+  const vendor = status.vendor === 'deepseek' ? 'DeepSeek' : 'GLM'
+  const next = status.state === 'peak' ? 'off-peak' : 'peak'
+  const flipUtc = `${String(status.flipsAt.getUTCHours()).padStart(2, '0')}:${String(status.flipsAt.getUTCMinutes()).padStart(2, '0')} UTC`
+  return `${dot} ${label} — ${next} in ${countdown} (${vendor} flips ${formatFlipSgt(status.flipsAt)} / ${flipUtc})`
+}
