@@ -7,6 +7,7 @@ import { spawnSync } from 'node:child_process'
 import { describe, expect, it, vi } from 'vitest'
 import { CACHE_SCHEMA_VERSION } from '../src/models.js'
 import { STATUS_SNAPSHOT_RENDER_VERSION } from '../src/status-snapshot-semantic.js'
+import { noonTz } from './fixtures/noon-tz.js'
 
 // Derive the revision tags rather than hard-coding them: a snapshot revision
 // bump on one branch would otherwise leave another branch's assertion pinned
@@ -54,6 +55,9 @@ async function plantRender5MissingBasis(snapshotPath: string): Promise<string> {
 // child's stderr rather than riding this number.
 vi.setConfig({ testTimeout: 60_000 })
 
+// Fixtures stamped relative to now query "today"; the fixed-date ones pass TZ: 'UTC'.
+const CLI_TZ = noonTz()
+
 function runCli(args: string[], home: string, extraEnv: Record<string, string | undefined> = {}) {
   return spawnSync(process.execPath, ['--import', 'tsx', 'src/cli.ts', ...args], {
     cwd: process.cwd(),
@@ -62,7 +66,7 @@ function runCli(args: string[], home: string, extraEnv: Record<string, string | 
       CLAUDE_CONFIG_DIR: join(home, '.claude'),
       CODEBURN_CACHE_DIR: join(home, '.cache', 'codeburn'),
       HOME: home, USERPROFILE: home,
-      TZ: 'UTC',
+      TZ: CLI_TZ,
       ...extraEnv,
     },
     encoding: 'utf-8',
@@ -107,13 +111,7 @@ describe('codeburn status --format menubar-json', () => {
       await mkdir(projectDir, { recursive: true })
 
       const now = new Date()
-      // Two hours back, clamped inside the current UTC day (runCli pins
-      // TZ=UTC): a plain now-2h leaves today during the first two hours of
-      // the day, and the old hour-guard still escaped into yesterday during
-      // the first five minutes of hours 0 and 1, zeroing every "today" query
-      // on runs that started just past the top of those hours.
-      const todayUtcMidnight = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
-      const base = new Date(Math.max(todayUtcMidnight, now.getTime() - 2 * 3600_000))
+      const base = new Date(now.getTime() - 2 * 3600_000)
       const ts1 = base.toISOString().replace(/\.\d+Z$/, 'Z')
       const ts2 = new Date(base.getTime() + 60_000).toISOString().replace(/\.\d+Z$/, 'Z')
       const ts3 = new Date(base.getTime() + 120_000).toISOString().replace(/\.\d+Z$/, 'Z')
@@ -182,8 +180,7 @@ describe('codeburn status --format menubar-json', () => {
       const projectDir = join(home, '.claude', 'projects', 'myapp')
       await mkdir(projectDir, { recursive: true })
       const now = new Date()
-      const todayUtcMidnight = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
-      const userAt = new Date(Math.max(todayUtcMidnight, now.getTime() - 60_000))
+      const userAt = new Date(now.getTime() - 60_000)
       const ts1 = userAt.toISOString().replace(/\.\d+Z$/, 'Z')
       const ts2 = now.toISOString().replace(/\.\d+Z$/, 'Z')
       await writeFile(
@@ -269,7 +266,7 @@ describe('codeburn status --format menubar-json', () => {
         '--day', '2026-04-10',
         '--provider', 'all',
         '--no-optimize',
-      ], home)
+      ], home, { TZ: 'UTC' })
 
       expect(result.status, `stderr: ${result.stderr}`).toBe(0)
 
@@ -318,7 +315,7 @@ describe('codeburn status --format menubar-json', () => {
         ].join('\n'),
       )
 
-      const env = { CLAUDE_CONFIG_DIRS: [work, personal].join(pathDelimiter) }
+      const env = { CLAUDE_CONFIG_DIRS: [work, personal].join(pathDelimiter), TZ: 'UTC' }
       const allResult = runCli([
         'status',
         '--format', 'menubar-json',
@@ -404,7 +401,7 @@ describe('codeburn status --format menubar-json', () => {
         ].join('\n'),
       )
 
-      const env = { CLAUDE_CONFIG_DIRS: [work, personal].join(pathDelimiter) }
+      const env = { CLAUDE_CONFIG_DIRS: [work, personal].join(pathDelimiter), TZ: 'UTC' }
       const allResult = runCli([
         'status',
         '--format', 'menubar-json',
@@ -457,8 +454,7 @@ describe('codeburn status --format menubar-json', () => {
       await mkdir(join(firstRoot, 'projects', 'first'), { recursive: true })
       await mkdir(join(secondRoot, 'projects', 'second'), { recursive: true })
       const now = new Date()
-      const todayUtcMidnight = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
-      const base = new Date(Math.max(todayUtcMidnight, now.getTime() - 2 * 3600_000))
+      const base = new Date(now.getTime() - 2 * 3600_000)
       const ts = (offset: number) => new Date(base.getTime() + offset).toISOString().replace(/\.\d+Z$/, 'Z')
       await writeFile(
         join(firstRoot, 'projects', 'first', 'first.jsonl'),
@@ -556,6 +552,7 @@ describe('codeburn status --format menubar-json', () => {
       const env = {
         CLAUDE_CONFIG_DIRS: [work, personal].join(pathDelimiter),
         CODEBURN_DESKTOP_SESSIONS_DIR: desktop,
+        TZ: 'UTC',
       }
       const result = runCli([
         'status', '--format', 'menubar-json', '--period', 'all', '--provider', 'all', '--no-optimize',
@@ -590,13 +587,7 @@ describe('codeburn status --format menubar-json', () => {
       }))
 
       const now = new Date()
-      // Two hours back, clamped inside the current UTC day (runCli pins
-      // TZ=UTC): a plain now-2h leaves today during the first two hours of
-      // the day, and the old hour-guard still escaped into yesterday during
-      // the first five minutes of hours 0 and 1, zeroing every "today" query
-      // on runs that started just past the top of those hours.
-      const todayUtcMidnight = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
-      const base = new Date(Math.max(todayUtcMidnight, now.getTime() - 2 * 3600_000))
+      const base = new Date(now.getTime() - 2 * 3600_000)
       const ts1 = base.toISOString().replace(/\.\d+Z$/, 'Z')
       const ts2 = new Date(base.getTime() + 60_000).toISOString().replace(/\.\d+Z$/, 'Z')
       const ts3 = new Date(base.getTime() + 120_000).toISOString().replace(/\.\d+Z$/, 'Z')
@@ -653,13 +644,7 @@ describe('codeburn status --format menubar-json', () => {
       await mkdir(projectDir, { recursive: true })
 
       const now = new Date()
-      // Two hours back, clamped inside the current UTC day (runCli pins
-      // TZ=UTC): a plain now-2h leaves today during the first two hours of
-      // the day, and the old hour-guard still escaped into yesterday during
-      // the first five minutes of hours 0 and 1, zeroing every "today" query
-      // on runs that started just past the top of those hours.
-      const todayUtcMidnight = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
-      const base = new Date(Math.max(todayUtcMidnight, now.getTime() - 2 * 3600_000))
+      const base = new Date(now.getTime() - 2 * 3600_000)
       const ts1 = base.toISOString().replace(/\.\d+Z$/, 'Z')
       const ts2 = new Date(base.getTime() + 60_000).toISOString().replace(/\.\d+Z$/, 'Z')
 
@@ -819,8 +804,7 @@ describe('codeburn status --format menubar-json', () => {
       await mkdir(projectDir, { recursive: true })
 
       const now = new Date()
-      const todayUtcMidnight = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
-      const base = new Date(Math.max(todayUtcMidnight, now.getTime() - 2 * 3600_000))
+      const base = new Date(now.getTime() - 2 * 3600_000)
       const ts = (offset: number) => new Date(base.getTime() + offset).toISOString().replace(/\.\d+Z$/, 'Z')
 
       await writeFile(
@@ -884,8 +868,7 @@ describe('codeburn status --format menubar-json', () => {
       const projectDir = join(home, '.claude', 'projects', 'myapp')
       await mkdir(projectDir, { recursive: true })
       const now = new Date()
-      const todayUtcMidnight = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
-      const base = new Date(Math.max(todayUtcMidnight, now.getTime() - 2 * 3600_000))
+      const base = new Date(now.getTime() - 2 * 3600_000)
       const ts = (offset: number) => new Date(base.getTime() + offset).toISOString().replace(/\.\d+Z$/, 'Z')
       await writeFile(
         join(projectDir, 'session.jsonl'),
@@ -930,8 +913,7 @@ describe('codeburn status --format menubar-json', () => {
       const projectDir = join(home, '.claude', 'projects', 'myapp')
       await mkdir(projectDir, { recursive: true })
       const now = new Date()
-      const todayUtcMidnight = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
-      const base = new Date(Math.max(todayUtcMidnight, now.getTime() - 2 * 3600_000))
+      const base = new Date(now.getTime() - 2 * 3600_000)
       const ts1 = base.toISOString().replace(/\.\d+Z$/, 'Z')
       const ts2 = new Date(base.getTime() + 60_000).toISOString().replace(/\.\d+Z$/, 'Z')
 
@@ -971,8 +953,7 @@ describe('codeburn status --format menubar-json', () => {
       const projectDir = join(home, '.claude', 'projects', 'myapp')
       await mkdir(projectDir, { recursive: true })
       const now = new Date()
-      const todayUtcMidnight = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
-      const base = new Date(Math.max(todayUtcMidnight, now.getTime() - 2 * 3600_000))
+      const base = new Date(now.getTime() - 2 * 3600_000)
       const ts1 = base.toISOString().replace(/\.\d+Z$/, 'Z')
       const ts2 = new Date(base.getTime() + 60_000).toISOString().replace(/\.\d+Z$/, 'Z')
 
@@ -1085,8 +1066,7 @@ describe('codeburn status --format menubar-json', () => {
       const projectDir = join(home, '.claude', 'projects', 'myapp')
       await mkdir(projectDir, { recursive: true })
       const now = new Date()
-      const todayUtcMidnight = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
-      const base = new Date(Math.max(todayUtcMidnight, now.getTime() - 2 * 3600_000))
+      const base = new Date(now.getTime() - 2 * 3600_000)
       const ts = (offset: number) => new Date(base.getTime() + offset).toISOString().replace(/\.\d+Z$/, 'Z')
       await writeFile(
         join(projectDir, 'session.jsonl'),
@@ -1151,7 +1131,7 @@ describe('codeburn status --format menubar-json', () => {
       await mkdir(projectDir, { recursive: true })
       const now = new Date()
       const todayUtcMidnight = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
-      const base = new Date(Math.max(todayUtcMidnight, now.getTime() - 2 * 3600_000))
+      const base = new Date(now.getTime() - 2 * 3600_000)
       const ts = (offset: number) => new Date(base.getTime() + offset).toISOString().replace(/\.\d+Z$/, 'Z')
       await writeFile(
         join(projectDir, 'session.jsonl'),
@@ -1232,8 +1212,7 @@ describe('codeburn status --format menubar-json', () => {
       const projectDir = join(home, '.claude', 'projects', 'myapp')
       await mkdir(projectDir, { recursive: true })
       const now = new Date()
-      const todayUtcMidnight = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
-      const base = new Date(Math.max(todayUtcMidnight, now.getTime() - 2 * 3600_000))
+      const base = new Date(now.getTime() - 2 * 3600_000)
       const ts = (offset: number) => new Date(base.getTime() + offset).toISOString().replace(/\.\d+Z$/, 'Z')
       await writeFile(
         join(projectDir, 'session.jsonl'),
@@ -1299,8 +1278,7 @@ describe('codeburn status --format menubar-json', () => {
       const projectDir = join(home, '.claude', 'projects', 'myapp')
       await mkdir(projectDir, { recursive: true })
       const now = new Date()
-      const todayUtcMidnight = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
-      const base = new Date(Math.max(todayUtcMidnight, now.getTime() - 2 * 3600_000))
+      const base = new Date(now.getTime() - 2 * 3600_000)
       const ts = (offset: number) => new Date(base.getTime() + offset).toISOString().replace(/\.\d+Z$/, 'Z')
       await writeFile(
         join(projectDir, 'session.jsonl'),
@@ -1346,8 +1324,7 @@ describe('codeburn status --format menubar-json', () => {
       const projectDir = join(home, '.claude', 'projects', 'myapp')
       await mkdir(projectDir, { recursive: true })
       const now = new Date()
-      const todayUtcMidnight = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
-      const base = new Date(Math.max(todayUtcMidnight, now.getTime() - 2 * 3600_000))
+      const base = new Date(now.getTime() - 2 * 3600_000)
       const ts = (offset: number) => new Date(base.getTime() + offset).toISOString().replace(/\.\d+Z$/, 'Z')
       const model = 'zz-status-snapshot-flat-rate'
       await writeFile(
@@ -1383,8 +1360,7 @@ describe('codeburn status --format menubar-json', () => {
       const projectDir = join(home, '.claude', 'projects', 'myapp')
       await mkdir(projectDir, { recursive: true })
       const now = new Date()
-      const todayUtcMidnight = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
-      const base = new Date(Math.max(todayUtcMidnight, now.getTime() - 2 * 3600_000))
+      const base = new Date(now.getTime() - 2 * 3600_000)
       const ts = (offset: number) => new Date(base.getTime() + offset).toISOString().replace(/\.\d+Z$/, 'Z')
       await writeFile(
         join(projectDir, 'session.jsonl'),
@@ -1417,8 +1393,7 @@ describe('codeburn status --format menubar-json', () => {
       const projectDir = join(home, '.claude', 'projects', 'myapp')
       await mkdir(projectDir, { recursive: true })
       const now = new Date()
-      const todayUtcMidnight = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
-      const base = new Date(Math.max(todayUtcMidnight, now.getTime() - 2 * 3600_000))
+      const base = new Date(now.getTime() - 2 * 3600_000)
       const ts = (offset: number) => new Date(base.getTime() + offset).toISOString().replace(/\.\d+Z$/, 'Z')
       await writeFile(
         join(projectDir, 'session.jsonl'),
@@ -1459,8 +1434,7 @@ describe('codeburn status --format menubar-json', () => {
       const projectDir = join(home, '.claude', 'projects', 'myapp')
       await mkdir(projectDir, { recursive: true })
       const now = new Date()
-      const todayUtcMidnight = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
-      const base = new Date(Math.max(todayUtcMidnight, now.getTime() - 2 * 3600_000))
+      const base = new Date(now.getTime() - 2 * 3600_000)
       const ts = (offset: number) => new Date(base.getTime() + offset).toISOString().replace(/\.\d+Z$/, 'Z')
       await writeFile(
         join(projectDir, 'session.jsonl'),
@@ -1504,13 +1478,7 @@ describe('codeburn status --format menubar-json', () => {
       const projectDir = join(home, '.claude', 'projects', 'myapp')
       await mkdir(projectDir, { recursive: true })
       const now = new Date()
-      // Two hours back, clamped inside the current UTC day (runCli pins
-      // TZ=UTC): a plain now-2h leaves today during the first two hours of
-      // the day, and the old hour-guard still escaped into yesterday during
-      // the first five minutes of hours 0 and 1, zeroing every "today" query
-      // on runs that started just past the top of those hours.
-      const todayUtcMidnight = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
-      const base = new Date(Math.max(todayUtcMidnight, now.getTime() - 2 * 3600_000))
+      const base = new Date(now.getTime() - 2 * 3600_000)
       const ts1 = base.toISOString().replace(/\.\d+Z$/, 'Z')
       const ts2 = new Date(base.getTime() + 60_000).toISOString().replace(/\.\d+Z$/, 'Z')
       await writeFile(join(projectDir, 'session.jsonl'), [userLine('s1', ts1), assistantLine('s1', ts2, 'msg-1')].join('\n'))

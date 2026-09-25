@@ -6,6 +6,7 @@ import { spawn, spawnSync } from 'node:child_process'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { DAILY_CACHE_VERSION, currentTzKey } from '../src/daily-cache.js'
+import { noonTz } from './fixtures/noon-tz.js'
 
 // Each test spawns `tsx src/cli.ts`, which re-transpiles the CLI per spawn.
 vi.setConfig({ testTimeout: 30_000 })
@@ -57,10 +58,16 @@ async function seedHomeWithOlderSessions(): Promise<string> {
   homes.push(home)
   const dir = join(home, '.claude', 'projects', SIBLINGS[0]!.dir)
   await mkdir(dir, { recursive: true })
-  const fiveDaysAgo = Date.now() - 5 * 24 * 60 * 60 * 1000
+  // Earlier this month than today, read in noonTz (the child's zone): five
+  // days back, or 1am on the 1st when the month is younger than that, which on
+  // the 1st itself is today.
+  const now = Date.now()
+  const localMidnight = now - 12 * 3600_000 - (now % 3600_000)
+  const monthStart = localMidnight - (new Date(now).getUTCDate() - 1) * 24 * 3600_000
+  const older = Math.max(now - 5 * 24 * 3600_000, monthStart + 3600_000)
   const lines = [1, 2].map(index => JSON.stringify({
     type: 'assistant',
-    timestamp: new Date(fiveDaysAgo + index * 60_000).toISOString(),
+    timestamp: new Date(older + index * 60_000).toISOString(),
     sessionId: 's-old',
     cwd: SIBLINGS[0]!.cwd,
     message: {
@@ -119,10 +126,10 @@ async function seedHomeWithApologies(): Promise<string> {
   return home
 }
 
-function runCli(args: string[], home: string) {
+function runCli(args: string[], home: string, tz = 'UTC') {
   return spawnSync(process.execPath, ['--import', 'tsx', 'src/cli.ts', ...args], {
     cwd: process.cwd(),
-    env: { ...process.env, HOME: home, USERPROFILE: home, CLAUDE_CONFIG_DIR: join(home, '.claude'), CODEBURN_CACHE_DIR: join(home, 'cache'), TZ: 'UTC' },
+    env: { ...process.env, HOME: home, USERPROFILE: home, CLAUDE_CONFIG_DIR: join(home, '.claude'), CODEBURN_CACHE_DIR: join(home, 'cache'), TZ: tz },
     encoding: 'utf-8',
     timeout: 30_000,
   })
@@ -232,15 +239,16 @@ describe('a rooted pattern that names nothing is reported', () => {
 
   it('does not contradict a total the same command prints', async () => {
     const home = await seedHomeWithOlderSessions()
+    const tz = noonTz()
     // `status` builds today and then month. Judged on the today pass alone, the
     // pattern looks unmatched while the month total beside it is that project's.
-    const result = runCli(['status', '--format', 'json', '--project', '/Users/gone/app'], home)
+    const result = runCli(['status', '--format', 'json', '--project', '/Users/gone/app'], home, tz)
 
     expect(result.status).toBe(0)
     expect(JSON.parse(result.stdout).month.cost).toBeGreaterThan(0)
     expect(result.stderr).not.toContain('no project in this period matches')
 
-    const typo = runCli(['status', '--format', 'json', '--project', '/Users/gone/apps'], home)
+    const typo = runCli(['status', '--format', 'json', '--project', '/Users/gone/apps'], home, tz)
     expect(typo.stderr).toContain('no project in this period matches /Users/gone/apps')
   })
 

@@ -3,6 +3,7 @@ import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { formatDayLong } from '../lib/format'
 import { EMPTY_FILTERS } from '../lib/investigation'
 import type { SessionDrillRow, SessionRow } from '../lib/types'
 import { INITIAL_VISIBLE, sessionRowKey, Sessions } from './Sessions'
@@ -242,7 +243,9 @@ describe('Sessions', () => {
     const drawer = screen.getByRole('dialog', { name: /session details/i })
     expect(drawer).toBeInTheDocument()
     expect(within(drawer).getByText(/claude · projects\/codeburn/)).toBeInTheDocument()
-    expect(within(drawer).getByText(/Jul 11, 2026 → Jul 11, 2026 · 1h 35m/)).toBeInTheDocument()
+    // Local dates: 10:00Z is already Jul 12 at UTC+14.
+    const span = `${formatDayLong('2026-07-11T10:00:00.000Z')} → ${formatDayLong('2026-07-11T11:35:00.000Z')} · 1h 35m`
+    expect(within(drawer).getByText(new RegExp(span))).toBeInTheDocument()
     expect(container.querySelectorAll('.session-row')).toHaveLength(6)
     expect(container.querySelector('.drawer-lead')).toHaveTextContent('This session cost $8.41, about 2.8x your usual.')
     for (const label of ['Cost', 'Turns', 'Duration']) {

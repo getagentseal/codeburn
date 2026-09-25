@@ -6,8 +6,10 @@ import { spawnSync } from 'node:child_process'
 import { describe, expect, it } from 'vitest'
 
 import { getDateRange } from '../src/cli-date.js'
+import { noonTz } from './fixtures/noon-tz.js'
 
 const CLI_TIMEOUT_MS = 30_000
+const CLI_TZ = noonTz()
 
 function runCli(args: string[], home: string) {
   return spawnSync(process.execPath, ['--import', 'tsx', 'src/cli.ts', ...args], {
@@ -19,7 +21,7 @@ function runCli(args: string[], home: string) {
       USERPROFILE: home,
       HOMEPATH: home,
       HOMEDRIVE: '',
-      TZ: 'UTC',
+      TZ: CLI_TZ,
     },
     encoding: 'utf-8',
     timeout: CLI_TIMEOUT_MS,
@@ -38,18 +40,9 @@ function timestampFromDate(date: Date, offsetMinutes = 0): string {
 }
 
 function currentMonthTimestamp(offsetMinutes: number): string {
-  const now = new Date()
-  // Noon-today-UTC was month-safe but lands in the future for the 12 hours
-  // before it, and rows timestamped in the future don't surface in the
-  // overview on the 1st, so every CI run on the 1st before 12:00 UTC went
-  // red. Seed five minutes back instead, pinned to month start on the 1st so
-  // the row can't slip into the previous month. The child runs with TZ=UTC,
-  // so the month boundary has to be UTC too or the clamp misses in every
-  // other zone.
-  const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1))
-  const fiveMinutesAgo = new Date(now.getTime() - 5 * 60_000)
-  const base = fiveMinutesAgo < monthStart ? monthStart : fiveMinutesAgo
-  return timestampFromDate(base, offsetMinutes)
+  // Five minutes back. The child runs in CLI_TZ, where it is about noon on the
+  // UTC date, so that is this month even on the 1st just after midnight UTC.
+  return timestampFromDate(new Date(Date.now() - 5 * 60_000), offsetMinutes)
 }
 
 function userLine(sessionId: string, timestamp: string): string {
@@ -222,6 +215,7 @@ describe('codeburn budget command', () => {
   it('uses the same weekly spend window for budget --check and overview -p week', async () => {
     const home = await mkdtemp(join(tmpdir(), 'codeburn-cli-budget-'))
     try {
+      process.env.TZ = CLI_TZ
       const weekStart = getDateRange('week').range.start
       await seedClaudeSpend(home, {
         sessionId: 'weekly-boundary-session',

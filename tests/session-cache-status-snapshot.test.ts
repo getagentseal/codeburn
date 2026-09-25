@@ -19,6 +19,7 @@ import { delimiter, join } from 'path'
 
 import { acquireCacheRefreshLock } from '../src/cache-refresh-lock.js'
 import { loadStatusSnapshot, saveStatusSnapshot } from '../src/session-cache.js'
+import { noonTz } from './fixtures/noon-tz.js'
 
 let TMP_DIR: string
 const SEMANTIC_KEY = 'test-render-v1'
@@ -319,11 +320,8 @@ describe('degraded read-only parse is never persisted as a status snapshot', () 
       await mkdir(join(work, 'projects', 'app'), { recursive: true })
       await mkdir(join(personal, 'projects', 'app'), { recursive: true })
 
-      // Two hours back, clamped inside the current UTC day (cliEnv pins
-      // TZ=UTC), so every session falls inside the 'today' query.
-      const now = new Date()
-      const todayUtcMidnight = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
-      const base = new Date(Math.max(todayUtcMidnight, now.getTime() - 2 * 3600_000))
+      // Two hours back, in a zone where 'today' has room for it (noonTz).
+      const base = new Date(Date.now() - 2 * 3600_000)
       const ts = (offset: number) => new Date(base.getTime() + offset).toISOString().replace(/\.\d+Z$/, 'Z')
 
       await writeFile(
@@ -334,7 +332,7 @@ describe('degraded read-only parse is never persisted as a status snapshot', () 
         join(personal, 'projects', 'app', 'p1.jsonl'),
         [userLine('p1', ts(30_000)), assistantLine('p1', ts(90_000), 'msg-p1')].join('\n') + '\n',
       )
-      const env = { CLAUDE_CONFIG_DIRS: [work, personal].join(delimiter) }
+      const env = { CLAUDE_CONFIG_DIRS: [work, personal].join(delimiter), TZ: noonTz() }
 
       // Warm the session cache through the DEFAULT optimize path: it parses
       // and persists the corpus but never reads or writes the status snapshot

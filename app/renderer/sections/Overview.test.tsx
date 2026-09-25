@@ -1286,6 +1286,9 @@ describe('Overview refresh tiers', () => {
   })
 
   it('shows the stored savings with its age, never as a live figure', async () => {
+    // Mid-day, so a stamp a few hours back is still today and shows as a bare time.
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date(2026, 8, 24, 12, 0, 0))
     const computedAt = new Date(Date.now() - 90 * 60_000)
     getOptimizeSnapshot.mockResolvedValue(snapshot(
       { findingCount: 4, savingsUSD: 31.5, topFindings: [] },
@@ -1346,6 +1349,8 @@ describe('Overview refresh tiers', () => {
 
   it('does not re-ask act or yield on live cadence ticks', async () => {
     vi.useFakeTimers()
+    // Mid-day: a local midnight inside these ten minutes is a real reason to re-ask.
+    vi.setSystemTime(new Date(2026, 8, 24, 12, 0, 0))
     try {
       getOptimizeSnapshot.mockResolvedValue(snapshot({ findingCount: 0, savingsUSD: 0, topFindings: [] }))
       render(<OverviewContent period="30days" provider="all" overview={polled(makePayload(new Date()))} />)
@@ -1390,6 +1395,9 @@ describe('Overview stored-figure honesty', () => {
   })
 
   it('dates the stored findings that sit beside live signals in the Signals card', async () => {
+    // Mid-day, so a stamp a few hours back is still today and shows as a bare time.
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date(2026, 8, 24, 12, 0, 0))
     const now = new Date()
     const computedAt = new Date(Date.now() - 3 * 60 * 60_000)
     getOptimizeSnapshot.mockResolvedValue(snapshot(

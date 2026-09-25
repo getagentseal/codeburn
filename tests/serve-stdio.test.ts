@@ -4,6 +4,7 @@ import { appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'fs/promises
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { classifyRootReuse, createOutputMemoEntry, fileDaySpan, outputMemoKey, servedDayRange } from '../src/serve.js'
+import { noonTz } from './fixtures/noon-tz.js'
 
 it('timestamps a completed output memo before parsing begins', () => {
   const parseStartedAt = 100
@@ -641,11 +642,8 @@ describe('codeburn serve --stdio never defers a menubar poll', () => {
   }
 
   // The corpus fixture is shaped like the ones in cli-status-menubar.test.ts:
-  // two hours back, clamped inside the current UTC day (TZ is pinned to UTC),
-  // so a run started just after midnight still lands inside "today".
-  const now = new Date()
-  const todayUtcMidnight = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
-  const base = new Date(Math.max(todayUtcMidnight, now.getTime() - 2 * 3600_000))
+  // two hours back, served from a zone where "today" has room for it.
+  const base = new Date(Date.now() - 2 * 3600_000)
   const ts = (offset: number): string => new Date(base.getTime() + offset).toISOString().replace(/\.\d+Z$/, 'Z')
   const pricedCall = (n: number, offset: number): string => [
     JSON.stringify({ type: 'user', sessionId: 's1', timestamp: ts(offset), message: { role: 'user', content: 'go' } }),
@@ -680,6 +678,7 @@ describe('codeburn serve --stdio never defers a menubar poll', () => {
         // a window this large makes "the deferral must not happen in serve"
         // deterministic instead of timing-dependent.
         CODEBURN_STATUS_SNAPSHOT_SETTLE_MS: '600000',
+        TZ: noonTz(),
       },
     })
     let buffer = ''
