@@ -1458,7 +1458,8 @@ function StatusBar({ width, showProvider, view, findingCount, optimizeAvailable,
         )}
         {showProvider && (<><Text dimColor>   </Text><Text color={ORANGE} bold>p</Text><Text dimColor> provider</Text></>)}
         <Text dimColor>   </Text><Text color={ORANGE} bold>↑</Text><Text dimColor>/</Text><Text color={ORANGE} bold>↓</Text><Text dimColor> scroll   </Text>
-        <Text color={ORANGE} bold>PgUp</Text><Text dimColor>/</Text><Text color={ORANGE} bold>PgDn</Text><Text dimColor> page</Text>
+        <Text color={ORANGE} bold>PgUp</Text><Text dimColor>/</Text><Text color={ORANGE} bold>PgDn</Text><Text dimColor> page   </Text>
+        <Text color={ORANGE} bold>m</Text><Text dimColor> mouse</Text>
       </Text>
     </Box>
   )
@@ -1515,7 +1516,7 @@ const WHEEL_LINES_PER_TICK = 3
 const MOUSE_TRACKING_ON = '\x1b[?1000h\x1b[?1006h'
 const MOUSE_TRACKING_OFF = '\x1b[?1006l\x1b[?1000l'
 
-function ScrollableViewport({ children, width, lineScroll = true }: { children: React.ReactNode; width: number; lineScroll?: boolean }) {
+function ScrollableViewport({ children, width, lineScroll = true, mouse = false }: { children: React.ReactNode; width: number; lineScroll?: boolean; mouse?: boolean }) {
   const { rows } = useWindowSize()
   const height = Math.max(1, rows - 1)
   const contentRef = useRef<DOMElement>(null)
@@ -1534,22 +1535,37 @@ function ScrollableViewport({ children, width, lineScroll = true }: { children: 
     setOffset(current => Math.min(current, nextMaxOffset))
   })
 
-  // Mouse-wheel scrolling via SGR mouse reporting. Known tradeoff: while
-  // tracking is on, click-drag text selection needs Shift held in most
-  // terminals. Tracking is disabled again on unmount (view switches, q).
+  // Unconditional teardown: whatever the toggle below did, and whichever exit
+  // path ran, the terminal goes back to reporting no mouse events so click-drag
+  // selection always survives the dashboard.
+  useEffect(() => () => { if (process.stdout.isTTY) process.stdout.write(MOUSE_TRACKING_OFF) }, [])
+
+  // Mouse-wheel scrolling via SGR mouse reporting, off until the user presses
+  // `m` (#951): while tracking is on, click-drag text selection needs Shift
+  // held in most terminals, and copying a number is the commoner need.
+  // Tracking is disabled again on unmount and on process exit.
   useEffect(() => {
-    if (!process.stdout.isTTY || !process.stdin.isTTY) return
+    if (!mouse || !process.stdout.isTTY || !process.stdin.isTTY) return
     process.stdout.write(MOUSE_TRACKING_ON)
     const onData = (data: Buffer) => {
       const delta = wheelDelta(data.toString('utf8'))
       if (delta !== 0) setOffset(current => Math.max(0, Math.min(current + delta, maxOffsetRef.current)))
     }
     process.stdin.on('data', onData)
+    // The raw Ctrl+C/qq guard and `exitAfterCacheCleanup` reach process.exit
+    // without unmounting React, and a SIGTERM would not run either, so both
+    // get a direct disable rather than relying on the cleanup below.
+    const disable = () => { process.stdout.write(MOUSE_TRACKING_OFF) }
+    const onSigterm = () => { disable(); process.kill(process.pid, 'SIGTERM') }
+    process.on('exit', disable)
+    process.once('SIGTERM', onSigterm)
     return () => {
       process.stdin.off('data', onData)
-      process.stdout.write(MOUSE_TRACKING_OFF)
+      process.off('exit', disable)
+      process.off('SIGTERM', onSigterm)
+      disable()
     }
-  }, [])
+  }, [mouse])
 
   useInput((_input, key) => {
     if (lineScroll && key.downArrow) setOffset(current => Math.min(current + 1, maxOffset))
@@ -1637,6 +1653,10 @@ export function InteractiveDashboard({ initialProjects, initialDailyHistoryProje
   // Auto-clears the moment the fill lands so a stale flag can never trap a
   // later q.
   const [quitArmed, setQuitArmed] = useState(false)
+  // #951: wheel scrolling costs click-drag text selection, so it is opt-in per
+  // run via `m`. Held here, above the viewport's remount key, so a period or
+  // provider switch does not silently drop the user's choice.
+  const [mouseTracking, setMouseTracking] = useState(false)
   const isDayMode = dayDate != null
   const isCustomRange = customRange != null && !isDayMode
   const scrollableDailyHistory = !isCustomRange && !isDayMode
@@ -2016,6 +2036,7 @@ export function InteractiveDashboard({ initialProjects, initialDailyHistoryProje
       quitNow(0)
       return
     }
+    if (input === 'm') { setMouseTracking(on => !on); return }
     if (input === 'o' && view === 'dashboard' && optimizeAvailable) { void loadOptimizeResult(); return }
     if ((input === 'b' || key.escape) && view === 'optimize') { setView('dashboard'); setFindingsCursor(0); return }
     if (view === 'optimize') {
@@ -2145,6 +2166,7 @@ export function InteractiveDashboard({ initialProjects, initialDailyHistoryProje
       key={`${view}:${period}:${activeProvider}:${dayDate ?? ''}:${customRangeLabel ?? ''}`}
       width={dashWidth}
       lineScroll={view !== 'compare'}
+      mouse={mouseTracking}
     >
       {content}
     </ScrollableViewport>
