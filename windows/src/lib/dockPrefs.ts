@@ -43,6 +43,8 @@ export type DockPrefs = {
   providers: string[]
   /// Latches once the user edits the provider set, so auto-seeding stops second-guessing them.
   manualSelection: boolean
+  /// Keeps every selected ring out at rest instead of collapsing to the resting provider.
+  keepExpanded: boolean
 }
 
 export const DEFAULT_DOCK_PREFS: DockPrefs = {
@@ -53,6 +55,7 @@ export const DEFAULT_DOCK_PREFS: DockPrefs = {
   gaugeShape: 'circle',
   providers: [],
   manualSelection: false,
+  keepExpanded: false,
 }
 
 export function parseDockPrefs(raw: Record<string, unknown>): DockPrefs {
@@ -65,6 +68,7 @@ export function parseDockPrefs(raw: Record<string, unknown>): DockPrefs {
     gaugeShape: raw.gaugeShape === 'squircle' ? 'squircle' : 'circle',
     providers: Array.isArray(raw.providers) ? raw.providers.filter((p): p is string => typeof p === 'string') : [],
     manualSelection: raw.manualSelection === true,
+    keepExpanded: raw.keepExpanded === true,
   }
 }
 

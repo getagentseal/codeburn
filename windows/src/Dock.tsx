@@ -699,7 +699,9 @@ export function Dock() {
   orderedRef.current = ordered
   const loading = quota.fetchedAt === null && quota.error === null
 
-  const expanded = isExpanded(interaction)
+  // With the preference on the rail never rests on one ring: it reads as pinned, so every
+  // selected row stays out and the hover-out collapse has nothing to do.
+  const expanded = prefs.keepExpanded || isExpanded(interaction)
   useEffect(() => {
     if (expanded) setPresentationExpanded(true)
   }, [expanded])

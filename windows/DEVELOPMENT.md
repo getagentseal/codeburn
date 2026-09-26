@@ -130,6 +130,10 @@ the user's login. Like `ClaudeCredentialStore.refreshAfter401` on macOS, we re-r
 own credential file for a token it has already rotated, and report a transient failure when
 there isn't one yet.
 
+The `keepExpanded` dock preference (Settings > General > Capacity Dock > Keep expanded) makes
+the rail read as pinned, so every selected ring stays out at rest and the hover-out collapse
+never runs.
+
 ## Build a production package
 
 ```bash

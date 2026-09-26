@@ -368,6 +368,17 @@ function CapacityDockSection({ quota }: { quota: QuotaState }) {
         />
       )}
       <Row
+        label="Keep expanded"
+        hint="Every ring stays out. Off, the rail rests on one ring and opens when you hover it."
+        control={
+          <Switch
+            ariaLabel="Keep the Capacity Dock expanded"
+            on={prefs.keepExpanded}
+            onToggle={() => apply({ keepExpanded: !prefs.keepExpanded })}
+          />
+        }
+      />
+      <Row
         label="Size"
         control={
           <>
