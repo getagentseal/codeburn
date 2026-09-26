@@ -137,4 +137,56 @@ struct CliUpdateInvocationTests {
         // Falling through to npm --force would create a second, conflicting install.
         #expect(UpdateChecker.cliUpdateInvocation(cliPath: "/opt/homebrew/bin/codeburn", fileExists: { $0.hasSuffix("/npm") }) == nil)
     }
+
+    @Test("brew-provided node with an npm-global CLI resolves npm, not brew")
+    func brewNodeNpmGlobal() {
+        // Homebrew's node sets the npm global prefix to /opt/homebrew, so the
+        // launcher sits in the brew prefix but points into node_modules.
+        let resolve: (String) -> String = { path in
+            path == "/opt/homebrew/bin/codeburn" ? "/opt/homebrew/lib/node_modules/codeburn/dist/cli.js" : path
+        }
+        let exists: (String) -> Bool = { $0 == "/opt/homebrew/bin/brew" || $0 == "/opt/homebrew/bin/npm" }
+        let argv = UpdateChecker.cliUpdateInvocation(
+            cliPath: "/opt/homebrew/bin/codeburn",
+            fileExists: exists,
+            resolvingSymlinks: resolve
+        )
+        #expect(argv == ["/opt/homebrew/bin/npm", "install", "-g", "codeburn@latest", "--force"])
+    }
+
+    @Test("a real Cellar symlink still resolves brew")
+    func cellarSymlink() {
+        let resolve: (String) -> String = { path in
+            path == "/opt/homebrew/bin/codeburn" ? "/opt/homebrew/Cellar/codeburn/0.9.25/bin/codeburn" : path
+        }
+        let argv = UpdateChecker.cliUpdateInvocation(
+            cliPath: "/opt/homebrew/bin/codeburn",
+            fileExists: { $0 == "/opt/homebrew/bin/brew" },
+            resolvingSymlinks: resolve
+        )
+        #expect(argv == ["/opt/homebrew/bin/brew", "upgrade", "codeburn"])
+    }
+
+    @Test("an unresolvable launcher keeps the previous directory heuristic")
+    func unresolvableKeepsHeuristic() {
+        let argv = UpdateChecker.cliUpdateInvocation(
+            cliPath: "/opt/homebrew/bin/codeburn",
+            fileExists: { $0 == "/opt/homebrew/bin/brew" },
+            resolvingSymlinks: { $0 }
+        )
+        #expect(argv == ["/opt/homebrew/bin/brew", "upgrade", "codeburn"])
+    }
+}
+
+@Suite("cliUpdateCommand")
+struct CliUpdateCommandTests {
+    @Test("manual hint follows the same decision as the one-click path")
+    func hintMatchesInvocation() {
+        let resolve: (String) -> String = { path in
+            path == "/opt/homebrew/bin/codeburn" ? "/opt/homebrew/lib/node_modules/codeburn/dist/cli.js" : path
+        }
+        #expect(UpdateChecker.cliUpdateCommand(cliPath: "/opt/homebrew/bin/codeburn", resolvingSymlinks: resolve) == "npm update -g codeburn")
+        #expect(UpdateChecker.cliUpdateCommand(cliPath: "/usr/local/Cellar/codeburn/0.9.25/bin/codeburn") == "brew upgrade codeburn")
+        #expect(UpdateChecker.cliUpdateCommand(cliPath: "/Users/u/.nvm/versions/node/v22.1.0/bin/codeburn") == "npm update -g codeburn")
+    }
 }
