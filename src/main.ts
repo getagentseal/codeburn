@@ -1158,6 +1158,7 @@ program
   .description('Compact status output (today + month)')
   .option('--format <format>', 'Output format: terminal, menubar-json, json', 'terminal')
   .option('--scope <scope>', 'Usage scope for menubar-json: local, combined', 'local')
+  .option('--combined-details', 'Include sanitized per-device payloads in combined menubar-json output')
   .option('--provider <provider>', 'Filter by provider (e.g. claude, gemini, cursor, copilot)', 'all')
   .option('--project <name>', 'Show only projects matching name (repeatable)', collect, [])
   .option('--exclude <name>', 'Exclude projects matching name (repeatable)', collect, [])
@@ -1173,6 +1174,10 @@ program
     assertFormat(opts.format, ['terminal', 'menubar-json', 'json'], 'status')
     assertScope(opts.scope, ['local', 'combined'], 'status')
     assertProvider(opts.provider, 'status')
+    if (opts.combinedDetails && (opts.format !== 'menubar-json' || opts.scope !== 'combined')) {
+      process.stderr.write('error: --combined-details requires --format menubar-json --scope combined\n')
+      process.exit(1)
+    }
     if (opts.day && (opts.from || opts.to)) {
       process.stderr.write('error: --day cannot be combined with --from or --to\n')
       process.exit(1)
@@ -1344,6 +1349,25 @@ program
             start: toDateString(periodInfo.range.start),
             end: toDateString(periodInfo.range.end),
           })
+          if (opts.combinedDetails) {
+            payload.combinedDevices = results.map((device) => {
+              // The local result references `payload` itself. Strip the
+              // enrichment fields before nesting it, otherwise JSON.stringify
+              // would follow combinedDevices back into the root payload.
+              const detail = device.payload as unknown as typeof payload | undefined
+              const detailPayload = detail === undefined ? undefined : (() => {
+                const { combined: _combined, combinedDevices: _combinedDevices, ...rest } = detail
+                return rest as typeof payload
+              })()
+              return {
+                id: device.id,
+                name: device.name,
+                local: device.local,
+                ...(device.error !== undefined ? { error: device.error } : {}),
+                ...(detailPayload !== undefined ? { payload: detailPayload } : {}),
+              }
+            })
+          }
         } catch {
           // best-effort only: the local payload is still emitted below
         }

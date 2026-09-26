@@ -37,6 +37,11 @@ const INSIGHTS = [
   { id: 'stats', label: 'Stats' },
 ];
 
+const SCOPES = [
+  { id: 'local', label: 'This device' },
+  { id: 'combined', label: 'All devices' },
+];
+
 const PROVIDERS = [
   { id: 'all', label: 'All' },
   { id: 'claude', label: 'Claude' },
@@ -112,6 +117,137 @@ function formatTime(date) {
   return date.toLocaleDateString();
 }
 
+function numberValue(value) {
+  return Number(value) || 0;
+}
+
+// The CLI normally returns only the compact `combined` totals. When GNOME asks
+// for --combined-details it also receives the same sanitized per-device
+// payloads used by the Web dashboard, so the detailed insights can be rebuilt
+// without exposing any extra data over the network.
+function aggregateCombinedPayload(source) {
+  const devices = Array.isArray(source?.combinedDevices) ? source.combinedDevices : [];
+  const payloads = devices.map(d => d?.payload).filter(Boolean);
+  if (payloads.length === 0) return null;
+
+  const first = payloads[0];
+  const firstCurrent = first?.current ?? {};
+  const activityMap = new Map();
+  const modelMap = new Map();
+  const providerMap = new Map();
+  const dailyMap = new Map();
+
+  for (const payload of payloads) {
+    const current = payload?.current ?? {};
+    for (const activity of current.topActivities ?? []) {
+      const name = activity?.name || 'Unknown';
+      const row = activityMap.get(name) ?? {
+        name,
+        cost: 0,
+        savingsUSD: 0,
+        turns: 0,
+        weightedOneShot: 0,
+        oneShotWeight: 0,
+      };
+      const turns = numberValue(activity.turns);
+      row.cost += numberValue(activity.cost);
+      row.savingsUSD += numberValue(activity.savingsUSD);
+      row.turns += turns;
+      if (activity.oneShotRate != null) {
+        const weight = turns > 0 ? turns : 1;
+        row.weightedOneShot += numberValue(activity.oneShotRate) * weight;
+        row.oneShotWeight += weight;
+      }
+      activityMap.set(name, row);
+    }
+
+    for (const model of current.topModels ?? []) {
+      const name = model?.name || 'Unknown';
+      const row = modelMap.get(name) ?? { name, cost: 0, savingsUSD: 0, calls: 0 };
+      row.cost += numberValue(model.cost);
+      row.savingsUSD += numberValue(model.savingsUSD);
+      row.calls += numberValue(model.calls);
+      modelMap.set(name, row);
+    }
+
+    for (const [name, cost] of Object.entries(current.providers ?? {}))
+      providerMap.set(name, (providerMap.get(name) ?? 0) + numberValue(cost));
+
+    for (const day of payload?.history?.daily ?? []) {
+      const date = day?.date || '';
+      if (!date) continue;
+      const row = dailyMap.get(date) ?? {
+        date,
+        cost: 0,
+        calls: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        topModels: [],
+      };
+      row.cost += numberValue(day.cost);
+      row.calls += numberValue(day.calls);
+      row.inputTokens += numberValue(day.inputTokens);
+      row.outputTokens += numberValue(day.outputTokens);
+      row.cacheReadTokens += numberValue(day.cacheReadTokens);
+      row.cacheWriteTokens += numberValue(day.cacheWriteTokens);
+      dailyMap.set(date, row);
+    }
+  }
+
+  const topActivities = [...activityMap.values()]
+    .sort((a, b) => b.cost - a.cost)
+    .slice(0, TOP_ACTIVITIES)
+    .map(row => ({
+      name: row.name,
+      cost: row.cost,
+      savingsUSD: row.savingsUSD,
+      turns: row.turns,
+      oneShotRate: row.oneShotWeight > 0 ? row.weightedOneShot / row.oneShotWeight : null,
+    }));
+  const topModels = [...modelMap.values()]
+    .sort((a, b) => b.cost - a.cost)
+    .slice(0, 20)
+    .map(row => ({ ...row, savingsBaselineModel: '' }));
+  const daily = [...dailyMap.values()].sort((a, b) => a.date.localeCompare(b.date));
+
+  const current = {
+    ...firstCurrent,
+    cost: payloads.reduce((sum, p) => sum + numberValue(p?.current?.cost), 0),
+    calls: payloads.reduce((sum, p) => sum + numberValue(p?.current?.calls), 0),
+    sessions: payloads.reduce((sum, p) => sum + numberValue(p?.current?.sessions), 0),
+    inputTokens: payloads.reduce((sum, p) => sum + numberValue(p?.current?.inputTokens), 0),
+    outputTokens: payloads.reduce((sum, p) => sum + numberValue(p?.current?.outputTokens), 0),
+    cacheReadTokens: payloads.reduce((sum, p) => sum + numberValue(p?.current?.cacheReadTokens), 0),
+    cacheWriteTokens: payloads.reduce((sum, p) => sum + numberValue(p?.current?.cacheWriteTokens), 0),
+    topActivities,
+    topModels,
+    providers: Object.fromEntries(providerMap),
+    topProjects: [],
+    topSessions: [],
+    cacheHitPercent: 0,
+    localModelSavings: {
+      ...(firstCurrent.localModelSavings ?? {}),
+      totalUSD: payloads.reduce((sum, p) => sum + numberValue(p?.current?.localModelSavings?.totalUSD), 0),
+      calls: payloads.reduce((sum, p) => sum + numberValue(p?.current?.localModelSavings?.calls), 0),
+      byModel: [],
+      byProvider: [],
+    },
+  };
+  const cacheDenominator = current.inputTokens + current.cacheReadTokens;
+  current.cacheHitPercent = cacheDenominator > 0
+    ? (current.cacheReadTokens / cacheDenominator) * 100
+    : 0;
+
+  return {
+    ...source,
+    current,
+    history: { ...(first.history ?? source.history), daily },
+    optimize: { findingCount: 0, savingsUSD: 0, topFindings: [] },
+  };
+}
+
 export const CodeBurnIndicator = GObject.registerClass(
 class CodeBurnIndicator extends PanelMenu.Button {
   _init(extension) {
@@ -126,6 +262,9 @@ class CodeBurnIndicator extends PanelMenu.Button {
     this._insight = 'activity';
     this._availableProviders = this._detectProviders();
     this._provider = this._availableProviders.length === 1 ? this._availableProviders[0] : 'all';
+    this._localProvider = this._provider;
+    this._scope = this._settings.get_string('default-scope') === 'combined' ? 'combined' : 'local';
+    if (this._scope === 'combined') this._provider = 'all';
 
     this._currency = this._loadCurrency();
     this._exactCosts = this._settings.get_boolean('show-exact-costs');
@@ -133,6 +272,8 @@ class CodeBurnIndicator extends PanelMenu.Button {
     this._fxCache = { USD: 1 };
     this._soupSession = new Soup.Session();
     this._payload = null;
+    this._viewPayload = null;
+    this._combinedDetailsAvailable = false;
     this._payloadCache = new Map();
     this._inFlightKeys = new Set();
     this._refreshGen = 0;
@@ -196,6 +337,7 @@ class CodeBurnIndicator extends PanelMenu.Button {
       this._scrollView.set_child(this._scrollContent);
       this._root.add_child(this._scrollView);
 
+      this._buildScopeTabs();
       this._buildAgentTabs();
       this._buildHero();
       this._buildPeriodTabs();
@@ -225,6 +367,8 @@ class CodeBurnIndicator extends PanelMenu.Button {
     const detected = this._availableProviders;
     this._agentTabs = new Map();
     this._agentTabRow = null;
+    this._agentTabHost = new St.BoxLayout({ vertical: true });
+    this._scrollContent.add_child(this._agentTabHost);
     if (detected.length === 0) return;
 
     const disabled = this._getDisabledProviders();
@@ -236,7 +380,8 @@ class CodeBurnIndicator extends PanelMenu.Button {
       const badge = new St.Label({ text: tabs[0].label, style_class: 'codeburn-agent-badge' });
       const row = new St.BoxLayout({ style_class: 'codeburn-tab-row' });
       row.add_child(badge);
-      this._scrollContent.add_child(row);
+      this._agentTabHost.add_child(row);
+      this._updateScopeUi();
       return;
     }
 
@@ -245,7 +390,9 @@ class CodeBurnIndicator extends PanelMenu.Button {
     for (const p of tabs) {
       const btn = new St.Button({ label: p.label, style_class: 'codeburn-tab', can_focus: true, x_expand: !useScroll });
       btn.connect('clicked', () => {
+        if (this._scope === 'combined') return;
         this._provider = p.id;
+        this._localProvider = p.id;
         this._updateAgentTabStyle();
         this._refresh();
       });
@@ -259,11 +406,47 @@ class CodeBurnIndicator extends PanelMenu.Button {
         vscrollbar_policy: St.PolicyType.NEVER,
       });
       agentScroll.set_child(this._agentTabRow);
-      this._scrollContent.add_child(agentScroll);
+      this._agentTabHost.add_child(agentScroll);
     } else {
-      this._scrollContent.add_child(this._agentTabRow);
+      this._agentTabHost.add_child(this._agentTabRow);
     }
     this._updateAgentTabStyle();
+    this._updateScopeUi();
+  }
+
+  _buildScopeTabs() {
+    const row = new St.BoxLayout({ style_class: 'codeburn-tab-row codeburn-scope-row' });
+    this._scopeTabs = new Map();
+    for (const scope of SCOPES) {
+      const btn = new St.Button({ label: scope.label, style_class: 'codeburn-tab', can_focus: true, x_expand: true });
+      btn.connect('clicked', () => {
+        if (scope.id === this._scope) return;
+        if (scope.id === 'combined') {
+          this._localProvider = this._provider;
+          this._provider = 'all';
+        } else {
+          this._provider = this._localProvider || 'all';
+        }
+        this._scope = scope.id;
+        this._updateScopeUi();
+        this._updateAgentTabStyle();
+        this._refresh();
+      });
+      row.add_child(btn);
+      this._scopeTabs.set(scope.id, btn);
+    }
+    this._scrollContent.add_child(row);
+    this._updateScopeUi();
+  }
+
+  _updateScopeUi() {
+    for (const [id, btn] of this._scopeTabs ?? []) {
+      if (id === this._scope) btn.add_style_class_name('codeburn-tab-active');
+      else btn.remove_style_class_name('codeburn-tab-active');
+    }
+    // Combined usage is unfiltered because remote peers only expose their
+    // aggregate all-provider payload.
+    if (this._agentTabHost) this._agentTabHost.visible = this._scope !== 'combined';
   }
 
   _updateAgentTabStyle() {
@@ -314,6 +497,7 @@ class CodeBurnIndicator extends PanelMenu.Button {
 
   _buildInsightPills() {
     const row = new St.BoxLayout({ style_class: 'codeburn-insight-row' });
+    this._insightRow = row;
     this._insightPills = new Map();
     for (const i of INSIGHTS) {
       const btn = new St.Button({ label: i.label, style_class: 'codeburn-insight-pill', can_focus: true, x_expand: true });
@@ -479,6 +663,21 @@ class CodeBurnIndicator extends PanelMenu.Button {
       this._updatePeriodTabStyle();
       this._refresh();
     });
+    watch('default-scope', () => {
+      const scope = this._settings.get_string('default-scope');
+      if (scope !== 'local' && scope !== 'combined') return;
+      if (scope === this._scope) return;
+      if (scope === 'combined') {
+        this._localProvider = this._provider;
+        this._provider = 'all';
+      } else {
+        this._provider = this._localProvider || 'all';
+      }
+      this._scope = scope;
+      this._updateScopeUi();
+      this._updateAgentTabStyle();
+      this._refresh(true);
+    });
     watch('budget-threshold', () => this._updateBudget());
     watch('budget-alert-enabled', () => this._updateBudget());
     watch('force-dark-mode', () => this._applyThemeClass());
@@ -532,7 +731,7 @@ class CodeBurnIndicator extends PanelMenu.Button {
   // -- Data fetching with cache --
 
   _cacheKey() {
-    return `${this._period}|${this._provider}`;
+    return `${this._scope}|${this._period}|${this._provider}`;
   }
 
   async _refresh(force = false) {
@@ -554,12 +753,14 @@ class CodeBurnIndicator extends PanelMenu.Button {
       this._payload = cached.payload;
       this._render(this._payload);
     } else {
+      this._payload = null;
+      this._viewPayload = null;
       this._showLoading();
       if (this._contentArea) this._contentArea.opacity = 120;
     }
 
     try {
-      const payload = await this._dataClient.fetch(this._period, this._provider);
+      const payload = await this._dataClient.fetch(this._period, this._provider, this._scope);
       this._inFlightKeys.delete(key);
       if (this._destroyed || gen !== this._refreshGen) return;
       this._payloadCache.set(key, { payload, fetchedAt: Date.now() });
@@ -577,30 +778,38 @@ class CodeBurnIndicator extends PanelMenu.Button {
       if (gen !== this._refreshGen) return;
       if (e.message?.includes('cancelled')) return;
       log(`CodeBurn: refresh error: ${e.message}`);
-      if (!this._payload) this._renderError(e.message);
+      this._renderError(e.message);
     }
   }
 
   // -- Rendering --
 
   _render(payload) {
-    const current = payload?.current ?? {};
-    const cost = Number(current.cost ?? 0);
-    const savings = Number(current?.localModelSavings?.totalUSD ?? 0);
+    const combinedPayload = this._scope === 'combined' ? aggregateCombinedPayload(payload) : null;
+    this._viewPayload = this._scope === 'combined' ? combinedPayload : payload;
+    this._combinedDetailsAvailable = this._scope !== 'combined' || combinedPayload !== null;
+    const current = this._viewPayload?.current ?? payload?.current ?? {};
+    const combined = this._scope === 'combined' ? payload?.combined?.combined : null;
+    const cost = Number(combined?.cost ?? current.cost ?? 0);
+    const savings = Number(combined ? this._viewPayload?.current?.localModelSavings?.totalUSD ?? 0 : current?.localModelSavings?.totalUSD ?? 0);
 
     this._panelLabel.set_text(this._fmt(cost));
-    this._heroLabel.set_text(current.label || '');
+    this._heroLabel.set_text(combined ? `Combined · ${current.label || ''}` : (current.label || ''));
     this._heroAmount.set_text(this._fmt(cost));
 
-    const calls = Number(current.calls ?? 0);
-    const sessions = Number(current.sessions ?? 0);
+    const calls = Number(combined?.calls ?? current.calls ?? 0);
+    const sessions = Number(combined?.sessions ?? current.sessions ?? 0);
     const metaParts = [`${calls.toLocaleString()} calls`, formatSessionCount(sessions, current.sessionCountBasis)];
+    if (combined) metaParts.push(`${combined.reachableCount}/${combined.deviceCount} devices`);
     if (savings > 0) metaParts.push(`saved ${this._fmt(savings)}`);
     this._heroMeta.set_text(metaParts.join('   '));
 
-    this._renderChart(payload?.history?.daily ?? []);
+    // If an older CLI cannot provide detailed device payloads, the local
+    // history is not a combined history and must not appear below an
+    // all-devices total.
+    this._renderChart(combined && !this._combinedDetailsAvailable ? [] : this._viewPayload?.history?.daily ?? []);
     this._renderContent();
-    this._renderFindings(payload?.optimize ?? {});
+    this._renderFindings(combined ? {} : payload?.optimize ?? {});
     this._updateBudget();
 
     const updated = payload?.generated ? formatTime(new Date(payload.generated)) : '';
@@ -676,6 +885,16 @@ class CodeBurnIndicator extends PanelMenu.Button {
 
   _renderContent() {
     this._contentArea.destroy_all_children();
+    if (this._scope === 'combined') {
+      this._renderCombinedView();
+      if (!this._combinedDetailsAvailable) {
+        this._contentArea.add_child(new St.Label({
+          text: 'Detailed combined insights require a newer CodeBurn CLI',
+          style_class: 'codeburn-empty',
+        }));
+        return;
+      }
+    }
     switch (this._insight) {
       case 'trend': return this._renderTrendView();
       case 'forecast': return this._renderForecastView();
@@ -685,8 +904,58 @@ class CodeBurnIndicator extends PanelMenu.Button {
     }
   }
 
+  _renderCombinedView() {
+    const usage = this._payload?.combined;
+    if (!usage) {
+      this._contentArea.add_child(new St.Label({
+        text: 'Combined usage unavailable; showing this device',
+        style_class: 'codeburn-empty',
+      }));
+      return;
+    }
+
+    this._contentArea.add_child(this._sectionTitle('Devices'));
+    const header = new St.BoxLayout({ style_class: 'codeburn-table-header' });
+    header.add_child(new St.Label({ text: 'Device', style_class: 'codeburn-th', x_expand: true }));
+    header.add_child(new St.Label({ text: 'Cost', style_class: 'codeburn-th codeburn-th-right codeburn-th-cost' }));
+    header.add_child(new St.Label({ text: 'Tokens', style_class: 'codeburn-th codeburn-th-right codeburn-th-calls' }));
+    header.add_child(new St.Label({ text: 'Calls / sessions', style_class: 'codeburn-th codeburn-th-right codeburn-th-count' }));
+    this._contentArea.add_child(header);
+
+    const rows = new St.BoxLayout({ vertical: true, style_class: 'codeburn-device-rows' });
+    const devices = Array.isArray(usage.perDevice) ? usage.perDevice : [];
+    for (const device of devices) {
+      const row = new St.BoxLayout({ style_class: 'codeburn-device-row' });
+      const name = device.local ? `${device.name} · this device` : device.name;
+      const unavailable = device.error != null;
+      row.add_child(new St.Label({ text: name, style_class: 'codeburn-device-name', x_expand: true }));
+      row.add_child(new St.Label({
+        text: unavailable ? 'Unavailable' : this._fmt(device.cost),
+        style_class: 'codeburn-device-value codeburn-device-cost',
+      }));
+      row.add_child(new St.Label({
+        text: unavailable ? '—' : formatTokensCompact(device.totalTokens),
+        style_class: 'codeburn-device-value',
+      }));
+      row.add_child(new St.Label({
+        text: unavailable ? '—' : `${Number(device.calls || 0).toLocaleString()} / ${Number(device.sessions || 0).toLocaleString()}`,
+        style_class: 'codeburn-device-value codeburn-device-count',
+      }));
+      rows.add_child(row);
+      if (unavailable) {
+        rows.add_child(new St.Label({ text: `${device.name}: ${device.error}`, style_class: 'codeburn-device-error' }));
+      }
+    }
+    if (!devices.length) rows.add_child(new St.Label({ text: 'No paired devices', style_class: 'codeburn-empty' }));
+    this._contentArea.add_child(rows);
+    this._contentArea.add_child(new St.Label({
+      text: `${usage.combined.reachableCount} of ${usage.combined.deviceCount} devices reporting`,
+      style_class: 'codeburn-device-summary',
+    }));
+  }
+
   _renderActivityView() {
-    const current = this._payload?.current ?? {};
+    const current = this._viewPayload?.current ?? {};
     this._contentArea.add_child(this._sectionTitle('Activity'));
     const actHeader = new St.BoxLayout({ style_class: 'codeburn-table-header' });
     actHeader.add_child(new St.Label({ text: 'Name', style_class: 'codeburn-th', x_expand: true }));
@@ -721,7 +990,7 @@ class CodeBurnIndicator extends PanelMenu.Button {
   }
 
   _renderTrendView() {
-    const daily = this._payload?.history?.daily ?? [];
+    const daily = this._viewPayload?.history?.daily ?? [];
     if (!daily.length) {
       this._contentArea.add_child(new St.Label({ text: 'Not enough history yet', style_class: 'codeburn-empty' }));
       return;
@@ -740,7 +1009,7 @@ class CodeBurnIndicator extends PanelMenu.Button {
   }
 
   _renderForecastView() {
-    const daily = this._payload?.history?.daily ?? [];
+    const daily = this._viewPayload?.history?.daily ?? [];
     if (daily.length < 3) {
       this._contentArea.add_child(new St.Label({ text: 'Need at least 3 days of history', style_class: 'codeburn-empty' }));
       return;
@@ -763,8 +1032,8 @@ class CodeBurnIndicator extends PanelMenu.Button {
   }
 
   _renderPulseView() {
-    const current = this._payload?.current ?? {};
-    const daily = this._payload?.history?.daily ?? [];
+    const current = this._viewPayload?.current ?? {};
+    const daily = this._viewPayload?.history?.daily ?? [];
     this._contentArea.add_child(this._sectionTitle('Pulse'));
     const row = new St.BoxLayout({ style_class: 'codeburn-pulse-row' });
     row.add_child(this._pulseTile(this._fmt(current.cost), 'cost'));
@@ -785,8 +1054,8 @@ class CodeBurnIndicator extends PanelMenu.Button {
   }
 
   _renderStatsView() {
-    const current = this._payload?.current ?? {};
-    const daily = this._payload?.history?.daily ?? [];
+    const current = this._viewPayload?.current ?? {};
+    const daily = this._viewPayload?.history?.daily ?? [];
     this._contentArea.add_child(this._sectionTitle('Stats'));
     const models = Array.isArray(current.topModels) ? current.topModels : [];
     const favModel = models[0]?.name ?? '-';
@@ -817,6 +1086,13 @@ class CodeBurnIndicator extends PanelMenu.Button {
 
   _renderError(message) {
     this._panelLabel.set_text('!');
+    this._chartContainer.visible = false;
+    this._contentArea.destroy_all_children();
+    this._contentArea.add_child(new St.Label({
+      text: 'Refresh to try again',
+      style_class: 'codeburn-empty',
+    }));
+    this._updatedLabel?.set_text('');
     if (message?.includes('not found') || message?.includes('No such file')) {
       this._heroLabel.set_text('CodeBurn CLI not found');
       this._heroMeta.set_text('Install: npm i -g codeburn');
@@ -837,7 +1113,8 @@ class CodeBurnIndicator extends PanelMenu.Button {
       this._budgetLabel.visible = false;
       return;
     }
-    const cost = Number(this._payload.current.cost ?? 0) * this._fxRate;
+    const combined = this._scope === 'combined' ? this._payload?.combined?.combined : null;
+    const cost = Number(combined?.cost ?? this._payload.current.cost ?? 0) * this._fxRate;
     const thresholdConverted = threshold * this._fxRate;
     if (cost >= thresholdConverted) {
       this._budgetLabel.set_text(`Budget exceeded: ${this._fmt(cost)} / ${this._fmt(thresholdConverted)}`);

@@ -36,12 +36,21 @@ gnome-extensions prefs codeburn@codeburn.dev
 
 Or use the GNOME Extensions app.
 
+### Combined devices
+
+The **All devices** scope uses CodeBurn's existing local pairing. On another
+machine, run `codeburn share --always`, then pair it from this machine with
+`codeburn devices add`. The extension will include reachable paired devices in
+the combined total; sleeping or unavailable devices remain visible as
+unavailable rather than being counted.
+
 ### Settings
 
 | Setting | Default | Description |
 |---------|---------|-------------|
 | Refresh Interval | 30s | How often to poll CodeBurn CLI |
 | Default Period | Today | Period shown on open |
+| Default Scope | This device | Show this device or all paired devices on open |
 | Compact Mode | Off | Hide cost label, show icon only |
 | Budget Threshold | $0 | Daily budget alert (0 = disabled) |
 | Budget Alerts | Off | Show warning when budget exceeded |

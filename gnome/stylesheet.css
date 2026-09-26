@@ -30,10 +30,12 @@
 .codeburn-root {
   width: 340px;
   height: 540px;
+  min-width: 0;
   padding: 0;
   spacing: 0;
 }
 .codeburn-scroll {
+  min-width: 0;
   padding: 0;
 }
 
@@ -67,6 +69,10 @@
 .codeburn-period-row {
   padding-top: 0;
   padding-bottom: 10px;
+}
+.codeburn-scope-row {
+  padding-top: 4px;
+  padding-bottom: 4px;
 }
 .codeburn-tab,
 .codeburn-period {
@@ -158,6 +164,9 @@
 }
 .codeburn-th-calls {
   min-width: 50px;
+}
+.codeburn-th-count {
+  min-width: 78px;
 }
 
 .codeburn-activity-rows {
@@ -460,6 +469,44 @@
   min-width: 50px;
 }
 
+/* ---- combined device rows ---- */
+.codeburn-device-rows {
+  spacing: 0;
+}
+.codeburn-device-row {
+  spacing: 4px;
+  padding: 7px 0;
+}
+.codeburn-device-name {
+  font-size: 11px;
+  min-width: 92px;
+  max-width: 126px;
+}
+.codeburn-device-value {
+  font-family: monospace;
+  font-size: 10.5px;
+  min-width: 44px;
+  opacity: 0.75;
+}
+.codeburn-device-cost {
+  color: #ffd700;
+  font-weight: 600;
+  min-width: 58px;
+}
+.codeburn-device-count {
+  min-width: 68px;
+}
+.codeburn-device-error,
+.codeburn-device-summary {
+  font-size: 10px;
+  opacity: 0.55;
+}
+.codeburn-device-error {
+  color: #e5a50a;
+  max-width: 290px;
+  padding: 0 0 4px 0;
+}
+
 /* ---- settings gear button ---- */
 .codeburn-prefs-btn {
   padding: 6px 8px;
@@ -560,6 +607,7 @@
 }
 .codeburn-light .codeburn-activity-cost,
 .codeburn-light .codeburn-model-cost,
+.codeburn-light .codeburn-device-cost,
 .codeburn-light .codeburn-trend-cost,
 .codeburn-light .codeburn-kv-value {
   color: #c9521d;

@@ -662,6 +662,7 @@ describe('codeburn status --format menubar-json', () => {
         'status',
         '--format', 'menubar-json',
         '--scope', 'combined',
+        '--combined-details',
         '--period', 'today',
         '--provider', 'all',
         '--no-optimize',
@@ -706,6 +707,11 @@ describe('codeburn status --format menubar-json', () => {
             reachableCount: number
           }
         }
+        combinedDevices?: Array<{
+          id: string
+          local: boolean
+          payload?: { current: { cost: number } }
+        }>
       }
 
       expect(payload.combined).toBeDefined()
@@ -738,6 +744,12 @@ describe('codeburn status --format menubar-json', () => {
         totalTokens,
         deviceCount: 1,
         reachableCount: 1,
+      })
+      expect(payload.combinedDevices).toHaveLength(1)
+      expect(payload.combinedDevices![0]).toMatchObject({
+        id: 'local',
+        local: true,
+        payload: { current: { cost: payload.current.cost } },
       })
 
       const localResult = runCli([
