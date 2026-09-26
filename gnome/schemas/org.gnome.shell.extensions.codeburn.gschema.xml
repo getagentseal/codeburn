@@ -16,6 +16,12 @@
       <description>Period shown when extension opens (today, week, 30days, month, all)</description>
     </key>
 
+    <key name="default-scope" type="s">
+      <default>'local'</default>
+      <summary>Default usage scope</summary>
+      <description>Usage shown when the extension opens (local or combined paired devices)</description>
+    </key>
+
     <key name="budget-threshold" type="d">
       <default>0.0</default>
       <summary>Budget threshold</summary>

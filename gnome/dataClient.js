@@ -4,6 +4,10 @@ import Gio from 'gi://Gio';
 const TIMEOUT_SECONDS = 15;
 const SAFE_ARG_RE = /^[A-Za-z0-9 ._/\-]+$/;
 
+function isCombinedDetailsUnsupported(error) {
+  return /unknown option[^\n]*--combined-details/i.test(error?.message || '');
+}
+
 function buildAdditionalPaths() {
   const home = GLib.get_home_dir();
   return [
@@ -22,6 +26,7 @@ function buildAdditionalPaths() {
 export class DataClient {
   _cache = new Map();
   _inFlight = null;
+  _combinedDetailsSupported = null;
   _codeburnPath;
   _augmentedPath;
 
@@ -32,6 +37,7 @@ export class DataClient {
 
   setCodeburnPath(path) {
     this._codeburnPath = path || '';
+    this._combinedDetailsSupported = null;
   }
 
   cancelInFlight() {
@@ -41,20 +47,35 @@ export class DataClient {
     }
   }
 
-  getCached(period, provider) {
-    const key = `${period}:${provider}`;
+  getCached(period, provider, scope = 'local') {
+    const key = `${scope}:${period}:${provider}`;
     return this._cache.get(key) ?? null;
   }
 
-  async fetch(period, provider) {
+  async fetch(period, provider, scope = 'local') {
     this.cancelInFlight();
 
     const cancellable = new Gio.Cancellable();
     this._inFlight = { cancellable };
 
     try {
-      const payload = await this._spawn(period, provider, cancellable);
-      const key = `${period}:${provider}`;
+      let payload;
+      if (scope === 'combined' && this._combinedDetailsSupported !== false) {
+        try {
+          payload = await this._spawn(period, provider, scope, cancellable, true);
+          this._combinedDetailsSupported = true;
+        } catch (e) {
+          // Keep the extension usable with an older globally installed CLI.
+          // It can still provide combined totals, but does not know how to
+          // emit the optional detailed per-device payloads.
+          if (!isCombinedDetailsUnsupported(e)) throw e;
+          this._combinedDetailsSupported = false;
+          payload = await this._spawn(period, provider, scope, cancellable, false);
+        }
+      } else {
+        payload = await this._spawn(period, provider, scope, cancellable, false);
+      }
+      const key = `${scope}:${period}:${provider}`;
       this._cache.set(key, payload);
       return payload;
     } finally {
@@ -63,7 +84,7 @@ export class DataClient {
     }
   }
 
-  _buildArgv(period, provider) {
+  _buildArgv(period, provider, scope = 'local', combinedDetails = true) {
     let base;
     if (this._codeburnPath && SAFE_ARG_RE.test(this._codeburnPath)) {
       base = this._codeburnPath.split(' ').filter(s => s.length > 0);
@@ -79,8 +100,14 @@ export class DataClient {
       '--no-optimize',
     ];
 
-    if (provider && provider !== 'all')
+    // Combined usage is intentionally unfiltered: paired devices expose
+    // aggregate all-provider data, and the CLI rejects scoped combinations.
+    if (scope === 'combined') {
+      args.push('--scope', 'combined');
+      if (combinedDetails) args.push('--combined-details');
+    } else if (provider && provider !== 'all') {
       args.push('--provider', provider);
+    }
 
     return args;
   }
@@ -95,9 +122,9 @@ export class DataClient {
     return parts.join(':');
   }
 
-  _spawn(period, provider, cancellable) {
+  _spawn(period, provider, scope, cancellable, combinedDetails = true) {
     return new Promise((resolve, reject) => {
-      const argv = this._buildArgv(period, provider);
+      const argv = this._buildArgv(period, provider, scope, combinedDetails);
       let settled = false;
 
       const settle = (fn, value) => {
@@ -157,5 +184,6 @@ export class DataClient {
   destroy() {
     this.cancelInFlight();
     this._cache.clear();
+    this._combinedDetailsSupported = null;
   }
 }
