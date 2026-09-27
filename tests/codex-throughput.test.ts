@@ -90,6 +90,31 @@ describe('Codex throughput prototype', () => {
     expect(points[0]).toMatchObject({ generatedTokens: 20, activeGeneratedTokensPerSecond: 5 })
   })
 
+  it('counts total-only work after a replay burst before five seconds', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'codeburn-tps-fork-boundary-'))
+    const path = join(dir, 'rollout.jsonl')
+    const line = (timestamp: string, payload: Record<string, unknown>) => JSON.stringify({ type: 'event_msg', timestamp, payload })
+    await writeFile(path, [
+      JSON.stringify({ type: 'session_meta', timestamp: '2026-07-25T00:00:00.000Z', payload: { model: 'gpt-5.6-sol', forked_from_id: 'parent' } }),
+      line('2026-07-25T00:00:00.100Z', { type: 'task_started' }),
+      line('2026-07-25T00:00:00.200Z', { type: 'token_count', info: { last_token_usage: { output_tokens: 100 }, total_token_usage: { total_tokens: 100, output_tokens: 100 } } }),
+      line('2026-07-25T00:00:00.300Z', { type: 'task_complete', duration_ms: 1000 }),
+      line('2026-07-25T00:00:04.000Z', { type: 'task_started' }),
+      line('2026-07-25T00:00:04.500Z', { type: 'token_count', info: { total_token_usage: { total_tokens: 130, output_tokens: 130 } } }),
+      line('2026-07-25T00:00:05.000Z', { type: 'task_complete', duration_ms: 1000 }),
+    ].join('\n'))
+
+    const points = await readCodexThroughput(path)
+    expect(points).toHaveLength(1)
+    expect(points[0]).toMatchObject({
+      outputTokens: 30,
+      generatedTokens: 30,
+      taskGeneratedTokens: 30,
+      activeDurationSeconds: 1,
+      activeGeneratedTokensPerSecond: 30,
+    })
+  })
+
   it('keeps oversized rollout lines bounded while extracting token usage', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'codeburn-tps-large-'))
     const path = join(dir, 'rollout.jsonl')

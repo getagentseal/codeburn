@@ -1343,6 +1343,47 @@ describe('codex provider - forked session dedupe', () => {
     const { tokens } = await aggregateTokens(tmpDir)
     expect(tokens).toBe(300)
   })
+
+  it('counts the first total-only fork usage after a replay burst before five seconds', async () => {
+    // The fork copies cumulative snapshots in a tight burst, then does real
+    // work 3.8s after its last replay. The replay totals must seed the delta
+    // baseline, while the first new cumulative total must survive the old 5s
+    // cutoff. Parent usage is 200; the fork adds 300.
+    await writeSession(tmpDir, '2026-04-14', 'rollout-1-parent.jsonl', [
+      sessionMeta({ session_id: 'sess-parent' }),
+      tokenCount({ timestamp: '2026-04-14T10:00:01Z', total: { input: 100, total: 100 } }),
+      tokenCount({ timestamp: '2026-04-14T10:00:02Z', total: { input: 200, total: 200 } }),
+    ])
+    await writeSession(tmpDir, '2026-04-14', 'rollout-2-fork.jsonl', [
+      sessionMeta({ session_id: 'sess-fork', forked_from_id: 'sess-parent', timestamp: '2026-04-14T10:00:10Z' }),
+      tokenCount({ timestamp: '2026-04-14T10:00:10.100Z', total: { input: 100, total: 100 } }),
+      tokenCount({ timestamp: '2026-04-14T10:00:10.200Z', total: { input: 200, total: 200 } }),
+      tokenCount({ timestamp: '2026-04-14T10:00:14Z', total: { input: 500, total: 500 } }),
+    ])
+
+    const { tokens } = await aggregateTokens(tmpDir)
+    expect(tokens).toBe(500)
+  })
+
+  it('keeps skipping no-cumulative replay records while accepting work after the burst', async () => {
+    // No cross-session cumulative key is available here, so the replay burst
+    // boundary itself must suppress the copied parent calls. The first real
+    // call arrives at +4s and must still be counted.
+    await writeSession(tmpDir, '2026-04-14', 'rollout-1-parent.jsonl', [
+      sessionMeta({ session_id: 'sess-parent' }),
+      tokenCount({ timestamp: '2026-04-14T10:00:01Z', last: { input: 100 } }),
+      tokenCount({ timestamp: '2026-04-14T10:00:02Z', last: { input: 50 } }),
+    ])
+    await writeSession(tmpDir, '2026-04-14', 'rollout-2-fork-no-total.jsonl', [
+      sessionMeta({ session_id: 'sess-fork-no-total', forked_from_id: 'sess-parent', timestamp: '2026-04-14T10:00:10Z' }),
+      tokenCount({ timestamp: '2026-04-14T10:00:10.100Z', last: { input: 100 } }),
+      tokenCount({ timestamp: '2026-04-14T10:00:10.200Z', last: { input: 50 } }),
+      tokenCount({ timestamp: '2026-04-14T10:00:14Z', last: { input: 40 } }),
+    ])
+
+    const { tokens } = await aggregateTokens(tmpDir)
+    expect(tokens).toBe(190)
+  })
 })
 
 describe('codex auto-review pricing (#1047)', () => {
