@@ -1435,8 +1435,8 @@ describe('codex provider - token_usage_record accounting', () => {
     expect(calls).toHaveLength(1)
     expect(calls[0]).toMatchObject({
       model: 'gpt-5.5',
-      inputTokens: 700,
-      cacheCreationInputTokens: 200,
+      inputTokens: 900,
+      cacheCreationInputTokens: 0,
       cachedInputTokens: 300,
       outputTokens: 180,
       reasoningTokens: 60,
@@ -1460,6 +1460,48 @@ describe('codex provider - token_usage_record accounting', () => {
       outputTokens: 150,
       reasoningTokens: 25,
     })
+  })
+
+  it('keeps token_count fallback when a usage record has no recognized counters', async () => {
+    const calls = await parseCalls([
+      sessionMeta({ timestamp: '2026-09-27T10:00:00Z' }),
+      JSON.stringify({
+        type: 'token_usage_record',
+        timestamp: '2026-09-27T10:00:01Z',
+        payload: { response_id: 'resp-empty', usage: {} },
+      }),
+      tokenCount({
+        timestamp: '2026-09-27T10:00:02Z',
+        last: { input: 500, output: 80 },
+        total: { input: 500, output: 80, total: 580 },
+      }),
+    ])
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.inputTokens + calls[0]!.outputTokens).toBe(580)
+  })
+
+  it('does not switch usage sources because of a fork replay record', async () => {
+    const calls = await parseCalls([
+      sessionMeta({
+        timestamp: '2026-09-27T10:00:00Z',
+        session_id: 'sess-fork',
+        forked_from_id: 'sess-parent',
+      }),
+      tokenUsageRecord({
+        timestamp: '2026-09-27T10:00:01Z',
+        responseId: 'resp-replayed',
+        usage: { input: 500 },
+      }),
+      tokenCount({
+        timestamp: '2026-09-27T10:00:06Z',
+        last: { input: 200, output: 40 },
+        total: { input: 200, output: 40, total: 240 },
+      }),
+    ])
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.inputTokens + calls[0]!.outputTokens).toBe(240)
   })
 
   it('counts pre-handover token_count usage, then ignores record twins and later token_count events', async () => {
