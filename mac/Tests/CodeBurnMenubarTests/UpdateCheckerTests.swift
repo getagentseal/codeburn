@@ -104,7 +104,7 @@ struct UpdateFailurePresentationTests {
 struct CliUpdateInvocationTests {
     @Test("homebrew path resolves brew upgrade")
     func homebrewPath() {
-        let argv = UpdateChecker.cliUpdateInvocation(cliPath: "/opt/homebrew/bin/codeburn", fileExists: { $0 == "/opt/homebrew/bin/brew" })
+        let argv = UpdateChecker.cliUpdateInvocation(cliPath: "/opt/homebrew/bin/codeburn", fileExists: { $0 == "/opt/homebrew/bin/brew" }, resolvingSymlinks: { $0 })
         #expect(argv == ["/opt/homebrew/bin/brew", "upgrade", "codeburn"])
     }
 
@@ -135,7 +135,7 @@ struct CliUpdateInvocationTests {
     @Test("homebrew CLI without a findable brew never falls through to npm")
     func brewMissingStaysNil() {
         // Falling through to npm --force would create a second, conflicting install.
-        #expect(UpdateChecker.cliUpdateInvocation(cliPath: "/opt/homebrew/bin/codeburn", fileExists: { $0.hasSuffix("/npm") }) == nil)
+        #expect(UpdateChecker.cliUpdateInvocation(cliPath: "/opt/homebrew/bin/codeburn", fileExists: { $0.hasSuffix("/npm") }, resolvingSymlinks: { $0 }) == nil)
     }
 
     @Test("brew-provided node with an npm-global CLI resolves npm, not brew")
