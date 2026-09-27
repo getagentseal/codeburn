@@ -144,12 +144,19 @@ pub struct CliStatus {
 }
 
 /// What the Capacity Dock renders: the provider array, or the reason there isn't one.
+/// `claude_profiles` (the per-config-directory Claude answers, #1523) rides beside
+/// `providers` as opaque JSON; it is None on a CLI that predates the field.
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "state", rename_all = "camelCase")]
 pub enum DockQuota {
-    Ready { providers: Value },
+    Ready {
+        providers: Value,
+        claude_profiles: Option<Value>,
+    },
     CliOutdated,
-    Unavailable { message: String },
+    Unavailable {
+        message: String,
+    },
 }
 
 impl CodeburnCli {
@@ -326,6 +333,7 @@ impl CodeburnCli {
                     .get("providers")
                     .cloned()
                     .unwrap_or_else(|| Value::Array(vec![])),
+                claude_profiles: payload.get("claudeProfiles").cloned(),
             },
             Err(err) => DockQuota::Unavailable {
                 message: format!("CLI returned invalid JSON: {err}"),

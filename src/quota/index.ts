@@ -5,7 +5,13 @@
 // desktop app runs. They are deliberately left untouched by this change; the
 // two trees will be deduped in a follow-up once every surface reads the CLI.
 
+import os from 'node:os'
+import path from 'node:path'
+
 import { renderTable } from '../text-table.js'
+import { filterProjectsByClaudeConfigSource, parseAllSessions } from '../parser.js'
+import { discoverClaudeConfigSources, type ClaudeConfigSource } from '../providers/claude.js'
+import { buildPeriodData } from '../usage-aggregator.js'
 import { fetchAntigravityQuota } from './antigravity.js'
 import { fetchClaudeQuota } from './claude.js'
 import { fetchClinePassQuota } from './clinepass.js'
@@ -18,6 +24,7 @@ import { fetchGrokbotQuota, grokbotInstalled } from './grokbot.js'
 import { fetchKimiQuota } from './kimi.js'
 import { KEYCHAIN_TIMEOUT_MS } from './security.js'
 import type { ProviderName, QuotaProvider } from './types.js'
+import type { DateRange } from '../types.js'
 import { fetchZaiQuota } from './zai.js'
 import { fetchZcodeQuota } from './zcode.js'
 
@@ -35,7 +42,35 @@ export type QuotaCommandProvider = {
   notes?: string[]
 }
 
-export type QuotaReport = { providers: QuotaCommandProvider[] }
+/** One Claude config directory's own quota answer: the same shape as a
+ *  providers[] row, plus the identity of the directory it was read from and
+ *  that directory's own local today totals. Rate limits are per account, so a
+ *  machine with a work and a personal ~/.claude needs one of these per
+ *  directory to see which account is close to its limit (#1523). */
+export type ClaudeProfileReport = {
+  id: string
+  label: string
+  path: string
+  available: boolean
+  plan?: string
+  windows: QuotaCommandWindow[]
+  error?: string
+  today?: ClaudeProfileToday
+}
+
+/** A profile's today totals, scoped to that config directory's sessions only.
+ *  Mirrors the fields the Capacity Dock's glance bubble already renders. */
+export type ClaudeProfileToday = {
+  cost: number
+  calls: number
+  sessions: number
+  inputTokens: number
+  outputTokens: number
+  cacheReadTokens: number
+  cacheWriteTokens: number
+}
+
+export type QuotaReport = { providers: QuotaCommandProvider[]; claudeProfiles?: ClaudeProfileReport[] }
 
 export type ProviderReader = (signal: AbortSignal) => Promise<QuotaProvider>
 
@@ -116,13 +151,61 @@ export function toCommandProvider(id: ProviderName, name: string, quota: QuotaPr
   }
 }
 
+/** Reads one config directory's own quota. The credential file lives inside
+ *  the directory; the macOS Keychain fallback stays reserved for the default
+ *  ~/.claude, which is the only directory whose login Claude Code keeps there,
+ *  and WSL credential aggregation is left off because every WSL home is its
+ *  own config source with its own file. */
+function readClaudeProfile(source: ClaudeConfigSource, signal: AbortSignal): Promise<QuotaProvider> {
+  const isDefault = path.resolve(source.path) === path.resolve(path.join(os.homedir(), '.claude'))
+  return fetchClaudeQuota({
+    signal,
+    credentialPath: path.join(source.path, '.credentials.json'),
+    wslCredentialPaths: () => [],
+    allowKeychain: isDefault,
+  }).then(result => result.quota)
+}
+
+/** Each config directory's own today totals from one Claude-only parse of
+ *  today's range (cache-backed), filtered per source id exactly like the
+ *  menubar's per-config payloads. Claude Desktop sessions belong to no
+ *  config directory and match no source id, so they stay out of every
+ *  profile's totals. */
+export async function claudeTodayBySource(sources: ClaudeConfigSource[]): Promise<Map<string, ClaudeProfileToday>> {
+  const now = new Date()
+  const range: DateRange = { start: new Date(now.getFullYear(), now.getMonth(), now.getDate()), end: now }
+  const projects = await parseAllSessions(range, 'claude').catch(() => [])
+  const bySource = new Map<string, ClaudeProfileToday>()
+  for (const source of sources) {
+    const data = buildPeriodData('Today', filterProjectsByClaudeConfigSource(projects, source.id))
+    bySource.set(source.id, {
+      cost: data.cost,
+      calls: data.calls,
+      sessions: data.sessions,
+      inputTokens: data.inputTokens,
+      outputTokens: data.outputTokens,
+      cacheReadTokens: data.cacheReadTokens,
+      cacheWriteTokens: data.cacheWriteTokens,
+    })
+  }
+  return bySource
+}
+
 export async function collectQuota(options: {
   readers?: { id: ProviderName; name: string; read: ProviderReader }[]
   timeoutMs?: number
+  /** Overridable so tests can pin the profile windows without credentials. */
+  claudeProfileReader?: (source: ClaudeConfigSource, signal: AbortSignal) => Promise<QuotaProvider>
+  /** Overridable so tests can answer today totals without a parse. */
+  claudeToday?: (sources: ClaudeConfigSource[]) => Promise<Map<string, ClaudeProfileToday>>
 } = {}): Promise<QuotaReport> {
   const readers = options.readers ?? availableReaders()
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
-  const providers = await Promise.all(readers.map(async entry => {
+  // Profiles only exist when there is more than one config directory to tell
+  // apart; the single-directory case keeps today's payload shape untouched.
+  const sources = await discoverClaudeConfigSources().catch(() => [])
+  const profileSources = sources.length > 1 ? sources : []
+  const providersTask = Promise.all(readers.map(async entry => {
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), timeoutMs)
     const timedOut = new Promise<'timeout'>(resolve => { controller.signal.addEventListener('abort', () => resolve('timeout')) })
@@ -136,6 +219,39 @@ export async function collectQuota(options: {
       clearTimeout(timer)
     }
   }))
+  const profilesTask = profileSources.length === 0 ? Promise.resolve(undefined) : (async () => {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), timeoutMs)
+    const timedOut = new Promise<'timeout'>(resolve => { controller.signal.addEventListener('abort', () => resolve('timeout')) })
+    const read = options.claudeProfileReader ?? readClaudeProfile
+    try {
+      const [answers, today] = await Promise.all([
+        Promise.all(profileSources.map(async source => {
+          const quota = await Promise.race([read(source, controller.signal), timedOut])
+          return { source, quota }
+        })),
+        (options.claudeToday ?? claudeTodayBySource)(profileSources).catch(() => new Map<string, ClaudeProfileToday>()),
+      ])
+      return answers.map(({ source, quota }) => {
+        const row = quota === 'timeout'
+          ? { id: 'claude' as const, name: source.label, available: false, windows: [] as QuotaCommandWindow[], error: 'Timed out.' }
+          : toCommandProvider('claude', source.label, quota)
+        return {
+          id: source.id,
+          label: source.label,
+          path: source.path,
+          available: row.available,
+          ...(row.plan ? { plan: row.plan } : {}),
+          windows: row.windows,
+          ...(row.error ? { error: row.error } : {}),
+          ...(today.get(source.id) ? { today: today.get(source.id) } : {}),
+        }
+      })
+    } finally {
+      clearTimeout(timer)
+    }
+  })()
+  const [providers, claudeProfiles] = await Promise.all([providersTask, profilesTask])
   // ZCode and Z.ai read the same endpoint and report the same plan numbers
   // whenever both credentials belong to one z.ai account: showing both is a
   // duplicate row. The deliberately configured Z.ai credential (Keychain,
@@ -150,7 +266,7 @@ export async function collectQuota(options: {
       zaiRow.notes = [...(zaiRow.notes ?? []), 'A ZCode app login is also connected; it reads the same z.ai plan endpoint and is hidden as a duplicate.']
     }
   }
-  return { providers }
+  return claudeProfiles === undefined ? { providers } : { providers, claudeProfiles }
 }
 
 function resetLabel(iso: string | undefined): string {

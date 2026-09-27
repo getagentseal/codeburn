@@ -67,6 +67,8 @@ Today's spend sits in the tray as a number beside the flame icon (turn it off in
 
 Turn on **Show Capacity Dock** in the tray menu, or from the desktop app, for the same edge-docked quota rail the macOS menubar has: one ring per connected provider, hover for every quota window with its reset time, drag it to any screen edge. It is off by default and needs codeburn 0.9.24 or newer for `codeburn quota`.
 
+With more than one Claude config directory configured (`CLAUDE_CONFIG_DIRS` or the `claudeConfigDirs` key in `~/.config/codeburn/config.json`), Settings → General → Capacity Dock gains a **Claude profiles** row: **Combined** keeps the single Claude ring, **Separate rings** draws one captioned ring per directory — each with that account's own limit windows, running sessions and today totals, since rate limits are per account (#1523).
+
 The desktop app installs and configures the tray companion from a card on its **Plugins** page, the way it does the macOS menu bar: Install, Update, Open, Settings, Quit and Uninstall, a Running dot with the installed version, and the Capacity Dock switch. `codeburn menubar --uninstall` removes it from the command line.
 
 The tray app reads everything through the CLI, so install that first (`npm install -g codeburn`). It needs **codeburn 0.9.9 or newer**, and shows a setup screen with the install command until it finds one. Source and build instructions are in [`windows/`](../windows/) ([windows/DEVELOPMENT.md](../windows/DEVELOPMENT.md)).

@@ -14,6 +14,10 @@ export type LiveSession = {
   id: string
   /// Provider id, matching the rail row the session runs under.
   provider: string
+  /// For Claude sessions, the config directory (or Claude Desktop bucket) the transcript
+  /// belongs to, matching a claudeProfiles entry's id. Absent on non-Claude providers and on
+  /// payloads from a CLI that predates it.
+  claudeConfigSourceId?: string
   project: string
   branch: string | null
   model: string | null
@@ -92,6 +96,16 @@ export function sessionSubtitle(session: LiveSession, now = Date.now()): string 
 export function sessionsFor(glance: Glance, providerId: string): LiveSession[] | null {
   if (!glance.liveSessions) return null
   return glance.liveSessions.sessions.filter((session) => session.provider === providerId)
+}
+
+/// The Claude sessions belonging to one config directory, for a per-profile ring's bubble
+/// (#1523). A session with no claudeConfigSourceId (Claude Desktop bucket, or a payload from a
+/// CLI that predates the field) belongs to no profile and is left out.
+export function sessionsForSource(glance: Glance, sourceId: string): LiveSession[] | null {
+  if (!glance.liveSessions) return null
+  return glance.liveSessions.sessions.filter(
+    (session) => session.provider === 'claude' && session.claudeConfigSourceId === sourceId,
+  )
 }
 
 export function runningLabel(count: number): string {

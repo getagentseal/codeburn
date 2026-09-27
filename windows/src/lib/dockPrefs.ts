@@ -9,6 +9,14 @@ import { listen } from '@tauri-apps/api/event'
 
 export type DockTheme = 'graphite' | 'glass'
 export type DockGaugeShape = 'circle' | 'squircle'
+/// How the rail draws Claude when the CLI reports more than one config directory:
+/// one combined ring, or one captioned ring per directory (#1523).
+export type DockClaudeProfiles = 'combined' | 'separate'
+
+export const DOCK_CLAUDE_PROFILES: Array<{ id: DockClaudeProfiles; label: string }> = [
+  { id: 'combined', label: 'Combined' },
+  { id: 'separate', label: 'Separate rings' },
+]
 
 export const DOCK_THEMES: Array<{ id: DockTheme; label: string }> = [
   { id: 'graphite', label: 'Graphite' },
@@ -45,6 +53,8 @@ export type DockPrefs = {
   manualSelection: boolean
   /// Keeps every selected ring out at rest instead of collapsing to the resting provider.
   keepExpanded: boolean
+  /// One Claude ring, or one captioned ring per config directory.
+  claudeProfiles: DockClaudeProfiles
 }
 
 export const DEFAULT_DOCK_PREFS: DockPrefs = {
@@ -56,6 +66,7 @@ export const DEFAULT_DOCK_PREFS: DockPrefs = {
   providers: [],
   manualSelection: false,
   keepExpanded: false,
+  claudeProfiles: 'combined',
 }
 
 export function parseDockPrefs(raw: Record<string, unknown>): DockPrefs {
@@ -69,6 +80,7 @@ export function parseDockPrefs(raw: Record<string, unknown>): DockPrefs {
     providers: Array.isArray(raw.providers) ? raw.providers.filter((p): p is string => typeof p === 'string') : [],
     manualSelection: raw.manualSelection === true,
     keepExpanded: raw.keepExpanded === true,
+    claudeProfiles: raw.claudeProfiles === 'separate' ? 'separate' : 'combined',
   }
 }
 

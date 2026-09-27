@@ -307,6 +307,10 @@ export type TrayDockPrefs = {
   gaugeShape: string
   providers: string[]
   manualSelection: boolean
+  /** How the rail draws Claude with more than one config directory (#1523): 'combined' or
+   *  'separate' (one captioned ring per directory). String, not a union: this pane only
+   *  relays the tray app's own vocabulary and never interprets it. */
+  claudeProfiles: string
 }
 
 export const DEFAULT_TRAY_APP_PREFS: TrayAppPrefs = {
@@ -327,6 +331,7 @@ export const DEFAULT_TRAY_DOCK_PREFS: TrayDockPrefs = {
   gaugeShape: 'circle',
   providers: [],
   manualSelection: false,
+  claudeProfiles: 'combined',
 }
 
 function oneOf<T extends string | number>(value: unknown, allowed: readonly T[], fallback: T): T {
@@ -364,6 +369,7 @@ export function parseTrayDockPrefs(raw: Record<string, unknown>): TrayDockPrefs 
     gaugeShape: oneOf(raw.gaugeShape, DOCK_GAUGE_SHAPES, DEFAULT_TRAY_DOCK_PREFS.gaugeShape),
     providers: Array.isArray(raw.providers) ? raw.providers.filter((id): id is string => typeof id === 'string') : [],
     manualSelection: raw.manualSelection === true,
+    claudeProfiles: oneOf(raw.claudeProfiles, ['combined', 'separate'], DEFAULT_TRAY_DOCK_PREFS.claudeProfiles),
   }
 }
 
@@ -407,6 +413,9 @@ export function sanitizeDockPatch(patch: unknown): Record<string, unknown> {
   if ('scale' in patch) out.scale = normalizeScale(patch.scale)
   if ('theme' in patch) out.theme = patch.theme === 'glass' ? 'glass' : 'graphite'
   if ('gaugeShape' in patch) out.gaugeShape = oneOf(patch.gaugeShape, DOCK_GAUGE_SHAPES, DEFAULT_TRAY_DOCK_PREFS.gaugeShape)
+  if ('claudeProfiles' in patch) {
+    out.claudeProfiles = oneOf(patch.claudeProfiles, ['combined', 'separate'], DEFAULT_TRAY_DOCK_PREFS.claudeProfiles)
+  }
   if ('preferred' in patch) {
     out.preferred = typeof patch.preferred === 'string' && PROVIDER_ID.test(patch.preferred) ? patch.preferred : null
   }

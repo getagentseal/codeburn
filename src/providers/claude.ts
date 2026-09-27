@@ -34,8 +34,18 @@ function dedupeResolved(paths: string[]): string[] {
   return out
 }
 
-function claudeConfigSourceId(path: string): string {
+/// Stable id for one config directory. Shared by the session sources, the
+/// menubar payload's claudeConfigs selector, live sessions
+/// (claudeConfigSourceId on LiveSession) and the quota payload's
+/// claudeProfiles, so every surface names the same directory the same way.
+export function claudeConfigSourceId(path: string): string {
   return 'claude-config:' + createHash('sha256').update(path).digest('hex').slice(0, 16)
+}
+
+/// Stable id for a Claude Desktop sessions directory, matching the bucket
+/// discoverSessions tags Cowork sessions with.
+export function claudeDesktopSourceId(base: string): string {
+  return 'claude-desktop:' + createHash('sha256').update(resolve(base)).digest('hex').slice(0, 16)
 }
 
 // `\\wsl$\<distro>\home\<user>\.claude` -> distro, and the home's own name
@@ -384,7 +394,7 @@ export const claude: Provider = {
       // distinct source so a per-config view can account for them as their own
       // "Claude Desktop" bucket instead of silently dropping them (which made
       // sum-of-configs < All).
-      const desktopSourceId = 'claude-desktop:' + createHash('sha256').update(resolve(desktopBase)).digest('hex').slice(0, 16)
+      const desktopSourceId = claudeDesktopSourceId(desktopBase)
       for (const dirPath of desktopDirs) {
         const resolved = resolve(dirPath)
         if (seenProjectDirs.has(resolved)) continue

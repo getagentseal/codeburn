@@ -13,7 +13,7 @@ import { applyTheme } from '../lib/settings'
 import { TRAY_BADGE_SUPPORTED, homePath } from '../lib/platform'
 import { summaryFor, type QuotaState } from '../lib/quota'
 import {
-  DEFAULT_DOCK_PREFS, DOCK_GAUGE_SHAPES, DOCK_SCALE_MAX, DOCK_SCALE_MIN, DOCK_SCALE_STEP,
+  DEFAULT_DOCK_PREFS, DOCK_CLAUDE_PROFILES, DOCK_GAUGE_SHAPES, DOCK_SCALE_MAX, DOCK_SCALE_MIN, DOCK_SCALE_STEP,
   DOCK_THEMES, canDeselect, loadDockPrefs, manageableProviders, onDockPrefsChanged,
   writeDockPrefs, type DockPrefs,
 } from '../lib/dockPrefs'
@@ -416,6 +416,22 @@ function CapacityDockSection({ quota }: { quota: QuotaState }) {
           />
         }
       />
+      {/* Only meaningful with more than one Claude config directory; the row hides rather than
+          asking single-account users a question that has no answer. */}
+      {quota.claudeProfiles.length > 1 && (
+        <Row
+          label="Claude profiles"
+          hint="One ring per Claude config directory, each with its own limit and sessions."
+          control={
+            <Select
+              ariaLabel="Claude profiles"
+              value={prefs.claudeProfiles}
+              options={DOCK_CLAUDE_PROFILES}
+              onChange={claudeProfiles => apply({ claudeProfiles })}
+            />
+          }
+        />
+      )}
       {manageable.length === 0 ? (
         <Note>Connect a provider from its page in the sidebar to make it available here.</Note>
       ) : (

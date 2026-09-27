@@ -218,6 +218,16 @@ Add a `Capacity Dock` section to General Settings:
 - `Resting provider` menu, limited to selected providers.
 - `Size` slider from 70% to 120%, defaulting to 85%.
 - `Appearance` menu with `Graphite` and `Liquid Glass`.
+- `Claude profiles` menu (`Combined`, default, or `Separate rings`), shown only
+  when the CLI reports more than one Claude config directory. `Separate rings`
+  draws one captioned ring per directory — rate limits are per account, so a
+  work and a personal config directory each get their own windows, sessions and
+  today totals. The provider set and the resting provider keep addressing the
+  `claude` provider id; a `Claude` resting choice rests on the first ring. The
+  CLI side of the contract is the top-level `claudeProfiles` array of
+  `codeburn quota --format json` (one entry per config directory, `providers[]`
+  unchanged) and the `claudeConfigSourceId` field on live sessions, which lets a
+  profile ring claim only its own sessions (#1523).
 - Early-reset notifications are a switch in the General Settings
   `Notifications` section, default on, stored under
   `codeburn.quota.earlyResetNotificationsEnabled`. With it off the system

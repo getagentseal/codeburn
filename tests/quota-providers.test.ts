@@ -1,4 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import { mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { delimiter, join, resolve } from 'node:path'
 
 import { fetchAntigravityQuota, decodeAntigravitySummary, parseNetstatPorts } from '../src/quota/antigravity.js'
 import { decodeClaudeUsage, fetchClaudeQuota, planLabel } from '../src/quota/claude.js'
@@ -7,6 +10,7 @@ import { decodeCopilotUsage, fetchCopilotQuota } from '../src/quota/copilot.js'
 import { decodeGeminiUsage, fetchGeminiQuota } from '../src/quota/gemini.js'
 import { collectQuota, renderQuotaTable } from '../src/quota/index.js'
 import { decodeKimiUsage, fetchKimiQuota } from '../src/quota/kimi.js'
+import { discoverClaudeConfigSources } from '../src/providers/claude.js'
 import type { QuotaProvider } from '../src/quota/types.js'
 
 const noFile = vi.fn(async () => null)
@@ -353,5 +357,63 @@ describe('quota command envelope', () => {
       readers: [{ id: 'gemini', name: 'Gemini', read: () => new Promise<QuotaProvider>(() => {}) }],
     })
     expect(report.providers).toEqual([{ id: 'gemini', name: 'Gemini', available: false, windows: [], error: 'Timed out.' }])
+  })
+})
+
+describe('collectQuota claudeProfiles (#1523)', () => {
+  it('answers one profile per config directory, each with its own windows and today', async () => {
+    const dirs = [
+      mkdtempSync(join(tmpdir(), 'codeburn-profile-a-')),
+      mkdtempSync(join(tmpdir(), 'codeburn-profile-b-')),
+    ]
+    const previous = process.env.CLAUDE_CONFIG_DIRS
+    process.env.CLAUDE_CONFIG_DIRS = dirs.join(delimiter)
+    try {
+      const work: QuotaProvider = {
+        provider: 'claude', connection: 'connected', planLabel: 'Max 5x', footerLines: [],
+        primary: { label: 'Weekly', percent: 0.72, resetsAt: '2026-09-30T12:00:00.000Z' }, details: [],
+      }
+      const report = await collectQuota({
+        readers: [],
+        claudeProfileReader: async source =>
+          resolve(source.path) === resolve(dirs[0]) ? work : {
+            provider: 'claude', connection: 'disconnected', primary: null, details: [],
+            planLabel: null, footerLines: [],
+          },
+        claudeToday: async sources => new Map([
+          [sources[0].id, {
+            cost: 1.25, calls: 3, sessions: 1,
+            inputTokens: 100, outputTokens: 200, cacheReadTokens: 50, cacheWriteTokens: 10,
+          }],
+        ]),
+      })
+      // The profile ids are the same stable source ids the menubar selector and live
+      // sessions use, in config-directory order.
+      const sources = await discoverClaudeConfigSources()
+      expect(report.claudeProfiles).toEqual([
+        {
+          id: sources[0].id, label: sources[0].label, path: sources[0].path,
+          available: true, plan: 'Max 5x',
+          windows: [{ label: 'Weekly', usedPct: 72, resetsAt: '2026-09-30T12:00:00.000Z' }],
+          today: {
+            cost: 1.25, calls: 3, sessions: 1,
+            inputTokens: 100, outputTokens: 200, cacheReadTokens: 50, cacheWriteTokens: 10,
+          },
+        },
+        {
+          id: sources[1].id, label: sources[1].label, path: sources[1].path,
+          available: false, windows: [],
+        },
+      ])
+    } finally {
+      if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIRS
+      else process.env.CLAUDE_CONFIG_DIRS = previous
+    }
+  })
+
+  it('omits claudeProfiles entirely for a single config directory', async () => {
+    const report = await collectQuota({ readers: [] })
+    expect(report).toEqual({ providers: [] })
+    expect('claudeProfiles' in report).toBe(false)
   })
 })

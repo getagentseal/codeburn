@@ -45,6 +45,11 @@ pub struct Metrics {
     horizontal_rail_width: i32,
     row_height: i32,
     row_spacing: i32,
+    /// A profile row's caption line box and its gap under the percentage (#1523). Added to
+    /// every row's height when the rail draws one ring per Claude config directory, so the
+    /// whole rail keeps one uniform row extent (the hit-test arithmetic depends on it).
+    caption_line: i32,
+    caption_gap: i32,
     rail_along_pad: i32,
     /// 60% of the shoulder depth: a docked rail pads its ends so content never crowds the flare.
     flare_compensation: i32,
@@ -68,12 +73,24 @@ impl Metrics {
             horizontal_rail_width: points(106.0, scale),
             row_height: points(84.0, scale),
             row_spacing: points(12.0, scale),
+            caption_line: points(13.0, scale),
+            caption_gap: points(4.0, scale),
             rail_along_pad: points(20.0, scale),
             flare_compensation: (points(52.0, scale) as f64 * 0.6).round() as i32,
             detail_width: points(350.0, detail),
             detail_max_height: points(470.0, detail),
             detail_overhang: points(178.0, detail),
         }
+    }
+
+    /// The same metrics with every row tall enough to carry a caption line. Profile rings
+    /// draw the config directory's name under their percentage; every other row just gets
+    /// the same extra air, because a mixed-height rail would break the uniform row pitch
+    /// the layout and the hit-test both assume.
+    fn with_captions(&self) -> Metrics {
+        let mut m = *self;
+        m.row_height += m.caption_gap + m.caption_line;
+        m
     }
 
     fn from_prefs() -> Metrics {
@@ -214,6 +231,11 @@ pub struct LayoutRequest {
     pub total_rows: u32,
     pub expanded: bool,
     pub detail: Option<DetailRequest>,
+    /// The rail draws a caption line under each ring (one ring per Claude config directory,
+    /// #1523), so every row is taller by the caption metrics. Absent on a page that predates
+    /// the field, which reads as a plain uncaptioned rail.
+    #[serde(default)]
+    pub captioned: bool,
 }
 
 /// Which end of the rail stays put while it grows.
@@ -256,6 +278,10 @@ pub struct DockFrame {
     pub detail: Option<DetailFrame>,
     /// Hover comes from the cursor poll rather than DOM events when this is set.
     pub native_pointer: bool,
+    /// The row height this frame's rows were laid out with, caption allowance included, for
+    /// the hit-test's row pitch.
+    #[serde(skip)]
+    pub row_extent: i32,
 }
 
 fn rail_length(m: &Metrics, rows: u32, pad: i32) -> i32 {
@@ -308,6 +334,9 @@ fn resting_travel(area_along: i32, area_along_len: i32, rest_len: i32) -> (i32, 
 
 /// Pure layout in logical pixels. `area` is the monitor work area.
 pub fn layout(area: Rect, placement: &Placement, request: &LayoutRequest, m: &Metrics) -> DockFrame {
+    // Captioned rails swap in the taller row metrics once, here at the door, so every
+    // downstream computation (rail length, window, row mids, hit-test extent) agrees.
+    let m = if request.captioned { &m.with_captions() } else { m };
     let edge = placement.attachment;
     let vertical = edge.is_vertical();
     let docked = placement.docked.is_some();
@@ -436,6 +465,7 @@ pub fn layout(area: Rect, placement: &Placement, request: &LayoutRequest, m: &Me
             DetailFrame { x: local.x, y: local.y, w: local.w, h: local.h, tail }
         }),
         native_pointer: cfg!(target_os = "windows"),
+        row_extent: m.row_height,
     }
 }
 
@@ -723,13 +753,15 @@ static STATE: Mutex<DockState> = Mutex::new(DockState {
         horizontal_rail_width: 64,
         row_height: 50,
         row_spacing: 7,
+        caption_line: 8,
+        caption_gap: 2,
         rail_along_pad: 12,
         flare_compensation: 19,
         detail_width: 315,
         detail_max_height: 423,
         detail_overhang: 160,
     },
-    request: LayoutRequest { rows: 1, total_rows: 1, expanded: false, detail: None },
+    request: LayoutRequest { rows: 1, total_rows: 1, expanded: false, detail: None, captioned: false },
     frame: None,
     area: Rect { x: 0, y: 0, w: 0, h: 0 },
     scale: 1.0,
@@ -1193,9 +1225,9 @@ fn pointer_tick(app: &AppHandle, window: &tauri::WebviewWindow) -> u64 {
         if along < 0 {
             return None;
         }
-        let period = metrics.row_height + metrics.row_spacing;
+        let period = frame.row_extent + metrics.row_spacing;
         let slot = along / period;
-        (slot < frame.rows as i32 && along - slot * period < metrics.row_height).then_some(slot as u32)
+        (slot < frame.rows as i32 && along - slot * period < frame.row_extent).then_some(slot as u32)
     }).flatten();
     let detail_hovered = frame
         .detail
@@ -1384,7 +1416,7 @@ pub fn show(app: &AppHandle) -> tauri::Result<()> {
         let mut state = lock();
         *state = DockState::default();
         state.metrics = Metrics::from_prefs();
-        state.request = LayoutRequest { rows: 1, total_rows: 1, expanded: false, detail: None };
+        state.request = LayoutRequest { rows: 1, total_rows: 1, expanded: false, detail: None, captioned: false };
         state.scale = 1.0;
     }
     relayout(&window);
@@ -1594,7 +1626,7 @@ mod tests {
     }
 
     fn request(rows: u32, expanded: bool, detail: Option<DetailRequest>) -> LayoutRequest {
-        LayoutRequest { rows, total_rows: rows, expanded, detail }
+        LayoutRequest { rows, total_rows: rows, expanded, detail, captioned: false }
     }
 
     fn rail_on_screen(frame: &DockFrame) -> Rect {
@@ -1612,11 +1644,13 @@ mod tests {
             (m.rail_width, m.horizontal_rail_width, m.row_height, m.row_spacing),
             (53, 64, 50, 7)
         );
+        assert_eq!((m.caption_line, m.caption_gap), (8, 2));
         assert_eq!((m.rail_along_pad, m.flare_compensation), (12, 19));
         assert_eq!((m.detail_width, m.detail_max_height, m.detail_overhang), (315, 423, 160));
 
         let full = Metrics::for_scale(1.0);
         assert_eq!((full.rail_width, full.row_height, full.row_spacing), (88, 84, 12));
+        assert_eq!((full.caption_line, full.caption_gap), (13, 4));
         assert_eq!(full.flare_compensation, 31);
         // The bubble never shrinks with the rail, so it is unchanged at full size.
         assert_eq!((full.detail_width, full.detail_max_height), (350, 470));
@@ -1645,6 +1679,31 @@ mod tests {
     }
 
     #[test]
+    fn a_captioned_rail_grows_every_row_by_the_caption_metrics() {
+        let full = Metrics::for_scale(1.0);
+        let plain = layout(AREA, &Placement::default(), &request(2, true, None), &full);
+        let captioned = layout(
+            AREA,
+            &Placement::default(),
+            &LayoutRequest { rows: 2, total_rows: 2, expanded: true, detail: None, captioned: true },
+            &full,
+        );
+        // 84 + 4 gap + 13 line = 101 per row against the plain 84; two rows, one spacing.
+        assert_eq!(captioned.row_extent, 101);
+        assert_eq!(captioned.rail.h - plain.rail.h, 2 * (4 + 13));
+        // The hit-test pitch is the frame's own row extent plus the unchanged spacing.
+        assert_eq!(captioned.row_extent + full.row_spacing, 113);
+        // The resting (one-row) captioned rail is taller by exactly the caption allowance too.
+        let resting = layout(
+            AREA,
+            &Placement::default(),
+            &LayoutRequest { rows: 1, total_rows: 1, expanded: false, detail: None, captioned: true },
+            &full,
+        );
+        assert_eq!(resting.row_extent, 101);
+    }
+
+    #[test]
     fn resting_rail_hugs_the_right_edge_below_the_default_offset() {
         let frame = layout(AREA, &Placement::default(), &request(1, false, None), &small());
         assert_eq!(rail_on_screen(&frame), Rect { x: 1600 - 53, y: 156, w: 53, h: 112 });
@@ -1661,13 +1720,13 @@ mod tests {
         let rest = layout(
             AREA,
             &Placement::default(),
-            &LayoutRequest { rows: 1, total_rows: 3, expanded: false, detail: None },
+            &LayoutRequest { rows: 1, total_rows: 3, expanded: false, detail: None, captioned: false },
             &m,
         );
         let expanded = layout(
             AREA,
             &Placement::default(),
-            &LayoutRequest { rows: 3, total_rows: 3, expanded: true, detail: Some(DetailRequest { row: 0, height: 200 }) },
+            &LayoutRequest { rows: 3, total_rows: 3, expanded: true, detail: Some(DetailRequest { row: 0, height: 200 }), captioned: false },
             &m,
         );
         assert_eq!(rest.window, expanded.window);
@@ -1740,7 +1799,7 @@ mod tests {
             let frame = layout(
                 AREA,
                 &placement,
-                &LayoutRequest { rows: 1, total_rows: 1, expanded, detail: None },
+                &LayoutRequest { rows: 1, total_rows: 1, expanded, detail: None, captioned: false },
                 &m,
             );
             let rail = rail_on_screen(&frame);
