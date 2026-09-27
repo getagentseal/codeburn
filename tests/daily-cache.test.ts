@@ -549,8 +549,8 @@ describe('ensureCacheHydrated: Codex usage-record accounting migration', () => {
 
     const oldCodexDay = codexDay('2026-09-01', 2, 1_000)
     const sourceGoneDay = codexDay('2026-08-01', 4, 2_000)
-    await writeFile(join(TMP_CACHE_ROOT, 'daily-cache.v39.json'), JSON.stringify({
-      version: 39,
+    await writeFile(join(TMP_CACHE_ROOT, 'daily-cache.v40.json'), JSON.stringify({
+      version: 40,
       savingsConfigHash: '',
       tzKey: currentTzKey(),
       lastComputedDate: '2026-09-01',

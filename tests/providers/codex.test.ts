@@ -1504,6 +1504,34 @@ describe('codex provider - token_usage_record accounting', () => {
     expect(calls[0]!.inputTokens + calls[0]!.outputTokens).toBe(240)
   })
 
+  it('counts a real fork response record before the old five-second cutoff', async () => {
+    const calls = await parseCalls([
+      sessionMeta({
+        timestamp: '2026-09-27T10:00:10Z',
+        session_id: 'sess-fork',
+        forked_from_id: 'sess-parent',
+      }),
+      tokenUsageRecord({
+        timestamp: '2026-09-27T10:00:10.100Z',
+        responseId: 'resp-replayed',
+        usage: { input: 500 },
+      }),
+      tokenUsageRecord({
+        timestamp: '2026-09-27T10:00:12Z',
+        responseId: 'resp-real',
+        usage: { input: 200, output: 40 },
+      }),
+      tokenCount({
+        timestamp: '2026-09-27T10:00:12.100Z',
+        last: { input: 200, output: 40 },
+        total: { input: 200, output: 40, total: 240 },
+      }),
+    ])
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.inputTokens + calls[0]!.outputTokens).toBe(240)
+  })
+
   it('counts pre-handover token_count usage, then ignores record twins and later token_count events', async () => {
     const calls = await parseCalls([
       sessionMeta({ timestamp: '2026-09-27T10:00:00Z' }),
