@@ -94,8 +94,8 @@ describe('Claude queued human prompts', () => {
       'implement the parser change',
     ])
     expect(turns.map(turn => turn.assistantCalls.map(call => call.deduplicationKey))).toEqual([
-      ['claude:session-1:message-1'],
-      ['claude:session-1:message-2', 'claude:session-1:message-3'],
+      ['message-1'],
+      ['message-2', 'message-3'],
     ])
     expect(turns.flatMap(turn => turn.assistantCalls)).toHaveLength(3)
   })
