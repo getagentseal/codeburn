@@ -1631,6 +1631,8 @@ export function groupIntoTurns(entries: JournalEntry[], seenMsgIds: Set<string>,
   let currentSpawnIds: string[] = []
 
   const pushCurrentTurn = (): void => {
+    // Report turns only when they contain assistant API usage. An ordinary
+    // user-only entry and a queued prompt with no response are omitted alike.
     if (currentCalls.length === 0) return
     turns.push({
       userMessage: currentUserMessage,

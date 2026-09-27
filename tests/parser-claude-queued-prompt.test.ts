@@ -1,7 +1,11 @@
+import { copyFile, mkdir, mkdtemp, rm } from 'fs/promises'
+import { join, resolve } from 'path'
+import { tmpdir } from 'os'
 import { describe, expect, it } from 'vitest'
 
-import { compactEntry, groupIntoTurns } from '../src/parser.js'
-import type { JournalEntry } from '../src/types.js'
+import { clearSessionCache, compactEntry, groupIntoTurns, parseAllSessions } from '../src/parser.js'
+import type { DateRange, JournalEntry } from '../src/types.js'
+import { setHome } from './setup/home.js'
 
 function user(timestamp: string, content: string): JournalEntry {
   return {
@@ -98,5 +102,94 @@ describe('Claude queued human prompts', () => {
       ['message-2', 'message-3'],
     ])
     expect(turns.flatMap(turn => turn.assistantCalls)).toHaveLength(3)
+  })
+
+  it('omits a queued prompt without an assistant API call like an ordinary user-only message', () => {
+    expect(groupIntoTurns([user('2026-07-01T10:00:00Z', 'ordinary prompt')], new Set())).toEqual([])
+    expect(groupIntoTurns([
+      attachment('2026-07-01T10:00:00Z', 'queued_command', 'prompt', 'queued prompt'),
+    ], new Set())).toEqual([])
+  })
+
+  it('classifies a queued prompt through the JSONL parser and reloads it from session cache', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'codeburn-queued-prompt-home-'))
+    const cacheDir = await mkdtemp(join(tmpdir(), 'codeburn-queued-prompt-cache-'))
+    const envKeys = [
+      'HOME',
+      'USERPROFILE',
+      'CLAUDE_CONFIG_DIR',
+      'CLAUDE_CONFIG_DIRS',
+      'CODEBURN_CACHE_DIR',
+      'CODEBURN_DESKTOP_SESSIONS_DIR',
+    ] as const
+    const previousEnv = new Map(envKeys.map(key => [key, process.env[key]]))
+
+    try {
+      setHome(home)
+      const claudeDir = join(home, '.claude')
+      const projectDir = join(claudeDir, 'projects', 'queued-prompt-project')
+      await mkdir(projectDir, { recursive: true })
+      await copyFile(
+        resolve('tests/fixtures/claude/queued-human-prompt.jsonl'),
+        join(projectDir, 'session-1.jsonl'),
+      )
+      process.env['CLAUDE_CONFIG_DIR'] = claudeDir
+      delete process.env['CLAUDE_CONFIG_DIRS']
+      delete process.env['CODEBURN_DESKTOP_SESSIONS_DIR']
+      process.env['CODEBURN_CACHE_DIR'] = cacheDir
+
+      const range: DateRange = {
+        start: new Date('2026-07-01T00:00:00.000Z'),
+        end: new Date('2026-07-01T23:59:59.999Z'),
+      }
+      const summarize = async () => {
+        const projects = await parseAllSessions(range, 'claude')
+        const session = projects.flatMap(project => project.sessions).find(candidate => candidate.sessionId === 'session-1')
+        expect(session).toBeDefined()
+        return {
+          turns: session!.turns.map(turn => ({
+            userMessage: turn.userMessage,
+            category: turn.category,
+            calls: turn.assistantCalls.map(call => call.deduplicationKey),
+          })),
+          apiCalls: session!.apiCalls,
+          totalInputTokens: session!.totalInputTokens,
+          totalOutputTokens: session!.totalOutputTokens,
+          totalCostUSD: session!.totalCostUSD,
+        }
+      }
+
+      clearSessionCache()
+      const cold = await summarize()
+      expect(cold).toMatchObject({
+        turns: [
+          {
+            userMessage: 'How does the parser assign turns?',
+            category: 'exploration',
+            calls: ['message-1'],
+          },
+          {
+            userMessage: 'Implement a parser change in src/parser.ts',
+            category: 'feature',
+            calls: ['message-2', 'message-3'],
+          },
+        ],
+        apiCalls: 3,
+        totalInputTokens: 41,
+        totalOutputTokens: 15,
+      })
+
+      clearSessionCache()
+      expect(await summarize()).toEqual(cold)
+    } finally {
+      clearSessionCache()
+      for (const key of envKeys) {
+        const value = previousEnv.get(key)
+        if (value === undefined) delete process.env[key]
+        else process.env[key] = value
+      }
+      await rm(home, { recursive: true, force: true })
+      await rm(cacheDir, { recursive: true, force: true })
+    }
   })
 })
