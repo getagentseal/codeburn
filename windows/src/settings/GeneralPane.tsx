@@ -416,8 +416,7 @@ function CapacityDockSection({ quota }: { quota: QuotaState }) {
           />
         }
       />
-      {/* Only meaningful with more than one Claude config directory; the row hides rather than
-          asking single-account users a question that has no answer. */}
+      {/* Only meaningful with more than one Claude config directory. */}
       {quota.claudeProfiles.length > 1 && (
         <Row
           label="Claude profiles"

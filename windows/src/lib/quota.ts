@@ -84,9 +84,9 @@ export type QuotaProvider = {
   error?: string
 }
 
-/// One Claude config directory's own answer, from the quota payload's claudeProfiles (#1523).
-/// Same window shape as a provider row, plus the directory's identity and its own today
-/// totals, which the bubble renders instead of the all-provider glance today.
+/// One Claude config directory's own answer, from the quota payload's claudeProfiles: the
+/// same window shape as a provider row, plus the directory's identity and (in separate mode)
+/// its own today totals, which the bubble renders instead of the all-provider glance today.
 export type ClaudeProfile = {
   id: string
   label: string

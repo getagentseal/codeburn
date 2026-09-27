@@ -34,16 +34,13 @@ function dedupeResolved(paths: string[]): string[] {
   return out
 }
 
-/// Stable id for one config directory. Shared by the session sources, the
-/// menubar payload's claudeConfigs selector, live sessions
-/// (claudeConfigSourceId on LiveSession) and the quota payload's
-/// claudeProfiles, so every surface names the same directory the same way.
+/// Stable id for one config directory, shared by session sources, the menubar's
+/// claudeConfigs selector, live sessions and the quota payload's claudeProfiles.
 export function claudeConfigSourceId(path: string): string {
   return 'claude-config:' + createHash('sha256').update(path).digest('hex').slice(0, 16)
 }
 
-/// Stable id for a Claude Desktop sessions directory, matching the bucket
-/// discoverSessions tags Cowork sessions with.
+/// Stable id for a Claude Desktop sessions directory.
 export function claudeDesktopSourceId(base: string): string {
   return 'claude-desktop:' + createHash('sha256').update(resolve(base)).digest('hex').slice(0, 16)
 }

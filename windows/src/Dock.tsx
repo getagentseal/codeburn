@@ -91,10 +91,9 @@ type Provider = {
   plan?: string
   windows: QuotaWindow[]
   error?: string
-  /// Set on the per-profile Claude rows a separate-profiles rail draws in place of the single
-  /// claude row (#1523): the base provider the row stands for, the profile's own today totals,
-  /// and the caption drawn under the percentage. Everything that speaks in provider ids (the
-  /// settings' provider set, glyphs, colours, the connect button) addresses `baseId`.
+  /// On the per-profile rows a separate rail draws in place of the claude row: the base
+  /// provider the row stands for, its own today totals, and its caption. Provider-id
+  /// addressing (the settings' set, glyphs, colours, the connect button) uses `baseId`.
   baseId?: string
   today?: ProfileToday
   caption?: string
@@ -269,8 +268,7 @@ function Row({ m, shape, provider, loading, style, onEnter, onLeave, onClick }: 
         {provider.error ? <span className="dock-row-alert" /> : null}
       </span>
       <span className={`dock-pct${sev ? ` is-${sev}` : ' is-empty'}`}>{percent === null ? '--' : `${percent}%`}</span>
-      {/* A profile ring names its config directory, because two Claude rings are told apart
-          by that and nothing else. */}
+      {/* Two Claude rings are told apart by their captions and nothing else. */}
       {provider.caption ? <span className="dock-row-caption">{provider.caption}</span> : null}
     </button>
   )
@@ -410,8 +408,7 @@ function Detail({
   const now = Date.now()
   const connection: Connection = loading ? 'loading' : connectionFor(provider, quota)
   const profile = isProfileRow(provider)
-  // A profile ring's bubble answers for its config directory alone: only its own sessions
-  // (by claudeConfigSourceId) and its own today totals from the quota payload, never the
+  // A profile ring's bubble shows its own sessions and today totals, never the
   // all-provider glance figures the base rows show.
   const sessions = profile ? sessionsForSource(glance, provider.id) : sessionsFor(glance, provider.id)
   const today = profile && provider.today ? provider.today : glance.today
@@ -688,6 +685,16 @@ export function Dock() {
   // event and they are applied in one render, below.
   const m = metrics(layoutScale)
 
+  // Switching the profiles mode changes what the CLI is asked for (the --claude-profiles
+  // flag rides on the preference), so the rail asks for a fresh answer instead of drawing
+  // dashed list-mode rings until the cadence ticks.
+  const profilesModeRef = useRef(prefs.claudeProfiles)
+  useEffect(() => {
+    if (profilesModeRef.current === prefs.claudeProfiles) return
+    profilesModeRef.current = prefs.claudeProfiles
+    if (prefsLoaded) void refreshQuota()
+  }, [prefs.claudeProfiles, prefsLoaded])
+
   // Until the user edits the set in the settings window, the dock follows what is connected,
   // up to the mac's five. The write reaches the settings window through the same event, so a
   // window open on the Capacity Dock section fills its switches in as the answer arrives.
@@ -701,19 +708,19 @@ export function Dock() {
   // Providers: the ones the CLI reports signed in, narrowed to the settings window's choice
   // when one has been made, else the preferred one as a dashed stand-in. An empty choice is
   // "nobody has picked yet", which is why it means everything rather than nothing.
-  //
-  // One ring per Claude config directory (#1523): when the preference says separate and the
-  // CLI reported more than one profile, the claude row is drawn as one captioned row per
-  // profile, each with its own windows and today. The provider set and the resting provider
-  // keep addressing 'claude'; a stored 'claude' resting choice rests on the first ring.
+  // In separate mode the claude row is drawn as one captioned row per config directory;
+  // provider-id addressing keeps using 'claude', and a 'claude' resting choice rests on the
+  // first ring.
   const separateProfiles = prefs.claudeProfiles === 'separate' && quota.claudeProfiles.length > 1
   const profileRows: Provider[] = quota.claudeProfiles.map((profile) => ({
     id: profile.id,
     baseId: 'claude',
     name: profile.label,
-    available: profile.available,
+    // A list-mode answer (fetched while the preference was still combined) carries no
+    // windows or availability yet; those rows read as unknown rings until the next refresh.
+    available: profile.available ?? false,
     ...(profile.plan ? { plan: profile.plan } : {}),
-    windows: profile.windows,
+    windows: profile.windows ?? [],
     ...(profile.error ? { error: profile.error } : {}),
     ...(profile.today ? { today: profile.today } : {}),
     caption: profile.label === 'Default Claude' ? 'Default' : profile.label,
@@ -744,10 +751,9 @@ export function Dock() {
   const displayed = presentationExpanded
     ? [preferred, ...selected.filter((p) => p.id !== preferred.id)]
     : [preferred]
-  // Every row is taller by the caption metrics while the rail draws profile rings, so it keeps
-  // one uniform row pitch — the hit-test in Rust assumes it. Mode-level on purpose: sizing the
-  // rail by which rows happen to be shown would resize it on every hover.
-  const captioned = separateProfiles
+  // Profile rings carry a caption, and every row shares their taller pitch because the
+  // hit-test assumes a uniform one. Rails without a Claude ring keep today's height.
+  const captioned = separateProfiles && selected.some((p) => rowBase(p) === 'claude')
   const rowExtent = m.rowHeight + (captioned ? m.captionGap + m.captionLine : 0)
   const anchor = frame?.anchor ?? 'start'
   const ordered = anchor === 'end' ? [...displayed].reverse() : displayed

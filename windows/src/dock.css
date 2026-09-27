@@ -166,8 +166,7 @@
 .dock-pct.is-critical { color: var(--dock-orange); }
 .dock-pct.is-danger { color: var(--dock-red); }
 
-/* A profile ring's config-directory name (#1523). Only profile rows render it; every row of
-   the rail still reserves the space, so the row pitch stays uniform. */
+/* A profile ring's config-directory name. Only profile rows render it. */
 .dock-row-caption {
   margin-top: var(--dock-caption-gap);
   font-size: var(--dock-caption-size);

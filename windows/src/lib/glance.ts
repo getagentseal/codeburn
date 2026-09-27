@@ -98,9 +98,8 @@ export function sessionsFor(glance: Glance, providerId: string): LiveSession[] |
   return glance.liveSessions.sessions.filter((session) => session.provider === providerId)
 }
 
-/// The Claude sessions belonging to one config directory, for a per-profile ring's bubble
-/// (#1523). A session with no claudeConfigSourceId (Claude Desktop bucket, or a payload from a
-/// CLI that predates the field) belongs to no profile and is left out.
+/// The Claude sessions belonging to one config directory. A session with no
+/// claudeConfigSourceId (Claude Desktop bucket, or an older CLI) belongs to no profile.
 export function sessionsForSource(glance: Glance, sourceId: string): LiveSession[] | null {
   if (!glance.liveSessions) return null
   return glance.liveSessions.sessions.filter(

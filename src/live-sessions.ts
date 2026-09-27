@@ -23,9 +23,7 @@ export type LiveSession = {
   /// Provider catalog id, matching the dock ring the session runs under.
   provider: string
   /// For Claude sessions, the config directory (or Claude Desktop bucket) the
-  /// transcript belongs to, as a claudeConfigSourceId()/claudeDesktopSourceId()
-  /// id. Lets a per-profile dock ring claim only its own sessions (#1523).
-  /// Absent on non-Claude providers.
+  /// transcript belongs to. Absent on non-Claude providers.
   claudeConfigSourceId?: string
   project: string
   /// Git branch of the last turn, the second half of the row's title. Null when
@@ -213,8 +211,7 @@ type FileTimes = { path: string; mtimeMs: number; birthtimeMs: number; sourceId:
 /// provider registry. `discoverAllSessions` walks every provider's tree and
 /// costs about half a second on a large history; this block only ever reads
 /// Claude transcripts, and it runs on every payload build. Each root carries
-/// the config source id its transcripts belong to, so a live session can be
-/// claimed by its own dock ring (#1523).
+/// the config source id its transcripts belong to.
 async function transcriptRoots(): Promise<Array<{ root: string; sourceId: string }>> {
   const configured = await getClaudeConfigDirs().catch(() => [])
   return [

@@ -307,9 +307,8 @@ export type TrayDockPrefs = {
   gaugeShape: string
   providers: string[]
   manualSelection: boolean
-  /** How the rail draws Claude with more than one config directory (#1523): 'combined' or
-   *  'separate' (one captioned ring per directory). String, not a union: this pane only
-   *  relays the tray app's own vocabulary and never interprets it. */
+  /** 'combined' or 'separate' (one ring per Claude config directory). A plain string:
+   *  this pane only relays the tray app's own vocabulary. */
   claudeProfiles: string
 }
 

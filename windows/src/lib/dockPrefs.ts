@@ -9,8 +9,7 @@ import { listen } from '@tauri-apps/api/event'
 
 export type DockTheme = 'graphite' | 'glass'
 export type DockGaugeShape = 'circle' | 'squircle'
-/// How the rail draws Claude when the CLI reports more than one config directory:
-/// one combined ring, or one captioned ring per directory (#1523).
+/// How the rail draws Claude with more than one config directory.
 export type DockClaudeProfiles = 'combined' | 'separate'
 
 export const DOCK_CLAUDE_PROFILES: Array<{ id: DockClaudeProfiles; label: string }> = [

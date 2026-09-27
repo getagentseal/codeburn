@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
-import { mkdtempSync } from 'node:fs'
+import { mkdirSync, mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter, join, resolve } from 'node:path'
 
@@ -361,7 +361,7 @@ describe('quota command envelope', () => {
 })
 
 describe('collectQuota claudeProfiles (#1523)', () => {
-  it('answers one profile per config directory, each with its own windows and today', async () => {
+  async function withTwoDirs<T>(run: (dirs: string[], sources: Awaited<ReturnType<typeof discoverClaudeConfigSources>>) => Promise<T>): Promise<T> {
     const dirs = [
       mkdtempSync(join(tmpdir(), 'codeburn-profile-a-')),
       mkdtempSync(join(tmpdir(), 'codeburn-profile-b-')),
@@ -369,27 +369,34 @@ describe('collectQuota claudeProfiles (#1523)', () => {
     const previous = process.env.CLAUDE_CONFIG_DIRS
     process.env.CLAUDE_CONFIG_DIRS = dirs.join(delimiter)
     try {
+      return await run(dirs, await discoverClaudeConfigSources())
+    } finally {
+      if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIRS
+      else process.env.CLAUDE_CONFIG_DIRS = previous
+    }
+  }
+
+  it('full mode answers one profile per directory, each with its own windows and today', async () => {
+    await withTwoDirs(async (dirs, sources) => {
       const work: QuotaProvider = {
         provider: 'claude', connection: 'connected', planLabel: 'Max 5x', footerLines: [],
         primary: { label: 'Weekly', percent: 0.72, resetsAt: '2026-09-30T12:00:00.000Z' }, details: [],
       }
       const report = await collectQuota({
         readers: [],
+        claudeProfileDetail: 'full',
         claudeProfileReader: async source =>
           resolve(source.path) === resolve(dirs[0]) ? work : {
             provider: 'claude', connection: 'disconnected', primary: null, details: [],
             planLabel: null, footerLines: [],
           },
-        claudeToday: async sources => new Map([
-          [sources[0].id, {
+        claudeToday: async all => new Map([
+          [all[0].id, {
             cost: 1.25, calls: 3, sessions: 1,
             inputTokens: 100, outputTokens: 200, cacheReadTokens: 50, cacheWriteTokens: 10,
           }],
         ]),
       })
-      // The profile ids are the same stable source ids the menubar selector and live
-      // sessions use, in config-directory order.
-      const sources = await discoverClaudeConfigSources()
       expect(report.claudeProfiles).toEqual([
         {
           id: sources[0].id, label: sources[0].label, path: sources[0].path,
@@ -405,15 +412,74 @@ describe('collectQuota claudeProfiles (#1523)', () => {
           available: false, windows: [],
         },
       ])
+    })
+  })
+
+  it('full mode reuses the claude row for the default directory instead of reading it twice', async () => {
+    // os.homedir() answers $HOME on POSIX, so a temp home makes ~/.claude a fixture.
+    const home = mkdtempSync(join(tmpdir(), 'codeburn-profile-home-'))
+    const personal = join(home, '.claude')
+    const work = join(home, '.claude-work')
+    for (const dir of [personal, work]) mkdirSync(dir, { recursive: true })
+    const previousHome = process.env.HOME
+    const previousDirs = process.env.CLAUDE_CONFIG_DIRS
+    process.env.HOME = home
+    process.env.CLAUDE_CONFIG_DIRS = [personal, work].join(delimiter)
+    try {
+      const claudeRow: QuotaProvider = {
+        provider: 'claude', connection: 'connected', planLabel: 'Pro', footerLines: [],
+        primary: { label: 'Weekly', percent: 0.4, resetsAt: null }, details: [],
+      }
+      const reads: string[] = []
+      const report = await collectQuota({
+        readers: [{ id: 'claude', name: 'Claude', read: async () => claudeRow }],
+        claudeProfileDetail: 'full',
+        claudeProfileReader: async source => {
+          reads.push(resolve(source.path))
+          return { provider: 'claude', connection: 'disconnected', primary: null, details: [], planLabel: null, footerLines: [] }
+        },
+        claudeToday: async () => new Map(),
+      })
+      // Only the non-default directory is read; the default one is the claude row itself.
+      expect(reads).toEqual([resolve(work)])
+      const defaultProfile = report.claudeProfiles?.find(row => row.path === resolve(personal))
+      expect(defaultProfile).toMatchObject({ available: true, plan: 'Pro' })
+      expect(defaultProfile?.windows).toEqual([{ label: 'Weekly', usedPct: 40 }])
     } finally {
-      if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIRS
-      else process.env.CLAUDE_CONFIG_DIRS = previous
+      if (previousHome === undefined) delete process.env.HOME
+      else process.env.HOME = previousHome
+      if (previousDirs === undefined) delete process.env.CLAUDE_CONFIG_DIRS
+      else process.env.CLAUDE_CONFIG_DIRS = previousDirs
     }
+  })
+
+  it('list mode (the default) names the directories without reading or parsing any of them', async () => {
+    await withTwoDirs(async (_dirs, sources) => {
+      const report = await collectQuota({
+        readers: [],
+        claudeProfileReader: () => { throw new Error('list mode must not read profiles') },
+        claudeToday: () => { throw new Error('list mode must not parse today') },
+      })
+      expect(report.claudeProfiles).toEqual(sources.map(({ id, label, path }) => ({ id, label, path })))
+    })
   })
 
   it('omits claudeProfiles entirely for a single config directory', async () => {
     const report = await collectQuota({ readers: [] })
     expect(report).toEqual({ providers: [] })
     expect('claudeProfiles' in report).toBe(false)
+  })
+
+  it('drops missing directories before deciding there is more than one', async () => {
+    const real = mkdtempSync(join(tmpdir(), 'codeburn-profile-real-'))
+    const previous = process.env.CLAUDE_CONFIG_DIRS
+    process.env.CLAUDE_CONFIG_DIRS = [real, join(real, 'missing-sibling')].join(delimiter)
+    try {
+      const report = await collectQuota({ readers: [] })
+      expect('claudeProfiles' in report).toBe(false)
+    } finally {
+      if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIRS
+      else process.env.CLAUDE_CONFIG_DIRS = previous
+    }
   })
 })

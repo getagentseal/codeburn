@@ -27,9 +27,8 @@ export type Metrics = {
   horizontalRailWidth: number
   rowHeight: number
   rowSpacing: number
-  /// A profile row's caption line box and its gap under the percentage (#1523). Added to
-  /// every row's height when the rail draws one ring per Claude config directory; src-tauri
-  /// dock.rs mirrors both and grows its rows by the same amount.
+  /// A profile row's caption line box and gap, added to every row's height when the rail
+  /// draws one ring per Claude config directory. Mirrored in src-tauri dock.rs.
   captionLine: number
   captionGap: number
   railAlongPad: number

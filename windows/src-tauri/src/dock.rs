@@ -45,9 +45,9 @@ pub struct Metrics {
     horizontal_rail_width: i32,
     row_height: i32,
     row_spacing: i32,
-    /// A profile row's caption line box and its gap under the percentage (#1523). Added to
-    /// every row's height when the rail draws one ring per Claude config directory, so the
-    /// whole rail keeps one uniform row extent (the hit-test arithmetic depends on it).
+    /// A profile row's caption line box and gap, added to every row's height when the rail
+    /// draws one ring per Claude config directory, keeping the row extent uniform (the
+    /// hit-test arithmetic depends on it).
     caption_line: i32,
     caption_gap: i32,
     rail_along_pad: i32,
@@ -83,10 +83,8 @@ impl Metrics {
         }
     }
 
-    /// The same metrics with every row tall enough to carry a caption line. Profile rings
-    /// draw the config directory's name under their percentage; every other row just gets
-    /// the same extra air, because a mixed-height rail would break the uniform row pitch
-    /// the layout and the hit-test both assume.
+    /// The same metrics with every row tall enough for a caption: a mixed-height rail
+    /// would break the uniform row pitch the layout and hit-test assume.
     fn with_captions(&self) -> Metrics {
         let mut m = *self;
         m.row_height += m.caption_gap + m.caption_line;
@@ -231,9 +229,9 @@ pub struct LayoutRequest {
     pub total_rows: u32,
     pub expanded: bool,
     pub detail: Option<DetailRequest>,
-    /// The rail draws a caption line under each ring (one ring per Claude config directory,
-    /// #1523), so every row is taller by the caption metrics. Absent on a page that predates
-    /// the field, which reads as a plain uncaptioned rail.
+    /// The rail draws a caption line under each ring (one ring per Claude config
+    /// directory), so every row is taller by the caption metrics. Absent on a page
+    /// that predates the field, which reads as a plain uncaptioned rail.
     #[serde(default)]
     pub captioned: bool,
 }
