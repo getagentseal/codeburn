@@ -223,7 +223,10 @@ import type { DateRange, ProjectSummary } from './types.js'
 // v40: Codex fork usage after the copied-history burst was clipped by the old
 // 5s window. Re-derive Codex slices from the updated session cache so settled
 // days recover those calls and tokens.
-export const DAILY_CACHE_VERSION = 40
+// v41: Codex response-level token_usage_record repairs compacted/interrupted
+// responses and suppresses stale token_count twins. Counts can rise or fall,
+// so re-derive surviving days and allow the Codex slice to shrink once.
+export const DAILY_CACHE_VERSION = 41
 const MIN_SUPPORTED_VERSION = 28
 
 /// Providers whose per-day CALL COUNT means something different at
@@ -248,6 +251,9 @@ const MIN_SUPPORTED_VERSION = 28
 /// untouched, in both directions, and every other provider keeps the guard.
 const PENDING_REDERIVE_PROVIDER_VERSIONS: Readonly<Record<string, number>> = {
   copilot: 26,
+  // Codex response records replace stale/zero token_count twins and can
+  // legitimately reduce counts as well as recover missing usage.
+  codex: 41,
   // 31: a v30 file may have been written by #1132's accounting, which never
   // carried the Hermes cost contract. 33: day.models is keyed by route, and a
   // v32 Hermes day cannot know which of its rows went through
