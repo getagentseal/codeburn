@@ -47,12 +47,14 @@ import { isWslUncPath } from './wsl.js'
 // No bump for #1264: the missing-cumulative branch is a no-op on real data
 // (0 occurrences of info-without-total across 137k+ events; null-info pings
 // already take the estimate path), so cached numbers are identical and a
-// bump would only force a cold reparse. v16 was never shipped in a release
-// before this fork replay boundary change.
-// v16: fork replay suppression now ends at the first timestamp gap over one
-// second, so first real work at 3.5-4.8s is retained. Exact entries can hold
-// the old undercount, and resume state used the old fixed cutoff; reparse both.
-export const CODEX_CACHE_VERSION = 16
+// bump would only force a cold reparse.
+// v17: fork replay suppression now ends at the first timestamp gap over one
+// second, or five seconds past the fork regardless of gaps, so first real
+// work is retained. Exact entries can hold the old undercount, and resume
+// state used the old fixed cutoff; reparse both. Not 16: v16 was briefly
+// shipped by a reverted PR, so reusing it would let stale entries pass the
+// version check unreparsed.
+export const CODEX_CACHE_VERSION = 17
 export const CODEX_LEGACY_CACHE_FILE = 'codex-results.json'
 export function codexCacheFileName(version = CODEX_CACHE_VERSION): string {
   return `codex-results.v${version}.json`

@@ -247,8 +247,6 @@ const MIN_SUPPORTED_VERSION = 28
 /// fresh slice at all, so it still carries forward whole — the #1033 bar is
 /// untouched, in both directions, and every other provider keeps the guard.
 const PENDING_REDERIVE_PROVIDER_VERSIONS: Readonly<Record<string, number>> = {
-  // Codex's fork replay boundary changed; old daily slices can miss real usage.
-  codex: 40,
   copilot: 26,
   // 31: a v30 file may have been written by #1132's accounting, which never
   // carried the Hermes cost contract. 33: day.models is keyed by route, and a

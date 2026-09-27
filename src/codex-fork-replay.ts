@@ -28,6 +28,13 @@ export function isCodexForkReplay(state: CodexForkReplayState | undefined, times
   // Some spawned sub-agent rollouts retain the parent's original timestamps.
   if (timestampMs < state.startedAtMs) return true
 
+  // A burst that never sees a >1s gap (e.g. rapid tool-call chatter) must
+  // still end; five seconds past the fork is well outside any real replay.
+  if (timestampMs - state.startedAtMs > 5000) {
+    state.active = false
+    return false
+  }
+
   // Keep a slightly out-of-order record in the burst without moving the
   // boundary backwards; rollout records are usually ordered, but not required
   // to be strictly monotonic.

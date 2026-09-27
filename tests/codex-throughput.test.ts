@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { CodexThroughputReader, readCodexThroughput, renderCodexThroughput } from '../src/codex-throughput.js'
+import { isCodexForkReplay, startCodexForkReplay } from '../src/codex-fork-replay.js'
 
 describe('Codex throughput prototype', () => {
   it('estimates generated tokens/sec between token_count checkpoints', async () => {
@@ -113,6 +114,21 @@ describe('Codex throughput prototype', () => {
       activeDurationSeconds: 1,
       activeGeneratedTokensPerSecond: 30,
     })
+  })
+
+  it('stops treating a chain of <=1s gaps as replay once it passes the 5s ceiling', () => {
+    const base = Date.parse('2026-07-25T00:00:00.000Z')
+    const state = startCodexForkReplay('2026-07-25T00:00:00.000Z')
+    const offsetsMs = [500, 1000, 1800, 2600, 3400, 4200, 5100]
+    for (let i = 1; i < offsetsMs.length; i++) {
+      expect(offsetsMs[i] - offsetsMs[i - 1]).toBeLessThanOrEqual(1000)
+    }
+    let result = true
+    for (const offsetMs of offsetsMs) {
+      result = isCodexForkReplay(state, new Date(base + offsetMs).toISOString())
+    }
+    expect(result).toBe(false)
+    expect(state?.active).toBe(false)
   })
 
   it('keeps oversized rollout lines bounded while extracting token usage', async () => {
