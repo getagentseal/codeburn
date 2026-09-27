@@ -936,9 +936,9 @@ describe('codex provider - JSONL parsing', () => {
   })
 
   it('attributes a task_complete over everything since the last task_started, even across a suppressed one', async () => {
-    // A mid-file session_meta carrying forked_from_id re-arms the fork-replay
-    // cutoff, which swallows the task_started right behind it while its
-    // task_complete lands past the cutoff. Attribution then has to span both
+    // A mid-file session_meta carrying forked_from_id re-arms replay tracking,
+    // which swallows the task_started right behind it while its
+    // task_complete lands past the replay burst. Attribution then has to span both
     // turns, exactly as it did before calls were buffered per task.
     const filePath = await writeSession(tmpDir, '2026-04-14', 'rollout-suppressed-task-start.jsonl', [
       sessionMeta({ session_id: 'sess-suppressed-start', model: 'gpt-5.5' }),
@@ -1245,9 +1245,9 @@ describe('codex provider - forked session dedupe', () => {
     return { tokens, calls }
   }
 
-  it('does not double-count a fork that replays the parent past the 5s cutoff', async () => {
-    // Parent does 1100 tokens of real work. The fork replays both events with
-    // timestamps well beyond the 5s fork cutoff, then adds one genuine event
+  it('does not double-count a fork that replays the parent after the replay burst', async () => {
+    // Parent does 1100 tokens of real work. The fork replays both events after
+    // the burst boundary, then adds one genuine event
     // (+400). The replays must collide with the parent and drop, so the global
     // total is 1500 -- not 2600 (which keying on the fork's own session id would
     // produce by double-counting the replayed history).
@@ -1315,16 +1315,11 @@ describe('codex provider - forked session dedupe', () => {
     expect(tokens).toBe(2100)
   })
 
-  it('does not overcount a total-only fork whose replay straddles the 5s cutoff', async () => {
-    // The dedupe key must be derived from the cumulative token breakdown, not
-    // per-event deltas. In the fallback branch (events with total_token_usage
-    // but no last_token_usage), the delta is computed against a running `prev`.
-    // A fork skips replays within 5s of the fork (prev NOT advanced), so a
-    // replay kept just past the cutoff would compute a different delta than the
-    // parent did and, with a delta-based key, fail to dedupe -> double-count.
-    // The cumulative totals are copied verbatim, so a cumulative-based key
-    // collides regardless of the cutoff. Parent does 300 tokens; the fork is a
-    // pure replay (no new work), so the global total must stay 300.
+  it('does not overcount total-only parent snapshots replayed after the burst', async () => {
+    // The first snapshot is inside the replay burst. Later copied snapshots
+    // arrive after the burst and rely on the shared cumulative key to collide
+    // with the parent. Parent does 300 tokens; the fork is a pure replay, so
+    // the global total stays 300.
     await writeSession(tmpDir, '2026-04-14', 'rollout-1-parent.jsonl', [
       sessionMeta({ session_id: 'sess-parent' }),
       tokenCount({ timestamp: '2026-04-14T10:00:01Z', total: { input: 100, total: 100 } }),
@@ -1333,9 +1328,9 @@ describe('codex provider - forked session dedupe', () => {
     ])
     await writeSession(tmpDir, '2026-04-14', 'rollout-2-fork.jsonl', [
       sessionMeta({ session_id: 'sess-fork', forked_from_id: 'sess-parent' }),
-      // 10:00:01 is within the 5s cutoff -> skipped (prev not advanced).
+      // 10:00:01 is inside the replay burst -> skipped for call emission.
       tokenCount({ timestamp: '2026-04-14T10:00:01Z', total: { input: 100, total: 100 } }),
-      // These land past the cutoff and replay the parent's cumulative totals.
+      // These land after the burst and replay the parent's cumulative totals.
       tokenCount({ timestamp: '2026-04-14T10:00:08Z', total: { input: 200, total: 200 } }),
       tokenCount({ timestamp: '2026-04-14T10:00:09Z', total: { input: 300, total: 300 } }),
     ])
@@ -1378,11 +1373,12 @@ describe('codex provider - forked session dedupe', () => {
       sessionMeta({ session_id: 'sess-fork-no-total', forked_from_id: 'sess-parent', timestamp: '2026-04-14T10:00:10Z' }),
       tokenCount({ timestamp: '2026-04-14T10:00:10.100Z', last: { input: 100 } }),
       tokenCount({ timestamp: '2026-04-14T10:00:10.200Z', last: { input: 50 } }),
-      tokenCount({ timestamp: '2026-04-14T10:00:14Z', last: { input: 40 } }),
+      // Identical usage info can still be a genuine request after divergence.
+      tokenCount({ timestamp: '2026-04-14T10:00:14Z', last: { input: 50 } }),
     ])
 
     const { tokens } = await aggregateTokens(tmpDir)
-    expect(tokens).toBe(190)
+    expect(tokens).toBe(200)
   })
 })
 

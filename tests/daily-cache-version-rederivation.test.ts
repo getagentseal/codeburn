@@ -152,6 +152,7 @@ describe('daily-cache adoption of a v30 file written under a different accountin
     expect(loaded.watermarkTrusted).toBe(false)
     const carried = loaded.days.find(entry => entry.date === date)
     expect(carried?.carried).toBe(true)
+    expect(loaded.pendingRederive).toContain('codex')
     expect(loaded.pendingRederive).toContain('hermes')
     expect(loaded.pendingRederive).toContain('dsh')
   })

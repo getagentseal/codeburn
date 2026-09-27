@@ -398,8 +398,10 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // verbatim, so they must re-parse to gain the attribution.
   // activity-price-v1: `codex-auto-review` now prices via the recommended
   // review model. session-cache.json would otherwise keep the pre-alias $0.
-  // Compose all four — a take-ours merge would drop #1075, #1079, or #1092.
-  codex: 'mcp-attribution-v5-est-cost-active-timing-mcp-wait-rich-capture-v1-cross-provider-pr-v1-session-meta-model-v1-session-meta-fields-v1-codex-pricing-v1-codex-tps-v1-codex-mcp-skills-v1-activity-price-v1',
+  // fork-replay-burst-v1: copied fork history ends at the first >1s timestamp
+  // gap, preserving genuine work that starts before the old 5s cutoff.
+  // Compose every Codex suffix so merges retain each independent parse change.
+  codex: 'mcp-attribution-v5-est-cost-active-timing-mcp-wait-rich-capture-v1-cross-provider-pr-v1-session-meta-model-v1-session-meta-fields-v1-codex-pricing-v1-codex-tps-v1-codex-mcp-skills-v1-activity-price-v1-fork-replay-burst-v1',
   cursor: 'composer-anchored-crediting-v1-est-cost',
   // full-turn-accounting: every assistant message counts as a turn
   // (previously only the first after each user message survived), tool_use

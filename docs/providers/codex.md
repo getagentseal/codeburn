@@ -40,6 +40,16 @@ A session that yielded zero parseable lines does **not** write to the cache (`co
 
 ## Deduplication
 
+Forked rollouts copy the parent's history before their own work. Replays with
+the parent's original timestamps remain replay records until timestamps reach
+the fork's `session_meta`; re-timestamped history is treated as a burst while
+each event is within one second of the previous replay event. The first larger
+gap ends the burst, so a real first turn 3.5-4.8 seconds after the fork is not
+discarded by a fixed five-second window. Replayed cumulative snapshots still
+advance the parser's delta baseline without producing calls, and the shared
+parent key continues to deduplicate exact replays after the burst. The boundary
+state is stored with the incremental Codex resume checkpoint.
+
 Three layers, in order:
 
 1. **Byte-identity collapse (#257)**: a `token_count` event whose `info` payload is byte-identical to the previous event's is a re-emission of the same event, not a new request, and is skipped regardless of cumulative presence. Measured on public rollouts (53 sessions / 1313 events): 603 are such repeats.

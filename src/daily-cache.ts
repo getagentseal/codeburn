@@ -220,7 +220,10 @@ import type { DateRange, ProjectSummary } from './types.js'
 // v39: #986 Cursor Agent reads CLI sessions that exist only in
 // ~/.cursor/chats/*/*/store.db. Days finalized at v38 miss those calls; the
 // bump re-derives surviving days. Call counts only rise.
-export const DAILY_CACHE_VERSION = 39
+// v40: Codex fork usage after the copied-history burst was clipped by the old
+// 5s window. Re-derive Codex slices from the updated session cache so settled
+// days recover those calls and tokens.
+export const DAILY_CACHE_VERSION = 40
 const MIN_SUPPORTED_VERSION = 28
 
 /// Providers whose per-day CALL COUNT means something different at
@@ -244,6 +247,8 @@ const MIN_SUPPORTED_VERSION = 28
 /// fresh slice at all, so it still carries forward whole — the #1033 bar is
 /// untouched, in both directions, and every other provider keeps the guard.
 const PENDING_REDERIVE_PROVIDER_VERSIONS: Readonly<Record<string, number>> = {
+  // Codex's fork replay boundary changed; old daily slices can miss real usage.
+  codex: 40,
   copilot: 26,
   // 31: a v30 file may have been written by #1132's accounting, which never
   // carried the Hermes cost contract. 33: day.models is keyed by route, and a
