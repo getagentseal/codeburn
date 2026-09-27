@@ -365,7 +365,9 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // re-parse is forced so cached sessions without the lineage field gain it.
   // The field is purely additive; every cost / token / call total is
   // byte-identical to a build that omits it (see parser-lineage-capture test).
-  claude: 'advisor-usage-v1-skills-rich-capture-v1-cross-provider-pr-v1-session-lineage-capture-v1',
+  // queued-human-prompts-v1: cached turns need to be regrouped around Claude's
+  // queued_command prompt attachments, including classification and PR links.
+  claude: 'advisor-usage-v1-skills-rich-capture-v1-cross-provider-pr-v1-session-lineage-capture-v1-queued-human-prompts-v1',
   cline: 'worktree-project-grouping-v1',
   // reported-cost-v1: the CLI reports its own per-message cost, so entries
   // cached before cline-cli joined the reported-cost allowlist in parser.ts

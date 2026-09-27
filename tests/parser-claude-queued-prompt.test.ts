@@ -1,11 +1,14 @@
 import { copyFile, mkdir, mkdtemp, rm } from 'fs/promises'
+import { createHash } from 'crypto'
 import { join, resolve } from 'path'
 import { tmpdir } from 'os'
 import { describe, expect, it } from 'vitest'
 
 import { clearSessionCache, compactEntry, groupIntoTurns, parseAllSessions } from '../src/parser.js'
+import { PROVIDER_ENV_VARS } from '../src/session-cache.js'
 import type { DateRange, JournalEntry } from '../src/types.js'
 import { setHome } from './setup/home.js'
+import { readCacheOnDisk, writeCacheOnDisk } from './fixtures/session-cache-io.js'
 
 function user(timestamp: string, content: string): JournalEntry {
   return {
@@ -178,6 +181,25 @@ describe('Claude queued human prompts', () => {
         totalInputTokens: 41,
         totalOutputTokens: 15,
       })
+
+      // A pre-fix cache placed every assistant call under the ordinary user
+      // prompt. Simulate that warm cache with its prior parser fingerprint.
+      const cache = await readCacheOnDisk()
+      const section = cache.providers['claude']!
+      const oldParseVersion = 'advisor-usage-v1-skills-rich-capture-v1-cross-provider-pr-v1-session-lineage-capture-v1'
+      const fingerprintParts = PROVIDER_ENV_VARS['claude']!.map(key => `${key}=${process.env[key] ?? ''}`)
+      fingerprintParts.push(`parser=${oldParseVersion}`)
+      section.envFingerprint = createHash('sha256').update(fingerprintParts.join('\0')).digest('hex').slice(0, 16)
+      let staleTurnFound = false
+      for (const file of Object.values(section.files)) {
+        if (file.turns.length < 2) continue
+        const first = file.turns[0]!
+        first.calls.push(...file.turns[1]!.calls)
+        file.turns = [first]
+        staleTurnFound = true
+      }
+      expect(staleTurnFound).toBe(true)
+      await writeCacheOnDisk(cache)
 
       clearSessionCache()
       expect(await summarize()).toEqual(cold)
