@@ -117,8 +117,17 @@ final class UpdateChecker {
 
     var cliUpdateCommand: String {
         let argv = CodeburnCLI.baseArgv()
-        let path = argv.first ?? ""
-        if path.contains("/homebrew/") { return "brew upgrade codeburn" }
+        return Self.cliUpdateCommand(cliPath: argv.first ?? "")
+    }
+
+    /// Manual counterpart of `cliUpdateInvocation`, so the hint shown when the
+    /// one-click path cannot find a manager names the same manager that path
+    /// would have used.
+    nonisolated static func cliUpdateCommand(
+        cliPath: String,
+        resolvingSymlinks: (String) -> String = { URL(fileURLWithPath: $0).resolvingSymlinksInPath().path }
+    ) -> String {
+        if isHomebrewInstall(cliPath: cliPath, resolvingSymlinks: resolvingSymlinks) { return "brew upgrade codeburn" }
         return "npm update -g codeburn"
     }
 
@@ -255,13 +264,34 @@ final class UpdateChecker {
         return AppVersion.normalize(minCliVersionForUpdate).compare(normalizedInstalled, options: .numeric) == .orderedDescending
     }
 
+    /// True when the CLI launcher resolves into a Homebrew cellar.
+    ///
+    /// The launcher's own directory is not enough to tell brew from npm: Homebrew's
+    /// Node sets the npm global prefix to the Homebrew prefix, so an
+    /// `npm install -g codeburn` lands at `<prefix>/bin/codeburn` and points at
+    /// `<prefix>/lib/node_modules/codeburn`. A directory test sees `/homebrew/`
+    /// there and picks brew, which has no codeburn formula to upgrade.
+    nonisolated static func isHomebrewInstall(
+        cliPath: String,
+        resolvingSymlinks: (String) -> String = { URL(fileURLWithPath: $0).resolvingSymlinksInPath().path }
+    ) -> Bool {
+        let resolved = resolvingSymlinks(cliPath)
+        if resolved.contains("/Cellar/codeburn/") { return true }
+        if resolved.contains("/node_modules/codeburn/") { return false }
+        return cliPath.contains("/homebrew/") || cliPath.contains("/Cellar/")
+    }
+
     /// The package-manager invocation that updates the CLI in place, derived
     /// from where the running CLI binary actually lives. Returns nil when no
     /// known manager is recognizable; callers fall back to showing the manual
     /// command rather than guessing at a mutation.
-    nonisolated static func cliUpdateInvocation(cliPath: String, fileExists: (String) -> Bool = { FileManager.default.fileExists(atPath: $0) }) -> [String]? {
+    nonisolated static func cliUpdateInvocation(
+        cliPath: String,
+        fileExists: (String) -> Bool = { FileManager.default.fileExists(atPath: $0) },
+        resolvingSymlinks: (String) -> String = { URL(fileURLWithPath: $0).resolvingSymlinksInPath().path }
+    ) -> [String]? {
         let dir = (cliPath as NSString).deletingLastPathComponent
-        if cliPath.contains("/homebrew/") || cliPath.contains("/Cellar/") {
+        if isHomebrewInstall(cliPath: cliPath, resolvingSymlinks: resolvingSymlinks) {
             for brew in ["\(dir)/brew", "/opt/homebrew/bin/brew", "/usr/local/bin/brew"] where fileExists(brew) {
                 return [brew, "upgrade", "codeburn"]
             }

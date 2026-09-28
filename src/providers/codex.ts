@@ -8,6 +8,7 @@ import { FS_SCAN_CONCURRENCY, mapWithConcurrency, readSessionLines } from '../fs
 import { billableOutputTokens, calculateCost, getModelCosts } from '../models.js'
 import { readCachedCodexResults, writeCachedCodexResults, getCachedCodexProject, fingerprintFile, type CodexFileFingerprint } from '../codex-cache.js'
 import { mergeToolIntervals } from '../codex-throughput.js'
+import { isCodexForkReplay, isCodexForkReplayState, startCodexForkReplay, type CodexForkReplayState } from '../codex-fork-replay.js'
 import { normalizeContentBlocks } from '../content-utils.js'
 import { estimateTokensFromChars } from '../token-estimate.js'
 import { wslHomes } from '../wsl.js'
@@ -631,7 +632,7 @@ type CodexResumeState = {
   sessionId: string
   sessionCwd?: string
   forkedFromId: string
-  forkCutoff: string
+  forkReplayState?: CodexForkReplayState
   prevCumulativeTotal: number | null
   /// Byte-identity of the last token_count info payload (#257 re-emission
   /// collapse). Optional so resume states written before it still decode.
@@ -670,7 +671,7 @@ function isResumeState(value: unknown): value is CodexResumeState {
   const v = value as Record<string, unknown>
   return typeof v['sessionId'] === 'string'
     && typeof v['forkedFromId'] === 'string'
-    && typeof v['forkCutoff'] === 'string'
+    && (v['forkReplayState'] === undefined || isCodexForkReplayState(v['forkReplayState']))
     && (v['prevCumulativeTotal'] === null || typeof v['prevCumulativeTotal'] === 'number')
     && (v['prevInfoIdentity'] === undefined || v['prevInfoIdentity'] === null || typeof v['prevInfoIdentity'] === 'string')
     && typeof v['prevInput'] === 'number'
@@ -725,7 +726,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
       let sessionId = resume?.state.sessionId ?? ''
       let sessionCwd: string | undefined = resume?.state.sessionCwd
       let forkedFromId = resume?.state.forkedFromId ?? ''
-      let forkCutoff = resume?.state.forkCutoff ?? ''
+      let forkReplayState = resume?.state.forkReplayState ? { ...resume.state.forkReplayState } : undefined
       // Null sentinel rather than `0` so the FIRST event is never confused
       // with a duplicate. A session that only emits last_token_usage (no
       // total_token_usage) reports cumulativeTotal=0 on every event; with a
@@ -849,12 +850,12 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
             || entry.payload?.parent_thread_id
             || entry.payload?.source?.subagent?.thread_spawn?.parent_thread_id
             || ''
-          if (forkedFromId && entry.timestamp) {
-            // An unparseable timestamp (a garbage string, or a non-string from
-            // the unchecked JSON.parse cast) makes `new Date(NaN).toISOString()`
-            // throw RangeError, which would sink this whole session to zero.
-            const forkBaseMs = new Date(entry.timestamp).getTime()
-            if (Number.isFinite(forkBaseMs)) forkCutoff = new Date(forkBaseMs + 5000).toISOString()
+          if (forkedFromId) {
+            forkReplayState = startCodexForkReplay(entry.timestamp)
+            // Byte identity only collapses consecutive records inside one
+            // stream. A fork's first real no-cumulative request may have the
+            // same token breakdown as its last copied parent request.
+            prevInfoIdentity = null
           }
           if (typeof entry.payload?.model === 'string') sessionModel = entry.payload.model
           continue
@@ -864,8 +865,8 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
         // where model-request assembly actually began. Checked before any of
         // these types `continue` below, and unconditionally (like turn_context's
         // model capture above) so a forked replay's own request-context events
-        // still mark it -- matching how those events are already read regardless
-        // of isForkReplay, which only filters task boundaries and tool events.
+        // still mark it before the replay-specific task, tool, message, and usage
+        // records are skipped.
         if (taskActiveStartedAt === undefined && (
           entry.type === 'turn_context'
           || entry.type === 'world_state'
@@ -876,12 +877,13 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
           if (Number.isFinite(ctxAt)) taskActiveStartedAt = ctxAt
         }
 
+        const isForkReplay = isCodexForkReplay(forkReplayState, entry.timestamp)
+
         if (entry.type === 'turn_context' && typeof entry.payload?.model === 'string') {
           sessionModel = entry.payload.model
           continue
         }
 
-        const isForkReplay = Boolean(forkCutoff && entry.timestamp && entry.timestamp < forkCutoff)
         if (isForkReplay && (
           entry.payload?.type === 'task_started' ||
           entry.payload?.type === 'task_complete' ||
@@ -893,6 +895,34 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
           entry.payload?.type === 'item_completed' ||
           entry.payload?.type === 'patch_apply_end'
         )) continue
+
+        if (isForkReplay && entry.type === 'response_item' && entry.payload?.type === 'message') continue
+        if (isForkReplay && entry.type === 'event_msg' && entry.payload?.type === 'token_count') {
+          const info = entry.payload.info
+          if (info) {
+            const total = info.total_token_usage
+            const reportsCumulative = typeof total?.total_tokens === 'number'
+              && Number.isFinite(total.total_tokens)
+              && total.total_tokens >= 0
+            if (reportsCumulative) prevInfoIdentity = JSON.stringify(info)
+            if (total) {
+              const cumulativeTotal = total.total_tokens ?? 0
+              prevCumulativeTotal = reportsCumulative ? cumulativeTotal : null
+              prevInput = total.input_tokens ?? 0
+              prevCached = total.cached_input_tokens ?? 0
+              prevCacheWrite = total.cache_write_input_tokens ?? 0
+              prevOutput = total.output_tokens ?? 0
+              prevReasoning = total.reasoning_output_tokens ?? 0
+            } else {
+              prevCumulativeTotal = null
+            }
+          }
+          // A replay's prompt and response text is historical context. Keep it
+          // out of the fallback character estimate for the first real turn.
+          pendingUserMessage = ''
+          pendingOutputChars = 0
+          continue
+        }
 
         if (entry.type === 'event_msg' && entry.payload?.type === 'task_started') {
           // Emit the previous task. If it never reached task_complete its timing
@@ -914,7 +944,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
             sessionId,
             ...(sessionCwd !== undefined ? { sessionCwd } : {}),
             forkedFromId,
-            forkCutoff,
+            ...(forkReplayState ? { forkReplayState: { ...forkReplayState } } : {}),
             prevCumulativeTotal,
             prevInfoIdentity,
             prevInput,
@@ -1101,10 +1131,6 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
         }
 
         if (entry.type === 'event_msg' && entry.payload?.type === 'token_count') {
-          // Forked sessions replay the parent's entire event history with
-          // timestamps clustered at the fork creation time. Skip replayed
-          // events (within 5s of fork) to avoid double-counting.
-          if (forkCutoff && entry.timestamp && entry.timestamp < forkCutoff) continue
           const info = entry.payload.info
           if (!info) {
             if (pendingOutputChars === 0 && pendingUserMessage.length === 0) continue
@@ -1254,9 +1280,9 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
           // verbatim from the parent -- a true replay collides exactly, while
           // genuinely different work at the same total stays distinct. We use the
           // CUMULATIVE figures (not the per-event deltas) on purpose: the deltas
-          // are computed against a running `prev` that the fork advances
-          // differently once the 5s cutoff skips some replays, so a delta-based
-          // key would spuriously diverge on a replay and double-count it.
+          // are computed against a running `prev` that may start from a replay
+          // baseline, so a delta-based key would spuriously diverge on a replay
+          // and double-count it.
           // Without cumulative identity, equal usage can be distinct requests.
           // Use the physical record position: stable on cache resume/re-read,
           // but deliberately do not guess cross-file replay identity.
@@ -1265,8 +1291,8 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
           // strictly-advanced total, so no tokens are lost and no active-time
           // rescaling is needed; without it the record differs in payload
           // from its predecessor and is treated as a distinct request, which
-          // deliberately weakens forkedFromId replay protection past the 5s
-          // fork cutoff (accepted trade-off: the alternative collapsed
+          // deliberately weakens forkedFromId replay protection past the replay
+          // burst (accepted trade-off: the alternative collapsed
           // distinct requests wholesale).
           const dedupKey = reportsCumulative
             ? `codex:${forkedFromId || sessionId}:${cumulativeTotal}:${total?.input_tokens ?? 0}:${total?.cached_input_tokens ?? 0}:${total?.output_tokens ?? 0}:${total?.reasoning_output_tokens ?? 0}`

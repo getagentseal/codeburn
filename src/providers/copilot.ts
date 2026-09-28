@@ -64,7 +64,7 @@ import { join, basename, dirname, posix, win32 } from 'path'
 import { existsSync } from 'fs'
 import { createHash } from 'crypto'
 import { readSessionFile } from '../fs-utils.js'
-import { calculateCost } from '../models.js'
+import { calculateCost, modelKeyMatches } from '../models.js'
 import { extractBashCommands } from '../bash-utils.js'
 import { estimateTokens } from '../context-tree.js'
 import type {
@@ -1861,11 +1861,21 @@ function createChatSessionParser(
 // Known JetBrains Copilot model tokens, longest-first so we match the most
 // specific name (e.g. "gpt-4.1-mini" before "gpt-4.1").
 const JETBRAINS_MODEL_TOKENS = [
+  'claude-opus-4.8',
+  'claude-opus-4.6',
   'claude-opus-4.5',
   'claude-opus-4.1',
   'claude-opus-4',
+  'claude-sonnet-4.6',
   'claude-sonnet-4.5',
   'claude-sonnet-4',
+  'claude-haiku-4.5',
+  'gpt-5.6-luna',
+  'gpt-5.6-terra',
+  'gpt-5.6',
+  'gpt-5.5',
+  'gpt-5.4-mini',
+  'gpt-5.4',
   'gpt-5.3-codex',
   'gpt-5.3',
   'gpt-5.2',
@@ -1897,11 +1907,15 @@ function normalizeJetBrainsModelName(raw: string): string {
 }
 
 /** Match a known model token at an alnum boundary anywhere in a string. */
-function findJetBrainsModelToken(s: string): string {
+export function findJetBrainsModelToken(s: string): string {
   for (const token of JETBRAINS_MODEL_TOKENS) {
     const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-    // "o3" etc. must not match inside words like "iso3166".
-    if (new RegExp(`(?<![A-Za-z0-9])${escaped}(?![A-Za-z0-9])`).test(s)) {
+    // "o3" etc. must not match inside words like "iso3166". A dot followed by
+    // a digit is a version continuation and is rejected too: `gpt-5` must not
+    // capture `gpt-5.6-luna`, nor `claude-opus-4` capture `claude-opus-4.8` —
+    // that is a different version (#1530). A bare trailing dot (end of
+    // sentence, file extension) is not a version and stays a boundary.
+    if (new RegExp(`(?<![A-Za-z0-9])${escaped}(?![A-Za-z0-9]|\\.\\d)`).test(s)) {
       return normalizeJetBrainsModelName(token)
     }
   }
@@ -3689,9 +3703,13 @@ export function createCopilotProvider(
       return [...roots.values()]
     },
 
+    // Segment-boundary match (#1530): `includes` let a bare `gpt-5` key
+    // capture `gpt-5.5` and `gpt-5.6-luna`. Unknown ids fall through to the
+    // raw id, and the report layer's fallbackRawModelDisplayName then resolves
+    // them with the same global getShortModelName every other provider uses.
     modelDisplayName(model: string): string {
       for (const [key, display] of modelDisplayEntries) {
-        if (model.includes(key)) return display
+        if (modelKeyMatches(model, key)) return display
       }
       return model
     },

@@ -13,7 +13,7 @@ import { applyTheme } from '../lib/settings'
 import { TRAY_BADGE_SUPPORTED, homePath } from '../lib/platform'
 import { summaryFor, type QuotaState } from '../lib/quota'
 import {
-  DEFAULT_DOCK_PREFS, DOCK_CLAUDE_PROFILES, DOCK_GAUGE_SHAPES, DOCK_SCALE_MAX, DOCK_SCALE_MIN, DOCK_SCALE_STEP,
+  DEFAULT_DOCK_PREFS, DOCK_CLAUDE_PROFILES, DOCK_DETAIL_THEMES, DOCK_GAUGE_SHAPES, DOCK_SCALE_MAX, DOCK_SCALE_MIN, DOCK_SCALE_STEP,
   DOCK_THEMES, canDeselect, loadDockPrefs, manageableProviders, onDockPrefsChanged,
   writeDockPrefs, type DockPrefs,
 } from '../lib/dockPrefs'
@@ -402,6 +402,18 @@ function CapacityDockSection({ quota }: { quota: QuotaState }) {
             value={prefs.theme}
             options={DOCK_THEMES}
             onChange={theme => apply({ theme })}
+          />
+        }
+      />
+      <Row
+        label="Hover bubble"
+        hint="The details card can keep its own surface, so a Glass rail can carry a Graphite card."
+        control={
+          <Select
+            ariaLabel="Capacity Dock hover bubble appearance"
+            value={prefs.detailTheme}
+            options={DOCK_DETAIL_THEMES}
+            onChange={detailTheme => apply({ detailTheme })}
           />
         }
       />

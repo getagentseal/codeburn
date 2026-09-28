@@ -220,7 +220,13 @@ import type { DateRange, ProjectSummary } from './types.js'
 // v39: #986 Cursor Agent reads CLI sessions that exist only in
 // ~/.cursor/chats/*/*/store.db. Days finalized at v38 miss those calls; the
 // bump re-derives surviving days. Call counts only rise.
-export const DAILY_CACHE_VERSION = 39
+// v40: Codex fork usage after the copied-history burst was clipped by the old
+// 5s window. Re-derive Codex slices from the updated session cache so settled
+// days recover those calls and tokens.
+// v41: OMP side calls (`model_usage` entries: find, judge, cache warming) now
+// count. Days finalized at v40 miss them; the bump re-derives surviving days.
+// Call counts and cost only rise.
+export const DAILY_CACHE_VERSION = 41
 const MIN_SUPPORTED_VERSION = 28
 
 /// Providers whose per-day CALL COUNT means something different at
