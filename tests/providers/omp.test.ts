@@ -399,3 +399,91 @@ describe('omp provider - JSONL parsing', () => {
     expect(calls).toHaveLength(0)
   })
 })
+
+function modelUsage(opts: {
+  id: string
+  purpose?: string
+  provider?: string
+  model?: string
+  input?: number
+  output?: number
+  cost?: number
+  stopReason?: string
+}) {
+  return JSON.stringify({
+    type: 'model_usage',
+    id: opts.id,
+    parentId: 'parent',
+    timestamp: '2026-04-14T10:01:00.000Z',
+    purpose: opts.purpose ?? 'find',
+    role: 'typesafe',
+    api: 'openrouter-decisions',
+    provider: opts.provider ?? 'openrouter',
+    model: opts.model ?? '~typesafe/jev-latest',
+    usage: {
+      input: opts.input ?? 6244,
+      output: opts.output ?? 1220,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: (opts.input ?? 6244) + (opts.output ?? 1220),
+      cost: { input: opts.cost ?? 0.000262248, output: 0, cacheRead: 0, cacheWrite: 0, total: opts.cost ?? 0.000262248 },
+    },
+    stopReason: opts.stopReason ?? 'stop',
+  })
+}
+
+async function parseLines(lines: string[], seen = new Set<string>()): Promise<ParsedProviderCall[]> {
+  const filePath = await writeSession(join(tmpDir, '--Users-test-myproject--'), 'session.jsonl', lines)
+  const provider = createOmpProvider(tmpDir)
+  const source = { path: filePath, project: 'myproject', provider: 'omp' }
+  const calls: ParsedProviderCall[] = []
+  for await (const call of provider.createSessionParser(source, seen).parse()) calls.push(call)
+  return calls
+}
+
+describe('omp provider - model_usage side calls', () => {
+  it('counts a side call beside the assistant turn, with its reported cost and purpose', async () => {
+    const calls = await parseLines([
+      sessionMeta(),
+      userMessage('find the parser'),
+      assistantMessage({ cost: 0.5 }),
+      modelUsage({ id: 'mu-1' }),
+    ])
+
+    expect(calls).toHaveLength(2)
+    const side = calls.find(call => call.tools.includes('omp:find'))!
+    expect(side.model).toBe('openrouter/~typesafe/jev-latest')
+    expect(side.inputTokens).toBe(6244)
+    expect(side.outputTokens).toBe(1220)
+    expect(side.costUSD).toBeCloseTo(0.000262248, 12)
+    expect(side.userMessage).toBe('')
+    expect(side.timestamp).toBe('2026-04-14T10:01:00.000Z')
+    expect(calls.find(call => !call.tools.includes('omp:find'))!.userMessage).toBe('find the parser')
+  })
+
+  it('prices a zero reported cost through the price table', async () => {
+    setPriceOverrides({ 'openrouter/~typesafe/jev-latest': { input: 0.042, output: 0 } })
+    try {
+      const calls = await parseLines([sessionMeta(), modelUsage({ id: 'mu-2', input: 1_000_000, output: 5, cost: 0 })])
+      expect(calls[0]!.costUSD).toBeCloseTo(0.042, 12)
+    } finally {
+      setPriceOverrides({})
+    }
+  })
+
+  it('skips an errored side call that consumed no tokens', async () => {
+    const calls = await parseLines([
+      sessionMeta(),
+      modelUsage({ id: 'mu-3', input: 0, output: 0, cost: 0, stopReason: 'error' }),
+    ])
+    expect(calls).toHaveLength(0)
+  })
+
+  it('counts a repeated side call once across parses that share dedup keys', async () => {
+    const seen = new Set<string>()
+    const first = await parseLines([sessionMeta(), modelUsage({ id: 'mu-4' })], seen)
+    const second = await parseLines([sessionMeta(), modelUsage({ id: 'mu-4' })], seen)
+    expect(first).toHaveLength(1)
+    expect(second).toHaveLength(0)
+  })
+})

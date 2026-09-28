@@ -70,6 +70,17 @@ type PiEntry = {
   timestamp?: string
   cwd?: string
   model?: string
+  // `model_usage` entries (OMP side calls) carry these at the top level.
+  provider?: string
+  purpose?: string
+  stopReason?: string
+  usage?: {
+    input?: number
+    output?: number
+    cacheRead?: number
+    cacheWrite?: number
+    cost?: { total?: number }
+  }
   message?: {
     role?: string
     content?: Array<{ type?: string; text?: string; name?: string; arguments?: Record<string, unknown> }> | string
@@ -87,6 +98,56 @@ type PiEntry = {
         total?: number
       }
     }
+  }
+}
+
+// OMP logs side calls outside the assistant transcript as `model_usage`
+// entries: find and judge decisions (Jev), cache warming, and similar. They
+// never duplicate an assistant message, so each one counts as its own call.
+// The tool column carries the purpose, such as `find`, so a report can split
+// decision spend from chat spend.
+function modelUsageCall(entry: PiEntry, source: SessionSource, sessionId: string, lineIdx: number,
+                        sessionTimestamp: string, seenKeys: Set<string>): ParsedProviderCall | null {
+  const usage = entry.usage
+  if (!usage) return null
+  const input = usage.input ?? 0
+  const output = usage.output ?? 0
+  const cacheRead = usage.cacheRead ?? 0
+  const cacheWrite = usage.cacheWrite ?? 0
+  if (input === 0 && output === 0 && cacheRead === 0) return null
+  const bare = entry.model ?? ''
+  // OMP writes routed ids such as `~typesafe/jev-latest` beside provider
+  // `openrouter`. The provider prefix keeps them distinct and priceable.
+  const model = !entry.provider || bare.startsWith(`${entry.provider}/`) ? bare : `${entry.provider}/${bare}`
+  if (!model) return null
+  const dedupKey = `${source.provider}:${source.path}:model_usage:${entry.id || entry.timestamp || String(lineIdx)}`
+  if (seenKeys.has(dedupKey)) return null
+  seenKeys.add(dedupKey)
+  const reported = usage.cost?.total
+  const costUSD = typeof reported === 'number' && Number.isFinite(reported) && reported !== 0
+    ? reported
+    : calculateCost(model, input, output, cacheWrite, cacheRead, 0)
+  const timestamp = entry.timestamp || sessionTimestamp
+  if (!timestamp) return null
+  return {
+    provider: source.provider,
+    model,
+    inputTokens: input,
+    outputTokens: output,
+    cacheCreationInputTokens: cacheWrite,
+    cacheReadInputTokens: cacheRead,
+    cachedInputTokens: cacheRead,
+    reasoningTokens: 0,
+    webSearchRequests: 0,
+    costUSD,
+    tools: [entry.purpose ? `omp:${entry.purpose}` : 'omp:side-call'],
+    bashCommands: [],
+    skills: [],
+    timestamp,
+    speed: 'standard',
+    deduplicationKey: dedupKey,
+    userMessage: '',
+    sessionId,
   }
 }
 
@@ -246,6 +307,12 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
         }
         if (entry.type === 'model_change') {
           if (typeof entry.model === 'string' && entry.model) resolvedModel = entry.model
+          continue
+        }
+
+        if (entry.type === 'model_usage') {
+          const call = modelUsageCall(entry, source, sessionId, lineIdx, sessionTimestamp, seenKeys)
+          if (call) yield call
           continue
         }
 
