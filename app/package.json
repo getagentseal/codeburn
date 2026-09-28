@@ -274,6 +274,7 @@
               "$HOME/.local/share/opencode",
               "$HOME/.local/share/crush",
               "$HOME/.local/share/goose/sessions",
+              "$HOME/.local/share/amp/threads",
               "$HOME/.local/share/kilo",
               "$HOME/.local/share/zerostack/sessions"
             ]

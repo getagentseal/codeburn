@@ -59,6 +59,7 @@ enum ProviderConnectionCatalog {
         entry("opencode", "OpenCode", [.automatic, .web], [.cookieOrWebSession]),
         entry("opencodego", "OpenCode Go", [.automatic, .api, .web],
               [.localAppOrCLI, .apiTokenOrCloudCredentials, .cookieOrWebSession, .none]),
+        entry("amp", "Amp", [.automatic, .cli], [.localAppOrCLI], live: true),
         entry("alibaba", "Alibaba Coding Plan", [.automatic, .web, .api],
               [.cookieOrWebSession, .apiTokenOrCloudCredentials]),
         entry("alibabatokenplan", "Alibaba Token Plan", [.automatic, .cli, .web],

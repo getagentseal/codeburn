@@ -7,6 +7,7 @@ const PROVIDERS = [
   { id: 'claude', label: 'Claude' },
   { id: 'codex', label: 'Codex' },
   { id: 'copilot', label: 'Copilot' },
+  { id: 'amp', label: 'Amp' },
   { id: 'cursor', label: 'Cursor' },
   { id: 'devin', label: 'Devin' },
   { id: 'droid', label: 'Droid' },

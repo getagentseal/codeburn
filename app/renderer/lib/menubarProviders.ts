@@ -14,6 +14,7 @@ export const MENUBAR_QUOTA_PROVIDERS = [
   'Claude',
   'ClinePass',
   'Cursor',
+  'Amp',
   'Gemini',
   'Antigravity',
   'Copilot',
