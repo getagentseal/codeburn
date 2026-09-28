@@ -144,7 +144,7 @@ pub struct CliStatus {
 }
 
 /// What the Capacity Dock renders: the provider array, or the reason there isn't one.
-/// `claude_profiles` (the per-config-directory Claude answers, #1523) rides beside
+/// `claude_profiles` (the per-config-directory Claude answers) rides beside
 /// `providers` as opaque JSON; it is None on a CLI that predates the field.
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "state", rename_all = "camelCase")]

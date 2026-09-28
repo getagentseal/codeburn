@@ -227,7 +227,7 @@ Add a `Capacity Dock` section to General Settings:
   CLI side of the contract is the top-level `claudeProfiles` array of
   `codeburn quota --format json` (one entry per config directory, `providers[]`
   unchanged) and the `claudeConfigSourceId` field on live sessions, which lets a
-  profile ring claim only its own sessions (#1523).
+  profile ring claim only its own sessions.
 - Early-reset notifications are a switch in the General Settings
   `Notifications` section, default on, stored under
   `codeburn.quota.earlyResetNotificationsEnabled`. With it off the system

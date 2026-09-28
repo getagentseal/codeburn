@@ -422,8 +422,10 @@ describe('collectQuota claudeProfiles (#1523)', () => {
     const work = join(home, '.claude-work')
     for (const dir of [personal, work]) mkdirSync(dir, { recursive: true })
     const previousHome = process.env.HOME
+    const previousUserProfile = process.env.USERPROFILE
     const previousDirs = process.env.CLAUDE_CONFIG_DIRS
     process.env.HOME = home
+    process.env.USERPROFILE = home
     process.env.CLAUDE_CONFIG_DIRS = [personal, work].join(delimiter)
     try {
       const claudeRow: QuotaProvider = {
@@ -448,6 +450,8 @@ describe('collectQuota claudeProfiles (#1523)', () => {
     } finally {
       if (previousHome === undefined) delete process.env.HOME
       else process.env.HOME = previousHome
+      if (previousUserProfile === undefined) delete process.env.USERPROFILE
+      else process.env.USERPROFILE = previousUserProfile
       if (previousDirs === undefined) delete process.env.CLAUDE_CONFIG_DIRS
       else process.env.CLAUDE_CONFIG_DIRS = previousDirs
     }
