@@ -109,6 +109,7 @@ function createAgentDb(dir: string, agent: string, sessions: TranscriptSeedSessi
       ? 'INSERT INTO transcript_events(session_id, seq, event_json, created_at, event_zstd) VALUES (?, ?, ?, ?, ?)'
       : 'INSERT INTO transcript_events(session_id, seq, event_json, created_at) VALUES (?, ?, ?, ?)',
   )
+  db.exec('BEGIN')
   for (const session of sessions) {
     for (const row of session.rows) {
       const json = JSON.stringify(row.event)
@@ -121,6 +122,7 @@ function createAgentDb(dir: string, agent: string, sessions: TranscriptSeedSessi
       }
     }
   }
+  db.exec('COMMIT')
   db.close()
   return dbPath
 }
@@ -575,6 +577,34 @@ describe('openclaw provider', () => {
       // JSONL parse consumed must suppress its store counterpart — a re-parse
       // from the other era yields nothing new.
       const sqliteCalls = await parseAll(provider, { path: `${dbPath}:era-parity` }, seen)
+      expect(sqliteCalls.length).toBe(0)
+    })
+
+    it('assigns id-less calls the same dedup keys when neither the event nor the header has a timestamp', async () => {
+      // Neither the session header nor the message carries a timestamp, so
+      // the sqlite path falls back to the row's created_at while the JSONL
+      // path has no created_at to fall back to — the hash must be taken
+      // before that fallback or the two eras produce different keys.
+      const idLess = {
+        type: 'message',
+        message: { role: 'assistant', model: 'claude-sonnet-4-6', usage: { input: 30, output: 12, cacheRead: 0, cacheWrite: 0 } },
+      }
+      const sessionEvent = { type: 'session', version: 3, id: 'no-ts-parity' }
+      const events = [sessionEvent, idLess, idLess]
+      const createdAt = Date.parse('2026-09-07T11:00:00.000Z')
+
+      const dir = join(baseDir, 'idless-no-ts-parity')
+      const jsonlPath = await setupFixture(dir, 'proj', 'no-ts-parity', events.map(e => JSON.stringify(e)))
+      const dbPath = createAgentDb(dir, 'proj', [{
+        sessionId: 'no-ts-parity',
+        rows: events.map((event, seq) => ({ seq, event, createdAt: createdAt + seq * 1000 })),
+      }])
+
+      const provider = createOpenClawProvider(dir)
+      const seen = new Set<string>()
+      const jsonlCalls = await parseAll(provider, { path: jsonlPath }, seen)
+      expect(jsonlCalls.length).toBe(2)
+      const sqliteCalls = await parseAll(provider, { path: `${dbPath}:no-ts-parity` }, seen)
       expect(sqliteCalls.length).toBe(0)
     })
 

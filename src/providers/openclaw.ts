@@ -137,7 +137,7 @@ function consumeEvent(state: EventState, entry: OpenClawEntry, rowCreatedAtMs?: 
     if (!dedupId) {
       const hash = createHash('sha256').update(JSON.stringify([
         model,
-        timestamp,
+        entry.timestamp ?? state.sessionTimestamp,
         msg.usage.input,
         msg.usage.output,
         msg.usage.cacheRead,
