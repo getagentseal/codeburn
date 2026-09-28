@@ -226,7 +226,9 @@ describe('getModelCosts', () => {
 
   describe('grok-4.6 prompt tier', () => {
     it('uses the low tier below 200000 prompt tokens', () => {
-      expect(calculateCost('grok-4.6', 100_000, 10_000, 0, 99_999, 0)).toBeCloseTo(0.3099995, 12)
+      // Base input is 1.25e-6 since LiteLLM's 2026-09 reprice (was 2e-6); the
+      // tier rates above 200k are unchanged, so only this literal moved.
+      expect(calculateCost('grok-4.6', 100_000, 10_000, 0, 99_999, 0)).toBeCloseTo(0.2349995, 12)
     })
 
     it('uses the high tier for every token at exactly 200000 prompt tokens', () => {

@@ -54,6 +54,11 @@ const MANUAL_ENTRIES = {
   // exact gpt-5.6 tuple (Sol-tier: $5/$30 per million, 1.25x cache-write).
   'gpt-5.6-codex':          [5e-6, 3e-5, 6.25e-6, 5e-7],
   'gpt-5.6-codex-max':      [5e-6, 3e-5, 6.25e-6, 5e-7],
+  // LiteLLM dropped `claude-opus-4` upstream (a refresh moves dropped ids to
+  // the fallback tier), but the Cursor-style alias `claude-4-opus` resolves
+  // against PRIMARY rows - without this pin the bare id falls to the
+  // snowflake gateway row and under-prices by 3x. Anthropic list price.
+  'claude-opus-4':          [15e-6, 75e-6, 18.75e-6, 1.5e-6],
 }
 
 const snapshot = {}
@@ -275,6 +280,17 @@ const coveredByKey = (key) =>
 for (const [k, v] of [...Object.entries(previousSnapshot), ...Object.entries(previousFallback)]) {
   if (coveredByKey(k)) continue
   if (fallback[k] !== undefined) continue
+  // Same hygiene the gap-fill passes enforce: a carried row must not be
+  // @pin or date-suffixed (a query can never arrive in those forms - the
+  // runtime only ever peels them off, never adds them; a vendor-prefixed
+  // key CAN arrive verbatim, so it stays carriable) and must not be free on
+  // both ends (an unpriced model falls to expected-free handling, not a $0
+  // fallback row). Primary files legitimately hold such rows, so the guard
+  // lives here: when upstream drops one, carrying it verbatim would
+  // re-import exactly what tests/pricing-fallback-data.test.ts keeps out
+  // of this file.
+  if (/@/.test(k) || /-\d{8}$/.test(k)) continue
+  if (!validRates(v[0], v[1])) continue
   fallback[k] = v
   carried += 1
 }
