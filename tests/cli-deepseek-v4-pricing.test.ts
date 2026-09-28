@@ -111,21 +111,23 @@ describe('CLI DeepSeek v4 Claude pricing regression', () => {
 
       expect(report.overview.calls).toBe(2)
       expect(report.overview.tokens.cacheRead).toBe(306_945_536)
-      expect(report.overview.cost).toBeCloseTo(3.13091, 5)
+      // The bundled snapshot now carries DeepSeek's official peak pricing
+      // (#1134): $1.32/$3.96 per million on pro, $0.30/$1.20 on flash.
+      expect(report.overview.cost).toBeCloseTo(18.849608, 5)
 
       expect(pro).toBeDefined()
       expect(pro!.calls).toBe(1)
       expect(pro!.inputTokens).toBe(2_477_914)
       expect(pro!.outputTokens).toBe(762_994)
       expect(pro!.cacheReadTokens).toBe(258_556_928)
-      expect(pro!.cost).toBeCloseTo(2.678966, 6)
+      expect(pro!.cost).toBeCloseTo(17.668808, 6)
 
       expect(flash).toBeDefined()
       expect(flash!.calls).toBe(1)
       expect(flash!.inputTokens).toBe(1_552_573)
       expect(flash!.outputTokens).toBe(353_914)
       expect(flash!.cacheReadTokens).toBe(48_388_608)
-      expect(flash!.cost).toBeCloseTo(0.451944, 6)
+      expect(flash!.cost).toBeCloseTo(1.1808, 6)
     } finally {
       await rm(home, { recursive: true, force: true })
     }
