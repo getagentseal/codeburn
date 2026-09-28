@@ -2860,6 +2860,9 @@ program
       process.stdout.write(renderMarkdown(renderRows, { byTask: !!opts.byTask, byAgent: !!opts.byAgent, showTotals: opts.totals !== false }) + '\n')
     } else if (fmt === 'table') {
       process.stdout.write(renderTable(renderRows, { byTask: !!opts.byTask, byAgent: !!opts.byAgent, showTotals: opts.totals !== false }) + '\n')
+      if (renderRows.some(r => r.peakUSD != null || r.offPeakUSD != null)) {
+        process.stdout.write('Peak / Off-peak: consumption shares of the list-rate cost — DeepSeek peak hours are Mon–Fri 01:00–04:00 and 06:00–10:00 UTC (excl. Chinese public holidays), GLM/Z.ai peak hours are Mon–Fri 14:00–18:00 Singapore time. The vendors discount off-peak usage on their own bills (DeepSeek USD at 0.5x, Z.ai plan credits at 0.5x); the split only shows where usage ran. First-party routes only (dsh, zcode).\n')
+      }
       // Never advise aliasing unconditionally: a subscription or flat-rate model
       // is correctly $0, and mapping it onto another model's rate invents spend.
       if (opts.unpriced) process.stdout.write(unpricedModelHint() + '\n')
@@ -3142,12 +3145,13 @@ program
   .command('quota')
   .description('Live provider capacity: quota windows for each signed-in coding tool on this machine')
   .option('--format <format>', 'Output format: table, json', 'table')
+  .option('--claude-profiles', 'Read each Claude config directory\'s own quota (windows-dock separate mode); without it the payload lists profiles without reading them')
   .option('--no-color', 'Disable ANSI colors')
   .action(async (opts) => {
     const { collectQuota, renderQuotaTable } = await import('./quota/index.js')
     const { awaitCredentialWrites } = await import('./quota/security.js')
     try {
-      const report = await collectQuota()
+      const report = await collectQuota({ claudeProfileDetail: opts.claudeProfiles && opts.format === 'json' ? 'full' : 'list' })
       const out = opts.format === 'json'
         ? JSON.stringify(report, null, 2) + '\n'
         : renderQuotaTable(report, { color: opts.color }) + '\n'

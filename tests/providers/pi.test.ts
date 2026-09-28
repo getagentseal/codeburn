@@ -4,6 +4,7 @@ import { join } from 'path'
 import { tmpdir } from 'os'
 
 import { createPiProvider, createOmpProvider } from '../../src/providers/pi.js'
+import { fallbackRawModelDisplayName } from '../../src/models.js'
 import type { ParsedProviderCall } from '../../src/providers/types.js'
 import { classifyTurn } from '../../src/classifier.js'
 import type { ParsedApiCall, ParsedTurn } from '../../src/types.js'
@@ -640,6 +641,11 @@ describe('pi provider - JSONL parsing', () => {
 
 describe('pi provider - display names', () => {
   const provider = createPiProvider('/tmp')
+  // The composition models-report/audit-report actually use: the provider
+  // hook first, then the global resolver when the hook echoed the raw id.
+  // Pi carries no local table anymore (#1530), so every name comes from the
+  // one global getShortModelName all providers share.
+  const display = (m: string) => fallbackRawModelDisplayName(provider.modelDisplayName(m), m)
 
   it('has correct name and displayName', () => {
     expect(provider.name).toBe('pi')
@@ -647,13 +653,14 @@ describe('pi provider - display names', () => {
   })
 
   it('maps known models to readable names', () => {
-    expect(provider.modelDisplayName('gpt-5.4')).toBe('GPT-5.4')
-    expect(provider.modelDisplayName('gpt-5.4-mini')).toBe('GPT-5.4 Mini')
-    expect(provider.modelDisplayName('gpt-5')).toBe('GPT-5')
+    expect(display('gpt-5.4')).toBe('GPT-5.4')
+    expect(display('gpt-5.4-mini')).toBe('GPT-5.4 Mini')
+    expect(display('gpt-5')).toBe('GPT-5')
+    expect(display('gpt-5-mini')).toBe('GPT-5 Mini')
   })
 
   it('returns raw name for unknown models', () => {
-    expect(provider.modelDisplayName('some-future-model')).toBe('some-future-model')
+    expect(display('some-future-model')).toBe('some-future-model')
   })
 
   it('normalizes tool names to capitalized form', () => {

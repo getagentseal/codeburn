@@ -499,7 +499,7 @@ describe('ensureCacheHydrated: schema version invalidation (#873)', () => {
 })
 
 describe('ensureCacheHydrated: Codex usage-record accounting migration', () => {
-  it('re-derives settled Codex slices that shrink and carries days with missing sources', async () => {
+  it.each([40, 42])('re-derives shrinking Codex slices from v%i and carries days with missing sources', async sourceVersion => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-09-27T12:00:00.000Z'))
 
@@ -549,8 +549,8 @@ describe('ensureCacheHydrated: Codex usage-record accounting migration', () => {
 
     const oldCodexDay = codexDay('2026-09-01', 2, 1_000)
     const sourceGoneDay = codexDay('2026-08-01', 4, 2_000)
-    await writeFile(join(TMP_CACHE_ROOT, 'daily-cache.v40.json'), JSON.stringify({
-      version: 40,
+    await writeFile(join(TMP_CACHE_ROOT, `daily-cache.v${sourceVersion}.json`), JSON.stringify({
+      version: sourceVersion,
       savingsConfigHash: '',
       tzKey: currentTzKey(),
       lastComputedDate: '2026-09-01',

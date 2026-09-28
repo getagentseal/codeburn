@@ -115,6 +115,9 @@ process, so the cadence follows popover visibility.
 - popover hidden: 120 s tick, `today`/`all` only, `--no-optimize`
 - on show: immediate refresh when the visible key is older than 60 s
 
+The `detailTheme` dock preference (Settings > General > Capacity Dock > Hover bubble) picks
+the bubble's surface independently of the rail's; `match` is the rail's own theme.
+
 ## Plan / quota
 
 The Plan pill (visible on the Claude tab, or when Claude is the only detected provider) reads

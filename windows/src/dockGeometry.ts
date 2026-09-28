@@ -27,6 +27,10 @@ export type Metrics = {
   horizontalRailWidth: number
   rowHeight: number
   rowSpacing: number
+  /// A profile row's caption line box and gap, added to every row's height when the rail
+  /// draws one ring per Claude config directory. Mirrored in src-tauri dock.rs.
+  captionLine: number
+  captionGap: number
   railAlongPad: number
   flareCompensation: number
   railCrossPad: number
@@ -37,6 +41,7 @@ export type Metrics = {
   ringLabelSpacing: number
   providerIconSize: number
   percentTextSize: number
+  captionTextSize: number
   alertSize: number
   alertOffset: number
   detailWidth: number
@@ -54,6 +59,8 @@ function build(scale: number): Metrics {
     horizontalRailWidth: points(106, scale),
     rowHeight: points(84, scale),
     rowSpacing: points(12, scale),
+    captionLine: points(13, scale),
+    captionGap: points(4, scale),
     railAlongPad: points(20, scale),
     // Docked rails add 60% of the shoulder depth so content never crowds the concave flare.
     flareCompensation: Math.round(points(52, scale) * 0.6),
@@ -66,6 +73,7 @@ function build(scale: number): Metrics {
     ringLabelSpacing: points(6, scale),
     providerIconSize: points(26, scale),
     percentTextSize: points(17, scale),
+    captionTextSize: points(11, scale),
     alertSize: points(12, scale),
     alertOffset: points(19, scale),
     detailWidth: points(350, detailScale),
