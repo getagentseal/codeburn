@@ -24,6 +24,8 @@ import {
   getFlatRateModelsConfigHash,
   parseLiteLLMEntry,
   unpricedModelHint,
+  cacheWriteCostPerToken,
+  tieredCostsFor,
 } from '../src/models.js'
 import { getDailyCacheConfigHash } from '../src/usage-aggregator.js'
 import snapshotData from '../src/data/litellm-snapshot.json' with { type: 'json' }
@@ -168,9 +170,12 @@ describe('getModelCosts', () => {
     it('keeps the base rate for slots the tier omits', () => {
       // gpt-5.5's tier publishes cache read but no cache write: crossing the
       // threshold must not invent a tier cache-write rate, nor drop the base.
+      // The base cache-write slot is implicit, so it bills at the input rate
+      // of whichever costs object is in effect — tiered here, per #1544's rule.
       const base = getModelCosts('gpt-5.5')!
+      const tieredCosts = tieredCostsFor('gpt-5.5', base, 300_000, 'codex')
       const tiered = calculateCost('gpt-5.5', 300_000, 0, 1_000, 0, 0, 'standard', 0, 'codex')
-      expect(tiered).toBeCloseTo(300_000 * base.longContextTier!.inputCostPerToken + 1_000 * base.cacheWriteCostPerToken, 9)
+      expect(tiered).toBeCloseTo(300_000 * tieredCosts.inputCostPerToken + 1_000 * cacheWriteCostPerToken('gpt-5.5', tieredCosts), 9)
       expect(base.longContextTier!.cacheWriteCostPerToken).toBeUndefined()
     })
 
