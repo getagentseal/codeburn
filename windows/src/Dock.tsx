@@ -1029,6 +1029,10 @@ export function Dock() {
   // wallpaper, with a brighter rim than graphite gets.
   const glass = prefs.theme === 'glass'
   const surfaceFill = glass ? 'url(#dock-glass-fill)' : 'url(#dock-rail-fill)'
+  // The bubble may keep its own surface: a Glass rail can carry a Graphite bubble so the
+  // figures stay readable over any wallpaper. `match` is what it always did.
+  const bubbleGlass = prefs.detailTheme === 'match' ? glass : prefs.detailTheme === 'glass'
+  const bubbleFill = bubbleGlass ? 'url(#dock-glass-fill)' : 'url(#dock-rail-fill)'
   const edge = flareEdge
   const vertical = railVertical
   const cross = vertical ? m.railWidth : m.horizontalRailWidth
@@ -1183,12 +1187,12 @@ export function Dock() {
         >
           {detailH > 0 ? (
             <svg className="dock-surface" width={detailW} height={detailH} viewBox={`0 0 ${detailW} ${detailH}`} aria-hidden="true">
-              <path d={bubblePath(tailEdge, detailW, detailH, tail)} fill={surfaceFill} />
+              <path d={bubblePath(tailEdge, detailW, detailH, tail)} fill={bubbleFill} />
               <path d={bubblePath(tailEdge, detailW, detailH, tail)} fill="url(#dock-rail-glow)" />
               <path
                 d={bubblePath(tailEdge, detailW, detailH, tail)}
                 fill="none"
-                stroke={glass ? 'rgba(255,255,255,0.20)' : 'rgba(255,255,255,0.09)'}
+                stroke={bubbleGlass ? 'rgba(255,255,255,0.20)' : 'rgba(255,255,255,0.09)'}
                 strokeWidth={Math.max(0.5, m.detailScale)}
               />
             </svg>

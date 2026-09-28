@@ -65,7 +65,7 @@ It downloads the `.msi` for your CLI version, verifies its sha256, runs it throu
 
 Today's spend sits in the tray as a number beside the flame icon (turn it off in Settings, and the tooltip always carries it). Click for the same popover the macOS app shows: agent tabs, period switcher, Trend, Forecast, Pulse, Stats and Plan insights, activity and model breakdowns, optimize findings, and CSV/JSON export. Settings covers launch at login, the tray number, theme, and currency. It refreshes every 60 seconds while the popover is open and every 2 minutes while it is closed.
 
-Turn on **Show Capacity Dock** in the tray menu, or from the desktop app, for the same edge-docked quota rail the macOS menubar has: one ring per connected provider, hover for every quota window with its reset time, drag it to any screen edge. It is off by default and needs codeburn 0.9.24 or newer for `codeburn quota`.
+Turn on **Show Capacity Dock** in the tray menu, or from the desktop app, for the same edge-docked quota rail the macOS menubar has: one ring per connected provider, hover for every quota window with its reset time, drag it to any screen edge. It is off by default and needs codeburn 0.9.24 or newer for `codeburn quota`. The hover card can keep its own appearance (Settings > General > Capacity Dock > Hover bubble).
 
 The desktop app installs and configures the tray companion from a card on its **Plugins** page, the way it does the macOS menu bar: Install, Update, Open, Settings, Quit and Uninstall, a Running dot with the installed version, and the Capacity Dock switch. `codeburn menubar --uninstall` removes it from the command line.
 

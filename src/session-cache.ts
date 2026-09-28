@@ -502,7 +502,9 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // costUSD: undefined, so they must re-parse once.
   pi: 'cwd-project-path-v1-project-group-by-abs-v1-reported-cost-v1',
   // project-group-by-abs-v1: shared Pi/OMP serve grouping uses abs identity.
-  omp: 'nested-agent-v1-reported-cost-v2-cwd-project-path-v1-project-group-by-abs-v1',
+  // model-usage-v1: counts OMP side calls (`model_usage` entries: find, judge,
+  // cache warming), so cached sessions must re-parse to gain them.
+  omp: 'nested-agent-v1-reported-cost-v2-cwd-project-path-v1-project-group-by-abs-v1-model-usage-v1',
   // archived-subtree-v1 (#1362): the subtree walk no longer filters
   // `time_archived IS NULL`. An archived ROOT self-heals — it was evicted as an
   // undiscovered non-durable source and comes back new — but a root whose CHILD
