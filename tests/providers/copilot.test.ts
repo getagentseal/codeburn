@@ -4322,13 +4322,27 @@ describe('copilot deduplication key prefixes (durable-union contract)', () => {
 
 describe('copilot provider - JetBrains model token scan', () => {
   // #1530: a token must not capture a newer version — `gpt-5` is not
-  // `gpt-5.6-luna`, nor `claude-opus-4` `claude-opus-4.8`. A dot only counts
+  // `gpt-5.7-terra`, nor `claude-opus-4` `claude-opus-4.9`. A dot only counts
   // as a version continuation when a digit follows it; an end-of-sentence
   // period or a file extension stays a token boundary.
   it('does not match a token inside a newer dotted version', () => {
-    expect(findJetBrainsModelToken('running on gpt-5.6-luna for coding')).toBe('')
-    expect(findJetBrainsModelToken('switched to claude-opus-4.8 today')).toBe('')
+    expect(findJetBrainsModelToken('running on gpt-5.7-terra for coding')).toBe('')
+    expect(findJetBrainsModelToken('switched to claude-opus-4.9 today')).toBe('')
     expect(findJetBrainsModelToken('gpt-5.4.1 beta')).toBe('')
+  })
+
+  // The ids JetBrains writes today must match their own token, not fall
+  // through to the anthropic-auto bucket (#1531 review).
+  it('recognises the current dotted ids, longest first', () => {
+    expect(findJetBrainsModelToken('"model":"gpt-5.5"')).toBe('gpt-5.5')
+    expect(findJetBrainsModelToken('running on gpt-5.6-luna for coding')).toBe('gpt-5.6-luna')
+    expect(findJetBrainsModelToken('running on gpt-5.6-terra for coding')).toBe('gpt-5.6-terra')
+    expect(findJetBrainsModelToken('"model":"gpt-5.6"')).toBe('gpt-5.6')
+    expect(findJetBrainsModelToken('gpt-5.4-mini beta')).toBe('gpt-5.4-mini')
+    expect(findJetBrainsModelToken('switched to claude-opus-4.8 today')).toBe('claude-opus-4-8')
+    expect(findJetBrainsModelToken('switched to claude-opus-4.6 today')).toBe('claude-opus-4-6')
+    expect(findJetBrainsModelToken('switched to claude-sonnet-4.6 today')).toBe('claude-sonnet-4-6')
+    expect(findJetBrainsModelToken('switched to claude-haiku-4.5 today')).toBe('claude-haiku-4-5')
   })
 
   it('still matches tokens followed by sentence punctuation or file extensions', () => {
