@@ -54,7 +54,10 @@ import { isWslUncPath } from './wsl.js'
 // state used the old fixed cutoff; reparse both. Not 16: v16 was briefly
 // shipped by a reverted PR, so reusing it would let stale entries pass the
 // version check unreparsed.
-export const CODEX_CACHE_VERSION = 17
+// v18: read response-level token_usage_record and ignore later token_count
+// twins. v17 entries miss interrupted/compaction usage and can include counts
+// now suppressed after the source handover, so they must reparse.
+export const CODEX_CACHE_VERSION = 18
 export const CODEX_LEGACY_CACHE_FILE = 'codex-results.json'
 export function codexCacheFileName(version = CODEX_CACHE_VERSION): string {
   return `codex-results.v${version}.json`
