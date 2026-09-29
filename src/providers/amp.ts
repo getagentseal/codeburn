@@ -2,7 +2,7 @@ import { readdir } from 'fs/promises'
 import { join } from 'path'
 import { homedir } from 'os'
 
-import { FS_SCAN_CONCURRENCY, mapWithConcurrency, readSessionFile } from '../fs-utils.js'
+import { readSessionFile } from '../fs-utils.js'
 import { calculateCost, getShortModelName } from '../models.js'
 import type { ProbeRoot, Provider, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
 
@@ -24,8 +24,8 @@ import type { ProbeRoot, Provider, SessionSource, SessionParser, ParsedProviderC
 // cacheReadInputTokens, totalTokens, timestamp, model }). When a record
 // publishes only tokens.total, the total becomes the output count.
 //
-// Amp bills a subscription, not tokens, and records no charged dollars, so
-// every cost is CodeBurn's own token pricing (models.ts) and carries
+// Costs are priced from tokens; Amp's own credits field is not converted.
+// Every cost uses CodeBurn's model pricing (models.ts) and carries
 // costIsEstimated. Thread files carry no project/cwd, so sessions group under
 // the provider name. Amp's model ids are the underlying OpenAI/Anthropic/
 // Google ids and price through the standard catalog.
@@ -151,14 +151,14 @@ function parseThreadFile(content: string): ParsedThread | null {
     const inputTokens = readNumber(tokens, 'input')
     const outputTokens = readNumber(tokens, 'output')
     const total = finiteNonNegative(tokens['total'])
-    // Parts win when present; a total-only record bills as output.
-    const hasParts = inputTokens > 0 || outputTokens > 0
-    const billedOutput = hasParts ? outputTokens : total ?? 0
-
     const toMessageId = raw['toMessageId']
     const billed = typeof toMessageId === 'number' && Number.isInteger(toMessageId)
       ? cacheTokensByMessageId.get(toMessageId)
       : undefined
+    // Attribute any positive remainder to output, after accounting for the
+    // explicit input/output counts and both joined cache-token counts.
+    const accountedTokens = inputTokens + outputTokens + (billed?.creation ?? 0) + (billed?.read ?? 0)
+    const billedOutput = outputTokens + Math.max(0, (total ?? 0) - accountedTokens)
 
     calls.push({
       model,
@@ -260,8 +260,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
             record.cacheReadInputTokens,
             0,
           ),
-          // Amp bills a subscription and records no charged dollars; the
-          // token-priced figure is CodeBurn's own estimate of those dollars.
+          // Priced from tokens; Amp's own credits field is not converted.
           costIsEstimated: true,
           tools: [],
           bashCommands: [],
@@ -284,26 +283,17 @@ async function discoverThreads(roots: string[]): Promise<SessionSource[]> {
     const threadsDir = threadsDirFor(root)
     let entries: string[]
     try {
-      entries = await readdir(threadsDir)
+      entries = await readdir(threadsDir, { recursive: true })
     } catch {
       continue
     }
 
-    // One read per candidate file, fanned out; results re-concatenated in
-    // readdir order so the emitted source order matches a serial walk.
-    const found = await mapWithConcurrency(entries, FS_SCAN_CONCURRENCY, async name => {
-      if (!name.endsWith('.json')) return null
-      const path = join(threadsDir, name)
-      const content = await readSessionFile(path)
-      if (content === null) return null
-      // Only threads that parse and identify themselves become sources; the
-      // parser re-reads the file for its calls.
-      const parsed = parseThreadFile(content)
-      if (!parsed) return null
-      return { path, project: 'Amp', provider: 'amp' } as SessionSource
-    })
-
-    for (const source of found) if (source) sources.push(source)
+    // Discovery only walks names. The parser reads and validates each thread
+    // once, skipping malformed JSON and files without a thread id.
+    for (const name of entries) {
+      if (!name.endsWith('.json')) continue
+      sources.push({ path: join(threadsDir, name), project: 'Amp', provider: 'amp' })
+    }
   }
 
   return sources

@@ -86,7 +86,7 @@ describe('probeRoots mirrors discovery resolution (Tier 2, batch 1)', () => {
 
   it('amp reports exactly its resolved threads dir', async () => {
     expect(await createAmpProvider(['/tmp/amp-a']).probeRoots!()).toEqual([
-      { path: '/tmp/amp-a/threads', label: 'threads' },
+      { path: join('/tmp/amp-a', 'threads'), label: 'threads' },
     ])
     expect(await createAmpProvider().probeRoots!()).toEqual([
       { path: join(homedir(), '.local', 'share', 'amp', 'threads'), label: 'threads' },

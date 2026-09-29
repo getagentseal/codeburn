@@ -355,10 +355,9 @@ const FULL_LOAD_PROVIDER_NAMES: ReadonlySet<string> = new Set(['hermes', 'quickd
 // re-parse, which lands the flag too, and durable orphans now survive
 // fingerprint changes (the carry-forward in getOrCreateProviderSection).
 export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
-  // usage-ledger-v1: prefer the thread's usageLedger.events (one record per
-  // billed request) over per-message usage blocks, joining cache tokens
-  // through toMessageId -> messages[].messageId.
-  amp: 'usage-ledger-v1',
+  // usage-ledger-v2: include positive ledger total remainders as output after
+  // subtracting input, output, and cache tokens joined through toMessageId.
+  amp: 'usage-ledger-v2',
   // rich-session-capture-v1: parse-time capture of per-turn gitBranch, per-call
   // LOC deltas / interruptions / userModified / toolErrors, and session-level
   // title / prLinks / isSidechain. Forces one re-parse so cached sessions gain

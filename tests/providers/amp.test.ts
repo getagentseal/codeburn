@@ -120,7 +120,7 @@ describe('amp provider', () => {
     expect(await provider.discoverSessions()).toEqual([])
   })
 
-  it('discovers only parseable thread files', async () => {
+  it('discovers JSON candidates without parsing and skips invalid threads during parsing', async () => {
     await writeThread('T-good', LEDGER_THREAD)
     await mkdir(join(tmpDir, 'threads'), { recursive: true })
     await writeFile(join(tmpDir, 'threads', 'notes.txt'), 'not a thread', 'utf-8')
@@ -129,10 +129,30 @@ describe('amp provider', () => {
 
     const provider = createAmpProvider([tmpDir])
     const sources = await provider.discoverSessions()
-    expect(sources).toHaveLength(1)
-    expect(sources[0].path).toBe(join(tmpDir, 'threads', 'T-good.json'))
-    expect(sources[0].provider).toBe('amp')
-    expect(sources[0].project).toBe('Amp')
+    expect(sources.map(source => source.path).sort()).toEqual([
+      join(tmpDir, 'threads', 'T-broken.json'),
+      join(tmpDir, 'threads', 'T-good.json'),
+      join(tmpDir, 'threads', 'T-noid.json'),
+    ])
+    for (const source of sources) {
+      expect(source.provider).toBe('amp')
+      expect(source.project).toBe('Amp')
+      expect(await parseAll(source)).toHaveLength(source.path.endsWith('T-good.json') ? 2 : 0)
+    }
+  })
+
+  it('discovers and parses nested threads', async () => {
+    const dir = join(tmpDir, 'threads', 'sub', 'nested')
+    await mkdir(dir, { recursive: true })
+    const path = join(dir, 'T-2.json')
+    await writeFile(path, JSON.stringify({ ...LEDGER_THREAD, id: 'T-2' }), 'utf-8')
+    await writeFile(join(dir, 'notes.txt'), 'not a thread', 'utf-8')
+
+    const sources = await createAmpProvider([tmpDir]).discoverSessions()
+    expect(sources).toEqual([{ path, project: 'Amp', provider: 'amp' }])
+    const calls = await parseAll(sources[0])
+    expect(calls).toHaveLength(2)
+    expect(calls[0].sessionId).toBe('T-2')
   })
 
   it('parses ledger events with cache tokens joined from the billed message', async () => {
@@ -179,6 +199,39 @@ describe('amp provider', () => {
     expect(calls[0].inputTokens).toBe(0)
     expect(calls[0].outputTokens).toBe(345)
     expect(calls[0].costUSD).toBeGreaterThan(0)
+  })
+
+  it.each([
+    { input: 10, output: 20, creation: 30, read: 40, total: 150, expectedOutput: 70 },
+    { input: 10, output: 20, creation: 30, read: 40, total: 100, expectedOutput: 20 },
+    { input: 10, output: 20, creation: 30, read: 40, total: 50, expectedOutput: 20 },
+    { input: 10, output: 20, creation: 0, read: 0, total: 50, expectedOutput: 40 },
+    { input: 0, output: 0, creation: 30, read: 40, total: 100, expectedOutput: 30 },
+  ])('accounts for ledger total remainders: %j', async ({ input, output, creation, read, total, expectedOutput }) => {
+    const path = await writeThread('T-remainder', {
+      id: 'T-remainder',
+      messages: [{
+        role: 'assistant',
+        messageId: 1,
+        usage: { cacheCreationInputTokens: creation, cacheReadInputTokens: read },
+      }],
+      usageLedger: {
+        events: [{
+          id: 'evt-remainder',
+          timestamp: '2026-09-20T12:00:00.000Z',
+          model: 'claude-opus-4-6',
+          tokens: { input, output, total },
+          toMessageId: 1,
+        }],
+      },
+    })
+    const calls = await parseAll({ path, project: 'Amp', provider: 'amp' })
+    expect(calls).toHaveLength(1)
+    expect(calls[0].inputTokens).toBe(input)
+    expect(calls[0].outputTokens).toBe(expectedOutput)
+    expect(calls[0].cacheCreationInputTokens).toBe(creation)
+    expect(calls[0].cacheReadInputTokens).toBe(read)
+    expect(calls[0].costUSD).toBe(calculateCost('claude-opus-4-6', input, expectedOutput, creation, read, 0))
   })
 
   it('falls back to per-message usage when the thread has no ledger', async () => {
