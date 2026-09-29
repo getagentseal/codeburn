@@ -549,6 +549,13 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // to land.
   warp: 'worktree-project-grouping-v1-est-cost-billing-cost-v1',
   antigravity: 'worktree-project-grouping-v6',
+  // pr-attribution-v1: the parser now reads the `message`/`part` tables for
+  // per-turn user prompt text and the GitHub PR URLs it references. Cached
+  // ZCode sessions hold empty userMessage turns and no session prLinks, so
+  // they never appeared under attributed pull requests; one re-parse gains
+  // userMessage / per-turn prRefs / session prLinks. Cost totals are
+  // unchanged.
+  zcode: 'pr-attribution-v1',
 }
 
 function getLegacyCachePath(): string {
