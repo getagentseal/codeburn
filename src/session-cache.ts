@@ -370,7 +370,7 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // reported-cost-v1: the CLI reports its own per-message cost, so entries
   // cached before cline-cli joined the reported-cost allowlist in parser.ts
   // hold costUSD: undefined and get re-priced from tokens on every read.
-  'cline-cli': 'reported-cost-v1',
+  'cline-cli': 'reported-cost-v1-est-reprice-v1',
   codewhale: 'aggregate-session-v1-est-cost',
   // Bump when the Codex parser changes attribution so unchanged, already-cached
   // session files re-parse (session-cache.json serves them without invoking the
