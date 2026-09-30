@@ -9,6 +9,13 @@ import { listen } from '@tauri-apps/api/event'
 
 export type DockTheme = 'graphite' | 'glass'
 export type DockGaugeShape = 'circle' | 'squircle'
+/// How the rail draws Claude with more than one config directory.
+export type DockClaudeProfiles = 'combined' | 'separate'
+
+export const DOCK_CLAUDE_PROFILES: Array<{ id: DockClaudeProfiles; label: string }> = [
+  { id: 'combined', label: 'Combined' },
+  { id: 'separate', label: 'Separate rings' },
+]
 
 export const DOCK_THEMES: Array<{ id: DockTheme; label: string }> = [
   { id: 'graphite', label: 'Graphite' },
@@ -25,6 +32,15 @@ export const DOCK_GAUGE_SHAPES: Array<{ id: DockGaugeShape; label: string }> = [
   { id: 'squircle', label: 'Squircle' },
 ]
 
+export type DockDetailTheme = 'match' | 'graphite' | 'glass'
+
+/// The hover bubble's surface. `match` is the rail's own theme, which is what it always was.
+export const DOCK_DETAIL_THEMES: Array<{ id: DockDetailTheme; label: string }> = [
+  { id: 'match', label: 'Match dock' },
+  { id: 'graphite', label: 'Graphite' },
+  { id: 'glass', label: 'Glass' },
+]
+
 /// CapacityDockPreferences.scaleRange and its 0.05 step.
 export const DOCK_SCALE_MIN = 0.6
 export const DOCK_SCALE_MAX = 1.2
@@ -38,11 +54,16 @@ export type DockPrefs = {
   scale: number
   theme: DockTheme
   gaugeShape: DockGaugeShape
+  detailTheme: DockDetailTheme
   /// Which providers the rail shows. Empty means nothing has been chosen yet, which is what
   /// lets the dock auto-seed from whatever is connected.
   providers: string[]
   /// Latches once the user edits the provider set, so auto-seeding stops second-guessing them.
   manualSelection: boolean
+  /// Keeps every selected ring out at rest instead of collapsing to the resting provider.
+  keepExpanded: boolean
+  /// One Claude ring, or one captioned ring per config directory.
+  claudeProfiles: DockClaudeProfiles
 }
 
 export const DEFAULT_DOCK_PREFS: DockPrefs = {
@@ -51,8 +72,11 @@ export const DEFAULT_DOCK_PREFS: DockPrefs = {
   scale: DOCK_SCALE_MIN,
   theme: 'graphite',
   gaugeShape: 'circle',
+  detailTheme: 'match',
   providers: [],
   manualSelection: false,
+  keepExpanded: false,
+  claudeProfiles: 'combined',
 }
 
 export function parseDockPrefs(raw: Record<string, unknown>): DockPrefs {
@@ -63,8 +87,11 @@ export function parseDockPrefs(raw: Record<string, unknown>): DockPrefs {
     scale: Math.min(DOCK_SCALE_MAX, Math.max(DOCK_SCALE_MIN, scale)),
     theme: raw.theme === 'glass' || raw.theme === 'acrylic' ? 'glass' : 'graphite',
     gaugeShape: raw.gaugeShape === 'squircle' ? 'squircle' : 'circle',
+    detailTheme: raw.detailTheme === 'graphite' || raw.detailTheme === 'glass' ? raw.detailTheme : 'match',
     providers: Array.isArray(raw.providers) ? raw.providers.filter((p): p is string => typeof p === 'string') : [],
     manualSelection: raw.manualSelection === true,
+    keepExpanded: raw.keepExpanded === true,
+    claudeProfiles: raw.claudeProfiles === 'separate' ? 'separate' : 'combined',
   }
 }
 

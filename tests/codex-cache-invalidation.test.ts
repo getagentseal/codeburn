@@ -13,6 +13,7 @@ import { createHash } from 'crypto'
 import { join } from 'path'
 
 import { clearSessionCache, parseAllSessions } from '../src/parser.js'
+import type { SessionCache } from '../src/session-cache.js'
 import { readCacheOnDisk, writeCacheOnDisk } from './fixtures/session-cache-io.js'
 
 const testRoot = vi.hoisted(() => {
@@ -32,7 +33,18 @@ function preFixFingerprint(): string {
   return createHash('sha256').update(`CODEX_HOME=${CODEX_HOME}`).digest('hex').slice(0, 16)
 }
 
-beforeEach(() => {
+// Exact fingerprint emitted before token_usage_record accounting was added.
+function preUsageRecordFingerprint(): string {
+  const parseVersion = 'mcp-attribution-v5-est-cost-active-timing-mcp-wait-rich-capture-v1-cross-provider-pr-v1-session-meta-model-v1-session-meta-fields-v1-codex-pricing-v1-codex-tps-v1-codex-mcp-skills-v1-activity-price-v1'
+  return createHash('sha256')
+    .update(`CODEX_HOME=${CODEX_HOME}\0parser=${parseVersion}`)
+    .digest('hex')
+    .slice(0, 16)
+}
+
+beforeEach(async () => {
+  await rm(CACHE_DIR, { recursive: true, force: true })
+  await rm(CODEX_HOME, { recursive: true, force: true })
   process.env['HOME'] = join(testRoot, 'home')
   process.env['USERPROFILE'] = join(testRoot, 'home')
   process.env['CODEX_HOME'] = CODEX_HOME
@@ -105,5 +117,38 @@ describe('codex parser change invalidates stale session-cache (#478/#513)', () =
     // envFingerprint no longer matches, the stale section is discarded, the
     // unchanged file re-parses, and the mcp-cli attribution reappears.
     expect(allMcpServers(second)).toContain('github')
+  })
+
+  it('re-parses warm session-cache turns after token_usage_record accounting changes', async () => {
+    const sessionDir = join(CODEX_HOME, 'sessions', '2026', '09', '27')
+    await mkdir(sessionDir, { recursive: true })
+    await mkdir(CACHE_DIR, { recursive: true })
+    const lines = [
+      JSON.stringify({ type: 'session_meta', timestamp: '2026-09-27T10:00:00Z', payload: { session_id: 'sess-usage-record-cache', model: 'gpt-5.5', cwd: '/Users/test/proj', originator: 'codex_cli_rs' } }),
+      JSON.stringify({ type: 'token_usage_record', timestamp: '2026-09-27T10:01:00Z', payload: { response_id: 'resp-cache-migration', model: 'gpt-5.5', usage: { input_tokens: 1000, output_tokens: 200 } } }),
+      JSON.stringify({ type: 'event_msg', timestamp: '2026-09-27T10:01:01Z', payload: { type: 'token_count', info: { last_token_usage: {}, total_token_usage: { total_tokens: 0 } } } }),
+    ]
+    await writeFile(join(sessionDir, 'rollout-usage-record-cache.jsonl'), lines.join('\n') + '\n')
+
+    clearSessionCache()
+    const fresh = await parseAllSessions(undefined, 'codex')
+    const freshSession = fresh.flatMap(project => project.sessions).find(session => session.sessionId === 'sess-usage-record-cache')
+    expect(freshSession && freshSession.totalInputTokens + freshSession.totalOutputTokens).toBe(1200)
+
+    // Simulate a warm v39-style session cache whose provider fingerprint still
+    // matches the prior parser and whose turn was undercounted by the token_count
+    // twin. The Codex raw cache may be warm too; session-cache must still notice
+    // the parser suffix and re-derive the turn.
+    const cache = await readCacheOnDisk() as SessionCache
+    cache.providers['codex']!.envFingerprint = preUsageRecordFingerprint()
+    for (const file of Object.values(cache.providers['codex']!.files)) {
+      for (const turn of file.turns) turn.calls = []
+    }
+    await writeCacheOnDisk(cache)
+
+    clearSessionCache()
+    const migrated = await parseAllSessions(undefined, 'codex')
+    const migratedSession = migrated.flatMap(project => project.sessions).find(session => session.sessionId === 'sess-usage-record-cache')
+    expect(migratedSession && migratedSession.totalInputTokens + migratedSession.totalOutputTokens).toBe(1200)
   })
 })

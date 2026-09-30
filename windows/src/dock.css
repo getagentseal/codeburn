@@ -166,6 +166,20 @@
 .dock-pct.is-critical { color: var(--dock-orange); }
 .dock-pct.is-danger { color: var(--dock-red); }
 
+/* A profile ring's config-directory name. Only profile rows render it. */
+.dock-row-caption {
+  margin-top: var(--dock-caption-gap);
+  font-size: var(--dock-caption-size);
+  line-height: var(--dock-caption-line);
+  height: var(--dock-caption-line);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: rgba(250, 242, 230, 0.6);
+  font-weight: 400;
+}
+
 /* Detail bubble */
 
 .dock-detail {

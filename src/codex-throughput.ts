@@ -2,6 +2,7 @@ import { open, stat } from 'node:fs/promises'
 import { StringDecoder } from 'node:string_decoder'
 
 import { billableOutputTokens } from './models.js'
+import { isCodexForkReplay, startCodexForkReplay, type CodexForkReplayState } from './codex-fork-replay.js'
 
 export type CodexThroughputPoint = {
   timestamp: string
@@ -180,7 +181,7 @@ type ThroughputState = {
   toolStarts: Map<string, number>
   latestPoint?: CodexThroughputPoint
   points: CodexThroughputPoint[]
-  forkCutoffMs?: number
+  forkReplayState?: CodexForkReplayState
 }
 
 function newThroughputState(): ThroughputState {
@@ -334,14 +335,12 @@ export class CodexThroughputReader {
     if (entry.type === 'session_meta') {
       if (entry.payload?.model) state.model = entry.payload.model
       if (entry.payload?.forked_from_id && entry.timestamp) {
-        const timestamp = Date.parse(entry.timestamp)
-        if (Number.isFinite(timestamp)) state.forkCutoffMs = timestamp + 5000
+        state.forkReplayState = startCodexForkReplay(entry.timestamp)
       }
       return
     }
     if (entry.type === 'turn_context' && entry.payload?.model) state.model = entry.payload.model
-    const entryTimestamp = entry.timestamp ? Date.parse(entry.timestamp) : NaN
-    const isForkReplay = state.forkCutoffMs !== undefined && Number.isFinite(entryTimestamp) && entryTimestamp < state.forkCutoffMs
+    const isForkReplay = isCodexForkReplay(state.forkReplayState, entry.timestamp)
     if (isForkReplay && (
       entry.payload?.type === 'task_started' ||
       entry.payload?.type === 'task_complete' ||
@@ -352,7 +351,24 @@ export class CodexThroughputReader {
       entry.payload?.type === 'mcp_tool_call_end' ||
       entry.payload?.type === 'patch_apply_end' ||
       entry.payload?.type === 'token_count'
-    )) return
+    )) {
+      if (entry.payload?.type === 'token_count') {
+        const info = entry.payload.info
+        const total = info?.total_token_usage
+        if (total?.total_tokens !== undefined && Number.isFinite(total.total_tokens)) {
+          state.previousTotal = total.total_tokens
+          state.previousOutput = total.output_tokens ?? state.previousOutput
+          state.previousReasoning = total.reasoning_output_tokens ?? state.previousReasoning
+        }
+        const outputTokens = info?.last_token_usage?.output_tokens ?? total?.output_tokens ?? 0
+        const reasoningTokens = info?.last_token_usage?.reasoning_output_tokens ?? total?.reasoning_output_tokens ?? 0
+        const replayTimestamp = entry.timestamp ? Date.parse(entry.timestamp) : NaN
+        if ((outputTokens > 0 || reasoningTokens > 0) && Number.isFinite(replayTimestamp)) {
+          state.previousTimestamp = Math.max(replayTimestamp, state.forkReplayState?.startedAtMs ?? replayTimestamp)
+        }
+      }
+      return
+    }
     if (entry.type === 'event_msg' && entry.payload?.type === 'task_started') {
       state.currentTaskGenerated = 0
       state.currentTaskToolIntervals = []

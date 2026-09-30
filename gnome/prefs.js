@@ -30,6 +30,11 @@ const PERIODS = [
   { id: 'all', label: '6 Months' },
 ];
 
+const SCOPES = [
+  { id: 'local', label: 'This device' },
+  { id: 'combined', label: 'All devices' },
+];
+
 export default class CodeBurnPreferences extends ExtensionPreferences {
   fillPreferencesWindow(window) {
     const settings = this.getSettings();
@@ -99,6 +104,25 @@ export default class CodeBurnPreferences extends ExtensionPreferences {
         settings.set_string('default-period', PERIODS[idx].id);
     });
     displayGroup.add(periodRow);
+
+    const scopeModel = new Gtk.StringList();
+    for (const scope of SCOPES)
+      scopeModel.append(scope.label);
+
+    const scopeRow = new Adw.ComboRow({
+      title: 'Default Scope',
+      subtitle: 'Show this device or all paired devices when opened',
+      model: scopeModel,
+    });
+    const currentScope = settings.get_string('default-scope');
+    const scopeIndex = SCOPES.findIndex(s => s.id === currentScope);
+    scopeRow.set_selected(scopeIndex >= 0 ? scopeIndex : 0);
+    scopeRow.connect('notify::selected', () => {
+      const idx = scopeRow.get_selected();
+      if (idx >= 0 && idx < SCOPES.length)
+        settings.set_string('default-scope', SCOPES[idx].id);
+    });
+    displayGroup.add(scopeRow);
 
     const alertsGroup = new Adw.PreferencesGroup({
       title: 'Budget Alerts',

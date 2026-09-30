@@ -115,6 +115,9 @@ process, so the cadence follows popover visibility.
 - popover hidden: 120 s tick, `today`/`all` only, `--no-optimize`
 - on show: immediate refresh when the visible key is older than 60 s
 
+The `detailTheme` dock preference (Settings > General > Capacity Dock > Hover bubble) picks
+the bubble's surface independently of the rail's; `match` is the rail's own theme.
+
 ## Plan / quota
 
 The Plan pill (visible on the Claude tab, or when Claude is the only detected provider) reads
@@ -129,6 +132,10 @@ and rotates, so spending it would invalidate the token Claude Code itself is hol
 the user's login. Like `ClaudeCredentialStore.refreshAfter401` on macOS, we re-read Claude's
 own credential file for a token it has already rotated, and report a transient failure when
 there isn't one yet.
+
+The `keepExpanded` dock preference (Settings > General > Capacity Dock > Keep expanded) makes
+the rail read as pinned, so every selected ring stays out at rest and the hover-out collapse
+never runs.
 
 ## Build a production package
 

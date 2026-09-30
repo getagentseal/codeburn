@@ -9,15 +9,6 @@ import { extractBashCommands } from '../bash-utils.js'
 import { normalizeContentBlocks } from '../content-utils.js'
 import type { ProbeRoot, Provider, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
 
-const modelDisplayNames: Record<string, string> = {
-  'gpt-5.4': 'GPT-5.4',
-  'gpt-5.4-mini': 'GPT-5.4 Mini',
-  'gpt-5.5': 'GPT-5.5',
-  'gpt-5': 'GPT-5',
-  'gpt-4o': 'GPT-4o',
-  'gpt-4o-mini': 'GPT-4o Mini',
-}
-
 const toolNameMap: Record<string, string> = {
   bash: 'Bash',
   read: 'Read',
@@ -32,9 +23,6 @@ const toolNameMap: Record<string, string> = {
   todo: 'TodoWrite',
   patch: 'Patch',
 }
-
-// Pre-sorted by key length descending so longer/more-specific keys match first
-const modelDisplayEntries = Object.entries(modelDisplayNames).sort((a, b) => b[0].length - a[0].length)
 
 // Pi/OMP have no dedicated skill tool the way Claude Code does. A native skill
 // load is emitted as an ordinary `read` tool call whose path points at the
@@ -70,6 +58,17 @@ type PiEntry = {
   timestamp?: string
   cwd?: string
   model?: string
+  // `model_usage` entries (OMP side calls) carry these at the top level.
+  provider?: string
+  purpose?: string
+  stopReason?: string
+  usage?: {
+    input?: number
+    output?: number
+    cacheRead?: number
+    cacheWrite?: number
+    cost?: { total?: number }
+  }
   message?: {
     role?: string
     content?: Array<{ type?: string; text?: string; name?: string; arguments?: Record<string, unknown> }> | string
@@ -87,6 +86,56 @@ type PiEntry = {
         total?: number
       }
     }
+  }
+}
+
+// OMP logs side calls outside the assistant transcript as `model_usage`
+// entries: find and judge decisions (Jev), cache warming, and similar. They
+// never duplicate an assistant message, so each one counts as its own call.
+// The tool column carries the purpose, such as `find`, so a report can split
+// decision spend from chat spend.
+function modelUsageCall(entry: PiEntry, source: SessionSource, sessionId: string, lineIdx: number,
+                        sessionTimestamp: string, seenKeys: Set<string>): ParsedProviderCall | null {
+  const usage = entry.usage
+  if (!usage) return null
+  const input = usage.input ?? 0
+  const output = usage.output ?? 0
+  const cacheRead = usage.cacheRead ?? 0
+  const cacheWrite = usage.cacheWrite ?? 0
+  if (input === 0 && output === 0 && cacheRead === 0) return null
+  const bare = entry.model ?? ''
+  // OMP writes routed ids such as `~typesafe/jev-latest` beside provider
+  // `openrouter`. The provider prefix keeps them distinct and priceable.
+  const model = !entry.provider || bare.startsWith(`${entry.provider}/`) ? bare : `${entry.provider}/${bare}`
+  if (!model) return null
+  const dedupKey = `${source.provider}:${source.path}:model_usage:${entry.id || entry.timestamp || String(lineIdx)}`
+  if (seenKeys.has(dedupKey)) return null
+  seenKeys.add(dedupKey)
+  const reported = usage.cost?.total
+  const costUSD = typeof reported === 'number' && Number.isFinite(reported) && reported !== 0
+    ? reported
+    : calculateCost(model, input, output, cacheWrite, cacheRead, 0)
+  const timestamp = entry.timestamp || sessionTimestamp
+  if (!timestamp) return null
+  return {
+    provider: source.provider,
+    model,
+    inputTokens: input,
+    outputTokens: output,
+    cacheCreationInputTokens: cacheWrite,
+    cacheReadInputTokens: cacheRead,
+    cachedInputTokens: cacheRead,
+    reasoningTokens: 0,
+    webSearchRequests: 0,
+    costUSD,
+    tools: [entry.purpose ? `omp:${entry.purpose}` : 'omp:side-call'],
+    bashCommands: [],
+    skills: [],
+    timestamp,
+    speed: 'standard',
+    deduplicationKey: dedupKey,
+    userMessage: '',
+    sessionId,
   }
 }
 
@@ -249,6 +298,12 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
           continue
         }
 
+        if (entry.type === 'model_usage') {
+          const call = modelUsageCall(entry, source, sessionId, lineIdx, sessionTimestamp, seenKeys)
+          if (call) yield call
+          continue
+        }
+
         if (entry.type !== 'message') continue
 
         const msg = entry.message
@@ -373,10 +428,13 @@ export function createPiProvider(sessionsDir?: string): Provider {
     },
     displayName: 'Pi',
 
+    // No local display table (#1530): every entry one used to carry exists in
+    // the global SHORT_NAMES with the same label, and a local list that lags
+    // behind it re-creates the #1530 inconsistency (a bare `gpt-5` key
+    // swallowing `gpt-5-mini` into "GPT-5"). Echoing the raw id lets the
+    // report layer's fallbackRawModelDisplayName resolve every id with the
+    // one global getShortModelName all providers share.
     modelDisplayName(model: string): string {
-      for (const [key, name] of modelDisplayEntries) {
-        if (model.startsWith(key)) return name
-      }
       return model
     },
 
@@ -408,9 +466,6 @@ export function createOmpProvider(sessionsDir?: string): Provider {
     displayName: 'OMP',
 
     modelDisplayName(model: string): string {
-      for (const [key, name] of modelDisplayEntries) {
-        if (model.startsWith(key)) return name
-      }
       return model
     },
 

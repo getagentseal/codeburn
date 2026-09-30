@@ -123,6 +123,7 @@ describe('parseTrayDockPrefs', () => {
       gaugeShape: 'squircle',
       providers: ['claude', 'codex'],
       manualSelection: true,
+      claudeProfiles: 'separate',
     })).toEqual({
       enabled: true,
       preferred: 'claude',
@@ -131,6 +132,7 @@ describe('parseTrayDockPrefs', () => {
       gaugeShape: 'squircle',
       providers: ['claude', 'codex'],
       manualSelection: true,
+      claudeProfiles: 'separate',
     })
   })
 
@@ -143,6 +145,12 @@ describe('parseTrayDockPrefs', () => {
     expect(normalizeScale(9)).toBe(1.2)
     expect(normalizeScale(0.93)).toBe(0.95)
     expect(normalizeScale('big')).toBe(0.6)
+  })
+
+  it('keeps the Claude profiles mode to its two spelled values', () => {
+    expect(parseTrayDockPrefs({ claudeProfiles: 'separate' }).claudeProfiles).toBe('separate')
+    expect(parseTrayDockPrefs({ claudeProfiles: 'Combined' }).claudeProfiles).toBe('combined')
+    expect(parseTrayDockPrefs({}).claudeProfiles).toBe('combined')
   })
 })
 
@@ -172,6 +180,7 @@ describe('sanitizeDockPatch', () => {
     expect(sanitizeDockPatch({ scale: 1.05 })).toEqual({ scale: 1.05 })
     expect(sanitizeDockPatch({ theme: 'glass' })).toEqual({ theme: 'glass' })
     expect(sanitizeDockPatch({ gaugeShape: 'squircle' })).toEqual({ gaugeShape: 'squircle' })
+    expect(sanitizeDockPatch({ claudeProfiles: 'separate' })).toEqual({ claudeProfiles: 'separate' })
     expect(sanitizeDockPatch({ preferred: 'codex' })).toEqual({ preferred: 'codex' })
   })
 
@@ -186,6 +195,9 @@ describe('sanitizeDockPatch', () => {
     expect(sanitizeDockPatch({ preferred: '../../etc' })).toEqual({ preferred: null })
     expect(sanitizeDockPatch({ providers: ['claude', 'Bad Id', 42] }))
       .toEqual({ providers: ['claude'], manualSelection: true })
+    // An unknown profiles mode is repaired to the default rather than written where the tray
+    // app would have to parse it back.
+    expect(sanitizeDockPatch({ claudeProfiles: 'one-ring-each' })).toEqual({ claudeProfiles: 'combined' })
   })
 })
 

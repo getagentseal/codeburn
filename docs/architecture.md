@@ -84,8 +84,8 @@ links, PR correlation, the Codex result cache) stays on the main thread. A file
 whose keys were already claimed by an earlier file, or whose worker failed, is
 re-parsed in-process — so the output is identical to the serial path either way.
 That overlap check is what makes a forked Codex rollout safe: it replays its
-parent's token_count history under the parent's key namespace, collides, and is
-re-parsed against the real dedup set.
+parent's `token_count` and `token_usage_record` history under the parent's key
+namespace, collides, and is re-parsed against the real dedup set.
 
 A Codex worker never touches `src/codex-cache.ts`: it returns the cache entry it
 would have written and the parent writes it, in install order, so

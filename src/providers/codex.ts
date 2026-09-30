@@ -8,6 +8,7 @@ import { FS_SCAN_CONCURRENCY, mapWithConcurrency, readSessionLines } from '../fs
 import { billableOutputTokens, calculateCost, getModelCosts } from '../models.js'
 import { readCachedCodexResults, writeCachedCodexResults, getCachedCodexProject, fingerprintFile, type CodexFileFingerprint } from '../codex-cache.js'
 import { mergeToolIntervals } from '../codex-throughput.js'
+import { isCodexForkReplay, isCodexForkReplayState, startCodexForkReplay, type CodexForkReplayState } from '../codex-fork-replay.js'
 import { normalizeContentBlocks } from '../content-utils.js'
 import { estimateTokensFromChars } from '../token-estimate.js'
 import { wslHomes } from '../wsl.js'
@@ -136,7 +137,9 @@ type CodexEntry = {
     duration?: { secs?: number; nanos?: number } | string
     role?: string
     cwd?: string
+    response_id?: string
     model_provider?: string
+    model_name?: string
     originator?: string
     session_id?: string
     forked_from_id?: string
@@ -155,6 +158,7 @@ type CodexEntry = {
       last_token_usage?: CodexTokenUsage
       total_token_usage?: CodexTokenUsage
     }
+    usage?: CodexTokenUsage
   }
 }
 
@@ -617,7 +621,23 @@ function firstModelString(...values: unknown[]): string | undefined {
 }
 
 function resolveModel(info: CodexEntry['payload'], sessionModel?: string): string {
-  return firstModelString(info?.model, info?.info?.model, info?.info?.model_name, sessionModel) ?? 'gpt-5'
+  return firstModelString(info?.model, info?.model_name, info?.info?.model, info?.info?.model_name, sessionModel) ?? 'gpt-5'
+}
+
+function isValidCodexTokenUsage(value: unknown): value is CodexTokenUsage {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const usage = value as Record<string, unknown>
+  const fields = [
+    usage['input_tokens'],
+    usage['cached_input_tokens'],
+    usage['cache_write_input_tokens'],
+    usage['output_tokens'],
+    usage['reasoning_output_tokens'],
+  ]
+  const hasCounter = fields.some(field => typeof field === 'number' && Number.isFinite(field) && field >= 0)
+  return hasCounter && fields.every(field =>
+    field === undefined || (typeof field === 'number' && Number.isFinite(field) && field >= 0),
+  )
 }
 
 // Everything the single-pass decode carries across a `task_started` boundary.
@@ -631,11 +651,14 @@ type CodexResumeState = {
   sessionId: string
   sessionCwd?: string
   forkedFromId: string
-  forkCutoff: string
+  forkReplayState?: CodexForkReplayState
   prevCumulativeTotal: number | null
   /// Byte-identity of the last token_count info payload (#257 re-emission
   /// collapse). Optional so resume states written before it still decode.
   prevInfoIdentity?: string | null
+  /// Newer Codex builds emit one token_usage_record before each token_count
+  /// twin. Persist the source handover across append resumes.
+  hasTokenUsageRecord?: boolean
   prevInput: number
   prevCached: number
   prevCacheWrite: number
@@ -670,9 +693,10 @@ function isResumeState(value: unknown): value is CodexResumeState {
   const v = value as Record<string, unknown>
   return typeof v['sessionId'] === 'string'
     && typeof v['forkedFromId'] === 'string'
-    && typeof v['forkCutoff'] === 'string'
+    && (v['forkReplayState'] === undefined || isCodexForkReplayState(v['forkReplayState']))
     && (v['prevCumulativeTotal'] === null || typeof v['prevCumulativeTotal'] === 'number')
     && (v['prevInfoIdentity'] === undefined || v['prevInfoIdentity'] === null || typeof v['prevInfoIdentity'] === 'string')
+    && (v['hasTokenUsageRecord'] === undefined || typeof v['hasTokenUsageRecord'] === 'boolean')
     && typeof v['prevInput'] === 'number'
     && typeof v['prevCached'] === 'number'
     && typeof v['prevCacheWrite'] === 'number'
@@ -725,7 +749,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
       let sessionId = resume?.state.sessionId ?? ''
       let sessionCwd: string | undefined = resume?.state.sessionCwd
       let forkedFromId = resume?.state.forkedFromId ?? ''
-      let forkCutoff = resume?.state.forkCutoff ?? ''
+      let forkReplayState = resume?.state.forkReplayState ? { ...resume.state.forkReplayState } : undefined
       // Null sentinel rather than `0` so the FIRST event is never confused
       // with a duplicate. A session that only emits last_token_usage (no
       // total_token_usage) reports cumulativeTotal=0 on every event; with a
@@ -734,6 +758,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
       // total and dedup on equality regardless of whether it is zero.
       let prevCumulativeTotal: number | null = resume?.state.prevCumulativeTotal ?? null
       let prevInfoIdentity: string | null = resume?.state.prevInfoIdentity ?? null
+      let hasTokenUsageRecord = resume?.state.hasTokenUsageRecord ?? false
       let prevInput = resume?.state.prevInput ?? 0
       let prevCached = resume?.state.prevCached ?? 0
       let prevCacheWrite = resume?.state.prevCacheWrite ?? 0
@@ -814,6 +839,89 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
       let taskActiveStartedAt: number | undefined = resume?.state.taskActiveStartedAt
       const openToolStarts = new Map<string, number>()
 
+      const accountUsage = (entry: CodexEntry, usage: CodexTokenUsage, dedupKey: string): void => {
+        const inputTokens = usage.input_tokens ?? 0
+        const cachedInputTokens = usage.cached_input_tokens ?? 0
+        const cacheWriteTokens = usage.cache_write_input_tokens ?? 0
+        const outputTokens = usage.output_tokens ?? 0
+        const reasoningTokens = usage.reasoning_output_tokens ?? 0
+        const totalTokens = inputTokens + cachedInputTokens + outputTokens + reasoningTokens
+        if (totalTokens === 0 || seenKeys.has(dedupKey)) return
+
+        // OpenAI includes cached tokens inside input_tokens; Anthropic does not.
+        // Normalize to Anthropic semantics: inputTokens = non-cached only.
+        const uncachedInputTokens = Math.max(0, inputTokens - cachedInputTokens)
+
+        // Cache writes are carved out of the uncached input, never added to
+        // it: clamp so a malformed or lagging count can never drive the plain
+        // input bucket negative.
+        const cacheWriteInputTokens = Math.max(0, Math.min(cacheWriteTokens, uncachedInputTokens))
+
+        const model = resolveModel(entry.payload, sessionModel)
+        // Only move tokens into the cache-write bucket when the pricing
+        // source publishes a real cache-write rate for this model (gpt-5.6+)
+        // charges 1.25x input; otherwise don't invent an unbilled surcharge.
+        const billedCacheWriteTokens = cacheWriteInputTokens > 0 && getModelCosts(model)?.cacheWriteCostIsExplicit
+          ? cacheWriteInputTokens
+          : 0
+        const billedInputTokens = uncachedInputTokens - billedCacheWriteTokens
+        const timestamp = entry.timestamp ?? ''
+        seenKeys.add(dedupKey)
+
+        // Reasoning tokens are already inside output_tokens, so they are NOT
+        // added here. The cache-rehydration twin of this line lives in
+        // src/parser.ts (cachedCallToApiCall); both call billableOutputTokens
+        // so a fresh parse and a cache read can never price differently.
+        const costUSD = calculateCost(
+          model,
+          billedInputTokens,
+          billableOutputTokens('codex', outputTokens, reasoningTokens),
+          billedCacheWriteTokens,
+          cachedInputTokens,
+          0,
+          'standard',
+          0,
+          'codex',
+        )
+
+        pendingTaskCalls.push({
+          provider: 'codex',
+          model,
+          inputTokens: billedInputTokens,
+          outputTokens,
+          cacheCreationInputTokens: billedCacheWriteTokens,
+          cacheReadInputTokens: cachedInputTokens,
+          cachedInputTokens,
+          reasoningTokens,
+          webSearchRequests: 0,
+          costUSD,
+          tools: pendingTools,
+          bashCommands: [],
+          timestamp,
+          speed: 'standard',
+          deduplicationKey: dedupKey,
+          turnId: currentTurnId,
+          toolSequence: pendingToolSequence.length > 0 ? pendingToolSequence : undefined,
+          ...(pendingSkills.length > 0 ? { skills: pendingSkills } : {}),
+          userMessage: pendingUserMessage,
+          sessionId,
+          ...(sessionCwd ? { projectPath: sessionCwd, workingDirectory: sessionCwd } : {}),
+          ...(pendingLocAdded ? { locAdded: pendingLocAdded } : {}),
+          ...(pendingLocRemoved ? { locRemoved: pendingLocRemoved } : {}),
+          ...(pendingEditFailed ? { editFailed: pendingEditFailed } : {}),
+        })
+        taskGeneratedTokens += billableOutputTokens('codex', outputTokens, reasoningTokens)
+
+        pendingTools = []
+        pendingToolSequence = []
+        pendingSkills = []
+        pendingUserMessage = ''
+        pendingOutputChars = 0
+        pendingLocAdded = 0
+        pendingLocRemoved = 0
+        pendingEditFailed = 0
+      }
+
       // Resume point for the NEXT run, refreshed at every task boundary.
       const tracker = { lastCompleteLineOffset: resume?.offset ?? 0 }
       let resumeOffset = resume?.offset ?? 0
@@ -849,12 +957,12 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
             || entry.payload?.parent_thread_id
             || entry.payload?.source?.subagent?.thread_spawn?.parent_thread_id
             || ''
-          if (forkedFromId && entry.timestamp) {
-            // An unparseable timestamp (a garbage string, or a non-string from
-            // the unchecked JSON.parse cast) makes `new Date(NaN).toISOString()`
-            // throw RangeError, which would sink this whole session to zero.
-            const forkBaseMs = new Date(entry.timestamp).getTime()
-            if (Number.isFinite(forkBaseMs)) forkCutoff = new Date(forkBaseMs + 5000).toISOString()
+          if (forkedFromId) {
+            forkReplayState = startCodexForkReplay(entry.timestamp)
+            // Byte identity only collapses consecutive records inside one
+            // stream. A fork's first real no-cumulative request may have the
+            // same token breakdown as its last copied parent request.
+            prevInfoIdentity = null
           }
           if (typeof entry.payload?.model === 'string') sessionModel = entry.payload.model
           continue
@@ -864,8 +972,8 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
         // where model-request assembly actually began. Checked before any of
         // these types `continue` below, and unconditionally (like turn_context's
         // model capture above) so a forked replay's own request-context events
-        // still mark it -- matching how those events are already read regardless
-        // of isForkReplay, which only filters task boundaries and tool events.
+        // still mark it before the replay-specific task, tool, message, and usage
+        // records are skipped.
         if (taskActiveStartedAt === undefined && (
           entry.type === 'turn_context'
           || entry.type === 'world_state'
@@ -876,12 +984,13 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
           if (Number.isFinite(ctxAt)) taskActiveStartedAt = ctxAt
         }
 
+        const isForkReplay = isCodexForkReplay(forkReplayState, entry.timestamp)
+
         if (entry.type === 'turn_context' && typeof entry.payload?.model === 'string') {
           sessionModel = entry.payload.model
           continue
         }
 
-        const isForkReplay = Boolean(forkCutoff && entry.timestamp && entry.timestamp < forkCutoff)
         if (isForkReplay && (
           entry.payload?.type === 'task_started' ||
           entry.payload?.type === 'task_complete' ||
@@ -893,6 +1002,34 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
           entry.payload?.type === 'item_completed' ||
           entry.payload?.type === 'patch_apply_end'
         )) continue
+
+        if (isForkReplay && entry.type === 'response_item' && entry.payload?.type === 'message') continue
+        if (isForkReplay && entry.type === 'event_msg' && entry.payload?.type === 'token_count') {
+          const info = entry.payload.info
+          if (info) {
+            const total = info.total_token_usage
+            const reportsCumulative = typeof total?.total_tokens === 'number'
+              && Number.isFinite(total.total_tokens)
+              && total.total_tokens >= 0
+            if (reportsCumulative) prevInfoIdentity = JSON.stringify(info)
+            if (total) {
+              const cumulativeTotal = total.total_tokens ?? 0
+              prevCumulativeTotal = reportsCumulative ? cumulativeTotal : null
+              prevInput = total.input_tokens ?? 0
+              prevCached = total.cached_input_tokens ?? 0
+              prevCacheWrite = total.cache_write_input_tokens ?? 0
+              prevOutput = total.output_tokens ?? 0
+              prevReasoning = total.reasoning_output_tokens ?? 0
+            } else {
+              prevCumulativeTotal = null
+            }
+          }
+          // A replay's prompt and response text is historical context. Keep it
+          // out of the fallback character estimate for the first real turn.
+          pendingUserMessage = ''
+          pendingOutputChars = 0
+          continue
+        }
 
         if (entry.type === 'event_msg' && entry.payload?.type === 'task_started') {
           // Emit the previous task. If it never reached task_complete its timing
@@ -914,9 +1051,10 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
             sessionId,
             ...(sessionCwd !== undefined ? { sessionCwd } : {}),
             forkedFromId,
-            forkCutoff,
+            ...(forkReplayState ? { forkReplayState: { ...forkReplayState } } : {}),
             prevCumulativeTotal,
             prevInfoIdentity,
+            hasTokenUsageRecord,
             prevInput,
             prevCached,
             prevCacheWrite,
@@ -1100,11 +1238,29 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
           continue
         }
 
+        if (entry.type === 'token_usage_record') {
+          // Newer Codex builds write one response-level usage record before its
+          // token_count twin. The record survives compaction and interrupted
+          // turns, so it becomes the source for this rollout once seen.
+          const usage: unknown = entry.payload?.usage
+          if (!isValidCodexTokenUsage(usage)) continue
+          if (isForkReplay) continue
+          hasTokenUsageRecord = true
+
+          const responseId = entry.payload?.response_id
+          const dedupKey = typeof responseId === 'string' && responseId
+            ? `codex:${forkedFromId || sessionId}:response:${responseId}`
+            : `codex:usage-record:${JSON.stringify([source.path, tracker.lastCompleteLineOffset])}`
+          accountUsage(entry, usage, dedupKey)
+          continue
+        }
+
         if (entry.type === 'event_msg' && entry.payload?.type === 'token_count') {
-          // Forked sessions replay the parent's entire event history with
-          // timestamps clustered at the fork creation time. Skip replayed
-          // events (within 5s of fork) to avoid double-counting.
-          if (forkCutoff && entry.timestamp && entry.timestamp < forkCutoff) continue
+          // Newer rollouts pair each response record with a token_count event.
+          // The response record is authoritative; all subsequent twins and
+          // re-emissions stay out of usage, while pre-handover legacy events
+          // remain counted.
+          if (hasTokenUsageRecord) continue
           const info = entry.payload.info
           if (!info) {
             if (pendingOutputChars === 0 && pendingUserMessage.length === 0) continue
@@ -1119,7 +1275,9 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
             if (seenKeys.has(dedupKey)) { pendingTools = []; pendingToolSequence = []; pendingSkills = []; pendingUserMessage = ''; pendingOutputChars = 0; pendingLocAdded = 0; pendingLocRemoved = 0; pendingEditFailed = 0; continue }
             seenKeys.add(dedupKey)
 
-            const costUSD = calculateCost(model, estInput, estOutput, 0, 0, 0)
+            // An estimated prompt can cross a long-context threshold and tier
+            // itself; measured corpora hold no estimated calls that cross.
+            const costUSD = calculateCost(model, estInput, estOutput, 0, 0, 0, 'standard', 0, 'codex')
 
             pendingTaskCalls.push({
               provider: 'codex',
@@ -1219,30 +1377,6 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
             prevReasoning = total.reasoning_output_tokens ?? 0
           }
 
-          const totalTokens = inputTokens + cachedInputTokens + outputTokens + reasoningTokens
-          if (totalTokens === 0) continue
-
-          // OpenAI includes cached tokens inside input_tokens; Anthropic does not.
-          // Normalize to Anthropic semantics: inputTokens = non-cached only.
-          const uncachedInputTokens = Math.max(0, inputTokens - cachedInputTokens)
-
-          // Cache writes are carved out of the uncached input, never added to
-          // it: clamp so a malformed or lagging count can never drive the plain
-          // input bucket negative.
-          const cacheWriteInputTokens = Math.max(0, Math.min(cacheWriteTokens, uncachedInputTokens))
-
-          const model = resolveModel(entry.payload, sessionModel)
-          // Only move tokens into the cache-write bucket when the pricing
-          // source publishes a real cache-write rate for this model (gpt-5.6+
-          // charges 1.25x input; everything before it charges nothing extra).
-          // Otherwise buildCosts' fabricated 1.25x default would invent a
-          // surcharge that OpenAI never billed, so the tokens stay where they
-          // already were -- in plain input, priced exactly as before.
-          const billedCacheWriteTokens = cacheWriteInputTokens > 0 && getModelCosts(model)?.cacheWriteCostIsExplicit
-            ? cacheWriteInputTokens
-            : 0
-          const billedInputTokens = uncachedInputTokens - billedCacheWriteTokens
-          const timestamp = entry.timestamp ?? ''
           // Forked sessions copy the parent's entire token_count history
           // (re-timestamped), so replays must collide with the parent's events
           // and drop to avoid double-counting -- hence the parent namespace
@@ -1254,9 +1388,9 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
           // verbatim from the parent -- a true replay collides exactly, while
           // genuinely different work at the same total stays distinct. We use the
           // CUMULATIVE figures (not the per-event deltas) on purpose: the deltas
-          // are computed against a running `prev` that the fork advances
-          // differently once the 5s cutoff skips some replays, so a delta-based
-          // key would spuriously diverge on a replay and double-count it.
+          // are computed against a running `prev` that may start from a replay
+          // baseline, so a delta-based key would spuriously diverge on a replay
+          // and double-count it.
           // Without cumulative identity, equal usage can be distinct requests.
           // Use the physical record position: stable on cache resume/re-read,
           // but deliberately do not guess cross-file replay identity.
@@ -1265,65 +1399,20 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
           // strictly-advanced total, so no tokens are lost and no active-time
           // rescaling is needed; without it the record differs in payload
           // from its predecessor and is treated as a distinct request, which
-          // deliberately weakens forkedFromId replay protection past the 5s
-          // fork cutoff (accepted trade-off: the alternative collapsed
+          // deliberately weakens forkedFromId replay protection past the replay
+          // burst (accepted trade-off: the alternative collapsed
           // distinct requests wholesale).
           const dedupKey = reportsCumulative
             ? `codex:${forkedFromId || sessionId}:${cumulativeTotal}:${total?.input_tokens ?? 0}:${total?.cached_input_tokens ?? 0}:${total?.output_tokens ?? 0}:${total?.reasoning_output_tokens ?? 0}`
             : `codex:record:${JSON.stringify([source.path, tracker.lastCompleteLineOffset])}`
 
-          if (seenKeys.has(dedupKey)) continue
-          seenKeys.add(dedupKey)
-
-          // Reasoning tokens are already inside output_tokens, so they are NOT
-          // added here. The cache-rehydration twin of this line lives in
-          // src/parser.ts (cachedCallToApiCall); both call billableOutputTokens
-          // so a fresh parse and a cache read can never price differently.
-          const costUSD = calculateCost(
-            model,
-            billedInputTokens,
-            billableOutputTokens('codex', outputTokens, reasoningTokens),
-            billedCacheWriteTokens,
-            cachedInputTokens,
-            0,
-          )
-
-          pendingTaskCalls.push({
-            provider: 'codex',
-            model,
-            inputTokens: billedInputTokens,
-            outputTokens,
-            cacheCreationInputTokens: billedCacheWriteTokens,
-            cacheReadInputTokens: cachedInputTokens,
-            cachedInputTokens,
-            reasoningTokens,
-            webSearchRequests: 0,
-            costUSD,
-            tools: pendingTools,
-            bashCommands: [],
-            timestamp,
-            speed: 'standard',
-            deduplicationKey: dedupKey,
-            turnId: currentTurnId,
-            toolSequence: pendingToolSequence.length > 0 ? pendingToolSequence : undefined,
-            ...(pendingSkills.length > 0 ? { skills: pendingSkills } : {}),
-            userMessage: pendingUserMessage,
-            sessionId,
-            ...(sessionCwd ? { projectPath: sessionCwd, workingDirectory: sessionCwd } : {}),
-            ...(pendingLocAdded ? { locAdded: pendingLocAdded } : {}),
-            ...(pendingLocRemoved ? { locRemoved: pendingLocRemoved } : {}),
-            ...(pendingEditFailed ? { editFailed: pendingEditFailed } : {}),
-          })
-          taskGeneratedTokens += billableOutputTokens('codex', outputTokens, reasoningTokens)
-
-          pendingTools = []
-          pendingToolSequence = []
-          pendingSkills = []
-          pendingUserMessage = ''
-          pendingOutputChars = 0
-          pendingLocAdded = 0
-          pendingLocRemoved = 0
-          pendingEditFailed = 0
+          accountUsage(entry, {
+            input_tokens: inputTokens,
+            cached_input_tokens: cachedInputTokens,
+            cache_write_input_tokens: cacheWriteTokens,
+            output_tokens: outputTokens,
+            reasoning_output_tokens: reasoningTokens,
+          }, dedupKey)
         }
       }
 

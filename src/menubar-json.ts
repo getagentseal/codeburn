@@ -221,6 +221,17 @@ export type CombinedUsage = {
   }
 }
 
+/// Optional full payloads used by clients that need to reproduce the detailed
+/// all-devices view (activity/history/etc.). Remote payloads are already
+/// sanitized by the sharing host before they reach this boundary.
+export type CombinedDevicePayload = {
+  id: string
+  name: string
+  local: boolean
+  error?: string
+  payload?: MenubarPayload
+}
+
 export type ClaudeConfigOption = {
   id: string
   label: string
@@ -504,6 +515,10 @@ export type MenubarPayload = {
   /// { code: 'USD', symbol: '$', rate: 1 }.
   currency: { code: string; symbol: string; rate: number }
   combined?: CombinedUsage
+  /// Present only when status was requested with --combined-details. This is
+  /// intentionally opt-in because it can be much larger than summary-only
+  /// combined usage. Remote entries contain aggregate, sanitized payloads.
+  combinedDevices?: CombinedDevicePayload[]
   claudeConfigs?: ClaudeConfigSelector
   /// Anonymised, fully bucketed daily aggregate for consent-gated product
   /// telemetry: the `usage_snapshot` event that the desktop app and the Windows

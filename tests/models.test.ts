@@ -24,6 +24,9 @@ import {
   getFlatRateModelsConfigHash,
   parseLiteLLMEntry,
   unpricedModelHint,
+  cacheWriteCostPerToken,
+  tieredCostsFor,
+  modelKeyMatches,
 } from '../src/models.js'
 import { getDailyCacheConfigHash } from '../src/usage-aggregator.js'
 import snapshotData from '../src/data/litellm-snapshot.json' with { type: 'json' }
@@ -105,21 +108,28 @@ describe('getModelCosts', () => {
     // generation LiteLLM ships (gpt-5-codex, gpt-5.1-codex, gpt-5.1-codex-max,
     // gpt-5.2-codex, gpt-5.3-codex all carry their base model's exact rate).
     const snapshot = snapshotData as Record<string, unknown>
-    // 2026-08-24: OpenAI cut the gpt-5.6 base rate ($5/$30 to $4/$20) and
-    // LiteLLM updated the base row before the codex SKUs, so codex-equals-base
-    // cannot be asserted until upstream syncs. The codex rows must still exist
-    // explicitly and carry the pre-cut rate they ship with today.
-    expect(snapshot['gpt-5.6-codex']).toBeDefined()
-    expect(snapshot['gpt-5.6-codex-max']).toEqual(snapshot['gpt-5.6-codex'])
+    // The codex SKUs are still absent from LiteLLM (2026-09-29 refresh), so
+    // they ship as MANUAL_ENTRIES in bundle-litellm.mjs - full verbatim
+    // mirrors of the gpt-5.6 row, tier block included, per the same-generation
+    // pattern every codex id LiteLLM carries follows (gpt-5-codex == gpt-5,
+    // gpt-5.1-codex == gpt-5.1-codex-max == gpt-5.1, gpt-5.2-codex == gpt-5.2,
+    // gpt-5.3-codex == gpt-5.3). The equality below is the re-tightened
+    // #1134 invariant: if LiteLLM reprices the base row again, the mirror
+    // fails here until the manual entries are refreshed - and once upstream
+    // ships the codex SKUs, the manual mirrors must be deleted, not edited.
+    expect(snapshot['gpt-5.6-codex']).toEqual(snapshot['gpt-5.6'])
+    expect(snapshot['gpt-5.6-codex-max']).toEqual(snapshot['gpt-5.6'])
 
     const codex = getModelCosts('gpt-5.6-codex')
     const codexMax = getModelCosts('gpt-5.6-codex-max')
     expect(codex).not.toBeNull()
     expect(codexMax).not.toBeNull()
-    expect(codex!.inputCostPerToken).toBe(5e-6)
-    expect(codex!.outputCostPerToken).toBe(3e-5)
-    expect(codex!.cacheWriteCostPerToken).toBe(6.25e-6)
-    expect(codex!.cacheReadCostPerToken).toBe(5e-7)
+    // The 2026-08-24 repricing: gpt-5.6 base cut from $5/$30 to $4/$20 per
+    // million, 1.25x cache-write, 0.1x cache-read, >272k tier at 2x.
+    expect(codex!.inputCostPerToken).toBe(4e-6)
+    expect(codex!.outputCostPerToken).toBe(2e-5)
+    expect(codex!.cacheWriteCostPerToken).toBe(5e-6)
+    expect(codex!.cacheReadCostPerToken).toBe(4e-7)
     expect(codex!.cacheWriteCostIsExplicit).toBe(true)
     expect(codexMax).toEqual(codex)
 
@@ -127,9 +137,114 @@ describe('getModelCosts', () => {
     expect(calculateCost('gpt-5.6-codex-max', 1_000_000, 1_000_000, 0, 0, 0)).toBeGreaterThan(0)
   })
 
+  describe('long-context tiers (#1076)', () => {
+    it('bundles the source long-context tiers with their real thresholds', () => {
+      // Straight from the regenerated snapshot: OpenAI's family tiers at 272k
+      // (NOT 128k - #1075 verified 128k fabricates +64% spend), Anthropic's at
+      // 200k, with each tier's own cache rates where the source publishes them.
+      const gpt = getModelCosts('gpt-5.6')
+      expect(gpt?.longContextTier).toEqual({
+        thresholdTokens: 272_000,
+        inputCostPerToken: 8e-6,
+        outputCostPerToken: 3e-5,
+        cacheWriteCostPerToken: 1e-5,
+        cacheReadCostPerToken: 8e-7,
+      })
+      const claude = getModelCosts('claude-sonnet-4-5')
+      expect(claude?.longContextTier?.thresholdTokens).toBe(200_000)
+      expect(claude?.longContextTier?.inputCostPerToken).toBe(6e-6)
+      // The codex SKUs mirror the gpt-5.6 row verbatim (#1134), tier included.
+      expect(getModelCosts('gpt-5.6-codex')?.longContextTier).toEqual({
+        thresholdTokens: 272_000,
+        inputCostPerToken: 8e-6,
+        outputCostPerToken: 3e-5,
+        cacheWriteCostPerToken: 1e-5,
+        cacheReadCostPerToken: 8e-7,
+      })
+      // A model without a published tier resolves to no tier at all.
+      expect(getModelCosts('deepseek-v4-pro')?.longContextTier).toBeUndefined()
+    })
+
+    it('applies the tier to every token at and after the threshold, and only then', () => {
+      // prompt tokens = input + cached input; below the threshold the base
+      // rates apply, at it the tier's rates price the WHOLE request.
+      const below = calculateCost('gpt-5.6', 271_999, 0, 0, 0, 0, 'standard', 0, 'codex')
+      expect(below).toBeCloseTo(271_999 * 4e-6, 9)
+      const at = calculateCost('gpt-5.6', 272_000, 0, 0, 0, 0, 'standard', 0, 'codex')
+      expect(at).toBeCloseTo(272_000 * 8e-6, 9)
+      const above = calculateCost('gpt-5.6', 271_000, 0, 0, 1_000, 0, 'standard', 0, 'codex')
+      expect(above).toBeCloseTo(271_000 * 8e-6 + 1_000 * 8e-7, 9)
+      // The tier applies only where billing evidence exists for it: the same
+      // call through a provider not in TIERED_PRICING_PROVIDERS (or none, the
+      // default for every legacy caller) keeps the base rate.
+      const notEligible = calculateCost('gpt-5.6', 300_000, 0, 0, 0, 0)
+      expect(notEligible).toBeCloseTo(300_000 * 4e-6, 9)
+      const copilot = calculateCost('gpt-5.6', 300_000, 0, 0, 0, 0, 'standard', 0, 'copilot')
+      expect(copilot).toBeCloseTo(300_000 * 4e-6, 9)
+    })
+
+    it('keeps the base rate for slots the tier omits', () => {
+      // gpt-5.5's tier publishes cache read but no cache write: crossing the
+      // threshold must not invent a tier cache-write rate, nor drop the base.
+      // The base cache-write slot is implicit, so it bills at the input rate
+      // of whichever costs object is in effect — tiered here, per #1544's rule.
+      const base = getModelCosts('gpt-5.5')!
+      const tieredCosts = tieredCostsFor('gpt-5.5', base, 300_000, 'codex')
+      const tiered = calculateCost('gpt-5.5', 300_000, 0, 1_000, 0, 0, 'standard', 0, 'codex')
+      expect(tiered).toBeCloseTo(300_000 * tieredCosts.inputCostPerToken + 1_000 * cacheWriteCostPerToken('gpt-5.5', tieredCosts), 9)
+      expect(base.longContextTier!.cacheWriteCostPerToken).toBeUndefined()
+    })
+
+    it('still prices below-threshold requests exactly as before the extension', () => {
+      // Compat: the tier is inert below the threshold, so pre-extension
+      // pricing on any sub-threshold call is byte-for-byte unchanged.
+      expect(calculateCost('gpt-5.6', 100_000, 50_000, 1_000, 2_000, 0))
+        .toBeCloseTo(100_000 * 4e-6 + 50_000 * 2e-5 + 1_000 * 5e-6 + 2_000 * 4e-7, 9)
+    })
+
+    it('an exact price override still beats the tier', () => {
+      setPriceOverrides({ 'gpt-5.6': { input: 2, output: 6 } })
+      expect(calculateCost('gpt-5.6', 300_000, 0, 0, 0, 0, 'standard', 0, 'codex')).toBeCloseTo(300_000 * 2e-6, 9)
+    })
+
+    it('parses the tier from a live LiteLLM entry, plain context suffixes only', () => {
+      const costs = parseLiteLLMEntry({
+        input_cost_per_token: 1e-6,
+        output_cost_per_token: 2e-5,
+        input_cost_per_token_above_272k_tokens: 5e-6,
+        output_cost_per_token_above_272k_tokens: 6e-5,
+        cache_read_input_token_cost_above_272k_tokens: 5e-7,
+        // Service-tier variants are not context thresholds and must be ignored.
+        input_cost_per_token_above_272k_priority_tokens: 9e-5,
+        input_cost_per_token_above_272k_flex_tokens: 8e-6,
+      } as never)
+      expect(costs?.longContextTier).toEqual({
+        thresholdTokens: 272_000,
+        inputCostPerToken: 5e-6,
+        outputCostPerToken: 6e-5,
+        cacheReadCostPerToken: 5e-7,
+      })
+      const none = parseLiteLLMEntry({
+        input_cost_per_token: 1e-6,
+        output_cost_per_token: 2e-5,
+        input_cost_per_token_above_272k_priority_tokens: 9e-5,
+      } as never)
+      expect(none?.longContextTier).toBeUndefined()
+    })
+
+    it('old five-slot tuples still parse without a tier', () => {
+      // The compat path: bundles predating the sixth slot load unchanged.
+      const legacy = parseLiteLLMEntry({ input_cost_per_token: 1e-6, output_cost_per_token: 2e-5 })!
+      expect(legacy.longContextTier).toBeUndefined()
+      expect(legacy.inputCostPerToken).toBe(1e-6)
+    })
+  })
+
   describe('grok-4.6 prompt tier', () => {
     it('uses the low tier below 200000 prompt tokens', () => {
-      expect(calculateCost('grok-4.6', 100_000, 10_000, 0, 99_999, 0)).toBeCloseTo(0.3099995, 12)
+      // Base input is 1.25e-6 since LiteLLM's 2026-09 reprice (was 2e-6); the
+      // tier rates above 200k are unchanged, so only this literal moved.
+      expect(calculateCost('grok-4.6', 100_000, 10_000, 0, 99_999, 0)).toBeCloseTo(0.2349995, 12)
     })
 
     it('uses the high tier for every token at exactly 200000 prompt tokens', () => {
@@ -354,9 +469,42 @@ describe('getShortModelName', () => {
     expect(getShortModelName('gpt-5.6-sol')).toBe('GPT-5.6 Sol')
     expect(getShortModelName('gpt-5.6-terra')).toBe('GPT-5.6 Terra')
     expect(getShortModelName('gpt-5.6-luna')).toBe('GPT-5.6 Luna')
-    // No bare `gpt-5.6` entry exists, so an unlisted future variant must still
-    // fall through to its raw id rather than borrow a sibling's label.
-    expect(getShortModelName('gpt-5.6-unlisted')).toBe('gpt-5.6-unlisted')
+    // No bare `gpt-5.6` entry exists, so an unlisted variant of this version
+    // must not borrow a sibling's curated label. Since #1530 it derives its own
+    // label from the id instead of surfacing the raw slug. (Versions that DO
+    // have a bare entry, like gpt-5.5, still fold suffixed ids by the prefix
+    // rule — unchanged here.)
+    expect(getShortModelName('gpt-5.6-unlisted')).toBe('GPT-5.6 Unlisted')
+  })
+
+  // Regression for #1530: some doors write the Claude minor with a dot
+  // (GitHub Copilot's session store: claude-opus-4.8). The derivation must
+  // accept both spellings, or the name silently loses its minor ("Opus 4").
+  it('derives dot-form Claude minors the same as dash-form (#1530)', () => {
+    expect(getShortModelName('claude-opus-4.8')).toBe('Opus 4.8')
+    expect(getShortModelName('claude-opus-4-8')).toBe('Opus 4.8')
+    expect(getShortModelName('claude-sonnet-4.9')).toBe('Sonnet 4.9')
+    expect(getShortModelName('claude-opus-4.8-20300101')).toBe('Opus 4.8')
+  })
+
+  // Regression for #1530: an unknown future GPT version derives its name from
+  // the id, the way unreleased Claude versions already do — no hand-maintained
+  // entry per release. Curated entries still win, and the legacy bare-major /
+  // date-packaged shapes stay raw.
+  it('derives unknown GPT versions from their ids instead of surfacing raw (#1530)', () => {
+    expect(getShortModelName('gpt-5.7-terra')).toBe('GPT-5.7 Terra')
+    expect(getShortModelName('gpt-5.7-codex-spark')).toBe('GPT-5.7 Codex Spark')
+    expect(getShortModelName('gpt-5.7')).toBe('GPT-5.7')
+    // Numeric segments are packaging, not part of the name.
+    expect(getShortModelName('gpt-5.7-20261105')).toBe('GPT-5.7')
+    // Legacy shapes stay raw: bare-major ids and date-versioned packaging.
+    expect(getShortModelName('gpt-9')).toBe('gpt-9')
+    expect(getShortModelName('gpt-4-1106-preview')).toBe('gpt-4-1106-preview')
+    // Curated labels keep winning over the derivation.
+    expect(getShortModelName('gpt-5.5')).toBe('GPT-5.5')
+    expect(getShortModelName('gpt-5.1-codex-mini')).toBe('GPT-5.1 Codex Mini')
+    expect(getShortModelName('gpt-5-mini')).toBe('GPT-5 Mini')
+    expect(getShortModelName('gpt-4o')).toBe('GPT-4o')
   })
 
   it('names grok-4.5 without disturbing the Grok Build harness label', () => {
@@ -387,6 +535,26 @@ describe('getShortModelName', () => {
     expect(getShortModelName('accounts/fireworks/models/kimi-k2p7-code')).toBe('Kimi K2.7 Code')
     expect(getShortModelName('accounts/fireworks/models/deepseek-v4-pro')).toBe('DeepSeek v4 Pro')
     expect(getShortModelName('accounts/fireworks/models/deepseek-v4-flash')).toBe('DeepSeek v4 Flash')
+  })
+})
+
+describe('modelKeyMatches', () => {
+  // The primitive provider display tables match with (#1530): a key must be
+  // the whole id or a whole dash-segment, never mid-version — so a bare
+  // `gpt-5` key cannot capture `gpt-5.5` or `gpt-5.6-luna`.
+  it('matches the exact id and dash-suffixed ids', () => {
+    expect(modelKeyMatches('gpt-5', 'gpt-5')).toBe(true)
+    expect(modelKeyMatches('gpt-5-mini', 'gpt-5')).toBe(true)
+    expect(modelKeyMatches('gpt-4.1-2025-04-14', 'gpt-4.1')).toBe(true)
+    expect(modelKeyMatches('openai/gpt-5', 'gpt-5')).toBe(true)
+  })
+
+  it('rejects mid-version and mid-word matches', () => {
+    expect(modelKeyMatches('gpt-5.5', 'gpt-5')).toBe(false)
+    expect(modelKeyMatches('gpt-5.6-luna', 'gpt-5')).toBe(false)
+    expect(modelKeyMatches('gpt-5.4.1', 'gpt-5.4')).toBe(false)
+    expect(modelKeyMatches('xgpt-5', 'gpt-5')).toBe(false)
+    expect(modelKeyMatches('claude-opus-4.8', 'claude-opus-4')).toBe(false)
   })
 })
 
@@ -915,41 +1083,43 @@ describe('zero-priced stubs do not satisfy case-insensitive lookup', () => {
 })
 
 describe('DeepSeek v4 models resolve to pricing', () => {
-  it('deepseek-v4-pro has current official discounted pricing', () => {
+  it('deepseek-v4-pro has current official peak pricing', () => {
+    // LiteLLM merged the v4 rows (#1134): 2026-09-29 refresh carries the
+    // official peak rates from https://api-docs.deepseek.com/quick_start/pricing
+    // (off-peak is half of peak, cache-hit input $0.044/M). The hand-pinned
+    // pre-sync entry ($0.435/$0.87) is gone from bundle-litellm.mjs.
     const costs = getModelCosts('deepseek-v4-pro')
     expect(costs).not.toBeNull()
-    expect(costs!.inputCostPerToken).toBe(4.35e-7)
-    expect(costs!.outputCostPerToken).toBe(8.7e-7)
-    expect(costs!.cacheReadCostPerToken).toBe(3.625e-9)
+    expect(costs!.inputCostPerToken).toBe(1.32e-6)
+    expect(costs!.outputCostPerToken).toBe(3.96e-6)
+    expect(costs!.cacheReadCostPerToken).toBe(4.4e-8)
     expect(costs!.cacheWriteCostPerToken).toBe(0)
   })
 
-  it('deepseek-v4-flash has current official pricing', () => {
+  it('deepseek-v4-flash has current official peak pricing', () => {
     const costs = getModelCosts('deepseek-v4-flash')
     expect(costs).not.toBeNull()
-    expect(costs!.inputCostPerToken).toBe(1.4e-7)
-    expect(costs!.outputCostPerToken).toBe(2.8e-7)
-    expect(costs!.cacheReadCostPerToken).toBe(2.8e-9)
+    expect(costs!.inputCostPerToken).toBe(3e-7)
+    expect(costs!.outputCostPerToken).toBe(1.2e-6)
+    expect(costs!.cacheReadCostPerToken).toBe(6e-9)
     expect(costs!.cacheWriteCostPerToken).toBe(0)
   })
 
   it('provider-prefixed DeepSeek v4 names resolve to real pricing', () => {
-    // 2026-08-24: DeepSeek repriced v4-pro and LiteLLM updated the
-    // `deepseek/`-namespaced row before the bare one, so the two spellings
-    // legitimately differ until upstream syncs. Both must still price
-    // non-null; flash rows are in sync and must stay equal.
-    expect(getModelCosts('deepseek/deepseek-v4-pro')).not.toBeNull()
-    expect(getModelCosts('deepseek-v4-pro')).not.toBeNull()
-    expect(getModelCosts('deepseek/deepseek-v4-flash')).not.toBeNull()
-    expect(getModelCosts('deepseek-v4-flash')).not.toBeNull()
+    // Re-tightened #1134 invariant: bare and `deepseek/`-prefixed rows must
+    // agree (the 2026-08-24 mid-transition window is closed, and the bundler
+    // no longer lets an `openrouter/`-prefixed resale row claim the
+    // namespaced slot ahead of the official one).
+    expect(getModelCosts('deepseek/deepseek-v4-pro')).toEqual(getModelCosts('deepseek-v4-pro'))
+    expect(getModelCosts('deepseek/deepseek-v4-flash')).toEqual(getModelCosts('deepseek-v4-flash'))
   })
 
   it('calculates non-zero costs for observed DeepSeek v4 Claude usage', () => {
     const pro = calculateCost('deepseek-v4-pro', 2_477_914, 762_994, 0, 258_556_928, 0)
     const flash = calculateCost('deepseek-v4-flash', 1_552_573, 353_914, 0, 48_388_608, 0)
 
-    expect(pro).toBeCloseTo(2.68, 2)
-    expect(flash).toBeCloseTo(0.45, 2)
+    expect(pro).toBeCloseTo(17.67, 2)
+    expect(flash).toBeCloseTo(1.18, 2)
   })
 
   it('uses DeepSeek v4 display names', () => {
@@ -981,8 +1151,8 @@ describe('DeepSeek v4 models resolve to pricing', () => {
       await loadPricing()
 
       expect(getModelCosts('gpt-4o-mini')!.inputCostPerToken).toBe(9e-7)
-      expect(getModelCosts('deepseek-v4-pro')!.inputCostPerToken).toBe(4.35e-7)
-      expect(getModelCosts('deepseek-v4-flash')!.inputCostPerToken).toBe(1.4e-7)
+      expect(getModelCosts('deepseek-v4-pro')!.inputCostPerToken).toBe(1.32e-6)
+      expect(getModelCosts('deepseek-v4-flash')!.inputCostPerToken).toBe(3e-7)
     } finally {
       await rm(cacheRoot, { recursive: true, force: true })
       await loadPricing()

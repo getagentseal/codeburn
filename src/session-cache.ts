@@ -372,7 +372,7 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // reported-cost-v1: the CLI reports its own per-message cost, so entries
   // cached before cline-cli joined the reported-cost allowlist in parser.ts
   // hold costUSD: undefined and get re-priced from tokens on every read.
-  'cline-cli': 'reported-cost-v1',
+  'cline-cli': 'reported-cost-v1-est-reprice-v1',
   codewhale: 'aggregate-session-v1-est-cost',
   // Bump when the Codex parser changes attribution so unchanged, already-cached
   // session files re-parse (session-cache.json serves them without invoking the
@@ -400,8 +400,13 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // verbatim, so they must re-parse to gain the attribution.
   // activity-price-v1: `codex-auto-review` now prices via the recommended
   // review model. session-cache.json would otherwise keep the pre-alias $0.
-  // Compose all four — a take-ours merge would drop #1075, #1079, or #1092.
-  codex: 'mcp-attribution-v5-est-cost-active-timing-mcp-wait-rich-capture-v1-cross-provider-pr-v1-session-meta-model-v1-session-meta-fields-v1-codex-pricing-v1-codex-tps-v1-codex-mcp-skills-v1-activity-price-v1',
+  // fork-replay-burst-v1: copied fork history ends at the first >1s timestamp
+  // gap, preserving genuine work that starts before the old 5s cutoff.
+  // codex-token-usage-record-v1: prefer response-level usage records on newer
+  // rollouts and retain the legacy-to-record handover state. Cached turns must
+  // reparse because session-cache otherwise bypasses the provider parser.
+  // Compose both suffixes so cached sessions receive both accounting fixes.
+  codex: 'mcp-attribution-v5-est-cost-active-timing-mcp-wait-rich-capture-v1-cross-provider-pr-v1-session-meta-model-v1-session-meta-fields-v1-codex-pricing-v1-codex-tps-v1-codex-mcp-skills-v1-activity-price-v1-fork-replay-burst-v1-codex-token-usage-record-v1',
   cursor: 'composer-anchored-crediting-v1-est-cost',
   // full-turn-accounting: every assistant message counts as a turn
   // (previously only the first after each user message survived), tool_use
@@ -468,7 +473,10 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // preserved through the cache via `costFromBilling`. This is OpenClaw's
   // first parse version; adding it moves the provider's env fingerprint,
   // which is what forces the one re-parse that lands the reported dollars.
-  openclaw: 'reported-cost-v1',
+  // sqlite-store-v1: id-less dedup keys now carry an occurrence index
+  // (`h:<hash>:<n>`) instead of the bare payload hash; cached turns hold the
+  // old keys, so without this bump they would suppress the re-parsed calls.
+  openclaw: 'reported-cost-v1-sqlite-store-v1',
   'lingtai-tui': 'token-ledger-registry-activity-v3',
   'ibm-bob': 'worktree-project-grouping-v1',
   // project-path-v1: the parser now records the session's full working
@@ -502,7 +510,9 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // costUSD: undefined, so they must re-parse once.
   pi: 'cwd-project-path-v1-project-group-by-abs-v1-reported-cost-v1',
   // project-group-by-abs-v1: shared Pi/OMP serve grouping uses abs identity.
-  omp: 'nested-agent-v1-reported-cost-v2-cwd-project-path-v1-project-group-by-abs-v1',
+  // model-usage-v1: counts OMP side calls (`model_usage` entries: find, judge,
+  // cache warming), so cached sessions must re-parse to gain them.
+  omp: 'nested-agent-v1-reported-cost-v2-cwd-project-path-v1-project-group-by-abs-v1-model-usage-v1',
   // archived-subtree-v1 (#1362): the subtree walk no longer filters
   // `time_archived IS NULL`. An archived ROOT self-heals — it was evicted as an
   // undiscovered non-durable source and comes back new — but a root whose CHILD
