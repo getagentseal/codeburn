@@ -53,7 +53,7 @@ and a proxy can observe the same request; do not sum their request counts.
 | Codex | Existing generated-token/model-wait estimates from completed turns. Multi-model turns are excluded because timings are not observed separately. | HTTP OpenAI Responses SSE through the proxy when the configured provider supports a base-URL override. WebSocket transport is not supported. The normal ChatGPT transport is not automatically rerouted. |
 | Claude Code | Its assistant JSONL does not provide an individual-token timeline to this reader. | Anthropic SSE through a per-run `ANTHROPIC_BASE_URL` override; native individual-token events can use the collector. |
 | ZCode | Read-only `model_usage` request start/end and optional `first_token_at`. `completed_at` is **not** treated as the last token's timestamp. Older schemas without status/first-token data remain incomplete/unknown. | Proxy when that provider's endpoint is configurable; otherwise a native producer must submit timing events. |
-| DeepSeek Harness (`dsh`) | Existing compacted session formats are not interpreted as individual-token timestamps. | OpenAI-compatible SSE when the selected provider supports a base-URL override, or native timing submission. |
+| DeepSeek Harness (`dsh`) | Existing compacted session formats are not interpreted as individual-token timestamps. | Its native DeepSeek Messages adapter or a configurable OpenAI-compatible SSE provider through the proxy, or native timing submission. |
 | Hermes | Session token aggregates do not establish per-request/per-token timing. | Configurable OpenAI/Anthropic HTTP provider through the proxy, or native timing submission. |
 | Antigravity | The usage/RPC/database reader does not establish per-token timing. | A native timing producer is required. Starting the collector does not instrument its proprietary model transport. |
 
@@ -82,6 +82,60 @@ Use the client's existing credentials; the proxy forwards them and never
 stores them. It does not install credentials, certificates, hooks, or change
 global environment/configuration. Some subscription clients restrict custom
 endpoints: an unsuccessful override is not proof of supported capture.
+
+### DeepSeek Harness and Hermes
+
+Both paths below were checked with real, isolated runs using the clients'
+existing credentials. Both returned `SPEED_PROBE_OK`; their own output usage
+matched the proxy's six generated tokens. Each stream had six emission events,
+which still remain `chunk` observations rather than an asserted token timeline.
+The response model ID was `deepseek-flash` in both harnesses, including Hermes's
+request under the `deepseek-chat` alias.
+
+For DSH's API-key Messages provider, start a proxy with `--harness dsh
+--upstream https://api.deepseek.com --port 4320`. A temporary `--patch` file can
+route a headless run without editing the desktop profile:
+
+```yaml
+- id: llm-deepseek
+  config:
+    baseURL: http://127.0.0.1:4320/anthropic
+    apiKeyEnv: DEEPSEEK_API_KEY
+- id: agent-default-model
+  config:
+    provider: deepseek-official
+    model: deepseek-flash
+```
+
+```sh
+dsh headless --patch ./speed-probe.yml 'Reply exactly SPEED_PROBE_OK.'
+```
+
+This verifies DSH's API-key provider. The desktop account provider restricts
+credential destinations; that login route was not exercised through the proxy.
+
+For Hermes, start another proxy with `--harness hermes --upstream
+https://api.deepseek.com --port 4321`. In the desired Hermes profile, a named
+custom provider can select the endpoint and the existing credential variable:
+
+```yaml
+providers:
+  speedprobe:
+    base_url: http://127.0.0.1:4321/v1
+    key_env: DEEPSEEK_API_KEY
+    api_mode: chat_completions
+    default_model: deepseek-chat
+```
+
+```sh
+hermes chat --provider speedprobe --model deepseek-chat --oneshot \
+  -q 'Reply exactly SPEED_PROBE_OK.'
+```
+
+Use a temporary profile for a probe. The checked path is the configurable HTTP
+provider; Hermes's default Codex subscription route was not automatically
+instrumented. A rejected credential remains an error sample and contributes no
+complete-request speed.
 
 The proxy binds only `127.0.0.1`, has a fixed upstream, rejects browser-origin
 requests and URL credentials, and allows plaintext upstreams only on loopback.
