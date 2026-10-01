@@ -8,7 +8,7 @@ export type SpeedSample = {
   id: string
   harness: SpeedHarness
   model: string
-  source: 'proxy' | 'native' | 'zcode-db' | 'codex-checkpoint'
+  source: 'proxy' | 'native' | 'antigravity-cli' | 'zcode-db' | 'codex-checkpoint'
   resolution: 'token' | 'chunk' | 'request' | 'turn'
   startedAt: string
   durationMs: number
@@ -36,7 +36,7 @@ export function validateSpeedSample(value: unknown): SpeedSample {
   if (!value || typeof value !== 'object') throw new Error('Expected a speed sample')
   const v = value as Record<string, unknown>
   if (v.version !== 1 || !label(v.id) || !label(v.model) || typeof v.harness !== 'string' || !isSpeedHarness(v.harness)
-    || !['proxy', 'native', 'zcode-db', 'codex-checkpoint'].includes(String(v.source))
+    || !['proxy', 'native', 'antigravity-cli', 'zcode-db', 'codex-checkpoint'].includes(String(v.source))
     || !['token', 'chunk', 'request', 'turn'].includes(String(v.resolution))
     || !['complete', 'incomplete', 'interrupted', 'error'].includes(String(v.status))
     || typeof v.startedAt !== 'string' || !Number.isFinite(Date.parse(v.startedAt)) || !finite(v.durationMs)

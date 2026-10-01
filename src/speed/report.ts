@@ -18,7 +18,7 @@ export function buildSpeedReport(samples: SpeedSample[]) {
   const rows = [...groups.values()].map(group => {
     const first = group[0]!
     const complete = group.filter(s => s.status === 'complete' && s.durationMs > 0 && s.outputTokens !== undefined && s.outputTokens > 0)
-    const emitted = complete.filter(s => s.firstEmissionMs !== undefined && s.lastEmissionMs !== undefined && s.lastEmissionMs > s.firstEmissionMs)
+    const emitted = complete.filter(s => s.resolution !== 'turn' && s.firstEmissionMs !== undefined && s.lastEmissionMs !== undefined && s.lastEmissionMs > s.firstEmissionMs)
     const streamRates = emitted.map(s => {
       // With native individual tokens, N-1 intervals cover N-1 tokens.
       // Chunk/request boundaries cannot locate each token: label as estimate.
@@ -51,7 +51,7 @@ export function renderSpeedReport(report: ReturnType<typeof buildSpeedReport>): 
     (row.estimated ? '~' : '') + n(row.effectiveTokensPerSecond), (row.streamRateEstimated && row.streamTokensPerSecondP50 !== null ? '~' : '') + n(row.streamTokensPerSecondP50),
     n(row.firstEmissionMsP50), n(row.durationMsP95)].join('\t'))
   if (report.unavailableHarnesses.length) lines.push(`No timed samples: ${report.unavailableHarnesses.join(', ')}`)
-  lines.push('~ = estimate. First = first token (native/ZCode) or first generated SSE chunk (proxy).')
-  lines.push('Effective Tok/s includes request latency; Codex estimates exclude tools. Stream rates from chunks are estimates. Sources stay separate; do not sum overlapping historical/proxy samples.')
+  lines.push('~ = estimate. First = first token (native/ZCode), SSE chunk (proxy), or CLI delta (antigravity-cli).')
+  lines.push('Effective Tok/s includes observed request/run latency; Codex estimates exclude tools. Stream rates from chunks are estimates. Sources stay separate; do not sum overlapping historical/proxy samples.')
   return lines.join('\n')
 }

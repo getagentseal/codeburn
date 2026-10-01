@@ -4,6 +4,7 @@ import { readSpeedHistory } from './history.js'
 import { readSpeedSamples, speedFile } from './store.js'
 import { isSpeedHarness, SPEED_HARNESSES, type SpeedSample } from './types.js'
 import { startSpeedServer } from './server.js'
+import { captureAntigravitySpeed } from './antigravity.js'
 
 function integer(raw: string): number {
   const n = Number(raw)
@@ -53,6 +54,13 @@ export function registerSpeedCommands(program: Command): void {
       const matches = samples.filter(s => s.id === id && (!harness || s.harness === harness))
       if (matches.length !== 1) throw new Error(matches.length ? 'Request id is ambiguous; specify --harness' : 'Speed request not found')
       console.log(JSON.stringify(matches[0], null, 2))
+    })
+  speed.command('capture-antigravity').description('Observe one agy stream-json print run from stdin; forward bytes and save local timing metadata')
+    .option('--file <path>', 'Local speed telemetry JSONL file')
+    .action(async opts => {
+      const sample = await captureAntigravitySpeed(opts.file ?? speed.opts().file)
+      if (!sample) throw new Error('No Antigravity init event received')
+      process.stderr.write(`Antigravity speed sample saved: ${sample.id} (${sample.status}, ${sample.resolution})\n`)
     })
   const serve = async (opts: { port: number; file: string; harness?: string; upstream?: string }) => {
     if (opts.harness && !isSpeedHarness(opts.harness)) throw new Error('Unknown speed harness')

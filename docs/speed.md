@@ -3,6 +3,8 @@
 `codeburn speed` reports local timing samples grouped by **harness, actual model
 ID, source and timing resolution**. A model used in Claude Code and Hermes has
 separate rows. The speed report does not rewrite model IDs to pricing aliases.
+For Antigravity CLI capture, the model is the ID supplied by `init.model`;
+its result frame does not expose a separate served-model ID.
 It does not change spend accounting or send telemetry to a cloud service.
 
 ```sh
@@ -30,9 +32,9 @@ be inspected without retaining every intervening token event.
 
 | Field | Meaning |
 |---|---|
-| Effective Tok/s | Sum of generated tokens / sum of timed request seconds. Includes request/network/prefill latency; Codex's existing estimate excludes tool execution. |
+| Effective Tok/s | Sum of generated tokens / sum of observed request/run seconds. Includes request/network/prefill latency; Codex's existing estimate excludes tool execution. Antigravity's window begins at the CLI's `init` frame. |
 | Stream Tok/s p50 | Median rate between first and last emission. Native individual tokens use `(N-1)/(last-first)`. For chunks this is an estimate using the final usage count; missing usage produces no rate. |
-| First ms p50 / p95 | Delay to the first generated emission: a native token, ZCode's recorded first token, or a proxy SSE chunk. Heartbeats, role declarations and usage events do not start the clock. |
+| First ms p50 / p95 | Delay to the first generated emission: a native token, ZCode's recorded first token, a proxy SSE chunk, or an Antigravity CLI delta. Heartbeats, role declarations and usage events do not start the clock. |
 | Duration ms p50 / p95 | Distribution of complete timed requests. Codex's duration is estimated model wait at turn granularity. |
 | interTokenMsP50 / P95 (JSON) | Intervals between individual native tokens, only when the complete token timeline is available. Never calculated by spreading a chunk's tokens evenly across its duration. |
 
@@ -53,14 +55,14 @@ and a proxy can observe the same request; do not sum their request counts.
 | Codex | Existing generated-token/model-wait estimates from completed turns. Multi-model turns are excluded because timings are not observed separately. | HTTP OpenAI Responses SSE through the proxy when the configured provider supports a base-URL override. WebSocket transport is not supported. The normal ChatGPT transport is not automatically rerouted. |
 | Claude Code | Its assistant JSONL does not provide an individual-token timeline to this reader. | Anthropic SSE through a per-run `ANTHROPIC_BASE_URL` override; native individual-token events can use the collector. |
 | ZCode | Read-only `model_usage` request start/end and optional `first_token_at`. `completed_at` is **not** treated as the last token's timestamp. Older schemas without status/first-token data remain incomplete/unknown. | Proxy when that provider's endpoint is configurable; otherwise a native producer must submit timing events. |
-| DeepSeek Harness (`dsh`) | Existing compacted session formats are not interpreted as individual-token timestamps. | Its native DeepSeek Messages adapter or a configurable OpenAI-compatible SSE provider through the proxy, or native timing submission. |
+| DeepSeek Harness (`dsh`) | The existing spend reader supports session formats v0–v3, without individual-token timestamps. The installed client tested here writes v4, which that history reader skips. | Its native DeepSeek Messages adapter or a configurable OpenAI-compatible SSE provider through the proxy, or native timing submission. Live streaming does not depend on the session-file version. |
 | Hermes | Session token aggregates do not establish per-request/per-token timing. | Configurable OpenAI/Anthropic HTTP provider through the proxy, or native timing submission. |
-| Antigravity | The usage/RPC/database reader does not establish per-token timing. | A native timing producer is required. Starting the collector does not instrument its proprietary model transport. |
+| Antigravity | The usage/RPC/database reader does not establish per-token timing. | Pipe one `agy --output-format stream-json --print ...` run through `speed capture-antigravity` for CLI delta timestamps and final token usage. The desktop/IDE transport is not automatically instrumented. |
 
 The report explicitly lists harnesses without complete timed samples. Installing
 a harness alone does not provide streaming timing. The collector contract
 supports all six identities, but actual capture depends on the producer or a
-supported HTTP stream; this is not a claim of automatic per-token coverage.
+supported HTTP/CLI stream; this is not a claim of automatic per-token coverage.
 
 ## Capture streaming requests through a local proxy
 
@@ -113,6 +115,10 @@ dsh headless --patch ./speed-probe.yml 'Reply exactly SPEED_PROBE_OK.'
 
 This verifies DSH's API-key provider. The desktop account provider restricts
 credential destinations; that login route was not exercised through the proxy.
+The installed DSH runtime writes `session.v4.jsonl.zstd`. This PR's live speed
+capture reads its HTTP stream, while CodeBurn's existing v0–v3 spend/history
+parser skips v4; `codeburn doctor --provider dsh` reported one skipped local
+session. Adding v4 history semantics is separate from this speed capture path.
 
 For Hermes, start another proxy with `--harness hermes --upstream
 https://api.deepseek.com --port 4321`. In the desired Hermes profile, a named
@@ -151,6 +157,45 @@ several tokens; **SSE events are stored with resolution `chunk`**. The proxy doe
 not tokenize text, retain text, or convert characters to guessed token counts.
 Final provider usage supplies the output total. A complete stream without final
 usage remains incomplete for rate calculations.
+
+## Capture Antigravity CLI deltas
+
+```sh
+agy --model gemini-3.8-flash-low --mode plan --sandbox \
+  --disable-slash-commands --output-format stream-json \
+  --print 'Reply exactly SPEED_PROBE_OK. Do not call tools or read files.' |
+  codeburn speed capture-antigravity
+
+codeburn speed --harness antigravity --no-history
+```
+
+The adapter reads the CLI's native `init`, `step_update` and `result` NDJSON
+frames, forwards stdout bytes unchanged, and saves only timing/counter metadata
+with source `antigravity-cli` and resolution `chunk`. `--file` selects another
+local telemetry file. It uses the client's existing login without changing
+global configuration or routing credentials through a proxy.
+
+This path was verified with the installed Antigravity CLI, including a real
+`gemini-3.8-flash-low` run that returned `SPEED_PROBE_OK`. Final CLI input/output
+usage matched the stored counters. A delta can contain several tokens; matching
+usage does not establish individual-token timestamps. Thinking tokens are
+already included in `output_tokens`, so they are recorded as detail and never
+added to the output total a second time.
+
+Timings use one local arrival clock from `init` to `result`, excluding CLI
+startup before `init`. First/last emissions include nonempty text or thinking
+deltas. The adapter does not combine the CLI-reported
+`duration_seconds` with local arrival timestamps. The first-token and stream
+rates describe CLI delivery, which can batch deltas, rather than GPU decode.
+
+Only a single-turn run with one agent response step and no tool steps can
+contribute a complete per-model measurement. Tool runs, multiple response steps
+or aggregated turns remain `incomplete` at `turn` resolution because the final
+usage can combine different generations/models. Missing model/usage, malformed
+frames and mismatched conversation identities also remain incomplete. Early
+EOF or cancellation retains partial timing as interrupted; none of these
+samples contributes a complete-request rate. Desktop/IDE timing still needs a
+producer that observes its stream.
 
 ## Capture individual native tokens
 
@@ -196,6 +241,6 @@ must represent the same generated tokens as the timeline.
 
 Unknown producer fields are discarded before storage. Prompt/response bodies,
 credentials, HTTP headers, token IDs, project paths and tool arguments are not
-retained. At most 100,000 emission timestamps are retained per proxy request;
+retained. At most 100,000 emission timestamps are retained per captured request/run;
 longer timelines are marked truncated. Truncated timelines do not contribute
 individual-token interval percentiles.
