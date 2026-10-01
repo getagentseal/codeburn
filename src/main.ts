@@ -43,6 +43,7 @@ import { runOptimize } from './optimize.js'
 import { registerActCommands } from './act/cli.js'
 import { registerGuardCommands } from './guard/cli.js'
 import { registerSyncCommands } from './sync/cli.js'
+import { registerSpeedCommands } from './speed/cli.js'
 import { registerPluginCommands, registerLoadedPluginCommands } from './plugins/cli.js'
 import { runContextCommand } from './context-tree.js'
 import { renderCompare } from './compare.js'
@@ -3173,6 +3174,7 @@ program
 registerActCommands(program)
 registerGuardCommands(program)
 registerSyncCommands(program)
+registerSpeedCommands(program)
 registerPluginCommands(program)
 
 program

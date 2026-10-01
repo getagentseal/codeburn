@@ -91,6 +91,11 @@ Compare periods puts two date ranges side by side and shows the difference. Use 
 
 The Pull requests page matches spend against the pull requests your sessions recorded, so you can see which spend shipped ([Yield](docs/yield.md)).
 
+Generation speed is also available with `codeburn speed`, grouped by model and
+harness. Native request timings, streaming chunks and checkpoint estimates
+remain separate. [Speed measurement and opt-in local telemetry](docs/speed.md)
+explain coverage, first-token latency and individual-token timelines.
+
 ## Fix it
 
 ```bash
