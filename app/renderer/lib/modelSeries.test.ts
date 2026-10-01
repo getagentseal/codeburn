@@ -26,6 +26,24 @@ describe('model series', () => {
     ['gemini-3.1-pro-preview', 'balanced'],
     ['Gemini 3.5 Flash', 'fast'],
     ['gemini-3.1-flash-lite-preview', 'fast'],
+    ['GLM-5.3', 'flagship'],
+    ['glm-5.3', 'flagship'],
+    ['GLM 5.3', 'flagship'],
+    ['glm-5p3', 'flagship'],
+    ['z-ai/glm-5.3', 'flagship'],
+    ['flash-router/glm-5.3', 'flagship'],
+    ['GLM-5.3 (OpenRouter)', 'flagship'],
+    ['GLM-5.3-Flash', 'fast'],
+    ['glm-5.3-flash', 'fast'],
+    ['GLM 5.3 Flash', 'fast'],
+    ['glm-5p3-flash', 'fast'],
+    ['z-ai/glm-5.3-flash', 'fast'],
+    ['cliproxy/zcode/glm-5.3-flash', 'fast'],
+    ['GLM-5.3-Flash (OpenRouter)', 'fast'],
+    ['GLM-5.3-FlashX', 'fast'],
+    ['glm-5.2', 'other'],
+    ['glm-5.30', 'other'],
+    ['glm-5.30-flash', 'other'],
     ['mystery-model', 'other'],
     [undefined, 'other'],
   ] as const)('classifies %s as %s', (model, series) => {
@@ -37,5 +55,9 @@ describe('model series', () => {
     expect(seriesClassForModel('claude-fable-1')).toBe('s-premium')
     expect(seriesColorForModel('gemini-3.1-pro')).toBe('var(--s-balanced)')
     expect(seriesClassForModel('gemini-3.5-flash')).toBe('s-fast')
+    expect(seriesColorForModel('GLM-5.3')).toBe('var(--s-flagship)')
+    expect(seriesClassForModel('GLM-5.3')).toBe('s-flagship')
+    expect(seriesColorForModel('GLM-5.3-Flash')).toBe('var(--s-fast)')
+    expect(seriesClassForModel('GLM-5.3-Flash')).toBe('s-fast')
   })
 })
