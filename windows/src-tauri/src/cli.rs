@@ -144,12 +144,21 @@ pub struct CliStatus {
 }
 
 /// What the Capacity Dock renders: the provider array, or the reason there isn't one.
+/// `claude_profiles` (the per-config-directory Claude answers) rides beside
+/// `providers` as opaque JSON; it is None on a CLI that predates the field.
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "state", rename_all = "camelCase")]
 pub enum DockQuota {
-    Ready { providers: Value },
+    Ready {
+        providers: Value,
+        /// `rename_all` above only covers the variant tag, not this field.
+        #[serde(rename = "claudeProfiles")]
+        claude_profiles: Option<Value>,
+    },
     CliOutdated,
-    Unavailable { message: String },
+    Unavailable {
+        message: String,
+    },
 }
 
 impl CodeburnCli {
@@ -295,15 +304,21 @@ impl CodeburnCli {
 
     /// Spawns `codeburn quota --format json` for the Capacity Dock. A CLI without the
     /// subcommand exits 1 with `unknown command`, which the dock reports as a quiet
-    /// "CLI update needed" state rather than an error.
+    /// "CLI update needed" state rather than an error. `claude_profiles` adds
+    /// `--claude-profiles` (the rail's separate-rings mode); a CLI that predates the flag
+    /// rejects it, so it is passed only when the preference asks for it.
     ///
     /// Provider keys pasted into the settings window ride along as environment variables on
     /// the child, which is the only credential channel the CLI has. They are never put on a
     /// command line and never logged.
-    pub async fn fetch_quota(&self) -> DockQuota {
+    pub async fn fetch_quota(&self, claude_profiles: bool) -> DockQuota {
+        let mut args: Vec<&str> = vec!["quota", "--format", "json"];
+        if claude_profiles {
+            args.push("--claude-profiles");
+        }
         let stdout = match self
             .run_capture_with_env(
-                &["quota", "--format", "json"],
+                &args,
                 SILENCE_SECS,
                 &crate::settings::quota_environment(),
             )
@@ -312,7 +327,9 @@ impl CodeburnCli {
             Ok(stdout) => stdout,
             Err(err) => {
                 let message = err.to_string();
-                return if message.contains("unknown command") {
+                // `unknown option` is the same verdict for a CLI too old to know
+                // `--claude-profiles` as `unknown command` is for one too old for `quota`.
+                return if message.contains("unknown command") || message.contains("unknown option") {
                     DockQuota::CliOutdated
                 } else {
                     DockQuota::Unavailable { message }
@@ -326,6 +343,7 @@ impl CodeburnCli {
                     .get("providers")
                     .cloned()
                     .unwrap_or_else(|| Value::Array(vec![])),
+                claude_profiles: payload.get("claudeProfiles").cloned(),
             },
             Err(err) => DockQuota::Unavailable {
                 message: format!("CLI returned invalid JSON: {err}"),
@@ -1157,6 +1175,17 @@ mod which {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dock_quota_ready_serializes_claude_profiles_as_camel_case() {
+        let answer = DockQuota::Ready {
+            providers: serde_json::json!([]),
+            claude_profiles: Some(serde_json::json!([{"id": "x"}])),
+        };
+        let value = serde_json::to_value(&answer).unwrap();
+        assert!(value.get("claudeProfiles").is_some());
+        assert!(value.get("claude_profiles").is_none());
+    }
 
     #[test]
     fn only_a_named_read_only_subcommand_opens_a_terminal() {

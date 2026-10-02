@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { mkdir, mkdtemp, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { LIVE_WINDOW_SECONDS, TAIL_BYTES, buildLiveSessions, collectKimicodeInputs, scanTranscript, type LiveSessionInput } from '../src/live-sessions.js'
+import { delimiter, join, resolve } from 'node:path'
+import { LIVE_WINDOW_SECONDS, TAIL_BYTES, buildLiveSessions, collectKimicodeInputs, collectLiveSessionInputs, scanTranscript, type LiveSessionInput } from '../src/live-sessions.js'
+import { claudeConfigSourceId } from '../src/providers/claude.js'
 
 const NOW = Date.parse('2026-09-01T12:00:00.000Z')
 
@@ -77,6 +78,53 @@ describe('buildLiveSessions', () => {
 
   it('treats a missing timestamp as not live rather than as the epoch', () => {
     expect(buildLiveSessions([input({ lastActivityMs: 0 })], NOW, LIVE_WINDOW_SECONDS).sessions).toEqual([])
+  })
+
+  it('carries the config source a session runs under, and drops it for other providers (#1523)', () => {
+    const block = buildLiveSessions([
+      input({ id: 'claude-session', claudeConfigSourceId: 'claude-config:abc123' }),
+      input({ id: 'kimicode-session', provider: 'kimicode' }),
+    ], NOW, LIVE_WINDOW_SECONDS)
+    expect(block.sessions.find(s => s.id === 'claude-session')).toMatchObject({
+      claudeConfigSourceId: 'claude-config:abc123',
+    })
+    expect(block.sessions.find(s => s.id === 'kimicode-session')!.claudeConfigSourceId).toBeUndefined()
+  })
+})
+
+describe('collectLiveSessionInputs', () => {
+  it('tags each live Claude session with its own config directory (#1523)', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'live-profiles-'))
+    const personal = join(home, '.claude')
+    const work = join(home, '.claude-work')
+    for (const dir of [personal, work]) {
+      await mkdir(join(dir, 'projects', 'users-x-codeburn'), { recursive: true })
+    }
+    const now = Date.now()
+    for (const [dir, id] of [[personal, 's1'], [work, 's2']] as const) {
+      await writeFile(join(dir, 'projects', 'users-x-codeburn', `${id}.jsonl`), `${JSON.stringify({
+        type: 'user', sessionId: id, cwd: '/Users/x/codeburn', gitBranch: 'main',
+      })}\n`)
+    }
+    const previous = process.env.CLAUDE_CONFIG_DIRS
+    // A real Claude Desktop install on the test machine must not leak into the assertions.
+    const previousDesktop = process.env.CODEBURN_DESKTOP_SESSIONS_DIR
+    process.env.CLAUDE_CONFIG_DIRS = [personal, work].join(delimiter)
+    process.env.CODEBURN_DESKTOP_SESSIONS_DIR = join(home, 'no-desktop-sessions')
+    try {
+      const inputs = await collectLiveSessionInputs(now, LIVE_WINDOW_SECONDS)
+      const claude = inputs.filter(input => input.provider === 'claude')
+      expect(claude.map(input => input.id).sort()).toEqual(['s1', 's2'])
+      expect(claude.find(input => input.id === 's1')!.claudeConfigSourceId)
+        .toBe(claudeConfigSourceId(resolve(personal)))
+      expect(claude.find(input => input.id === 's2')!.claudeConfigSourceId)
+        .toBe(claudeConfigSourceId(resolve(work)))
+    } finally {
+      if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIRS
+      else process.env.CLAUDE_CONFIG_DIRS = previous
+      if (previousDesktop === undefined) delete process.env.CODEBURN_DESKTOP_SESSIONS_DIR
+      else process.env.CODEBURN_DESKTOP_SESSIONS_DIR = previousDesktop
+    }
   })
 })
 

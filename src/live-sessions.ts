@@ -4,7 +4,7 @@
 /// only what it finds here.
 import { open, readdir, stat } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
-import { getClaudeConfigDirs, getDesktopSessionsDirs } from './providers/claude.js'
+import { getClaudeConfigDirs, getDesktopSessionsDirs, claudeConfigSourceId, claudeDesktopSourceId } from './providers/claude.js'
 import { kimicodeHomes, projectFromWorkDir, readState as readKimicodeState } from './providers/kimicode.js'
 import { reportedContextWindow } from './context-tree.js'
 import { modelRowKey } from './models.js'
@@ -22,6 +22,9 @@ export type LiveSession = {
   id: string
   /// Provider catalog id, matching the dock ring the session runs under.
   provider: string
+  /// For Claude sessions, the config directory (or Claude Desktop bucket) the
+  /// transcript belongs to. Absent on non-Claude providers.
+  claudeConfigSourceId?: string
   project: string
   /// Git branch of the last turn, the second half of the row's title. Null when
   /// the transcript never named one (non-Claude tools, or a non-repo cwd).
@@ -48,6 +51,7 @@ export type LiveSessionsBlock = {
 export type LiveSessionInput = {
   id: string
   provider: string
+  claudeConfigSourceId?: string
   project: string
   branch: string | null
   model: string | null
@@ -75,6 +79,7 @@ export function buildLiveSessions(
     .map(input => ({
       id: input.id,
       provider: input.provider,
+      ...(input.claudeConfigSourceId ? { claudeConfigSourceId: input.claudeConfigSourceId } : {}),
       project: input.project,
       branch: input.branch,
       model: input.model,
@@ -200,33 +205,37 @@ function parentTranscriptPath(sidechainPath: string): string | null {
   return `${sidechainPath.slice(0, marker)}.jsonl`
 }
 
-type FileTimes = { path: string; mtimeMs: number; birthtimeMs: number }
+type FileTimes = { path: string; mtimeMs: number; birthtimeMs: number; sourceId: string }
 
 /// Transcript roots, straight from the Claude config rather than through the
 /// provider registry. `discoverAllSessions` walks every provider's tree and
 /// costs about half a second on a large history; this block only ever reads
-/// Claude transcripts, and it runs on every payload build.
-async function transcriptRoots(): Promise<string[]> {
+/// Claude transcripts, and it runs on every payload build. Each root carries
+/// the config source id its transcripts belong to.
+async function transcriptRoots(): Promise<Array<{ root: string; sourceId: string }>> {
   const configured = await getClaudeConfigDirs().catch(() => [])
-  return [...configured.map(dir => join(dir, 'projects')), ...getDesktopSessionsDirs()]
+  return [
+    ...configured.map(dir => ({ root: join(dir, 'projects'), sourceId: claudeConfigSourceId(dir) })),
+    ...getDesktopSessionsDirs().map(dir => ({ root: dir, sourceId: claudeDesktopSourceId(dir) })),
+  ]
 }
 
 /// Every transcript touched inside the window. One recursive listing per root,
 /// then a stat per file: nothing is opened until it is known to be live.
 async function liveTranscripts(nowMs: number, windowMs: number): Promise<FileTimes[]> {
-  const paths: string[] = []
-  for (const root of await transcriptRoots()) {
+  const paths: Array<{ path: string; sourceId: string }> = []
+  for (const { root, sourceId } of await transcriptRoots()) {
     const entries = await readdir(root, { recursive: true, withFileTypes: true }).catch(() => [])
     for (const entry of entries) {
       if (!entry.isFile() || !entry.name.endsWith('.jsonl')) continue
-      paths.push(join(entry.parentPath, entry.name))
+      paths.push({ path: join(entry.parentPath, entry.name), sourceId })
     }
   }
-  const stats = await Promise.all(paths.map(async path => {
+  const stats = await Promise.all(paths.map(async ({ path, sourceId }) => {
     const info = await stat(path).catch(() => null)
     if (!info?.isFile()) return null
     if (nowMs - info.mtimeMs > windowMs) return null
-    return { path, mtimeMs: info.mtimeMs, birthtimeMs: info.birthtimeMs || info.mtimeMs }
+    return { path, mtimeMs: info.mtimeMs, birthtimeMs: info.birthtimeMs || info.mtimeMs, sourceId }
   }))
   return stats.filter((entry): entry is FileTimes => entry !== null)
 }
@@ -240,12 +249,13 @@ export async function collectLiveSessionInputs(
 ): Promise<LiveSessionInput[]> {
   const windowMs = windowSeconds * 1000
   const inputs = new Map<string, LiveSessionInput>()
-  type PendingSidechain = { sessionId: string; mtimeMs: number; path: string }
+  type PendingSidechain = { sessionId: string; mtimeMs: number; path: string; sourceId: string }
   const pendingSidechains: PendingSidechain[] = []
 
-  const toInput = (scan: ScannedFile, times: Omit<FileTimes, 'path'>, fallbackProject: string): LiveSessionInput => ({
+  const toInput = (scan: ScannedFile, times: FileTimes, fallbackProject: string): LiveSessionInput => ({
     id: scan.sessionId,
     provider: 'claude',
+    claudeConfigSourceId: times.sourceId,
     project: scan.cwd ? basename(scan.cwd) : fallbackProject,
     branch: scan.branch,
     model: scan.model,
@@ -257,7 +267,9 @@ export async function collectLiveSessionInputs(
   })
 
   /// A parent whose own transcript is idle because its sub-agent is doing the
-  /// work. Its file is not live, so read it here to recover its details.
+  /// work. Its file is not live, so read it here to recover its details. The
+  /// parent lives in the same transcript tree as the sidechain, so it carries
+  /// the sidechain's config source id.
   const loadIdleParent = async (sidechain: PendingSidechain): Promise<LiveSessionInput | null> => {
     const parentPath = parentTranscriptPath(sidechain.path)
     if (!parentPath) return null
@@ -266,7 +278,7 @@ export async function collectLiveSessionInputs(
     const scan = await scanTranscript(parentPath)
     return toInput(
       scan,
-      { mtimeMs: info.mtimeMs, birthtimeMs: info.birthtimeMs || info.mtimeMs },
+      { path: parentPath, mtimeMs: info.mtimeMs, birthtimeMs: info.birthtimeMs || info.mtimeMs, sourceId: sidechain.sourceId },
       basename(parentPath).replace(/\.jsonl$/, ''),
     )
   }
@@ -274,7 +286,7 @@ export async function collectLiveSessionInputs(
   for (const file of await liveTranscripts(nowMs, windowMs)) {
     const scan = await scanTranscript(file.path)
     if (scan.isSidechain) {
-      pendingSidechains.push({ sessionId: scan.sessionId, mtimeMs: file.mtimeMs, path: file.path })
+      pendingSidechains.push({ sessionId: scan.sessionId, mtimeMs: file.mtimeMs, path: file.path, sourceId: file.sourceId })
       continue
     }
     inputs.set(scan.sessionId, toInput(scan, file, basename(file.path).replace(/\.jsonl$/, '')))

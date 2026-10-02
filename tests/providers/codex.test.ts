@@ -65,6 +65,29 @@ function tokenCount(opts: {
   })
 }
 
+function tokenUsageRecord(opts: {
+  timestamp?: string
+  responseId?: string
+  model?: string
+  usage: { input?: number; cached?: number; cacheWrite?: number; output?: number; reasoning?: number }
+}) {
+  return JSON.stringify({
+    type: 'token_usage_record',
+    timestamp: opts.timestamp ?? '2026-09-27T10:01:00Z',
+    payload: {
+      response_id: opts.responseId ?? 'resp-001',
+      model: opts.model,
+      usage: {
+        input_tokens: opts.usage.input ?? 0,
+        cached_input_tokens: opts.usage.cached ?? 0,
+        cache_write_input_tokens: opts.usage.cacheWrite ?? 0,
+        output_tokens: opts.usage.output ?? 0,
+        reasoning_output_tokens: opts.usage.reasoning ?? 0,
+      },
+    },
+  })
+}
+
 function functionCall(name: string, timestamp?: string) {
   return JSON.stringify({
     type: 'response_item',
@@ -1382,7 +1405,235 @@ describe('codex provider - forked session dedupe', () => {
   })
 })
 
+describe('codex provider - token_usage_record accounting', () => {
+  async function parseCalls(lines: string[]): Promise<ParsedProviderCall[]> {
+    const filePath = await writeSession(tmpDir, '2026-09-27', 'rollout-usage-record.jsonl', lines)
+    const provider = createCodexProvider(tmpDir)
+    const source = { path: filePath, project: 'test', provider: 'codex' }
+    const calls: ParsedProviderCall[] = []
+    for await (const call of provider.createSessionParser(source, new Set()).parse()) calls.push(call)
+    return calls
+  }
+
+  it('uses the response usage record when compaction leaves a zero token_count twin', async () => {
+    const calls = await parseCalls([
+      sessionMeta({ timestamp: '2026-09-27T10:00:00Z' }),
+      tokenUsageRecord({
+        timestamp: '2026-09-27T10:01:00Z',
+        responseId: 'resp-compaction',
+        model: 'gpt-5.5',
+        usage: { input: 1200, cached: 300, cacheWrite: 200, output: 180, reasoning: 60 },
+      }),
+      JSON.stringify({ type: 'event_msg', timestamp: '2026-09-27T10:01:01Z', payload: { type: 'compacted' } }),
+      tokenCount({
+        timestamp: '2026-09-27T10:01:02Z',
+        last: {},
+        total: { input: 0, output: 0, total: 0 },
+      }),
+    ])
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]).toMatchObject({
+      model: 'gpt-5.5',
+      inputTokens: 900,
+      cacheCreationInputTokens: 0,
+      cachedInputTokens: 300,
+      outputTokens: 180,
+      reasoningTokens: 60,
+    })
+  })
+
+  it('keeps token_count as the source for older rollouts', async () => {
+    const calls = await parseCalls([
+      sessionMeta(),
+      tokenCount({
+        timestamp: '2026-04-14T10:01:00Z',
+        last: { input: 800, cached: 100, output: 150, reasoning: 25 },
+        total: { input: 800, cached: 100, output: 150, reasoning: 25, total: 1075 },
+      }),
+    ])
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]).toMatchObject({
+      inputTokens: 700,
+      cachedInputTokens: 100,
+      outputTokens: 150,
+      reasoningTokens: 25,
+    })
+  })
+
+  it('keeps token_count fallback when a usage record has no recognized counters', async () => {
+    const calls = await parseCalls([
+      sessionMeta({ timestamp: '2026-09-27T10:00:00Z' }),
+      JSON.stringify({
+        type: 'token_usage_record',
+        timestamp: '2026-09-27T10:00:01Z',
+        payload: { response_id: 'resp-empty', usage: {} },
+      }),
+      tokenCount({
+        timestamp: '2026-09-27T10:00:02Z',
+        last: { input: 500, output: 80 },
+        total: { input: 500, output: 80, total: 580 },
+      }),
+    ])
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.inputTokens + calls[0]!.outputTokens).toBe(580)
+  })
+
+  it('does not switch usage sources because of a fork replay record', async () => {
+    const calls = await parseCalls([
+      sessionMeta({
+        timestamp: '2026-09-27T10:00:00Z',
+        session_id: 'sess-fork',
+        forked_from_id: 'sess-parent',
+      }),
+      tokenUsageRecord({
+        timestamp: '2026-09-27T10:00:01Z',
+        responseId: 'resp-replayed',
+        usage: { input: 500 },
+      }),
+      tokenCount({
+        timestamp: '2026-09-27T10:00:06Z',
+        last: { input: 200, output: 40 },
+        total: { input: 200, output: 40, total: 240 },
+      }),
+    ])
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.inputTokens + calls[0]!.outputTokens).toBe(240)
+  })
+
+  it('counts a real fork response record before the old five-second cutoff', async () => {
+    const calls = await parseCalls([
+      sessionMeta({
+        timestamp: '2026-09-27T10:00:10Z',
+        session_id: 'sess-fork',
+        forked_from_id: 'sess-parent',
+      }),
+      tokenUsageRecord({
+        timestamp: '2026-09-27T10:00:10.100Z',
+        responseId: 'resp-replayed',
+        usage: { input: 500 },
+      }),
+      tokenUsageRecord({
+        timestamp: '2026-09-27T10:00:12Z',
+        responseId: 'resp-real',
+        usage: { input: 200, output: 40 },
+      }),
+      tokenCount({
+        timestamp: '2026-09-27T10:00:12.100Z',
+        last: { input: 200, output: 40 },
+        total: { input: 200, output: 40, total: 240 },
+      }),
+    ])
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.inputTokens + calls[0]!.outputTokens).toBe(240)
+  })
+
+  it('counts pre-handover token_count usage, then ignores record twins and later token_count events', async () => {
+    const calls = await parseCalls([
+      sessionMeta({ timestamp: '2026-09-27T10:00:00Z' }),
+      tokenCount({
+        timestamp: '2026-09-27T10:00:01Z',
+        last: { input: 200, output: 100 },
+        total: { input: 200, output: 100, total: 300 },
+      }),
+      tokenUsageRecord({
+        timestamp: '2026-09-27T10:00:02Z',
+        responseId: 'resp-handover',
+        usage: { input: 400, output: 120 },
+      }),
+      tokenCount({
+        timestamp: '2026-09-27T10:00:03Z',
+        last: { input: 400, output: 120 },
+        total: { input: 600, output: 220, total: 820 },
+      }),
+      tokenCount({
+        timestamp: '2026-09-27T10:00:04Z',
+        last: { input: 30, output: 10 },
+        total: { input: 630, output: 230, total: 860 },
+      }),
+    ])
+
+    expect(calls).toHaveLength(2)
+    const total = calls.reduce((sum, call) => sum + call.inputTokens + call.cachedInputTokens + call.outputTokens + call.reasoningTokens, 0)
+    expect(total).toBe(820)
+  })
+
+  it('deduplicates response records replayed by a fork while keeping the fork response', async () => {
+    await writeSession(tmpDir, '2026-09-27', 'rollout-1-parent.jsonl', [
+      sessionMeta({ session_id: 'sess-parent', timestamp: '2026-09-27T10:00:00Z' }),
+      tokenUsageRecord({ timestamp: '2026-09-27T10:00:10Z', responseId: 'resp-shared', usage: { input: 500 } }),
+    ])
+    await writeSession(tmpDir, '2026-09-27', 'rollout-2-fork.jsonl', [
+      sessionMeta({ session_id: 'sess-fork', forked_from_id: 'sess-parent', timestamp: '2026-09-27T10:00:30Z' }),
+      tokenUsageRecord({ timestamp: '2026-09-27T10:00:40Z', responseId: 'resp-shared', usage: { input: 500 } }),
+      tokenUsageRecord({ timestamp: '2026-09-27T10:00:41Z', responseId: 'resp-fork', usage: { input: 200 } }),
+    ])
+
+    const provider = createCodexProvider(tmpDir)
+    const sessions = (await provider.discoverSessions()).sort((a, b) => a.path.localeCompare(b.path))
+    const seenKeys = new Set<string>()
+    let tokens = 0
+    let calls = 0
+    for (const source of sessions) {
+      for await (const call of provider.createSessionParser(source, seenKeys).parse()) {
+        calls++
+        tokens += call.inputTokens + call.cachedInputTokens + call.outputTokens + call.reasoningTokens
+      }
+    }
+
+    expect(calls).toBe(2)
+    expect(tokens).toBe(700)
+  })
+
+  it('keeps usage from a response interrupted before token_count or task_complete', async () => {
+    const calls = await parseCalls([
+      sessionMeta({ timestamp: '2026-09-27T10:00:00Z' }),
+      tokenUsageRecord({
+        timestamp: '2026-09-27T10:01:00Z',
+        responseId: 'resp-interrupted',
+        usage: { input: 900, output: 240 },
+      }),
+    ])
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.inputTokens + calls[0]!.outputTokens).toBe(1140)
+  })
+})
+
 describe('codex auto-review pricing (#1047)', () => {
+  it('prices an auto-review whose prompt crosses gpt-5.5\'s above-272k tier at the tier (#1076)', async () => {
+    // End-to-end through the codex provider path: the gate is keyed on the
+    // provider string threaded from codex.ts, so a typo there would leave the
+    // call at base rates and fail this. 400k input puts the prompt well past
+    // 272,000 with no cache needed.
+    const filePath = await writeSession(tmpDir, '2026-04-14', 'rollout-auto-review-tier.jsonl', [
+      sessionMeta({ session_id: 'sess-auto-tier', model: 'codex-auto-review' }),
+      userMessage('review the PR'),
+      tokenCount({
+        timestamp: '2026-04-14T10:01:00Z',
+        last: { input: 400_000, output: 1_000 },
+        total: { total: 401_000 },
+      }),
+    ])
+    const provider = createCodexProvider(tmpDir)
+    const calls: ParsedProviderCall[] = []
+    for await (const call of provider.createSessionParser({ path: filePath, project: 'test', provider: 'codex' }, new Set()).parse()) {
+      calls.push(call)
+    }
+    expect(calls).toHaveLength(1)
+    // gpt-5.5 tier (bundled): input 1e-5, output 4.5e-5 - explicit arithmetic,
+    // not just self-consistency with calculateCost.
+    expect(calls[0]!.costUSD).toBeCloseTo(400_000 * 1e-5 + 1_000 * 4.5e-5, 12)
+    expect(calls[0]!.costUSD).toBe(calculateCost('gpt-5.5', 400_000, 1_000, 0, 0, 0, 'standard', 0, 'codex'))
+    // The same call without the codex provider stays at base rates (the
+    // refreshed bundle's gpt-5.5 base is 5e-6/3e-5) - the gate that keeps the
+    // real Copilot billing of tests/parser.test.ts (c4) intact.
+    expect(calculateCost('gpt-5.5', 400_000, 1_000, 0, 0, 0)).toBeCloseTo(400_000 * 5e-6 + 1_000 * 3e-5, 12)
+  })
   it('parses auto-review as itself and prices it as GPT-5.5', async () => {
     const filePath = await writeSession(tmpDir, '2026-04-14', 'rollout-auto-review.jsonl', [
       sessionMeta({ session_id: 'sess-auto', model: 'codex-auto-review' }),
@@ -1400,7 +1651,7 @@ describe('codex auto-review pricing (#1047)', () => {
     }
     expect(calls).toHaveLength(1)
     expect(calls[0]!.model).toBe('codex-auto-review')
-    expect(calls[0]!.costUSD).toBe(calculateCost('gpt-5.5', 1_000_000, 1_000_000, 0, 0, 0))
+    expect(calls[0]!.costUSD).toBe(calculateCost('gpt-5.5', 1_000_000, 1_000_000, 0, 0, 0, 'standard', 0, 'codex'))
   })
 
   it('discards a warm v11 versioned $0 exact hit so unchanged rollouts reprice', async () => {
@@ -1447,7 +1698,7 @@ describe('codex auto-review pricing (#1047)', () => {
       }
       expect(calls).toHaveLength(1)
       expect(calls[0]!.costUSD).toBeGreaterThan(0)
-      expect(calls[0]!.costUSD).toBe(calculateCost('gpt-5.5', 1_000_000, 1_000_000, 0, 0, 0))
+      expect(calls[0]!.costUSD).toBe(calculateCost('gpt-5.5', 1_000_000, 1_000_000, 0, 0, 0, 'standard', 0, 'codex'))
     } finally {
       clearCodexMemCaches()
       if (prev === undefined) delete process.env['CODEBURN_CACHE_DIR']

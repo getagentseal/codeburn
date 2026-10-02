@@ -1164,32 +1164,35 @@ mod commands {
     /// cadence therefore asks twice within a second of itself. This collapses that into one
     /// CLI run: whoever asks second waits for the run in flight and is answered from it. The
     /// cache lives only for a few seconds, far below the store's own interactive floor, so a
-    /// Retry a reader presses is still a live answer.
+    /// Retry a reader presses is still a live answer. It is keyed on the profiles mode,
+    /// because a combined answer cannot serve a rail just switched to separate rings.
     const QUOTA_COALESCE: std::time::Duration = std::time::Duration::from_secs(10);
-    static QUOTA_CACHE: std::sync::Mutex<Option<(crate::cli::DockQuota, std::time::Instant)>> =
+    static QUOTA_CACHE: std::sync::Mutex<Option<(crate::cli::DockQuota, bool, std::time::Instant)>> =
         std::sync::Mutex::new(None);
     static QUOTA_GATE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-    fn cached_quota() -> Option<crate::cli::DockQuota> {
+    fn cached_quota(separate: bool) -> Option<crate::cli::DockQuota> {
         let guard = QUOTA_CACHE.lock().ok()?;
-        let (answer, taken) = guard.as_ref()?;
-        (taken.elapsed() < QUOTA_COALESCE).then(|| answer.clone())
+        let (answer, cached_separate, taken) = guard.as_ref()?;
+        (taken.elapsed() < QUOTA_COALESCE && *cached_separate == separate).then(|| answer.clone())
     }
 
     #[tauri::command]
     pub async fn dock_quota(state: State<'_, AppState>) -> Result<crate::cli::DockQuota, String> {
-        if let Some(fresh) = cached_quota() {
+        // Per-profile reads are opt-in: only a rail in separate mode pays for them.
+        let separate = crate::dock::read_prefs().get("claudeProfiles").and_then(|v| v.as_str()) == Some("separate");
+        if let Some(fresh) = cached_quota(separate) {
             return Ok(fresh);
         }
         let _gate = QUOTA_GATE.lock().await;
         // The run we queued behind has just answered; that answer is this one.
-        if let Some(fresh) = cached_quota() {
+        if let Some(fresh) = cached_quota(separate) {
             return Ok(fresh);
         }
         let cli = state.cli.lock().map_err(|e| e.to_string())?.clone();
-        let answer = cli.fetch_quota().await;
+        let answer = cli.fetch_quota(separate).await;
         if let Ok(mut guard) = QUOTA_CACHE.lock() {
-            *guard = Some((answer.clone(), std::time::Instant::now()));
+            *guard = Some((answer.clone(), separate, std::time::Instant::now()));
         }
         Ok(answer)
     }

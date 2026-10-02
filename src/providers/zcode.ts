@@ -2,7 +2,7 @@ import { join } from 'path'
 import { homedir } from 'os'
 
 import { billableOutputTokens, calculateCost } from '../models.js'
-import { isSqliteAvailable, getSqliteLoadError, openDatabase, type SqliteDatabase } from '../sqlite.js'
+import { isSqliteAvailable, getSqliteLoadError, isSqliteBusyError, openDatabase, type SqliteDatabase } from '../sqlite.js'
 import type { Provider, SessionSource, SessionParser, ParsedProviderCall, ProbeRoot } from './types.js'
 
 /// ZCode (CLI v0.14.x) records usage in a single SQLite database at
@@ -11,6 +11,12 @@ import type { Provider, SessionSource, SessionParser, ParsedProviderCall, ProbeR
 /// source stores a dollar cost (GLM-5.2 runs on z.ai's start-plan subscription).
 /// Tokens are exact; cost is computed from the pricing table. Schema verified
 /// against db v0.14.8 on 2026-06-20.
+///
+/// PR attribution reads the `message`/`part` tables too: a user message's
+/// `anchor.turnId` matches `model_usage.turn_id`, and its prompt text (the
+/// `metadata.inputIntent.text` field, else the message's `text` parts) is what
+/// the shared parser layer scans for GitHub PR references. Without it ZCode
+/// sessions could never appear under attributed pull requests.
 
 type SessionRow = {
   id: string
@@ -33,6 +39,93 @@ type UsageRow = {
 type ToolRow = {
   turn_id: string | null
   tool_name: string
+}
+
+type MessageRow = {
+  id: string
+  data: string
+}
+
+type TextPartRow = {
+  message_id: string
+  text: string | null
+}
+
+type UserMessageData = {
+  anchor?: { turnId?: string }
+  metadata?: { inputIntent?: { text?: string } }
+}
+
+// Provider-neutral explicit-reference capture, mirrored from parser.ts (a
+// provider cannot import the parser without a cycle). Full URLs only: a bare
+// "#123" is repository-ambiguous and must never silently move spend between
+// repositories.
+const PR_URL_IN_TEXT_RE = /https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/pull\/\d+/g
+
+function extractGithubPullUrls(text: string): string[] {
+  return [...new Set(text.match(PR_URL_IN_TEXT_RE) ?? [])]
+}
+
+/// Per-turn user prompt text plus the session-wide set of GitHub PR URLs the
+/// user referenced. The turn text feeds the parser layer's per-turn prRefs
+/// extraction; the URL set seeds the cached file's session-level prLinks, the
+/// gate every PR-attributed session must pass. Both degrade to empty on a DB
+/// without `message`/`part` tables (older schema, or the test fixture), which
+/// keeps usage rows exactly as they were before.
+function loadPromptReferences(db: SqliteDatabase, sessionId: string): {
+  turnTextByTurnId: Map<string, string>
+  prLinks: string[]
+} {
+  const turnTextByTurnId = new Map<string, string>()
+  const prUrls = new Set<string>()
+  try {
+    const messages = db.query<MessageRow>(
+      `SELECT id, data FROM message
+       WHERE session_id = ? AND json_extract(data, '$.role') = 'user'
+       ORDER BY time_created ASC, sequence ASC, id ASC`,
+      [sessionId],
+    )
+    if (messages.length === 0) return { turnTextByTurnId, prLinks: [] }
+
+    // Prompt text lives in `metadata.inputIntent.text` when the CLI recorded
+    // it, otherwise in the message's `text` parts (queued/injected inputs).
+    const partTextByMessage = new Map<string, string>()
+    for (const part of db.query<TextPartRow>(
+      `SELECT p.message_id as message_id, json_extract(p.data, '$.text') as text
+       FROM part p
+       WHERE p.session_id = ? AND json_extract(p.data, '$.type') = 'text'
+         AND p.message_id IN (SELECT id FROM message WHERE session_id = ? AND json_extract(data, '$.role') = 'user')
+       ORDER BY p.message_id, p.sequence ASC`,
+      [sessionId, sessionId],
+    )) {
+      if (!part.text) continue
+      const existing = partTextByMessage.get(part.message_id)
+      partTextByMessage.set(part.message_id, existing ? `${existing}\n${part.text}` : part.text)
+    }
+
+    for (const message of messages) {
+      let parsed: UserMessageData
+      try {
+        parsed = JSON.parse(message.data) as UserMessageData
+      } catch {
+        continue
+      }
+      const inputIntent = parsed.metadata?.inputIntent?.text
+      const text = (typeof inputIntent === 'string' && inputIntent.trim()
+        ? inputIntent
+        : partTextByMessage.get(message.id)) ?? ''
+      if (!text.trim()) continue
+      for (const url of extractGithubPullUrls(text)) prUrls.add(url)
+      const turnId = parsed.anchor?.turnId
+      if (!turnId) continue
+      const existing = turnTextByTurnId.get(turnId)
+      turnTextByTurnId.set(turnId, existing ? `${existing}\n${text}` : text)
+    }
+  } catch (err) {
+    if (isSqliteBusyError(err)) throw err
+    // message/part are an optional read; usage rows still count without them.
+  }
+  return { turnTextByTurnId, prLinks: [...prUrls].sort() }
 }
 
 function getDbPath(override?: string): string {
@@ -140,6 +233,8 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
 
         const turnsWithToolsEmitted = new Set<string>()
 
+        const { turnTextByTurnId, prLinks } = loadPromptReferences(db, sessionId)
+
         for (const row of rows) {
           const cacheRead = row.cache_read_input_tokens ?? 0
           const cacheCreation = row.cache_creation_input_tokens ?? 0
@@ -192,7 +287,8 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
             speed: 'standard',
             deduplicationKey: dedupKey,
             turnId: row.turn_id ?? undefined,
-            userMessage: '',
+            userMessage: row.turn_id ? turnTextByTurnId.get(row.turn_id) ?? '' : '',
+            ...(prLinks.length > 0 ? { prLinks } : {}),
             sessionId,
           }
         }
