@@ -1,5 +1,8 @@
 export const SPEED_HARNESSES = ['codex', 'claude', 'zcode', 'dsh', 'hermes', 'antigravity'] as const
 export type SpeedHarness = typeof SPEED_HARNESSES[number]
+export const speedHarnessName: Record<SpeedHarness, string> = {
+  codex: 'Codex', claude: 'Claude Code', zcode: 'ZCode', dsh: 'DeepSeek Harness', hermes: 'Hermes', antigravity: 'Antigravity',
+}
 
 // A token timestamp is accepted only from a producer that observes individual
 // tokens. SSE deltas are chunks, even when they happen to contain one word.

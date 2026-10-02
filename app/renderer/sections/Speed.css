@@ -1,0 +1,16 @@
+.speed-note { color: var(--mut); font-size: 12px; line-height: 1.6; margin: 10px 0; }
+.speed-scroll { overflow-x: auto; max-width: 100%; }
+.speed-table { min-width: 810px; width: 100%; border-collapse: collapse; font-size: 12px; }
+.speed-table th, .speed-table td { padding: 12px 8px; text-align: right; white-space: nowrap; border-bottom: 1px solid var(--line, #8883); }
+.speed-table th { color: var(--mut); font-size: 11px; font-weight: 500; white-space: normal; max-width: 100px; }
+.speed-table th:nth-child(-n+2), .speed-table td:nth-child(-n+2) { text-align: left; }
+.speed-table .speed-model { min-width: 155px; max-width: 210px; white-space: normal; overflow-wrap: anywhere; font-weight: 550; }
+.speed-model b { font-size: 12px; font-weight: 550; }
+.speed-harness { display: block; color: var(--mut); margin-top: 5px; font-size: 11px; font-weight: 400; }
+.speed-table td:nth-child(2) { white-space: normal; min-width: 100px; max-width: 145px; }
+.speed-table .speed-rate { font-size: 17px; font-variant-numeric: tabular-nums; }
+.speed-stats { display: flex; flex-wrap: wrap; gap: 24px; }
+.speed-stats dt { color: var(--mut); font-size: 12px; }
+.speed-stats dd { font-size: 22px; font-variant-numeric: tabular-nums; margin: 6px 0; }
+.speed-chart { margin: 16px 0 0; }
+.speed-chart svg { width: 100%; max-height: 220px; display: block; color: var(--mut); }

@@ -3,10 +3,11 @@ import { homedir } from 'node:os'
 import { stat } from 'node:fs/promises'
 import { openDatabase } from '../sqlite.js'
 import { billableOutputTokens } from '../models.js'
+import { mapWithConcurrency } from '../fs-utils.js'
 import { getProvider } from '../providers/index.js'
 import type { SpeedSample } from './types.js'
 
-export async function readSpeedHistory(limit = 100, zcodePath = join(homedir(), '.zcode', 'cli', 'db', 'db.sqlite')): Promise<{ samples: SpeedSample[]; warnings: string[] }> {
+export async function readSpeedHistory(limit = 100, zcodePath = join(homedir(), '.zcode', 'cli', 'db', 'db.sqlite'), includeTurnEstimates = true): Promise<{ samples: SpeedSample[]; warnings: string[] }> {
   const samples: SpeedSample[] = []
   const warnings: string[] = []
   try {
@@ -31,11 +32,14 @@ export async function readSpeedHistory(limit = 100, zcodePath = join(homedir(), 
       }
     } finally { db.close() }
   } catch (err) { if ((err as NodeJS.ErrnoException).code !== 'ENOENT') warnings.push('ZCode timing database could not be read') }
+  // GUI generation-speed reads do not need to discover/parse Codex turn logs:
+  // those lack first-token timing and cannot contribute to the displayed rate.
+  if (!includeTurnEstimates) return { samples, warnings }
   try {
     const provider = await getProvider('codex')
     if (provider) {
       const sources = await provider.discoverSessions()
-      const dated = await Promise.all(sources.map(async source => ({ source, mtime: await stat(source.path).then(s => s.mtimeMs, () => 0) })))
+      const dated = await mapWithConcurrency(sources, 4, async source => ({ source, mtime: await stat(source.path).then(s => s.mtimeMs, () => 0) }))
       const seen = new Set<string>()
       for (const { source } of dated.sort((a, b) => b.mtime - a.mtime).slice(0, limit)) {
         const calls = []

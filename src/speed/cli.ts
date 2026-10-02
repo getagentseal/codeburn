@@ -5,6 +5,7 @@ import { readSpeedSamples, speedFile } from './store.js'
 import { isSpeedHarness, SPEED_HARNESSES, type SpeedSample } from './types.js'
 import { startSpeedServer } from './server.js'
 import { captureAntigravitySpeed } from './antigravity.js'
+import { getDateRange, parseDateRangeFlags, parsePeriodOrThrow } from '../cli-date.js'
 
 function integer(raw: string): number {
   const n = Number(raw)
@@ -23,21 +24,30 @@ export function registerSpeedCommands(program: Command): void {
     .option('--json', 'Machine-readable report including coverage and timing percentiles')
     .option('--harness <id>', `Filter a harness (${SPEED_HARNESSES.join(', ')})`)
     .option('--since <date>', 'Include requests started on/after an ISO date or timestamp')
+    .option('--period <period>', 'Report window: today, week, 30days, month, all, lifetime')
+    .option('--from <date>', 'Window start (local YYYY-MM-DD)')
+    .option('--to <date>', 'Window end (local YYYY-MM-DD, inclusive)')
     .option('--file <path>', 'Speed telemetry JSONL file', speedFile())
     .option('--limit <n>', 'Recent telemetry records to read', integer, 10_000)
     .option('--history-limit <n>', 'Recent ZCode requests and Codex sessions to inspect', integer, 100)
     .option('--no-history', 'Read collected telemetry only')
+    .option('--no-turn-estimates', 'Skip Codex history scans that cannot measure generation speed')
     .action(async opts => {
       if (opts.harness && !isSpeedHarness(opts.harness)) throw new Error('Unknown speed harness')
       const since = opts.since ? Date.parse(opts.since) : -Infinity
       if (opts.since && !Number.isFinite(since)) throw new Error('Invalid --since date')
-      const selected = (s: SpeedSample) => (!opts.harness || s.harness === opts.harness) && Date.parse(s.startedAt) >= since
+      if (opts.period) parsePeriodOrThrow(opts.period)
+      const range = parseDateRangeFlags(opts.from, opts.to) ?? (opts.period ? getDateRange(opts.period).range : null)
+      const start = Math.max(since, range?.start?.getTime() ?? -Infinity)
+      const end = range?.end?.getTime() ?? Infinity
+      const selected = (s: SpeedSample) => (!opts.harness || s.harness === opts.harness) && Date.parse(s.startedAt) >= start && Date.parse(s.startedAt) <= end
       const stored = await readSpeedSamples(opts.file, opts.limit, selected)
-      const history = opts.history ? await readSpeedHistory(opts.historyLimit) : { samples: [], warnings: [] }
+      const history = opts.history ? await readSpeedHistory(opts.historyLimit, undefined, opts.turnEstimates) : { samples: [], warnings: [] }
       const samples = [...stored.samples, ...history.samples.filter(selected)]
       const grouped = buildSpeedReport(samples)
       const report = { ...grouped, unavailableHarnesses: grouped.unavailableHarnesses.filter(h => !opts.harness || h === opts.harness),
-        rejectedRecords: stored.rejected, omittedRecords: stored.omitted, warnings: history.warnings }
+        rejectedRecords: stored.rejected, omittedRecords: stored.omitted, warnings: history.warnings,
+        generatedAt: new Date().toISOString(), historyLimit: opts.history ? opts.historyLimit : 0 }
       console.log(opts.json ? JSON.stringify(report, null, 2) : renderSpeedReport(report))
       if (!opts.json) {
         if (stored.rejected) process.stderr.write(`Ignored ${stored.rejected} invalid speed records\n`)

@@ -88,6 +88,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
     private var providerSettingsObserver: NSObjectProtocol?
 
     func applicationWillTerminate(_ notification: Notification) {
+        store.cancelSpeedRefresh()
         // Bounded by its own timeout, so a slow network can never hold up quit.
         Telemetry.shared.flushOnQuit()
         // Synchronously, before the actor hop: the app can exit before a
@@ -249,6 +250,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
     }
 
     private func prepareRefreshPipelineForSleep() {
+        store.cancelSpeedRefresh()
         // Leave the timer running: the kernel pauses it during sleep, and tearing
         // it down stranded the loop whenever a wake notification was missed.
         forceRefreshTask?.cancel()
@@ -268,6 +270,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
 
     private func recoverRefreshPipelineAfterInterruption(resetLoading: Bool, clearCache: Bool = false, reason: String) {
         if resetLoading {
+            store.cancelSpeedRefresh()
             forceRefreshTask?.cancel()
             forceRefreshTask = nil
             forceRefreshStartedAt = nil
@@ -502,6 +505,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
         if !force, minAgeSeconds > 0, let age = store.menubarPayloadAgeSeconds,
            TimeInterval(age) < minAgeSeconds { return }
 
+        store.refreshSpeedIfNeeded(force: force)
         let menubarPeriod = store.menubarPeriod
         if let age = store.menubarPayloadAgeSeconds, age > 120 {
             NSLog("CodeBurn: status payload stale for %ds on %@ refresh", age, reason)
@@ -581,6 +585,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
         showLoading: Bool = false,
         qualityOfService: QualityOfService = .userInitiated
     ) async -> Bool {
+        store.refreshSpeedIfNeeded(force: force)
         let menubarPeriod = store.menubarPeriod
 
         // With the popover closed, only the payloads the status item actually
@@ -1021,6 +1026,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
 
     @MainActor
     func refreshSubscriptionNow() {
+        store.cancelSpeedRefresh()
         manualRefreshTask?.cancel()
         manualRefreshGeneration &+= 1
         let generation = manualRefreshGeneration
@@ -1131,6 +1137,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
             _ = self.store.copilotLoadState
             _ = self.store.antigravityUsage
             _ = self.store.antigravityLoadState
+            _ = self.store.speedReport
+            _ = self.store.speedRefreshFailed
             _ = self.store.capacityDockProviderSummaries
             _ = self.store.capacityDockProviderErrors
             _ = self.store.capacityDockProvidersLoading

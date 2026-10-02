@@ -6,7 +6,7 @@ import { isModifierChord, shortcutLabel } from '../lib/platform'
 import { AboutModal } from './AboutModal'
 import { Icon } from './icons'
 
-export type Section = 'overview' | 'sessions' | 'pullRequests' | 'spend' | 'optimize' | 'models' | 'compare' | 'periods' | 'plans' | 'settings' | 'plugins'
+export type Section = 'overview' | 'sessions' | 'pullRequests' | 'spend' | 'optimize' | 'models' | 'speed' | 'compare' | 'periods' | 'plans' | 'settings' | 'plugins'
 
 type NavItem = { id: Section; label: string; key: string; icon: ReactNode }
 
@@ -32,6 +32,7 @@ export function navGroups(): Array<{ label?: string; items: NavItem[] }> {
     {
       label: t('shell.navGroup.insight'),
       items: [
+        { id: 'speed', label: t('shell.nav.speed'), key: '0', icon: <Icon name="zap" /> },
         { id: 'optimize', label: t('shell.nav.optimize'), key: '5', icon: <Icon name="sparkles" /> },
         { id: 'compare', label: t('shell.nav.compare'), key: '7', icon: <Icon name="scale" /> },
         { id: 'periods', label: t('shell.nav.periods'), key: '9', icon: <Icon name="calendar-range" /> },

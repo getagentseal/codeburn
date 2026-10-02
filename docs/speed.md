@@ -28,19 +28,77 @@ Omitted records are disclosed in text/JSON; full timelines remain on disk.
 `speed events` filters by request identity while reading, so an older trace can
 be inspected without retaining every intervening token event.
 
+## Desktop, menubar and Capacity Dock
+
+[UI screenshots and fixture provenance](images/speed/README.md) show the desktop
+table, arrival inspector, menubar summary and Capacity Dock block.
+
+Open **Speed** in the desktop sidebar (Command/Ctrl+0). The table separates model,
+harness, source and precision, with **generation tok/s**, first-arrival latency,
+request duration and generation-timed/observed counts. Select a harness or date window in
+the toolbar. Stored captures have an **Inspect** action showing reported output
+tokens separately from recorded arrivals, plus a bounded arrival graph. History
+estimates have no persisted per-request timeline to inspect. **Generation tok/s
+excludes the wait for the first token** on every surface. The displayed value is
+the median of eligible per-request rates. First-arrival latency is separate.
+An end-to-end request average is retained only in JSON for diagnostics; it never
+substitutes for unavailable generation speed. Two closely spaced, buffered chunks
+cannot establish precise model decode speed, so chunk rates always carry `~`.
+
+Speed has its own explicit scope: **this device, all projects and accounts**.
+Timing records do not carry project, account or synced-device attribution. The
+usual project/account filters therefore do not apply to this screen. Missing
+samples and incomplete requests are not displayed as zero speed. Capture is still
+opt-in; use **Capture setup** to configure a supported timing source.
+
+The macOS menubar popover shows the six most recently observed model/harness/source
+groups in the last 24 hours. A Capacity Dock provider's detail popover shows its
+most recent timed model group when that provider has a matching speed record
+(current dock catalog: Codex, Claude, ZCode and Antigravity). These are median
+generation rates over the window, excluding the initial wait. Precision and local,
+all-account/project scope are shown alongside the value. Speed can be shown even
+when no quota snapshot is available. Failed refreshes retain a visibly stale
+snapshot; speed fetching is independent of usage/plan refreshes.
+
+Desktop polling has a 60-second minimum interval and respects slower/manual
+refresh settings. Native background reads also have a 60-second minimum between attempts,
+share one in-flight request and follow the existing refresh lifecycle. Explicit
+manual refresh can request a fresh snapshot. Both GUI
+surfaces inspect at most ten recent ZCode requests per history read and pass
+`--no-turn-estimates` to skip Codex log discovery entirely, because turn-only
+history cannot measure generation speed. Collected records retain the report's
+existing memory bounds. CLI turn-history discovery uses bounded filesystem
+concurrency when enabled. The timeline graph renders
+at most 200 points and discloses the displayed count and any producer truncation.
+
+CLI date filters use the same local-day semantics as the desktop: `--period week`
+or `--from 2026-10-01 --to 2026-10-02`. Explicit dates override the period; `--since`
+can further narrow the start. No date flag preserves the original CLI behavior.
+
 ## What each number measures
 
 | Field | Meaning |
 |---|---|
-| Effective Tok/s | Sum of generated tokens / sum of observed request/run seconds. Includes request/network/prefill latency; Codex's existing estimate excludes tool execution. Antigravity's window begins at the CLI's `init` frame. |
-| Stream Tok/s p50 | Median rate between first and last emission. Native individual tokens use `(N-1)/(last-first)`. For chunks this is an estimate using the final usage count; missing usage produces no rate. |
+| Generation Tok/s p50 | Median of `(output tokens - 1) / seconds after first arrival`. Native tokens use first-to-last-token timing; chunks use first-to-last-chunk timing and are estimates. Request-only logs use request completion minus first-token time and are also estimates. |
 | First ms p50 / p95 | Delay to the first generated emission: a native token, ZCode's recorded first token, a proxy SSE chunk, or an Antigravity CLI delta. Heartbeats, role declarations and usage events do not start the clock. |
 | Duration ms p50 / p95 | Distribution of complete timed requests. Codex's duration is estimated model wait at turn granularity. |
+| Generation / observed | Requests with enough data for generation speed / all observations, including incomplete or unavailable samples. One output token, one streamed chunk, missing first arrival, or turn-only timing cannot establish generation speed. |
 | interTokenMsP50 / P95 (JSON) | Intervals between individual native tokens, only when the complete token timeline is available. Never calculated by spreading a chunk's tokens evenly across its duration. |
+| effectiveTokensPerSecond (JSON only) | Sum of generated tokens / sum of observed request/run seconds, including initial wait. Codex's turn estimate excludes tools; Antigravity's window begins at `init`. This is a separate diagnostic, not the displayed generation speed. |
+
+The generation formula is the inverse of time per output token (TPOT), excluding
+the first token and its latency, as defined in [vLLM's metrics documentation](https://github.com/vllm-project/vllm/blob/main/docs/design/metrics.md).
+CodeBurn uses the observed last emission where available; request completion is
+an explicitly estimated endpoint when only request-level timing exists. The JSON
+fields are `generationTokensPerSecondP50`, `generationRateEstimated` and
+`generationRequests`. No valid generation interval means `null`, with no fallback
+to the end-to-end or turn rate.
 
 `~` marks an estimate. Reasoning and generated tool arguments may be included
 in output usage; these are generation rates, not only the speed of visible prose.
-Compare similar context lengths, reasoning settings and workloads. Timing is
+Short or buffered streams can yield misleading estimates; use longer, comparable
+generations for useful comparisons. Compare similar context lengths, reasoning
+settings and workloads. Timing is
 client-observed arrival time, not the provider's internal GPU decode time.
 
 Interrupted/error/incomplete requests remain visible in the sample counts but
@@ -52,14 +110,14 @@ and a proxy can observe the same request; do not sum their request counts.
 
 | Harness | Existing local history | Opt-in streaming capture |
 |---|---|---|
-| Codex | Existing generated-token/model-wait estimates from completed turns. Multi-model turns are excluded because timings are not observed separately. | HTTP OpenAI Responses SSE through the proxy when the configured provider supports a base-URL override. WebSocket transport is not supported. The normal ChatGPT transport is not automatically rerouted. |
+| Codex | Existing generated-token/model-wait estimates from completed turns remain JSON diagnostics. They lack first-token timing, so generation tok/s is unavailable. Multi-model turns are excluded. | HTTP OpenAI Responses SSE through the proxy when the configured provider supports a base-URL override. WebSocket transport is not supported. The normal ChatGPT transport is not automatically rerouted. |
 | Claude Code | Its assistant JSONL does not provide an individual-token timeline to this reader. | Anthropic SSE through a per-run `ANTHROPIC_BASE_URL` override; native individual-token events can use the collector. |
-| ZCode | Read-only `model_usage` request start/end and optional `first_token_at`. `completed_at` is **not** treated as the last token's timestamp. Older schemas without status/first-token data remain incomplete/unknown. | Proxy when that provider's endpoint is configurable; otherwise a native producer must submit timing events. |
+| ZCode | Read-only `model_usage` request start/end and optional `first_token_at`. Generation tok/s uses `(N-1)/(completed_at-first_token_at)` as an estimate; completion is not a token timestamp. Missing status/first-token data leaves generation speed unavailable. | Proxy when that provider's endpoint is configurable; otherwise a native producer must submit timing events. |
 | DeepSeek Harness (`dsh`) | The existing spend reader supports session formats v0–v3, without individual-token timestamps. The installed client tested here writes v4, which that history reader skips. | Its native DeepSeek Messages adapter or a configurable OpenAI-compatible SSE provider through the proxy, or native timing submission. Live streaming does not depend on the session-file version. |
 | Hermes | Session token aggregates do not establish per-request/per-token timing. | Configurable OpenAI/Anthropic HTTP provider through the proxy, or native timing submission. |
 | Antigravity | The usage/RPC/database reader does not establish per-token timing. | Pipe one `agy --output-format stream-json --print ...` run through `speed capture-antigravity` for CLI delta timestamps and final token usage. The desktop/IDE transport is not automatically instrumented. |
 
-The report explicitly lists harnesses without complete timed samples. Installing
+The report explicitly lists harnesses without eligible generation timings. Installing
 a harness alone does not provide streaming timing. The collector contract
 supports all six identities, but actual capture depends on the producer or a
 supported HTTP/CLI stream; this is not a claim of automatic per-token coverage.
@@ -94,7 +152,7 @@ which still remain `chunk` observations rather than an asserted token timeline.
 The response model ID was `deepseek-flash` in both harnesses, including Hermes's
 request under the `deepseek-chat` alias.
 
-For DSH's API-key Messages provider, start a proxy with `--harness dsh
+For DeepSeek Harness's API-key Messages provider, start a proxy with `--harness dsh
 --upstream https://api.deepseek.com --port 4320`. A temporary `--patch` file can
 route a headless run without editing the desktop profile:
 
@@ -113,9 +171,9 @@ route a headless run without editing the desktop profile:
 dsh headless --patch ./speed-probe.yml 'Reply exactly SPEED_PROBE_OK.'
 ```
 
-This verifies DSH's API-key provider. The desktop account provider restricts
+This verifies DeepSeek Harness's API-key provider. The desktop account provider restricts
 credential destinations; that login route was not exercised through the proxy.
-The installed DSH runtime writes `session.v4.jsonl.zstd`. This PR's live speed
+The installed DeepSeek Harness runtime writes `session.v4.jsonl.zstd`. This PR's live speed
 capture reads its HTTP stream, while CodeBurn's existing v0–v3 spend/history
 parser skips v4; `codeburn doctor --provider dsh` reported one skipped local
 session. Adding v4 history semantics is separate from this speed capture path.

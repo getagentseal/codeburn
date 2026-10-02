@@ -101,6 +101,18 @@ struct DataClient {
         }
     }
 
+    static func fetchSpeed(now: Date = Date()) async throws -> SpeedReport {
+        let since = ISO8601DateFormatter().string(from: now.addingTimeInterval(-86_400))
+        let result = try await runCLI(
+            subcommand: ["speed", "--json", "--since", since, "--history-limit", "10", "--no-turn-estimates"],
+            qualityOfService: .utility
+        )
+        guard result.exitCode == 0 else {
+            throw DataClientError.nonZeroExit(code: result.exitCode, stderr: result.stderr)
+        }
+        return try JSONDecoder().decode(SpeedReport.self, from: result.stdout)
+    }
+
     static func statusSubcommand(period: Period,
                                  day: String? = nil,
                                  days: Set<String> = [],

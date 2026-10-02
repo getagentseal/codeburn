@@ -42,10 +42,12 @@ import { localDateKey, PERIOD_LABELS } from './lib/period'
 import { generationAt } from './lib/generation'
 import { detectedProviders as detectedProviderList, providerLabel, readDisabledProviders, type DetectedProvider } from './lib/providers'
 import { reportMemoKey } from './lib/reportMemoKey'
+import { SPEED_HARNESSES, harnessName } from './lib/speed'
 import { persistRefreshValue, readRefreshValue, resolveCadenceMs, useOnBattery, RefreshCadenceContext, type RefreshCadence } from './lib/refreshCadence'
 import { OverviewContent, type InvestigateRequest } from './sections/Overview'
 import { OptimizeContent } from './sections/Optimize'
 import { Models } from './sections/Models'
+import { Speed } from './sections/Speed'
 import { INITIAL_VISIBLE, Sessions, type SessionSort } from './sections/Sessions'
 import { PullRequestsContent } from './sections/PullRequests'
 import { Compare } from './sections/Compare'
@@ -147,6 +149,7 @@ function sectionTitles(): Record<Section, string> {
     spend: t('shell.nav.spend'),
     optimize: t('shell.nav.optimize'),
     models: t('shell.nav.models'),
+    speed: t('shell.nav.speed'),
     compare: t('shell.nav.compare'),
     periods: t('shell.nav.periods'),
     plans: t('shell.nav.plans'),
@@ -188,6 +191,7 @@ export function selectedReportMemoKeys(
     reportMemoKey('optimize', period, provider, range),
     reportMemoKey('yield', period, provider, range),
   ]
+  if (section === 'speed') return [reportMemoKey('speed', period, provider, range)]
   if (section === 'models') return [reportMemoKey('models', period, provider, range, 'false')]
   if (section === 'compare') return [reportMemoKey('comparemodels', period, provider, range)]
   if (section === 'plans') return [
@@ -325,7 +329,7 @@ function LocaleProvider({ children }: { children: ReactNode }) {
   return <LocaleContext.Provider value={value}><Fragment key={locale}>{children}</Fragment></LocaleContext.Provider>
 }
 
-const NAV_SECTIONS = new Set<string>(['overview', 'sessions', 'pullRequests', 'spend', 'optimize', 'models', 'compare', 'plans', 'settings', 'plugins'])
+const NAV_SECTIONS = new Set<string>(['overview', 'sessions', 'pullRequests', 'spend', 'optimize', 'models', 'speed', 'compare', 'plans', 'settings', 'plugins'])
 
 /** Boot position: the best-effort restart snapshot when it is still valid
  *  (section and period re-validated; a stale drawer revalidates itself once
@@ -823,6 +827,7 @@ function AppMain() {
       else if (key === '3') navigate('pullRequests')
       else if (key === '4') navigate('spend')
       else if (key === '5') navigate('optimize')
+      else if (key === '0') navigate('speed')
       else if (key === '6') navigate('models')
       else if (key === '7') navigate('compare')
       else if (key === '9') navigate('periods')
@@ -937,7 +942,8 @@ function AppMain() {
   // payload happened to be oldest, which is not what the numbers came from.
   // A filtered view shows its own payload, never the machine-wide generation, so
   // its clock stays the report's.
-  const headlineFromGeneration = !customRange
+  const headlineFromGeneration = section !== 'speed'
+    && !customRange
     && scope === 'local'
     && !claudeConfigSource
     && provider === 'all'
@@ -973,16 +979,16 @@ function AppMain() {
               canForward={history.future.length > 0}
               onBack={goBack}
               onForward={goForward}
-              scope={scopeCaption}
+              scope={section === 'speed' ? t('speed.scope') : scopeCaption}
               period={period}
               onPeriodChange={onPeriodChange}
               customRange={customRange}
               onRangeSelect={range => commitNav({ range, visibleCount: INITIAL_VISIBLE })}
               provider={provider}
               providerLabel={activeProviderLabel}
-              providerOptions={providerOptions}
+              providerOptions={section === 'speed' ? [{ value: 'all', label: t('shell.provider.all') }, ...SPEED_HARNESSES.map(value => ({ value, label: harnessName[value] }))] : providerOptions}
               onProviderSelect={onProviderSelect}
-              claudeConfigs={claudeConfigs}
+              claudeConfigs={section === 'speed' ? undefined : claudeConfigs}
               configSource={claudeConfigSource}
               onConfigSelect={onConfigSelect}
             />
@@ -1003,6 +1009,8 @@ function AppMain() {
                 <OptimizeContent period={period} provider={provider} range={customRange} overview={overview} refreshToken={refreshToken} ready={ready} configSource={claudeConfigSource} scope={scope} />
               ) : section === 'models' ? (
                 <Models period={period} provider={provider} range={customRange} refreshToken={refreshToken} onNavigate={navigate} onInvestigate={investigate} ready={ready} />
+              ) : section === 'speed' ? (
+                <Speed period={period} provider={provider} range={customRange} refreshToken={refreshToken} ready={ready} />
               ) : section === 'compare' ? (
                 <Compare period={period} provider={provider} range={customRange} refreshToken={refreshToken} ready={ready} onInvestigate={investigate} />
               ) : section === 'periods' ? (
@@ -1017,7 +1025,7 @@ function AppMain() {
         {section !== 'settings' && (
           <Hint
             items={[
-              { k: shortcutLabel('1-9'), label: t('shell.hint.navigate') },
+              { k: shortcutLabel('0-9'), label: t('shell.hint.navigate') },
               { k: shortcutLabel(','), label: t('shell.nav.settings') },
               { k: shortcutLabel('R'), label: t('shell.action.refresh') },
             ]}

@@ -725,3 +725,34 @@
 "Anonymous usage statistics" = "Anonymous usage statistics";
 "Managed by the CodeBurn desktop app. Change it there under Settings → Privacy & data." = "Managed by the CodeBurn desktop app. Change it there under Settings → Privacy & data.";
 "Optional usage statistics: the names of the models, tools and providers you use, with bucketed counts of how often each one came up, plus when the app is opened. A random install id, the app version and your country code travel with them. Never your prompts, your code, your project and file names, or exact amounts." = "Optional usage statistics: the names of the models, tools and providers you use, with bucketed counts of how often each one came up, plus when the app is opened. A random install id, the app version and your country code travel with them. Never your prompts, your code, your project and file names, or exact amounts.";
+
+"Generation speed" = "Generation speed";
+
+"Last 24h · this device · all accounts and projects" = "Last 24h · this device · all accounts and projects";
+
+"No timing samples. Set up capture in the desktop Speed tab." = "No timing samples. Set up capture in the desktop Speed tab.";
+
+
+"Speed refresh failed. Showing the last available snapshot." = "Speed refresh failed. Showing the last available snapshot.";
+
+"Some timing records are unavailable. See desktop Speed for details." = "Some timing records are unavailable. See desktop Speed for details.";
+
+"Speed snapshot is stale" = "Speed snapshot is stale";
+
+"24h · local · all accounts/projects" = "24h · local · all accounts/projects";
+
+"Turn estimate" = "Turn estimate";
+
+"Reading local timings…" = "Reading local timings…";
+
+"Individual tokens" = "Individual tokens";
+
+"Chunk timing" = "Chunk timing";
+
+"Request timing" = "Request timing";
+
+"Turn timing" = "Turn timing";
+
+
+"First arrival" = "First arrival";
+"Generation excludes the initial wait. ~ = estimate; short or buffered replies may distort it. — = unavailable." = "Generation excludes the initial wait. ~ = estimate; short or buffered replies may distort it. — = unavailable.";

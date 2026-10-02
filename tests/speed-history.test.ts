@@ -28,7 +28,9 @@ describe('native ZCode request timings', () => {
     expect(history.samples).toHaveLength(2)
     expect(history.samples.find(s => s.id === 'r1')).toMatchObject({ harness: 'zcode', model: 'GLM-test', durationMs: 1000, firstEmissionMs: 200, outputTokens: 100, events: [] })
     expect(history.samples.every(s => s.lastEmissionMs === undefined)).toBe(true)
-    expect(buildSpeedReport(history.samples).rows[0]).toMatchObject({ effectiveTokensPerSecond: 100, firstEmissionMsP50: 200, streamTokensPerSecondP50: null, interTokenMsP50: null, timedRequests: 1, requests: 2 })
+    expect(buildSpeedReport(history.samples).rows[0]).toMatchObject({ effectiveTokensPerSecond: 100, firstEmissionMsP50: 200,
+      generationTokensPerSecondP50: 99 / 0.8, generationRateEstimated: true, generationRequests: 1,
+      interTokenMsP50: null, timedRequests: 1, requests: 2 })
   })
 
   it('handles missing optional columns and a missing database without assuming zero latency', async () => {
@@ -45,6 +47,11 @@ describe('native ZCode request timings', () => {
     expect((await readSpeedHistory(100, join(dir, 'absent.sqlite'))).samples).toEqual([])
   })
 
+  it('skips Codex session discovery for lightweight GUI generation reads', async () => {
+    expect(await readSpeedHistory(10, join(dir, 'absent.sqlite'), false)).toEqual({ samples: [], warnings: [] })
+    expect(getProvider).not.toHaveBeenCalled()
+  })
+
   it('excludes Codex turns that mix models instead of proportionally inventing per-model timing', async () => {
     const path = join(dir, 'rollout.jsonl')
     await writeFile(path, '')
@@ -58,5 +65,6 @@ describe('native ZCode request timings', () => {
     const history = await readSpeedHistory(100, join(dir, 'absent.sqlite'))
     expect(history.samples).toHaveLength(1)
     expect(history.samples[0]).toMatchObject({ id: 'request-2', model: 'model-a', source: 'codex-checkpoint', resolution: 'turn', outputTokens: 10 })
+    expect(buildSpeedReport(history.samples).rows[0]).toMatchObject({ generationTokensPerSecondP50: null, generationRequests: 0, effectiveTokensPerSecond: 10 })
   })
 })

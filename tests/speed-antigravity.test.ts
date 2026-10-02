@@ -50,7 +50,8 @@ describe('Antigravity CLI timing', () => {
     expect(sample.events).toEqual([{ elapsedMs: 2700 }, { elapsedMs: 2860 }])
     expect(JSON.stringify(sample)).not.toMatch(/PRIVATE|private|răspuns|cwd|tools|response|duration_seconds/)
     expect(buildSpeedReport([sample]).rows[0]).toMatchObject({ timedRequests: 1,
-      effectiveTokensPerSecond: 6 / 3.1, interTokenMsP50: null, streamRateEstimated: true })
+      effectiveTokensPerSecond: 6 / 3.1, generationTokensPerSecondP50: 5 / 0.16, generationRequests: 1,
+      interTokenMsP50: null, generationRateEstimated: true })
   })
 
   it('handles split UTF-8, CRLF and an unterminated final line without inventing token boundaries', () => {
@@ -81,7 +82,7 @@ describe('Antigravity CLI timing', () => {
     ]) {
       const sample = fixture({ extra })
       expect(sample).toMatchObject({ status: 'incomplete', resolution: 'turn' })
-      expect(buildSpeedReport([sample]).rows[0]).toMatchObject({ timedRequests: 0, effectiveTokensPerSecond: null, streamTokensPerSecondP50: null })
+      expect(buildSpeedReport([sample]).rows[0]).toMatchObject({ timedRequests: 0, effectiveTokensPerSecond: null, generationTokensPerSecondP50: null })
     }
     expect(fixture({ result: { ...result, result: { ...result.result, num_turns: 2 } } })).toMatchObject({ status: 'incomplete', resolution: 'turn' })
   })

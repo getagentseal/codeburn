@@ -716,3 +716,34 @@
 "Anonymous usage statistics" = "匿名使用统计";
 "Managed by the CodeBurn desktop app. Change it there under Settings → Privacy & data." = "由 CodeBurn 桌面应用管理。请在设置 → 隐私与数据中更改。";
 "Optional usage statistics: the names of the models, tools and providers you use, with bucketed counts of how often each one came up, plus when the app is opened. A random install id, the app version and your country code travel with them. Never your prompts, your code, your project and file names, or exact amounts." = "可选的使用统计信息:您使用的模型、工具和服务商的名称,以及每项出现频率的分段计数,还有应用的打开次数。随附的还有随机安装 ID、应用版本和国家/地区代码。绝不包含您的提示词、代码、项目与文件名称或确切金额。";
+
+"Generation speed" = "生成速度";
+
+"Last 24h · this device · all accounts and projects" = "过去24小时 · 此设备 · 所有账户和项目";
+
+"No timing samples. Set up capture in the desktop Speed tab." = "暂无计时样本。请在桌面应用速度页配置采集。";
+
+
+"Speed refresh failed. Showing the last available snapshot." = "速度刷新失败。显示最后可用快照。";
+
+"Some timing records are unavailable. See desktop Speed for details." = "部分计时记录不可用。详情见桌面应用速度页。";
+
+"Speed snapshot is stale" = "速度快照已过期";
+
+"24h · local · all accounts/projects" = "24小时 · 本地 · 所有账户/项目";
+
+"Turn estimate" = "轮次估算";
+
+"Reading local timings…" = "正在读取本地计时…";
+
+"Individual tokens" = "逐 token";
+
+"Chunk timing" = "分块计时";
+
+"Request timing" = "请求计时";
+
+"Turn timing" = "轮次计时";
+
+
+"First arrival" = "首次到达";
+"Generation excludes the initial wait. ~ = estimate; short or buffered replies may distort it. — = unavailable." = "生成速度不含初始等待。~ 为估算，短回复或缓冲可能使其失真。— 为不可用。";

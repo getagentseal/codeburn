@@ -7,7 +7,7 @@ import { execFileSync } from 'node:child_process'
 import { SpeedStreamObserver } from '../src/speed/stream.js'
 import { appendSpeedSample, readSpeedSamples } from '../src/speed/store.js'
 import { startSpeedServer, type SpeedServer } from '../src/speed/server.js'
-import { buildSpeedReport } from '../src/speed/report.js'
+import { buildSpeedReport, renderSpeedReport } from '../src/speed/report.js'
 import { validateSpeedSample, type SpeedSample } from '../src/speed/types.js'
 
 let dir: string
@@ -45,7 +45,7 @@ describe('stream timing', () => {
     expect(sample).toMatchObject({ model: 'claude-test', resolution: 'chunk', status: 'complete', outputTokens: 40, inputTokens: 9, firstEmissionMs: 100, lastEmissionMs: 300, durationMs: 600 })
     expect(sample.events).toEqual([{ elapsedMs: 100 }, { elapsedMs: 300 }])
     expect(JSON.stringify(sample)).not.toMatch(/PRIVATE|SECRET|răspuns/)
-    expect(buildSpeedReport([sample]).rows[0]).toMatchObject({ streamRateEstimated: true, interTokenMsP50: null })
+    expect(buildSpeedReport([sample]).rows[0]).toMatchObject({ generationRateEstimated: true, interTokenMsP50: null })
   })
 
   it('captures DeepSeek/OpenAI content, reasoning and tool deltas, with inclusive usage counted once', () => {
@@ -92,9 +92,39 @@ describe('native token telemetry and reports', () => {
   it('reports actual token intervals, first-token latency, N-1 decode intervals and harness-separated rows', () => {
     const report = buildSpeedReport([native(), native({ id: 'request-2', harness: 'claude' })])
     expect(report.rows).toHaveLength(2)
-    for (const row of report.rows) expect(row).toMatchObject({ effectiveTokensPerSecond: 3, streamTokensPerSecondP50: 5,
-      firstEmissionMsP50: 100, interTokenMsP50: 200, interTokenMsP95: 200, streamRateEstimated: false })
+    for (const row of report.rows) expect(row).toMatchObject({ effectiveTokensPerSecond: 3, generationTokensPerSecondP50: 5,
+      firstEmissionMsP50: 100, interTokenMsP50: 200, interTokenMsP95: 200, generationRateEstimated: false, generationRequests: 1 })
     expect(report.unavailableHarnesses).toContain('antigravity')
+  })
+
+  it('keeps generation speed unchanged when only the initial wait grows', () => {
+    const original = native({ harness: 'dsh' })
+    const delayed = native({ id: 'slow-first-token', harness: 'dsh', durationMs: 4000, firstEmissionMs: 3100, lastEmissionMs: 3500,
+      events: [{ elapsedMs: 3100, tokens: 1 }, { elapsedMs: 3300, tokens: 1 }, { elapsedMs: 3500, tokens: 1 }] })
+    const fast = buildSpeedReport([original]).rows[0]!
+    const slow = buildSpeedReport([delayed]).rows[0]!
+    expect(fast.generationTokensPerSecondP50).toBe(5)
+    expect(slow.generationTokensPerSecondP50).toBe(5)
+    expect(slow.effectiveTokensPerSecond).toBe(0.75)
+    expect(slow.firstEmissionMsP50).toBe(3100)
+    const printed = renderSpeedReport(buildSpeedReport([delayed]))
+    expect(printed).toContain('Generation Tok/s p50')
+    expect(printed).toContain('DeepSeek Harness\ttest-model\tnative/token\t1/1\t5.0\t3100.0')
+    expect(printed).not.toContain('Effective Tok/s')
+  })
+
+  it('never substitutes request throughput for missing generation timing', () => {
+    const samples = [
+      native({ model: 'single-token', outputTokens: 1, firstEmissionMs: 100, lastEmissionMs: 100, events: [{ elapsedMs: 100, tokens: 1 }] }),
+      native({ model: 'single-chunk', source: 'proxy', resolution: 'chunk', lastEmissionMs: 100, events: [{ elapsedMs: 100 }] }),
+      native({ model: 'no-first-token', source: 'zcode-db', resolution: 'request', firstEmissionMs: undefined, lastEmissionMs: undefined, events: [] }),
+      native({ model: 'turn-only', source: 'codex-checkpoint', resolution: 'turn', firstEmissionMs: undefined, lastEmissionMs: undefined, events: [] }),
+      native({ model: 'cancelled', status: 'interrupted' }),
+    ]
+    const report = buildSpeedReport(samples)
+    expect(report.rows.every(r => r.generationTokensPerSecondP50 === null && r.generationRequests === 0)).toBe(true)
+    expect(report.rows.filter(r => r.effectiveTokensPerSecond !== null)).toHaveLength(4)
+    expect(report.unavailableHarnesses).toContain('hermes')
   })
 
   it('weights throughput by timed durations and excludes interrupted calls instead of treating them as zero', () => {
@@ -109,7 +139,7 @@ describe('native token telemetry and reports', () => {
   it('keeps overlapping source recordings separate and never invents token intervals for request/chunk timing', () => {
     const report = buildSpeedReport([native(), native({ source: 'zcode-db', resolution: 'request', events: [] }), native({ source: 'proxy', resolution: 'chunk', events: [{ elapsedMs: 100 }, { elapsedMs: 500 }] })])
     expect(report.rows).toHaveLength(3)
-    expect(report.rows.filter(r => r.resolution !== 'token').every(r => r.interTokenMsP50 === null && r.streamRateEstimated)).toBe(true)
+    expect(report.rows.filter(r => r.resolution !== 'token').every(r => r.interTokenMsP50 === null && r.generationRateEstimated)).toBe(true)
   })
 
   it('rejects fabricated per-token timing and strips producer content', () => {
@@ -213,9 +243,24 @@ describe('local store and HTTP capture', () => {
     await appendSpeedSample(native(), file)
     const run = (...args: string[]) => execFileSync(process.execPath, ['--import', 'tsx', 'src/cli.ts', 'speed', ...args], { encoding: 'utf8', timeout: 15_000 })
     const report = JSON.parse(run('--no-history', '--harness', 'hermes', '--file', file, '--json'))
-    expect(report.rows[0]).toMatchObject({ harness: 'hermes', interTokenMsP50: 200 })
+    expect(report.rows[0]).toMatchObject({ harness: 'hermes', interTokenMsP50: 200, latestSampleId: 'request-1', latestStartedAt: '2026-10-01T09:00:00.000Z' })
     expect(report.unavailableHarnesses).toEqual([])
     expect(JSON.parse(run('events', 'request-1', '--file', file)).events).toEqual(native().events)
+  })
+
+  it('applies desktop date bounds before the record limit and honors custom ranges over the period', async () => {
+    const file = join(dir, 'date-filter.jsonl')
+    const day = (date: string) => new Date(date + 'T12:00:00').toISOString()
+    for (const date of ['2026-09-30', '2026-10-01', '2026-10-02']) {
+      await appendSpeedSample(native({ id: date, startedAt: day(date) }), file)
+    }
+    const raw = execFileSync(process.execPath, ['--import', 'tsx', 'src/cli.ts', 'speed', '--no-history', '--json', '--file', file,
+      '--period', 'today', '--from', '2026-10-01', '--to', '2026-10-01', '--limit', '1'], { encoding: 'utf8', timeout: 15_000 })
+    const report = JSON.parse(raw)
+    expect(report.rows).toHaveLength(1)
+    expect(report.rows[0]).toMatchObject({ requests: 1, latestSampleId: '2026-10-01' })
+    expect(report.omittedRecords).toBe(0)
+    expect(report.historyLimit).toBe(0)
   })
 
   it('refuses credential-bearing or remote plaintext upstreams', async () => {
