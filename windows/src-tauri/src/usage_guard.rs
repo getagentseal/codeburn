@@ -354,7 +354,7 @@ fn roots() -> Vec<Root> {
     let amp_default = xdg_data().join("amp");
     let amp_value = std::env::var_os("AMP_DATA_DIR").map(|v| v.to_string_lossy().into_owned());
     for amp_dir in amp_data_dirs(amp_value.as_deref(), &amp_default) {
-        roots.push(leaf(amp_dir));
+        roots.push(dir(amp_dir));
     }
     roots.push(leaf(
         env_path("ZS_DATA_DIR").unwrap_or_else(|| xdg_data().join("zerostack")),
