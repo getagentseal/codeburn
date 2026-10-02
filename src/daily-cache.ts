@@ -235,7 +235,9 @@ import type { DateRange, ProjectSummary } from './types.js'
 // and tokens are unchanged, but settled category totals need re-derivation.
 // v45: #1581 ZCode user prompt text now reaches classification. Calls and
 // cost are unchanged, but settled zcode category totals need re-derivation.
-export const DAILY_CACHE_VERSION = 45
+// v47: #1579 Claude Cowork usage-ledger spend; days finalized earlier miss it,
+// call counts only rise.
+export const DAILY_CACHE_VERSION = 47
 const MIN_SUPPORTED_VERSION = 28
 
 /// Providers whose per-day CALL COUNT means something different at

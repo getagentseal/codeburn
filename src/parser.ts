@@ -2066,9 +2066,11 @@ async function scanProjectDirs(
   // mid-scan then resumes from a warm cache instead of re-parsing from zero.
   onFileParsed?: () => Promise<void>,
   readOnly = false,
+  preservedSourcePaths: string[] = [],
 ): Promise<ProjectSummary[]> {
   const section = getOrCreateProviderSection(diskCache, 'claude')
   const allDiscoveredFiles = new Set<string>()
+  for (const path of preservedSourcePaths) allDiscoveredFiles.add(path)
 
   type FileInfo = { dirName: string; fp: NonNullable<Awaited<ReturnType<typeof fingerprintFile>>>; source?: SessionSourceMetadata }
   const unchangedFiles: Array<{ filePath: string; dirName: string; source?: SessionSourceMetadata; cached: CachedFile }> = []
@@ -3597,7 +3599,9 @@ export async function parseProviderSources(
 
   const wslHomesForOrphans = refreshWslHomesForOrphans(Object.keys(section.files), allDiscoveredFiles)
 
-  if (readOnly) {
+  // scanProjectDirs serves Claude's orphans; the Cowork ledger pass shares
+  // the claude section and would serve every transcript a second time.
+  if (readOnly && providerName !== 'claude') {
     for (const [path, cached] of cacheEntriesInLoadOrder(diskCache, providerName)) {
       if (allDiscoveredFiles.has(path)) continue
       if (isCacheStub(cached)) {
@@ -3910,7 +3914,11 @@ export async function parseProviderSources(
     markCacheDirty(diskCache, providerName)
   }
 
-  if (!readOnly && !provider.durableSources) {
+  // Claude's transcript tree and Cowork's usage ledger share one provider
+  // cache section but are reconciled by two different parsers. The transcript
+  // scanner owns ordinary Claude-source eviction; the ledger pass must not
+  // interpret the transcript paths as ledger orphans and delete them.
+  if (!readOnly && !provider.durableSources && providerName !== 'claude') {
     for (const cachedPath of Object.keys(section.files)) {
       if (allDiscoveredFiles.has(cachedPath)) continue
       const wslStatus = classifyWslCachePath(cachedPath, wslHomesForOrphans)
@@ -4300,7 +4308,7 @@ export async function parseProviderSources(
   // counted here so the monthly total never drops.
   // WSL orphans join them for every provider: their distro being stopped must
   // not drop the spend from the totals for the length of a shutdown (#1059).
-  if (provider.durableSources || Object.keys(section.files).some(isWslUncPath)) {
+  if (providerName !== 'claude' && (provider.durableSources || Object.keys(section.files).some(isWslUncPath))) {
     for (const [cachedPath, cachedFile] of Object.entries(section.files)) {
       if (!provider.durableSources && !isWslUncPath(cachedPath)) continue
       if (allDiscoveredFiles.has(cachedPath)) continue  // already counted above
@@ -5636,7 +5644,7 @@ export async function computeCorpusFingerprint(providerFilter?: string): Promise
       envFingerprinted.add(source.provider)
       entries.push(`env:${source.provider}|${computeEnvFingerprint(source.provider)}`)
     }
-    if (source.provider === 'claude') {
+    if (source.provider === 'claude' && source.sourceKind !== 'claude-desktop-ledger') {
       for (const filePath of await collectJsonlFiles(source.path)) await record(filePath)
       continue
     }
@@ -6152,6 +6160,8 @@ async function runParseInner(
   traceTiming('discovery', ` sources=${allSources.length}`)
 
   const claudeSources = allSources.filter(s => s.provider === 'claude')
+  const claudeLedgerSources = claudeSources.filter(s => s.sourceKind === 'claude-desktop-ledger')
+  const claudeProjectSources = claudeSources.filter(s => s.sourceKind !== 'claude-desktop-ledger')
   const nonClaudeSources = allSources.filter(s => s.provider !== 'claude')
 
   const providerGroups = new Map<string, SessionSource[]>()
@@ -6186,7 +6196,7 @@ async function runParseInner(
     ...providerGroups.keys(),
   ] })
 
-  const claudeDirs = claudeSources.map(s => ({
+  const claudeDirs = claudeProjectSources.map(s => ({
     path: s.path,
     name: s.project,
     source: s.sourceId && s.sourceLabel && s.sourcePath && s.sourceKind
@@ -6206,7 +6216,27 @@ async function runParseInner(
   let claudeProjects: ProjectSummary[] = []
   if (claudeInScope) {
     try {
-      claudeProjects = await scanProjectDirs(claudeDirs, seenMsgIds, diskCache, dateRange, saveProgress, readOnly)
+      claudeProjects = await scanProjectDirs(
+        claudeDirs,
+        seenMsgIds,
+        diskCache,
+        dateRange,
+        saveProgress,
+        readOnly,
+        claudeLedgerSources.map(source => source.path),
+      )
+      if (claudeLedgerSources.length > 0) {
+        const ledgerProjects = await parseProviderSources(
+          'claude',
+          claudeLedgerSources,
+          seenKeys,
+          diskCache,
+          dateRange,
+          saveProgress,
+          readOnly,
+        )
+        claudeProjects.push(...ledgerProjects)
+      }
       if (claudeSources.length > 0) emitScanProgress({ kind: 'provider', provider: 'claude', state: 'done', files: claudeSources.length })
     } catch (err) {
       if (!isPermissionError(err)) throw err

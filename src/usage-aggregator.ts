@@ -335,7 +335,14 @@ async function claudeConfigSelector(projects: ProjectSummary[], selectedId?: str
   ).some(Boolean)
   if ((await getClaudeConfigDirs()).length > 1 || desktopExists) {
     for (const source of await claude.discoverSessions()) {
-      if ((source.sourceKind !== 'claude-config' && source.sourceKind !== 'claude-desktop') || !source.sourceId || !source.sourceLabel || !source.sourcePath) continue
+      if (
+        (source.sourceKind !== 'claude-config' &&
+          source.sourceKind !== 'claude-desktop' &&
+          source.sourceKind !== 'claude-desktop-ledger') ||
+        !source.sourceId ||
+        !source.sourceLabel ||
+        !source.sourcePath
+      ) continue
       if (!byId.has(source.sourceId)) byId.set(source.sourceId, { id: source.sourceId, label: source.sourceLabel, path: source.sourcePath })
     }
   }

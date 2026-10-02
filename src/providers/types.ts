@@ -8,7 +8,7 @@ export type SessionSource = {
   sourceId?: string
   sourceLabel?: string
   sourcePath?: string
-  sourceKind?: 'claude-config' | 'claude-desktop'
+  sourceKind?: 'claude-config' | 'claude-desktop' | 'claude-desktop-ledger'
   // OMP stores each crewmate transcript under its parent-session directory.
   // These fields retain that per-agent identity through the shared cache path.
   agentName?: string

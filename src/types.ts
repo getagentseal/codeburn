@@ -215,7 +215,7 @@ export type SessionSourceMetadata = {
   id: string
   label: string
   path: string
-  kind: 'claude-config' | 'claude-desktop'
+  kind: 'claude-config' | 'claude-desktop' | 'claude-desktop-ledger'
 }
 
 /// Provider-recorded parent-child session lineage (CB-1, slice 1). The
