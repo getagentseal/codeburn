@@ -151,6 +151,8 @@ pub struct CliStatus {
 pub enum DockQuota {
     Ready {
         providers: Value,
+        /// `rename_all` above only covers the variant tag, not this field.
+        #[serde(rename = "claudeProfiles")]
         claude_profiles: Option<Value>,
     },
     CliOutdated,
@@ -1173,6 +1175,17 @@ mod which {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dock_quota_ready_serializes_claude_profiles_as_camel_case() {
+        let answer = DockQuota::Ready {
+            providers: serde_json::json!([]),
+            claude_profiles: Some(serde_json::json!([{"id": "x"}])),
+        };
+        let value = serde_json::to_value(&answer).unwrap();
+        assert!(value.get("claudeProfiles").is_some());
+        assert!(value.get("claude_profiles").is_none());
+    }
 
     #[test]
     fn only_a_named_read_only_subcommand_opens_a_terminal() {

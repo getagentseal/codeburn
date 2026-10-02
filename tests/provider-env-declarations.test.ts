@@ -27,6 +27,7 @@ import { getAllProviders } from '../src/providers/index.js'
 // providers). A file that contains env reads and is missing here fails the
 // guard: add it, with the provider(s) the reads serve.
 const FILE_PROVIDERS: Record<string, string[]> = {
+  'amp.ts': ['amp'],
   'claude.ts': ['claude'],
   'cline-cli.ts': ['cline-cli'],
   'codebuff.ts': ['codebuff'],

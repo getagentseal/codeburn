@@ -295,6 +295,7 @@ const UNREFERENCED_SHARD_MAX_AGE_MS = 60 * 60 * 1000
 // readable. Hashing the policy here would instead discard the rows that make a
 // shutdown/restart cycle lossless and force a full 9P re-parse after re-enable.
 export const PROVIDER_ENV_VARS: Record<string, string[]> = {
+  amp: ['AMP_DATA_DIR'],
   claude: ['CLAUDE_CONFIG_DIRS', 'CLAUDE_CONFIG_DIR', 'CODEBURN_DESKTOP_SESSIONS_DIR', 'APPDATA', 'LOCALAPPDATA'],
   'cline-cli': ['CLINE_SESSION_DATA_DIR', 'CLINE_DATA_DIR', 'CLINE_DIR'],
   codebuff: ['CODEBUFF_DATA_DIR'],
@@ -354,6 +355,9 @@ const FULL_LOAD_PROVIDER_NAMES: ReadonlySet<string> = new Set(['hermes', 'quickd
 // re-parse, which lands the flag too, and durable orphans now survive
 // fingerprint changes (the carry-forward in getOrCreateProviderSection).
 export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
+  // usage-ledger-v2: include positive ledger total remainders as output after
+  // subtracting input, output, and cache tokens joined through toMessageId.
+  amp: 'usage-ledger-v2',
   // rich-session-capture-v1: parse-time capture of per-turn gitBranch, per-call
   // LOC deltas / interruptions / userModified / toolErrors, and session-level
   // title / prLinks / isSidechain. Forces one re-parse so cached sessions gain

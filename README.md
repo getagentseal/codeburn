@@ -156,7 +156,7 @@ That registers a local MCP server over stdio. Your agent can then answer "where 
 
 It reads the same files on disk that the CLI reads. The server answers from that local data and makes no network call of its own, and project names are pseudonymized unless the agent asks for them.
 
-## Works with 40 tools
+## Works with 41 tools
 
 CodeBurn detects the tools you already use. There is nothing to configure and no folder to point it at. If a tool is installed and has sessions on disk, it shows up. Each logo links to that tool's page.
 
@@ -198,11 +198,11 @@ CodeBurn detects the tools you already use. There is nothing to configure and no
 </p>
 
 <details>
-<summary><strong>All 40 tools</strong></summary>
+<summary><strong>All 41 tools</strong></summary>
 
 Each page lists where that tool keeps its data, the format it uses, and the quirks CodeBurn works around.
 
-[Antigravity](docs/providers/antigravity.md) &middot; [Claude Code](docs/providers/claude.md) &middot; [Cline](docs/providers/cline.md) &middot; [Cline CLI](docs/providers/cline-cli.md) &middot; [Codebuff](docs/providers/codebuff.md) &middot; [Codex](docs/providers/codex.md) &middot;
+[Amp](docs/providers/amp.md) &middot; [Antigravity](docs/providers/antigravity.md) &middot; [Claude Code](docs/providers/claude.md) &middot; [Cline](docs/providers/cline.md) &middot; [Cline CLI](docs/providers/cline-cli.md) &middot; [Codebuff](docs/providers/codebuff.md) &middot; [Codex](docs/providers/codex.md) &middot;
 [CodeWhale](docs/providers/codewhale.md) &middot; [Copilot](docs/providers/copilot.md) &middot; [Crush](docs/providers/crush.md) &middot; [Cursor](docs/providers/cursor.md) &middot; [Cursor Agent](docs/providers/cursor-agent.md) &middot; [DeepSeek Harness](docs/providers/dsh.md) &middot;
 [Devin](docs/providers/devin.md) &middot; [Droid](docs/providers/droid.md) &middot; [Forge](docs/providers/forge.md) &middot; [Gemini CLI](docs/providers/gemini.md) &middot; [Goose](docs/providers/goose.md) &middot; [Grok Bot](docs/providers/grokbot.md) &middot;
 [Grok Build](docs/providers/grok.md) &middot; [Hermes Agent](docs/providers/hermes.md) &middot; [IBM Bob](docs/providers/ibm-bob.md) &middot; [KiloCode](docs/providers/kilo-code.md) &middot; [Kimi](docs/providers/kimi.md) &middot; [Kimi Code](docs/providers/kimicode.md) &middot;
