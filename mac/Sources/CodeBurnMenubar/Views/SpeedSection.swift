@@ -18,7 +18,7 @@ struct SpeedSection: View {
                     HStack(alignment: .top, spacing: 8) {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(row.model).font(.system(size: 11, weight: .medium)).lineLimit(1)
-                            Text("\(row.harnessName) · \(L(row.precisionLabel))")
+                            Text("\(row.harnessName) · \(row.precisionLabel)")
                                 .font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
                         }
                         Spacer(minLength: 4)
@@ -31,7 +31,9 @@ struct SpeedSection: View {
                     .help("\(row.model) · \(row.source) · \(row.generationRequests)/\(row.requests) · \(row.latestStartedAt)")
                 }
                 if rows.isEmpty {
-                    Text(L(store.speedReport == nil && !store.speedRefreshFailed ? "Reading local timings…" : "No timing samples. Set up capture in the desktop Speed tab."))
+                    Text(store.speedReport == nil && !store.speedRefreshFailed
+                         ? L("Reading local timings…")
+                         : L("No timing samples. Set up capture in the desktop Speed tab."))
                         .font(.system(size: 11)).foregroundStyle(.secondary)
                 }
                 Text(L("Generation excludes the initial wait. ~ = estimate; short or buffered replies may distort it. — = unavailable."))
@@ -67,7 +69,7 @@ struct SpeedGlance: View {
                 Text(row.formattedRate).font(.system(size: 14 * s, weight: .semibold, design: .monospaced))
             }
             Text(row.model).font(.system(size: 11 * s, weight: .medium)).lineLimit(1)
-            Text("\(L(row.precisionLabel)) · \(L("First arrival")): \(row.formattedFirstArrival)")
+            Text("\(row.precisionLabel) · \(L("First arrival")): \(row.formattedFirstArrival)")
                 .font(.system(size: 10 * s)).lineLimit(1)
             Text(L("24h · local · all accounts/projects"))
                 .font(.system(size: 9 * s)).lineLimit(1)

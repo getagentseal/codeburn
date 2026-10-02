@@ -184,12 +184,23 @@ describe('Antigravity CLI timing', () => {
     } finally { child.kill('SIGKILL'); await rm(dir, { recursive: true, force: true }) }
   })
 
-  it.skipIf(process.platform === 'win32')('retains partial metadata when a downstream reader closes the forwarded output', async () => {
+  it.skipIf(process.platform === 'win32').each(['CLI', 'capture function'])('retains partial metadata and exits cleanly after downstream closure via %s', async entrypoint => {
     const dir = await mkdtemp(join(tmpdir(), 'codeburn-agy-epipe-'))
-    const child = spawn(process.execPath, ['--import', 'tsx', 'src/cli.ts', 'speed', 'capture-antigravity', '--file', join(dir, 'speed.jsonl')],
+    const file = join(dir, 'speed.jsonl')
+    // Exercise the actual closed pipe without relying on the CLI's separate
+    // asynchronous credential-drain handler winning a race to process.exit(0).
+    const args = entrypoint === 'CLI'
+      ? ['src/cli.ts', 'speed', 'capture-antigravity', '--file', file]
+      : ['--input-type=module', '--eval', `
+          import { captureAntigravitySpeed } from './src/speed/antigravity.ts'
+          process.stdout.on('error', error => { if (error.code !== 'EPIPE') throw error })
+          await captureAntigravitySpeed(process.argv[1])
+        `, file]
+    const child = spawn(process.execPath, ['--import', 'tsx', ...args],
       { stdio: ['pipe', 'pipe', 'pipe'] })
     try {
-      child.stderr.resume()
+      let stderr = ''
+      child.stderr.on('data', bytes => { stderr += String(bytes) })
       child.stdin.on('error', () => undefined)
       const exited = once(child, 'close')
       const forwarded = once(child.stdout, 'data')
@@ -197,8 +208,9 @@ describe('Antigravity CLI timing', () => {
       await forwarded
       child.stdout.destroy()
       child.stdin.end(line(delta))
-      expect((await exited)[0]).toBe(0)
-      const { samples } = await readSpeedSamples(join(dir, 'speed.jsonl'))
+      const [code, signal] = await exited
+      expect({ code, signal, stderr }).toMatchObject({ code: 0, signal: null })
+      const { samples } = await readSpeedSamples(file)
       expect(samples[0]).toMatchObject({ status: 'interrupted', events: [{ elapsedMs: expect.any(Number) }] })
       expect(buildSpeedReport(samples).rows[0].timedRequests).toBe(0)
     } finally { child.kill('SIGKILL'); await rm(dir, { recursive: true, force: true }) }

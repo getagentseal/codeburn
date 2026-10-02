@@ -68,12 +68,12 @@ struct SpeedRow: Decodable, Sendable, Identifiable {
         return String(format: "%.0f ms", first)
     }
     var precisionLabel: String {
-        if estimated { return "Turn estimate" }
+        if estimated { return L("Turn estimate") }
         switch resolution {
-        case "token": return "Individual tokens"
-        case "chunk": return "Chunk timing"
-        case "request": return "Request timing"
-        default: return "Turn timing"
+        case "token": return L("Individual tokens")
+        case "chunk": return L("Chunk timing")
+        case "request": return L("Request timing")
+        default: return L("Turn timing")
         }
     }
 }

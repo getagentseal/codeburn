@@ -24,10 +24,10 @@ struct SpeedReportTests {
         #expect(rows[0].harnessName == "DeepSeek Harness")
         #expect(rows[0].formattedRate == "~36.2 tok/s")
         #expect(rows[0].formattedFirstArrival == "742 ms")
-        #expect(rows[0].precisionLabel == "Chunk timing")
+        #expect(rows[0].precisionLabel == L("Chunk timing"))
         #expect(rows[1].formattedRate == "—")
-        #expect(rows[1].precisionLabel == "Turn estimate")
-        #expect(rows[2].precisionLabel == "Individual tokens")
+        #expect(rows[1].precisionLabel == L("Turn estimate"))
+        #expect(rows[2].precisionLabel == L("Individual tokens"))
         #expect(rows[2].formattedRate == "36.2 tok/s")
     }
 

@@ -145,12 +145,18 @@ async function capture(file?: string): Promise<SpeedSample | null> {
     observer.feed(bytes); process.stdout.write(bytes, done)
   } })
   let failed = false
+  let downstreamClosed = false
   try { await pipeline(process.stdin, forward, { signal: controller.signal }) }
-  catch { failed = true }
+  catch (error) {
+    failed = true
+    downstreamClosed = (error as NodeJS.ErrnoException)?.code === 'EPIPE'
+  }
   finally { process.off('SIGINT', stop); process.off('SIGTERM', stop) }
   const sample = observer.finish(interrupted || failed)
   if (sample) await appendSpeedSample(sample, file)
-  if (failed && !interrupted) throw new Error('Antigravity stream forwarding failed; partial timing retained when available')
+  // EPIPE is a normal early reader exit. Rejecting here races the CLI's async
+  // credential/capture drain and can make its launcher exit 1 before that drain.
+  if (failed && !interrupted && !downstreamClosed) throw new Error('Antigravity stream forwarding failed; partial timing retained when available')
   if (interrupted) process.exitCode = 130
   return sample
 }
