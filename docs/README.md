@@ -28,6 +28,7 @@ One line per file in this directory, recursively.
 - [design/codeburn-mcp-plan.md](design/codeburn-mcp-plan.md) — Goal: add a `codeburn mcp` stdio MCP server exposing CodeBurn's usage/cost data to AI agents via two tools (`get_usage`, `get_savings`).
 - [design/codeburn-mcp.md](design/codeburn-mcp.md) — CodeBurn already aggregates rich AI-coding usage/cost data (by task, model, project, provider; retry tax; routing waste; optimize findings; 365-day history).
 - [design/desktop-data-lifecycle.md](design/desktop-data-lifecycle.md) — Status: implementation contract for the quality/performance epic.
+- [design/desktop-transient-project-filter.md](design/desktop-transient-project-filter.md) — Approved design for a session-only, exact-project Desktop report scope (#1585).
 - [design/perf-cache-fix.md](design/perf-cache-fix.md) — `codeburn status --format menubar-json` was measured taking 25-90+ seconds per call, with no speedup on a repeat call against an unchanged, freshly-warmed cache.
 
 ## docs/providers/
