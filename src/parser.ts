@@ -1000,6 +1000,14 @@ const MAX_TOOL_BLOCKS = 500
 const MAX_ADDED_NAMES = 1000
 const QUEUED_SLASH_COMMAND = /^\/[a-z][\w:.-]*(?:\s|$)/
 
+// Peer and agent-message queued commands (`isMeta: true`, `origin.kind: "peer"`)
+// are queue plumbing between agents, not a prompt the user typed.
+function isHumanQueuedPrompt(a: Record<string, unknown>): boolean {
+  const origin = a['origin'] as { kind?: unknown } | undefined
+  return a['type'] === 'queued_command' && a['commandMode'] === 'prompt'
+    && a['isMeta'] !== true && (origin?.kind ?? 'human') === 'human'
+}
+
 function firstPlainText(value: unknown): string {
   if (typeof value === 'string') return value
   if (!Array.isArray(value)) return ''
@@ -1037,7 +1045,7 @@ export function compactEntry(raw: JournalEntry): JournalEntry {
         if (typeof n === 'string') names.push(n)
       }
       ;(entry as Record<string, unknown>)['attachment'] = { type: 'deferred_tools_delta', addedNames: names }
-    } else if (a['type'] === 'queued_command' && a['commandMode'] === 'prompt') {
+    } else if (isHumanQueuedPrompt(a)) {
       entry.attachment = {
         type: 'queued_command',
         commandMode: 'prompt',
@@ -1698,7 +1706,7 @@ function queuedHumanPromptText(entry: JournalEntry): string | undefined {
   const attachment = entry['attachment']
   if (!attachment || typeof attachment !== 'object') return undefined
   const data = attachment as Record<string, unknown>
-  if (data['type'] !== 'queued_command' || data['commandMode'] !== 'prompt') return undefined
+  if (!isHumanQueuedPrompt(data)) return undefined
 
   const prompt = firstPlainText(data['prompt']).trim()
   if (!prompt || prompt.startsWith('<ide_') || prompt.startsWith('<system-reminder')) return undefined

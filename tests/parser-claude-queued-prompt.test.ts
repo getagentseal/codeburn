@@ -67,6 +67,23 @@ describe('Claude queued human prompts', () => {
 
     const unrelated = compactEntry(attachment('2026-07-01T10:00:03Z', 'queued_command', 'task-notification', 'finished'))
     expect(unrelated['attachment']).toBeUndefined()
+
+    const peer = compactEntry({
+      type: 'attachment',
+      timestamp: '2026-07-01T10:00:03Z',
+      sessionId: 'session-1',
+      attachment: {
+        type: 'queued_command',
+        commandMode: 'prompt',
+        prompt: '<agent-message from="peer-session">continue</agent-message>',
+        isMeta: true,
+        origin: { kind: 'peer' },
+      },
+    } as JournalEntry)
+    expect(peer['attachment']).toBeUndefined()
+
+    const missingOrigin = compactEntry(attachment('2026-07-01T10:00:03Z', 'queued_command', 'prompt', 'no origin field'))
+    expect((missingOrigin['attachment'] as Record<string, unknown>)['prompt']).toBe('no origin field')
   })
 
   it('starts a separate turn for a typed queued prompt and ignores other attachments', () => {
@@ -83,6 +100,20 @@ describe('Claude queued human prompts', () => {
       attachment('2026-07-01T10:00:06Z', 'queued_command', 'prompt', '<ide_opened_file>src/parser.ts</ide_opened_file>'),
       attachment('2026-07-01T10:00:07Z', 'queued_command', 'prompt', '<system-reminder>injected context</system-reminder>'),
       attachment('2026-07-01T10:00:08Z', 'queued_command', 'prompt', '/compact'),
+      // A peer/agent-message queued command: not a prompt the user typed, so it
+      // must not start a turn.
+      {
+        type: 'attachment',
+        timestamp: '2026-07-01T10:00:08Z',
+        sessionId: 'session-1',
+        attachment: {
+          type: 'queued_command',
+          commandMode: 'prompt',
+          prompt: '<agent-message from="peer-session">keep going</agent-message>',
+          isMeta: true,
+          origin: { kind: 'peer' },
+        },
+      } as JournalEntry,
       attachment('2026-07-01T10:00:09Z', 'other', 'prompt', 'not a queued command'),
       {
         type: 'attachment',
@@ -105,6 +136,31 @@ describe('Claude queued human prompts', () => {
       ['message-2', 'message-3'],
     ])
     expect(turns.flatMap(turn => turn.assistantCalls)).toHaveLength(3)
+  })
+
+  it('ignores an uncompacted peer queued prompt passed straight to groupIntoTurns', () => {
+    const peerEntry: JournalEntry = {
+      type: 'attachment',
+      timestamp: '2026-07-01T10:00:03Z',
+      sessionId: 'session-1',
+      attachment: {
+        type: 'queued_command',
+        commandMode: 'prompt',
+        prompt: '<agent-message from="peer-session">keep going</agent-message>',
+        isMeta: true,
+        origin: { kind: 'peer' },
+      },
+    } as JournalEntry
+
+    const turns = groupIntoTurns([
+      user('2026-07-01T10:00:00Z', 'typed by the user'),
+      assistant('2026-07-01T10:00:01Z', 'message-1'),
+      peerEntry,
+      assistant('2026-07-01T10:00:02Z', 'message-2'),
+    ], new Set())
+
+    expect(turns).toHaveLength(1)
+    expect(turns[0]!.assistantCalls.map(call => call.deduplicationKey)).toEqual(['message-1', 'message-2'])
   })
 
   it('omits a queued prompt without an assistant API call like an ordinary user-only message', () => {

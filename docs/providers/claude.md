@@ -45,7 +45,9 @@ Claude Code can record a message sent while it is working as an
 `commandMode: "prompt"`. CodeBurn counts a timestamped, non-empty prompt as a
 new user turn and assigns later assistant API calls to it. Task notifications,
 IDE or system-reminder injections, slash commands, and other attachment types
-are ignored. Turns represent API usage, so a queued prompt with no following
+are ignored, as are peer and agent-message queued commands
+(`isMeta: true`/`origin.kind: "peer"`), which are queue plumbing rather than a
+prompt the user typed. Turns represent API usage, so a queued prompt with no following
 assistant API call is omitted, just like an ordinary user message with no
 assistant call.
 
