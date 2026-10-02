@@ -7,6 +7,7 @@ import { calculateCost } from '../models.js'
 import { extractBashCommands } from '../bash-utils.js'
 import type { ProbeRoot, Provider, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
 import { safeNumber } from '../parser.js'
+import { readUnifiedVibeCalls } from './mistral-vibe-unified.js'
 
 const METADATA_FILENAME = 'meta.json'
 const MESSAGES_FILENAME = 'messages.jsonl'
@@ -428,10 +429,29 @@ export function createMistralVibeProvider(sessionsDir?: string): Provider {
         })
       }
 
+      const unifiedDir = join(dir, 'unified')
+      for (const entry of (await readdir(unifiedDir).catch(() => [])).sort()) {
+        const sessionDir = join(unifiedDir, entry)
+        const currentPath = join(sessionDir, 'CURRENT')
+        if (!await isFile(currentPath)) continue
+        const metadata = await readJsonFile<VibeMetadata>(join(sessionDir, METADATA_FILENAME))
+        const cwd = metadata?.environment?.working_directory
+        sources.push({ path: currentPath, project: cwd ? basename(cwd) : entry, provider: 'mistral-vibe' })
+      }
+
       return sources
     },
 
     createSessionParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
+      if (basename(source.path) === 'CURRENT') {
+        return { async *parse() {
+          for (const call of await readUnifiedVibeCalls(source.path, name => toolNameMap[name] ?? name)) {
+            if (seenKeys.has(call.deduplicationKey)) continue
+            seenKeys.add(call.deduplicationKey)
+            yield call
+          }
+        } }
+      }
       return createParser(source, seenKeys)
     },
   }

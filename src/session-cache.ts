@@ -1,7 +1,7 @@
 import { readFile, stat, open, rename, unlink, readdir, mkdir, rm, type FileHandle } from 'fs/promises'
 import { existsSync, readFileSync, unlinkSync } from 'fs'
 import { createHash, randomBytes } from 'crypto'
-import { join } from 'path'
+import { basename, dirname, join } from 'path'
 import { StringDecoder } from 'string_decoder'
 
 import { getCodeburnCacheDir, RETIRED_PROVIDER_NAMES } from './cache-dir.js'
@@ -2532,6 +2532,28 @@ export async function fingerprintFile(filePath: string): Promise<FileFingerprint
   fingerprintCalls++
   try {
     const s = await stat(filePath)
+    // Unified Vibe publishes immutable generations through CURRENT, but live
+    // usage first lands in its bounded recovery journal without moving CURRENT.
+    if (basename(filePath) === 'CURRENT' && basename(dirname(dirname(filePath))) === 'unified') {
+      const dir = dirname(filePath)
+      const journal = join(dir, 'journal')
+      const names = (await readdir(journal).catch(() => []))
+        .filter(name => /^\d{16}\.jsonl$/.test(name)).sort()
+      const hash = createHash('sha256').update(`${s.ino}:${s.mtimeMs}:${s.size}`)
+      let mtimeMs = s.mtimeMs
+      let sizeBytes = s.size
+      for (const path of [join(dir, 'meta.json'), ...names.map(name => join(journal, name))]) {
+        const info = await stat(path).catch(() => null)
+        hash.update(`\0${path}:${info?.ino}:${info?.mtimeMs}:${info?.size}`)
+        if (info) {
+          mtimeMs = Math.max(mtimeMs, info.mtimeMs)
+          sizeBytes += info.size
+        }
+      }
+      // Composite identity changes even when a non-newest segment is rewritten;
+      // keep sizeBytes real because the parser also uses it for workload sizing.
+      return { dev: s.dev, ino: parseInt(hash.digest('hex').slice(0, 12), 16), mtimeMs, sizeBytes }
+    }
     // A source path that IS a SQLite database (copilot OTel's agent-traces.db)
     // needs the same WAL fold as the virtual-suffix forms below.
     if (SQLITE_DB_PATH.test(filePath)) return fingerprintSqliteFile(filePath)
