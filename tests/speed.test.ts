@@ -263,6 +263,33 @@ describe('local store and HTTP capture', () => {
     expect(report.historyLimit).toBe(0)
   })
 
+  it('compares a window with its typical day before it, and skips that for open-ended windows', async () => {
+    const file = join(dir, 'typical.jsonl')
+    // Ten chunk-timed tokens after the first arrival: 10 tok/s at 1100 ms, 5 tok/s at 2100 ms.
+    const chunk = (id: string, date: string, lastMs: number, time = '12:00:00') => native({ id, startedAt: new Date(`${date}T${time}`).toISOString(), source: 'proxy', resolution: 'chunk',
+      durationMs: lastMs + 10, firstEmissionMs: 100, lastEmissionMs: lastMs, outputTokens: 11, events: [{ elapsedMs: 100 }, { elapsedMs: lastMs }] })
+    for (const date of ['2026-09-30', '2026-10-01', '2026-10-02', '2026-10-05']) {
+      for (let i = 0; i < 5; i++) await appendSpeedSample(chunk(`${date}-${i}`, date, date === '2026-10-05' ? 2100 : 1100), file)
+    }
+    const run = (...args: string[]) => JSON.parse(execFileSync(process.execPath, ['--import', 'tsx', 'src/cli.ts', 'speed', '--no-history', '--json', '--file', file, ...args],
+      { encoding: 'utf8', timeout: 15_000 }))
+    const report = run('--from', '2026-10-05', '--to', '2026-10-05', '--typical-days', '7')
+    expect(report.typicalDays).toBe(7)
+    expect(report.rows[0]).toMatchObject({ requests: 5, generationTokensPerSecondP50: 5,
+      typical: { days: 3, generationTokensPerSecondP50: 10, generationChangePct: -50, generationShift: true, firstEmissionShift: false } })
+    expect(report.trend.bucket).toBe('hour')
+    // A 24-hour window compares with whole days: the morning before it is not a day.
+    for (let i = 0; i < 5; i++) await appendSpeedSample(chunk(`morning-${i}`, '2026-10-05', 5100, '06:00:00'), file)
+    const since = run('--since', new Date('2026-10-05T12:00:00').toISOString(), '--typical-days', '7')
+    expect(since.rows[0].typical).toMatchObject({ days: 3, generationTokensPerSecondP50: 10 })
+    for (const period of ['all', 'lifetime']) expect(run('--period', period, '--typical-days', '7').typicalDays).toBeNull()
+    const lifetime = run('--typical-days', '7')
+    expect(lifetime.typicalDays).toBeNull()
+    expect(lifetime.rows[0].typical).toBeNull()
+    expect(lifetime.trend.bucket).toBe('day')
+    expect(lifetime.rows[0].trend.filter(Boolean)).toHaveLength(4)
+  })
+
   it('refuses credential-bearing or remote plaintext upstreams', async () => {
     await expect(startSpeedServer({ upstream: 'https://user:secret@example.com', harness: 'codex' })).rejects.toThrow(/origin/)
     await expect(startSpeedServer({ upstream: 'http://example.com', harness: 'codex' })).rejects.toThrow(/HTTPS/)

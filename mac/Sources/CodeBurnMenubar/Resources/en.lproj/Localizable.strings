@@ -755,4 +755,7 @@
 
 
 "First arrival" = "First arrival";
+"Buffered delivery" = "Buffered delivery";
+"Typical" = "Typical";
+"Typical = median day of the previous %1$lld days. A colored change is %2$lld%% or more: green is better, orange is worse." = "Typical = median day of the previous %1$lld days. A colored change is %2$lld%% or more: green is better, orange is worse.";
 "Generation excludes the initial wait. ~ = estimate; short or buffered replies may distort it. — = unavailable." = "Generation excludes the initial wait. ~ = estimate; short or buffered replies may distort it. — = unavailable.";

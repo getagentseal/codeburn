@@ -748,4 +748,7 @@
 
 
 "First arrival" = "最初の到着";
+"Buffered delivery" = "バッファ配信";
+"Typical" = "通常";
+"Typical = median day of the previous %1$lld days. A colored change is %2$lld%% or more: green is better, orange is worse." = "通常 = 直前 %1$lld 日間の中央値の日。色付きの変化は %2$lld%% 以上：緑は改善、オレンジは悪化。";
 "Generation excludes the initial wait. ~ = estimate; short or buffered replies may distort it. — = unavailable." = "生成速度は最初の待ち時間を除外。~ は推定値で、短い応答やバッファリングの影響を受けます。— は計測不可。";

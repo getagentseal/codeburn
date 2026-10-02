@@ -22,10 +22,22 @@ struct SpeedSection: View {
                                 .font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
                         }
                         Spacer(minLength: 4)
-                        VStack(alignment: .trailing, spacing: 2) {
-                            Text(row.formattedRate).font(.system(size: 12, weight: .semibold, design: .monospaced))
-                            Text("\(L("First arrival")): \(row.formattedFirstArrival)")
-                                .font(.system(size: 10)).foregroundStyle(.secondary)
+                        VStack(alignment: .trailing, spacing: 3) {
+                            HStack(spacing: 5) {
+                                if let change = row.generationChange { SpeedChangeBadge(change: change) }
+                                Text(row.formattedRate).font(.system(size: 12, weight: .semibold, design: .monospaced))
+                            }
+                            if row.bufferedDelivery == true {
+                                Text(L("Buffered delivery")).font(.system(size: 10)).foregroundStyle(.secondary)
+                            }
+                            HStack(spacing: 5) {
+                                if let change = row.firstArrivalChange { SpeedChangeBadge(change: change) }
+                                Text("\(L("First arrival")): \(row.formattedFirstArrival)")
+                                    .font(.system(size: 10)).foregroundStyle(.secondary)
+                            }
+                            if let typical = row.typicalLabel {
+                                Text(typical).font(.system(size: 10)).foregroundStyle(.tertiary)
+                            }
                         }
                     }
                     .help("\(row.model) · \(row.source) · \(row.generationRequests)/\(row.requests) · \(row.latestStartedAt)")
@@ -38,6 +50,10 @@ struct SpeedSection: View {
                 }
                 Text(L("Generation excludes the initial wait. ~ = estimate; short or buffered replies may distort it. — = unavailable."))
                     .font(.system(size: 10)).foregroundStyle(.secondary)
+                if rows.contains(where: { $0.typical != nil }) {
+                    Text(L("Typical = median day of the previous %1$lld days. A colored change is %2$lld%% or more: green is better, orange is worse.", 7, 25))
+                        .font(.system(size: 10)).foregroundStyle(.secondary)
+                }
                 if store.speedRefreshFailed {
                     Text(L("Speed refresh failed. Showing the last available snapshot."))
                         .font(.system(size: 10)).foregroundStyle(.orange)
@@ -63,14 +79,22 @@ struct SpeedGlance: View {
     var body: some View {
         let s = scale
         return VStack(alignment: .leading, spacing: 3 * s) {
-            HStack {
+            HStack(spacing: 5 * s) {
                 Text(L("Generation speed")).font(.system(size: 10 * s))
                 Spacer(minLength: 4)
+                if let change = row.generationChange { SpeedChangeBadge(change: change, scale: s) }
                 Text(row.formattedRate).font(.system(size: 14 * s, weight: .semibold, design: .monospaced))
             }
             Text(row.model).font(.system(size: 11 * s, weight: .medium)).lineLimit(1)
-            Text("\(row.precisionLabel) · \(L("First arrival")): \(row.formattedFirstArrival)")
-                .font(.system(size: 10 * s)).lineLimit(1)
+            HStack(spacing: 5 * s) {
+                Text("\(row.precisionLabel) · \(L("First arrival")): \(row.formattedFirstArrival)")
+                    .font(.system(size: 10 * s)).lineLimit(1)
+                if let change = row.firstArrivalChange { SpeedChangeBadge(change: change, scale: s) }
+            }
+            // speedHeight reserves this line, so the measured dock layout holds either way.
+            if let typical = row.typicalLabel {
+                Text(typical).font(.system(size: 10 * s)).lineLimit(1).minimumScaleFactor(0.8).opacity(0.75)
+            }
             Text(L("24h · local · all accounts/projects"))
                 .font(.system(size: 9 * s)).lineLimit(1)
             if stale {
@@ -81,7 +105,28 @@ struct SpeedGlance: View {
         .foregroundStyle(Color.capacityDockText)
         .padding(.horizontal, CapacityDockGlance.contentInset * s)
         .frame(height: CapacityDockGlance.speedHeight * s)
-        .help("\(L("Generation excludes the initial wait. ~ = estimate; short or buffered replies may distort it. — = unavailable."))\n\(row.harnessName) · \(row.source) · \(row.generationRequests)/\(row.requests) · \(row.latestStartedAt)")
+        .help("\(L("Generation excludes the initial wait. ~ = estimate; short or buffered replies may distort it. — = unavailable."))\n\(L("Typical = median day of the previous %1$lld days. A colored change is %2$lld%% or more: green is better, orange is worse.", 7, 25))\n\(row.harnessName) · \(row.source) · \(row.generationRequests)/\(row.requests) · \(row.latestStartedAt)")
     }
 
+}
+
+/// A small capsule with the change against the typical day.
+struct SpeedChangeBadge: View {
+    let change: SpeedChange
+    var scale: CGFloat = 1
+
+    var body: some View {
+        let color: Color = switch change.tone {
+        case .good: .green
+        case .bad: .orange
+        case .flat: .secondary
+        }
+        Text(change.text)
+            .font(.system(size: 9 * scale, weight: .semibold, design: .monospaced))
+            .foregroundStyle(color)
+            .padding(.horizontal, 5 * scale)
+            .padding(.vertical, 1 * scale)
+            .background(Capsule().fill(color.opacity(0.16)))
+            .fixedSize()
+    }
 }

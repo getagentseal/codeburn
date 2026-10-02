@@ -7,7 +7,10 @@ import { mapWithConcurrency } from '../fs-utils.js'
 import { getProvider } from '../providers/index.js'
 import type { SpeedSample } from './types.js'
 
-export async function readSpeedHistory(limit = 100, zcodePath = join(homedir(), '.zcode', 'cli', 'db', 'db.sqlite'), includeTurnEstimates = true): Promise<{ samples: SpeedSample[]; warnings: string[] }> {
+// The ZCode limit applies inside the report window, so a trend over past days
+// is not starved by the most recent requests.
+export async function readSpeedHistory(limit = 100, zcodePath = join(homedir(), '.zcode', 'cli', 'db', 'db.sqlite'), includeTurnEstimates = true,
+  window: { start?: number; end?: number } = {}): Promise<{ samples: SpeedSample[]; warnings: string[] }> {
   const samples: SpeedSample[] = []
   const warnings: string[] = []
   try {
@@ -18,7 +21,11 @@ export async function readSpeedHistory(limit = 100, zcodePath = join(homedir(), 
       const optional = (name: string) => columns.has(name) ? name : `NULL AS ${name}`
       const rows = db.query<{ id: string; model_id: string; started_at: number; completed_at: number; first_token_at: number | null; output_tokens: number; reasoning_tokens: number; status: string | null }>(
         `SELECT id, model_id, started_at, completed_at, output_tokens, reasoning_tokens, ${optional('first_token_at')}, ${optional('status')}
-         FROM model_usage WHERE completed_at > started_at AND output_tokens + reasoning_tokens > 0 ORDER BY completed_at DESC LIMIT ?`, [limit])
+         FROM model_usage WHERE completed_at > started_at AND output_tokens + reasoning_tokens > 0 AND started_at >= ? AND started_at <= ?
+         ORDER BY completed_at DESC LIMIT ?`, [Number.isFinite(window.start) ? window.start : 0, Number.isFinite(window.end) ? window.end : Number.MAX_SAFE_INTEGER, limit])
+      // A full page means older requests in the window were left out; say so
+      // rather than let them read as idle intervals.
+      if (rows.length >= limit) warnings.push(`ZCode history: only the ${limit} most recent requests in this window were read (--history-limit)`)
       for (const row of rows) {
         if (!Number.isFinite(row.started_at) || !Number.isFinite(row.completed_at) || row.started_at <= 0) continue
         const durationMs = row.completed_at - row.started_at

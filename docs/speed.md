@@ -42,8 +42,9 @@ estimates have no persisted per-request timeline to inspect. **Generation tok/s
 excludes the wait for the first token** on every surface. The displayed value is
 the median of eligible per-request rates. First-arrival latency is separate.
 An end-to-end request average is retained only in JSON for diagnostics; it never
-substitutes for unavailable generation speed. Two closely spaced, buffered chunks
-cannot establish precise model decode speed, so chunk rates always carry `~`.
+substitutes for unavailable generation speed. Chunk and request rates always
+carry `~`, and need at least one second of streaming after the first arrival:
+two closely spaced, buffered chunks measure delivery, not decode speed.
 
 Speed has its own explicit scope: **this device, all projects and accounts**.
 Timing records do not carry project, account or synced-device attribution. The
@@ -64,9 +65,11 @@ Desktop polling has a 60-second minimum interval and respects slower/manual
 refresh settings. Native background reads also have a 60-second minimum between attempts,
 share one in-flight request and follow the existing refresh lifecycle. Explicit
 manual refresh can request a fresh snapshot. Both GUI
-surfaces inspect at most ten recent ZCode requests per history read and pass
-`--no-turn-estimates` to skip Codex log discovery entirely, because turn-only
-history cannot measure generation speed. Collected records retain the report's
+surfaces read up to 100,000 ZCode requests inside the window (and the seven days
+before it, for the typical day) and pass `--no-turn-estimates` to skip Codex log
+discovery entirely, because turn-only history cannot measure generation speed.
+A 30-day read of about 64,000 real ZCode requests took 0.9 s; the menubar's
+24-hour window plus its typical week took 0.6 s. Collected records retain the report's
 existing memory bounds. CLI turn-history discovery uses bounded filesystem
 concurrency when enabled. The timeline graph renders
 at most 200 points and discloses the displayed count and any producer truncation.
@@ -75,11 +78,47 @@ CLI date filters use the same local-day semantics as the desktop: `--period week
 or `--from 2026-10-01 --to 2026-10-02`. Explicit dates override the period; `--since`
 can further narrow the start. No date flag preserves the original CLI behavior.
 
+## Trend and typical day
+
+Providers change serving stacks, quantization and capacity without notice. The
+trend and the typical day make that visible.
+
+- **Trend (desktop).** Below the table, a chart shows the selected row's median
+  generation tok/s and median first arrival per interval: per hour for windows up
+  to two days, per day up to 120 days, per Monday-aligned week beyond that, all in
+  local time. Intervals without complete requests stay gaps. The Trend column has
+  a sparkline per row; click it to chart that row. Hover the chart for the
+  interval's request count.
+- **Typical day.** With `--typical-days n`, each row also gets the median of its
+  daily medians over the n whole local days before the window's first day. A
+  buffered row (below) gets no typical generation rate. A day needs at least five
+  requests, the typical day at least three such days, and the window at least five
+  requests before a change is reported, so one busy day or a thin window cannot
+  drive it. A change of 25% or more is a shift: green when it helps (faster
+  generation, earlier first arrival), amber or orange when it hurts. Ordinary days
+  in real ZCode history moved about ±20%.
+- **Where.** The desktop shows the typical value and change under each number,
+  and as a dashed line on the chart. The macOS menubar and the Capacity Dock
+  compare the last 24 hours with the seven days before them.
+
+Workload changes move these numbers too: longer contexts, more reasoning or a
+different mix of tasks. Treat a shift as a prompt to look, not a verdict on the
+provider.
+
+JSON adds `trend.bucket` and `trend.starts` (interval starts), `rows[].trend`
+(per-interval medians and request counts, aligned with `trend.starts`, `null` for
+gaps), `rows[].typical` (`null` without enough earlier data) and `typicalDays`.
+Open-ended windows and the long `all`/`lifetime` periods carry no typical day:
+the week before them says nothing about now. When the ZCode read fills
+`--history-limit` (CLI default 100), a warning says older requests in the window
+were left out, so they never read as idle intervals.
+
 ## What each number measures
 
 | Field | Meaning |
 |---|---|
-| Generation Tok/s p50 | Median of `(output tokens - 1) / seconds after first arrival`. Native tokens use first-to-last-token timing; chunks use first-to-last-chunk timing and are estimates. Request-only logs use request completion minus first-token time and are also estimates. |
+| Generation Tok/s p50 | Median of `(output tokens - 1) / seconds after first arrival`. Native tokens use first-to-last-token timing; chunks use first-to-last-chunk timing and are estimates. Request-only logs use request completion minus first-token time and are also estimates. Chunk and request estimates need at least 1 s after the first arrival. |
+| bufferedDelivery (JSON) | `true` when most of a row's requests ended within a second of their first arrival. The delivery path buffers, so the row shows no generation rate (`—`, "buffered"); first arrival still applies. In real ZCode history, Gemini through the `custom:antigravity` provider delivered half its replies within 170 ms of the first chunk, which read as 3,400 tok/s. |
 | First ms p50 / p95 | Delay to the first generated emission: a native token, ZCode's recorded first token, a proxy SSE chunk, or an Antigravity CLI delta. Heartbeats, role declarations and usage events do not start the clock. |
 | Duration ms p50 / p95 | Distribution of complete timed requests. Codex's duration is estimated model wait at turn granularity. |
 | Generation / observed | Requests with enough data for generation speed / all observations, including incomplete or unavailable samples. One output token, one streamed chunk, missing first arrival, or turn-only timing cannot establish generation speed. |

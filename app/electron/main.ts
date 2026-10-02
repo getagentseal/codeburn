@@ -727,7 +727,7 @@ export function createBridgeHandlers(deps: Deps = { spawnCli, spawnCliAction, re
     // Timing records have no project/account/device attribution. The UI labels
     // that local scope explicitly instead of applying unrelated usage filters.
     'codeburn:getSpeed': run((period: string, provider: string, range?: DateRange) => [
-      'speed', '--json', '--period', vPeriod(period), '--history-limit', '10', '--no-turn-estimates',
+      'speed', '--json', '--period', vPeriod(period), '--history-limit', '100000', '--typical-days', '7', '--no-turn-estimates',
       ...(provider === 'all' ? [] : ['--harness', vSpeedHarness(provider)]),
       ...rangeArgs(vRange(range)),
     ], 3),

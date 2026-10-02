@@ -748,4 +748,7 @@
 
 
 "First arrival" = "첫 도착";
+"Buffered delivery" = "버퍼링된 전송";
+"Typical" = "평소";
+"Typical = median day of the previous %1$lld days. A colored change is %2$lld%% or more: green is better, orange is worse." = "평소 = 직전 %1$lld일의 중앙값 일자. 색이 표시된 변화는 %2$lld%% 이상: 초록은 개선, 주황은 악화.";
 "Generation excludes the initial wait. ~ = estimate; short or buffered replies may distort it. — = unavailable." = "생성 속도는 초기 대기를 제외합니다. ~는 추정치이며 짧거나 버퍼링된 응답의 영향을 받습니다. —는 측정 불가입니다.";

@@ -135,7 +135,7 @@ enum CapacityDockGlance {
     /// section rather than the panel, so group fills can still run edge to edge.
     static let contentInset: CGFloat = 16
     static let tailAllowance: CGFloat = 18
-    static let speedHeight: CGFloat = 92
+    static let speedHeight: CGFloat = 108
 
     /// The title row's own line box.
     static let headerRow: CGFloat = 20

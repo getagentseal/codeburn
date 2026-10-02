@@ -30,4 +30,6 @@ The large Antigravity estimate comes from two closely spaced chunks, which can
 be buffered. It is explicitly marked `~`; neither its 1.7 tok/s end-to-end average
 nor its chunk estimate establishes precise model decode speed. Native token
 timelines use observed individual-token timestamps. Without enough timing data,
-the displayed generation speed stays unavailable.
+the displayed generation speed stays unavailable. These screenshots predate the
+one-second rule: chunk and request estimates now need at least one second after
+the first arrival, so this two-chunk capture shows no generation rate today.

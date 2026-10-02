@@ -114,8 +114,8 @@ const CHANNELS = [
 ] as const
 
 const ARGV_CASES: Array<{ channel: string; args: unknown[]; argv: string[] }> = [
-  { channel: 'codeburn:getSpeed', args: ['week', 'all'], argv: ['speed', '--json', '--period', 'week', '--history-limit', '10', '--no-turn-estimates'] },
-  { channel: 'codeburn:getSpeed', args: ['today', 'dsh', { from: '2026-10-01', to: '2026-10-02' }], argv: ['speed', '--json', '--period', 'today', '--history-limit', '10', '--no-turn-estimates', '--harness', 'dsh', '--from', '2026-10-01', '--to', '2026-10-02'] },
+  { channel: 'codeburn:getSpeed', args: ['week', 'all'], argv: ['speed', '--json', '--period', 'week', '--history-limit', '100000', '--typical-days', '7', '--no-turn-estimates'] },
+  { channel: 'codeburn:getSpeed', args: ['today', 'dsh', { from: '2026-10-01', to: '2026-10-02' }], argv: ['speed', '--json', '--period', 'today', '--history-limit', '100000', '--typical-days', '7', '--no-turn-estimates', '--harness', 'dsh', '--from', '2026-10-01', '--to', '2026-10-02'] },
   { channel: 'codeburn:getSpeedEvents', args: ['request-1', 'hermes'], argv: ['speed', 'events', 'request-1', '--harness', 'hermes'] },
   { channel: 'codeburn:getOverview', args: ['30days', 'claude'], argv: ['status', '--format', 'menubar-json', '--period', '30days', '--no-timeline', '--no-optimize', '--provider', 'claude'] },
   { channel: 'codeburn:getOverview', args: ['30days', 'all'], argv: ['status', '--format', 'menubar-json', '--period', '30days', '--no-timeline', '--no-optimize'] },

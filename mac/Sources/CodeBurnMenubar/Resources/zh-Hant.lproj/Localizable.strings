@@ -744,4 +744,7 @@
 
 
 "First arrival" = "首次到達";
+"Buffered delivery" = "緩衝傳送";
+"Typical" = "典型";
+"Typical = median day of the previous %1$lld days. A colored change is %2$lld%% or more: green is better, orange is worse." = "典型 = 前 %1$lld 天的中位日。帶顏色的變化達 %2$lld%% 或以上：綠色為改善，橘色為變差。";
 "Generation excludes the initial wait. ~ = estimate; short or buffered replies may distort it. — = unavailable." = "生成速度不含初始等待。~ 為估算，短回覆或緩衝可能使其失真。— 為無法使用。";

@@ -31,6 +31,31 @@ struct SpeedReportTests {
         #expect(rows[2].formattedRate == "36.2 tok/s")
     }
 
+    @Test("Typical-day labels carry the CLI's change; a thin window or an older CLI shows none")
+    func typicalDay() throws {
+        let typical = { (change: String) in
+            #"{"days":4,"generationTokensPerSecondP50":70.1,"firstEmissionMsP50":4944,"generationChangePct":\#(change),"firstEmissionChangePct":351.2,"generationShift":false,"firstEmissionShift":true}"#
+        }
+        let with = { (change: String) in row().replacingOccurrences(of: #""firstEmissionMsP50":741.9}"#, with: #""firstEmissionMsP50":741.9,"typical":\#(typical(change))}"#) }
+        let rows = try report([with("-22.6"), with("null"), row()].joined(separator: ",")).rows
+        let moved = try #require(rows[0].typical)
+        #expect(moved.firstEmissionShift)
+        #expect(!moved.generationShift)
+        #expect(rows[0].typicalLabel == "\(L("Typical")) 70.1 tok/s · 4944 ms")
+        // A 23% dip stays neutral; the CLI flagged the later first arrival, which hurts.
+        #expect(rows[0].generationChange?.text == "−23%")
+        #expect(rows[0].generationChange?.tone == .flat)
+        #expect(rows[0].firstArrivalChange?.text == "+351%")
+        #expect(rows[0].firstArrivalChange?.tone == .bad)
+        #expect(rows[1].generationChange == nil)
+        #expect(rows[1].typicalLabel == "\(L("Typical")) 70.1 tok/s · 4944 ms")
+        #expect(rows[2].typical == nil)
+        #expect(rows[2].typicalLabel == nil)
+        #expect(rows[2].firstArrivalChange == nil)
+        #expect(SpeedChange(40, shift: true, higherIsBetter: true)?.tone == .good)
+        #expect(SpeedChange(-40, shift: true, higherIsBetter: false)?.tone == .good)
+    }
+
     @Test("Select the latest matching model, not the fastest; never mix harnesses")
     func latestMatching() throws {
         let data = try report([

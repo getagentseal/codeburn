@@ -39,6 +39,10 @@ struct SpeedRow: Decodable, Sendable, Identifiable {
     let requests: Int
     let generationTokensPerSecondP50: Double?
     let firstEmissionMsP50: Double?
+    /// Median day in the week before the window; absent from older CLIs.
+    let typical: SpeedTypical?
+    /// Most requests arrived in sub-second bursts, so the CLI withholds a rate.
+    let bufferedDelivery: Bool?
 
     var id: String { [harness, model, source, resolution].joined(separator: "|") }
     var harnessName: String {
@@ -67,6 +71,20 @@ struct SpeedRow: Decodable, Sendable, Identifiable {
         guard let first = firstEmissionMsP50, first.isFinite else { return "—" }
         return String(format: "%.0f ms", first)
     }
+    /// "Typical 70.1 tok/s · 4944 ms", or nil without a typical day.
+    var typicalLabel: String? {
+        let parts = [
+            typical?.generationTokensPerSecondP50.flatMap { $0.isFinite && $0 > 0 ? String(format: "%.1f tok/s", $0) : nil },
+            typical?.firstEmissionMsP50.flatMap { $0.isFinite ? String(format: "%.0f ms", $0) : nil },
+        ].compactMap { $0 }
+        return parts.isEmpty ? nil : "\(L("Typical")) \(parts.joined(separator: " · "))"
+    }
+    var generationChange: SpeedChange? {
+        SpeedChange(typical?.generationChangePct, shift: typical?.generationShift == true, higherIsBetter: true)
+    }
+    var firstArrivalChange: SpeedChange? {
+        SpeedChange(typical?.firstEmissionChangePct, shift: typical?.firstEmissionShift == true, higherIsBetter: false)
+    }
     var precisionLabel: String {
         if estimated { return L("Turn estimate") }
         switch resolution {
@@ -76,4 +94,29 @@ struct SpeedRow: Decodable, Sendable, Identifiable {
         default: return L("Turn timing")
         }
     }
+}
+
+/// Change against the typical day. The CLI's 25% rule decides a shift; a
+/// shift reads green when it helps (faster, earlier) and orange when it hurts.
+struct SpeedChange: Equatable {
+    enum Tone { case good, bad, flat }
+    let text: String
+    let tone: Tone
+
+    init?(_ pct: Double?, shift: Bool, higherIsBetter: Bool) {
+        guard let pct, pct.isFinite else { return nil }
+        let rounded = pct.rounded()
+        text = (rounded > 0 ? "+" : rounded < 0 ? "−" : "") + String(format: "%.0f%%", abs(rounded))
+        tone = !shift || rounded == 0 ? .flat : (rounded > 0) == higherIsBetter ? .good : .bad
+    }
+}
+
+struct SpeedTypical: Decodable, Sendable {
+    let days: Int
+    let generationTokensPerSecondP50: Double?
+    let firstEmissionMsP50: Double?
+    let generationChangePct: Double?
+    let firstEmissionChangePct: Double?
+    let generationShift: Bool
+    let firstEmissionShift: Bool
 }

@@ -7,9 +7,9 @@ import { startSpeedServer } from './server.js'
 import { captureAntigravitySpeed } from './antigravity.js'
 import { getDateRange, parseDateRangeFlags, parsePeriodOrThrow } from '../cli-date.js'
 
-function integer(raw: string): number {
+function integer(raw: string, max = 10_000): number {
   const n = Number(raw)
-  if (!Number.isInteger(n) || n < 1 || n > 10_000) throw new Error('Limit must be an integer from 1 to 10000')
+  if (!Number.isInteger(n) || n < 1 || n > max) throw new Error(`Limit must be an integer from 1 to ${max}`)
   return n
 }
 
@@ -29,9 +29,10 @@ export function registerSpeedCommands(program: Command): void {
     .option('--to <date>', 'Window end (local YYYY-MM-DD, inclusive)')
     .option('--file <path>', 'Speed telemetry JSONL file', speedFile())
     .option('--limit <n>', 'Recent telemetry records to read', integer, 10_000)
-    .option('--history-limit <n>', 'Recent ZCode requests and Codex sessions to inspect', integer, 100)
+    .option('--history-limit <n>', 'Recent ZCode requests in the window and Codex sessions to inspect', (raw: string) => integer(raw, 100_000), 100)
     .option('--no-history', 'Read collected telemetry only')
     .option('--no-turn-estimates', 'Skip Codex history scans that cannot measure generation speed')
+    .option('--typical-days <n>', 'Compare each row with its median day in the n days before the window', (raw: string) => integer(raw, 90))
     .action(async opts => {
       if (opts.harness && !isSpeedHarness(opts.harness)) throw new Error('Unknown speed harness')
       const since = opts.since ? Date.parse(opts.since) : -Infinity
@@ -42,12 +43,28 @@ export function registerSpeedCommands(program: Command): void {
       const end = range?.end?.getTime() ?? Infinity
       const selected = (s: SpeedSample) => (!opts.harness || s.harness === opts.harness) && Date.parse(s.startedAt) >= start && Date.parse(s.startedAt) <= end
       const stored = await readSpeedSamples(opts.file, opts.limit, selected)
-      const history = opts.history ? await readSpeedHistory(opts.historyLimit, undefined, opts.turnEstimates) : { samples: [], warnings: [] }
+      const history = opts.history ? await readSpeedHistory(opts.historyLimit, undefined, opts.turnEstimates, { start, end }) : { samples: [], warnings: [] }
       const samples = [...stored.samples, ...history.samples.filter(selected)]
-      const grouped = buildSpeedReport(samples)
+      // Without a start, or across the long all/lifetime windows, "the week before"
+      // says nothing about now; rows then carry no typical day.
+      const longWindow = !opts.since && !opts.from && !opts.to && (opts.period === 'all' || opts.period === 'lifetime')
+      const typicalDays = opts.typicalDays && Number.isFinite(start) && !longWindow ? opts.typicalDays as number : null
+      let before: SpeedSample[] | undefined
+      if (typicalDays) {
+        // Turn-only Codex history has neither metric, so it is never rescanned here.
+        // Whole local days before the window's first day, so a 24-hour window
+        // never weighs partial edge days as full ones.
+        const first = new Date(start)
+        const prior = { start: new Date(first.getFullYear(), first.getMonth(), first.getDate() - typicalDays).getTime(),
+          end: new Date(first.getFullYear(), first.getMonth(), first.getDate()).getTime() - 1 }
+        const earlier = (s: SpeedSample) => (!opts.harness || s.harness === opts.harness) && Date.parse(s.startedAt) >= prior.start && Date.parse(s.startedAt) <= prior.end
+        before = [...(await readSpeedSamples(opts.file, opts.limit, earlier)).samples,
+          ...(opts.history ? (await readSpeedHistory(opts.historyLimit, undefined, false, prior)).samples.filter(earlier) : [])]
+      }
+      const grouped = buildSpeedReport(samples, before)
       const report = { ...grouped, unavailableHarnesses: grouped.unavailableHarnesses.filter(h => !opts.harness || h === opts.harness),
         rejectedRecords: stored.rejected, omittedRecords: stored.omitted, warnings: history.warnings,
-        generatedAt: new Date().toISOString(), historyLimit: opts.history ? opts.historyLimit : 0 }
+        generatedAt: new Date().toISOString(), historyLimit: opts.history ? opts.historyLimit : 0, typicalDays }
       console.log(opts.json ? JSON.stringify(report, null, 2) : renderSpeedReport(report))
       if (!opts.json) {
         if (stored.rejected) process.stderr.write(`Ignored ${stored.rejected} invalid speed records\n`)

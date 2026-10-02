@@ -43,7 +43,19 @@ export const speed: SectionCatalog = {
     "speed.status.incomplete": "Incomplete",
     "speed.status.interrupted": "Interrupted",
     "speed.status.error": "Failed",
-    "speed.generation": "Generation tok/s · p50"
+    "speed.generation": "Generation tok/s · p50",
+    "speed.trend": "Trend",
+    "speed.trend.hour": "Median per hour",
+    "speed.trend.day": "Median per day",
+    "speed.trend.week": "Median per week",
+    "speed.typical": "typical {value}",
+    "speed.trendChart": "{metric} over time",
+    "speed.trendNote": "Each point is the median of complete requests in that interval; hover the chart for details. Provider changes and different workloads can both move these numbers.",
+    "speed.typicalNote": "Typical (dashed line, and under each value in the table) is the median day in the {days} days before this window. A colored change is 25% or more: green when it helps, amber when it hurts.",
+    "speed.requests": "Requests: {count}",
+    "speed.noInterval": "No complete requests in this interval",
+    "speed.bufferedTag": "buffered",
+    "speed.buffered": "Buffered delivery, so generation speed is unavailable for: {models}. Most of their requests finished within 1 s of the first arrival, which measures how the reply was delivered, not how fast it was generated. First arrival still applies."
   },
   "fr": {
     "shell.nav.speed": "Vitesse",
@@ -87,7 +99,19 @@ export const speed: SectionCatalog = {
     "speed.status.incomplete": "Incomplète",
     "speed.status.interrupted": "Interrompue",
     "speed.status.error": "Échec",
-    "speed.generation": "Génération tok/s · p50"
+    "speed.generation": "Génération tok/s · p50",
+    "speed.trend": "Tendance",
+    "speed.trend.hour": "Médiane par heure",
+    "speed.trend.day": "Médiane par jour",
+    "speed.trend.week": "Médiane par semaine",
+    "speed.typical": "habituel {value}",
+    "speed.trendChart": "{metric} dans le temps",
+    "speed.trendNote": "Chaque point est la médiane des requêtes complètes de l’intervalle ; survolez le graphique pour le détail. Un changement chez le fournisseur comme une charge de travail différente peuvent faire varier ces valeurs.",
+    "speed.typicalNote": "La valeur habituelle (ligne pointillée, et sous chaque valeur du tableau) est le jour médian des {days} jours précédant cette période. Un écart coloré atteint 25 % ou plus : vert s’il est favorable, ambre s’il est défavorable.",
+    "speed.requests": "Requêtes : {count}",
+    "speed.noInterval": "Aucune requête complète dans cet intervalle",
+    "speed.bufferedTag": "en rafale",
+    "speed.buffered": "Livraison en rafale, vitesse de génération indisponible pour : {models}. La plupart de leurs requêtes se sont terminées moins d’1 s après la première arrivée, ce qui mesure la livraison de la réponse, pas la vitesse de génération. La première arrivée reste valable."
   },
   "ja": {
     "shell.nav.speed": "速度",
@@ -131,7 +155,19 @@ export const speed: SectionCatalog = {
     "speed.status.incomplete": "未完了",
     "speed.status.interrupted": "中断",
     "speed.status.error": "失敗",
-    "speed.generation": "生成 tok/s · p50"
+    "speed.generation": "生成 tok/s · p50",
+    "speed.trend": "推移",
+    "speed.trend.hour": "1時間ごとの中央値",
+    "speed.trend.day": "1日ごとの中央値",
+    "speed.trend.week": "1週間ごとの中央値",
+    "speed.typical": "通常 {value}",
+    "speed.trendChart": "{metric} の推移",
+    "speed.trendNote": "各点はその区間で完了したリクエストの中央値です。グラフにカーソルを合わせると詳細が表示されます。プロバイダー側の変更だけでなく、作業内容の違いでもこれらの値は変わります。",
+    "speed.typicalNote": "通常値（破線、および表の各値の下）は、この期間の前の {days} 日間における中央値の日です。色付きの変化は 25% 以上で、改善は緑、悪化はアンバーで示します。",
+    "speed.requests": "リクエスト数: {count}",
+    "speed.noInterval": "この区間に完了したリクエストはありません",
+    "speed.bufferedTag": "バッファ配信",
+    "speed.buffered": "バッファ配信のため、生成速度は表示できません: {models}。ほとんどのリクエストが最初の到着から 1 秒以内に完了しており、これは生成の速さではなく応答の配信方法を測っています。最初の到着は引き続き有効です。"
   },
   "ko": {
     "shell.nav.speed": "속도",
@@ -175,7 +211,19 @@ export const speed: SectionCatalog = {
     "speed.status.incomplete": "미완료",
     "speed.status.interrupted": "중단됨",
     "speed.status.error": "실패",
-    "speed.generation": "생성 tok/s · p50"
+    "speed.generation": "생성 tok/s · p50",
+    "speed.trend": "추이",
+    "speed.trend.hour": "시간별 중앙값",
+    "speed.trend.day": "일별 중앙값",
+    "speed.trend.week": "주별 중앙값",
+    "speed.typical": "평소 {value}",
+    "speed.trendChart": "시간에 따른 {metric}",
+    "speed.trendNote": "각 점은 해당 구간에서 완료된 요청의 중앙값이며, 차트에 마우스를 올리면 자세한 내용이 표시됩니다. 제공자 측 변경뿐 아니라 작업 유형의 차이도 이 수치를 바꿀 수 있습니다.",
+    "speed.typicalNote": "평소 값(점선, 표의 각 값 아래)은 이 기간 이전 {days}일 동안의 중앙값 일자입니다. 색이 표시된 변화는 25% 이상이며, 개선은 초록색, 악화는 호박색입니다.",
+    "speed.requests": "요청 수: {count}",
+    "speed.noInterval": "이 구간에 완료된 요청이 없습니다",
+    "speed.bufferedTag": "버퍼링됨",
+    "speed.buffered": "버퍼링된 전송이므로 생성 속도를 표시할 수 없습니다: {models}. 대부분의 요청이 첫 도착 후 1초 안에 끝났으며, 이는 생성 속도가 아니라 응답이 전달된 방식을 측정한 것입니다. 첫 도착 값은 그대로 유효합니다."
   },
   "zhCN": {
     "shell.nav.speed": "速度",
@@ -219,7 +267,19 @@ export const speed: SectionCatalog = {
     "speed.status.incomplete": "未完成",
     "speed.status.interrupted": "已中断",
     "speed.status.error": "失败",
-    "speed.generation": "生成 tok/s · p50"
+    "speed.generation": "生成 tok/s · p50",
+    "speed.trend": "趋势",
+    "speed.trend.hour": "每小时中位数",
+    "speed.trend.day": "每日中位数",
+    "speed.trend.week": "每周中位数",
+    "speed.typical": "典型 {value}",
+    "speed.trendChart": "{metric} 随时间变化",
+    "speed.trendNote": "每个点是该时段内已完成请求的中位数；悬停图表可查看详情。提供方的调整和不同的工作负载都可能改变这些数值。",
+    "speed.typicalNote": "典型值（虚线，以及表格中各数值下方）是此时间窗口之前 {days} 天中的中位日。带颜色的变化达 25% 或以上：改善为绿色，变差为琥珀色。",
+    "speed.requests": "请求数：{count}",
+    "speed.noInterval": "此时段内没有已完成的请求",
+    "speed.bufferedTag": "缓冲交付",
+    "speed.buffered": "因缓冲交付，以下模型无法显示生成速度：{models}。它们的大多数请求在首次到达后 1 秒内就已完成，这衡量的是回复的交付方式，而不是生成速度。首次到达仍然有效。"
   },
   "zhTW": {
     "shell.nav.speed": "速度",
@@ -263,6 +323,18 @@ export const speed: SectionCatalog = {
     "speed.status.incomplete": "未完成",
     "speed.status.interrupted": "已中斷",
     "speed.status.error": "失敗",
-    "speed.generation": "生成 tok/s · p50"
+    "speed.generation": "生成 tok/s · p50",
+    "speed.trend": "趨勢",
+    "speed.trend.hour": "每小時中位數",
+    "speed.trend.day": "每日中位數",
+    "speed.trend.week": "每週中位數",
+    "speed.typical": "典型 {value}",
+    "speed.trendChart": "{metric} 隨時間變化",
+    "speed.trendNote": "每個點是該時段內已完成請求的中位數；將滑鼠移到圖表上可查看詳情。供應商的調整和不同的工作負載都可能改變這些數值。",
+    "speed.typicalNote": "典型值（虛線，以及表格中各數值下方）是此時間範圍之前 {days} 天中的中位日。帶顏色的變化達 25% 或以上：改善為綠色，變差為琥珀色。",
+    "speed.requests": "請求數：{count}",
+    "speed.noInterval": "此時段內沒有已完成的請求",
+    "speed.bufferedTag": "緩衝傳送",
+    "speed.buffered": "因緩衝傳送，以下模型無法顯示生成速度：{models}。它們的大多數請求在首次到達後 1 秒內就已完成，這衡量的是回覆的傳送方式，而不是生成速度。首次到達仍然有效。"
   }
 }

@@ -49,8 +49,9 @@ describe('Antigravity CLI timing', () => {
       durationMs: 3100, firstEmissionMs: 2700, lastEmissionMs: 2860 })
     expect(sample.events).toEqual([{ elapsedMs: 2700 }, { elapsedMs: 2860 }])
     expect(JSON.stringify(sample)).not.toMatch(/PRIVATE|private|răspuns|cwd|tools|response|duration_seconds/)
+    // Two chunks 160 ms apart are one delivery burst, too short to estimate generation from.
     expect(buildSpeedReport([sample]).rows[0]).toMatchObject({ timedRequests: 1,
-      effectiveTokensPerSecond: 6 / 3.1, generationTokensPerSecondP50: 5 / 0.16, generationRequests: 1,
+      effectiveTokensPerSecond: 6 / 3.1, generationTokensPerSecondP50: null, generationRequests: 0,
       interTokenMsP50: null, generationRateEstimated: true })
   })
 

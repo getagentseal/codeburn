@@ -748,4 +748,7 @@
 
 
 "First arrival" = "Première arrivée";
+"Buffered delivery" = "Livraison en rafale";
+"Typical" = "Habituel";
+"Typical = median day of the previous %1$lld days. A colored change is %2$lld%% or more: green is better, orange is worse." = "Habituel = jour médian des %1$lld jours précédents. Un écart coloré atteint %2$lld %% ou plus : vert = mieux, orange = moins bien.";
 "Generation excludes the initial wait. ~ = estimate; short or buffered replies may distort it. — = unavailable." = "La génération exclut l’attente initiale. ~ = estimation, sensible aux réponses courtes ou mises en tampon. — = indisponible.";
