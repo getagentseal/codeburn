@@ -812,9 +812,9 @@ describe('#946: a migration re-derives copilot instead of carrying it', () => {
     )
 
     const loaded = await loadDailyCache()
-    // From v32 only hermes (contract 33: day.models keyed by route) is owed a
-    // re-derivation; dsh's v32 contract is already satisfied.
-    expect(loaded.pendingRederive).toEqual(['hermes'])
+    // From v32, Codex and Hermes are owed re-derivation; dsh's v32 contract
+    // is already satisfied.
+    expect(loaded.pendingRederive).toEqual(['codex', 'hermes'])
   })
 
   it('preserves an older cache pending repair while adding a newer provider repair', async () => {
@@ -834,7 +834,7 @@ describe('#946: a migration re-derives copilot instead of carrying it', () => {
     )
 
     const loaded = await loadDailyCache()
-    expect(loaded.pendingRederive).toEqual(['copilot', 'hermes'])
+    expect(loaded.pendingRederive).toEqual(['copilot', 'codex', 'hermes'])
   })
 
   it('still carries the slice whole when the sources are gone (never-lose, #1033)', async () => {
@@ -868,7 +868,7 @@ describe('#946: a migration re-derives copilot instead of carrying it', () => {
   it('a PARTIAL parse does not spend the entitlement', async () => {
     await seedOlderCache([day(settled, { copilot: PRE_STORE })])
     const partial = await ensureCacheHydrated(noSessions, () => [], 'cfg-A', () => false)
-    expect(partial.pendingRederive).toEqual(['copilot', 'hermes', 'dsh'])
+    expect(partial.pendingRederive).toEqual(['copilot', 'codex', 'hermes', 'dsh'])
     // The next COMPLETE run still gets to re-derive.
     const out = await ensureCacheHydrated(noSessions, () => [day(settled, { copilot: STORE_BACKED })], 'cfg-A')
     expect(out.days.find(d => d.date === settled)!.providers['copilot'])

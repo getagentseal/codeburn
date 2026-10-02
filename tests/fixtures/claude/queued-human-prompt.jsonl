@@ -1,0 +1,11 @@
+{"type":"user","uuid":"user-1","timestamp":"2026-07-01T10:00:00.000Z","sessionId":"session-1","message":{"role":"user","content":"How does the parser assign turns?"}}
+{"type":"assistant","timestamp":"2026-07-01T10:00:02.000Z","sessionId":"session-1","message":{"type":"message","role":"assistant","model":"claude-sonnet-4-20250514","id":"message-1","content":[],"usage":{"input_tokens":11,"output_tokens":5}}}
+{"type":"attachment","timestamp":"2026-07-01T10:00:03.000Z","sessionId":"session-1","attachment":{"type":"queued_command","commandMode":"prompt","prompt":"Implement a parser change in src/parser.ts"}}
+{"type":"assistant","timestamp":"2026-07-01T10:00:04.000Z","sessionId":"session-1","message":{"type":"message","role":"assistant","model":"claude-sonnet-4-20250514","id":"message-2","content":[],"usage":{"input_tokens":13,"output_tokens":7}}}
+{"type":"attachment","timestamp":"2026-07-01T10:00:04.500Z","sessionId":"session-1","attachment":{"type":"queued_command","commandMode":"prompt","prompt":"<agent-message from=\"peer-session\">keep going</agent-message>","isMeta":true,"origin":{"kind":"peer"}}}
+{"type":"attachment","timestamp":"2026-07-01T10:00:05.000Z","sessionId":"session-1","attachment":{"type":"queued_command","commandMode":"task-notification","prompt":"Background task finished"}}
+{"type":"attachment","timestamp":"2026-07-01T10:00:06.000Z","sessionId":"session-1","attachment":{"type":"queued_command","commandMode":"prompt","prompt":"<ide_opened_file>src/parser.ts</ide_opened_file>"}}
+{"type":"attachment","timestamp":"2026-07-01T10:00:07.000Z","sessionId":"session-1","attachment":{"type":"queued_command","commandMode":"prompt","prompt":"<system-reminder>injected context</system-reminder>"}}
+{"type":"attachment","timestamp":"2026-07-01T10:00:08.000Z","sessionId":"session-1","attachment":{"type":"queued_command","commandMode":"prompt","prompt":"/compact"}}
+{"type":"attachment","timestamp":"2026-07-01T10:00:09.000Z","sessionId":"session-1","attachment":{"type":"other","prompt":"not a user prompt"}}
+{"type":"assistant","timestamp":"2026-07-01T10:00:10.000Z","sessionId":"session-1","message":{"type":"message","role":"assistant","model":"claude-sonnet-4-20250514","id":"message-3","content":[],"usage":{"input_tokens":17,"output_tokens":3}}}

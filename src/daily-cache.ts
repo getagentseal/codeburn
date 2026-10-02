@@ -228,12 +228,19 @@ import type { DateRange, ProjectSummary } from './types.js'
 // Call counts and cost only rise.
 // v42: #1076 long-context tiers. A Codex call past a model's published
 // long-context threshold prices at the tier rate, so settled days re-derive.
-// v43: Devin usage comes from sessions.db instead of the transcript exports,
+// v43: Codex response-level token_usage_record repairs compacted/interrupted
+// responses and suppresses stale token_count twins. Counts can rise or fall,
+// so re-derive surviving days and allow the Codex slice to shrink once.
+// v44: Claude queued_command human prompts split and reclassify turns. Calls
+// and tokens are unchanged, but settled category totals need re-derivation.
+// v45: #1581 ZCode user prompt text now reaches classification. Calls and
+// cost are unchanged, but settled zcode category totals need re-derivation.
+// v46: Devin usage comes from sessions.db instead of the transcript exports,
 // which held a few sessions and dated steps without metadata.created_at on the
-// session's last activity. Days finalized at v42 miss most Devin calls, and a
+// session's last activity. Days finalized at v45 miss most Devin calls, and a
 // day can also lose calls that now land on their real date, so devin joins
 // PENDING_REDERIVE_PROVIDER_VERSIONS.
-export const DAILY_CACHE_VERSION = 43
+export const DAILY_CACHE_VERSION = 46
 const MIN_SUPPORTED_VERSION = 28
 
 /// Providers whose per-day CALL COUNT means something different at
@@ -258,6 +265,9 @@ const MIN_SUPPORTED_VERSION = 28
 /// untouched, in both directions, and every other provider keeps the guard.
 const PENDING_REDERIVE_PROVIDER_VERSIONS: Readonly<Record<string, number>> = {
   copilot: 26,
+  // Codex response records replace stale/zero token_count twins and can
+  // legitimately reduce counts as well as recover missing usage.
+  codex: 43,
   // 31: a v30 file may have been written by #1132's accounting, which never
   // carried the Hermes cost contract. 33: day.models is keyed by route, and a
   // v32 Hermes day cannot know which of its rows went through
@@ -266,9 +276,9 @@ const PENDING_REDERIVE_PROVIDER_VERSIONS: Readonly<Record<string, number>> = {
   // DSH v0-only parsing and exclusive-reasoning display were both stale in
   // finalized days written before the multi-generation reader.
   dsh: 32,
-  // 43: transcript-era Devin days put every step lacking metadata.created_at
+  // 46: transcript-era Devin days put every step lacking metadata.created_at
   // on the session's last-activity day; sessions.db dates each request.
-  devin: 43,
+  devin: 46,
 }
 
 function providersPendingRederiveFrom(fromVersion: number): string[] {
