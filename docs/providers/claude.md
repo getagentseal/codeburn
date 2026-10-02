@@ -40,6 +40,17 @@ JSONL, one event per line, per session file. Sessions live under `<project>/<ses
 
 `createSessionParser` returns an empty async generator (`claude.ts:101-105`). Claude is a special case: `src/parser.ts` reads Claude JSONL files directly with full turn grouping, dedup of streaming message IDs, and MCP tool inventory extraction. The provider object exists only so `discoverSessions` can return Claude session sources alongside the others.
 
+Claude Code can record a message sent while it is working as an
+`attachment` entry with `attachment.type: "queued_command"` and
+`commandMode: "prompt"`. CodeBurn counts a timestamped, non-empty prompt as a
+new user turn and assigns later assistant API calls to it. Task notifications,
+IDE or system-reminder injections, slash commands, and other attachment types
+are ignored, as are peer and agent-message queued commands
+(`isMeta: true`/`origin.kind: "peer"`), which are queue plumbing rather than a
+prompt the user typed. Turns represent API usage, so a queued prompt with no following
+assistant API call is omitted, just like an ordinary user message with no
+assistant call.
+
 ## Pricing
 
 Claude Code reports total cache-write tokens in `usage.cache_creation_input_tokens`.

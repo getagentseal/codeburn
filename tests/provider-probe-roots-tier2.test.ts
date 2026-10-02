@@ -4,6 +4,7 @@ import { homedir } from 'os'
 
 import { createClineProvider, getClineDataPath } from '../src/providers/cline.js'
 import { createKiloCodeProvider } from '../src/providers/kilo-code.js'
+import { createAmpProvider } from '../src/providers/amp.js'
 import { createGrokProvider } from '../src/providers/grok.js'
 import { createPiProvider, createOmpProvider } from '../src/providers/pi.js'
 import { createKimiProvider } from '../src/providers/kimi.js'
@@ -80,6 +81,15 @@ describe('probeRoots mirrors discovery resolution (Tier 2, batch 1)', () => {
     ])
     expect(await createGrokProvider().probeRoots!()).toEqual([
       { path: join(homedir(), '.grok', 'sessions'), label: 'sessions' },
+    ])
+  })
+
+  it('amp reports exactly its resolved threads dir', async () => {
+    expect(await createAmpProvider(['/tmp/amp-a']).probeRoots!()).toEqual([
+      { path: join('/tmp/amp-a', 'threads'), label: 'threads' },
+    ])
+    expect(await createAmpProvider().probeRoots!()).toEqual([
+      { path: join(homedir(), '.local', 'share', 'amp', 'threads'), label: 'threads' },
     ])
   })
 

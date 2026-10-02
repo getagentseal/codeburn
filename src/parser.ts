@@ -998,6 +998,27 @@ const USER_TEXT_CAP = 2000
 const BASH_COMMAND_CAP = 2000
 const MAX_TOOL_BLOCKS = 500
 const MAX_ADDED_NAMES = 1000
+const QUEUED_SLASH_COMMAND = /^\/[a-z][\w:.-]*(?:\s|$)/
+
+// Peer and agent-message queued commands (`isMeta: true`, `origin.kind: "peer"`)
+// are queue plumbing between agents, not a prompt the user typed.
+function isHumanQueuedPrompt(a: Record<string, unknown>): boolean {
+  const origin = a['origin'] as { kind?: unknown } | undefined
+  return a['type'] === 'queued_command' && a['commandMode'] === 'prompt'
+    && a['isMeta'] !== true && (origin?.kind ?? 'human') === 'human'
+}
+
+function firstPlainText(value: unknown): string {
+  if (typeof value === 'string') return value
+  if (!Array.isArray(value)) return ''
+  for (const block of value) {
+    if (typeof block === 'string') return block
+    if (!block || typeof block !== 'object') continue
+    const text = (block as Record<string, unknown>)['text']
+    if (typeof text === 'string') return text
+  }
+  return ''
+}
 
 export function compactEntry(raw: JournalEntry): JournalEntry {
   const entry: JournalEntry = { type: raw.type }
@@ -1024,6 +1045,12 @@ export function compactEntry(raw: JournalEntry): JournalEntry {
         if (typeof n === 'string') names.push(n)
       }
       ;(entry as Record<string, unknown>)['attachment'] = { type: 'deferred_tools_delta', addedNames: names }
+    } else if (isHumanQueuedPrompt(a)) {
+      entry.attachment = {
+        type: 'queued_command',
+        commandMode: 'prompt',
+        prompt: flatSlice(firstPlainText(a['prompt']), USER_TEXT_CAP),
+      }
     }
   }
 
@@ -1611,28 +1638,45 @@ export function groupIntoTurns(entries: JournalEntry[], seenMsgIds: Set<string>,
   // carried from each call's `spawnToolUseIds`.
   let currentSpawnIds: string[] = []
 
+  const pushCurrentTurn = (): void => {
+    // Report turns only when they contain assistant API usage. An ordinary
+    // user-only entry and a queued prompt with no response are omitted alike.
+    if (currentCalls.length === 0) return
+    turns.push({
+      userMessage: currentUserMessage,
+      assistantCalls: currentCalls,
+      timestamp: currentTimestamp,
+      sessionId: currentSessionId,
+      ...(currentBranch ? { gitBranch: currentBranch } : {}),
+      ...(currentPrRefs.length > 0 ? { prRefs: [...currentPrRefs].sort() } : {}),
+      ...(currentSpawnIds.length > 0 ? { spawnToolUseIds: currentSpawnIds } : {}),
+    })
+  }
+
   for (const entry of entries) {
     const entryBranch = typeof entry.gitBranch === 'string' && entry.gitBranch ? entry.gitBranch : undefined
     if (entry.type === 'user') {
       const text = getUserMessageText(entry)
       if (text.trim()) {
-        if (currentCalls.length > 0) {
-          turns.push({
-            userMessage: currentUserMessage,
-            assistantCalls: currentCalls,
-            timestamp: currentTimestamp,
-            sessionId: currentSessionId,
-            ...(currentBranch ? { gitBranch: currentBranch } : {}),
-            ...(currentPrRefs.length > 0 ? { prRefs: [...currentPrRefs].sort() } : {}),
-            ...(currentSpawnIds.length > 0 ? { spawnToolUseIds: currentSpawnIds } : {}),
-          })
-        }
+        pushCurrentTurn()
         currentUserMessage = text
         currentCalls = []
         currentTimestamp = entry.timestamp ?? ''
         currentSessionId = entry.sessionId ?? ''
         currentBranch = entryBranch
         currentPrRefs = extractPrUrlsFromText(text)
+        currentSpawnIds = []
+      }
+    } else if (entry.type === 'attachment') {
+      const queuedPrompt = queuedHumanPromptText(entry)
+      if (queuedPrompt) {
+        pushCurrentTurn()
+        currentUserMessage = queuedPrompt
+        currentCalls = []
+        currentTimestamp = entry.timestamp ?? ''
+        currentSessionId = entry.sessionId ?? ''
+        currentBranch = entryBranch
+        currentPrRefs = extractPrUrlsFromText(queuedPrompt)
         currentSpawnIds = []
       }
     } else if (entry.type === 'assistant') {
@@ -1652,19 +1696,22 @@ export function groupIntoTurns(entries: JournalEntry[], seenMsgIds: Set<string>,
     }
   }
 
-  if (currentCalls.length > 0) {
-    turns.push({
-      userMessage: currentUserMessage,
-      assistantCalls: currentCalls,
-      timestamp: currentTimestamp,
-      sessionId: currentSessionId,
-      ...(currentBranch ? { gitBranch: currentBranch } : {}),
-      ...(currentPrRefs.length > 0 ? { prRefs: [...currentPrRefs].sort() } : {}),
-      ...(currentSpawnIds.length > 0 ? { spawnToolUseIds: currentSpawnIds } : {}),
-    })
-  }
+  pushCurrentTurn()
 
   return turns
+}
+
+function queuedHumanPromptText(entry: JournalEntry): string | undefined {
+  if (typeof entry.timestamp !== 'string' || !entry.timestamp) return undefined
+  const attachment = entry['attachment']
+  if (!attachment || typeof attachment !== 'object') return undefined
+  const data = attachment as Record<string, unknown>
+  if (!isHumanQueuedPrompt(data)) return undefined
+
+  const prompt = firstPlainText(data['prompt']).trim()
+  if (!prompt || prompt.startsWith('<ide_') || prompt.startsWith('<system-reminder')) return undefined
+  if (QUEUED_SLASH_COMMAND.test(prompt)) return undefined
+  return flatSlice(prompt, USER_TEXT_CAP)
 }
 
 // Map each subagent-spawn `tool_use` id to the PR set active at the turn that

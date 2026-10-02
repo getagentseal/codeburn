@@ -138,6 +138,7 @@ private struct InsightPillSwitcher: View {
 private struct TrendInsight: View {
     let days: [DailyHistoryEntry]
     let period: Period
+    @AppStorage("codeburn.trendShowsTokens") private var showTokens = false
 
     private var trendDayCount: Int {
         switch period {
@@ -156,10 +157,9 @@ private struct TrendInsight: View {
         let dayCount = trendDayCount
         let bars = buildTrendBars(from: days, dayCount: dayCount)
         let stats = computeTrendStats(bars: bars, allDays: days, dayCount: dayCount)
-        // Tokens are real for the .all-providers view; per-provider history doesn't carry
-        // token breakdown yet, so fall back to $ when no tokens are present.
+        // Per-provider history doesn't carry a token breakdown yet, so tokens mode falls back to $.
         let totalTokens = bars.reduce(0.0) { $0 + $1.tokens }
-        let useTokens = totalTokens > 0
+        let useTokens = trendUsesTokens(showTokens: showTokens, totalTokens: totalTokens)
         let metric: (TrendBar) -> Double = useTokens ? { $0.tokens } : { $0.cost }
         let maxValue = max(bars.map(metric).max() ?? 1, 0.01)
         let avgValue = bars.isEmpty ? 0 : bars.map(metric).reduce(0, +) / Double(bars.count)
@@ -178,15 +178,20 @@ private struct TrendInsight: View {
                         .foregroundStyle(.primary)
                 }
                 Spacer()
-                if let delta = stats.deltaPercent {
-                    HStack(spacing: 3) {
-                        Image(systemName: delta >= 0 ? "arrow.up.right" : "arrow.down.right")
-                            .font(.system(size: 9, weight: .bold))
-                        Text(L("%1$@%% vs prior %2$lldd", (delta >= 0 ? "+" : "") + String(format: "%.0f", delta), dayCount))
-                            .font(.system(size: 10.5))
-                            .monospacedDigit()
+                VStack(alignment: .trailing, spacing: 4) {
+                    if totalTokens > 0 {
+                        TrendMetricToggle(showTokens: $showTokens)
                     }
-                    .foregroundStyle(Theme.brandAccent)
+                    if let delta = stats.deltaPercent {
+                        HStack(spacing: 3) {
+                            Image(systemName: delta >= 0 ? "arrow.up.right" : "arrow.down.right")
+                                .font(.system(size: 9, weight: .bold))
+                            Text(L("%1$@%% vs prior %2$lldd", (delta >= 0 ? "+" : "") + String(format: "%.0f", delta), dayCount))
+                                .font(.system(size: 10.5))
+                                .monospacedDigit()
+                        }
+                        .foregroundStyle(Theme.brandAccent)
+                    }
                 }
             }
 
@@ -231,6 +236,33 @@ private struct TrendInsight: View {
         let parts = ymd.split(separator: "-")
         guard parts.count == 3 else { return ymd }
         return "\(parts[1])/\(parts[2])"
+    }
+}
+
+private struct TrendMetricToggle: View {
+    @Binding var showTokens: Bool
+
+    var body: some View {
+        HStack(spacing: 2) {
+            pill(L("Cost"), selected: !showTokens) { showTokens = false }
+            pill(L("Tokens"), selected: showTokens) { showTokens = true }
+        }
+    }
+
+    private func pill(_ label: String, selected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(label)
+                .font(.system(size: 10, weight: .medium))
+                .fixedSize()
+                .foregroundStyle(selected ? AnyShapeStyle(.white) : AnyShapeStyle(.secondary))
+                .padding(.horizontal, 7)
+                .padding(.vertical, 2)
+                .background(
+                    RoundedRectangle(cornerRadius: 5)
+                        .fill(selected ? AnyShapeStyle(Theme.brandAccent) : AnyShapeStyle(Color.secondary.opacity(0.10)))
+                )
+        }
+        .buttonStyle(.plain)
     }
 }
 
@@ -481,6 +513,10 @@ private struct MiniStat: View {
                 .fill(Color(nsColor: .separatorColor).opacity(0.35))
         )
     }
+}
+
+func trendUsesTokens(showTokens: Bool, totalTokens: Double) -> Bool {
+    showTokens && totalTokens > 0
 }
 
 private struct TrendBar: Identifiable {

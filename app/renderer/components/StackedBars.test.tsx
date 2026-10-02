@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 
 import type { DailyHistoryEntry } from '../lib/types'
@@ -20,6 +20,27 @@ function entry(day: number): DailyHistoryEntry {
 }
 
 describe('StackedBars', () => {
+  it('uses GLM tiers in the spend bars, legend, and hover tooltip', () => {
+    const topModels = [
+      { name: 'GLM-5.3-Flash', cost: 57.31 },
+      { name: 'GLM-5.3', cost: 33.90 },
+    ].map(model => ({ ...model, savingsUSD: 0, calls: 1, inputTokens: 0, outputTokens: 0 }))
+    const { container } = render(<StackedBars daily={[{ ...entry(29), cost: 91.21, topModels }]} />)
+
+    const column = container.querySelector('.sbars .c')!
+    expect(column.querySelector('[title="GLM-5.3 · $33.90"]')).toHaveClass('s-flagship')
+    expect(column.querySelector('[title="GLM-5.3-Flash · $57.31"]')).toHaveClass('s-fast')
+    expect([...container.querySelectorAll('.legend span')].map(node => node.textContent)).toEqual(['Flagship', 'Fast'])
+    expect(column.querySelector('.s-other')).not.toBeInTheDocument()
+
+    fireEvent.mouseEnter(column, { clientX: 100, clientY: 100 })
+    const rows = screen.getByRole('tooltip').querySelectorAll('.chart-tip-row')
+    expect(rows[0]).toHaveTextContent('GLM-5.3-Flash$57.31')
+    expect(rows[0].querySelector('i')).toHaveClass('s-fast')
+    expect(rows[1]).toHaveTextContent('GLM-5.3$33.90')
+    expect(rows[1].querySelector('i')).toHaveClass('s-flagship')
+  })
+
   it('renders every supplied day and axis ticks every fourth day back from the last', () => {
     const daily = Array.from({ length: 16 }, (_, index) => entry(index + 1))
     const { container } = render(<StackedBars daily={daily} />)

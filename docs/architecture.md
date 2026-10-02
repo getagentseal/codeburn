@@ -84,8 +84,8 @@ links, PR correlation, the Codex result cache) stays on the main thread. A file
 whose keys were already claimed by an earlier file, or whose worker failed, is
 re-parsed in-process — so the output is identical to the serial path either way.
 That overlap check is what makes a forked Codex rollout safe: it replays its
-parent's token_count history under the parent's key namespace, collides, and is
-re-parsed against the real dedup set.
+parent's `token_count` and `token_usage_record` history under the parent's key
+namespace, collides, and is re-parsed against the real dedup set.
 
 A Codex worker never touches `src/codex-cache.ts`: it returns the cache entry it
 would have written and the parent writes it, in install order, so
@@ -193,7 +193,7 @@ type Provider = {
 
 `src/providers/index.ts` registers providers across two tiers:
 
-- **Eager**: `claude`, `cline`, `cline-cli`, `codewhale`, `codebuff`, `codex`, `copilot`, `devin`, `droid`, `dsh`, `gemini`, `hermes`, `ibm-bob`, `kilo-code`, `kiro`, `kimi`, `kimicode`, `lingtai-tui`, `mistral-vibe`, `mux`, `openclaw`, `openclaude`, `open-design`, `pi`, `omp`, `qwen`, `quickdesk`, `zerostack`, `grok`. Imported at module load.
+- **Eager**: `claude`, `cline`, `cline-cli`, `codewhale`, `codebuff`, `codex`, `copilot`, `devin`, `droid`, `dsh`, `gemini`, `hermes`, `ibm-bob`, `kilo-code`, `kiro`, `kimi`, `kimicode`, `lingtai-tui`, `mistral-vibe`, `mux`, `openclaw`, `openclaude`, `open-design`, `pi`, `omp`, `qwen`, `quickdesk`, `zerostack`, `grok`, `grokbot`, `amp`. Imported at module load.
 - **Lazy**: `antigravity`, `forge`, `goose`, `cursor`, `opencode`, `cursor-agent`, `crush`, `warp`, `vercel-gateway`, `zcode`, `zed`. Imported via dynamic `import()` so the heavy dependencies (SQLite, protobuf, network clients) do not touch users who do not have those tools installed.
 
 Both lists hit the same `getAllProviders()` aggregator. A failed lazy import is silent and excludes that provider from the run.
