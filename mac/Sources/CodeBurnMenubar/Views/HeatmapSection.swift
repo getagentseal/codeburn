@@ -159,7 +159,7 @@ private struct TrendInsight: View {
         let stats = computeTrendStats(bars: bars, allDays: days, dayCount: dayCount)
         // Per-provider history doesn't carry a token breakdown yet, so tokens mode falls back to $.
         let totalTokens = bars.reduce(0.0) { $0 + $1.tokens }
-        let useTokens = showTokens && totalTokens > 0
+        let useTokens = trendUsesTokens(showTokens: showTokens, totalTokens: totalTokens)
         let metric: (TrendBar) -> Double = useTokens ? { $0.tokens } : { $0.cost }
         let maxValue = max(bars.map(metric).max() ?? 1, 0.01)
         let avgValue = bars.isEmpty ? 0 : bars.map(metric).reduce(0, +) / Double(bars.count)
@@ -513,6 +513,10 @@ private struct MiniStat: View {
                 .fill(Color(nsColor: .separatorColor).opacity(0.35))
         )
     }
+}
+
+func trendUsesTokens(showTokens: Bool, totalTokens: Double) -> Bool {
+    showTokens && totalTokens > 0
 }
 
 private struct TrendBar: Identifiable {
