@@ -3,11 +3,37 @@ import { join } from 'path'
 import { tmpdir } from 'os'
 import { createRequire } from 'node:module'
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { isSqliteAvailable } from '../../src/sqlite.js'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { isSqliteAvailable, isSqliteBusyError } from '../../src/sqlite.js'
 import { createZcodeProvider } from '../../src/providers/zcode.js'
 import { calculateCost } from '../../src/models.js'
 import type { ParsedProviderCall } from '../../src/providers/types.js'
+
+// Simulates SQLITE_BUSY on the message/part read specifically, without
+// locking the whole file (SQLite has no table-level locks, so a real
+// BEGIN EXCLUSIVE would also fail the earlier model_usage/tool_usage
+// queries and never exercise this catch).
+let simulateMessageBusy = false
+vi.mock('../../src/sqlite.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/sqlite.js')>()
+  return {
+    ...actual,
+    openDatabase: (path: string) => {
+      const real = actual.openDatabase(path)
+      return {
+        query: (sql: string, params?: unknown[]) => {
+          if (simulateMessageBusy && /FROM message/.test(sql)) {
+            const err = new Error('database is locked') as Error & { code: string }
+            err.code = 'SQLITE_BUSY'
+            throw err
+          }
+          return real.query(sql, params)
+        },
+        close: () => real.close(),
+      }
+    },
+  }
+})
 
 const requireForTest = createRequire(import.meta.url)
 
@@ -15,6 +41,7 @@ let tmpRoot: string
 
 beforeEach(async () => {
   tmpRoot = await mkdtemp(join(tmpdir(), 'zcode-test-'))
+  simulateMessageBusy = false
 })
 
 afterEach(async () => {
@@ -281,6 +308,20 @@ describe('zcode provider', () => {
         'https://github.com/getagentseal/codeburn/pull/1400',
       ])
     }
+  })
+
+  it('propagates a busy message/part read instead of silently dropping it', async () => {
+    if (!isSqliteAvailable()) return
+    const dbPath = createZcodeDb(tmpRoot)
+    createTranscriptTables(dbPath)
+    seed(dbPath)
+    seedUserMessage(dbPath, 'm-1', 'sess-1', 1781981180000, 'turn-1', 'see https://github.com/getagentseal/codeburn/pull/1264')
+
+    simulateMessageBusy = true
+    const provider = createZcodeProvider(dbPath)
+    const [source] = await provider.discoverSessions()
+    await expect(collect(provider.createSessionParser(source!, new Set<string>())))
+      .rejects.toSatisfy((err: unknown) => isSqliteBusyError(err))
   })
 
   it('parses usage rows unchanged when the transcript tables are absent', async () => {

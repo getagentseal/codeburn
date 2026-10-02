@@ -2,7 +2,7 @@ import { join } from 'path'
 import { homedir } from 'os'
 
 import { billableOutputTokens, calculateCost } from '../models.js'
-import { isSqliteAvailable, getSqliteLoadError, openDatabase, type SqliteDatabase } from '../sqlite.js'
+import { isSqliteAvailable, getSqliteLoadError, isSqliteBusyError, openDatabase, type SqliteDatabase } from '../sqlite.js'
 import type { Provider, SessionSource, SessionParser, ParsedProviderCall, ProbeRoot } from './types.js'
 
 /// ZCode (CLI v0.14.x) records usage in a single SQLite database at
@@ -94,8 +94,9 @@ function loadPromptReferences(db: SqliteDatabase, sessionId: string): {
       `SELECT p.message_id as message_id, json_extract(p.data, '$.text') as text
        FROM part p
        WHERE p.session_id = ? AND json_extract(p.data, '$.type') = 'text'
+         AND p.message_id IN (SELECT id FROM message WHERE session_id = ? AND json_extract(data, '$.role') = 'user')
        ORDER BY p.message_id, p.sequence ASC`,
-      [sessionId],
+      [sessionId, sessionId],
     )) {
       if (!part.text) continue
       const existing = partTextByMessage.get(part.message_id)
@@ -120,7 +121,8 @@ function loadPromptReferences(db: SqliteDatabase, sessionId: string): {
       const existing = turnTextByTurnId.get(turnId)
       turnTextByTurnId.set(turnId, existing ? `${existing}\n${text}` : text)
     }
-  } catch {
+  } catch (err) {
+    if (isSqliteBusyError(err)) throw err
     // message/part are an optional read; usage rows still count without them.
   }
   return { turnTextByTurnId, prLinks: [...prUrls].sort() }

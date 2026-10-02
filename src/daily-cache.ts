@@ -233,7 +233,9 @@ import type { DateRange, ProjectSummary } from './types.js'
 // so re-derive surviving days and allow the Codex slice to shrink once.
 // v44: Claude queued_command human prompts split and reclassify turns. Calls
 // and tokens are unchanged, but settled category totals need re-derivation.
-export const DAILY_CACHE_VERSION = 44
+// v45: #1581 ZCode user prompt text now reaches classification. Calls and
+// cost are unchanged, but settled zcode category totals need re-derivation.
+export const DAILY_CACHE_VERSION = 45
 const MIN_SUPPORTED_VERSION = 28
 
 /// Providers whose per-day CALL COUNT means something different at
