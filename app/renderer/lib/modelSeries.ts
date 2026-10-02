@@ -36,6 +36,8 @@ export function seriesKeyForModel(model?: string): SeriesKey {
   if (/\bgpt[-\s]?5\.6[-\s]?sol\b/.test(m)) return 'flagship'
   if (/\bgpt[-\s]?5\.6[-\s]?luna\b/.test(m)) return 'fast'
   if (/\bgpt[-\s]?5\.6[-\s]?terra\b/.test(m)) return 'balanced'
+  if (/\bglm[-\s]?5(?:\.|p)3[-\s]?flash(?:x)?\b/.test(m)) return 'fast'
+  if (/\bglm[-\s]?5(?:\.|p)3\b/.test(m)) return 'flagship'
   if (m.includes('gemini')) {
     if (m.includes('flash')) return 'fast'
     if (m.includes('pro')) return 'balanced'

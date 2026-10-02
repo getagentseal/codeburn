@@ -108,21 +108,28 @@ describe('getModelCosts', () => {
     // generation LiteLLM ships (gpt-5-codex, gpt-5.1-codex, gpt-5.1-codex-max,
     // gpt-5.2-codex, gpt-5.3-codex all carry their base model's exact rate).
     const snapshot = snapshotData as Record<string, unknown>
-    // 2026-08-24: OpenAI cut the gpt-5.6 base rate ($5/$30 to $4/$20) and
-    // LiteLLM updated the base row before the codex SKUs, so codex-equals-base
-    // cannot be asserted until upstream syncs. The codex rows must still exist
-    // explicitly and carry the pre-cut rate they ship with today.
-    expect(snapshot['gpt-5.6-codex']).toBeDefined()
-    expect(snapshot['gpt-5.6-codex-max']).toEqual(snapshot['gpt-5.6-codex'])
+    // The codex SKUs are still absent from LiteLLM (2026-09-29 refresh), so
+    // they ship as MANUAL_ENTRIES in bundle-litellm.mjs - full verbatim
+    // mirrors of the gpt-5.6 row, tier block included, per the same-generation
+    // pattern every codex id LiteLLM carries follows (gpt-5-codex == gpt-5,
+    // gpt-5.1-codex == gpt-5.1-codex-max == gpt-5.1, gpt-5.2-codex == gpt-5.2,
+    // gpt-5.3-codex == gpt-5.3). The equality below is the re-tightened
+    // #1134 invariant: if LiteLLM reprices the base row again, the mirror
+    // fails here until the manual entries are refreshed - and once upstream
+    // ships the codex SKUs, the manual mirrors must be deleted, not edited.
+    expect(snapshot['gpt-5.6-codex']).toEqual(snapshot['gpt-5.6'])
+    expect(snapshot['gpt-5.6-codex-max']).toEqual(snapshot['gpt-5.6'])
 
     const codex = getModelCosts('gpt-5.6-codex')
     const codexMax = getModelCosts('gpt-5.6-codex-max')
     expect(codex).not.toBeNull()
     expect(codexMax).not.toBeNull()
-    expect(codex!.inputCostPerToken).toBe(5e-6)
-    expect(codex!.outputCostPerToken).toBe(3e-5)
-    expect(codex!.cacheWriteCostPerToken).toBe(6.25e-6)
-    expect(codex!.cacheReadCostPerToken).toBe(5e-7)
+    // The 2026-08-24 repricing: gpt-5.6 base cut from $5/$30 to $4/$20 per
+    // million, 1.25x cache-write, 0.1x cache-read, >272k tier at 2x.
+    expect(codex!.inputCostPerToken).toBe(4e-6)
+    expect(codex!.outputCostPerToken).toBe(2e-5)
+    expect(codex!.cacheWriteCostPerToken).toBe(5e-6)
+    expect(codex!.cacheReadCostPerToken).toBe(4e-7)
     expect(codex!.cacheWriteCostIsExplicit).toBe(true)
     expect(codexMax).toEqual(codex)
 
@@ -146,8 +153,16 @@ describe('getModelCosts', () => {
       const claude = getModelCosts('claude-sonnet-4-5')
       expect(claude?.longContextTier?.thresholdTokens).toBe(200_000)
       expect(claude?.longContextTier?.inputCostPerToken).toBe(6e-6)
+      // The codex SKUs mirror the gpt-5.6 row verbatim (#1134), tier included.
+      expect(getModelCosts('gpt-5.6-codex')?.longContextTier).toEqual({
+        thresholdTokens: 272_000,
+        inputCostPerToken: 8e-6,
+        outputCostPerToken: 3e-5,
+        cacheWriteCostPerToken: 1e-5,
+        cacheReadCostPerToken: 8e-7,
+      })
       // A model without a published tier resolves to no tier at all.
-      expect(getModelCosts('gpt-5.6-codex')?.longContextTier).toBeUndefined()
+      expect(getModelCosts('deepseek-v4-pro')?.longContextTier).toBeUndefined()
     })
 
     it('applies the tier to every token at and after the threshold, and only then', () => {
@@ -1068,41 +1083,43 @@ describe('zero-priced stubs do not satisfy case-insensitive lookup', () => {
 })
 
 describe('DeepSeek v4 models resolve to pricing', () => {
-  it('deepseek-v4-pro has current official discounted pricing', () => {
+  it('deepseek-v4-pro has current official peak pricing', () => {
+    // LiteLLM merged the v4 rows (#1134): 2026-09-29 refresh carries the
+    // official peak rates from https://api-docs.deepseek.com/quick_start/pricing
+    // (off-peak is half of peak, cache-hit input $0.044/M). The hand-pinned
+    // pre-sync entry ($0.435/$0.87) is gone from bundle-litellm.mjs.
     const costs = getModelCosts('deepseek-v4-pro')
     expect(costs).not.toBeNull()
-    expect(costs!.inputCostPerToken).toBe(4.35e-7)
-    expect(costs!.outputCostPerToken).toBe(8.7e-7)
-    expect(costs!.cacheReadCostPerToken).toBe(3.625e-9)
+    expect(costs!.inputCostPerToken).toBe(1.32e-6)
+    expect(costs!.outputCostPerToken).toBe(3.96e-6)
+    expect(costs!.cacheReadCostPerToken).toBe(4.4e-8)
     expect(costs!.cacheWriteCostPerToken).toBe(0)
   })
 
-  it('deepseek-v4-flash has current official pricing', () => {
+  it('deepseek-v4-flash has current official peak pricing', () => {
     const costs = getModelCosts('deepseek-v4-flash')
     expect(costs).not.toBeNull()
-    expect(costs!.inputCostPerToken).toBe(1.4e-7)
-    expect(costs!.outputCostPerToken).toBe(2.8e-7)
-    expect(costs!.cacheReadCostPerToken).toBe(2.8e-9)
+    expect(costs!.inputCostPerToken).toBe(3e-7)
+    expect(costs!.outputCostPerToken).toBe(1.2e-6)
+    expect(costs!.cacheReadCostPerToken).toBe(6e-9)
     expect(costs!.cacheWriteCostPerToken).toBe(0)
   })
 
   it('provider-prefixed DeepSeek v4 names resolve to real pricing', () => {
-    // 2026-08-24: DeepSeek repriced v4-pro and LiteLLM updated the
-    // `deepseek/`-namespaced row before the bare one, so the two spellings
-    // legitimately differ until upstream syncs. Both must still price
-    // non-null; flash rows are in sync and must stay equal.
-    expect(getModelCosts('deepseek/deepseek-v4-pro')).not.toBeNull()
-    expect(getModelCosts('deepseek-v4-pro')).not.toBeNull()
-    expect(getModelCosts('deepseek/deepseek-v4-flash')).not.toBeNull()
-    expect(getModelCosts('deepseek-v4-flash')).not.toBeNull()
+    // Re-tightened #1134 invariant: bare and `deepseek/`-prefixed rows must
+    // agree (the 2026-08-24 mid-transition window is closed, and the bundler
+    // no longer lets an `openrouter/`-prefixed resale row claim the
+    // namespaced slot ahead of the official one).
+    expect(getModelCosts('deepseek/deepseek-v4-pro')).toEqual(getModelCosts('deepseek-v4-pro'))
+    expect(getModelCosts('deepseek/deepseek-v4-flash')).toEqual(getModelCosts('deepseek-v4-flash'))
   })
 
   it('calculates non-zero costs for observed DeepSeek v4 Claude usage', () => {
     const pro = calculateCost('deepseek-v4-pro', 2_477_914, 762_994, 0, 258_556_928, 0)
     const flash = calculateCost('deepseek-v4-flash', 1_552_573, 353_914, 0, 48_388_608, 0)
 
-    expect(pro).toBeCloseTo(2.68, 2)
-    expect(flash).toBeCloseTo(0.45, 2)
+    expect(pro).toBeCloseTo(17.67, 2)
+    expect(flash).toBeCloseTo(1.18, 2)
   })
 
   it('uses DeepSeek v4 display names', () => {
@@ -1134,8 +1151,8 @@ describe('DeepSeek v4 models resolve to pricing', () => {
       await loadPricing()
 
       expect(getModelCosts('gpt-4o-mini')!.inputCostPerToken).toBe(9e-7)
-      expect(getModelCosts('deepseek-v4-pro')!.inputCostPerToken).toBe(4.35e-7)
-      expect(getModelCosts('deepseek-v4-flash')!.inputCostPerToken).toBe(1.4e-7)
+      expect(getModelCosts('deepseek-v4-pro')!.inputCostPerToken).toBe(1.32e-6)
+      expect(getModelCosts('deepseek-v4-flash')!.inputCostPerToken).toBe(3e-7)
     } finally {
       await rm(cacheRoot, { recursive: true, force: true })
       await loadPricing()

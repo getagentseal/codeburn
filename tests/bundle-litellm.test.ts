@@ -26,6 +26,12 @@ it('adds context tiers without repricing base rows or losing exact-key carry-for
       'reseller/grok-3': row(1.25e-6, 2.5e-6, { cache_read_input_token_cost: 0.1e-6 }),
       'mistral-large-latest': row(8e-6, 24e-6),
       'reseller/mistral-large-latest': row(0.5e-6, 1.5e-6, { cache_read_input_token_cost: 0.05e-6 }),
+      // The #1134 ordering bug: a reseller-prefixed row (`reseller/vendor/x`)
+      // strips to the SAME key as an official prefixed row (`vendor/x`) that
+      // appears later in the upstream JSON. The reseller row must never claim
+      // that slot - the official row wins regardless of which came first.
+      'reseller/vendor/x': row(1e-6, 2e-6),
+      'vendor/x': row(2e-6, 4e-6),
       'gpt-5.6': row(4e-6, 20e-6, {
         input_cost_per_token_above_128k_tokens: 6e-6,
         output_cost_per_token_above_128k_tokens: 25e-6,
@@ -104,6 +110,9 @@ it('adds context tiers without repricing base rows or losing exact-key carry-for
     expect(snapshot['grok-3']).toEqual([3e-6, 15e-6, null, null, null, null])
     expect(snapshot['mistral-large-latest']).toEqual([8e-6, 24e-6, null, null, null, null])
     expect(snapshot['reseller/grok-3']).toEqual([1.25e-6, 2.5e-6, null, 0.1e-6, null, null])
+    // #1134: a reseller-prefixed row appearing before the official prefixed
+    // row must not shadow it - the official rate wins regardless of order.
+    expect(snapshot['vendor/x']).toEqual([2e-6, 4e-6, null, null, null, null])
     expect(snapshot['gateway/x-ai/grok-latest']).toEqual([2e-6, 4e-6, null, null, null, null])
     expect(snapshot['qwen/qwen3.5-plus-20260420']).toEqual([2e-6, 4e-6, null, null, null, null])
     // Fill adds a missing cache slot; it never overwrites a published one.

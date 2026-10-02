@@ -334,6 +334,9 @@ fn roots() -> Vec<Root> {
         env_path("CRUSH_GLOBAL_DATA").unwrap_or_else(|| xdg_data().join("crush")),
     ));
     roots.push(leaf(
+        env_path("AMP_DATA_DIR").unwrap_or_else(|| xdg_data().join("amp")),
+    ));
+    roots.push(leaf(
         env_path("ZS_DATA_DIR").unwrap_or_else(|| xdg_data().join("zerostack")),
     ));
     roots.push(leaf(xdg_data().join("kilo")));

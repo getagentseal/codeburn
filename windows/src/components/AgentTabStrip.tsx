@@ -63,6 +63,7 @@ const PROVIDER_COLORS: Record<string, string> = {
   pi: '#B26B3D',
   qwen: '#615EEB',
   omp: '#8B5CB0',
+  amp: '#3A3A3C',
   crush: '#E06C9F',
   antigravity: '#FF7A45',
   goose: '#B78D52',

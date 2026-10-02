@@ -128,6 +128,46 @@ async function parse(cacheDir: string, codexDir = tmpDir): Promise<ParsedProvide
 }
 
 describe('codex incremental resume', () => {
+  it('keeps the usage-record handover when an appended tail resumes at a task boundary', async () => {
+    const warmCache = join(tmpDir, 'cache-warm')
+    const coldCache = join(tmpDir, 'cache-cold')
+    const started = (timestamp: string) => JSON.stringify({
+      type: 'event_msg', timestamp, payload: { type: 'task_started' },
+    })
+    const record = (timestamp: string, responseId: string, input: number, output: number) => JSON.stringify({
+      type: 'token_usage_record', timestamp,
+      payload: { response_id: responseId, usage: { input_tokens: input, output_tokens: output } },
+    })
+    const tokenCount = (timestamp: string, input: number, output: number) => JSON.stringify({
+      type: 'event_msg', timestamp,
+      payload: { type: 'token_count', info: { last_token_usage: { input_tokens: input, output_tokens: output } } },
+    })
+
+    sessionPath = await writeRollout([
+      meta(),
+      started('2026-04-14T10:01:00Z'),
+      record('2026-04-14T10:01:01Z', 'resp-1', 100, 20),
+      tokenCount('2026-04-14T10:01:02Z', 0, 0),
+      started('2026-04-14T10:02:00Z'),
+    ])
+    expect(await parse(warmCache)).toHaveLength(1)
+
+    await appendFile(sessionPath, [
+      tokenCount('2026-04-14T10:02:01Z', 999, 0),
+      record('2026-04-14T10:02:02Z', 'resp-2', 60, 10),
+      tokenCount('2026-04-14T10:02:03Z', 60, 10),
+    ].join('\n') + '\n')
+
+    readLineCalls.length = 0
+    const resumed = await parse(warmCache)
+    const resumeReads = readLineCalls.filter(c => c.filePath === sessionPath)
+    expect(resumeReads.length).toBeGreaterThan(0)
+    expect(resumeReads.every(c => (c.startByteOffset ?? 0) > 0)).toBe(true)
+    expect(resumed).toHaveLength(2)
+    expect(resumed.reduce((sum, call) => sum + call.inputTokens + call.outputTokens, 0)).toBe(190)
+    expect(JSON.stringify(resumed)).toBe(JSON.stringify(await parse(coldCache)))
+  })
+
   it('resumes at a task boundary and matches a full re-parse exactly', async () => {
     const warmCache = join(tmpDir, 'cache-warm')
     const coldCache = join(tmpDir, 'cache-cold')

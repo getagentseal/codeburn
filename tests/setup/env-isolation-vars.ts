@@ -22,6 +22,7 @@ export const REDIRECTED = [
 
 export const CLEARED = [
   // Provider session-discovery dirs
+  'AMP_DATA_DIR',
   'CLAUDE_CONFIG_DIR',
   'CLAUDE_CONFIG_DIRS',
   'CLINE_DIR',
