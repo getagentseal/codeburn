@@ -21,8 +21,10 @@ import type { ProbeRoot, Provider, SessionSource, SessionParser, ParsedProviderC
 // usage.cacheCreationInputTokens / usage.cacheReadInputTokens). Threads
 // without a ledger fall back to the per-assistant-message usage blocks
 // ({ inputTokens, outputTokens, cacheCreationInputTokens,
-// cacheReadInputTokens, totalTokens, timestamp, model }). When a record
-// publishes only tokens.total, the total becomes the output count.
+// cacheReadInputTokens, totalTokens, timestamp, model }). For ledger
+// events, any positive remainder of tokens.total after input, output and
+// cache counts is added to output; a message block with no individual
+// counts uses its totalTokens as the output count.
 //
 // Costs are priced from tokens; Amp's own credits field is not converted.
 // Every cost uses CodeBurn's model pricing (models.ts) and carries
