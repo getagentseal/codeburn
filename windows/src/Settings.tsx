@@ -16,7 +16,7 @@ import { AboutPane } from './settings/AboutPane'
 /// provider search, General and About, then one row per provider that has a live quota
 /// adapter, driving a detail pane on the right.
 
-/// The eleven readers `codeburn quota` registers, in the CLI's own order. Only a fallback: the
+/// The twelve readers `codeburn quota` registers, in the CLI's own order. Only a fallback: the
 /// quota store's answer is what the sidebar normally lists, so a provider the CLI grows
 /// appears here without a code change.
 const KNOWN_PROVIDERS: Array<{ id: string; name: string }> = [
