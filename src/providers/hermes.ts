@@ -104,7 +104,15 @@ const toolNameMap: Record<string, string> = {
 }
 
 function getHermesHome(override?: string): string {
-  return override ?? process.env['HERMES_HOME'] ?? join(homedir(), '.hermes')
+  const configuredHome = override ?? process.env['HERMES_HOME']
+  if (configuredHome !== undefined) return configuredHome
+
+  if (process.platform === 'win32') {
+    const localAppData = process.env['LOCALAPPDATA']?.trim()
+    return join(localAppData || join(homedir(), 'AppData', 'Local'), 'hermes')
+  }
+
+  return join(homedir(), '.hermes')
 }
 
 function displayProjectForProfile(profile: string): string {

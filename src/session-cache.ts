@@ -301,7 +301,7 @@ export const PROVIDER_ENV_VARS: Record<string, string[]> = {
   codebuff: ['CODEBUFF_DATA_DIR'],
   codewhale: ['CODEWHALE_HOME'],
   codex: ['CODEX_HOME'],
-  hermes: ['HERMES_HOME'],
+  hermes: ['HERMES_HOME', 'LOCALAPPDATA'],
   'lingtai-tui': ['LINGTAI_HOME', 'LINGTAI_TUI_HOME', 'LINGTAI_TUI_GLOBAL_DIR'],
   droid: ['FACTORY_DIR'],
   dsh: ['DSH_HOME'],
