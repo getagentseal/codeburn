@@ -1,6 +1,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'fs'
 import { join } from 'path'
 import { homedir } from 'os'
+import { getEditorDataDir } from '../editor-data-dir.js'
 
 import { calculateCost } from '../models.js'
 import { extractBashCommands } from '../bash-utils.js'
@@ -86,13 +87,7 @@ function rethrowBusy(err: unknown): void {
 }
 
 function getCursorDbPath(): string {
-  if (process.platform === 'darwin') {
-    return join(homedir(), 'Library', 'Application Support', 'Cursor', 'User', 'globalStorage', 'state.vscdb')
-  }
-  if (process.platform === 'win32') {
-    return join(homedir(), 'AppData', 'Roaming', 'Cursor', 'User', 'globalStorage', 'state.vscdb')
-  }
-  return join(homedir(), '.config', 'Cursor', 'User', 'globalStorage', 'state.vscdb')
+  return join(getEditorDataDir('Cursor', homedir(), process.platform), 'User', 'globalStorage', 'state.vscdb')
 }
 
 function getCursorWorkspaceStorageDir(globalDbPath: string): string {

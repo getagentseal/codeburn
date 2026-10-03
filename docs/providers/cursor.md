@@ -14,7 +14,9 @@ A single SQLite database per platform:
 |---|---|
 | macOS | `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb` |
 | Windows | `%APPDATA%/Cursor/User/globalStorage/state.vscdb` |
-| Linux | `~/.config/Cursor/User/globalStorage/state.vscdb` |
+| Linux | `$XDG_CONFIG_HOME/Cursor/User/globalStorage/state.vscdb`, falling back to `~/.config/Cursor/User/globalStorage/state.vscdb` |
+
+Windows honors `APPDATA`, falling back to `AppData/Roaming` under the home directory when it is unset or empty. Workspace mappings come from the database's sibling `workspaceStorage` folder, so they follow the same redirected root. Explicit database overrides take precedence. Changes to `APPDATA` or `XDG_CONFIG_HOME` invalidate Cursor's session-cache fingerprint.
 
 ## Storage format
 
