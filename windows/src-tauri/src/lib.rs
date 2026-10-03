@@ -8,6 +8,7 @@ mod config;
 mod dock;
 mod fx;
 mod glance;
+mod i18n;
 mod plan;
 mod refresh;
 mod session;
@@ -45,6 +46,22 @@ static DOCK_MENU_ITEM: std::sync::OnceLock<CheckMenuItem<tauri::Wry>> = std::syn
 static USAGE_MENU_ITEM: std::sync::OnceLock<MenuItem<tauri::Wry>> = std::sync::OnceLock::new();
 #[cfg(not(target_os = "linux"))]
 static THEME_MENU_ITEM: std::sync::OnceLock<MenuItem<tauri::Wry>> = std::sync::OnceLock::new();
+#[cfg(not(target_os = "linux"))]
+static OPEN_MENU_ITEM: std::sync::OnceLock<MenuItem<tauri::Wry>> = std::sync::OnceLock::new();
+#[cfg(not(target_os = "linux"))]
+static REFRESH_MENU_ITEM: std::sync::OnceLock<MenuItem<tauri::Wry>> = std::sync::OnceLock::new();
+#[cfg(not(target_os = "linux"))]
+static SETTINGS_MENU_ITEM: std::sync::OnceLock<MenuItem<tauri::Wry>> = std::sync::OnceLock::new();
+#[cfg(not(target_os = "linux"))]
+static DOCK_SETTINGS_MENU_ITEM: std::sync::OnceLock<MenuItem<tauri::Wry>> = std::sync::OnceLock::new();
+#[cfg(not(target_os = "linux"))]
+static REPORT_MENU_ITEM: std::sync::OnceLock<MenuItem<tauri::Wry>> = std::sync::OnceLock::new();
+#[cfg(not(target_os = "linux"))]
+static UPDATES_MENU_ITEM: std::sync::OnceLock<MenuItem<tauri::Wry>> = std::sync::OnceLock::new();
+#[cfg(not(target_os = "linux"))]
+static ABOUT_MENU_ITEM: std::sync::OnceLock<MenuItem<tauri::Wry>> = std::sync::OnceLock::new();
+#[cfg(not(target_os = "linux"))]
+static QUIT_MENU_ITEM: std::sync::OnceLock<MenuItem<tauri::Wry>> = std::sync::OnceLock::new();
 
 use crate::cli::CodeburnCli;
 use crate::config::CurrencyConfig;
@@ -266,6 +283,8 @@ pub fn run() {
             commands::settings_section,
             commands::settings_load,
             commands::settings_patch,
+            commands::i18n_catalog,
+            commands::i18n_format,
             commands::terminals,
             commands::claude_config_dirs,
             commands::set_claude_config_dirs,
@@ -308,36 +327,34 @@ fn build_tray_tauri(app: &AppHandle) -> tauri::Result<()> {
 
     // Disabled by design: the mac's menu opens with what today cost, which is the one thing
     // worth knowing without opening anything. The frontend fills it in on every refresh.
-    let usage = MenuItem::with_id(app, "usage", "Today", false, None::<&str>)?;
-    let open = MenuItem::with_id(app, "open", "Open CodeBurn", true, None::<&str>)?;
-    let refresh = MenuItem::with_id(app, "refresh", "Refresh", true, None::<&str>)?;
-    let theme = MenuItem::with_id(
-        app,
-        "toggle_theme",
-        theme_menu_text(&theme_choice()),
-        true,
-        None::<&str>,
-    )?;
-    let settings = MenuItem::with_id(app, "settings", "Settings...", true, None::<&str>)?;
-    let dock_settings = MenuItem::with_id(
-        app,
-        "dock_settings",
-        "Capacity Dock Settings...",
-        true,
-        None::<&str>,
-    )?;
+    // The usage row is the one title a language change does not rewrite; the webview sends
+    // it again. Every other title comes from the same list `sync_localized_menu_items` uses.
+    let labels = localized_static_labels(&theme_choice());
+    let text = |id: &str| -> String {
+        labels
+            .iter()
+            .find(|(key, _)| *key == id)
+            .map(|(_, value)| value.clone())
+            .unwrap_or_else(|| id.to_owned())
+    };
+    let usage = MenuItem::with_id(app, "usage", i18n::lookup("Today"), false, None::<&str>)?;
+    let open = MenuItem::with_id(app, "open", text("open"), true, None::<&str>)?;
+    let refresh = MenuItem::with_id(app, "refresh", text("refresh"), true, None::<&str>)?;
+    let theme = MenuItem::with_id(app, "toggle_theme", text("toggle_theme"), true, None::<&str>)?;
+    let settings = MenuItem::with_id(app, "settings", text("settings"), true, None::<&str>)?;
+    let dock_settings = MenuItem::with_id(app, "dock_settings", text("dock_settings"), true, None::<&str>)?;
     let capacity_dock = CheckMenuItem::with_id(
         app,
         "toggle_dock",
-        "Show Capacity Dock",
+        text("toggle_dock"),
         true,
         dock::is_enabled(),
         None::<&str>,
     )?;
-    let report = MenuItem::with_id(app, "report", "Open Full Report", true, None::<&str>)?;
-    let updates = MenuItem::with_id(app, "check_updates", "Check for Updates", true, None::<&str>)?;
-    let about = MenuItem::with_id(app, "about", "About CodeBurn", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", "Quit CodeBurn", true, None::<&str>)?;
+    let report = MenuItem::with_id(app, "report", text("report"), true, None::<&str>)?;
+    let updates = MenuItem::with_id(app, "check_updates", text("check_updates"), true, None::<&str>)?;
+    let about = MenuItem::with_id(app, "about", text("about"), true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", text("quit"), true, None::<&str>)?;
     let separator = PredefinedMenuItem::separator(app)?;
     // Inside a Store package the update check never runs, so the item that opens its result
     // would only ever say there is nothing to check. It is not offered at all there.
@@ -362,6 +379,15 @@ fn build_tray_tauri(app: &AppHandle) -> tauri::Result<()> {
     let _ = DOCK_MENU_ITEM.set(capacity_dock);
     let _ = USAGE_MENU_ITEM.set(usage);
     let _ = THEME_MENU_ITEM.set(theme);
+    // `OnceLock::set` cannot run twice, so a language change updates these handles in place.
+    let _ = OPEN_MENU_ITEM.set(open);
+    let _ = REFRESH_MENU_ITEM.set(refresh);
+    let _ = SETTINGS_MENU_ITEM.set(settings);
+    let _ = DOCK_SETTINGS_MENU_ITEM.set(dock_settings);
+    let _ = REPORT_MENU_ITEM.set(report);
+    let _ = UPDATES_MENU_ITEM.set(updates);
+    let _ = ABOUT_MENU_ITEM.set(about);
+    let _ = QUIT_MENU_ITEM.set(quit);
 
     tray.set_menu(Some(menu.clone()))?;
     tray.set_show_menu_on_left_click(false)?;
@@ -618,13 +644,31 @@ fn next_theme(current: &str) -> &'static str {
 }
 
 /// The item names the state it moves to rather than the one it is in, because a menu item
-/// reads as a verb.
+/// reads as a verb. The sentence is the same English key the popover's More menu uses.
 fn theme_menu_text(current: &str) -> String {
-    match next_theme(current) {
-        "light" => "Switch to Light Theme".into(),
-        "dark" => "Switch to Dark Theme".into(),
-        _ => "Switch to System Theme".into(),
-    }
+    let key = match next_theme(current) {
+        "light" => "Switch to Light Theme",
+        "dark" => "Switch to Dark Theme",
+        _ => "Switch to System Theme",
+    };
+    i18n::lookup(key)
+}
+
+/// Static tray titles, in menu order. The usage row is absent: it is dynamic, and a
+/// language change leaves it for the webview to send again.
+fn localized_static_labels(theme: &str) -> Vec<(&'static str, String)> {
+    vec![
+        ("open", i18n::lookup("Open CodeBurn")),
+        ("refresh", i18n::lookup("Refresh")),
+        ("toggle_theme", theme_menu_text(theme)),
+        ("settings", i18n::lookup("Settings…")),
+        ("dock_settings", i18n::lookup("Capacity Dock Settings…")),
+        ("toggle_dock", i18n::lookup("Show Capacity Dock")),
+        ("report", i18n::lookup("Open Full Report")),
+        ("check_updates", i18n::lookup("Check for Updates")),
+        ("about", i18n::lookup("About CodeBurn")),
+        ("quit", i18n::lookup("Quit CodeBurn")),
+    ]
 }
 
 fn theme_choice() -> String {
@@ -664,6 +708,46 @@ pub fn sync_theme_menu_item() {
 
 #[cfg(target_os = "linux")]
 pub fn sync_theme_menu_item() {}
+
+/// Rewrites every static tray title from the current language. The usage row is not one of
+/// them. Called from the same place `sync_theme_menu_item` used to run after a settings write.
+pub fn sync_localized_menu_items() {
+    #[cfg(not(target_os = "linux"))]
+    apply_localized_menu_items();
+}
+
+#[cfg(not(target_os = "linux"))]
+fn apply_localized_menu_items() {
+    for (id, text) in localized_static_labels(&theme_choice()) {
+        match id {
+            "open" => set_menu_text(OPEN_MENU_ITEM.get(), &text),
+            "refresh" => set_menu_text(REFRESH_MENU_ITEM.get(), &text),
+            "toggle_theme" => set_menu_text(THEME_MENU_ITEM.get(), &text),
+            "settings" => set_menu_text(SETTINGS_MENU_ITEM.get(), &text),
+            "dock_settings" => set_menu_text(DOCK_SETTINGS_MENU_ITEM.get(), &text),
+            "toggle_dock" => set_check_text(DOCK_MENU_ITEM.get(), &text),
+            "report" => set_menu_text(REPORT_MENU_ITEM.get(), &text),
+            "check_updates" => set_menu_text(UPDATES_MENU_ITEM.get(), &text),
+            "about" => set_menu_text(ABOUT_MENU_ITEM.get(), &text),
+            "quit" => set_menu_text(QUIT_MENU_ITEM.get(), &text),
+            _ => {}
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn set_menu_text(item: Option<&MenuItem<tauri::Wry>>, text: &str) {
+    if let Some(item) = item {
+        let _ = item.set_text(text);
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn set_check_text(item: Option<&CheckMenuItem<tauri::Wry>>, text: &str) {
+    if let Some(item) = item {
+        let _ = item.set_text(text);
+    }
+}
 
 #[cfg(not(target_os = "linux"))]
 fn set_tray_usage_text(text: &str) {
@@ -769,7 +853,7 @@ fn reload_settings(app: &AppHandle) {
         let _ = item.set_checked(enabled);
     }
     settings::broadcast(app, &settings::read());
-    sync_theme_menu_item();
+    sync_localized_menu_items();
 }
 
 fn toggle_popover(app: &AppHandle, anchor: Option<(i32, i32)>) {
@@ -1106,10 +1190,12 @@ mod commands {
     }
 
     /// The usage row at the top of the tray menu: disabled, and there only to say what today
-    /// cost without opening the popover.
+    /// cost without opening the popover. `english` is the line before translation, and the
+    /// row is shortened to that line's display-cell count so a wide-glyph translation cannot
+    /// draw wider. Static titles are not clamped.
     #[tauri::command]
-    pub fn set_tray_usage(text: String) {
-        super::set_tray_usage_text(&text);
+    pub fn set_tray_usage(text: String, english: String) {
+        super::set_tray_usage_text(&crate::i18n::clamp_usage(&text, &english));
     }
 
     /// `text` is a short spend string ("$87", "142", "1.2K"); `None` hides the badge icon.
@@ -1306,8 +1392,20 @@ mod commands {
     ) -> Result<Value, String> {
         let merged = crate::settings::patch(patch).map_err(|e| e.to_string())?;
         crate::settings::broadcast(&app, &merged);
-        crate::sync_theme_menu_item();
+        crate::sync_localized_menu_items();
         Ok(Value::Object(merged))
+    }
+
+    /// The resolved catalog. A missing key is the English sentence, which the page returns
+    /// when the map has no entry. Placeholder fill is `i18n_format`, not this map.
+    #[tauri::command]
+    pub fn i18n_catalog() -> std::collections::BTreeMap<String, String> {
+        crate::i18n::active_catalog()
+    }
+
+    #[tauri::command]
+    pub fn i18n_format(key: String, args: Vec<serde_json::Value>) -> String {
+        crate::i18n::format_message(&key, &args)
     }
 
     /// The consoles the settings window offers, each marked with whether it is on this
@@ -1502,5 +1600,48 @@ mod tests {
     #[test]
     fn only_an_exact_flag_counts() {
         assert_eq!(parse_second_launch(&argv(&[r"C:\tools\--quit\app.exe"])), SecondLaunch::ShowPopover);
+    }
+
+    #[test]
+    fn a_language_change_rewrites_static_titles_and_leaves_the_usage_row() {
+        let _lock = crate::i18n::LocaleLock::acquire("zh-Hans");
+        let labels = super::localized_static_labels("light");
+        let text = |id: &str| {
+            labels
+                .iter()
+                .find(|(key, _)| *key == id)
+                .map(|(_, value)| value.as_str())
+                .unwrap_or("")
+        };
+        assert!(labels.iter().all(|(id, _)| *id != "usage"));
+        assert_eq!(
+            labels.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
+            vec![
+                "open",
+                "refresh",
+                "toggle_theme",
+                "settings",
+                "dock_settings",
+                "toggle_dock",
+                "report",
+                "check_updates",
+                "about",
+                "quit",
+            ]
+        );
+        assert_eq!(text("quit"), "退出 CodeBurn");
+        assert_eq!(text("toggle_dock"), "显示容量 Dock");
+        assert_eq!(text("settings"), "设置…");
+        assert_eq!(text("dock_settings"), "容量 Dock 设置…");
+        assert_eq!(text("toggle_theme"), super::theme_menu_text("light"));
+        assert_eq!(text("toggle_theme"), crate::i18n::lookup("Switch to Dark Theme"));
+        assert_eq!(
+            super::theme_menu_text("dark"),
+            crate::i18n::lookup("Switch to System Theme")
+        );
+        assert_eq!(
+            super::theme_menu_text("system"),
+            crate::i18n::lookup("Switch to Light Theme")
+        );
     }
 }

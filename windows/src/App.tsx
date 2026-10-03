@@ -9,9 +9,10 @@ import { PayloadCache, sameSelection, selectionKey, type Selection } from './lib
 import { relativePast } from './lib/dates'
 import { applyTheme, readSetting, writeSetting } from './lib/settings'
 import {
-  DEFAULT_SETTINGS, MENUBAR_PERIODS, MENUBAR_SUFFIX, cacheThemeAndAccent, nextTheme, subscribeSettings, themeCycleLabel,
+  DEFAULT_SETTINGS, MENUBAR_PERIODS, MENUBAR_SUFFIX, cacheThemeAndAccent, nextTheme, subscribeSettings,
   writeSettings, type AppSettings, type ThemeChoice,
 } from './lib/appSettings'
+import { formatMessage, t, useI18nRevision } from './lib/i18n'
 import { TRAY_BADGE_SUPPORTED } from './lib/platform'
 import { usageRefreshPlan } from './lib/refresh'
 import { EMPTY_QUOTA, refreshQuota, refreshQuotaIfDue, subscribeQuota, worstSeverity, type QuotaState } from './lib/quota'
@@ -133,6 +134,7 @@ export function App() {
   // Every preference the settings window owns arrives here through one store, so a change
   // made in that window reaches this one without a reload.
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS)
+  const i18nRevision = useI18nRevision()
   const [menubarPayload, setMenubarPayload] = useState<MenubarPayload | null>(null)
   const accent: AccentPreset = accentById(settings.accent)
   const trayBadge = TRAY_BADGE_SUPPORTED && settings.trayBadge
@@ -434,13 +436,26 @@ export function App() {
 
   useEffect(() => {
     if (trayFigure === null) return
-    const devices = trayShortfall
-      ? ` · ${trayShortfall.reachable} of ${trayShortfall.total} devices reporting`
-      : ''
-    invoke('set_tray_tooltip', { text: `CodeBurn · ${trayFigure}${traySuffix}${devices}` }).catch(() => {})
+    let live = true
+    const figure = `${trayFigure}${traySuffix}`
+    void (async () => {
+      try {
+        const text = trayShortfall
+          ? await formatMessage('CodeBurn %1$@ · %2$lld of %3$lld devices reporting', [
+              figure,
+              trayShortfall.reachable,
+              trayShortfall.total,
+            ])
+          : `CodeBurn · ${figure}`
+        if (live) await invoke('set_tray_tooltip', { text })
+      } catch {
+        // The previous tooltip stays until the next figure arrives.
+      }
+    })()
+    return () => { live = false }
     // Only the counts matter here, not the object identity a render makes fresh every time.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [trayFigure, traySuffix, trayShortfall?.reachable, trayShortfall?.total])
+  }, [trayFigure, traySuffix, trayShortfall?.reachable, trayShortfall?.total, i18nRevision])
 
   useEffect(() => {
     if (!TRAY_BADGE_SUPPORTED) return
@@ -469,14 +484,38 @@ export function App() {
   }, [quota, todayCost, todayTokens, budgets])
 
   useEffect(() => {
-    const span = MENUBAR_PERIODS.find(p => p.id === settings.menubarPeriod)?.label ?? 'Today'
+    let live = true
+    const periodLabel = MENUBAR_PERIODS.find(p => p.id === settings.menubarPeriod)?.label ?? 'Today'
+    const figure = `${trayFigure}`
     const devices = trayShortfall ? ` · ${trayShortfall.reachable}/${trayShortfall.total} devices` : ''
-    const text = trayCurrent
-      ? `${span} · ${trayFigure} · ${plural(trayCurrent.calls, 'call')}${devices}`
-      : `${span} · no usage yet`
-    invoke('set_tray_usage', { text }).catch(() => {})
+    const englishCalls = trayCurrent ? plural(trayCurrent.calls, 'call') : ''
+    const english = trayCurrent
+      ? `${periodLabel} · ${figure} · ${englishCalls}${devices}`
+      : `${periodLabel} · no usage yet`
+    void (async () => {
+      try {
+        let text: string
+        if (!trayCurrent) {
+          text = settings.menubarPeriod === 'today'
+            ? t('Today · no usage yet')
+            : `${t(periodLabel)} · no usage yet`
+        } else {
+          const calls = trayCurrent.calls === 1
+            ? t('1 call')
+            : await formatMessage('%lld calls', [trayCurrent.calls])
+          text = settings.menubarPeriod === 'today'
+            ? await formatMessage('Today · %1$@ · %2$@', [figure, calls])
+            : `${t(periodLabel)} · ${figure} · ${calls}`
+          text += devices
+        }
+        if (live) await invoke('set_tray_usage', { text, english })
+      } catch {
+        // The row already on the menu stays until the webview can send another.
+      }
+    })()
+    return () => { live = false }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [trayCurrent, trayFigure, settings.menubarPeriod, trayShortfall?.reachable, trayShortfall?.total])
+  }, [trayCurrent, trayFigure, settings.menubarPeriod, trayShortfall?.reachable, trayShortfall?.total, i18nRevision])
 
   const chooseAccent = (preset: AccentPreset) => {
     applyAccent(preset)
@@ -709,7 +748,7 @@ export function App() {
         onOpenReport={() => openTerminal(['report'])}
         onToggleTheme={cycleTheme}
         onQuit={() => invoke('quit_app').catch(() => {})}
-        themeLabel={themeCycleLabel(settings.theme)}
+        theme={settings.theme}
         trayBadge={trayBadge}
         onToggleTrayBadge={() => setTrayBadgePref(!trayBadge)}
         onOpenSettings={openSettingsWindow}

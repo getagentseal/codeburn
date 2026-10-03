@@ -7,8 +7,9 @@ import { CURRENCY_CODES, CURRENCY_NAMES, USD } from '../lib/currency'
 import { ACCENT_PRESETS, accentById, applyAccent } from '../lib/accent'
 import {
   DISPLAY_METRICS, MENUBAR_PERIODS, TERMINALS, USAGE_CADENCES, subscribeSettings, writeSettings,
-  type AppSettings, type DisplayMetric, type MenubarPeriod, type MenubarScope, type ThemeChoice,
+  type AppSettings, type DisplayMetric, type LanguageChoice, type MenubarPeriod, type MenubarScope, type ThemeChoice,
 } from '../lib/appSettings'
+import { t, useI18nRevision } from '../lib/i18n'
 import { applyTheme } from '../lib/settings'
 import { TRAY_BADGE_SUPPORTED, homePath } from '../lib/platform'
 import { summaryFor, type QuotaState } from '../lib/quota'
@@ -35,6 +36,7 @@ type Props = {
 }
 
 export function GeneralPane({ quota, anchor }: Props) {
+  useI18nRevision()
   const [settings, setSettings] = useState<AppSettings | null>(null)
   const [currency, setCurrency] = useState<CurrencyState>(USD)
   const [currencyError, setCurrencyError] = useState<string | null>(null)
@@ -189,6 +191,21 @@ export function GeneralPane({ quota, anchor }: Props) {
       <AlertsSection settings={settings} currency={currency} />
 
       <Group title="System">
+        <Row
+          label={t('Language')}
+          control={
+            <Select
+              ariaLabel={t('Language')}
+              value={settings.language}
+              options={[
+                { id: 'system' as LanguageChoice, label: t('System') },
+                { id: 'en' as LanguageChoice, label: 'English' },
+                { id: 'zh-Hans' as LanguageChoice, label: '中文' },
+              ]}
+              onChange={(language: LanguageChoice) => writeSettings({ language })}
+            />
+          }
+        />
         <Row
           label="Theme"
           control={
