@@ -34,7 +34,16 @@ const ZSTD_MAGIC = 0xfd2fb528
 // the caller skips the WHOLE file rather than counting the frames it got to.
 const MAX_FRAME_DECODED_BYTES = 64 * 1024 * 1024
 
-const SUPPORTED_SESSION_FORMAT_VERSIONS = new Set([0, 1, 2, 3])
+// v4 (dsh 0.2.0-rc.2) keeps the reader's whole consumption surface intact —
+// dense `seq`, usage at `assistant/message`'s `data.usage` (plus an
+// informational `totalTokens` sum) or the embedded stream, tagged end-seed
+// inheritance, `llm/retry-started` attempt slots — and only lifts tool-result
+// message roles, namespaces unknown tags, and adds surface/replacement
+// metadata this parser ignores. Verified against the official
+// `sessionFormatCatalog` (recovery: 'strict', validation: 'current') from
+// @deepseek-ai/dsh-session-format-catalog@0.2.0-rc.2 with the fixtures below
+// and a real 0.2.0-rc.2 log.
+const SUPPORTED_SESSION_FORMAT_VERSIONS = new Set([0, 1, 2, 3, 4])
 const SESSION_LOG_NAME = /^session(?:\.v(\d+))?\.jsonl(?:\.zstd)?$/u
 
 const MIN_REASONABLE_TIMESTAMP_MS = 1_000_000_000_000
@@ -119,6 +128,8 @@ type DshUsage = {
   cacheReadTokens?: number
   cacheWriteTokens?: number
   reasoningTokens?: number
+  // Informational sum the v4 writer adds; never read, kept to document the shape.
+  totalTokens?: number
 }
 
 type DshEvent = {
