@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtemp, mkdir, writeFile, rm, utimes } from 'fs/promises'
+import { mkdtemp, mkdir, readFile, writeFile, rm, utimes } from 'fs/promises'
 import { join, posix, win32 } from 'path'
 import { tmpdir } from 'os'
 import { createRequire } from 'node:module'
@@ -1085,6 +1085,62 @@ describe('copilot provider - chatSessions parsing', () => {
   afterEach(async () => {
     await rm(tmpDir, { recursive: true, force: true })
     vi.unstubAllEnvs()
+  })
+
+  it('reads request-level input tokens from snapshots, appended requests and patches', async () => {
+    // VS Code serializes usage.promptTokens directly on the request, even
+    // when the extension result has no metadata. Include an input-only row.
+    const filePath = fileURLToPath(new URL('../fixtures/copilot/request-token-journal.jsonl', import.meta.url))
+    const calls = await collectCalls({ path: filePath, project: 'myproject', provider: 'copilot', sourceType: 'chatsession' })
+
+    expect(calls.map(c => [c.inputTokens, c.outputTokens])).toEqual([[12345, 678], [1000, 0]])
+    expect(calls.map(c => c.costUSD)).toEqual([
+      calculateCost('gpt-4o', 12345, 678, 0, 0, 0),
+      calculateCost('gpt-4o', 1000, 0, 0, 0, 0),
+    ])
+  })
+
+  it.each(['json-first', 'journal-first'])('deduplicates root usage across both formats (%s)', async order => {
+    const journalPath = fileURLToPath(new URL('../fixtures/copilot/request-token-journal.jsonl', import.meta.url))
+    const snapshot = JSON.parse((await readFile(journalPath, 'utf8')).split('\n')[0]!).v
+    snapshot.requests.push({ requestId: 'input-only', modelId: 'copilot/gpt-4o', promptTokens: 1000, completionTokens: 0 })
+    const jsonPath = join(tmpDir, 'root-usage.json')
+    await writeFile(jsonPath, JSON.stringify(snapshot))
+    const seen = new Set<string>()
+    const paths = order === 'json-first' ? [jsonPath, journalPath] : [journalPath, jsonPath]
+    const first = await collectCalls({ path: paths[0]!, project: 'p', provider: 'copilot', sourceType: 'chatsession' }, seen)
+    const second = await collectCalls({ path: paths[1]!, project: 'p', provider: 'copilot', sourceType: 'chatsession' }, seen)
+    expect(first.map(c => [c.inputTokens, c.outputTokens])).toEqual([[12345, 678], [1000, 0]])
+    expect(second).toEqual([])
+    expect([...seen]).toEqual(['copilot-chatsession:chat-root-usage:snapshot', 'copilot-chatsession:chat-root-usage:input-only'])
+  })
+
+  it.each([undefined, 0, -5, '500', null])('falls back to root input for invalid or absent metadata (%s)', async metadataInput => {
+    const path = join(tmpDir, 'fallback.jsonl')
+    await createChatSessionFile(path, [{ kind: 0, v: { sessionId: 'fallback', requests: [{
+      requestId: 'r', promptTokens: 1000, completionTokens: 20,
+      modelId: 'copilot/gpt-4o', result: { metadata: { promptTokens: metadataInput } },
+    }] } }])
+    const calls = await collectCalls({ path, project: 'p', provider: 'copilot', sourceType: 'chatsession' })
+    expect(calls.map(c => [c.inputTokens, c.outputTokens])).toEqual([[1000, 20]])
+  })
+
+  it('keeps metadata precedence without summing duplicate token fields', async () => {
+    const path = join(tmpDir, 'precedence.jsonl')
+    await createChatSessionFile(path, [{ kind: 0, v: { sessionId: 'precedence', requests: [{
+      requestId: 'r', promptTokens: 1000, completionTokens: 490, modelId: 'copilot/gpt-4o',
+      result: { metadata: { promptTokens: 500, outputTokens: 60 } },
+    }] } }])
+    const calls = await collectCalls({ path, project: 'p', provider: 'copilot', sourceType: 'chatsession' })
+    expect(calls.map(c => [c.inputTokens, c.outputTokens])).toEqual([[500, 60]])
+  })
+
+  it.each([0, -1, '1000', null])('skips invalid or zero root usage without estimating text (%s)', async promptTokens => {
+    const path = join(tmpDir, 'invalid.jsonl')
+    await createChatSessionFile(path, [{ kind: 0, v: { sessionId: 'invalid', requests: [{
+      requestId: 'r', promptTokens, completionTokens: 0, message: { text: 'No reported usage' },
+    }] } }])
+    expect(await collectCalls({ path, project: 'p', provider: 'copilot', sourceType: 'chatsession' })).toEqual([])
   })
 
   it('parses sample journal token counts and cost', async () => {
