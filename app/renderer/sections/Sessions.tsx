@@ -23,7 +23,8 @@ import {
   type InvestigationFilters,
 } from '../lib/investigation'
 import { reportMemoKey } from '../lib/reportMemoKey'
-import type { DateRange, Period, SessionDrillRow, SessionRow } from '../lib/types'
+import { desktopProjectScopeKey } from '../lib/projectScope'
+import type { DateRange, DesktopProjectId, Period, Scope, SessionDrillRow, SessionRow } from '../lib/types'
 import { t } from '../i18n'
 
 export const INITIAL_VISIBLE = 120
@@ -119,6 +120,8 @@ export function Sessions({
   period,
   provider,
   range = null,
+  projectId = null,
+  deviceScope = 'local',
   refreshToken = 0,
   detectedProviders = [],
   onProviderChange = () => {},
@@ -136,6 +139,8 @@ export function Sessions({
   period: Period
   provider: string
   range?: DateRange | null
+  projectId?: DesktopProjectId | null
+  deviceScope?: Scope
   refreshToken?: number
   detectedProviders?: Array<{ id: string; label: string }>
   onProviderChange?: (value: string) => void
@@ -156,6 +161,7 @@ export function Sessions({
   visibleCount?: number
   onVisibleCountChange?: (count: number) => void
 }) {
+  const projectScopeKey = desktopProjectScopeKey(projectId)
   const [internalSort, setInternalSort] = useState<SessionSort>('cost')
   const sort = controlledSort ?? internalSort
   const setSort = (value: SessionSort) => {
@@ -181,9 +187,9 @@ export function Sessions({
   const lastOpenerRef = useRef<HTMLButtonElement | null>(null)
 
   const plainReport = usePolled<SessionRow[]>(
-    () => range ? codeburn.getSessions(period, provider, range) : codeburn.getSessions(period, provider),
-    [period, provider, range?.from, range?.to, refreshToken],
-    { enabled: ready && !investigating, memoKey: reportMemoKey('sessions', period, provider, range) },
+    () => codeburn.getSessions({ period, provider, range, deviceScope, projectId }),
+    [period, provider, range?.from, range?.to, deviceScope, projectId, projectScopeKey, refreshToken],
+    { enabled: ready && !investigating, memoKey: reportMemoKey('sessions', period, provider, range, '', projectScopeKey) },
   )
   // The contributions report is fetched only while a selection is active: one
   // CLI read per population. The population must COVER the selection: a day
@@ -200,11 +206,9 @@ export function Sessions({
     return { from, to }
   }, [filters.days, range?.from, range?.to])
   const contributionReport = usePolled<SessionDrillRow[]>(
-    () => fetchRange
-      ? codeburn.getSessionsContributions(period, provider, fetchRange)
-      : codeburn.getSessionsContributions(period, provider),
-    [period, provider, fetchRange?.from, fetchRange?.to, refreshToken],
-    { enabled: ready && investigating, memoKey: reportMemoKey('sessioncontrib-v2', period, provider, fetchRange) },
+    () => codeburn.getSessionsContributions({ period, provider, range: fetchRange, deviceScope, projectId }),
+    [period, provider, fetchRange?.from, fetchRange?.to, deviceScope, projectId, projectScopeKey, refreshToken],
+    { enabled: ready && investigating, memoKey: reportMemoKey('sessioncontrib-v2', period, provider, fetchRange, '', projectScopeKey) },
   )
 
   const report = investigating ? contributionReport : plainReport

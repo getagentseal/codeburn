@@ -125,4 +125,20 @@ describe('billing routes: the same three rows on every surface', () => {
     for (const s of SESSIONS) expect(dayKeys.has(s.expectRow), s.expectRow).toBe(true)
     expect(dayKeys.has('anthropic.claude-haiku-4-5-20251001-v1:0')).toBe(false)
   })
+
+  it('accepts an attached hidden Desktop identity on the classic models and status paths', async () => {
+    const home = await seedHome()
+
+    const models = JSON.parse(runCli([
+      'models', '--provider', 'claude', '--period', 'week', '--format', 'json',
+      '--desktop-project-id=path:/Users/gone/app',
+    ], home)) as unknown
+    const rows = (Array.isArray(models) ? models : (models as { rows?: unknown[] }).rows ?? []) as Array<{ calls: number }>
+    expect(rows.reduce((sum, row) => sum + row.calls, 0)).toBe(3)
+
+    const status = JSON.parse(runCli([
+      'status', '--format', 'json', '--desktop-project-id=path:/Users/gone/app',
+    ], home)) as { month: { calls: number } }
+    expect(status.month.calls).toBe(3)
+  })
 })

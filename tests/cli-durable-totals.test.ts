@@ -4,7 +4,7 @@ import { existsSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 
-import { DAILY_CACHE_VERSION, currentTzKey, type DailyCache, type DailyEntry } from '../src/daily-cache.js'
+import { DAILY_CACHE_VERSION, currentTzKey, type DailyCache, type DailyEntry, type ProjectDayStats } from '../src/daily-cache.js'
 import { getDateRange } from '../src/cli-date.js'
 import { loadPricing } from '../src/models.js'
 import {
@@ -16,6 +16,7 @@ import {
 import { parseAllSessions, filterProjectsByName, filterProjectsByDateRange, filterProjectsByDays, clearSessionCache } from '../src/parser.js'
 import { renderOverview } from '../src/overview.js'
 import type { DateRange } from '../src/types.js'
+import { exactProjectBucketKey, legacyProjectBucketKey } from '../src/project-scope.js'
 
 // The point of #755: Claude deletes transcripts after ~30 days, so a day that
 // can no longer be re-derived from session files exists ONLY in the durable
@@ -82,6 +83,48 @@ async function seedCarriedCache(): Promise<string> {
   }
   await writeFile(join(ROOT, 'cache', `daily-cache.v${DAILY_CACHE_VERSION}.json`), JSON.stringify(cache), 'utf-8')
   return day
+}
+
+function exactScopedDay(date: string, legacy = false): DailyEntry {
+  const id = 'path:/Users/gone/proj-x'
+  const stats: ProjectDayStats = {
+    canonicalId: legacy ? null : id,
+    sourceLabel: 'proj-x',
+    displayName: 'proj-x',
+    path: legacy ? null : '/Users/gone/proj-x',
+    provenance: legacy ? 'legacy' : 'exact',
+    cost: CARRIED_COST,
+    calls: 40,
+    savingsUSD: 0,
+    sessions: 3,
+    inputTokens: 5000,
+    outputTokens: 2000,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    editTurns: 4,
+    oneShotTurns: 2,
+    models: { 'Opus 4.8': { calls: 40, cost: CARRIED_COST, savingsUSD: 0, inputTokens: 5000, outputTokens: 2000, cacheReadTokens: 0, cacheWriteTokens: 0 } },
+    categories: { coding: { turns: 10, cost: CARRIED_COST, savingsUSD: 0, editTurns: 4, oneShotTurns: 2 } },
+  }
+  const key = legacy ? legacyProjectBucketKey('proj-x') : exactProjectBucketKey(id)
+  const day = carriedDay(date)
+  return {
+    ...day,
+    projects: { [key]: stats },
+    providers: { claude: { ...day.providers.claude!, projects: { [key]: stats } } },
+  }
+}
+
+async function seedCacheDays(days: DailyEntry[]): Promise<void> {
+  const cache: DailyCache = {
+    version: DAILY_CACHE_VERSION,
+    savingsConfigHash: getDailyCacheConfigHash(),
+    tzKey: currentTzKey(),
+    lastComputedDate: daysAgoStr(1),
+    days,
+    complete: true,
+  }
+  await writeFile(join(ROOT, 'cache', `daily-cache.v${DAILY_CACHE_VERSION}.json`), JSON.stringify(cache), 'utf-8')
 }
 
 /** Sources for the settled day still exist but explain only a fraction of what
@@ -193,6 +236,33 @@ async function assertParity(range: DateRange, provider: string): Promise<{ menub
 }
 
 describe('CLI totals ↔ menubar parity through the durable daily cache', () => {
+  it('projects retained exact history without using the global day as a top-up', async () => {
+    const day = daysAgoStr(10)
+    await seedCacheDays([exactScopedDay(day)])
+
+    const durable = await buildDurablePeriod(
+      { range: getDateRange('all').range, label: 'all' },
+      { provider: 'all', desktopProjectId: 'path:/Users/gone/proj-x' },
+    )
+
+    expect(durable.data.cost).toBe(CARRIED_COST)
+    expect(durable.data.calls).toBe(40)
+    expect(durable.periodTotals).toBeUndefined()
+  })
+
+  it('does not subtract a legacy project row from a global retained day', async () => {
+    const day = daysAgoStr(10)
+    await seedCacheDays([exactScopedDay(day, true)])
+
+    const durable = await buildDurablePeriod(
+      { range: getDateRange('all').range, label: 'all' },
+      { provider: 'all', desktopProjectId: 'path:/Users/gone/proj-x' },
+    )
+
+    expect(durable.data.cost).toBe(0)
+    expect(durable.data.calls).toBe(0)
+  })
+
   it('counts the carried day equally on both paths for all-provider, custom-range, and lifetime', async () => {
     await seedCarriedCache()
     await seedLiveTodaySession()

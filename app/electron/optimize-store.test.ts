@@ -35,7 +35,7 @@ function block(savingsUSD: number) {
   return { findingCount: 1, savingsUSD, topFindings: [{ title: 'Trim preamble', impact: 'high' as const, savingsUSD }] }
 }
 
-function handlers(stateDir: string, payloadSavings = 12) {
+function handlers(stateDir: string, payloadSavings = 12, desktopProjectId?: string) {
   const calls: string[][] = []
   const spawnCli = vi.fn(async (args: string[]) => {
     calls.push(args)
@@ -49,7 +49,17 @@ function handlers(stateDir: string, payloadSavings = 12) {
     stateDir,
     appVersion: '1.2.3',
   } as unknown as Parameters<typeof createBridgeHandlers>[0])
-  return { snapshot: bridge['codeburn:getOptimizeSnapshot']!, calls }
+  const handler = bridge['codeburn:getOptimizeSnapshot']!
+  const snapshot = (...args: unknown[]) => handler({
+    period: args[0],
+    provider: args[1],
+    range: args[2] ?? null,
+    configSource: args[3] ?? null,
+    deviceScope: args[4] ?? 'local',
+    maxAgeMs: args[5],
+    projectId: desktopProjectId,
+  })
+  return { snapshot, calls }
 }
 
 describe('optimize snapshot store', () => {
@@ -130,6 +140,35 @@ describe('optimize snapshot store', () => {
     const res = await again.snapshot('today', 'all') as { value: OptimizeSnapshot }
     expect(again.calls).toHaveLength(0)
     expect(res.value.optimize.savingsUSD).toBe(12)
+  })
+
+  it("never serves one Desktop project's Optimize savings for another", async () => {
+    const dir = tempDir()
+    const alpha = handlers(dir, 12, 'path:/work/alpha')
+    await alpha.snapshot('today', 'all')
+    expect(alpha.calls[0]).toContain('--desktop-project-id=path:/work/alpha')
+
+    const beta = handlers(dir, 500, 'path:/work/beta')
+    const betaResult = await beta.snapshot('today', 'all') as { value: OptimizeSnapshot }
+    expect(beta.calls).toHaveLength(1)
+    expect(betaResult.value.optimize.savingsUSD).toBe(500)
+
+    const alphaAgain = handlers(dir, 999, 'path:/work/alpha')
+    const alphaResult = await alphaAgain.snapshot('today', 'all') as { value: OptimizeSnapshot }
+    expect(alphaAgain.calls).toHaveLength(0)
+    expect(alphaResult.value.optimize.savingsUSD).toBe(12)
+  })
+
+  it('keeps the unscoped Optimize snapshot independent after scoped entries exist', async () => {
+    const dir = tempDir()
+    const alpha = handlers(dir, 12, 'path:/work/alpha')
+    await alpha.snapshot('today', 'all')
+
+    const all = handlers(dir, 77)
+    const allResult = await all.snapshot('today', 'all') as { value: OptimizeSnapshot }
+
+    expect(all.calls[0]).not.toContain('--desktop-project-id=path:/work/alpha')
+    expect(allResult.value.optimize.savingsUSD).toBe(77)
   })
 
   it('recomputes across local midnight even though the scan is minutes old', async () => {

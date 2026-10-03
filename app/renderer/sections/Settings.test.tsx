@@ -557,6 +557,19 @@ describe('Settings', () => {
     expect(screen.getByRole('option', { name: 'Local' })).toBeInTheDocument()
   })
 
+  it('offers Local only while a quick project is selected, without changing the saved scope', async () => {
+    const user = userEvent.setup()
+    const onScopeChange = vi.fn()
+    render(<Settings period="month" scope="combined" onScopeChange={onScopeChange} projectScopeSelected />)
+
+    expect(screen.getByLabelText('Scope')).toHaveTextContent('Local')
+    expect(screen.getByText(/Local only while a project is selected/)).toBeInTheDocument()
+    await user.click(screen.getByLabelText('Scope'))
+
+    expect(screen.queryByRole('option', { name: 'Combined' })).not.toBeInTheDocument()
+    expect(onScopeChange).not.toHaveBeenCalled()
+  })
+
   it('lists providers from the real overview payload', async () => {
     const user = userEvent.setup()
     render(<Settings period="week" />)
@@ -566,7 +579,7 @@ describe('Settings', () => {
     expect(screen.getByText('Codex')).toBeInTheDocument()
     // The providers pane detects live providers over a cheap fixed 1-day window,
     // decoupled from the global period, so it never asks for 'week' here.
-    expect(mocks.getOverview).toHaveBeenCalledWith('today', 'all')
+    expect(mocks.getOverview).toHaveBeenCalledWith({ period: 'today', provider: 'all' })
   })
 
   it('keys provider logos on the internal id from providerDetails', async () => {

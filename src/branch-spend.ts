@@ -6,6 +6,7 @@ import { filterProjectsByName, parseAllSessions } from './parser.js'
 import { inferSessionProvider } from './session-output.js'
 import { behavioralCallCount } from './behavioral-weight.js'
 import { spendProjectIdentity } from './spend-flow.js'
+import type { DesktopProjectId } from './project-scope.js'
 import type { DateRange, ProjectSummary, SessionSummary } from './types.js'
 
 /// Per-branch-and-project spend, the Spend "By branch" lens. Extends the
@@ -394,9 +395,15 @@ export function buildBranchSpendReport(projects: ProjectSummary[], range: DateRa
 /// CLI/IPC entry: parse the filtered population (range, provider, project
 /// patterns — the same flags and semantics as `spend --format flow-json`) and
 /// build the by-branch report over it.
-export async function computeBranchSpend(range: DateRange, provider: string, projectFilter?: string[], excludeFilter?: string[]): Promise<BranchSpendReport> {
+export async function computeBranchSpend(
+  range: DateRange,
+  provider: string,
+  projectFilter?: string[],
+  excludeFilter?: string[],
+  desktopProjectId?: DesktopProjectId | null,
+): Promise<BranchSpendReport> {
   const parsed = await parseAllSessions(range, provider)
   await reportUnmatchedProjectPatterns(parsed, projectFilter, excludeFilter, () => cachedProjectIdentitiesForRange(range))
-  const projects = filterProjectsByName(parsed, projectFilter, excludeFilter)
+  const projects = filterProjectsByName(parsed, projectFilter, excludeFilter, desktopProjectId)
   return buildBranchSpendReport(projects, range)
 }

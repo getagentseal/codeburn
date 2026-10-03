@@ -24,6 +24,11 @@ const FILE = 'optimize-snapshots.json'
 // cycles through; past that the oldest entry is dropped.
 const MAX_ENTRIES = 8
 
+/** The persisted scope is the exact argv, including attached Desktop identity. */
+export function optimizeSnapshotScope(argv: readonly string[]): string {
+  return argv.join(' ')
+}
+
 function storePath(dir: string): string {
   return path.join(dir, FILE)
 }

@@ -336,6 +336,27 @@ body { overflow: hidden; background: var(--bg); color: var(--ink); }
 .dropdown-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .dropdown-chevron { width: 14px; height: 14px; color: var(--mut2); }
 .dropdown-menu { overflow-y: auto; }
+.project-scope-wrap { flex: 0 1 220px; min-width: 128px; max-width: 240px; }
+.project-scope-trigger { min-height: 32px; gap: 6px; }
+.project-scope-trigger > .icon:first-child { width: 14px; height: 14px; color: var(--mut2); }
+.project-scope-trigger-label { min-width: 0; }
+.project-scope-menu { width: min(340px, calc(100vw - 16px)); max-width: min(340px, calc(100vw - 16px)); padding: 7px; }
+.project-scope-search {
+  width: 100%; min-height: 32px; box-sizing: border-box; margin-bottom: 5px; padding: 6px 9px;
+  border: 1px solid var(--line); border-radius: 7px; background: var(--fill); color: var(--ink); font: inherit; font-size: var(--fs-meta);
+}
+.project-scope-search:focus-visible { border-color: var(--accent); outline: 2px solid var(--accent); outline-offset: 1px; }
+.project-scope-options { display: flex; flex-direction: column; gap: 1px; }
+.project-scope-option { min-height: 40px; align-items: center; gap: 8px; padding: 6px 9px; white-space: normal; }
+.project-scope-option-copy { display: flex; min-width: 0; flex: 1; flex-direction: column; align-items: flex-start; gap: 1px; }
+.project-scope-option-name { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.project-scope-option-path { max-width: 100%; overflow: hidden; color: var(--mut2); font-size: var(--fs-label); text-overflow: ellipsis; white-space: nowrap; }
+.project-scope-option-check { flex: 0 0 auto; color: var(--accent-text); font-size: var(--fs-body); }
+.project-scope-status { margin: 5px 2px 0; padding: 7px 2px 2px; border-top: 1px solid var(--line2); color: var(--mut); font-size: var(--fs-label); line-height: 1.4; white-space: normal; }
+.project-scope-error { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: var(--bad); }
+.project-scope-retry { flex: 0 0 auto; padding: 4px 7px; border: 1px solid var(--line); border-radius: 6px; background: transparent; color: var(--accent-text); font: inherit; font-size: var(--fs-label); cursor: pointer; }
+.project-scope-retry:hover, .project-scope-retry:focus-visible { border-color: var(--accent); background: var(--hover); }
+.project-scope-footer { margin: 5px 2px 0; padding: 7px 2px 2px; border-top: 1px solid var(--line2); color: var(--mut2); font-size: var(--fs-label); line-height: 1.35; white-space: normal; }
 .pop-menu .pop-item { width: 100%; min-width: 0; border: 0; background: transparent; font: inherit; font-size: var(--fs-body); text-align: left; }
 .pop-item-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .pop-item-note { flex: 0 0 auto; margin-left: auto; padding-left: 8px; color: var(--mut2); font-size: var(--fs-label); }
@@ -1507,6 +1528,7 @@ html.page-hidden *::after {
 @media (max-width: 1199px) {
   .bar { gap: var(--sp-2); }
   .bar .dropdown { width: auto; min-width: 110px; }
+  .bar .project-scope-wrap { flex-basis: 180px; min-width: 112px; }
 }
 /* Below 1100 the period pills and the bar's own chrome give their slack to the
    two pickers, so neither provider nor config label ever ellipsizes. */
@@ -1516,6 +1538,11 @@ html.page-hidden *::after {
   .bar .seg span { padding: 2.5px 3px; font-size: var(--fs-label); }
   .bar .dropdown { min-width: fit-content; }
   .bar .dropdown-trigger { gap: 4px; padding: 2.5px 7px; }
+  .bar .project-scope-wrap { flex-basis: 156px; min-width: 100px; }
+}
+@media (max-width: 900px) {
+  .bar .project-scope-wrap { flex-basis: 136px; min-width: 92px; }
+  .project-scope-option { min-height: 42px; }
 }
 
 /* Back/Forward in the top bar. */

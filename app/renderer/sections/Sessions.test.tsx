@@ -1,16 +1,18 @@
 // @vitest-environment jsdom
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { clearPolledMemo } from '../hooks/usePolled'
 import { formatDayLong } from '../lib/format'
 import { EMPTY_FILTERS } from '../lib/investigation'
-import type { SessionDrillRow, SessionRow } from '../lib/types'
+import type { DesktopReportQuery, SessionDrillRow, SessionRow } from '../lib/types'
+import { PROJECT_ALPHA, PROJECT_ALPHA_SAME_NAME } from '../test/projectScopeFixtures'
 import { INITIAL_VISIBLE, sessionRowKey, Sessions } from './Sessions'
 
 const { getSessions, getSessionsContributions } = vi.hoisted(() => ({
-  getSessions: vi.fn<(period: string, provider: string) => Promise<SessionRow[]>>(),
-  getSessionsContributions: vi.fn<(period: string, provider: string) => Promise<SessionRow[]>>(),
+  getSessions: vi.fn<(query: DesktopReportQuery) => Promise<SessionRow[]>>(),
+  getSessionsContributions: vi.fn<(query: DesktopReportQuery) => Promise<SessionDrillRow[]>>(),
 }))
 vi.mock('../lib/ipc', async orig => {
   const actual = await orig<typeof import('../lib/ipc')>()
@@ -114,8 +116,70 @@ const rows: SessionRow[] = [
   }),
 ]
 
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>(resolvePromise => { resolve = resolvePromise })
+  return { promise, resolve }
+}
+
 describe('Sessions', () => {
   beforeEach(() => { getSessions.mockReset(); getSessionsContributions.mockReset() })
+
+  it('Scenario: Sessions and contributions receive the same exact project id', async () => {
+    getSessions.mockResolvedValue(rows)
+    getSessionsContributions.mockResolvedValue(rows as SessionDrillRow[])
+    const scopedProps = {
+      period: 'week',
+      provider: 'all',
+      projectId: PROJECT_ALPHA.id,
+      deviceScope: 'local',
+    } as any
+    const view = render(<Sessions {...scopedProps} />)
+
+    await waitFor(() => expect(getSessions).toHaveBeenCalledWith(expect.objectContaining({
+      projectId: PROJECT_ALPHA.id,
+      deviceScope: 'local',
+    })))
+
+    view.rerender(<Sessions {...scopedProps} filters={{ ...EMPTY_FILTERS, categories: ['coding'] }} />)
+    await waitFor(() => expect(getSessionsContributions).toHaveBeenCalledWith(expect.objectContaining({
+      projectId: PROJECT_ALPHA.id,
+      deviceScope: 'local',
+    })))
+  })
+
+  it('Scenario: real Sessions query and memo construction keeps Beta after a late Alpha response', async () => {
+    const alpha = deferred<SessionRow[]>()
+    const beta = deferred<SessionRow[]>()
+    getSessions.mockImplementation((query: DesktopReportQuery) =>
+      query.projectId === PROJECT_ALPHA.id ? alpha.promise : beta.promise)
+
+    const view = render(<Sessions period="week" provider="all" projectId={PROJECT_ALPHA.id} deviceScope="local" />)
+    await waitFor(() => expect(getSessions).toHaveBeenCalledWith(expect.objectContaining({
+      projectId: PROJECT_ALPHA.id,
+      deviceScope: 'local',
+    })))
+
+    clearPolledMemo()
+    view.rerender(<Sessions period="week" provider="all" projectId={PROJECT_ALPHA_SAME_NAME.id} deviceScope="local" />)
+    await waitFor(() => expect(getSessions).toHaveBeenCalledWith(expect.objectContaining({
+      projectId: PROJECT_ALPHA_SAME_NAME.id,
+      deviceScope: 'local',
+    })))
+
+    await act(async () => {
+      beta.resolve([session({ sessionId: 'beta-session', project: 'beta-project', provider: 'claude', title: 'Beta response', cost: 22 })])
+      await beta.promise
+    })
+    expect(await screen.findByText('Beta response')).toBeInTheDocument()
+
+    await act(async () => {
+      alpha.resolve([session({ sessionId: 'alpha-session', project: 'alpha-project', provider: 'claude', title: 'Alpha response', cost: 11 })])
+      await alpha.promise
+    })
+    expect(screen.getByText('Beta response')).toBeInTheDocument()
+    expect(screen.queryByText('Alpha response')).not.toBeInTheDocument()
+  })
 
   it('shows the first-load skeleton, then yields to the session list', async () => {
     let resolve!: (value: SessionRow[]) => void

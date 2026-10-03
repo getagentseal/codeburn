@@ -12,8 +12,9 @@ import { asOfLabel, formatCompact, formatCount, formatUsd } from '../lib/format'
 import { codeburn } from '../lib/ipc'
 import { YIELD_SLOW_MS } from '../lib/refreshCadence'
 import { reportMemoKey } from '../lib/reportMemoKey'
+import { desktopProjectScopeKey } from '../lib/projectScope'
 import { trackEvent } from '../lib/track'
-import type { CliError, DateRange, FindingClass, MenubarPayload, OptimizeBlock, OptimizeJsonReport, Period, SessionYieldJson, WasteAction, YieldJsonReport } from '../lib/types'
+import type { CliError, DateRange, DesktopProjectId, FindingClass, MenubarPayload, OptimizeBlock, OptimizeJsonReport, Period, Scope, SessionYieldJson, WasteAction, YieldJsonReport } from '../lib/types'
 import { Icon, type IconName } from '../components/icons'
 import { t } from '../i18n'
 
@@ -36,52 +37,57 @@ function tabTitle(tab: OptimizeTab): string {
   }[tab]
 }
 
-export function Optimize({ period, provider, range = null }: { period: Period; provider: string; range?: DateRange | null }) {
+export function Optimize({ period, provider, range = null, projectId = null, deviceScope = 'local' }: { period: Period; provider: string; range?: DateRange | null; projectId?: DesktopProjectId | null; deviceScope?: Scope }) {
+  const projectScopeKey = desktopProjectScopeKey(projectId)
   const overview = usePolled<MenubarPayload>(
-    () => range ? codeburn.getOverview(period, provider, range) : codeburn.getOverview(period, provider),
-    [period, provider, range?.from, range?.to],
+    () => codeburn.getOverview({ period, provider, range, deviceScope, projectId }),
+    [period, provider, range?.from, range?.to, deviceScope, projectId],
+    { memoKey: reportMemoKey('overview', period, provider, range, '', projectScopeKey) },
   )
-  return <OptimizeContent period={period} provider={provider} range={range} overview={overview} />
+  return <OptimizeContent period={period} provider={provider} range={range} projectId={projectId} deviceScope={deviceScope} overview={overview} />
 }
 
 export function OptimizeContent({
   period,
   provider = 'all',
   range = null,
+  projectId = null,
+  deviceScope = 'local',
   overview,
   refreshToken = 0,
   ready = true,
   configSource = null,
-  scope = 'local',
 }: {
   period: Period
   provider?: string
   range?: DateRange | null
+  projectId?: DesktopProjectId | null
+  deviceScope?: Scope
   overview: Polled<MenubarPayload>
   refreshToken?: number
   ready?: boolean
   /** Scoped Claude config and device scope, so the optimize cache key here is
    *  the same one the Overview page uses for the same view. */
   configSource?: string | null
-  scope?: string
 }) {
+  const projectScopeKey = desktopProjectScopeKey(projectId)
   // Gate on app-level readiness so boot hydrates the cache once (default true
   // keeps standalone renders/tests polling normally).
   const optimizeReport = usePolled<OptimizeJsonReport>(
-    () => range ? codeburn.getOptimizeReport(period, provider, range) : codeburn.getOptimizeReport(period, provider),
-    [period, provider, range?.from, range?.to, refreshToken],
-    { enabled: ready, memoKey: reportMemoKey('optimize', period, provider, range) },
+    () => codeburn.getOptimizeReport({ period, provider, range, deviceScope, projectId }),
+    [period, provider, range?.from, range?.to, deviceScope, projectId, projectScopeKey, refreshToken],
+    { enabled: ready, memoKey: reportMemoKey('optimize', period, provider, range, '', projectScopeKey) },
   )
   const yieldReport = usePolled<YieldJsonReport>(
-    () => range ? codeburn.getYield(period, provider, range) : codeburn.getYield(period, provider),
-    [period, provider, range?.from, range?.to, refreshToken],
-    { enabled: ready, memoKey: reportMemoKey('yield', period, provider, range), cadence: { slowMs: YIELD_SLOW_MS } },
+    () => codeburn.getYield({ period, provider, range, deviceScope, projectId }),
+    [period, provider, range?.from, range?.to, deviceScope, projectId, projectScopeKey, refreshToken],
+    { enabled: ready, memoKey: reportMemoKey('yield', period, provider, range, '', projectScopeKey), cadence: { slowMs: YIELD_SLOW_MS } },
   )
   // This page is the one place the scan is always recomputed on open, so it
   // behaves exactly as it did when the overview poll still carried the block —
   // and its result is what the Overview page's daily figures then read.
   const optimizeSnapshot = useOptimizeSnapshot(
-    { period, provider, range, configSource, scope },
+    { period, provider, range, configSource, scope: deviceScope, projectId },
     { enabled: ready, alwaysFresh: true, refreshToken },
   )
   const optimizeBlock: OptimizeBlock | null = optimizeSnapshot.data?.optimize ?? null

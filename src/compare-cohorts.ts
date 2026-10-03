@@ -27,6 +27,7 @@ import { callBillableOutputTokens, inferSessionProvider } from './session-output
 import { isExpectedFreeModel, modelRowKey } from './models.js'
 import { aggregateModelStats, findModelStat, type ModelStats } from './compare-stats.js'
 import { spendProjectIdentity } from './spend-flow.js'
+import { matchesDesktopProjectId, type DesktopProjectId } from './project-scope.js'
 
 // The CLI's cohort branch resolves these through this one dynamic import; both
 // are the classic module's own implementations (single identity source).
@@ -102,6 +103,8 @@ export type CohortSelection = {
   projects: ProjectSummary[]
   /** Inclusive; undefined = every activity category. */
   category?: TaskCategory
+  /** Desktop-only exact project scope; public cohort ids remain unchanged. */
+  desktopProjectId?: DesktopProjectId | null
 }
 
 /**
@@ -129,7 +132,12 @@ export function extractCohortObservations(
     return obs
   }
 
-  for (const project of selection.projects) {
+  const desktopProjectId = selection.desktopProjectId
+  const projects = desktopProjectId === null || desktopProjectId === undefined
+    ? selection.projects
+    : selection.projects.filter(project => matchesDesktopProjectId(project, desktopProjectId))
+
+  for (const project of projects) {
     for (const session of project.sessions) {
       for (const turn of session.turns) {
         if (!turn.hasEdits) continue
@@ -383,9 +391,13 @@ export function buildCohortComparison(
   modelB: string,
   label: string,
   provider: string,
-  selection: { category?: TaskCategory; from?: string | null; to?: string | null } = {},
+  selection: { category?: TaskCategory; from?: string | null; to?: string | null; desktopProjectId?: DesktopProjectId | null } = {},
 ): CohortComparisonReport {
-  const { perModel, exclusions } = extractCohortObservations({ projects, category: selection.category })
+  const desktopProjectId = selection.desktopProjectId
+  const scopedProjects = desktopProjectId === null || desktopProjectId === undefined
+    ? projects
+    : projects.filter(project => matchesDesktopProjectId(project, desktopProjectId))
+  const { perModel, exclusions } = extractCohortObservations({ projects: scopedProjects, category: selection.category })
   const sharedExclusions = {
     multiModelTurnCount: exclusions.multiModelTurns.length,
     combinedMultiModelCostUSD: exclusions.combinedMultiModelCostUSD,
@@ -407,7 +419,7 @@ export function buildCohortComparison(
     kind: 'cohort-comparison',
     period: { label, provider },
     selection: {
-      projects: [...new Set(projects.map(p => p.project))].sort(),
+      projects: [...new Set(scopedProjects.map(p => p.project))].sort(),
       category: selection.category ?? null,
       from: selection.from ?? null,
       to: selection.to ?? null,
@@ -422,9 +434,12 @@ export function buildCohortComparison(
   }
 }
 
-export function buildCohortFacets(projects: ProjectSummary[]): CohortFacets {
+export function buildCohortFacets(projects: ProjectSummary[], desktopProjectId?: DesktopProjectId | null): CohortFacets {
+  const scopedProjects = desktopProjectId === null || desktopProjectId === undefined
+    ? projects
+    : projects.filter(project => matchesDesktopProjectId(project, desktopProjectId))
   const projectMap = new Map<string, { id: string; project: string; projectPath: string; sessions: number; costUSD: number }>()
-  for (const p of projects) {
+  for (const p of scopedProjects) {
     const { id } = spendProjectIdentity(p)
     const existing = projectMap.get(id)
     if (existing) {
@@ -436,7 +451,7 @@ export function buildCohortFacets(projects: ProjectSummary[]): CohortFacets {
   }
   return {
     kind: 'cohort-facets',
-    models: aggregateModelStats(projects),
+    models: aggregateModelStats(scopedProjects),
     projects: [...projectMap.values()].sort((a, b) => b.costUSD - a.costUSD),
     categories: cohortCategoryOptions(),
   }

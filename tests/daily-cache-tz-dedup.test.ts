@@ -6,6 +6,7 @@ import { join } from 'path'
 
 import type { DateRange, ProjectSummary } from '../src/types.js'
 import { aggregateProjectsIntoDays, dateKey, dateKeyInTz } from '../src/day-aggregator.js'
+import { exactProjectBucketKey } from '../src/project-scope.js'
 
 import {
   DAILY_CACHE_VERSION,
@@ -266,6 +267,7 @@ describe('tz-change re-derive: subtract what the fresh parse re-bucketed (issue 
     const newDayEntry = out.days.find(d => d.date === newDay)
     expect(newDayEntry).toBeDefined()
     expect(newDayEntry!.providers['codex']!.cost).toBeCloseTo(10, 5)
+    expect(newDayEntry!.projects?.[exactProjectBucketKey('path:/p')]?.cost).toBeCloseTo(10, 5)
   })
 
   it('(b) a sources-gone day survives a tz re-derive unchanged', async () => {

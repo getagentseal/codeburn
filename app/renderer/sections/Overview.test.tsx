@@ -1,31 +1,61 @@
 // @vitest-environment jsdom
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { useState } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import type { Polled } from '../hooks/usePolled'
+import { clearPolledMemo, type Polled } from '../hooks/usePolled'
 import { setActiveCurrency } from '../lib/format'
 import type { OverviewHeadlineSnapshot } from '../lib/overviewSnapshot'
 import type { ActReportJson, DailyHistoryEntry, MenubarPayload, OptimizeBlock, OptimizeSnapshot, YieldJsonReport } from '../lib/types'
 import { __resetGeneration } from '../lib/generation'
+import { __resetStreak } from '../lib/streak'
+import { QuickProjectScopeProvider, useQuickProjectScope } from '../lib/projectScope'
+import { PROJECT_ALPHA, PROJECT_ALPHA_SAME_NAME } from '../test/projectScopeFixtures'
 import { Overview, OverviewContent, deriveSignals, localDateKey } from './Overview'
 
 function polled(data: MenubarPayload, lastSuccessAt = Date.now()): Polled<MenubarPayload> {
   return { data, error: null, loading: false, switching: false, lastSuccessAt, refresh: vi.fn() }
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, resolve, reject }
+}
+
 // Mock the typed bridge so the section fetches our payload instead of spawning
 // the CLI. `normalizeCliError` (used by usePolled) is kept from the real module.
 // `vi.hoisted` lets the hoisted `vi.mock` factory reference the spy safely.
-const { getOverview, getActReport, getYield, getOptimizeSnapshot } = vi.hoisted(() => ({
-  getOverview: vi.fn<(period: string, provider: string) => Promise<MenubarPayload>>(),
+const { getOverview, getActReport, getYield, getOptimizeSnapshot, getProjectScopeCatalog, validateProjectScope } = vi.hoisted(() => ({
+  getOverview: vi.fn(),
   getActReport: vi.fn<() => Promise<ActReportJson>>(),
-  getYield: vi.fn<(period: string, provider: string) => Promise<YieldJsonReport>>(),
-  getOptimizeSnapshot: vi.fn<(...args: unknown[]) => Promise<OptimizeSnapshot>>(),
+  getYield: vi.fn(),
+  getOptimizeSnapshot: vi.fn<(query: { maxAgeMs?: number }) => Promise<OptimizeSnapshot>>(),
+  getProjectScopeCatalog: vi.fn(),
+  validateProjectScope: vi.fn(),
 }))
 vi.mock('../lib/ipc', async orig => {
   const actual = await orig<typeof import('../lib/ipc')>()
-  return { ...actual, codeburn: { getOverview, getActReport, getYield, getOptimizeSnapshot } }
+  return { ...actual, codeburn: { getOverview, getActReport, getYield, getOptimizeSnapshot, getProjectScopeCatalog, validateProjectScope } }
 })
+
+function ScopedOverviewHarness({ showSecond }: { showSecond: boolean }) {
+  const scope = useQuickProjectScope()
+  const view = () => <Overview period="week" provider="all" projectId={scope.projectId} deviceScope="local" />
+  const [second, setSecond] = useState(showSecond)
+  return (
+    <>
+      <button type="button" onClick={() => void scope.selectProject(PROJECT_ALPHA.id)}>Select Alpha</button>
+      <button type="button" onClick={() => { clearPolledMemo(); setSecond(true) }}>Change persistent filter</button>
+      {view()}
+      {second ? view() : null}
+    </>
+  )
+}
 
 /** The on-disk daily scan the overview poll no longer carries. */
 function snapshot(optimize: OptimizeBlock, computedAt = new Date().toISOString()): OptimizeSnapshot {
@@ -186,6 +216,10 @@ describe('Overview', () => {
     getActReport.mockReset()
     getYield.mockReset()
     getOptimizeSnapshot.mockReset()
+    getProjectScopeCatalog.mockReset()
+    validateProjectScope.mockReset()
+    getProjectScopeCatalog.mockResolvedValue({ revision: 'revision-1', options: [PROJECT_ALPHA, PROJECT_ALPHA_SAME_NAME] })
+    validateProjectScope.mockResolvedValue(PROJECT_ALPHA)
     getActReport.mockResolvedValue({ totals: { realizedCostUSD: 84.2, measuredActions: 11 } })
     getYield.mockResolvedValue(makeYieldReport())
     getOptimizeSnapshot.mockResolvedValue(snapshot({ findingCount: 0, savingsUSD: 0, topFindings: [] }))
@@ -193,6 +227,121 @@ describe('Overview', () => {
   afterEach(() => {
     vi.useRealTimers()
     __resetGeneration()
+    __resetStreak()
+  })
+
+  it('sends named scoped queries and suppresses the unscoped act report', async () => {
+    const now = new Date()
+    const range = { from: '2026-09-01', to: '2026-09-07' }
+    getOverview.mockResolvedValue(makePayload(now))
+
+    render(<Overview
+      period="week"
+      provider="all"
+      range={range}
+      projectId={PROJECT_ALPHA.id}
+      deviceScope="local"
+    /> as any)
+
+    await waitFor(() => expect(getOverview).toHaveBeenCalledWith(expect.objectContaining({
+      range,
+      projectId: PROJECT_ALPHA.id,
+      deviceScope: 'local',
+    })))
+    await waitFor(() => expect(getYield).toHaveBeenCalledWith(expect.objectContaining({
+      range,
+      projectId: PROJECT_ALPHA.id,
+      deviceScope: 'local',
+    })))
+    await waitFor(() => expect(getOptimizeSnapshot).toHaveBeenCalledWith(expect.objectContaining({
+      range,
+      projectId: PROJECT_ALPHA.id,
+      deviceScope: 'local',
+    })))
+    expect(getActReport).not.toHaveBeenCalled()
+  })
+
+  it('Scenario: real Overview query and memo construction keeps Beta after a late Alpha response', async () => {
+    const alpha = deferred<MenubarPayload>()
+    const beta = deferred<MenubarPayload>()
+    const now = new Date()
+    const payload = (label: string, cost: number): MenubarPayload => {
+      const base = makePayload(now)
+      return { ...base, current: { ...base.current, label, cost } }
+    }
+    getOverview.mockImplementation((query: { projectId?: string | null }) =>
+      query.projectId === PROJECT_ALPHA.id ? alpha.promise : beta.promise)
+
+    const view = render(<Overview period="week" provider="all" projectId={PROJECT_ALPHA.id} deviceScope="local" /> as any)
+    await waitFor(() => expect(getOverview).toHaveBeenCalledWith(expect.objectContaining({
+      projectId: PROJECT_ALPHA.id,
+      deviceScope: 'local',
+    })))
+
+    // This is the production filter-generation boundary; the rerender below
+    // exercises Overview's own scope-qualified memo construction.
+    clearPolledMemo()
+    view.rerender(<Overview period="week" provider="all" projectId={PROJECT_ALPHA_SAME_NAME.id} deviceScope="local" /> as any)
+    await waitFor(() => expect(getOverview).toHaveBeenCalledWith(expect.objectContaining({
+      projectId: PROJECT_ALPHA_SAME_NAME.id,
+      deviceScope: 'local',
+    })))
+
+    await act(async () => {
+      beta.resolve(payload('Beta', 22))
+      await beta.promise
+    })
+    expect(await screen.findByText('$22.00')).toBeInTheDocument()
+
+    await act(async () => {
+      alpha.resolve(payload('Alpha', 11))
+      await alpha.promise
+    })
+    expect(screen.getByText('$22.00')).toBeInTheDocument()
+    expect(screen.queryByText('$11.00')).not.toBeInTheDocument()
+  })
+
+  it('Scenario: same-project filter generation invalidation rejects an older Overview response', async () => {
+    const beforeFilter = deferred<MenubarPayload>()
+    const afterFilter = deferred<MenubarPayload>()
+    let alphaRequests = 0
+    const now = new Date()
+    const payload = (label: string, cost: number): MenubarPayload => {
+      const base = makePayload(now)
+      return { ...base, current: { ...base.current, label, cost } }
+    }
+    getOverview.mockImplementation((query: { projectId?: string | null }) => {
+      if (query.projectId === null) return Promise.resolve(payload('All projects', 6))
+      alphaRequests++
+      return alphaRequests === 1 ? beforeFilter.promise : afterFilter.promise
+    })
+
+    render(
+      <QuickProjectScopeProvider>
+        <ScopedOverviewHarness showSecond={false} />
+      </QuickProjectScopeProvider>,
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Select Alpha' }))
+    await waitFor(() => expect(getOverview).toHaveBeenCalledWith(expect.objectContaining({
+      projectId: PROJECT_ALPHA.id,
+      deviceScope: 'local',
+    })))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Change persistent filter' }))
+    await waitFor(() => expect(getOverview.mock.calls.filter(call => call[0]?.projectId === PROJECT_ALPHA.id)).toHaveLength(2))
+
+    await act(async () => {
+      afterFilter.resolve(payload('Alpha after filter', 22))
+      await afterFilter.promise
+    })
+    expect(await screen.findByText('$22.00')).toBeInTheDocument()
+
+    await act(async () => {
+      beforeFilter.resolve(payload('Alpha before filter', 11))
+      await beforeFilter.promise
+    })
+    expect(screen.getByText('$22.00')).toBeInTheDocument()
+    expect(screen.queryByText('$11.00')).not.toBeInTheDocument()
   })
 
   it('counts the streak from yesterday when today has no spend yet', async () => {
@@ -204,6 +353,19 @@ describe('Overview', () => {
 
     expect(await screen.findByText('Last 30 days')).toBeInTheDocument()
     expect(container.querySelector('.ov-streak')).toHaveTextContent('11-day streak')
+  })
+
+  it('does not reuse the global streak under a selected project query', async () => {
+    const now = new Date()
+    const global = { ...makePayload(now), streak: 12 }
+    const scoped = { ...makePayload(now), history: { daily: [] } }
+    getOverview.mockImplementation((query: { projectId?: string | null }) => Promise.resolve(query.projectId ? scoped : global))
+
+    const view = render(<Overview period="30days" provider="all" />)
+    await waitFor(() => expect(document.querySelector('.ov-streak')).toHaveTextContent('12-day streak'))
+
+    view.rerender(<Overview period="30days" provider="all" projectId={PROJECT_ALPHA.id} deviceScope="local" />)
+    await waitFor(() => expect(screen.queryByText('12-day streak')).not.toBeInTheDocument())
   })
 
   it("renders real hero, stats, model, saved, session, and daily-chart data", async () => {
@@ -1329,20 +1491,37 @@ describe('Overview refresh tiers', () => {
     expect(await screen.findByText('$4.25')).toBeInTheDocument()
   })
 
+  it('does not render the previous project Optimize snapshot during a delayed scope transition', async () => {
+    getOptimizeSnapshot.mockResolvedValueOnce(snapshot({ findingCount: 1, savingsUSD: 31.5, topFindings: [] }))
+    const overview = polled(makePayload(new Date()))
+    const { rerender, container } = render(<OverviewContent period="30days" provider="all" projectId={PROJECT_ALPHA.id} overview={overview} />)
+    expect(await screen.findByText('$31.50')).toBeInTheDocument()
+
+    let release!: (value: OptimizeSnapshot) => void
+    getOptimizeSnapshot.mockImplementation(() => new Promise(resolve => { release = resolve }))
+    rerender(<OverviewContent period="30days" provider="all" projectId={PROJECT_ALPHA_SAME_NAME.id} overview={overview} />)
+
+    expect(screen.queryByText('$31.50')).not.toBeInTheDocument()
+    await waitFor(() => expect(getOptimizeSnapshot).toHaveBeenCalledWith(expect.objectContaining({ projectId: PROJECT_ALPHA_SAME_NAME.id })))
+
+    await act(async () => { release(snapshot({ findingCount: 1, savingsUSD: 4.25, topFindings: [] })) })
+    expect(await screen.findByText('$4.25')).toBeInTheDocument()
+  })
+
   it('re-asks act, yield and the scan on a manual refresh, and forces a fresh scan', async () => {
     getOptimizeSnapshot.mockResolvedValue(snapshot({ findingCount: 1, savingsUSD: 2, topFindings: [] }))
     const overview = polled(makePayload(new Date()))
     const { rerender } = render(<OverviewContent period="30days" provider="all" overview={overview} refreshToken={0} />)
     await waitFor(() => expect(getOptimizeSnapshot).toHaveBeenCalledTimes(1))
     // The first read may serve a cached scan (no forced maxAge).
-    expect(getOptimizeSnapshot.mock.calls[0]![5]).toBeUndefined()
+    expect(getOptimizeSnapshot.mock.calls[0]![0]?.maxAgeMs).toBeUndefined()
     const actCalls = getActReport.mock.calls.length
     const yieldCalls = getYield.mock.calls.length
 
     rerender(<OverviewContent period="30days" provider="all" overview={overview} refreshToken={1} />)
 
     await waitFor(() => expect(getOptimizeSnapshot).toHaveBeenCalledTimes(2))
-    expect(getOptimizeSnapshot.mock.calls[1]![5]).toBe(0) // forced recompute
+    expect(getOptimizeSnapshot.mock.calls[1]![0]?.maxAgeMs).toBe(0) // forced recompute
     expect(getActReport.mock.calls.length).toBe(actCalls + 1)
     expect(getYield.mock.calls.length).toBe(yieldCalls + 1)
   })
@@ -1501,7 +1680,7 @@ describe('Overview across local midnight', () => {
       expect(within(coach()).queryByText('$31.50')).not.toBeInTheDocument()
       await act(async () => { await vi.advanceTimersByTimeAsync(0) })
       expect(getOptimizeSnapshot).toHaveBeenCalledTimes(2)
-      expect(getOptimizeSnapshot.mock.calls[1]![5]).toBeUndefined()
+      expect(getOptimizeSnapshot.mock.calls[1]![0]?.maxAgeMs).toBeUndefined()
       expect(within(coach()).queryByText('$31.50')).not.toBeInTheDocument()
 
       await act(async () => {

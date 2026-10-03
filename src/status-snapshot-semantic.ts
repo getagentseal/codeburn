@@ -37,7 +37,10 @@ import { DAILY_CACHE_VERSION } from './daily-cache.js'
 // v11: Copilot OTel trace-level tool/skill/bash metadata is now attributed
 // once per trace, so older snapshots can carry per-span-duplicated skill/tool
 // turns and cost for otherwise identical period queries.
-export const STATUS_SNAPSHOT_RENDER_VERSION = 11
+// v12: scoped payloads carry project-attributable Optimize evidence and omit
+// unprovable global Optimize findings, so an unscoped snapshot has different
+// rendering semantics even when its corpus fingerprint is unchanged.
+export const STATUS_SNAPSHOT_RENDER_VERSION = 12
 
 /// The semantic key recorded on every status snapshot. A snapshot whose stored
 /// key differs (an older render revision, or a different daily-cache version)
@@ -48,4 +51,13 @@ export function statusSnapshotSemanticKey(
   renderVersion: number = STATUS_SNAPSHOT_RENDER_VERSION,
 ): string {
   return `${version}:render-${renderVersion}:daily-${DAILY_CACHE_VERSION}`
+}
+
+/**
+ * Stable identity for one status payload query. Keep this next to the semantic
+ * revision so the CLI and its tests cannot accidentally omit a scope field from
+ * the snapshot key while adding it to the payload builder.
+ */
+export function statusSnapshotQueryKey(query: Readonly<Record<string, unknown>>): string {
+  return JSON.stringify(query)
 }

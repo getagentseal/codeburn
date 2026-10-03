@@ -69,6 +69,16 @@ describe('persisted Overview headline', () => {
     expect(readOverviewHeadline(requestedKey, NOW)).toBeNull()
   })
 
+  it('does not let a scoped payload without period totals fill the unscoped headline', () => {
+    const allKey = 'overview|all|week|local|all|filter:one'
+    const alphaKey = 'overview|all|week|local|project:cGF0aDovd29yay9hbHBoYQ|filter:one'
+    const scoped = { ...payload(), current: { ...payload().current, cost: 7 } }
+
+    expect(writeOverviewHeadline(alphaKey, scoped, NOW)).not.toBeNull()
+    expect(readOverviewHeadline(alphaKey, NOW)).not.toBeNull()
+    expect(readOverviewHeadline(allKey, NOW)).toBeNull()
+  })
+
   it('ignores legacy v1 headlines that may already contain a cross-period write', () => {
     localStorage.setItem('codeburn.overview-headlines.v1', JSON.stringify({
       'overview|all|week': {

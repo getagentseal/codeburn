@@ -108,4 +108,12 @@ describe('navHistory', () => {
     expect(base).not.toBe(navStateKey(state({ visibleCount: 240 })))
     expect(base).toBe(navStateKey(state()))
   })
+
+  it('keeps quick project scope out of NavState serialization and identity', () => {
+    const current = state()
+    const scopedRuntimeState = { ...current, projectId: 'path:/work/alpha' } as NavState & { projectId: string }
+
+    expect(JSON.stringify(current)).not.toContain('projectId')
+    expect(navStateKey(scopedRuntimeState)).toBe(navStateKey(current))
+  })
 })

@@ -3,12 +3,13 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { render, screen, within } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { Polled } from '../hooks/usePolled'
-import type { BranchSpendReport, MenubarPayload, SpendFlow } from '../lib/types'
+import type { BranchSpendReport, DesktopReportQuery, MenubarPayload, SpendFlow } from '../lib/types'
+import { PROJECT_ALPHA } from '../test/projectScopeFixtures'
 import { Spend, SpendContent } from './Spend'
 
 const ROOT_WEEK_OVERVIEW = JSON.parse(
@@ -20,10 +21,10 @@ function polled(data: MenubarPayload): Polled<MenubarPayload> {
 }
 
 const { getOverview, getSpendFlow, getTimeline, getBranchSpend } = vi.hoisted(() => ({
-  getOverview: vi.fn<(period: string, provider: string) => Promise<MenubarPayload>>(),
-  getSpendFlow: vi.fn<(period: string, provider: string) => Promise<SpendFlow>>(),
-  getTimeline: vi.fn<(period: string, provider: string) => Promise<MenubarPayload>>(),
-  getBranchSpend: vi.fn<(period: string, provider: string) => Promise<BranchSpendReport>>(),
+  getOverview: vi.fn<(query: DesktopReportQuery) => Promise<MenubarPayload>>(),
+  getSpendFlow: vi.fn<(query: DesktopReportQuery) => Promise<SpendFlow>>(),
+  getTimeline: vi.fn<(query: DesktopReportQuery) => Promise<MenubarPayload>>(),
+  getBranchSpend: vi.fn<(query: DesktopReportQuery) => Promise<BranchSpendReport>>(),
 }))
 vi.mock('../lib/ipc', async orig => {
   const actual = await orig<typeof import('../lib/ipc')>()
@@ -153,12 +154,40 @@ describe('Spend', () => {
     vi.setSystemTime(new Date(2026, 6, 10, 12, 0, 0))
     getOverview.mockReset()
     getSpendFlow.mockReset()
+    getTimeline.mockReset()
     getBranchSpend.mockReset()
+    getTimeline.mockResolvedValue(makePayload(new Date()))
     getBranchSpend.mockResolvedValue(emptyBranchReport())
   })
 
   afterEach(() => {
     vi.useRealTimers()
+  })
+
+  it('Scenario: Spend flow, timeline, and branch reports share one project query', async () => {
+    const payload = makePayload(new Date())
+    getOverview.mockResolvedValue(payload)
+    getSpendFlow.mockResolvedValue(emptyFlow())
+    getTimeline.mockResolvedValue(payload)
+    const scopedProps = {
+      period: 'week',
+      provider: 'all',
+      projectId: PROJECT_ALPHA.id,
+      deviceScope: 'local',
+    } as any
+
+    render(<Spend {...scopedProps} />)
+
+    await waitFor(() => expect(getOverview).toHaveBeenCalledWith(expect.objectContaining({
+      projectId: PROJECT_ALPHA.id,
+      deviceScope: 'local',
+    })))
+    await waitFor(() => expect(getSpendFlow).toHaveBeenCalledWith(expect.objectContaining({
+      projectId: PROJECT_ALPHA.id,
+      deviceScope: 'local',
+    })))
+    expect(getTimeline).toHaveBeenCalledWith(expect.objectContaining({ projectId: PROJECT_ALPHA.id, deviceScope: 'local' }))
+    expect(getBranchSpend).toHaveBeenCalledWith(expect.objectContaining({ projectId: PROJECT_ALPHA.id, deviceScope: 'local' }))
   })
 
   it('zero-fills a contiguous 15-day calendar window with a real date axis, projects, and Sankey ribbons', async () => {

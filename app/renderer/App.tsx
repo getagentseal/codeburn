@@ -41,6 +41,7 @@ import { isMacPlatform, isModifierChord, shortcutLabel } from './lib/platform'
 import { localDateKey, PERIOD_LABELS } from './lib/period'
 import { generationAt } from './lib/generation'
 import { detectedProviders as detectedProviderList, providerLabel, readDisabledProviders, type DetectedProvider } from './lib/providers'
+import { QuickProjectScopeProvider, useQuickProjectScope } from './lib/projectScope'
 import { reportMemoKey } from './lib/reportMemoKey'
 import { persistRefreshValue, readRefreshValue, resolveCadenceMs, useOnBattery, RefreshCadenceContext, type RefreshCadence } from './lib/refreshCadence'
 import { OverviewContent, type InvestigateRequest } from './sections/Overview'
@@ -160,13 +161,24 @@ const STANDARD_PERIODS: Period[] = ['today', 'week', '30days', 'month', 'all', '
 // Instant-switch memo key for an overview result. Shared by the overview poll
 // and the provider prefetcher so the two never drift out of sync. Exported so
 // the prefetch-storm test can assert warmed keys survive between polls.
-export function overviewMemoKey(provider: string, period: Period, range: DateRange | null, configSource: string | null, scope: Scope = 'local', now = new Date()): string {
+export function overviewMemoKey(
+  provider: string,
+  period: Period,
+  range: DateRange | null,
+  configSource: string | null,
+  scope: Scope = 'local',
+  scopeKeyOrNow: string | Date = 'all',
+  now = new Date(),
+): string {
+  const projectScopeKey = scopeKeyOrNow instanceof Date ? 'all' : scopeKeyOrNow
+  const boundaryNow = scopeKeyOrNow instanceof Date ? scopeKeyOrNow : now
   const boundary = period === 'today'
-    ? localDateKey(now)
+    ? localDateKey(boundaryNow)
     : period === 'month'
-      ? `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
+      ? `${boundaryNow.getFullYear()}-${String(boundaryNow.getMonth() + 1).padStart(2, '0')}`
       : ''
-  return `overview|${provider}|${period}|${range?.from ?? ''}-${range?.to ?? ''}|${configSource ?? ''}|${scope}|${boundary}`
+  const base = `overview|${provider}|${period}|${range?.from ?? ''}-${range?.to ?? ''}|${configSource ?? ''}|${scope}|${boundary}`
+  return projectScopeKey === 'all' ? base : `${base}|${projectScopeKey}`
 }
 
 /** Exact report identities that make a top-level destination complete enough
@@ -179,17 +191,18 @@ export function selectedReportMemoKeys(
   range: DateRange | null,
   activeOverviewKey: string,
   disabledProviders: Iterable<string> = readDisabledProviders(),
+  scopeKey = 'all',
 ): string[] {
   if (section === 'overview' || section === 'pullRequests') return [activeOverviewKey]
-  if (section === 'sessions') return [reportMemoKey('sessions', period, provider, range)]
-  if (section === 'spend') return [activeOverviewKey, reportMemoKey('spendflow', period, provider, range)]
+  if (section === 'sessions') return [reportMemoKey('sessions', period, provider, range, '', scopeKey)]
+  if (section === 'spend') return [activeOverviewKey, reportMemoKey('spendflow', period, provider, range, '', scopeKey)]
   if (section === 'optimize') return [
     activeOverviewKey,
-    reportMemoKey('optimize', period, provider, range),
-    reportMemoKey('yield', period, provider, range),
+    reportMemoKey('optimize', period, provider, range, '', scopeKey),
+    reportMemoKey('yield', period, provider, range, '', scopeKey),
   ]
-  if (section === 'models') return [reportMemoKey('models', period, provider, range, 'false')]
-  if (section === 'compare') return [reportMemoKey('comparemodels', period, provider, range)]
+  if (section === 'models') return [reportMemoKey('models', period, provider, range, 'false', scopeKey)]
+  if (section === 'compare') return [reportMemoKey('comparemodels', period, provider, range, '', scopeKey)]
   if (section === 'plans') return [
     `quota|${[...disabledProviders].sort().join(',')}`,
     reportMemoKey('plans', period),
@@ -255,6 +268,20 @@ function persistProjectFiltered(active: boolean): void {
   try { globalThis.localStorage?.setItem('codeburn.projectFiltered', active ? '1' : '0') } catch { /* storage can be unavailable */ }
 }
 
+/** A concrete quick project is always a local-device report, without changing
+ * the user's requested Combined preference. Keep this synchronous so every
+ * query and supported section sees the same transition frame. */
+export function resolveEffectiveDeviceScope(requestedScope: Scope, projectId: string | null, projectFiltered: boolean): Scope {
+  return projectId !== null || projectFiltered ? 'local' : requestedScope
+}
+
+function projectFilterGeneration(filter: { project: string[]; exclude: string[] }): string {
+  return JSON.stringify({
+    project: [...filter.project].sort(),
+    exclude: [...filter.exclude].sort(),
+  })
+}
+
 export function refreshedLabel(lastSuccessAt: number | null, loading: boolean, now: number): string {
   if (loading && lastSuccessAt === null) return t('shell.refreshedAt.refreshing')
   if (lastSuccessAt === null) return t('shell.refreshedAt.notYet')
@@ -285,9 +312,11 @@ export function App() {
   )
   return (
     <RefreshCadenceContext.Provider value={cadence}>
-      <LocaleProvider>
-        <AppMain />
-      </LocaleProvider>
+      <QuickProjectScopeProvider>
+        <LocaleProvider>
+          <AppMain />
+        </LocaleProvider>
+      </QuickProjectScopeProvider>
     </RefreshCadenceContext.Provider>
   )
 }
@@ -350,6 +379,15 @@ function initialNavState(): NavState {
 }
 
 function AppMain() {
+  const {
+    quickScope,
+    projectId,
+    projectScopeKey,
+    projectScopeSelected,
+    catalogRevision,
+    refreshCatalog,
+    clearProjectScope,
+  } = useQuickProjectScope()
   const [nav, setNav] = useState<NavState>(initialNavState)
   const [history, setHistory] = useState<NavHistory>(EMPTY_NAV_HISTORY)
   // Mirrors for synchronous reads inside callbacks (commit/back/forward must
@@ -373,7 +411,8 @@ function AppMain() {
   const [projectFiltered, setProjectFiltered] = useState(initialProjectFiltered)
   // Combined reports unfiltered paired-device usage, so a project filter would
   // come back inside the aggregate. The filter wins, from the first poll.
-  const scope: Scope = projectFiltered ? 'local' : requestedScope
+  const effectiveDeviceScope = resolveEffectiveDeviceScope(requestedScope, projectId, projectFiltered)
+  const scope = effectiveDeviceScope
   // Rolls the shell once per local calendar day: the overview memo keys bake in
   // a today/month boundary, so midnight must produce a re-render — but ticking
   // a wall clock every second would re-render the whole tree for a label one
@@ -393,6 +432,17 @@ function AppMain() {
   const [, setCurrencyTick] = useState(0)
   const [snapshotRevision, setSnapshotRevision] = useState(0)
   const configGenerationRef = useRef(0)
+  const filterGenerationRef = useRef<string | null>(null)
+  const catalogRevisionRef = useRef<string | null>(null)
+  const warmedKeys = useRef<Set<string>>(new Set())
+
+  const invalidateRendererMemo = useCallback(() => {
+    configGenerationRef.current++
+    warmedKeys.current.clear()
+    clearPolledMemo()
+    clearOverviewHeadlines()
+    setSnapshotRevision(revision => revision + 1)
+  }, [])
 
   /** Commit a new app position: one history entry per committed change, with
    *  identical consecutive states coalesced (poll refreshes never push). */
@@ -450,20 +500,30 @@ function AppMain() {
   // a provider/config filter, so onScopeChange forces provider='all' and clears
   // the config scope before this poll runs. Passing scope='local' produces the
   // same flag-free argv as before, so local users are unaffected.
-  const activeOverviewKey = overviewMemoKey(provider, period, customRange, claudeConfigSource, scope, new Date())
+  const activeOverviewKey = overviewMemoKey(provider, period, customRange, claudeConfigSource, scope, projectScopeKey, new Date())
   // Provider membership is period/range-specific. Keep the catalog tied to the
   // exact unscoped local overview that produced it so a scoped view cannot leak
   // providers from a different time horizon while its own payload is loading.
-  const allProviderOverviewKey = overviewMemoKey('all', period, customRange, null, 'local', new Date())
+  const allProviderOverviewKey = overviewMemoKey('all', period, customRange, null, 'local', projectScopeKey, new Date())
+  const overviewQuery = scope === 'combined'
+    ? {
+        period,
+        provider: 'all',
+        range: customRange,
+        deviceScope: scope,
+        projectId: null,
+      }
+    : {
+        period,
+        provider,
+        range: customRange,
+        deviceScope: scope,
+        projectId,
+        ...(claudeConfigSource ? { configSource: claudeConfigSource } : {}),
+      }
   const overview = usePolled<MenubarPayload>(
-    () => scope === 'combined'
-      ? codeburn.getOverview(period, 'all', customRange ?? undefined, undefined, undefined, 'combined')
-      : claudeConfigSource
-      ? codeburn.getOverview(period, provider, customRange ?? undefined, claudeConfigSource)
-      : customRange
-      ? codeburn.getOverview(period, provider, customRange)
-      : codeburn.getOverview(period, provider),
-    [period, provider, customRange?.from, customRange?.to, claudeConfigSource, scope],
+    () => codeburn.getOverview(overviewQuery),
+    [period, provider, customRange?.from, customRange?.to, claudeConfigSource, scope, projectId, projectScopeKey],
     { memoKey: activeOverviewKey },
   )
   const refreshOverview = overview.refresh
@@ -540,7 +600,7 @@ function AppMain() {
   // and still emits without it if that fetch fails.
   const snapshotDayRef = useRef<string | null>(null)
   useEffect(() => {
-    if (!overview.data || provider !== 'all' || customRange || claudeConfigSource || scope !== 'local') return
+    if (!overview.data || provider !== 'all' || customRange || claudeConfigSource || scope !== 'local' || projectId !== null) return
     const today = localDateKey(new Date())
     if (snapshotDayRef.current === today) return
     snapshotDayRef.current = today
@@ -553,11 +613,11 @@ function AppMain() {
     void (async () => {
       let modelCategories: Map<string, string> | undefined
       try {
-        modelCategories = topCategoryByModel(await codeburn.getModels(period, 'all', false))
+        modelCategories = topCategoryByModel(await codeburn.getModels({ period, provider: 'all', byTask: false, deviceScope: scope, projectId }))
       } catch { /* degrade: emit the snapshot without per-model topCategory */ }
       trackEvent('usage_snapshot', usageSnapshotProps(payload, modelCategories))
     })()
-  }, [overview.data, provider, customRange, claudeConfigSource, scope, period])
+  }, [overview.data, provider, customRange, claudeConfigSource, scope, period, projectId])
 
   useEffect(() => {
     let saved: string | null = null
@@ -570,12 +630,12 @@ function AppMain() {
   }, [])
 
   useEffect(() => {
-    // Only the all-provider payload is authoritative for the picker. A scoped
-    // payload contains just the selected provider; merging it forever also
-    // leaked idle providers across period changes.
+    // Only the all-provider payload is authoritative for the picker. It remains
+    // authoritative under an exact project scope too: that payload is the
+    // provider catalog for the selected project, not a single-provider slice.
     if (!overview.data || overview.switching || provider !== 'all' || claudeConfigSource || scope !== 'local') return
     setProviderCatalog({ key: allProviderOverviewKey, entries: detectedProviderList(overview.data.current) })
-  }, [allProviderOverviewKey, claudeConfigSource, overview.data, overview.switching, provider, scope])
+  }, [allProviderOverviewKey, claudeConfigSource, overview.data, overview.switching, provider, scope, projectId])
 
   const selectedProviderEntry = useMemo(() => provider === 'all'
     ? null
@@ -630,7 +690,6 @@ function AppMain() {
   // for a user-triggered fetch without re-arming the whole loop on each toggle.
   const overviewBusyRef = useRef(false)
   overviewBusyRef.current = overview.loading
-  const warmedKeys = useRef<Set<string>>(new Set())
   useEffect(() => {
     // Keep this first slice local-only; combined scope has its own remote-data
     // lifecycle and must not inherit local-corpus assumptions by accident.
@@ -666,28 +725,28 @@ function AppMain() {
       // revalidation.
       const reportTargets: Array<{ key: string; load: () => Promise<unknown> }> = [
         {
-          key: reportMemoKey('sessions', targetPeriod, provider),
-          load: () => codeburn.getSessions(targetPeriod, provider, undefined, true),
+          key: reportMemoKey('sessions', targetPeriod, provider, null, '', projectScopeKey),
+          load: () => codeburn.getSessions({ period: targetPeriod, provider, deviceScope: scope, projectId, background: true }),
         },
         {
-          key: reportMemoKey('spendflow', targetPeriod, provider),
-          load: () => codeburn.getSpendFlow(targetPeriod, provider, undefined, true),
+          key: reportMemoKey('spendflow', targetPeriod, provider, null, '', projectScopeKey),
+          load: () => codeburn.getSpendFlow({ period: targetPeriod, provider, deviceScope: scope, projectId, background: true }),
         },
         {
-          key: reportMemoKey('models', targetPeriod, provider, null, 'false'),
-          load: () => codeburn.getModels(targetPeriod, provider, false, undefined, true),
+          key: reportMemoKey('models', targetPeriod, provider, null, 'false', projectScopeKey),
+          load: () => codeburn.getModels({ period: targetPeriod, provider, byTask: false, deviceScope: scope, projectId, background: true }),
         },
         {
-          key: reportMemoKey('comparemodels', targetPeriod, provider),
-          load: () => codeburn.getCompareModels(targetPeriod, provider, true),
+          key: reportMemoKey('comparemodels', targetPeriod, provider, null, '', projectScopeKey),
+          load: () => codeburn.getCompareModels({ period: targetPeriod, provider, deviceScope: scope, projectId, background: true }),
         },
         {
-          key: reportMemoKey('optimize', targetPeriod, provider),
-          load: () => codeburn.getOptimizeReport(targetPeriod, provider, undefined, true),
+          key: reportMemoKey('optimize', targetPeriod, provider, null, '', projectScopeKey),
+          load: () => codeburn.getOptimizeReport({ period: targetPeriod, provider, deviceScope: scope, projectId, background: true }),
         },
         {
-          key: reportMemoKey('yield', targetPeriod, provider),
-          load: () => codeburn.getYield(targetPeriod, provider, undefined, true),
+          key: reportMemoKey('yield', targetPeriod, provider, null, '', projectScopeKey),
+          load: () => codeburn.getYield({ period: targetPeriod, provider, deviceScope: scope, projectId, background: true }),
         },
         {
           key: reportMemoKey('plans', targetPeriod),
@@ -721,14 +780,14 @@ function AppMain() {
       for (const targetProvider of warmProviderIds ? warmProviderIds.split('\u0000') : []) {
         if (cancelled) break
         if (targetProvider === provider) continue
-        const key = overviewMemoKey(targetProvider, period, null, null)
+        const key = overviewMemoKey(targetProvider, period, null, null, scope, projectScopeKey)
         if (warmedKeys.current.has(key) || hasPolledMemo(key)) continue
         await holdWhileBusyOrHidden()
         if (cancelled) break
         if (warmedKeys.current.has(key) || hasPolledMemo(key)) continue
         try {
           const configGeneration = configGenerationRef.current
-          const value = await codeburn.getOverview(period, targetProvider, undefined, undefined, true)
+          const value = await codeburn.getOverview({ period, provider: targetProvider, deviceScope: scope, projectId, background: true })
           // A result is kept, and the key marked warm, only when it is usable:
           // computed under the current config and fully hydrated. A rejection or
           // a partial parse marks nothing, so a later pass retries that key.
@@ -747,7 +806,7 @@ function AppMain() {
     // `overview.data == null` (a boolean) gates on first-resolution without
     // re-running every poll; the data content itself is intentionally not a dep.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ready, period, provider, warmProviderIds, customRange, claudeConfigSource, scope, snapshotRevision, overview.data == null])
+  }, [ready, period, provider, warmProviderIds, customRange, claudeConfigSource, scope, projectId, projectScopeKey, snapshotRevision, overview.data == null])
 
   const refreshVisible = useCallback(() => {
     refreshOverview()
@@ -761,13 +820,17 @@ function AppMain() {
   // Purge the memo, then force-refresh the active view so the new values land in a
   // couple seconds (quick like the menubar) instead of at the next poll.
   const onConfigMutated = useCallback(() => {
-    configGenerationRef.current++
-    warmedKeys.current.clear()
-    clearPolledMemo()
-    clearOverviewHeadlines()
-    setSnapshotRevision(revision => revision + 1)
+    invalidateRendererMemo()
     refreshVisible()
-  }, [refreshVisible])
+  }, [invalidateRendererMemo, refreshVisible])
+
+  const onProjectFilterMutating = useCallback(() => {
+    // A persistent-filter write can invalidate the active quick scope before
+    // the IPC write resolves. Clear it first so the replacement report cannot
+    // issue another request for a project that is about to be hidden.
+    clearProjectScope()
+    invalidateRendererMemo()
+  }, [clearProjectScope, invalidateRendererMemo])
 
   const navigate = useCallback((next: Section, pane: SettingsPane = 'general') => {
     setSettingsPane(pane)
@@ -881,15 +944,28 @@ function AppMain() {
       .then(filter => {
         if (cancelled) return
         const active = filter.project.length > 0 || filter.exclude.length > 0
-        // reportMemoKey has no filter component, so a snapshot memoised under
-        // the other scope would repaint until the next fetch lands.
-        if (active !== initialProjectFiltered()) clearPolledMemo()
+        const generation = projectFilterGeneration(filter)
+        const generationChanged = filterGenerationRef.current !== null
+          ? filterGenerationRef.current !== generation
+          : active !== initialProjectFiltered()
+        filterGenerationRef.current = generation
+        if (generationChanged) {
+          invalidateRendererMemo()
+          if (catalogRevision !== null) void refreshCatalog()
+        }
         setProjectFiltered(active)
         persistProjectFiltered(active)
       })
       .catch(() => { /* an older preload has no getProjectFilter to honour */ })
     return () => { cancelled = true }
-  }, [snapshotRevision, refreshToken, overview.data])
+  }, [catalogRevision, invalidateRendererMemo, overview.data, refreshCatalog, refreshToken, snapshotRevision])
+
+  useEffect(() => {
+    if (catalogRevision === null) return
+    const previous = catalogRevisionRef.current
+    catalogRevisionRef.current = catalogRevision
+    if (previous !== null && previous !== catalogRevision) invalidateRendererMemo()
+  }, [catalogRevision, invalidateRendererMemo])
 
   // Collapse the stored preference too, so clearing the filter later starts
   // from local instead of silently restoring a combined view.
@@ -927,7 +1003,7 @@ function AppMain() {
     ? `${customRange ? rangeLabel(customRange) : PERIOD_LABELS[period]} · ${t('shell.scope.combined')}`
     : `${customRange ? rangeLabel(customRange) : PERIOD_LABELS[period]} · ${activeProviderLabel}${activeConfigLabel ? ` · ${activeConfigLabel}` : ''}`
   const refreshing = usePolledInFlight() || overview.switching || (!!headlineSnapshot && overview.loading)
-  const selectedReportKeys = selectedReportMemoKeys(section, period, provider, customRange, activeOverviewKey)
+  const selectedReportKeys = selectedReportMemoKeys(section, period, provider, customRange, activeOverviewKey, readDisabledProviders(), projectScopeKey)
   const selectedReportTimestamps = selectedReportKeys.map(polledMemoTimestamp)
   const reportLastSuccessAt = selectedReportKeys.length > 0 && selectedReportTimestamps.every((value): value is number => value != null)
     ? Math.min(...selectedReportTimestamps)
@@ -941,6 +1017,7 @@ function AppMain() {
     && scope === 'local'
     && !claudeConfigSource
     && provider === 'all'
+    && projectId === null
     && !projectFiltered
     && !!overview.data?.periodTotals
   const generationClock = headlineFromGeneration ? generationAt() : null
@@ -962,7 +1039,7 @@ function AppMain() {
         {section === 'plans' ? (
           <Plans period={period} refreshToken={refreshToken} onNavigate={navigate} ready={ready} />
         ) : section === 'settings' ? (
-          <Settings period={period} refreshToken={refreshToken} onNavigate={navigate} initialPane={settingsPane} claudeConfigs={claudeConfigs} claudeConfigSource={claudeConfigSource} onConfigMutated={onConfigMutated} scope={scope} onScopeChange={onScopeChange} projectFiltered={projectFiltered} />
+          <Settings period={period} refreshToken={refreshToken} onNavigate={navigate} initialPane={settingsPane} claudeConfigs={claudeConfigs} claudeConfigSource={claudeConfigSource} onConfigMutated={onConfigMutated} onProjectFilterMutating={onProjectFilterMutating} scope={scope} onScopeChange={onScopeChange} projectFiltered={projectFiltered} projectScopeSelected={projectScopeSelected} />
         ) : section === 'plugins' ? (
           <PluginsSection onNavigate={navigate} />
         ) : (
@@ -988,25 +1065,25 @@ function AppMain() {
             />
             <div className={motionClass('body', 'section-fade')}>
               {section === 'overview' ? (
-                <OverviewContent period={period} provider={provider} range={customRange} overview={overview} onNavigate={navigate} onInvestigate={investigate} ready={ready} scope={scope} configSource={claudeConfigSource} refreshToken={refreshToken} headlineSnapshot={headlineSnapshot} />
+                <OverviewContent period={period} provider={provider} range={customRange} overview={overview} onNavigate={navigate} onInvestigate={investigate} ready={ready} scope={scope} deviceScope={scope} projectId={projectId} configSource={claudeConfigSource} refreshToken={refreshToken} headlineSnapshot={headlineSnapshot} />
               ) : section === 'sessions' ? (
                 // A new sort or a changed selection reorders the whole list, so
                 // the pagination depth resets IN THE SAME commit — one history
                 // entry, and the depth a Back/Forward restores stays whatever it
                 // was when that position was committed.
-                <Sessions period={period} provider={provider} range={customRange} refreshToken={refreshToken} detectedProviders={visibleProviderEntries} onProviderChange={onProviderSelect} ready={ready} filters={filters} onFiltersChange={next => commitNav({ filters: next, visibleCount: INITIAL_VISIBLE })} openSessionId={openSessionId} onSessionOpen={key => commitNav({ sessionId: key })} onSessionClose={() => commitNav({ sessionId: null })} sort={nav.sort as SessionSort} onSortChange={value => commitNav({ sort: value, visibleCount: INITIAL_VISIBLE })} visibleCount={nav.visibleCount} onVisibleCountChange={value => commitNav({ visibleCount: value })} />
+                <Sessions period={period} provider={provider} range={customRange} projectId={projectId} deviceScope={scope} refreshToken={refreshToken} detectedProviders={visibleProviderEntries} onProviderChange={onProviderSelect} ready={ready} filters={filters} onFiltersChange={next => commitNav({ filters: next, visibleCount: INITIAL_VISIBLE })} openSessionId={openSessionId} onSessionOpen={key => commitNav({ sessionId: key })} onSessionClose={() => commitNav({ sessionId: null })} sort={nav.sort as SessionSort} onSortChange={value => commitNav({ sort: value, visibleCount: INITIAL_VISIBLE })} visibleCount={nav.visibleCount} onVisibleCountChange={value => commitNav({ visibleCount: value })} />
               ) : section === 'pullRequests' ? (
-                <PullRequestsContent overview={overview} period={period} provider={provider} range={customRange} onInvestigate={investigate} />
+                <PullRequestsContent overview={overview} period={period} provider={provider} range={customRange} projectId={projectId} deviceScope={scope} onInvestigate={investigate} />
               ) : section === 'spend' ? (
-                <SpendContent period={period} provider={provider} range={customRange} overview={overview} refreshToken={refreshToken} ready={ready} onInvestigate={investigate} />
+                <SpendContent period={period} provider={provider} range={customRange} projectId={projectId} deviceScope={scope} overview={overview} refreshToken={refreshToken} ready={ready} onInvestigate={investigate} />
               ) : section === 'optimize' ? (
-                <OptimizeContent period={period} provider={provider} range={customRange} overview={overview} refreshToken={refreshToken} ready={ready} configSource={claudeConfigSource} scope={scope} />
+                <OptimizeContent period={period} provider={provider} range={customRange} projectId={projectId} deviceScope={scope} overview={overview} refreshToken={refreshToken} ready={ready} configSource={claudeConfigSource} />
               ) : section === 'models' ? (
-                <Models period={period} provider={provider} range={customRange} refreshToken={refreshToken} onNavigate={navigate} onInvestigate={investigate} ready={ready} />
+                <Models period={period} provider={provider} range={customRange} projectId={projectId} deviceScope={scope} refreshToken={refreshToken} onNavigate={navigate} onInvestigate={investigate} ready={ready} />
               ) : section === 'compare' ? (
-                <Compare period={period} provider={provider} range={customRange} refreshToken={refreshToken} ready={ready} onInvestigate={investigate} />
+                <Compare period={period} provider={provider} range={customRange} projectId={projectId} deviceScope={scope} refreshToken={refreshToken} ready={ready} onInvestigate={investigate} />
               ) : section === 'periods' ? (
-                <PeriodCompare provider={provider} refreshToken={refreshToken} ready={ready} onInspectContribution={inspectContribution} />
+                <PeriodCompare provider={provider} projectId={projectId} deviceScope={scope} refreshToken={refreshToken} ready={ready} onInspectContribution={inspectContribution} />
               ) : (
                 <SectionPlaceholder title={sectionTitles()[section]} />
               )}

@@ -528,6 +528,16 @@ export type MenubarPayload = {
   telemetrySnapshot: TelemetrySnapshot | null
 }
 
+/// A selected Desktop project may not inherit generation-wide fields from the
+/// unscoped report. The caller declares whether its streak was rebuilt from
+/// exact project buckets; otherwise the global field is removed too.
+export function applyScopedPayloadPolicy(payload: MenubarPayload, scoped: boolean, streakAttributable = false): MenubarPayload {
+  if (!scoped) return payload
+  delete payload.periodTotals
+  if (!streakAttributable) delete payload.streak
+  return payload
+}
+
 function oneShotRateFor(editTurns: number, oneShotTurns: number): number | null {
   if (editTurns === 0) return null
   return oneShotTurns / editTurns

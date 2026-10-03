@@ -1,5 +1,6 @@
 import type { DailyEntry, ProjectDayStats, ProviderDaySlice } from './daily-cache.js'
 import type { PeriodData } from './menubar-json.js'
+import { canonicalDesktopProjectId, exactProjectBucketKey, type DesktopProjectId, type ProjectBucketKey } from './project-scope.js'
 import { CATEGORY_LABELS, type ProjectSummary, type TaskCategory } from './types.js'
 import { behavioralCallWeight, isBehavioralTurn } from './behavioral-weight.js'
 import { billableOutputTokens, modelRowKey } from './models.js'
@@ -53,6 +54,30 @@ function emptySlice(): ProviderDaySlice {
   }
 }
 
+type ProjectOwner = {
+  canonicalId: DesktopProjectId
+  sourceLabel: string
+  displayName: string
+  path: string | null
+  bucketKey: ProjectBucketKey
+}
+
+function projectOwner(project: ProjectSummary): ProjectOwner {
+  const canonicalId = canonicalDesktopProjectId({ project: project.project, projectPath: project.projectPath })
+  const path = canonicalId.startsWith('path:') && project.projectPath.length > 0 ? project.projectPath : null
+  const displayPath = path?.replace(/\\/g, '/').replace(/\/+$/, '')
+  const displayName = displayPath
+    ? displayPath.slice(displayPath.lastIndexOf('/') + 1) || project.project
+    : project.project
+  return {
+    canonicalId,
+    sourceLabel: project.project,
+    displayName,
+    path,
+    bucketKey: exactProjectBucketKey(canonicalId),
+  }
+}
+
 export function aggregateProjectsIntoDays(projects: ProjectSummary[], dateKeyFn: (iso: string) => string = dateKey): DailyEntry[] {
   const byDate = new Map<string, DailyEntry>()
   const ensure = (date: string): DailyEntry => {
@@ -65,31 +90,49 @@ export function aggregateProjectsIntoDays(projects: ProjectSummary[], dateKeyFn:
     if (!s) { s = emptySlice(); day.providers[provider] = s }
     return s
   }
-  const ensureProject = (holder: { projects?: Record<string, ProjectDayStats> }, project: string, path?: string): ProjectDayStats => {
+  const ensureProject = (holder: { projects?: Record<string, ProjectDayStats> }, owner: ProjectOwner): ProjectDayStats => {
     const projects = (holder.projects ??= {})
-    // defineProperty so a project directory named "__proto__" becomes an own
+    // defineProperty so a project identity named "__proto__" becomes an own
     // key instead of mutating the prototype link.
-    let p = Object.hasOwn(projects, project) ? projects[project] : undefined
+    let p = Object.hasOwn(projects, owner.bucketKey) ? projects[owner.bucketKey] : undefined
     if (!p) {
-      p = { cost: 0, calls: 0, savingsUSD: 0, sessions: 0 }
-      Object.defineProperty(projects, project, { value: p, enumerable: true, writable: true, configurable: true })
+      p = {
+        canonicalId: owner.canonicalId,
+        sourceLabel: owner.sourceLabel,
+        displayName: owner.displayName,
+        path: owner.path,
+        provenance: 'exact',
+        cost: 0,
+        calls: 0,
+        savingsUSD: 0,
+        sessions: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        editTurns: 0,
+        oneShotTurns: 0,
+        models: {},
+        categories: {},
+      }
+      Object.defineProperty(projects, owner.bucketKey, { value: p, enumerable: true, writable: true, configurable: true })
     }
-    if (!p.path && path) p.path = path
     return p
   }
 
   for (const project of projects) {
+    const owner = projectOwner(project)
     for (const session of project.sessions) {
       const sessionDate = dateKeyFn(session.firstTimestamp)
       const sessionDay = ensure(sessionDate)
       sessionDay.sessions += 1
-      ensureProject(sessionDay, session.project, project.projectPath).sessions += 1
+      ensureProject(sessionDay, owner).sessions += 1
       // A session belongs to exactly one provider; its calls all carry it.
       const sessionProvider = session.turns.flatMap(t => t.assistantCalls)[0]?.provider
       if (sessionProvider) {
         const slice = ensureSlice(sessionDay, sessionProvider)
         slice.sessions! += 1
-        ensureProject(slice, session.project, project.projectPath).sessions += 1
+        ensureProject(slice, owner).sessions += 1
       }
 
       for (const turn of session.turns) {
@@ -115,6 +158,7 @@ export function aggregateProjectsIntoDays(projects: ProjectSummary[], dateKeyFn:
         //   what makes it exact now.)
         const turnDate = dateKeyFn(turn.timestamp || turn.assistantCalls[0]!.timestamp)
         const turnDay = ensure(turnDate)
+        const turnProject = ensureProject(turnDay, owner)
 
         // A turn whose calls are all supplementary accounting (copilot rollup
         // / paired store rows) is not a behavioral exchange: its cost still
@@ -129,6 +173,8 @@ export function aggregateProjectsIntoDays(projects: ProjectSummary[], dateKeyFn:
 
         turnDay.editTurns += editTurns
         turnDay.oneShotTurns += oneShotTurns
+        turnProject.editTurns += editTurns
+        turnProject.oneShotTurns += oneShotTurns
 
         const cat = turnDay.categories[turn.category] ?? { turns: 0, cost: 0, savingsUSD: 0, editTurns: 0, oneShotTurns: 0 }
         if (behavioralTurn) cat.turns += 1
@@ -137,6 +183,13 @@ export function aggregateProjectsIntoDays(projects: ProjectSummary[], dateKeyFn:
         cat.editTurns += editTurns
         cat.oneShotTurns += oneShotTurns
         turnDay.categories[turn.category] = cat
+        const projectCategory = turnProject.categories[turn.category] ?? { turns: 0, cost: 0, savingsUSD: 0, editTurns: 0, oneShotTurns: 0 }
+        if (behavioralTurn) projectCategory.turns += 1
+        projectCategory.cost += turnCost
+        projectCategory.savingsUSD += turnSavings
+        projectCategory.editTurns += editTurns
+        projectCategory.oneShotTurns += oneShotTurns
+        turnProject.categories[turn.category] = projectCategory
 
         // Cost stays attributed to every provider actually present in the turn,
         // but turn counts belong to exactly one slice. Otherwise carrying one
@@ -172,6 +225,16 @@ export function aggregateProjectsIntoDays(projects: ProjectSummary[], dateKeyFn:
           sliceCat.editTurns += ownsTurn ? editTurns : 0
           sliceCat.oneShotTurns += ownsTurn ? oneShotTurns : 0
           turnSlice.categories![turn.category] = sliceCat
+          const sliceProject = ensureProject(turnSlice, owner)
+          sliceProject.editTurns += ownsTurn ? editTurns : 0
+          sliceProject.oneShotTurns += ownsTurn ? oneShotTurns : 0
+          const projectSliceCategory = sliceProject.categories[turn.category] ?? { turns: 0, cost: 0, savingsUSD: 0, editTurns: 0, oneShotTurns: 0 }
+          projectSliceCategory.turns += ownsTurn && behavioralTurn ? 1 : 0
+          projectSliceCategory.cost += totals.cost
+          projectSliceCategory.savingsUSD += totals.savingsUSD
+          projectSliceCategory.editTurns += ownsTurn ? editTurns : 0
+          projectSliceCategory.oneShotTurns += ownsTurn ? oneShotTurns : 0
+          sliceProject.categories[turn.category] = projectSliceCategory
         }
 
         for (const call of turn.assistantCalls) {
@@ -200,10 +263,14 @@ export function aggregateProjectsIntoDays(projects: ProjectSummary[], dateKeyFn:
           callDay.cacheReadTokens += call.usage.cacheReadInputTokens
           callDay.cacheWriteTokens += call.usage.cacheCreationInputTokens
 
-          const dayProject = ensureProject(callDay, session.project, project.projectPath)
+          const dayProject = ensureProject(callDay, owner)
           dayProject.cost += call.costUSD
           dayProject.calls += callWeight
           dayProject.savingsUSD += callSavings
+          dayProject.inputTokens += call.usage.inputTokens
+          dayProject.outputTokens += billableOut
+          dayProject.cacheReadTokens += call.usage.cacheReadInputTokens
+          dayProject.cacheWriteTokens += call.usage.cacheCreationInputTokens
 
           // Keyed by the same row key every report uses, so a route sourced
           // from a provider column (Hermes `billing_provider`) survives into
@@ -222,6 +289,19 @@ export function aggregateProjectsIntoDays(projects: ProjectSummary[], dateKeyFn:
           model.cacheReadTokens += call.usage.cacheReadInputTokens
           model.cacheWriteTokens += call.usage.cacheCreationInputTokens
           callDay.models[dayModelKey] = model
+          const dayProjectModel = dayProject.models[dayModelKey] ?? {
+            calls: 0, cost: 0, savingsUSD: 0,
+            inputTokens: 0, outputTokens: 0,
+            cacheReadTokens: 0, cacheWriteTokens: 0,
+          }
+          dayProjectModel.calls += callWeight
+          dayProjectModel.cost += call.costUSD
+          dayProjectModel.savingsUSD += callSavings
+          dayProjectModel.inputTokens += call.usage.inputTokens
+          dayProjectModel.outputTokens += billableOut
+          dayProjectModel.cacheReadTokens += call.usage.cacheReadInputTokens
+          dayProjectModel.cacheWriteTokens += call.usage.cacheCreationInputTokens
+          dayProject.models[dayModelKey] = dayProjectModel
 
           const slice = ensureSlice(callDay, call.provider)
           slice.calls += callWeight
@@ -232,10 +312,14 @@ export function aggregateProjectsIntoDays(projects: ProjectSummary[], dateKeyFn:
           slice.cacheReadTokens! += call.usage.cacheReadInputTokens
           slice.cacheWriteTokens! += call.usage.cacheCreationInputTokens
 
-          const sliceProject = ensureProject(slice, session.project, project.projectPath)
+          const sliceProject = ensureProject(slice, owner)
           sliceProject.cost += call.costUSD
           sliceProject.calls += callWeight
           sliceProject.savingsUSD += callSavings
+          sliceProject.inputTokens += call.usage.inputTokens
+          sliceProject.outputTokens += billableOut
+          sliceProject.cacheReadTokens += call.usage.cacheReadInputTokens
+          sliceProject.cacheWriteTokens += call.usage.cacheCreationInputTokens
 
           const sliceModel = slice.models![dayModelKey] ?? {
             calls: 0, cost: 0, savingsUSD: 0,
@@ -250,6 +334,19 @@ export function aggregateProjectsIntoDays(projects: ProjectSummary[], dateKeyFn:
           sliceModel.cacheReadTokens += call.usage.cacheReadInputTokens
           sliceModel.cacheWriteTokens += call.usage.cacheCreationInputTokens
           slice.models![dayModelKey] = sliceModel
+          const sliceProjectModel = sliceProject.models[dayModelKey] ?? {
+            calls: 0, cost: 0, savingsUSD: 0,
+            inputTokens: 0, outputTokens: 0,
+            cacheReadTokens: 0, cacheWriteTokens: 0,
+          }
+          sliceProjectModel.calls += callWeight
+          sliceProjectModel.cost += call.costUSD
+          sliceProjectModel.savingsUSD += callSavings
+          sliceProjectModel.inputTokens += call.usage.inputTokens
+          sliceProjectModel.outputTokens += billableOut
+          sliceProjectModel.cacheReadTokens += call.usage.cacheReadInputTokens
+          sliceProjectModel.cacheWriteTokens += call.usage.cacheCreationInputTokens
+          sliceProject.models[dayModelKey] = sliceProjectModel
         }
       }
     }

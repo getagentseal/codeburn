@@ -24,6 +24,17 @@ The header always shows how many days each range spans, whether the durations
 differ, and whether the ranges overlap (overlapping days count on **both**
 sides). Your selection is remembered when you leave the screen and come back.
 
+## Desktop project scope
+
+On Desktop, a project selection applies to both A and B. It intersects the
+persistent Settings visibility filter and is applied to live sessions, exact
+durable history, coverage, and the session drill-down behind each comparison
+row. The selection is session-only and resets when Desktop restarts.
+
+Retained history is used only when its project identity and provenance are
+exact. If historical data is legacy or ambiguous, that portion is shown as
+**unavailable/detail-only** rather than supplemented from an unscoped total.
+
 ## Reading the report
 
 **Summary** — one sentence built from the report numbers (how much B cost

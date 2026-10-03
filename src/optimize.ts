@@ -18,6 +18,7 @@ import { appliedFixGlyph, formatAppliedFix, type AppliedFix } from './act/types.
 import { isUserStartedSession, userStartedProjects } from './session-population.js'
 import { inferSessionProvider, sessionBillableOutputTokens } from './session-output.js'
 import { aggregateFileChurn, buildCoachingNotes, scanUserCorrections, medianTimeToFirstEditMs, worstOneShotCategory, type ReworkedFile } from './workflow-insights.js'
+import { canonicalDesktopProjectId, desktopProjectScopeKey, matchesDesktopProjectId, type DesktopProjectId } from './project-scope.js'
 
 // ============================================================================
 // Display constants
@@ -550,6 +551,9 @@ export type FindingApply =
 
 export type WasteFinding = {
   id: FindingId
+  /// Exact Desktop identity whose corpus produced this finding. Unscoped
+  /// findings deliberately omit it because they may combine several projects.
+  projectId?: DesktopProjectId
   title: string
   explanation: string
   impact: Impact
@@ -608,6 +612,7 @@ export type OptimizeJsonReport = {
   }
   findings: Array<{
     id: FindingId
+    projectId?: DesktopProjectId
     title: string
     explanation: string
     severity: Impact
@@ -1279,7 +1284,44 @@ export async function scanJsonlFileMemoized(
   return rangeProjection(entry, dateRange, recentCutoffMs)
 }
 
-async function scanSessions(dateRange?: DateRange, provider?: string): Promise<ScanData> {
+function normalizedOptimizePath(value: string): string {
+  return value.trim().replace(/\\/g, '/').replace(/\/+$/, '')
+}
+
+function cwdBelongsToProject(cwd: string, projectId: DesktopProjectId): boolean {
+  const normalizedCwd = normalizedOptimizePath(cwd)
+  if (!projectId.startsWith('path:') || !normalizedCwd) return false
+  const selectedPath = normalizedOptimizePath(projectId.slice('path:'.length))
+  if (!selectedPath) return false
+  const canonicalCwd = canonicalDesktopProjectId({ project: '', projectPath: normalizedCwd })
+  if (canonicalCwd === projectId) return true
+  const cwdPath = canonicalCwd.startsWith('path:') ? canonicalCwd.slice('path:'.length) : normalizedCwd
+  const canonicalSelected = canonicalDesktopProjectId({ project: '', projectPath: selectedPath })
+  const selected = canonicalSelected.startsWith('path:') ? canonicalSelected.slice('path:'.length) : selectedPath
+  return cwdPath.startsWith(selected + '/')
+}
+
+function scanFileBelongsToProject(
+  cwds: string[],
+  sourceProject: string,
+  projectId: DesktopProjectId,
+  projects: ProjectSummary[],
+): boolean {
+  if (cwds.some(cwd => cwdBelongsToProject(cwd, projectId))) return true
+  // Pathless identities have no cwd to compare. The source label is the only
+  // durable evidence available for them, and it is already the parser's exact
+  // project grouping key.
+  return projects.some(project =>
+    matchesDesktopProjectId(project, projectId) && project.project === sourceProject,
+  )
+}
+
+async function scanSessions(
+  dateRange?: DateRange,
+  provider?: string,
+  desktopProjectId?: DesktopProjectId,
+  projects: ProjectSummary[] = [],
+): Promise<ScanData> {
   if (!providerCoversClaude(provider)) {
     return { toolCalls: [], projectCwds: new Set(), apiCalls: [], userMessages: [], openers: [] }
   }
@@ -1309,11 +1351,18 @@ async function scanSessions(dateRange?: DateRange, provider?: string): Promise<S
   await runWithConcurrency(tasks, FILE_READ_CONCURRENCY, async ({ file, project, identity }) => {
     const { calls, cwds, apiCalls, userMessages, openers } =
       await scanJsonlFileMemoized(file, project, dateRange, identity, recentCutoffMs)
-    allCalls.push(...calls)
+    if (desktopProjectId !== undefined && !scanFileBelongsToProject(cwds, project, desktopProjectId, projects)) return
+    const attributedCalls = desktopProjectId === undefined
+      ? calls
+      : calls.map(call => ({ ...call, project: desktopProjectId }))
+    const attributedOpeners = desktopProjectId === undefined
+      ? openers
+      : openers.map(opener => ({ ...opener, project: desktopProjectId }))
+    allCalls.push(...attributedCalls)
     for (const cwd of cwds) allCwds.add(cwd)
     allApiCalls.push(...apiCalls)
     allUserMessages.push(...userMessages)
-    allOpeners.push(...openers)
+    allOpeners.push(...attributedOpeners)
   })
 
   return { toolCalls: allCalls, projectCwds: allCwds, apiCalls: allApiCalls, userMessages: allUserMessages, openers: allOpeners }
@@ -3998,7 +4047,12 @@ export function computeInputCostRate(projects: ProjectSummary[]): number {
 type CacheEntry = { data: OptimizeResult; ts: number }
 const resultCache = new Map<string, CacheEntry>()
 
-export function cacheKey(projects: ProjectSummary[], dateRange: DateRange | undefined, provider?: string): string {
+export function cacheKey(
+  projects: ProjectSummary[],
+  dateRange: DateRange | undefined,
+  provider?: string,
+  desktopProjectId?: DesktopProjectId,
+): string {
   const dr = dateRange ? `${dateRange.start.getTime()}-${dateRange.end.getTime()}` : 'all'
   // Fingerprint enough of the dataset that two materially different inputs
   // cannot collide onto one cached OptimizeResult. Project count + api-call
@@ -4027,27 +4081,37 @@ export function cacheKey(projects: ProjectSummary[], dateRange: DateRange | unde
   const fingerprint = `${projects.length}:${sessions}:${sidechains}:${sidechainDigest}:${calls}:${Math.round(cost * 1e6)}:${Math.round(savings * 1e6)}:${Math.round(proxied * 1e6)}`
   // The provider decides whether the Claude session scan runs at all, so two
   // filters that happen to share a project fingerprint must not share a result.
-  return `${provider ?? 'all'}:${dr}:${fingerprint}`
+  const scope = desktopProjectId === undefined ? 'all' : desktopProjectScopeKey(desktopProjectId)
+  return `${scope}:${provider ?? 'all'}:${dr}:${fingerprint}`
 }
 
 export async function scanAndDetect(
   projects: ProjectSummary[],
   dateRange?: DateRange,
   provider?: string,
+  desktopProjectId?: DesktopProjectId,
 ): Promise<OptimizeResult> {
-  if (projects.length === 0) {
+  const scopedProjects = desktopProjectId === undefined
+    ? projects
+    : projects.filter(project => matchesDesktopProjectId(project, desktopProjectId))
+  if (scopedProjects.length === 0) {
     return { findings: [], costRate: 0, healthScore: 100, healthGrade: 'A', modelRecommendations: [] }
   }
 
-  const key = cacheKey(projects, dateRange, provider)
+  const key = cacheKey(scopedProjects, dateRange, provider, desktopProjectId)
   const cached = resultCache.get(key)
   if (cached && Date.now() - cached.ts < RESULT_CACHE_TTL_MS) return cached.data
 
-  const costRate = computeInputCostRate(projects)
-  const behavioralProjects = userStartedProjects(projects)
+  const costRate = computeInputCostRate(scopedProjects)
+  const behavioralProjects = userStartedProjects(scopedProjects)
   const scanCoversClaude = providerCoversClaude(provider)
-  const { toolCalls, projectCwds, apiCalls, userMessages, openers } = await scanSessions(dateRange, provider)
-  const mcpCoverage = aggregateMcpCoverage(projects)
+  const { toolCalls, projectCwds, apiCalls, userMessages, openers } = await scanSessions(dateRange, provider, desktopProjectId, scopedProjects)
+  if (desktopProjectId !== undefined) {
+    for (const project of scopedProjects) {
+      if (project.projectPath) projectCwds.add(project.projectPath)
+    }
+  }
+  const mcpCoverage = aggregateMcpCoverage(scopedProjects)
 
   const findings: WasteFinding[] = []
   // Priority order for the per-session findings: low-worth → context-bloat →
@@ -4068,40 +4132,48 @@ export async function scanAndDetect(
   // unused when it was simply not measured.
   const claudeOnly = (detect: () => WasteFinding | null): (() => WasteFinding | null) =>
     scanCoversClaude ? detect : () => null
+  const globalMcpDetectors: Array<() => WasteFinding | null> = desktopProjectId === undefined
+    ? [
+      claudeOnly(() => detectUnusedMcp(toolCalls, scopedProjects, projectCwds, mcpCoverage)),
+      () => detectMcpToolCoverage(scopedProjects, mcpCoverage, localMcpServerNames(projectCwds)),
+      () => detectMcpProfileAdvisor(scopedProjects, mcpCoverage, provider),
+      // mcp-deferral-gaps family (#614): detection only, no apply plans yet.
+      claudeOnly(() => detectMcpDeferralOff(toolCalls, scopedProjects, projectCwds, apiCalls)),
+      claudeOnly(() => detectMcpAlwaysLoadHygiene(scopedProjects, projectCwds, apiCalls, mcpCoverage)),
+      claudeOnly(() => detectMcpDeferThreshold(scopedProjects, projectCwds)),
+    ]
+    : []
   const syncDetectors: Array<() => WasteFinding | null> = [
-    claudeOnly(() => detectCacheBloat(apiCalls, projects, dateRange)),
+    claudeOnly(() => detectCacheBloat(apiCalls, scopedProjects, dateRange)),
     claudeOnly(() => detectLowReadEditRatio(toolCalls)),
     claudeOnly(() => detectJunkReads(toolCalls, dateRange)),
     claudeOnly(() => detectDuplicateReads(toolCalls, dateRange)),
-    claudeOnly(() => detectUnusedMcp(toolCalls, projects, projectCwds, mcpCoverage)),
-    () => detectMcpToolCoverage(projects, mcpCoverage, localMcpServerNames(projectCwds)),
-    () => detectMcpProfileAdvisor(projects, mcpCoverage, provider),
-    // mcp-deferral-gaps family (#614): detection only, no apply plans yet.
-    claudeOnly(() => detectMcpDeferralOff(toolCalls, projects, projectCwds, apiCalls)),
-    claudeOnly(() => detectMcpAlwaysLoadHygiene(projects, projectCwds, apiCalls, mcpCoverage)),
-    claudeOnly(() => detectMcpDeferThreshold(projects, projectCwds)),
+    ...globalMcpDetectors,
     () => detectCapabilityReliability(behavioralProjects, provider),
     () => detectLowWorthSessions(behavioralProjects, provider),
     () => detectContextBloat(behavioralProjects, lowWorthSessionIds, provider),
     () => detectSessionOutliers(behavioralProjects, outlierExclusions, provider),
     () => detectLowCacheHitSessions(behavioralProjects),
     claudeOnly(() => detectBloatedClaudeMd(projectCwds)),
-    claudeOnly(() => detectBashBloat()),
+    ...(desktopProjectId === undefined ? [claudeOnly(() => detectBashBloat())] : []),
     claudeOnly(() => detectRecurringContext(openers)),
   ]
+  const addFinding = (finding: WasteFinding | null): void => {
+    if (!finding) return
+    findings.push(desktopProjectId === undefined ? finding : { ...finding, projectId: desktopProjectId })
+  }
   for (const detect of syncDetectors) {
-    const finding = detect()
-    if (finding) findings.push(finding)
+    addFinding(detect())
   }
 
-  const ghostResults = scanCoversClaude
+  const ghostResults = scanCoversClaude && desktopProjectId === undefined
     ? await Promise.all([
       detectGhostAgents(toolCalls),
       detectGhostSkills(toolCalls),
       detectGhostCommands(userMessages),
     ])
     : []
-  for (const f of ghostResults) if (f) findings.push(f)
+  for (const f of ghostResults) addFinding(f)
 
   // Urgency first, then class: every surface lists the apply-able fixes
   // before the habit nudges, and orders by urgency inside each group.
@@ -4364,7 +4436,7 @@ export async function runOptimize(
   projects: ProjectSummary[],
   periodLabel: string,
   dateRange?: DateRange,
-  opts: { format?: 'text' | 'json'; appliedHeader?: string; previouslyApplied?: Record<string, string>; appliedFixes?: AppliedFix[]; provider?: string } = {},
+  opts: { format?: 'text' | 'json'; appliedHeader?: string; previouslyApplied?: Record<string, string>; appliedFixes?: AppliedFix[]; provider?: string; desktopProjectId?: DesktopProjectId } = {},
 ): Promise<void> {
   const format = opts.format ?? 'text'
   if (projects.length === 0 && format === 'text') {
@@ -4376,19 +4448,41 @@ export async function runOptimize(
     process.stderr.write(chalk.dim('  Analyzing your sessions...\n'))
   }
 
-  const result = await scanAndDetect(projects, dateRange, opts.provider)
+  const result = await scanAndDetect(projects, dateRange, opts.provider, opts.desktopProjectId)
   const { findings, costRate, healthScore, healthGrade } = result
   const sessionCount = optimizeSessionCount(projects)
   const periodCost = projects.reduce((s, p) => s + p.totalCostUSD, 0)
   const callCount = projects.reduce((s, p) => s + p.totalApiCalls, 0)
 
   if (format === 'json') {
-    console.log(JSON.stringify(buildOptimizeJsonReport(projects, periodLabel, result, dateRange, opts.appliedFixes), null, 2))
+    console.log(JSON.stringify(buildOptimizeJsonReport(
+      projects,
+      periodLabel,
+      result,
+      dateRange,
+      opts.desktopProjectId === undefined ? opts.appliedFixes : [],
+    ), null, 2))
     return
   }
 
   const { topReworkedFiles, coachingNotes } = buildWorkflowReport(projects)
-  const output = renderOptimize(findings, costRate, periodLabel, periodCost, sessionCount, callCount, healthScore, healthGrade, topReworkedFiles, coachingNotes, opts.appliedHeader, opts.previouslyApplied, result.modelRecommendations, opts.appliedFixes, opts.provider)
+  const output = renderOptimize(
+    findings,
+    costRate,
+    periodLabel,
+    periodCost,
+    sessionCount,
+    callCount,
+    healthScore,
+    healthGrade,
+    topReworkedFiles,
+    coachingNotes,
+    opts.desktopProjectId === undefined ? opts.appliedHeader : undefined,
+    opts.desktopProjectId === undefined ? opts.previouslyApplied : undefined,
+    result.modelRecommendations,
+    opts.desktopProjectId === undefined ? opts.appliedFixes : [],
+    opts.provider,
+  )
   console.log(output)
 }
 
@@ -4431,6 +4525,7 @@ export function buildOptimizeJsonReport(
     },
     findings: result.findings.map(f => ({
       id: f.id,
+      ...(f.projectId !== undefined ? { projectId: f.projectId } : {}),
       title: f.title,
       explanation: f.explanation,
       severity: f.impact,

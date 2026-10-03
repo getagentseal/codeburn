@@ -24,6 +24,7 @@ import {
 import { contiguousDailyWindow, dataStartKey, formatChartDate, localDateKey, sliceDailyToPeriod, sliceDailyToRange } from '../lib/period'
 import { ACT_SLOW_MS, YIELD_SLOW_MS } from '../lib/refreshCadence'
 import { reportMemoKey } from '../lib/reportMemoKey'
+import { desktopProjectScopeKey } from '../lib/projectScope'
 import { barBucketDays, barLayout, formatAxisMoney, niceTicks, ticksClearOfPeak } from '../lib/chartAxis'
 import { generationHeadline, generationModels, rememberGeneration } from '../lib/generation'
 import { rememberStreak } from '../lib/streak'
@@ -33,6 +34,7 @@ import type {
   CombinedUsage,
   DailyHistoryEntry,
   DateRange,
+  DesktopProjectId,
   MenubarPayload,
   OptimizeBlock,
   Period,
@@ -318,6 +320,7 @@ export function deriveSignals(
   rangeActive: boolean,
   /** The stored daily scan: its findings and the age to label them with. */
   stored: { topFindings: OptimizeBlock['topFindings']; asOf?: string | null } = { topFindings: [] },
+  streakScope = 'all',
 ): SignalGroups {
   const daily = data.history.daily
   const current = data.current
@@ -325,7 +328,7 @@ export function deriveSignals(
   const improvements: Signal[] = []
   const risks: Signal[] = []
 
-  const streak = rememberStreak(data.streak) ?? streakDays(daily, now)
+  const streak = rememberStreak(data.streak, streakScope) ?? streakDays(daily, now)
 
   // Week-over-week: mean of the last 7 active entries vs the prior 7 (matches the
   // coach's pacing line). Needs >= 14 entries for both windows to exist.
@@ -945,9 +948,20 @@ function TopActivities({ activities, onSelectCategory }: { activities: MenubarPa
   )
 }
 
-export function Overview({ period, provider }: { period: Period; provider: string }) {
-  const overview = usePolled<MenubarPayload>(() => codeburn.getOverview(period, provider), [period, provider])
-  return <OverviewContent period={period} provider={provider} overview={overview} />
+export function Overview({ period, provider, range = null, projectId = null, deviceScope = 'local' }: {
+  period: Period
+  provider: string
+  range?: DateRange | null
+  projectId?: DesktopProjectId | null
+  deviceScope?: Scope
+}) {
+  const projectScopeKey = desktopProjectScopeKey(projectId)
+  const overview = usePolled<MenubarPayload>(
+    () => codeburn.getOverview({ period, provider, range, deviceScope, projectId }),
+    [period, provider, range?.from, range?.to, deviceScope, projectId],
+    { memoKey: reportMemoKey('overview', period, provider, range, '', projectScopeKey) },
+  )
+  return <OverviewContent period={period} provider={provider} range={range} projectId={projectId} deviceScope={deviceScope} overview={overview} />
 }
 
 
@@ -977,6 +991,8 @@ export function OverviewContent({
   onInvestigate,
   ready = true,
   scope = 'local',
+  deviceScope,
+  projectId = null,
   configSource = null,
   refreshToken = 0,
   headlineSnapshot = null,
@@ -990,6 +1006,10 @@ export function OverviewContent({
   onInvestigate?: (request: InvestigateRequest) => void
   ready?: boolean
   scope?: Scope
+  /** Effective local/combined device scope for every secondary report. */
+  deviceScope?: Scope
+  /** Exact canonical project id, when a project is selected. */
+  projectId?: DesktopProjectId | null
   /** Scoped Claude config, part of the optimize cache key so a scan computed
    *  under one config is never shown under another. */
   configSource?: string | null
@@ -997,8 +1017,11 @@ export function OverviewContent({
   refreshToken?: number
   headlineSnapshot?: OverviewHeadlineSnapshot | null
 }) {
+  const effectiveDeviceScope = deviceScope ?? scope
+  const projectScopeKey = desktopProjectScopeKey(projectId)
+  const streakScope = `${provider}|${effectiveDeviceScope}|${projectScopeKey}`
   const { data, error, lastSuccessAt } = overview
-  const heroSelectionKey = `${period}|${provider}|${range?.from ?? ''}|${range?.to ?? ''}|${scope}`
+  const heroSelectionKey = `${period}|${provider}|${range?.from ?? ''}|${range?.to ?? ''}|${effectiveDeviceScope}|${projectScopeKey}`
   // Suppress only the single persisted-headline -> live-data handoff. A stored
   // headline remains available after that handoff, so testing the snapshot prop
   // directly would disable every later user-triggered period/provider animation.
@@ -1025,12 +1048,16 @@ export function OverviewContent({
     else if (overview.data != null) setTimeoutBlocked(false)
   }, [overview.data, overview.error?.kind])
   const detailsReady = ready && !timeoutBlocked && overview.error?.kind !== 'timeout'
-  const actReport = usePolled<ActReportJson>(() => codeburn.getActReport(), [refreshToken], { enabled: detailsReady, memoKey: 'overview-act', cadence: { slowMs: ACT_SLOW_MS } })
-  const yieldReport = usePolled<YieldJsonReport>(() => codeburn.getYield(period, provider), [period, provider, refreshToken], { enabled: detailsReady, memoKey: reportMemoKey('yield', period, provider), cadence: { slowMs: YIELD_SLOW_MS } })
+  const actReport = usePolled<ActReportJson>(() => codeburn.getActReport(), [refreshToken, projectId, effectiveDeviceScope], { enabled: detailsReady && projectId === null, memoKey: 'overview-act', cadence: { slowMs: ACT_SLOW_MS } })
+  const yieldReport = usePolled<YieldJsonReport>(
+    () => codeburn.getYield({ period, provider, range, deviceScope: effectiveDeviceScope, projectId }),
+    [period, provider, range?.from, range?.to, effectiveDeviceScope, projectId, refreshToken],
+    { enabled: detailsReady, memoKey: reportMemoKey('yield', period, provider, range, '', projectScopeKey), cadence: { slowMs: YIELD_SLOW_MS } },
+  )
   // Daily tier: the live poll runs --no-optimize, so the coach figures below
   // come from the on-disk scan for this exact scope, with their age on screen.
   const optimizeSnapshot = useOptimizeSnapshot(
-    { period, provider, range, configSource, scope },
+    { period, provider, range, configSource, scope: effectiveDeviceScope, projectId },
     { enabled: detailsReady, refreshToken },
   )
   const optimizeBlock = optimizeSnapshot.data?.optimize ?? null
@@ -1151,17 +1178,18 @@ export function OverviewContent({
   const weekPrior = mean(recent14.slice(-14, -7).map(day => day.cost))
   const weeklyPct = weekPrior > 0 ? Math.round(Math.abs((weekNow - weekPrior) / weekPrior * 100)) : null
   const topModel = data.current.topModels[0]
-  const saved = actReport.data?.totals?.realizedCostUSD ?? 0
-  const applied = saved > 0 ? (actReport.data?.totals?.measuredActions ?? 0) : 0
+  const actData = projectId === null ? actReport.data : null
+  const saved = actData?.totals?.realizedCostUSD ?? 0
+  const applied = saved > 0 ? (actData?.totals?.measuredActions ?? 0) : 0
   const localSaved = data.current.localModelSavings.totalUSD
-  const actAge = asOfLabel(actReport.lastSuccessAt)
+  const actAge = projectId === null ? asOfLabel(actReport.lastSuccessAt) : null
   // Until the daily scan has produced a figure for THIS scope the clause is
   // omitted entirely: a $0 here would read as "nothing to recover".
   const recoverable = optimizeBlock
     ? <> <span className="num">{formatUsd(optimizeBlock.savingsUSD)}</span>{t('overview.coach.recoverableSuffix')}{optimizeAge ? <small className="ov-coach-age"> ({optimizeAge})</small> : null}</>
     : null
   // A custom range has no meaningful "vs last week" or month-to-date baseline.
-  const signals = deriveSignals(data, now, rangeActive, { topFindings: optimizeBlock?.topFindings ?? [], asOf: optimizeAge })
+  const signals = deriveSignals(data, now, rangeActive, { topFindings: optimizeBlock?.topFindings ?? [], asOf: optimizeAge }, streakScope)
   // Drill-through entry points. An expensive-session row can only open the
   // exact session when the payload carries its identity (provider + id);
   // otherwise the row keeps the plain "See all" navigation, never a guess.
@@ -1185,7 +1213,7 @@ export function OverviewContent({
         <div className="ov-panel-head">
           <Icon name="circle-dollar-sign" />
           <h3>{combined ? `${t('overview.hero.combined')} · ${data.current.label}` : data.current.label}</h3>
-          <span className="r"><span className="ov-streak">{t('overview.hero.streakPrefix')}<b>{rememberStreak(data.streak) ?? streakDays(data.history.daily, now)}</b>{t('overview.hero.streakSuffix')}</span></span>
+          <span className="r"><span className="ov-streak">{t('overview.hero.streakPrefix')}<b>{rememberStreak(data.streak, streakScope) ?? streakDays(data.history.daily, now)}</b>{t('overview.hero.streakSuffix')}</span></span>
         </div>
         <div className="ov-card-inner ov-hero-split" aria-label={t('overview.hero.kpiAria')}>
           <div className="ov-hero-main">

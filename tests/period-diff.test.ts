@@ -12,6 +12,9 @@ import {
 } from '../src/period-diff.js'
 import type { DailyCache, DailyEntry } from '../src/daily-cache.js'
 import type { ProjectSummary, SessionSummary } from '../src/types.js'
+import { aggregateProjectsIntoDays } from '../src/day-aggregator.js'
+import { exactProjectBucketKey } from '../src/project-scope.js'
+import type { ProjectDayStats } from '../src/daily-cache.js'
 
 // Minimal but arithmetically consistent session/project fixtures: the same
 // fields buildPeriodData, the session-count key, and the model lens read.
@@ -353,6 +356,32 @@ function day(date: string, cost: number, carried?: true): DailyEntry {
   }
 }
 
+function exactHistoryDay(date: string, total: number, selectedId: string, selectedCost: number): DailyEntry {
+  const selected: ProjectDayStats = {
+    canonicalId: selectedId,
+    sourceLabel: selectedId.slice(selectedId.lastIndexOf('/') + 1),
+    displayName: selectedId.slice(selectedId.lastIndexOf('/') + 1),
+    path: selectedId.slice('path:'.length),
+    provenance: 'exact',
+    cost: selectedCost,
+    calls: selectedCost === 0 ? 0 : 1,
+    savingsUSD: 0,
+    sessions: selectedCost === 0 ? 0 : 1,
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    editTurns: 0,
+    oneShotTurns: 0,
+    models: {},
+    categories: {},
+  }
+  return {
+    ...day(date, total, true),
+    projects: { [exactProjectBucketKey(selectedId)]: selected },
+  }
+}
+
 describe('history basis (aggregate-only carried history)', () => {
   const cache: DailyCache = {
     version: 21,
@@ -385,6 +414,60 @@ describe('history basis (aggregate-only carried history)', () => {
     const basis = historyBasis(plainCache, RANGE_A, RANGE_B, 'all', [day('2026-03-03', 15)], [])
     expect(basis.aggregateOnly.A).toBe(0)
     expect(basis.days.A).toHaveLength(0)
+  })
+
+  it('applies one exact Desktop project id to both ranges, history, and drill-down', () => {
+    const id = 'path:/work/x'
+    const projectA = makeProject('/work/x', [makeSession({ sessionId: 'x1', costUSD: 70, calls: 7, firstTimestamp: '2026-03-03T10:00:00.000Z' })])
+    const otherA = makeProject('/work/y', [makeSession({ sessionId: 'y1', costUSD: 30, calls: 3, firstTimestamp: '2026-03-03T10:00:00.000Z' })])
+    const projectB = makeProject('/work/x', [makeSession({ sessionId: 'x1', costUSD: 90, calls: 9, firstTimestamp: '2026-03-10T10:00:00.000Z' })])
+    const otherB = makeProject('/work/z', [makeSession({ sessionId: 'z1', costUSD: 70, calls: 7, firstTimestamp: '2026-03-10T10:00:00.000Z' })])
+    const historyCache: DailyCache = {
+      ...cache,
+      days: [
+        exactHistoryDay('2026-03-03', 100, id, 70),
+        exactHistoryDay('2026-03-10', 160, id, 90),
+      ],
+    }
+    const history = historyBasis(
+      historyCache,
+      RANGE_A,
+      RANGE_B,
+      'all',
+      aggregateProjectsIntoDays([projectA, otherA]),
+      aggregateProjectsIntoDays([projectB, otherB]),
+      id,
+    )
+    const report = buildPeriodDiffReport({
+      provider: 'all',
+      rangeA: RANGE_A,
+      rangeB: RANGE_B,
+      projectsA: [projectA, otherA],
+      projectsB: [projectB, otherB],
+      history,
+      desktopProjectId: id,
+    })
+
+    expect(report.totals.A.cost).toBe(70)
+    expect(report.totals.B.cost).toBe(90)
+    expect(report.history?.historyCost).toEqual({ A: 70, B: 90 })
+    expect(diffSessions([projectA, otherA], [projectB, otherB], 'project', id, id)).toMatchObject([{ costA: 70, costB: 90 }])
+  })
+
+  it('marks scoped history unavailable instead of treating a global day as project history', () => {
+    const id = 'path:/work/x'
+    const unavailable = historyBasis(
+      { ...cache, days: [day('2026-03-03', 10, true)] },
+      RANGE_A,
+      RANGE_B,
+      'all',
+      [],
+      [],
+      id,
+    )
+
+    expect(unavailable.historyCost.A).toBe(0)
+    expect(unavailable.basis.toLowerCase()).toContain('unavailable')
   })
 })
 

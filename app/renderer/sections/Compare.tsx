@@ -18,6 +18,7 @@ import { Usd, tokensOf } from '../components/Usd'
 import { t } from '../i18n'
 import { codeburn } from '../lib/ipc'
 import { reportMemoKey } from '../lib/reportMemoKey'
+import { desktopProjectScopeKey } from '../lib/projectScope'
 import { sessionFilters } from '../lib/investigation'
 import { trackEvent } from '../lib/track'
 import type { InvestigateRequest } from './Overview'
@@ -30,8 +31,10 @@ import type {
   CompareJsonReport,
   ComparisonRow,
   DateRange,
+  DesktopProjectId,
   ModelStats,
   Period,
+  Scope,
   WorkingStyleRow,
 } from '../lib/types'
 
@@ -43,22 +46,14 @@ function fmtMetric(v: number | null, fn: 'cost' | 'number' | 'percent' | 'decima
   return Math.round(v).toLocaleString('en-US')
 }
 
-// The CLI `compare` command has no --from/--to, so a custom range falls back to
-// the selected period. Say so instead of silently ignoring the dates.
-function RangeNote() {
-  return (
-    <p className="cmp-range-note" role="status">
-      {t('compare.classic.rangeNote')}
-    </p>
-  )
-}
-
 type CompareMode = 'classic' | 'cohorts'
 
 export function Compare({
   period,
   provider,
   range = null,
+  projectId = null,
+  deviceScope = 'local',
   refreshToken = 0,
   ready = true,
   onInvestigate,
@@ -66,6 +61,8 @@ export function Compare({
   period: Period
   provider: string
   range?: DateRange | null
+  projectId?: DesktopProjectId | null
+  deviceScope?: Scope
   refreshToken?: number
   ready?: boolean
   onInvestigate?: (request: InvestigateRequest) => void
@@ -85,7 +82,7 @@ export function Compare({
             onChange={next => setMode(next as CompareMode)}
           />
         </div>
-        <CohortCompare period={period} provider={provider} range={range} refreshToken={refreshToken} ready={ready} onInvestigate={onInvestigate} />
+        <CohortCompare period={period} provider={provider} range={range} projectId={projectId} deviceScope={deviceScope} refreshToken={refreshToken} ready={ready} onInvestigate={onInvestigate} />
       </div>
     )
   }
@@ -102,7 +99,7 @@ export function Compare({
           onChange={next => setMode(next as CompareMode)}
         />
       </div>
-      <ClassicCompare period={period} provider={provider} range={range} refreshToken={refreshToken} ready={ready} />
+      <ClassicCompare period={period} provider={provider} range={range} projectId={projectId} deviceScope={deviceScope} refreshToken={refreshToken} ready={ready} />
     </div>
   )
 }
@@ -111,19 +108,24 @@ function ClassicCompare({
   period,
   provider,
   range,
+  projectId,
+  deviceScope,
   refreshToken,
   ready,
 }: {
   period: Period
   provider: string
   range: DateRange | null
+  projectId: DesktopProjectId | null
+  deviceScope: Scope
   refreshToken: number
   ready: boolean
 }) {
+  const projectScopeKey = desktopProjectScopeKey(projectId)
   const models = usePolled<ModelStats[]>(
-    () => codeburn.getCompareModels(period, provider),
-    [period, provider, refreshToken],
-    { enabled: ready, memoKey: reportMemoKey('comparemodels', period, provider) },
+    () => codeburn.getCompareModels({ period, provider, range, deviceScope, projectId }),
+    [period, provider, range?.from, range?.to, deviceScope, projectId, projectScopeKey, refreshToken],
+    { enabled: ready, memoKey: reportMemoKey('comparemodels', period, provider, range, '', projectScopeKey) },
   )
   const [modelA, setModelA] = useState<string | null>(null)
   const [modelB, setModelB] = useState<string | null>(null)
@@ -170,7 +172,6 @@ function ClassicCompare({
 
   return (
     <>
-      {range && <RangeNote />}
       <div className="cmp-picker" aria-label={t('compare.classic.modelsAriaLabel')}>
         <Dropdown
           id="compare-first-model"
@@ -198,6 +199,9 @@ function ClassicCompare({
         <CompareReport
           period={period}
           provider={provider}
+          range={range}
+          projectId={projectId}
+          deviceScope={deviceScope}
           modelA={modelA}
           modelB={modelB}
           refreshToken={refreshToken}
@@ -211,6 +215,9 @@ function ClassicCompare({
 function CompareReport({
   period,
   provider,
+  range,
+  projectId,
+  deviceScope,
   modelA,
   modelB,
   refreshToken,
@@ -218,15 +225,19 @@ function CompareReport({
 }: {
   period: Period
   provider: string
+  range: DateRange | null
+  projectId: DesktopProjectId | null
+  deviceScope: Scope
   modelA: string
   modelB: string
   refreshToken: number
   onError: () => void
 }) {
+  const projectScopeKey = desktopProjectScopeKey(projectId)
   const report = usePolled<CompareJsonReport>(
-    () => codeburn.getCompare(period, provider, modelA, modelB),
-    [period, provider, modelA, modelB, refreshToken],
-    { memoKey: reportMemoKey('compare', period, provider, null, `${modelA}|${modelB}`) },
+    () => codeburn.getCompare({ period, provider, range, modelA, modelB, deviceScope, projectId }),
+    [period, provider, range?.from, range?.to, deviceScope, projectId, projectScopeKey, modelA, modelB, refreshToken],
+    { memoKey: reportMemoKey('compare', period, provider, range, `${modelA}|${modelB}`, projectScopeKey) },
   )
 
   useEffect(() => {
@@ -397,6 +408,8 @@ function CohortCompare({
   period,
   provider,
   range,
+  projectId,
+  deviceScope,
   refreshToken,
   ready,
   onInvestigate,
@@ -404,14 +417,17 @@ function CohortCompare({
   period: Period
   provider: string
   range: DateRange | null
+  projectId: DesktopProjectId | null
+  deviceScope: Scope
   refreshToken: number
   ready: boolean
   onInvestigate?: (request: InvestigateRequest) => void
 }) {
+  const projectScopeKey = desktopProjectScopeKey(projectId)
   const facets = usePolled(
-    () => codeburn.getCompareCohortModels(period, provider, range ?? undefined),
-    [period, provider, range?.from, range?.to, refreshToken],
-    { enabled: ready, memoKey: reportMemoKey('cohortmodels-v2', period, provider, range) },
+    () => codeburn.getCompareCohortModels({ period, provider, range, deviceScope, projectId }),
+    [period, provider, range?.from, range?.to, deviceScope, projectId, projectScopeKey, refreshToken],
+    { enabled: ready, memoKey: reportMemoKey('cohortmodels-v2', period, provider, range, '', projectScopeKey) },
   )
 
   const [modelA, setModelA] = useState<string | null>(null)
@@ -433,11 +449,21 @@ function CohortCompare({
   }, [facets.data])
 
   const report = usePolled<CohortComparisonReport>(
-    () => codeburn.getCompareCohort(period, provider, modelA ?? '', modelB ?? '', range ?? undefined, project ? [project] : undefined, category || undefined),
-    [period, provider, modelA, modelB, range?.from, range?.to, project, category, refreshToken],
+    () => codeburn.getCompareCohort({
+      period,
+      provider,
+      range,
+      deviceScope,
+      projectId,
+      modelA: modelA ?? undefined,
+      modelB: modelB ?? undefined,
+      projects: project ? [project] : undefined,
+      category: category || undefined,
+    }),
+    [period, provider, modelA, modelB, range?.from, range?.to, deviceScope, projectId, projectScopeKey, project, category, refreshToken],
     {
       enabled: ready && !!modelA && !!modelB && modelA !== modelB,
-      memoKey: reportMemoKey('cohort-v2', period, provider, range, JSON.stringify([modelA, modelB, project, category])),
+      memoKey: reportMemoKey('cohort-v2', period, provider, range, JSON.stringify([modelA, modelB, project, category]), projectScopeKey),
     },
   )
 

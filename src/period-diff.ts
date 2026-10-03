@@ -1,9 +1,10 @@
 import { getDaysInRange, type DailyCache, type DailyEntry } from './daily-cache.js'
 import { aggregateProjectsIntoDays } from './day-aggregator.js'
 import type { DateRange, ProjectSummary } from './types.js'
-import { buildPeriodData, canonicalSessionCountKey } from './usage-aggregator.js'
+import { buildPeriodData, canonicalSessionCountKey, sliceDayToProject } from './usage-aggregator.js'
 import { inferSessionProvider } from './session-output.js'
 import { spendProjectIdentity } from './spend-flow.js'
+import { matchesDesktopProjectId, type DesktopProjectId } from './project-scope.js'
 
 /// Period-vs-period difference engine (Compare periods). Pure functions only:
 /// no clock reads, no filesystem, no parsing. The caller parses each range with
@@ -325,11 +326,18 @@ function normalizedView(totalsA: PeriodTotals, totalsB: PeriodTotals, rangeA: Pe
   }
 }
 
-function projectContributions(projectsA: ProjectSummary[], projectsB: ProjectSummary[]): Contribution[] {
+function projectContributions(
+  projectsA: ProjectSummary[],
+  projectsB: ProjectSummary[],
+  desktopProjectId?: DesktopProjectId,
+): Contribution[] {
   const fold = (projects: ProjectSummary[]) => {
     const totals = new Map<string, { cost: number; calls: number }>()
     for (const project of projects) {
-      const { id } = spendProjectIdentity(project)
+      // Public compare-periods keeps its existing spend identity. A hidden
+      // Desktop scope uses the exact identity so pathless projects cannot
+      // lose their `label:` discriminator in the scoped report.
+      const id = desktopProjectId ?? spendProjectIdentity(project).id
       const value = totals.get(id) ?? { cost: 0, calls: 0 }
       value.cost += project.totalCostUSD
       value.calls += project.totalApiCalls
@@ -395,13 +403,30 @@ export function historyBasis(
   provider: string,
   freshDaysA: DailyEntry[],
   freshDaysB: DailyEntry[],
+  desktopProjectId?: DesktopProjectId,
 ): HistoryBasis {
+  const scopeDay = (entry: DailyEntry): DailyEntry => desktopProjectId === undefined
+    ? entry
+    : sliceDayToProject(entry, () => true, desktopProjectId)
   const dayCost = (entry: DailyEntry): number => {
     if (provider === 'all' || provider === '') return entry.cost
     return entry.providers[provider]?.cost ?? 0
   }
   const detailByDay = (days: DailyEntry[]): Map<string, number> =>
-    new Map(days.map(day => [day.date, day.cost]))
+    new Map(days.map(day => scopeDay(day)).map(day => [day.date, day.cost]))
+
+  const rawDayHasScopedBasis = (entry: DailyEntry): boolean => {
+    if (desktopProjectId === undefined) return true
+    const source = provider === 'all' || provider === ''
+      ? entry
+      : entry.providers[provider]
+    if (!source) return true
+    const hasAccounting = source.cost > 0 || source.calls > 0 || (source.sessions ?? 0) > 0
+    if (!hasAccounting) return true
+    return Object.values(source.projects ?? {}).some(project =>
+      project.provenance === 'exact' && project.canonicalId === desktopProjectId,
+    )
+  }
 
   const build = (range: PeriodRangeKey, fresh: DailyEntry[]) => {
     const detail = detailByDay(fresh)
@@ -409,7 +434,10 @@ export function historyBasis(
     let historyCost = 0
     let detailCost = 0
     let aggregateOnly = 0
-    for (const entry of getDaysInRange(cache, range.from, range.to)) {
+    let unavailable = false
+    for (const rawEntry of getDaysInRange(cache, range.from, range.to)) {
+      if (!rawDayHasScopedBasis(rawEntry)) unavailable = true
+      const entry = scopeDay(rawEntry)
       const history = dayCost(entry)
       const explained = detail.get(entry.date) ?? 0
       historyCost += history
@@ -423,7 +451,7 @@ export function historyBasis(
         rows.push({ date: entry.date, historyCost: history, detailCost: explained, aggregateOnly: unexplained })
       }
     }
-    return { rows, historyCost, detailCost, aggregateOnly }
+    return { rows, historyCost, detailCost, aggregateOnly, unavailable }
   }
 
   const a = build(rangeA, freshDaysA)
@@ -433,7 +461,9 @@ export function historyBasis(
     detailCost: { A: a.detailCost, B: b.detailCost },
     days: { A: a.rows, B: b.rows },
     aggregateOnly: { A: a.aggregateOnly, B: b.aggregateOnly },
-    basis: 'Totals come from parsed session transcripts. Days whose sources no longer exist survive only as aggregate daily history; their unexplained cost is listed here, not folded into the totals.',
+    basis: desktopProjectId !== undefined && (a.unavailable || b.unavailable)
+      ? 'Scoped daily history unavailable for days without exact project buckets; totals reflect parsed session detail only for that portion.'
+      : 'Totals come from parsed session transcripts. Days whose sources no longer exist survive only as aggregate daily history; their unexplained cost is listed here, not folded into the totals.',
   }
 }
 
@@ -469,13 +499,20 @@ export function buildPeriodDiffReport(args: {
   projectsA: ProjectSummary[]
   projectsB: ProjectSummary[]
   history?: HistoryBasis
+  desktopProjectId?: DesktopProjectId
 }): PeriodDiffReport {
   const infoA = rangeInfo(args.rangeA)
   const infoB = rangeInfo(args.rangeB)
   const labelA = `${infoA.from} to ${infoA.to}`
   const labelB = `${infoB.from} to ${infoB.to}`
-  const sideA = totalsOf(args.projectsA, labelA)
-  const sideB = totalsOf(args.projectsB, labelB)
+  const projectsA = args.desktopProjectId === undefined
+    ? args.projectsA
+    : args.projectsA.filter(project => matchesDesktopProjectId(project, args.desktopProjectId!))
+  const projectsB = args.desktopProjectId === undefined
+    ? args.projectsB
+    : args.projectsB.filter(project => matchesDesktopProjectId(project, args.desktopProjectId!))
+  const sideA = totalsOf(projectsA, labelA)
+  const sideB = totalsOf(projectsB, labelB)
   const totalsA = sideA.totals
   const totalsB = sideB.totals
   return {
@@ -486,10 +523,10 @@ export function buildPeriodDiffReport(args: {
     overlapDays: overlapDays(args.rangeA, args.rangeB),
     durationDeltaDays: infoB.days - infoA.days,
     totals: diffTotals(totalsA, totalsB),
-    projects: projectContributions(args.projectsA, args.projectsB),
-    models: modelContributions(args.projectsA, args.projectsB),
+    projects: projectContributions(projectsA, projectsB, args.desktopProjectId),
+    models: modelContributions(projectsA, projectsB),
     normalized: normalizedView(totalsA, totalsB, infoA, infoB),
-    daily: { A: dailySeries(args.rangeA, args.projectsA), B: dailySeries(args.rangeB, args.projectsB) },
+    daily: { A: dailySeries(args.rangeA, projectsA), B: dailySeries(args.rangeB, projectsB) },
     coverage: {
       unpricedModelsA: sideA.unpriced,
       unpricedModelsB: sideB.unpriced,
@@ -509,6 +546,7 @@ export function diffSessions(
   projectsB: ProjectSummary[],
   dimension: 'project' | 'model',
   key: string,
+  desktopProjectId?: DesktopProjectId,
 ): SessionDiffRow[] {
   type Acc = { provider: string; sessionId: string; project: string; title?: string; costA: number; costB: number; callsA: number; callsB: number }
   const accs = new Map<string, Acc>()
@@ -521,7 +559,13 @@ export function diffSessions(
         // use several models and its total belongs to no single one of them.
         const modelEntry = dimension === 'model' ? session.modelBreakdown[key] : undefined
         if (dimension === 'model' && !modelEntry) continue
-        if (dimension === 'project' && spendProjectIdentity(project).id !== key) continue
+        if (dimension === 'project') {
+          if (desktopProjectId !== undefined) {
+            if (!matchesDesktopProjectId(project, desktopProjectId)) continue
+          } else if (spendProjectIdentity(project).id !== key) {
+            continue
+          }
+        }
         const cost = dimension === 'model' ? modelEntry!.costUSD : session.totalCostUSD
         const calls = dimension === 'model' ? modelEntry!.calls : session.apiCalls
         const identity = canonicalSessionCountKey(session, project.projectPath)
@@ -547,8 +591,14 @@ export function diffSessions(
       }
     }
   }
-  fold(projectsA, 'A')
-  fold(projectsB, 'B')
+  const scopedProjectsA = desktopProjectId === undefined
+    ? projectsA
+    : projectsA.filter(project => matchesDesktopProjectId(project, desktopProjectId!))
+  const scopedProjectsB = desktopProjectId === undefined
+    ? projectsB
+    : projectsB.filter(project => matchesDesktopProjectId(project, desktopProjectId!))
+  fold(scopedProjectsA, 'A')
+  fold(scopedProjectsB, 'B')
 
   const rows: SessionDiffRow[] = []
   for (const [identity, acc] of accs) {

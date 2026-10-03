@@ -12,7 +12,8 @@ import { formatCompact, formatCount, formatDayShort, formatUsd } from '../lib/fo
 import { codeburn } from '../lib/ipc'
 import { groupProjects } from '../lib/projectGroups'
 import { reportMemoKey } from '../lib/reportMemoKey'
-import type { BranchSpendProjectReport, BranchSpendReport, BranchSpendRow, BranchSpendSessionRow, BranchTokenSplit, DateRange, Period } from '../lib/types'
+import { desktopProjectScopeKey } from '../lib/projectScope'
+import type { BranchSpendProjectReport, BranchSpendReport, BranchSpendRow, BranchSpendSessionRow, BranchTokenSplit, DateRange, DesktopProjectId, Period, Scope } from '../lib/types'
 
 const ALL_PROJECTS = '__all__'
 
@@ -242,11 +243,12 @@ function BranchPage({ report }: { report: BranchSpendReport }) {
  *  contributions and recorded worktree evidence, filtered by the app-wide
  *  period/provider/range controls (the CLI report computes the full filtered
  *  population; this panel only narrows the display to the chosen project). */
-export function BranchBreakdown({ period, provider, range = null }: { period: Period; provider: string; range?: DateRange | null }) {
+export function BranchBreakdown({ period, provider, range = null, projectId = null, deviceScope = 'local' }: { period: Period; provider: string; range?: DateRange | null; projectId?: DesktopProjectId | null; deviceScope?: Scope }) {
+  const projectScopeKey = desktopProjectScopeKey(projectId)
   const report = usePolled<BranchSpendReport>(
-    () => range ? codeburn.getBranchSpend(period, provider, range) : codeburn.getBranchSpend(period, provider),
-    [period, provider, range?.from, range?.to],
-    { memoKey: reportMemoKey('branchspend', period, provider, range) },
+    () => codeburn.getBranchSpend({ period, provider, range, deviceScope, projectId }),
+    [period, provider, range?.from, range?.to, deviceScope, projectId, projectScopeKey],
+    { memoKey: reportMemoKey('branchspend', period, provider, range, '', projectScopeKey) },
   )
   if (!report.data) {
     if (report.error) {

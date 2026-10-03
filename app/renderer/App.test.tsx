@@ -1,15 +1,19 @@
 // @vitest-environment jsdom
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { Fragment, useEffect } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { App, overviewMemoKey, refreshedLabel, selectedReportMemoKeys, topCategoryByModel, usageSnapshotProps } from './App'
+import { App, overviewMemoKey, refreshedLabel, resolveEffectiveDeviceScope, selectedReportMemoKeys, topCategoryByModel, usageSnapshotProps } from './App'
+import { OverviewContent } from './sections/Overview'
 import { sanitizeProps } from '../electron/telemetry'
 import { __resetPolledMemo, hasPolledMemo, primePolledMemo } from './hooks/usePolled'
+import { desktopProjectScopeKey, QuickProjectScopeProvider, useQuickProjectScope } from './lib/projectScope'
 import { reportMemoKey } from './lib/reportMemoKey'
 import { setActiveCurrency } from './lib/format'
 import { readOverviewHeadline, writeOverviewHeadline } from './lib/overviewSnapshot'
 import type { BranchSpendReport, DateRange, MenubarPayload, ModelReportRow, OptimizeJsonReport, SessionRow, SpendFlow } from './lib/types'
 import { INITIAL_VISIBLE } from './sections/Sessions'
+import { PROJECT_ALPHA, PROJECT_ALPHA_SAME_NAME, PROJECT_PATHLESS } from './test/projectScopeFixtures'
 
 const stored = new Map<string, string>()
 vi.stubGlobal('localStorage', {
@@ -22,11 +26,11 @@ vi.stubGlobal('localStorage', {
 })
 
 const mocks = vi.hoisted(() => ({
-  getOverview: vi.fn<(period: string, provider: string, range?: DateRange, configSource?: string | null, background?: boolean, scope?: string) => Promise<MenubarPayload>>(),
-  getSpendFlow: vi.fn<(period: string, provider: string, range?: DateRange, background?: boolean) => Promise<SpendFlow>>(),
-  getBranchSpend: vi.fn<(period: string, provider: string, range?: DateRange, background?: boolean) => Promise<BranchSpendReport>>(),
-  getTimeline: vi.fn<(period: string, provider: string, range?: DateRange) => Promise<MenubarPayload>>(),
-  getOptimizeReport: vi.fn<(period: string, provider: string, range?: DateRange, background?: boolean) => Promise<OptimizeJsonReport>>(),
+  getOverview: vi.fn(),
+  getSpendFlow: vi.fn(),
+  getBranchSpend: vi.fn(),
+  getTimeline: vi.fn(),
+  getOptimizeReport: vi.fn(),
   getModels: vi.fn(),
   getSessions: vi.fn(),
   getCompareModels: vi.fn(),
@@ -41,11 +45,19 @@ const mocks = vi.hoisted(() => ({
   cliStatus: vi.fn(),
   getPriceOverrides: vi.fn(),
   getProjectFilter: vi.fn<() => Promise<{ project: string[]; exclude: string[] }>>(),
+  setProjectFilter: vi.fn(),
+  getUnfilteredProjects: vi.fn(),
+  getProjectScopeCatalog: vi.fn(),
+  validateProjectScope: vi.fn(),
   getAliases: vi.fn(),
   setCurrency: vi.fn(),
   resetCurrency: vi.fn(),
   telemetryTrack: vi.fn<(name: string, props?: Record<string, unknown>) => Promise<boolean>>(),
 }))
+
+function overviewQuery(period: string, provider: string, fields: Record<string, unknown> = {}) {
+  return { period, provider, range: null, deviceScope: 'local', projectId: null, ...fields }
+}
 
 vi.mock('./lib/ipc', async orig => {
   const actual = await orig<typeof import('./lib/ipc')>()
@@ -123,6 +135,31 @@ function overviewPayload(): MenubarPayload {
 const CONFIG_A = 'claude-config:aaaa000011112222'
 const CONFIG_B = 'claude-desktop:bbbb000011112222'
 
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, resolve, reject }
+}
+
+function projectPayload(projectId: string, cost: number, localSavings = 0): MenubarPayload {
+  const payload = overviewPayload()
+  return {
+    ...payload,
+    current: {
+      ...payload.current,
+      label: projectId,
+      cost,
+      calls: 2,
+      sessions: 1,
+      localModelSavings: { totalUSD: localSavings, calls: localSavings > 0 ? 1 : 0, byModel: [], byProvider: [] },
+    },
+  }
+}
+
 function withConfigs(payload: MenubarPayload): MenubarPayload {
   return {
     ...payload,
@@ -162,6 +199,17 @@ function installDefaultMocks() {
   })
   mocks.getModels.mockResolvedValue([])
   mocks.getProjectFilter.mockResolvedValue({ project: [], exclude: [] })
+  mocks.setProjectFilter.mockImplementation(async (filter: { project: string[]; exclude: string[] }) => filter)
+  mocks.getUnfilteredProjects.mockResolvedValue({ projects: [] })
+  mocks.getProjectScopeCatalog.mockResolvedValue({
+    revision: 'revision-1',
+    options: [PROJECT_ALPHA, PROJECT_ALPHA_SAME_NAME, PROJECT_PATHLESS],
+  })
+  mocks.validateProjectScope.mockImplementation(async (id: string) => {
+    const option = [PROJECT_ALPHA, PROJECT_ALPHA_SAME_NAME, PROJECT_PATHLESS].find(candidate => candidate.id === id)
+    if (!option) throw new Error('invalid project')
+    return option
+  })
   mocks.getSessions.mockResolvedValue([])
   mocks.getCompareModels.mockResolvedValue([])
   mocks.getQuota.mockResolvedValue([
@@ -205,6 +253,35 @@ function installDefaultMocks() {
   mocks.telemetryTrack.mockResolvedValue(true)
 }
 
+function ScopeProbe() {
+  const scope = useQuickProjectScope()
+  return (
+    <>
+      <output data-testid="quick-scope">{scope.quickScope.kind === 'all' ? 'all' : scope.quickScope.id}</output>
+      <output data-testid="quick-scope-key">{scope.projectScopeKey}</output>
+      <output data-testid="catalog-error">{scope.catalogError ? 'error' : 'clear'}</output>
+      <button type="button" onClick={() => void scope.loadCatalog()}>Load projects</button>
+      <button type="button" onClick={() => void scope.selectProject(PROJECT_ALPHA.id)}>Select Alpha</button>
+      <button type="button" onClick={() => scope.clearProjectScope()}>Clear project</button>
+      <button type="button" onClick={() => void scope.refreshCatalog()}>Refresh projects</button>
+    </>
+  )
+}
+
+function ScopeQueryProbe() {
+  const scope = useQuickProjectScope()
+  useEffect(() => {
+    void mocks.getOverview({
+      period: '30days',
+      provider: 'all',
+      range: null,
+      deviceScope: 'local',
+      projectId: scope.projectId,
+    })
+  }, [scope.projectId])
+  return <ScopeProbe />
+}
+
 describe('App shortcuts', () => {
   beforeEach(() => {
     installDefaultMocks()
@@ -230,6 +307,268 @@ describe('App shortcuts', () => {
     await waitFor(() => expect(mocks.getOverview).toHaveBeenCalled())
     await act(async () => { await Promise.resolve() })
     expect(mocks.getActReport).not.toHaveBeenCalled()
+    expect(screen.queryByText("Couldn't read data")).not.toBeInTheDocument()
+  })
+
+  it('keeps the selected project above a locale remount without adding it to NavState', async () => {
+    const { rerender } = render(
+      <QuickProjectScopeProvider>
+        <Fragment key="en"><ScopeProbe /></Fragment>
+      </QuickProjectScopeProvider>,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Select Alpha' }))
+    await waitFor(() => expect(screen.getByTestId('quick-scope')).toHaveTextContent(PROJECT_ALPHA.id))
+    expect(localStorage.getItem('codeburn.navState.v1') ?? '').not.toContain(PROJECT_ALPHA.id)
+
+    rerender(
+      <QuickProjectScopeProvider>
+        <Fragment key="fr"><ScopeProbe /></Fragment>
+      </QuickProjectScopeProvider>,
+    )
+    expect(screen.getByTestId('quick-scope')).toHaveTextContent(PROJECT_ALPHA.id)
+  })
+
+  it('resets a session-only project selection on a fresh provider mount', async () => {
+    const first = render(<QuickProjectScopeProvider><ScopeProbe /></QuickProjectScopeProvider>)
+    fireEvent.click(screen.getByRole('button', { name: 'Select Alpha' }))
+    await waitFor(() => expect(screen.getByTestId('quick-scope')).toHaveTextContent(PROJECT_ALPHA.id))
+
+    first.unmount()
+    render(<QuickProjectScopeProvider><ScopeProbe /></QuickProjectScopeProvider>)
+    expect(screen.getByTestId('quick-scope')).toHaveTextContent('all')
+  })
+
+  it('clears a selected project when a refreshed catalog revision hides it', async () => {
+    mocks.getProjectScopeCatalog
+      .mockResolvedValueOnce({ revision: 'revision-1', options: [PROJECT_ALPHA] })
+      .mockResolvedValueOnce({ revision: 'revision-2', options: [] })
+    const { getByRole, getByTestId } = render(<QuickProjectScopeProvider><ScopeProbe /></QuickProjectScopeProvider>)
+
+    fireEvent.click(getByRole('button', { name: 'Select Alpha' }))
+    await waitFor(() => expect(getByTestId('quick-scope')).toHaveTextContent(PROJECT_ALPHA.id))
+    fireEvent.click(getByRole('button', { name: 'Refresh projects' }))
+    await waitFor(() => expect(getByTestId('quick-scope')).toHaveTextContent('all'))
+  })
+
+  it('keeps a valid selected project when the refreshed current slice is empty', async () => {
+    const { getByRole, getByTestId } = render(<QuickProjectScopeProvider><ScopeProbe /></QuickProjectScopeProvider>)
+
+    fireEvent.click(getByRole('button', { name: 'Select Alpha' }))
+    await waitFor(() => expect(getByTestId('quick-scope')).toHaveTextContent(PROJECT_ALPHA.id))
+    fireEvent.click(getByRole('button', { name: 'Refresh projects' }))
+    await waitFor(() => expect(getByTestId('quick-scope')).toHaveTextContent(PROJECT_ALPHA.id))
+  })
+
+  it('Scenario: supported reports share the exact project while admin paths stay unscoped', async () => {
+    render(<App />)
+    expect(await screen.findByText('Most expensive sessions')).toBeInTheDocument()
+    mocks.getActReport.mockClear()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Project scope: All projects' }))
+    fireEvent.click(await screen.findByRole('option', { name: 'work/alpha, /work/alpha' }))
+
+    await waitFor(() => expect(mocks.getOverview).toHaveBeenCalledWith(expect.objectContaining({
+      projectId: PROJECT_ALPHA.id,
+      deviceScope: 'local',
+    })))
+    mocks.getActReport.mockClear()
+    await act(async () => { await Promise.resolve() })
+    expect(mocks.getActReport).not.toHaveBeenCalled()
+
+    fireEvent.keyDown(document, { key: '2', metaKey: true })
+    await waitFor(() => expect(mocks.getSessions).toHaveBeenCalledWith(expect.objectContaining({
+      projectId: PROJECT_ALPHA.id,
+      deviceScope: 'local',
+    })))
+
+    fireEvent.keyDown(document, { key: '8', metaKey: true })
+    expect(await screen.findByText('Not connected. Log in with the Claude CLI.')).toBeInTheDocument()
+    expect(mocks.getPlans.mock.calls.every(call => !call[0]?.projectId)).toBe(true)
+
+    fireEvent.keyDown(document, { key: ',', metaKey: true })
+    expect(screen.queryByRole('button', { name: /Project scope:/ })).not.toBeInTheDocument()
+  })
+
+  it('keeps Combined preference but makes the first project transition locally scoped everywhere', async () => {
+    expect(resolveEffectiveDeviceScope('combined', PROJECT_ALPHA.id, false)).toBe('local')
+    localStorage.setItem('codeburn.scope', 'combined')
+    render(<App />)
+    await waitFor(() => expect(mocks.getOverview).toHaveBeenCalledWith(overviewQuery('30days', 'all', { deviceScope: 'combined' })))
+
+    for (const mock of [mocks.getOverview, mocks.getYield, mocks.getSessions, mocks.getSpendFlow, mocks.getTimeline, mocks.getBranchSpend, mocks.getModels, mocks.getCompareModels, mocks.getOptimizeReport]) mock.mockClear()
+    fireEvent.click(screen.getByRole('button', { name: 'Project scope: All projects' }))
+    fireEvent.click(await screen.findByRole('option', { name: 'work/alpha, /work/alpha' }))
+
+    const scoped = { projectId: PROJECT_ALPHA.id, deviceScope: 'local' }
+    await waitFor(() => expect(mocks.getOverview).toHaveBeenCalledWith(expect.objectContaining(scoped)))
+    await waitFor(() => expect(mocks.getYield).toHaveBeenCalledWith(expect.objectContaining(scoped)))
+
+    fireEvent.keyDown(document, { key: '2', metaKey: true })
+    await waitFor(() => expect(mocks.getSessions).toHaveBeenCalledWith(expect.objectContaining(scoped)))
+
+    fireEvent.keyDown(document, { key: '4', metaKey: true })
+    await waitFor(() => expect(mocks.getSpendFlow).toHaveBeenCalledWith(expect.objectContaining(scoped)))
+    await waitFor(() => expect(mocks.getTimeline).toHaveBeenCalledWith(expect.objectContaining(scoped)))
+    await waitFor(() => expect(mocks.getBranchSpend).toHaveBeenCalledWith(expect.objectContaining(scoped)))
+
+    fireEvent.keyDown(document, { key: '6', metaKey: true })
+    await waitFor(() => expect(mocks.getModels).toHaveBeenCalledWith(expect.objectContaining(scoped)))
+
+    fireEvent.keyDown(document, { key: '7', metaKey: true })
+    await waitFor(() => expect(mocks.getCompareModels).toHaveBeenCalledWith(expect.objectContaining(scoped)))
+
+    fireEvent.keyDown(document, { key: '5', metaKey: true })
+    await waitFor(() => expect(mocks.getOptimizeReport).toHaveBeenCalledWith(expect.objectContaining(scoped)))
+
+    __resetPolledMemo()
+    fireEvent.click(screen.getByRole('button', { name: /Project scope: work\/alpha/ }))
+    fireEvent.click(await screen.findByRole('option', { name: 'All projects' }))
+    await waitFor(() => expect(mocks.getOverview).toHaveBeenLastCalledWith(overviewQuery('30days', 'all', { deviceScope: 'combined' })))
+    expect(localStorage.getItem('codeburn.scope')).toBe('combined')
+  })
+
+  it('keeps the selected project when catalog refresh fails and disables new selection', async () => {
+    mocks.getProjectScopeCatalog
+      .mockResolvedValueOnce({ revision: 'revision-1', options: [PROJECT_ALPHA] })
+      .mockRejectedValueOnce(new Error('catalog unavailable'))
+    const { getByRole, getByTestId } = render(<QuickProjectScopeProvider><ScopeQueryProbe /></QuickProjectScopeProvider>)
+
+    fireEvent.click(getByRole('button', { name: 'Select Alpha' }))
+    await waitFor(() => expect(getByTestId('quick-scope')).toHaveTextContent(PROJECT_ALPHA.id))
+    await waitFor(() => expect(mocks.getOverview).toHaveBeenCalledWith(expect.objectContaining({ projectId: PROJECT_ALPHA.id })))
+
+    fireEvent.click(getByRole('button', { name: 'Refresh projects' }))
+    await waitFor(() => expect(getByTestId('catalog-error')).toHaveTextContent('error'))
+    expect(getByTestId('quick-scope')).toHaveTextContent(PROJECT_ALPHA.id)
+    expect(mocks.getOverview).toHaveBeenLastCalledWith(expect.objectContaining({ projectId: PROJECT_ALPHA.id }))
+  })
+
+  it('keeps the selected project while a stale catalog selection reloads', async () => {
+    const { getByRole, getByTestId } = render(<QuickProjectScopeProvider><ScopeProbe /></QuickProjectScopeProvider>)
+
+    fireEvent.click(getByRole('button', { name: 'Select Alpha' }))
+    await waitFor(() => expect(getByTestId('quick-scope')).toHaveTextContent(PROJECT_ALPHA.id))
+
+    mocks.validateProjectScope.mockRejectedValueOnce({ kind: 'bad-args', message: 'catalog revision changed' })
+    mocks.getProjectScopeCatalog.mockResolvedValueOnce({ revision: 'revision-2', options: [PROJECT_ALPHA] })
+    fireEvent.click(getByRole('button', { name: 'Select Alpha' }))
+
+    await waitFor(() => expect(mocks.getProjectScopeCatalog).toHaveBeenCalledTimes(2))
+    expect(getByTestId('quick-scope')).toHaveTextContent(PROJECT_ALPHA.id)
+  })
+
+  it('keeps the newest project response when Alpha resolves after Beta', async () => {
+    const alpha = deferred<MenubarPayload>()
+    const beta = deferred<MenubarPayload>()
+    mocks.getOverview.mockImplementation((query: { projectId: string | null }) => {
+      if (query.projectId === PROJECT_ALPHA.id) return alpha.promise
+      if (query.projectId === PROJECT_ALPHA_SAME_NAME.id) return beta.promise
+      return Promise.resolve(overviewPayload())
+    })
+
+    render(<App />)
+    expect(await screen.findByText('Most expensive sessions')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Project scope: All projects' }))
+    fireEvent.click(await screen.findByRole('option', { name: 'work/alpha, /work/alpha' }))
+    await waitFor(() => expect(mocks.getOverview).toHaveBeenCalledWith(expect.objectContaining({ projectId: PROJECT_ALPHA.id, deviceScope: 'local' })))
+
+    fireEvent.click(screen.getByRole('button', { name: /Project scope: work\/alpha/ }))
+    fireEvent.click(await screen.findByRole('option', { name: 'work/alpha-ui, /work/alpha-ui' }))
+    await waitFor(() => expect(mocks.getOverview).toHaveBeenCalledWith(expect.objectContaining({ projectId: PROJECT_ALPHA_SAME_NAME.id, deviceScope: 'local' })))
+
+    await act(async () => {
+      beta.resolve(projectPayload(PROJECT_ALPHA_SAME_NAME.id, 22))
+      await beta.promise
+    })
+    expect(screen.getAllByText('$22.00').length).toBeGreaterThan(0)
+
+    await act(async () => {
+      alpha.resolve(projectPayload(PROJECT_ALPHA.id, 11))
+      await alpha.promise
+    })
+    expect(screen.getAllByText('$22.00').length).toBeGreaterThan(0)
+    expect(screen.queryByText('$11.00')).not.toBeInTheDocument()
+  })
+
+  it('keeps one selected project across report navigation, period/provider changes, and history', async () => {
+    render(<App />)
+    expect(await screen.findByText('Most expensive sessions')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Providers' }))
+    fireEvent.click(await screen.findByRole('option', { name: 'Claude' }))
+    await waitFor(() => expect(mocks.getOverview).toHaveBeenCalledWith(expect.objectContaining({ provider: 'claude' })))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Project scope: All projects' }))
+    fireEvent.click(await screen.findByRole('option', { name: 'work/alpha, /work/alpha' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: /Project scope: work\/alpha/ })).toBeInTheDocument())
+
+    fireEvent.keyDown(document, { key: '2', metaKey: true })
+    expect(await screen.findByText('No sessions in this range yet.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Project scope: work\/alpha/ })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('tab', { name: '7D' }))
+    await waitFor(() => expect(mocks.getOverview).toHaveBeenCalledWith(expect.objectContaining({ period: 'week', provider: 'claude', projectId: PROJECT_ALPHA.id })))
+    expect(screen.getByRole('button', { name: /Project scope: work\/alpha/ })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }))
+    expect(screen.getByRole('button', { name: /Project scope: work\/alpha/ })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Forward' }))
+    expect(screen.getByRole('button', { name: /Project scope: work\/alpha/ })).toBeInTheDocument()
+  })
+
+  it('closes the project picker on Escape and restores focus to its trigger', async () => {
+    render(<App />)
+    expect(await screen.findByText('Most expensive sessions')).toBeInTheDocument()
+    const trigger = screen.getByRole('button', { name: 'Project scope: All projects' })
+
+    fireEvent.click(trigger)
+    expect(await screen.findByRole('searchbox')).toBeInTheDocument()
+    fireEvent.keyDown(document, { key: 'Escape' })
+
+    expect(screen.queryByRole('listbox')).not.toBeInTheDocument()
+    expect(document.activeElement).toBe(trigger)
+  })
+
+  it('keeps counterfactual local-model savings while omitting global applied-action evidence in a project view', async () => {
+    const scoped = projectPayload(PROJECT_ALPHA.id, 9, 4.5)
+    mocks.getActReport.mockResolvedValue({ totals: { realizedCostUSD: 84, measuredActions: 7 } })
+    mocks.getActReport.mockClear()
+    render(<OverviewContent
+      period="30days"
+      provider="all"
+      projectId={PROJECT_ALPHA.id}
+      deviceScope="local"
+      ready
+      overview={{ data: scoped, error: null, loading: false, switching: false, lastSuccessAt: Date.now(), refresh: vi.fn() }}
+    />)
+
+    expect(await screen.findByText('Saved via local models')).toBeInTheDocument()
+    expect(screen.getByText('$4.50')).toBeInTheDocument()
+    expect(screen.queryByText('Saved by applied fixes')).not.toBeInTheDocument()
+    expect(screen.queryByText(/across 7 fixes/)).not.toBeInTheDocument()
+    expect(mocks.getActReport).not.toHaveBeenCalled()
+  })
+
+  it('invalidates a pending overview when the Settings filter revision changes without publishing its stale error', async () => {
+    const pendingOverview = deferred<MenubarPayload>()
+    const filterRevision = deferred<{ project: string[]; exclude: string[] }>()
+    mocks.getOverview.mockReturnValue(pendingOverview.promise)
+    mocks.getProjectFilter.mockReturnValue(filterRevision.promise)
+
+    render(<App />)
+    await waitFor(() => expect(mocks.getOverview).toHaveBeenCalled())
+
+    await act(async () => {
+      filterRevision.resolve({ project: [], exclude: ['/work/hidden'] })
+      await filterRevision.promise
+    })
+    await act(async () => {
+      pendingOverview.reject(new Error('stale filter response'))
+      await expect(pendingOverview.promise).rejects.toThrow('stale filter response')
+    })
+
     expect(screen.queryByText("Couldn't read data")).not.toBeInTheDocument()
   })
 
@@ -274,14 +613,14 @@ describe('App shortcuts', () => {
     const thirtyDays = overviewPayload()
     thirtyDays.current = { ...thirtyDays.current, label: 'Last 30 Days', cost: 30 }
     const pendingWeek = new Promise<MenubarPayload>(() => {})
-    mocks.getOverview.mockImplementation((period: string) =>
-      period === 'week' ? pendingWeek : Promise.resolve(thirtyDays))
+    mocks.getOverview.mockImplementation((query: { period: string }) =>
+      query.period === 'week' ? pendingWeek : Promise.resolve(thirtyDays))
 
     render(<App />)
     expect(await screen.findByText('$30.00')).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('tab', { name: '7D' }))
-    await waitFor(() => expect(mocks.getOverview).toHaveBeenCalledWith('week', 'all'))
+    await waitFor(() => expect(mocks.getOverview).toHaveBeenCalledWith(overviewQuery('week', 'all')))
 
     // The selected key has not resolved yet. A 30-day result must never be
     // written beneath it and then shown as the seven-day headline on a later
@@ -293,8 +632,8 @@ describe('App shortcuts', () => {
     const thirtyDays = overviewPayload()
     thirtyDays.current = { ...thirtyDays.current, label: 'Last 30 Days', cost: 30 }
     const pendingWeek = new Promise<MenubarPayload>(() => {})
-    mocks.getOverview.mockImplementation((period: string) =>
-      period === 'week' ? pendingWeek : Promise.resolve(thirtyDays))
+    mocks.getOverview.mockImplementation((query: { period: string }) =>
+      query.period === 'week' ? pendingWeek : Promise.resolve(thirtyDays))
 
     render(<App />)
     expect(await screen.findByText('$30.00')).toBeInTheDocument()
@@ -302,7 +641,7 @@ describe('App shortcuts', () => {
     // The sweep only warms the selected period, so 7D is cold: the on-demand
     // fetch runs and the panel waits on it rather than showing 30D's figure.
     fireEvent.click(screen.getByRole('tab', { name: '7D' }))
-    await waitFor(() => expect(mocks.getOverview).toHaveBeenCalledWith('week', 'all'))
+    await waitFor(() => expect(mocks.getOverview).toHaveBeenCalledWith(overviewQuery('week', 'all')))
     await waitFor(() => expect(screen.queryByText('$30.00')).toBeNull())
     expect(document.querySelector('.skel')).not.toBeNull()
   })
@@ -318,6 +657,16 @@ describe('App shortcuts', () => {
       .toBe(overviewMemoKey('all', 'month', null, null, 'local', aug29))
     expect(overviewMemoKey('all', 'month', null, null, 'local', aug29))
       .not.toBe(overviewMemoKey('all', 'month', null, null, 'local', sep1))
+  })
+
+  it('partitions overview headlines between All projects and an exact project', () => {
+    const now = new Date(2026, 7, 28, 12, 0, 0)
+    const allProjects = overviewMemoKey('all', 'week', null, null, 'local', desktopProjectScopeKey(null), now)
+    const alpha = overviewMemoKey('all', 'week', null, null, 'local', desktopProjectScopeKey(PROJECT_ALPHA.id), now)
+
+    writeOverviewHeadline(allProjects, overviewPayload(), now.getTime())
+    expect(alpha).not.toBe(allProjects)
+    expect(readOverviewHeadline(alpha, now.getTime())).toBeNull()
   })
 
   it('maps the footer to the selected report instead of reusing Overview freshness', () => {
@@ -377,13 +726,13 @@ describe('App shortcuts', () => {
   it('boots with the persisted default period from Settings', async () => {
     localStorage.setItem('codeburn.defaultPeriod', 'week')
     render(<App />)
-    await waitFor(() => expect(mocks.getOverview).toHaveBeenCalledWith('week', 'all'))
+    await waitFor(() => expect(mocks.getOverview).toHaveBeenCalledWith(overviewQuery('week', 'all')))
   })
 
   it('boots to today when no default period is persisted', async () => {
     localStorage.removeItem('codeburn.defaultPeriod')
     render(<App />)
-    await waitFor(() => expect(mocks.getOverview).toHaveBeenCalledWith('today', 'all'))
+    await waitFor(() => expect(mocks.getOverview).toHaveBeenCalledWith(overviewQuery('today', 'all')))
   })
 
   it('falls back to 7 days when the boot payload shows today has no sessions', async () => {
@@ -391,8 +740,8 @@ describe('App shortcuts', () => {
     const empty = overviewPayload()
     mocks.getOverview.mockResolvedValue({ ...empty, current: { ...empty.current, sessions: 0 } })
     render(<App />)
-    await waitFor(() => expect(mocks.getOverview).toHaveBeenCalledWith('today', 'all'))
-    await waitFor(() => expect(mocks.getOverview).toHaveBeenCalledWith('week', 'all'))
+    await waitFor(() => expect(mocks.getOverview).toHaveBeenCalledWith(overviewQuery('today', 'all')))
+    await waitFor(() => expect(mocks.getOverview).toHaveBeenCalledWith(overviewQuery('week', 'all')))
   })
 
   it('leaves a persisted default period alone when today has no sessions', async () => {
@@ -400,9 +749,9 @@ describe('App shortcuts', () => {
     const empty = overviewPayload()
     mocks.getOverview.mockResolvedValue({ ...empty, current: { ...empty.current, sessions: 0 } })
     render(<App />)
-    await waitFor(() => expect(mocks.getOverview).toHaveBeenCalledWith('today', 'all'))
+    await waitFor(() => expect(mocks.getOverview).toHaveBeenCalledWith(overviewQuery('today', 'all')))
     await act(async () => { await Promise.resolve() })
-    expect(mocks.getOverview).not.toHaveBeenCalledWith('week', 'all')
+    expect(mocks.getOverview).not.toHaveBeenCalledWith(overviewQuery('week', 'all'))
   })
 
   it('switches sections with command-number shortcuts', async () => {
@@ -476,36 +825,36 @@ describe('App shortcuts', () => {
     fireEvent.click(screen.getByText('Today'))
 
     await waitFor(() => {
-      expect(mocks.getOverview).toHaveBeenCalledWith('today', 'all')
-      expect(mocks.getSpendFlow).toHaveBeenCalledWith('today', 'all')
+      expect(mocks.getOverview).toHaveBeenCalledWith(overviewQuery('today', 'all'))
+      expect(mocks.getSpendFlow).toHaveBeenCalledWith({ period: 'today', provider: 'all', range: null, deviceScope: 'local', projectId: null })
     })
 
     fireEvent.click(screen.getByText('All providers'))
     fireEvent.click(await screen.findByRole('option', { name: 'Claude' }))
 
     await waitFor(() => {
-      expect(mocks.getOverview).toHaveBeenCalledWith('today', 'claude')
-      expect(mocks.getSpendFlow).toHaveBeenCalledWith('today', 'claude')
+      expect(mocks.getOverview).toHaveBeenCalledWith(overviewQuery('today', 'claude'))
+      expect(mocks.getSpendFlow).toHaveBeenCalledWith({ period: 'today', provider: 'claude', range: null, deviceScope: 'local', projectId: null })
     })
   })
 
   it('drives combined-scope overview fetches and persists the Scope setting', async () => {
     render(<App />)
-    await waitFor(() => expect(mocks.getOverview).toHaveBeenCalledWith('30days', 'all'))
+    await waitFor(() => expect(mocks.getOverview).toHaveBeenCalledWith(overviewQuery('30days', 'all')))
 
     fireEvent.keyDown(document, { key: ',', metaKey: true })
     fireEvent.click(await screen.findByLabelText('Scope'))
     fireEvent.click(await screen.findByRole('option', { name: 'Combined' }))
 
     // Combined scope forces provider='all' and passes --scope combined (6th arg).
-    await waitFor(() => expect(mocks.getOverview).toHaveBeenCalledWith('30days', 'all', undefined, undefined, undefined, 'combined'))
+    await waitFor(() => expect(mocks.getOverview).toHaveBeenCalledWith(overviewQuery('30days', 'all', { deviceScope: 'combined' })))
     expect(localStorage.getItem('codeburn.scope')).toBe('combined')
   })
 
   it('boots in combined scope from the persisted Scope setting', async () => {
     localStorage.setItem('codeburn.scope', 'combined')
     render(<App />)
-    await waitFor(() => expect(mocks.getOverview).toHaveBeenCalledWith('30days', 'all', undefined, undefined, undefined, 'combined'))
+    await waitFor(() => expect(mocks.getOverview).toHaveBeenCalledWith(overviewQuery('30days', 'all', { deviceScope: 'combined' })))
   })
 
   it('never boots a filtered session into combined scope, and collapses the stored setting', async () => {
@@ -514,8 +863,8 @@ describe('App shortcuts', () => {
     mocks.getProjectFilter.mockResolvedValue({ project: [], exclude: ['my-company'] })
     render(<App />)
     // Local from the first poll: a combined total would carry the hidden project.
-    await waitFor(() => expect(mocks.getOverview).toHaveBeenCalledWith('30days', 'all'))
-    expect(mocks.getOverview).not.toHaveBeenCalledWith('30days', 'all', undefined, undefined, undefined, 'combined')
+    await waitFor(() => expect(mocks.getOverview).toHaveBeenCalledWith(overviewQuery('30days', 'all')))
+    expect(mocks.getOverview).not.toHaveBeenCalledWith(overviewQuery('30days', 'all', { deviceScope: 'combined' }))
     await waitFor(() => expect(localStorage.getItem('codeburn.scope')).toBe('local'))
   })
 
@@ -529,7 +878,7 @@ describe('App shortcuts', () => {
     mocks.getProjectFilter.mockResolvedValue({ project: [], exclude: ['my-company'] })
     mocks.getOverview.mockResolvedValue(overviewPayload())
     render(<App />)
-    await waitFor(() => expect(mocks.getOverview).toHaveBeenCalledWith('30days', 'all', undefined, undefined, undefined, 'combined'))
+    await waitFor(() => expect(mocks.getOverview).toHaveBeenCalledWith(overviewQuery('30days', 'all', { deviceScope: 'combined' })))
     await waitFor(() => expect(localStorage.getItem('codeburn.scope')).toBe('local'))
     await waitFor(() => expect(localStorage.getItem('codeburn.projectFiltered')).toBe('1'))
   })
@@ -556,6 +905,39 @@ describe('App shortcuts', () => {
     expect(hasPolledMemo('sentinel-filter-key')).toBe(true)
   })
 
+  it('clears quick project scope before a Settings filter replacement without mutating saved Combined preference', async () => {
+    localStorage.setItem('codeburn.scope', 'combined')
+    let currentFilter: { project: string[]; exclude: string[] } = { project: [], exclude: [] }
+    const savedFilter = deferred<{ project: string[]; exclude: string[] }>()
+    mocks.getProjectFilter.mockImplementation(async () => currentFilter)
+    mocks.getUnfilteredProjects.mockResolvedValue({
+      projects: [{ name: 'Other', path: '/work/other', cost: 1, sessions: 1 }],
+    })
+    mocks.setProjectFilter.mockReturnValue(savedFilter.promise)
+
+    render(<App />)
+    fireEvent.click(screen.getByRole('button', { name: 'Project scope: All projects' }))
+    fireEvent.click(await screen.findByRole('option', { name: 'work/alpha, /work/alpha' }))
+    await waitFor(() => expect(mocks.getOverview).toHaveBeenCalledWith(expect.objectContaining({ projectId: PROJECT_ALPHA.id })))
+
+    fireEvent.keyDown(document, { key: ',', metaKey: true })
+    fireEvent.click(await screen.findByRole('button', { name: 'Projects' }))
+    const hiddenProject = await screen.findByRole('switch', { name: /other/i })
+    const callsBeforeMutation = mocks.getOverview.mock.calls.length
+    fireEvent.click(hiddenProject)
+
+    expect(mocks.setProjectFilter).toHaveBeenCalledWith({ project: [], exclude: ['/work/other'] })
+    await waitFor(() => expect(mocks.getOverview.mock.calls.slice(callsBeforeMutation).some(call => (call[0] as { projectId?: string | null } | undefined)?.projectId === null)).toBe(true))
+    const replacementCalls = mocks.getOverview.mock.calls.slice(callsBeforeMutation)
+    expect(replacementCalls.every(call => (call[0] as { projectId?: string | null } | undefined)?.projectId !== PROJECT_ALPHA.id)).toBe(true)
+    expect(localStorage.getItem('codeburn.scope')).toBe('combined')
+
+    currentFilter = { project: [], exclude: ['/work/other'] }
+    savedFilter.resolve(currentFilter)
+    await waitFor(() => expect(localStorage.getItem('codeburn.projectFiltered')).toBe('1'))
+    await waitFor(() => expect(localStorage.getItem('codeburn.scope')).toBe('local'))
+  })
+
   it('records the filter for the next boot when the pane is empty', async () => {
     render(<App />)
     await waitFor(() => expect(localStorage.getItem('codeburn.projectFiltered')).toBe('0'))
@@ -578,7 +960,35 @@ describe('App shortcuts', () => {
     fireEvent.click(screen.getByText('All providers'))
     fireEvent.click(await screen.findByRole('option', { name: 'Grok Build' }))
 
-    await waitFor(() => expect(mocks.getOverview).toHaveBeenCalledWith('30days', 'grok'))
+    await waitFor(() => expect(mocks.getOverview).toHaveBeenCalledWith(overviewQuery('30days', 'grok')))
+  })
+
+  it('rebuilds the provider catalog inside a selected project scope', async () => {
+    const global = overviewPayload()
+    global.current.providerDetails = [{ id: 'claude', label: 'Claude', cost: 10 }]
+    const scoped = overviewPayload()
+    scoped.current.providers = { codex: 4 }
+    scoped.current.providerDetails = [{ id: 'codex', label: 'Codex', cost: 4 }]
+    mocks.getOverview.mockImplementation(async (query: { projectId?: string | null }) =>
+      query.projectId === PROJECT_ALPHA.id ? scoped : global)
+
+    render(<App />)
+    expect(await screen.findByText('Most expensive sessions')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Project scope: All projects' }))
+    fireEvent.click(await screen.findByRole('option', { name: 'work/alpha, /work/alpha' }))
+    await waitFor(() => expect(mocks.getOverview).toHaveBeenCalledWith(expect.objectContaining({
+      provider: 'all', projectId: PROJECT_ALPHA.id, deviceScope: 'local',
+    })))
+
+    fireEvent.click(screen.getByText('All providers'))
+    expect(await screen.findByRole('option', { name: 'Codex' })).toBeInTheDocument()
+    expect(screen.queryByRole('option', { name: 'Claude' })).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('option', { name: 'Codex' }))
+    await waitFor(() => expect(mocks.getOverview).toHaveBeenCalledWith(expect.objectContaining({
+      provider: 'codex', projectId: PROJECT_ALPHA.id, deviceScope: 'local',
+    })))
   })
 
   it('lists a provider that is installed but idle this period, greyed and last', async () => {
@@ -635,10 +1045,10 @@ describe('App shortcuts', () => {
 
     fireEvent.click(screen.getByLabelText('Providers'))
     fireEvent.click(await screen.findByRole('option', { name: 'Claude' }))
-    await waitFor(() => expect(mocks.getOverview).toHaveBeenCalledWith('30days', 'claude'))
+    await waitFor(() => expect(mocks.getOverview).toHaveBeenCalledWith(overviewQuery('30days', 'claude')))
 
     fireEvent.click(screen.getByText('Today'))
-    await waitFor(() => expect(mocks.getOverview).toHaveBeenCalledWith('today', 'claude'))
+    await waitFor(() => expect(mocks.getOverview).toHaveBeenCalledWith(overviewQuery('today', 'claude')))
 
     fireEvent.click(screen.getByLabelText('Providers'))
     expect(screen.getByRole('option', { name: 'Claude' })).toBeInTheDocument()
@@ -664,7 +1074,7 @@ describe('App shortcuts', () => {
     fireEvent.click(trigger)
     fireEvent.click(await screen.findByRole('option', { name: 'Default Claude' }))
 
-    await waitFor(() => expect(mocks.getOverview).toHaveBeenCalledWith('30days', 'all', undefined, CONFIG_A))
+    await waitFor(() => expect(mocks.getOverview).toHaveBeenCalledWith(overviewQuery('30days', 'all', { configSource: CONFIG_A })))
     expect(localStorage.getItem('codeburn.claudeConfigSource')).toBe(CONFIG_A)
   })
 
@@ -677,14 +1087,14 @@ describe('App shortcuts', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Providers' }))
     fireEvent.click(await screen.findByRole('option', { name: 'Codex' }))
-    await waitFor(() => expect(mocks.getOverview).toHaveBeenCalledWith('30days', 'codex'))
+    await waitFor(() => expect(mocks.getOverview).toHaveBeenCalledWith(overviewQuery('30days', 'codex')))
 
     fireEvent.click(screen.getByRole('button', { name: 'Claude config source' }))
     fireEvent.click(await screen.findByRole('option', { name: 'Default Claude' }))
 
-    await waitFor(() => expect(mocks.getOverview).toHaveBeenCalledWith('30days', 'all', undefined, CONFIG_A))
+    await waitFor(() => expect(mocks.getOverview).toHaveBeenCalledWith(overviewQuery('30days', 'all', { configSource: CONFIG_A })))
     // The Claude-incompatible provider filter must never reach the CLI with the flag.
-    expect(mocks.getOverview.mock.calls).not.toContainEqual(['30days', 'codex', undefined, CONFIG_A])
+    expect(mocks.getOverview.mock.calls).not.toContainEqual([overviewQuery('30days', 'codex', { configSource: CONFIG_A })])
   })
 
   it('clears the config scope when a non-Claude provider is picked afterwards', async () => {
@@ -696,14 +1106,14 @@ describe('App shortcuts', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Claude config source' }))
     fireEvent.click(await screen.findByRole('option', { name: 'Default Claude' }))
-    await waitFor(() => expect(mocks.getOverview).toHaveBeenCalledWith('30days', 'all', undefined, CONFIG_A))
+    await waitFor(() => expect(mocks.getOverview).toHaveBeenCalledWith(overviewQuery('30days', 'all', { configSource: CONFIG_A })))
 
     fireEvent.click(screen.getByRole('button', { name: 'Providers' }))
     fireEvent.click(await screen.findByRole('option', { name: 'Codex' }))
 
-    await waitFor(() => expect(mocks.getOverview).toHaveBeenCalledWith('30days', 'codex'))
+    await waitFor(() => expect(mocks.getOverview).toHaveBeenCalledWith(overviewQuery('30days', 'codex')))
     // The incompatible combination must never reach the CLI.
-    expect(mocks.getOverview.mock.calls).not.toContainEqual(['30days', 'codex', undefined, CONFIG_A])
+    expect(mocks.getOverview.mock.calls).not.toContainEqual([overviewQuery('30days', 'codex', { configSource: CONFIG_A })])
     expect(localStorage.getItem('codeburn.claudeConfigSource')).toBeNull()
   })
 
@@ -712,12 +1122,12 @@ describe('App shortcuts', () => {
     mocks.getOverview.mockResolvedValue(withConfigs(overviewPayload()))
     render(<App />)
 
-    await waitFor(() => expect(mocks.getOverview).toHaveBeenCalledWith('30days', 'all', undefined, CONFIG_A))
+    await waitFor(() => expect(mocks.getOverview).toHaveBeenCalledWith(overviewQuery('30days', 'all', { configSource: CONFIG_A })))
 
     fireEvent.click(await screen.findByRole('button', { name: 'Claude config source' }))
     fireEvent.click(await screen.findByRole('option', { name: 'All Claude configs' }))
 
-    await waitFor(() => expect(mocks.getOverview).toHaveBeenCalledWith('30days', 'all'))
+    await waitFor(() => expect(mocks.getOverview).toHaveBeenCalledWith(overviewQuery('30days', 'all')))
     expect(localStorage.getItem('codeburn.claudeConfigSource')).toBeNull()
   })
 
@@ -742,8 +1152,8 @@ describe('App shortcuts', () => {
     fireEvent.mouseUp(screen.getByRole('button', { name: toLabel }))
 
     await waitFor(() => {
-      expect(mocks.getOverview).toHaveBeenCalledWith('30days', 'all', range)
-      expect(mocks.getSpendFlow).toHaveBeenCalledWith('30days', 'all', range)
+      expect(mocks.getOverview).toHaveBeenCalledWith(overviewQuery('30days', 'all', { range }))
+      expect(mocks.getSpendFlow).toHaveBeenCalledWith({ period: '30days', provider: 'all', range, deviceScope: 'local', projectId: null })
     })
     expect(screen.getByRole('button', { name: /–/ })).toBeInTheDocument()
     expect(screen.getByText('30D')).not.toHaveClass('on')
@@ -816,7 +1226,7 @@ describe('App shortcuts', () => {
     // cap can no longer be evaluated: the banner must disappear.
     fireEvent.click(screen.getByText('All providers'))
     fireEvent.click(await screen.findByRole('option', { name: 'Claude' }))
-    await waitFor(() => expect(mocks.getOverview).toHaveBeenCalledWith('30days', 'claude'))
+    await waitFor(() => expect(mocks.getOverview).toHaveBeenCalledWith(overviewQuery('30days', 'claude')))
     await waitFor(() => expect(screen.queryByText(/Daily budget exceeded/)).not.toBeInTheDocument())
   })
 })
@@ -913,11 +1323,11 @@ describe('overview idle warming', () => {
       await act(async () => { await vi.advanceTimersByTimeAsync(3_000) })
       await act(async () => { await vi.advanceTimersByTimeAsync(240_000) })
 
-      const backgroundSpawns = mocks.getOverview.mock.calls.filter(call => call[4] === true)
-      expect(backgroundSpawns.every(call => call[0] === '30days')).toBe(true)
-      expect(backgroundSpawns[0]?.slice(0, 2)).toEqual(['30days', 'claude'])
+      const backgroundSpawns = mocks.getOverview.mock.calls.filter(call => call[0]?.background === true)
+      expect(backgroundSpawns.every(call => call[0]?.period === '30days')).toBe(true)
+      expect(backgroundSpawns[0]?.[0]).toMatchObject({ period: '30days', provider: 'claude' })
       for (const mock of [mocks.getSessions, mocks.getSpendFlow, mocks.getModels, mocks.getCompareModels, mocks.getOptimizeReport, mocks.getYield, mocks.getPlans]) {
-        expect(mock.mock.calls.every(call => call[0] === '30days')).toBe(true)
+        expect(mock.mock.calls.every(call => call[0]?.period === '30days' || call[0] === '30days')).toBe(true)
       }
     } finally {
       vi.useRealTimers()
@@ -932,11 +1342,11 @@ describe('overview idle warming', () => {
       await act(async () => { await vi.advanceTimersByTimeAsync(3_000) })
       await act(async () => { await vi.advanceTimersByTimeAsync(60_000) })
 
-      expect(mocks.getSessions.mock.calls.some(call => call[0] === '30days' && call[3] === true)).toBe(true)
-      expect(mocks.getSpendFlow.mock.calls.some(call => call[0] === '30days' && call[3] === true)).toBe(true)
-      expect(mocks.getModels.mock.calls.some(call => call[0] === '30days' && call[4] === true)).toBe(true)
-      expect(mocks.getCompareModels.mock.calls.some(call => call[0] === '30days' && call[2] === true)).toBe(true)
-      expect(mocks.getOptimizeReport.mock.calls.some(call => call[0] === '30days' && call[3] === true)).toBe(true)
+      expect(mocks.getSessions.mock.calls.some(call => call[0]?.period === '30days' && call[0]?.background === true)).toBe(true)
+      expect(mocks.getSpendFlow.mock.calls.some(call => call[0]?.period === '30days' && call[0]?.background === true)).toBe(true)
+      expect(mocks.getModels.mock.calls.some(call => call[0]?.period === '30days' && call[0]?.background === true)).toBe(true)
+      expect(mocks.getCompareModels.mock.calls.some(call => call[0]?.period === '30days' && call[0]?.background === true)).toBe(true)
+      expect(mocks.getOptimizeReport.mock.calls.some(call => call[0]?.period === '30days' && call[0]?.background === true)).toBe(true)
       expect(mocks.getPlans.mock.calls.some(call => call[0] === '30days' && call[1] === true)).toBe(true)
       // Yield is polled by the visible Overview itself, so the sweep finds it
       // already in the memo and skips it — warm either way.
@@ -955,8 +1365,8 @@ describe('overview idle warming', () => {
       await act(async () => { await vi.advanceTimersByTimeAsync(240_000) })
       // Nothing speculative while nobody is looking: no background overview and
       // no report warm at all.
-      expect(mocks.getOverview.mock.calls.filter(call => call[4] === true)).toEqual([])
-      expect(mocks.getSessions.mock.calls.filter(call => call[3] === true)).toEqual([])
+      expect(mocks.getOverview.mock.calls.filter(call => call[0]?.background === true)).toEqual([])
+      expect(mocks.getSessions.mock.calls.filter(call => call[0]?.background === true)).toEqual([])
 
       // `visibilitychange` is what wakes the hold — while hidden it waits on the
       // event, never on a timer that would spin the renderer every couple of
@@ -965,9 +1375,9 @@ describe('overview idle warming', () => {
       setVisibility('visible')
       await act(async () => { document.dispatchEvent(new Event('visibilitychange')) })
       await act(async () => { await vi.advanceTimersByTimeAsync(10_000) })
-      expect(mocks.getSessions.mock.calls.some(call => call[0] === '30days' && call[3] === true)).toBe(true)
+      expect(mocks.getSessions.mock.calls.some(call => call[0]?.period === '30days' && call[0]?.background === true)).toBe(true)
       await act(async () => { await vi.advanceTimersByTimeAsync(240_000) })
-      expect(mocks.getOverview.mock.calls.some(call => call[4] === true)).toBe(true)
+      expect(mocks.getOverview.mock.calls.some(call => call[0]?.background === true)).toBe(true)
     } finally {
       setVisibility('visible')
       vi.useRealTimers()
@@ -983,8 +1393,8 @@ describe('overview idle warming', () => {
       mocks.getOverview.mockImplementation(async () => manyProviderPayload())
       let resolveSessions!: (rows: unknown) => void
       let sessionWarms = 0
-      mocks.getSessions.mockImplementation((_period: string, _provider: string, _range, background) => {
-        if (background !== true) return Promise.resolve([])
+      mocks.getSessions.mockImplementation((query: { background?: boolean }) => {
+        if (query.background !== true) return Promise.resolve([])
         sessionWarms++
         return new Promise(resolve => { resolveSessions = resolve })
       })
@@ -1016,7 +1426,7 @@ describe('overview idle warming', () => {
       render(<App />)
       await act(async () => { await vi.advanceTimersByTimeAsync(3_000) })
       await act(async () => { await vi.advanceTimersByTimeAsync(60_000) })
-      expect(mocks.getSpendFlow.mock.calls.filter(call => call[3] === true)).toEqual([])
+      expect(mocks.getSpendFlow.mock.calls.filter(call => call[0]?.background === true)).toEqual([])
 
       // The hold is unbounded, so the memo has to be re-tested on the way out:
       // a section visited meanwhile is already warm and must not be re-parsed.
@@ -1024,8 +1434,8 @@ describe('overview idle warming', () => {
       setVisibility('visible')
       await act(async () => { document.dispatchEvent(new Event('visibilitychange')) })
       await act(async () => { await vi.advanceTimersByTimeAsync(240_000) })
-      expect(mocks.getSessions.mock.calls.some(call => call[3] === true)).toBe(true)
-      expect(mocks.getSpendFlow.mock.calls.filter(call => call[3] === true)).toEqual([])
+      expect(mocks.getSessions.mock.calls.some(call => call[0]?.background === true)).toBe(true)
+      expect(mocks.getSpendFlow.mock.calls.filter(call => call[0]?.background === true)).toEqual([])
     } finally {
       setVisibility('visible')
       vi.useRealTimers()
@@ -1037,9 +1447,9 @@ describe('overview idle warming', () => {
     try {
       setVisibility('visible')
       let claudeWarms = 0
-      mocks.getOverview.mockImplementation(async (period: string, provider: string, _range, _config, background) => {
+      mocks.getOverview.mockImplementation(async (query: { period: string; provider: string; background?: boolean }) => {
         const payload = manyProviderPayload()
-        if (provider === 'claude' && background === true) {
+        if (query.provider === 'claude' && query.background === true) {
           claudeWarms++
           // A cold corpus can answer before the parse is complete; that is not an
           // answer worth remembering as warm.
@@ -1087,13 +1497,13 @@ describe('overview idle warming', () => {
       await act(async () => { await vi.advanceTimersByTimeAsync(30 * 60_000) })
 
       const warmedProviders = mocks.getOverview.mock.calls
-        // Prefetch warms carry the background-priority flag (5th arg).
-        .filter(c => c[0] === '30days' && c[1] !== 'all' && c[2] === undefined && c[3] === undefined && c[4] === true)
-        .map(c => c[1])
+        // Prefetch warms carry the background-priority flag.
+        .filter(c => c[0]?.period === '30days' && c[0]?.provider !== 'all' && c[0]?.background === true)
+        .map(c => c[0]?.provider)
       expect(warmedProviders).toEqual(PROVIDERS)
 
       // Sanity: the active 'all' view was polled every cycle (not prefetch-gated).
-      const allPolls = mocks.getOverview.mock.calls.filter(c => c[1] === 'all')
+      const allPolls = mocks.getOverview.mock.calls.filter(c => c[0]?.provider === 'all')
       expect(allPolls.length).toBeGreaterThanOrEqual(3)
 
       for (const id of PROVIDERS) expect(hasPolledMemo(overviewMemoKey(id, '30days', null, null))).toBe(true)
@@ -1191,8 +1601,8 @@ describe('currency correctness', () => {
     // change. The claude fetch is left pending so `switching` stays true and the
     // memo-served EUR payload is what's on screen during the assertion window.
     const eur = { ...overviewPayload(), currency: EUR }
-    mocks.getOverview.mockImplementation((_period: string, provider: string) =>
-      provider === 'claude' ? new Promise<MenubarPayload>(() => {}) : Promise.resolve(usd))
+    mocks.getOverview.mockImplementation((query: { provider: string }) =>
+      query.provider === 'claude' ? new Promise<MenubarPayload>(() => {}) : Promise.resolve(usd))
     // Stamp the entry older than the memo's freshness window so the switch
     // revalidates behind it (a still-fresh entry is served without a refetch).
     const staleAt = Date.now() - 60_000
@@ -1209,7 +1619,7 @@ describe('currency correctness', () => {
     // its fresh fetch hangs. The currency effect must NOT apply that stale EUR.
     fireEvent.click(screen.getByText('All providers'))
     fireEvent.click(await screen.findByRole('option', { name: 'Claude' }))
-    await waitFor(() => expect(mocks.getOverview).toHaveBeenCalledWith('30days', 'claude'))
+    await waitFor(() => expect(mocks.getOverview).toHaveBeenCalledWith(overviewQuery('30days', 'claude')))
 
     expect(screen.queryByText(/€/)).not.toBeInTheDocument()
   })
@@ -1258,15 +1668,15 @@ describe('currency correctness', () => {
     let resolveOldWarm!: (payload: MenubarPayload) => void
     const oldWarm = new Promise<MenubarPayload>(resolve => { resolveOldWarm = resolve })
     const usd = { ...overviewPayload(), currency: USD }
-    mocks.getOverview.mockImplementation((_period: string, provider: string, _range, _config, background) => {
-      if (provider === 'claude' && background === true) return oldWarm
+    mocks.getOverview.mockImplementation((query: { provider: string; background?: boolean }) => {
+      if (query.provider === 'claude' && query.background === true) return oldWarm
       return Promise.resolve(usd)
     })
 
     render(<App />)
     await act(async () => { await Promise.resolve() })
     await act(async () => { await vi.advanceTimersByTimeAsync(60_000) })
-    expect(mocks.getOverview).toHaveBeenCalledWith('30days', 'claude', undefined, undefined, true)
+    expect(mocks.getOverview).toHaveBeenCalledWith({ period: '30days', provider: 'claude', deviceScope: 'local', projectId: null, background: true })
 
     fireEvent.keyDown(document, { key: ',', metaKey: true })
     fireEvent.click(screen.getByRole('button', { name: 'Reset to USD' }))

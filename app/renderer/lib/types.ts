@@ -11,6 +11,27 @@ export type Period = 'today' | 'week' | '30days' | 'month' | 'all' | 'lifetime'
 export type Scope = 'local' | 'combined'
 
 export type DateRange = { from: string; to: string }
+export type DesktopProjectId = string
+
+export type DesktopReportQuery = {
+  period: Period
+  provider: string
+  range?: DateRange | null
+  background?: boolean
+  deviceScope?: Scope
+  projectId?: DesktopProjectId | null
+}
+
+export type DesktopOverviewQuery = DesktopReportQuery & { configSource?: string | null }
+export type DesktopModelsQuery = DesktopReportQuery & { byTask: boolean }
+export type DesktopCompareQuery = DesktopReportQuery & { modelA?: string; modelB?: string }
+export type DesktopCohortQuery = DesktopReportQuery & { modelA?: string; modelB?: string; projects?: string[]; category?: string }
+export type DesktopPeriodQuery = Omit<DesktopReportQuery, 'period' | 'range'> & { rangeA: DateRange; rangeB: DateRange }
+export type DesktopPeriodSessionsQuery = DesktopPeriodQuery & { dimension: 'project' | 'model'; key: string }
+export type DesktopOptimizeSnapshotQuery = DesktopReportQuery & { configSource?: string | null; maxAgeMs?: number }
+
+export type ProjectScopeOption = { id: string; name: string; path: string | null }
+export type ProjectScopeCatalog = { revision: string; options: ProjectScopeOption[] }
 
 export type CliErrorKind = 'not-found' | 'nonzero' | 'bad-json' | 'timeout' | 'too-large' | 'bad-args'
 
@@ -1161,42 +1182,38 @@ export interface CodeburnBridge {
   /** Subscribe to pushed update-availability status; returns an unsubscribe fn. */
   onUpdateStatus(cb: (status: UpdateStatus) => void): () => void
   getQuota(force?: boolean, disabled?: ProviderName[]): Promise<QuotaProvider[]>
-  // `background` (prefetch only) requests background CLI-spawn priority; optional
-  // so an older preload that ignores it degrades to interactive priority.
-  // `scope` selects local-device usage ('local', default) or paired-device
-  // aggregate ('combined'); optional so an older preload degrades to local.
-  getOverview(period: Period, provider: string, range?: DateRange, configSource?: string | null, background?: boolean, scope?: string): Promise<MenubarPayload>
-  getTimeline(period: Period, provider: string, range?: DateRange): Promise<MenubarPayload>
+  getOverview(query: DesktopOverviewQuery): Promise<MenubarPayload>
+  getTimeline(query: DesktopReportQuery): Promise<MenubarPayload>
   getPlans(period: Period, background?: boolean): Promise<StatusJson>
   getActReport(): Promise<ActReportJson>
   readonly platform: string
   /** Node process.arch of the host ('arm64', 'x64', ...). Absent on preloads
    *  that predate the direct-download update link. */
   readonly arch?: string
-  getModels(period: Period, provider: string, byTask: boolean, range?: DateRange, background?: boolean): Promise<ModelReportRow[]>
-  getSessions(period: Period, provider: string, range?: DateRange, background?: boolean): Promise<SessionRow[]>
+  getModels(query: DesktopModelsQuery): Promise<ModelReportRow[]>
+  getSessions(query: DesktopReportQuery): Promise<SessionRow[]>
   /** Session rows with per-turn contribution segments (`sessions --contributions`).
    *  Same population and filtering semantics as getSessions; additive fields only. */
-  getSessionsContributions(period: Period, provider: string, range?: DateRange, background?: boolean): Promise<SessionDrillRow[]>
-  getCompareModels(period: Period, provider: string, background?: boolean): Promise<ModelStats[]>
-  getCompare(period: Period, provider: string, modelA: string, modelB: string): Promise<CompareJsonReport>
+  getSessionsContributions(query: DesktopReportQuery): Promise<SessionDrillRow[]>
+  getCompareModels(query: DesktopReportQuery): Promise<ModelStats[]>
+  getCompare(query: DesktopCompareQuery): Promise<CompareJsonReport>
   /** Cohort mode facets: models, canonical projects, activity categories. */
-  getCompareCohortModels(period: Period, provider: string, range?: DateRange, background?: boolean): Promise<CohortFacets>
+  getCompareCohortModels(query: DesktopReportQuery): Promise<CohortFacets>
   /** Cohort mode report; projects contains exact ids from CohortFacets. */
-  getCompareCohort(period: Period, provider: string, modelA: string, modelB: string, range?: DateRange, projects?: string[], category?: string, background?: boolean): Promise<CohortComparisonReport>
+  getCompareCohort(query: DesktopCohortQuery): Promise<CohortComparisonReport>
   /** Compare periods (B minus A). Both ranges are required local YYYY-MM-DD keys. */
-  getPeriodCompare(rangeA: DateRange, rangeB: DateRange, provider: string, background?: boolean): Promise<PeriodDiffReport>
+  getPeriodCompare(query: DesktopPeriodQuery): Promise<PeriodDiffReport>
   /** Sessions behind one project/model contribution, joined across A and B. */
-  getPeriodCompareSessions(rangeA: DateRange, rangeB: DateRange, provider: string, dimension: 'project' | 'model', key: string): Promise<PeriodSessionDiff>
-  getYield(period: Period, provider: string, range?: DateRange, background?: boolean): Promise<YieldJsonReport>
-  getSpendFlow(period: Period, provider: string, range?: DateRange, background?: boolean): Promise<SpendFlow>
+  getPeriodCompareSessions(query: DesktopPeriodSessionsQuery): Promise<PeriodSessionDiff>
+  getYield(query: DesktopReportQuery): Promise<YieldJsonReport>
+  getSpendFlow(query: DesktopReportQuery): Promise<SpendFlow>
   /** Spend per canonical project × branch (`spend --format branch-json`). */
-  getBranchSpend(period: Period, provider: string, range?: DateRange, background?: boolean): Promise<BranchSpendReport>
-  getOptimizeReport(period: Period, provider: string, range?: DateRange, background?: boolean): Promise<OptimizeJsonReport>
+  getBranchSpend(query: DesktopReportQuery): Promise<BranchSpendReport>
+  getOptimizeReport(query: DesktopReportQuery): Promise<OptimizeJsonReport>
   /** The once-a-day optimize scan for this query scope, cached on disk.
    *  `maxAgeMs` 0 forces a recompute. Optional so an older preload degrades to
    *  no coach figures rather than throwing. */
-  getOptimizeSnapshot?(period: Period, provider: string, range?: DateRange, configSource?: string | null, scope?: string, maxAgeMs?: number): Promise<OptimizeSnapshot>
+  getOptimizeSnapshot?(query: DesktopOptimizeSnapshotQuery): Promise<OptimizeSnapshot>
   /** Whether the machine is on battery. Optional: an older preload reads as AC. */
   powerStatus?(): Promise<boolean>
   /** Subscribe to power-source changes; returns an unsubscribe fn. */
@@ -1207,7 +1224,9 @@ export interface CodeburnBridge {
   getIdentity(): Promise<Identity>
   getAliases(): Promise<AliasRow[]>
   getProxyPaths(): Promise<string[]>
-  getAudit(period: Period, provider: string, range?: DateRange): Promise<AuditRow[]>
+  getAudit(query: DesktopReportQuery): Promise<AuditRow[]>
+  getProjectScopeCatalog(): Promise<ProjectScopeCatalog>
+  validateProjectScope(projectId: string, revision: string): Promise<ProjectScopeOption>
   getPriceOverrides(): Promise<PriceOverrideList>
   getProjectFilter(): Promise<ProjectFilter>
   setProjectFilter(filter: ProjectFilter): Promise<ProjectFilter>

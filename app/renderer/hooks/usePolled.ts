@@ -473,13 +473,13 @@ export function usePolled<T>(
         if (memoKey) memoSet(memoKey, result)
       })
       .catch(err => {
-        if (epochRef.current !== epoch) return
+        if (epochRef.current !== epoch || memoEpoch !== loadMemoEpoch) return
         setError(normalizeCliError(err))
         setErrorKey(memoKey ?? null)
       })
       .finally(() => {
         addInFlight(-1)
-        if (epochRef.current !== epoch) return
+        if (epochRef.current !== epoch || memoEpoch !== loadMemoEpoch) return
         setLoading(false)
         setSwitching(false)
       })

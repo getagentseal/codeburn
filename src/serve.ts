@@ -202,6 +202,23 @@ export function servedDayRange(args: string[]): { from: string; to: string } | n
 
 type ServeOptionKind = 'flag' | 'value'
 
+/// Read-only command shapes exercised by the Desktop resident client. The
+/// strings include the minimum format needed for `report`, whose interactive
+/// form is intentionally never served.
+export const SERVED_DESKTOP_REPORT_COMMANDS = [
+  'report --format json',
+  'status --format json',
+  'models --format json',
+  'sessions --format json',
+  'compare --format json',
+  'compare-periods --format json',
+  'spend --format flow-json',
+  'spend --format branch-json',
+  'yield --format json',
+  'optimize --format json',
+  'audit --format json',
+] as const
+
 // This is intentionally a positive, command-specific option schema rather
 // than a shared denylist. If a command later gains a write-capable option it
 // remains a normal one-shot CLI action until it is explicitly reviewed here.
@@ -213,12 +230,14 @@ const SERVE_OPTIONS: Readonly<Record<string, Readonly<Record<string, ServeOption
     '-p': 'value', '--period': 'value', '--day': 'value', '--from': 'value',
     '--to': 'value', '--provider': 'value', '--format': 'value',
     '--project': 'value', '--exclude': 'value',
+    '--desktop-project-id': 'value', '--desktop-project-catalog': 'flag',
   },
   status: {
     '--format': 'value', '--scope': 'value', '--provider': 'value', '--project': 'value',
     '--exclude': 'value', '--period': 'value', '--day': 'value', '--from': 'value',
     '--to': 'value', '--days': 'value', '--no-optimize': 'flag', '--no-timeline': 'flag',
     '--claude-config-source': 'value',
+    '--desktop-project-id': 'value',
   },
   overview: {
     '-p': 'value', '--period': 'value', '--from': 'value', '--to': 'value',
@@ -230,6 +249,7 @@ const SERVE_OPTIONS: Readonly<Record<string, Readonly<Record<string, ServeOption
     '--task': 'value', '--by-task': 'flag', '--by-agent': 'flag',
     '--top': 'value', '--min-cost': 'value', '--no-totals': 'flag', '--format': 'value',
     '--project': 'value', '--exclude': 'value',
+    '--desktop-project-id': 'value',
   },
   sessions: {
     '-p': 'value', '--period': 'value', '--from': 'value', '--to': 'value',
@@ -237,6 +257,7 @@ const SERVE_OPTIONS: Readonly<Record<string, Readonly<Record<string, ServeOption
     '--format': 'value', '--by-pr': 'flag', '--no-pager': 'flag',
     '--project': 'value', '--exclude': 'value',
     '--contributions': 'flag',
+    '--desktop-project-id': 'value',
   },
   compare: {
     '-p': 'value', '--period': 'value', '--from': 'value', '--to': 'value',
@@ -244,25 +265,37 @@ const SERVE_OPTIONS: Readonly<Record<string, Readonly<Record<string, ServeOption
     '--model-a': 'value', '--model-b': 'value',
     '--project': 'value', '--exclude': 'value',
     '--category': 'value', '--project-id': 'value',
+    '--desktop-project-id': 'value',
+  },
+  'compare-periods': {
+    '--from-a': 'value', '--to-a': 'value', '--from-b': 'value', '--to-b': 'value',
+    '--provider': 'value', '--format': 'value', '--dimension': 'value', '--key': 'value',
+    '--project': 'value', '--exclude': 'value', '--no-with-history': 'flag',
+    '--desktop-project-id': 'value',
   },
   yield: {
-    '-p': 'value', '--period': 'value', '--provider': 'value', '--format': 'value',
+    '-p': 'value', '--period': 'value', '--from': 'value', '--to': 'value',
+    '--provider': 'value', '--format': 'value',
     '--project': 'value', '--exclude': 'value',
+    '--desktop-project-id': 'value',
   },
   spend: {
     '-p': 'value', '--period': 'value', '--from': 'value', '--to': 'value',
     '--provider': 'value', '--format': 'value',
     '--project': 'value', '--exclude': 'value',
+    '--desktop-project-id': 'value',
   },
   optimize: {
     '-p': 'value', '--period': 'value', '--from': 'value', '--to': 'value',
     '--provider': 'value', '--format': 'value', '--json': 'flag',
     '--project': 'value', '--exclude': 'value',
+    '--desktop-project-id': 'value',
   },
   audit: {
     '-p': 'value', '--period': 'value', '--from': 'value', '--to': 'value',
     '--provider': 'value', '--route': 'value', '--billing': 'value', '--format': 'value',
     '--project': 'value', '--exclude': 'value',
+    '--desktop-project-id': 'value',
   },
 }
 
@@ -295,6 +328,10 @@ function allowed(args: string[]): boolean {
       if (inlineValue) return false
       continue
     }
+    // Desktop identity values are always attached. A path/label can begin
+    // with `-`, and keeping this form out of the resident protocol makes the
+    // argv contract unambiguous for every client.
+    if (option === '--desktop-project-id' && !inlineValue) return false
     if (inlineValue) continue
     const value = args[++i]
     if (value === undefined || value.startsWith('-')) return false
@@ -304,7 +341,16 @@ function allowed(args: string[]): boolean {
   // cannot run in a resident child whose stdout is the wire. Its JSON form is
   // the only servable one; the rest is refused and falls back to a one-shot.
   if (first === 'report' && readServeOption(args, '--format') !== 'json') return false
+  if (first === 'status'
+    && readServeOption(args, '--scope') === 'combined'
+    && readServeOption(args, '--desktop-project-id') !== undefined) return false
   return true
+}
+
+export function serveAllows(command: string, desktopProjectId?: string): boolean {
+  const args = command.trim().split(/\s+/).filter(Boolean)
+  if (desktopProjectId !== undefined) args.push(`--desktop-project-id=${desktopProjectId}`)
+  return allowed(args)
 }
 
 /// Read a served option's value. `allowed()` has already proven the argv shape

@@ -1,9 +1,12 @@
 import { beforeAll, describe, expect, it, vi } from 'vitest'
 
 import { buildMenubarPayloadForRange, overlayProviderDaySlices } from '../src/usage-aggregator.js'
+import { aggregateProjectsIntoDays } from '../src/day-aggregator.js'
 import { getDateRange } from '../src/cli-date.js'
 import { loadPricing } from '../src/models.js'
+import { exactProjectBucketKey } from '../src/project-scope.js'
 import type { DailyEntry, ProviderDaySlice } from '../src/daily-cache.js'
+import { project } from './fixtures/project-scope.js'
 
 const parseAllSessions = vi.hoisted(() => vi.fn(async () => []))
 
@@ -73,6 +76,33 @@ describe('provider-scoped menubar aggregation', () => {
     ])
   })
 
+  it('builds Pull Request rows from the provider and exact project-filtered corpus', async () => {
+    const alphaUrl = 'https://github.com/example/repo/pull/alpha'
+    const betaUrl = 'https://github.com/example/repo/pull/beta'
+    const alpha = project('Alpha', '/work/alpha', 5, 'claude')
+    const beta = project('Beta', '/work/beta', 7, 'claude')
+    const withPr = (summary: typeof alpha, url: string) => ({
+      ...summary,
+      sessions: summary.sessions.map(session => ({ ...session, prLinks: [url] })),
+    })
+    parseAllSessions.mockImplementation(async (_range, provider) => provider === 'claude'
+      ? [withPr(alpha, alphaUrl), withPr(beta, betaUrl)]
+      : [])
+
+    try {
+      const payload = await buildMenubarPayloadForRange(getDateRange('all'), {
+        provider: 'claude',
+        desktopProjectId: 'path:/work/alpha',
+        optimize: false,
+        timeline: false,
+      })
+
+      expect(payload.current.pullRequests?.rows.map(row => row.url)).toEqual([alphaUrl])
+    } finally {
+      parseAllSessions.mockReset().mockResolvedValue([])
+    }
+  })
+
   it('overlays today without letting a shrunken parse rewrite settled history', () => {
     const slice = (cost: number, calls: number): ProviderDaySlice => ({ cost, calls, savingsUSD: 0, sessions: calls })
     const day = (date: string, providers: Record<string, ProviderDaySlice>): DailyEntry => ({
@@ -113,5 +143,25 @@ describe('provider-scoped menubar aggregation', () => {
     ])
     expect(result[0]!.providers).toEqual({ hermes: slice(10, 100) })
     expect(result[1]!.providers).toEqual({ hermes: slice(0.438, 6) })
+  })
+
+  it('preserves rich project fields while slicing a day to one provider', () => {
+    const [day] = aggregateProjectsIntoDays([project('alpha', '/work/alpha', 5, 'claude')])
+    const key = exactProjectBucketKey('path:/work/alpha')
+    const result = overlayProviderDaySlices([], [day!], 'claude')
+    const projectStats = result[0]!.projects?.[key]
+    const providerStats = result[0]!.providers.claude?.projects?.[key]
+
+    expect(projectStats).toMatchObject({
+      inputTokens: expect.any(Number),
+      outputTokens: expect.any(Number),
+      cacheReadTokens: expect.any(Number),
+      cacheWriteTokens: expect.any(Number),
+      editTurns: expect.any(Number),
+      oneShotTurns: expect.any(Number),
+      models: expect.any(Object),
+      categories: expect.any(Object),
+    })
+    expect(providerStats).toEqual(projectStats)
   })
 })

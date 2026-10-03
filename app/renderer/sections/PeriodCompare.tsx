@@ -14,8 +14,9 @@ import { Usd, tokensOf } from '../components/Usd'
 import { localeTag, t } from '../i18n'
 import { codeburn } from '../lib/ipc'
 import { reportMemoKey } from '../lib/reportMemoKey'
+import { desktopProjectScopeKey } from '../lib/projectScope'
 import { trackEvent } from '../lib/track'
-import type { DateRange, PeriodContribution, PeriodDiffReport, PeriodRangeInfo, PeriodSessionDiff } from '../lib/types'
+import type { DateRange, DesktopProjectId, PeriodContribution, PeriodDiffReport, PeriodRangeInfo, PeriodSessionDiff, Scope } from '../lib/types'
 import { Icon } from '../components/icons'
 
 // Compare periods: two ranges, one deterministic difference. A is the
@@ -200,11 +201,15 @@ function normalizeRow(row: PeriodContribution, view: View, daysA: number, daysB:
 
 export function PeriodCompare({
   provider,
+  projectId = null,
+  deviceScope = 'local',
   refreshToken = 0,
   ready = true,
   onInspectContribution,
 }: {
   provider: string
+  projectId?: DesktopProjectId | null
+  deviceScope?: Scope
   refreshToken?: number
   ready?: boolean
   /** Navigation adapter (until the goal-8 navigation lands): open the existing
@@ -219,15 +224,16 @@ export function PeriodCompare({
   const [lens, setLens] = useState<Lens>(saved?.lens ?? 'projects')
   const [view, setView] = useState<View>(saved?.view ?? 'raw')
   const [drill, setDrill] = useState<{ dimension: 'project' | 'model'; key: string } | null>(null)
+  const projectScopeKey = desktopProjectScopeKey(projectId)
 
   useEffect(() => {
     persist({ preset, rangeA, rangeB, lens, view })
   }, [preset, rangeA, rangeB, lens, view])
 
   const report = usePolled<PeriodDiffReport>(
-    () => codeburn.getPeriodCompare(rangeA, rangeB, provider),
-    [rangeA.from, rangeA.to, rangeB.from, rangeB.to, provider, refreshToken],
-    { enabled: ready, memoKey: reportMemoKey('periodcompare-v2', 'week', provider, rangeA, `${rangeB.from}..${rangeB.to}`) },
+    () => codeburn.getPeriodCompare({ rangeA, rangeB, provider, deviceScope, projectId }),
+    [rangeA.from, rangeA.to, rangeB.from, rangeB.to, provider, deviceScope, projectId, projectScopeKey, refreshToken],
+    { enabled: ready, memoKey: reportMemoKey('periodcompare-v2', 'week', provider, rangeA, `${rangeB.from}..${rangeB.to}`, projectScopeKey) },
   )
 
   // One event per distinct (lens, view) actually put on screen, not per
@@ -297,6 +303,8 @@ export function PeriodCompare({
                 onDrill={setDrill}
                 onInspectContribution={onInspectContribution}
                 provider={provider}
+                projectId={projectId}
+                deviceScope={deviceScope}
                 refreshToken={refreshToken}
               />
               <details className="panel cmp-card pcmp-fold">
@@ -647,6 +655,8 @@ function MoversCard({
   onDrill,
   onInspectContribution,
   provider,
+  projectId,
+  deviceScope,
   refreshToken,
 }: {
   report: PeriodDiffReport
@@ -658,6 +668,8 @@ function MoversCard({
   onDrill: (drill: { dimension: 'project' | 'model'; key: string } | null) => void
   onInspectContribution?: (range: DateRange, dimension: 'project' | 'model', key: string) => void
   provider: string
+  projectId: DesktopProjectId | null
+  deviceScope: Scope
   refreshToken: number
 }) {
   const [showAll, setShowAll] = useState(false)
@@ -751,6 +763,8 @@ function MoversCard({
           rangeA={report.rangeA}
           rangeB={report.rangeB}
           provider={provider}
+          projectId={projectId}
+          deviceScope={deviceScope}
           refreshToken={refreshToken}
           dimension={drill.dimension}
           drillKey={drill.key}
@@ -768,6 +782,8 @@ function DrillPanel({
   rangeA,
   rangeB,
   provider,
+  projectId,
+  deviceScope,
   refreshToken,
   dimension,
   drillKey,
@@ -777,22 +793,27 @@ function DrillPanel({
   rangeA: PeriodRangeInfo
   rangeB: PeriodRangeInfo
   provider: string
+  projectId: DesktopProjectId | null
+  deviceScope: Scope
   refreshToken: number
   dimension: 'project' | 'model'
   drillKey: string
   onInspectContribution?: (range: DateRange, dimension: 'project' | 'model', key: string) => void
   onClose: () => void
 }) {
+  const projectScopeKey = desktopProjectScopeKey(projectId)
   const report = usePolled<PeriodSessionDiff>(
-    () => codeburn.getPeriodCompareSessions(
-      { from: rangeA.from, to: rangeA.to },
-      { from: rangeB.from, to: rangeB.to },
+    () => codeburn.getPeriodCompareSessions({
+      rangeA: { from: rangeA.from, to: rangeA.to },
+      rangeB: { from: rangeB.from, to: rangeB.to },
       provider,
+      projectId,
+      deviceScope,
       dimension,
-      drillKey,
-    ),
-    [rangeA.from, rangeA.to, rangeB.from, rangeB.to, provider, dimension, drillKey, refreshToken],
-    { memoKey: reportMemoKey('periodcomparesessions-v2', 'week', provider, { from: rangeA.from, to: rangeA.to }, JSON.stringify([rangeB.from, rangeB.to, dimension, drillKey])) },
+      key: drillKey,
+    }),
+    [rangeA.from, rangeA.to, rangeB.from, rangeB.to, provider, projectId, deviceScope, projectScopeKey, dimension, drillKey, refreshToken],
+    { memoKey: reportMemoKey('periodcomparesessions-v2', 'week', provider, { from: rangeA.from, to: rangeA.to }, JSON.stringify([rangeB.from, rangeB.to, dimension, drillKey]), projectScopeKey) },
   )
   if (!report.data) {
     if (report.error) return <CliErrorPanel error={report.error} subject={t('compare.periodCompare.drill.subject')} />

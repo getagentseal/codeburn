@@ -15,9 +15,10 @@ import { formatCount, formatUsd } from '../lib/format'
 import { codeburn } from '../lib/ipc'
 import { contiguousDailyWindow, dataStartKey, localDateKey } from '../lib/period'
 import { reportMemoKey } from '../lib/reportMemoKey'
+import { desktopProjectScopeKey } from '../lib/projectScope'
 import { projectFilters } from '../lib/investigation'
 import { formatSessionCount, sessionCountHelp } from '../lib/session-count-label'
-import type { CliError, DateRange, MenubarPayload, Period, SpendFlow } from '../lib/types'
+import type { CliError, DateRange, DesktopProjectId, MenubarPayload, Period, Scope, SpendFlow } from '../lib/types'
 import { localeTag, t } from '../i18n'
 
 import type { InvestigateRequest } from './Overview'
@@ -45,10 +46,12 @@ function providerLabel(provider: string): string {
     .join(' ')
 }
 
-function SpendPunchcard({ period, provider, range }: { period: Period; provider: string; range: DateRange | null }) {
+function SpendPunchcard({ period, provider, range, projectId, deviceScope }: { period: Period; provider: string; range: DateRange | null; projectId: DesktopProjectId | null; deviceScope: Scope }) {
+  const projectScopeKey = desktopProjectScopeKey(projectId)
   const payload = usePolled<MenubarPayload>(
-    () => range ? codeburn.getTimeline(period, provider, range) : codeburn.getTimeline(period, provider),
-    [period, provider, range?.from, range?.to],
+    () => codeburn.getTimeline({ period, provider, range, deviceScope, projectId }),
+    [period, provider, range?.from, range?.to, deviceScope, projectId],
+    { memoKey: reportMemoKey('timeline', period, provider, range, '', projectScopeKey) },
   )
   const timeline = payload.data?.history.timeline
   if (!timeline) return null
@@ -59,18 +62,22 @@ function SpendPunchcard({ period, provider, range }: { period: Period; provider:
   )
 }
 
-export function Spend({ period, provider, range = null }: { period: Period; provider: string; range?: DateRange | null }) {
+export function Spend({ period, provider, range = null, projectId = null, deviceScope = 'local' }: { period: Period; provider: string; range?: DateRange | null; projectId?: DesktopProjectId | null; deviceScope?: Scope }) {
+  const projectScopeKey = desktopProjectScopeKey(projectId)
   const overview = usePolled<MenubarPayload>(
-    () => range ? codeburn.getOverview(period, provider, range) : codeburn.getOverview(period, provider),
-    [period, provider, range?.from, range?.to],
+    () => codeburn.getOverview({ period, provider, range, deviceScope, projectId }),
+    [period, provider, range?.from, range?.to, deviceScope, projectId],
+    { memoKey: reportMemoKey('overview', period, provider, range, '', projectScopeKey) },
   )
-  return <SpendContent period={period} provider={provider} range={range} overview={overview} />
+  return <SpendContent period={period} provider={provider} range={range} projectId={projectId} deviceScope={deviceScope} overview={overview} />
 }
 
 export function SpendContent({
   period,
   provider,
   range = null,
+  projectId = null,
+  deviceScope = 'local',
   overview,
   refreshToken = 0,
   ready = true,
@@ -79,17 +86,20 @@ export function SpendContent({
   period: Period
   provider: string
   range?: DateRange | null
+  projectId?: DesktopProjectId | null
+  deviceScope?: Scope
   overview: Polled<MenubarPayload>
   refreshToken?: number
   ready?: boolean
   onInvestigate?: (request: InvestigateRequest) => void
 }) {
+  const projectScopeKey = desktopProjectScopeKey(projectId)
   // Gate on app-level readiness so boot hydrates the cache once (default true
   // keeps standalone renders/tests polling normally).
   const flow = usePolled<SpendFlow>(
-    () => range ? codeburn.getSpendFlow(period, provider, range) : codeburn.getSpendFlow(period, provider),
-    [period, provider, range?.from, range?.to, refreshToken],
-    { enabled: ready, memoKey: reportMemoKey('spendflow', period, provider, range) },
+    () => codeburn.getSpendFlow({ period, provider, range, deviceScope, projectId }),
+    [period, provider, range?.from, range?.to, deviceScope, projectId, projectScopeKey, refreshToken],
+    { enabled: ready, memoKey: reportMemoKey('spendflow', period, provider, range, '', projectScopeKey) },
   )
 
   if (!overview.data) {
@@ -98,7 +108,7 @@ export function SpendContent({
   }
 
   const animateKey = `${period}|${provider}|${range?.from ?? ''}|${range?.to ?? ''}`
-  return <SpendPage data={overview.data} flow={flow} period={period} provider={provider} range={range} staleError={overview.error} animateKey={animateKey} onInvestigate={onInvestigate} />
+  return <SpendPage data={overview.data} flow={flow} period={period} provider={provider} range={range} projectId={projectId} deviceScope={deviceScope} staleError={overview.error} animateKey={animateKey} onInvestigate={onInvestigate} />
 }
 
 function SpendPage({
@@ -107,6 +117,8 @@ function SpendPage({
   period,
   provider,
   range,
+  projectId,
+  deviceScope,
   staleError,
   animateKey,
   onInvestigate,
@@ -116,6 +128,8 @@ function SpendPage({
   period: Period
   provider: string
   range: DateRange | null
+  projectId: DesktopProjectId | null
+  deviceScope: Scope
   staleError: CliError | null
   animateKey: string
   onInvestigate?: (request: InvestigateRequest) => void
@@ -191,7 +205,7 @@ function SpendPage({
         <ProjectBreakdown projects={projects} onInvestigate={onInvestigate} />
       </div>
 
-      <BranchBreakdown period={period} provider={provider} range={range} />
+      <BranchBreakdown period={period} provider={provider} range={range} projectId={projectId} deviceScope={deviceScope} />
 
       <Panel title={t('spend.flow.title')} right={t('spend.flow.right')} className="scroll-x">
         {flow.data && flow.data.links.length ? (
@@ -203,7 +217,7 @@ function SpendPage({
         )}
       </Panel>
 
-      <SpendPunchcard period={period} provider={provider} range={range} />
+      <SpendPunchcard period={period} provider={provider} range={range} projectId={projectId} deviceScope={deviceScope} />
 
       <div className="spend-breakdowns">
         {breakdowns.length ? (

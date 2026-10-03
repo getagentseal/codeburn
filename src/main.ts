@@ -14,14 +14,14 @@ import { getClaudeConfigDirs, getDesktopSessionsDirs } from './providers/claude.
 import { convertCost, formatCost } from './currency.js'
 import { excludedGatewayNote, formatTokens, renderStatusBar } from './format.js'
 import { toDateString } from './daily-cache.js'
-import { statusSnapshotSemanticKey } from './status-snapshot-semantic.js'
+import { statusSnapshotQueryKey, statusSnapshotSemanticKey } from './status-snapshot-semantic.js'
 import { dateKey } from './day-aggregator.js'
 import { inferSessionProvider } from './session-output.js'
 import { behavioralCallWeight } from './behavioral-weight.js'
 import { CATEGORY_LABELS, type DateRange, type ProjectSummary, type TaskCategory } from './types.js'
 import type { AppliedFix } from './act/types.js'
 import { aggregateModelEfficiency } from './model-efficiency.js'
-import { buildPeriodData, buildMenubarPayloadForRange, buildDurablePeriod, getDailyCacheConfigHash, SERVE_HYDRATION_ENV, type DurablePeriod } from './usage-aggregator.js'
+import { buildPeriodData, buildMenubarPayloadForRange, buildDurablePeriod, buildProjectScopeCatalog, getDailyCacheConfigHash, SERVE_HYDRATION_ENV, type DurablePeriod } from './usage-aggregator.js'
 import { aggregateProjectsIntoDays } from './day-aggregator.js'
 import { buildPeriodDiffReport, defaultSevenDayRanges, diffSessions, dayKeyToRange, historyBasis, localRangeInfo } from './period-diff.js'
 import { loadStatusSnapshot, saveStatusSnapshot } from './session-cache.js'
@@ -66,6 +66,7 @@ const STATUS_SNAPSHOT_SEMANTIC_KEY = statusSnapshotSemanticKey(version)
 import { loadCurrency, getCurrency, isValidCurrencyCode } from './currency.js'
 import { sessionCountIsExact } from './session-count-label.js'
 import { CodexThroughputReader, newestCodexSession, renderCodexThroughput } from './codex-throughput.js'
+import { validateDesktopProjectId, type DesktopProjectId } from './project-scope.js'
 
 // A downstream reader that closes the pipe early (`| head`, quitting `less`, or
 // a missing command) makes stdout writes fail with EPIPE. Exit cleanly rather
@@ -506,16 +507,35 @@ function assertBilling(value: string | undefined, command: string): void {
   process.exit(1)
 }
 
+function parseDesktopProjectId(value: string): DesktopProjectId {
+  try {
+    return validateDesktopProjectId(value)
+  } catch {
+    throw new Error('invalid Desktop project id')
+  }
+}
+
+function desktopProjectOption(): Option {
+  return new Option('--desktop-project-id <id>')
+    .argParser(parseDesktopProjectId)
+    .hideHelp()
+}
+
+function desktopProjectCatalogOption(): Option {
+  return new Option('--desktop-project-catalog')
+    .hideHelp()
+}
+
 // Wrapped in a factory because commander option state is sticky across
 // parses: `codeburn serve` executes many requests in one process and must
 // build a FRESH program per request or one request's --period would leak
 // into the next one's defaults. The normal CLI path builds it exactly once.
 function buildProgram(): Command {
 
-async function runJsonReport(period: Period, provider: string, project: string[], exclude: string[]): Promise<void> {
+async function runJsonReport(period: Period, provider: string, project: string[], exclude: string[], desktopProjectId?: DesktopProjectId): Promise<void> {
   await loadPricing()
   const { range, label } = getDateRange(period)
-  const durable = await buildDurablePeriod({ range, label }, { provider, project, exclude })
+  const durable = await buildDurablePeriod({ range, label }, { provider, project, exclude, desktopProjectId })
   await reportUnmatchedProjectPatterns(durable.knownProjects, project, exclude)
   const report: ReturnType<typeof buildJsonReport> & { plan?: JsonPlanSummary; plans?: JsonPlanSummaryMap } = await attachPlanSummaries(buildJsonReport(durable.liveProjects, label, period, durable))
   console.log(JSON.stringify(report, null, 2))
@@ -851,9 +871,19 @@ program
   .option('--project <name>', 'Show only projects matching name (repeatable)', collect, [])
   .option('--exclude <name>', 'Exclude projects matching name (repeatable)', collect, [])
   .option('--refresh <seconds>', 'Auto-refresh interval in seconds (minimum 60; 0 to disable)', parseInteger, 60)
+  .addOption(desktopProjectOption())
+  .addOption(desktopProjectCatalogOption())
   .action(async (opts, command) => {
     assertFormat(opts.format, ['tui', 'json'], 'report')
     assertProvider(opts.provider, 'report')
+    if (opts.desktopProjectCatalog && opts.desktopProjectId !== undefined) {
+      process.stderr.write('codeburn report: --desktop-project-catalog cannot be combined with --desktop-project-id.\n')
+      process.exit(1)
+    }
+    if (opts.desktopProjectCatalog && opts.format !== 'json') {
+      process.stderr.write('codeburn report: --desktop-project-catalog requires --format json.\n')
+      process.exit(1)
+    }
     let customRange: DateRange | null = null
     let daySelection: ReturnType<typeof parseDayFlag> = null
     try {
@@ -869,17 +899,36 @@ program
     }
 
     const period = toPeriod(opts.period)
+    if (opts.desktopProjectCatalog) {
+      if (opts.period !== 'lifetime') {
+        process.stderr.write('codeburn report: --desktop-project-catalog requires --period lifetime.\n')
+        process.exit(1)
+      }
+      await loadPricing()
+      const { range, label } = getDateRange('lifetime')
+      const durable = await buildDurablePeriod({ range, label }, {
+        provider: 'all',
+        project: opts.project,
+        exclude: opts.exclude,
+      })
+      const catalog = buildProjectScopeCatalog(durable.liveProjects, durable.cache, {
+        project: opts.project,
+        exclude: opts.exclude,
+      })
+      console.log(JSON.stringify(catalog))
+      return
+    }
     if (opts.format === 'json') {
       await loadPricing()
       if (daySelection || customRange) {
         const range = daySelection?.range ?? customRange!
         const label = daySelection?.label ?? formatDateRangeLabel(opts.from, opts.to)
         const periodKey = daySelection ? 'day' : 'custom'
-        const durable = await buildDurablePeriod({ range, label }, { provider: opts.provider, project: opts.project, exclude: opts.exclude })
+        const durable = await buildDurablePeriod({ range, label }, { provider: opts.provider, project: opts.project, exclude: opts.exclude, desktopProjectId: opts.desktopProjectId })
         await reportUnmatchedProjectPatterns(durable.knownProjects, opts.project, opts.exclude)
         console.log(JSON.stringify(await attachPlanSummaries(buildJsonReport(durable.liveProjects, label, periodKey, durable)), null, 2))
       } else {
-        await runJsonReport(period, opts.provider, opts.project, opts.exclude)
+        await runJsonReport(period, opts.provider, opts.project, opts.exclude, opts.desktopProjectId)
       }
       return
     }
@@ -1169,6 +1218,7 @@ program
   .option('--days <dates>', 'Comma-separated dates (YYYY-MM-DD) for multi-day selection')
   .option('--no-optimize', 'Skip optimize findings (menubar-json only, faster)')
   .option('--no-timeline', 'Skip the granular timeline (menubar-json only, faster)')
+  .addOption(desktopProjectOption())
   .addOption(new Option('--claude-config-source <id>').hideHelp())
   .action(async (opts) => {
     assertFormat(opts.format, ['terminal', 'menubar-json', 'json'], 'status')
@@ -1205,6 +1255,10 @@ program
       process.stderr.write('error: --scope combined cannot be combined with --provider, --project, or --exclude (paired devices report unfiltered usage)\n')
       process.exit(1)
     }
+    if (opts.scope === 'combined' && opts.desktopProjectId !== undefined) {
+      process.stderr.write('error: Combined scope cannot be combined with --desktop-project-id (paired devices report unfiltered usage)\n')
+      process.exit(1)
+    }
     await loadPricing()
     const pf = opts.provider
     const fp = (p: ProjectSummary[]) => filterProjectsByName(p, opts.project, opts.exclude)
@@ -1234,6 +1288,7 @@ program
         provider: pf,
         project: opts.project,
         exclude: opts.exclude,
+        desktopProjectId: opts.desktopProjectId,
         optimize: opts.optimize !== false,
         timeline: opts.timeline !== false,
         claudeConfigSourceId: opts.claudeConfigSource ?? null,
@@ -1246,7 +1301,7 @@ program
         configDirs: await getClaudeConfigDirs(),
         desktopSessionDirs: getDesktopSessionsDirs(),
       }
-      const queryKey = JSON.stringify({
+      const queryKey = statusSnapshotQueryKey({
         start: periodInfo.range.start.toISOString(),
         end: periodInfo.range.end.toISOString(),
         label: periodInfo.label,
@@ -1379,8 +1434,8 @@ program
     if (opts.format === 'json') {
       // Durable totals so the compact status matches the menubar / report.
       const [todayDurable, monthDurable] = await withLoadWindow(getDateRange('month').range, async () => [
-        await buildDurablePeriod(getDateRange('today'), { provider: pf, project: opts.project, exclude: opts.exclude }),
-        await buildDurablePeriod(getDateRange('month'), { provider: pf, project: opts.project, exclude: opts.exclude }),
+        await buildDurablePeriod(getDateRange('today'), { provider: pf, project: opts.project, exclude: opts.exclude, desktopProjectId: opts.desktopProjectId }),
+        await buildDurablePeriod(getDateRange('month'), { provider: pf, project: opts.project, exclude: opts.exclude, desktopProjectId: opts.desktopProjectId }),
       ] as const)
       const todayData = todayDurable.data
       const todayProjects = todayDurable.liveProjects
@@ -1418,8 +1473,8 @@ program
     }
 
     const [todayDurable, monthDurable] = await withLoadWindow(getDateRange('month').range, async () => [
-      await buildDurablePeriod(getDateRange('today'), { provider: pf, project: opts.project, exclude: opts.exclude }),
-      await buildDurablePeriod(getDateRange('month'), { provider: pf, project: opts.project, exclude: opts.exclude }),
+      await buildDurablePeriod(getDateRange('today'), { provider: pf, project: opts.project, exclude: opts.exclude, desktopProjectId: opts.desktopProjectId }),
+      await buildDurablePeriod(getDateRange('month'), { provider: pf, project: opts.project, exclude: opts.exclude, desktopProjectId: opts.desktopProjectId }),
     ] as const)
     await reportUnmatchedProjectPatterns([...todayDurable.knownProjects, ...monthDurable.knownProjects], opts.project, opts.exclude)
     console.log(renderStatusBar([], {
@@ -2259,6 +2314,7 @@ program
   .option('--auto-revert', 'Undo applied fixes that measured no reduction (never CLAUDE.md rules)')
   .option('--project <name>', 'Show only projects matching name (repeatable)', collect, [])
   .option('--exclude <name>', 'Exclude projects matching name (repeatable)', collect, [])
+  .addOption(desktopProjectOption())
   .action(async (opts) => {
     assertProvider(opts.provider, 'optimize')
     const format = opts.json ? 'json' : opts.format
@@ -2284,7 +2340,7 @@ program
     const parsed = await parseAllSessions(range, opts.provider)
     await reportUnmatchedProjectPatterns(parsed, opts.project, opts.exclude, () => cachedProjectIdentitiesForRange(range))
     await reportExcludedGatewayCost(range, opts.provider)
-    const projects = filterProjectsByName(parsed, opts.project, opts.exclude)
+    const projects = filterProjectsByName(parsed, opts.project, opts.exclude, opts.desktopProjectId)
     if (opts.apply) {
       const { runOptimizeApply } = await import('./act/optimize-apply.js')
       await runOptimizeApply(projects, range, { yes: opts.yes, dryRun: opts.dryRun, only: opts.only, provider: opts.provider })
@@ -2299,23 +2355,25 @@ program
     let appliedHeader: string | undefined
     let previouslyApplied: Record<string, string> | undefined
     let appliedFixes: AppliedFix[] | undefined
-    try {
-      const { computeActReport, buildOptimizeAppliedHeader, autoRevertNoEffect } = await import('./act/report.js')
-      const applied = await computeActReport()
-      appliedHeader = buildOptimizeAppliedHeader(applied) ?? undefined
-      previouslyApplied = applied.appliedByFinding
-      appliedFixes = applied.appliedFixes
-      if (opts.autoRevert) {
-        const { lines, revertedIds } = await autoRevertNoEffect(appliedFixes)
-        appliedFixes = appliedFixes.filter(f => !revertedIds.has(f.id))
-        // JSON output must stay parseable, so the revert log goes to stderr there.
-        for (const line of lines) {
-          if (format === 'json') process.stderr.write(`  ${line}\n`)
-          else console.log(`  ${line}`)
+    if (opts.desktopProjectId === undefined) {
+      try {
+        const { computeActReport, buildOptimizeAppliedHeader, autoRevertNoEffect } = await import('./act/report.js')
+        const applied = await computeActReport()
+        appliedHeader = buildOptimizeAppliedHeader(applied) ?? undefined
+        previouslyApplied = applied.appliedByFinding
+        appliedFixes = applied.appliedFixes
+        if (opts.autoRevert) {
+          const { lines, revertedIds } = await autoRevertNoEffect(appliedFixes)
+          appliedFixes = appliedFixes.filter(f => !revertedIds.has(f.id))
+          // JSON output must stay parseable, so the revert log goes to stderr there.
+          for (const line of lines) {
+            if (format === 'json') process.stderr.write(`  ${line}\n`)
+            else console.log(`  ${line}`)
+          }
         }
-      }
-    } catch { /* the applied section is optional; never block the findings */ }
-    await runOptimize(projects, label, range, { format, appliedHeader, previouslyApplied, appliedFixes, provider: opts.provider })
+      } catch { /* the applied section is optional; never block the findings */ }
+    }
+    await runOptimize(projects, label, range, { format, appliedHeader, previouslyApplied, appliedFixes, provider: opts.provider, desktopProjectId: opts.desktopProjectId })
   })
 
 program
@@ -2441,6 +2499,7 @@ program
   .option('--to <date>', 'Custom range end (YYYY-MM-DD)')
   .option('--category <category>', 'cohort-json only: keep edit-turn observations of one activity category')
   .option('--project-id <id>', 'cohort-json only: exact canonical project identity (repeatable)', collect, [])
+  .addOption(desktopProjectOption())
   .action(async (opts) => {
     assertProvider(opts.provider, 'compare')
     assertFormat(opts.format, ['tui', 'json', 'cohort-json'], 'compare')
@@ -2465,7 +2524,7 @@ program
       const parsed = await parseAllSessions(range, opts.provider)
       await reportUnmatchedProjectPatterns(parsed, opts.project, opts.exclude, () => cachedProjectIdentitiesForRange(range))
       await reportExcludedGatewayCost(range, opts.provider)
-      const projects = selectCohortProjects(filterProjectsByName(parsed, opts.project, opts.exclude), opts.projectId)
+      const projects = selectCohortProjects(filterProjectsByName(parsed, opts.project, opts.exclude, opts.desktopProjectId), opts.projectId)
 
       // Without --model-a/--model-b the cohort format answers the FACET query:
       // the models, canonical project identities, and activity categories the
@@ -2502,7 +2561,7 @@ program
       const parsed = await parseAllSessions(range, opts.provider)
       await reportUnmatchedProjectPatterns(parsed, opts.project, opts.exclude, () => cachedProjectIdentitiesForRange(range))
       await reportExcludedGatewayCost(range, opts.provider)
-      const projects = filterProjectsByName(parsed, opts.project, opts.exclude)
+      const projects = filterProjectsByName(parsed, opts.project, opts.exclude, opts.desktopProjectId)
       const models = aggregateModelStats(projects)
 
       const providers = await getAllProviders()
@@ -2511,7 +2570,7 @@ program
         const sessions = await provider.discoverSessions()
         for (const session of sessions) dirs.push(session.path)
       }
-      const scope = opts.project.length > 0 || opts.exclude.length > 0 ? projectSessionIds(projects) : undefined
+      const scope = opts.project.length > 0 || opts.exclude.length > 0 || opts.desktopProjectId !== undefined ? projectSessionIds(projects) : undefined
       const corrections = await scanSelfCorrections(dirs, scope)
       for (const model of models) {
         model.selfCorrections = corrections.get(model.model) ?? 0
@@ -2561,6 +2620,7 @@ program
   .option('--project <name>', 'Show only projects matching name (repeatable)', collect, [])
   .option('--exclude <name>', 'Exclude projects matching name (repeatable)', collect, [])
   .option('--no-with-history', 'Skip the durable daily-history cross-check (aggregate-only carried days)')
+  .addOption(desktopProjectOption())
   .action(async (opts) => {
     assertProvider(opts.provider, 'compare-periods')
     assertFormat(opts.format, ['json', 'sessions'], 'compare-periods')
@@ -2609,15 +2669,15 @@ program
       ])
       // Same project filter as the report: a drill-down must never surface a
       // session from a project the active filter hides.
-      const projectsA = filterProjectsByName(parsedSessionsA, opts.project, opts.exclude)
-      const projectsB = filterProjectsByName(parsedSessionsB, opts.project, opts.exclude)
+      const projectsA = filterProjectsByName(parsedSessionsA, opts.project, opts.exclude, opts.desktopProjectId)
+      const projectsB = filterProjectsByName(parsedSessionsB, opts.project, opts.exclude, opts.desktopProjectId)
       process.stdout.write(JSON.stringify({
         dimension,
         key: opts.key,
         provider: opts.provider,
         rangeA: localRangeInfo(keyRangeA),
         rangeB: localRangeInfo(keyRangeB),
-        sessions: diffSessions(projectsA, projectsB, dimension, opts.key),
+        sessions: diffSessions(projectsA, projectsB, dimension, opts.key, opts.desktopProjectId),
       }, null, 2) + '\n')
       return
     }
@@ -2629,8 +2689,8 @@ program
     ])
     await reportUnmatchedProjectPatterns([...parsedA, ...parsedB], opts.project, opts.exclude, () => cachedProjectIdentitiesForRange(keyRangeB))
     await reportExcludedGatewayCost(keyRangeB, opts.provider)
-    const projectsA = filterProjectsByName(parsedA, opts.project, opts.exclude)
-    const projectsB = filterProjectsByName(parsedB, opts.project, opts.exclude)
+    const projectsA = filterProjectsByName(parsedA, opts.project, opts.exclude, opts.desktopProjectId)
+    const projectsB = filterProjectsByName(parsedB, opts.project, opts.exclude, opts.desktopProjectId)
 
     // Cross-check the durable daily history so usage whose sources aged off
     // disk (aggregate-only carried days) is visible instead of silently
@@ -2655,6 +2715,7 @@ program
           opts.provider,
           aggregateProjectsIntoDays(projectsA),
           aggregateProjectsIntoDays(projectsB),
+          opts.desktopProjectId,
         )
       } catch (err) {
         process.stderr.write(`codeburn compare-periods: daily history check skipped (${err instanceof Error ? err.message : String(err)}).\n`)
@@ -2668,6 +2729,7 @@ program
       projectsA,
       projectsB,
       history,
+      desktopProjectId: opts.desktopProjectId,
     })
     process.stdout.write(JSON.stringify(report, null, 2) + '\n')
   })
@@ -2684,6 +2746,7 @@ program
   .option('--format <format>', 'Output format: table, json', 'table')
   .option('--project <name>', 'Show only projects matching name (repeatable)', collect, [])
   .option('--exclude <name>', 'Exclude projects matching name (repeatable)', collect, [])
+  .addOption(desktopProjectOption())
   .action(async (opts) => {
     assertProvider(opts.provider, 'audit')
     assertRoute(opts.route, 'audit')
@@ -2707,7 +2770,7 @@ program
     await reportUnmatchedProjectPatterns(parsed, opts.project, opts.exclude, () => cachedProjectIdentitiesForRange(range))
     await reportExcludedGatewayCost(range, opts.provider)
     const projects = filterProjectsByBillingRoute(
-      filterProjectsByName(parsed, opts.project, opts.exclude),
+      filterProjectsByName(parsed, opts.project, opts.exclude, opts.desktopProjectId),
       { route: opts.route, billing: opts.billing },
     )
     const rows = await aggregateAudit(projects)
@@ -2743,6 +2806,7 @@ program
   .option('--format <format>', 'Output format: table, markdown, json, csv', 'table')
   .option('--project <name>', 'Show only projects matching name (repeatable)', collect, [])
   .option('--exclude <name>', 'Exclude projects matching name (repeatable)', collect, [])
+  .addOption(desktopProjectOption())
   .action(async (opts) => {
     assertProvider(opts.provider, 'models')
     assertRoute(opts.route, 'models')
@@ -2770,7 +2834,7 @@ program
     await reportUnmatchedProjectPatterns(parsed, opts.project, opts.exclude, () => cachedProjectIdentitiesForRange(range))
     await reportExcludedGatewayCost(range, opts.provider)
     const projects = filterProjectsByBillingRoute(
-      filterProjectsByName(parsed, opts.project, opts.exclude),
+      filterProjectsByName(parsed, opts.project, opts.exclude, opts.desktopProjectId),
       { route: opts.route, billing: opts.billing },
     )
     const topN = typeof opts.top === 'number' && Number.isFinite(opts.top) ? opts.top : undefined
@@ -2889,6 +2953,7 @@ program
   .option('--no-pager', 'Print the complete table directly instead of opening the interactive browser')
   .option('--project <name>', 'Show only projects matching name (repeatable)', collect, [])
   .option('--exclude <name>', 'Exclude projects matching name (repeatable)', collect, [])
+  .addOption(desktopProjectOption())
   .action(async (opts) => {
     assertProvider(opts.provider, 'sessions')
     assertFormat(opts.format, ['table', 'json'], 'sessions')
@@ -2923,7 +2988,7 @@ program
     await reportUnmatchedProjectPatterns(parsed, opts.project, opts.exclude, () => cachedProjectIdentitiesForRange(range))
     await reportExcludedGatewayCost(range, opts.provider)
     const projects = filterProjectsByBillingRoute(
-      filterProjectsByName(parsed, opts.project, opts.exclude),
+      filterProjectsByName(parsed, opts.project, opts.exclude, opts.desktopProjectId),
       { route: opts.route, billing: opts.billing },
     )
     if (opts.byPr) {
@@ -3012,20 +3077,35 @@ program
   .command('yield')
   .description('Track which AI spend shipped to main vs reverted/abandoned (experimental)')
   .option('-p, --period <period>', 'Analysis period: today, week, 30days, month, all, lifetime', 'week')
+  .option('--from <date>', 'Custom range start (YYYY-MM-DD)')
+  .option('--to <date>', 'Custom range end (YYYY-MM-DD)')
   .option('--provider <provider>', 'Filter by provider (e.g. claude, codex, cursor)', 'all')
   .option('--format <format>', 'Output format: text, json', 'text')
   .option('--project <name>', 'Show only projects matching name (repeatable)', collect, [])
   .option('--exclude <name>', 'Exclude projects matching name (repeatable)', collect, [])
+  .addOption(desktopProjectOption())
   .action(async (opts) => {
     assertFormat(opts.format, ['text', 'json'], 'yield')
     assertProvider(opts.provider, 'yield')
     const { computeYield, formatYieldSummary, buildYieldJsonReport } = await import('./yield.js')
     await loadPricing()
-    const { range, label } = getDateRange(opts.period)
+    let range: DateRange
+    let label: string
+    if (opts.from || opts.to) {
+      try {
+        range = parseDateRangeFlags(opts.from, opts.to)!
+        label = formatDateRangeLabel(opts.from, opts.to)
+      } catch (err) {
+        console.error(`\n  Error: ${err instanceof Error ? err.message : String(err)}\n`)
+        process.exit(1)
+      }
+    } else {
+      ({ range, label } = getDateRange(opts.period))
+    }
     if (opts.format !== 'json') {
       console.log(`\n  Analyzing yield for ${label}...\n`)
     }
-    const summary = await computeYield(range, process.cwd(), opts.provider, opts.project, opts.exclude)
+    const summary = await computeYield(range, process.cwd(), opts.provider, opts.project, opts.exclude, opts.desktopProjectId)
     if (opts.format === 'json') {
       console.log(JSON.stringify(buildYieldJsonReport(summary, label, range), null, 2))
       return
@@ -3043,6 +3123,7 @@ program
   .option('--format <format>', 'Output format: flow-json, branch-json', 'flow-json')
   .option('--project <name>', 'Show only projects matching name (repeatable)', collect, [])
   .option('--exclude <name>', 'Exclude projects matching name (repeatable)', collect, [])
+  .addOption(desktopProjectOption())
   .action(async (opts) => {
     assertFormat(opts.format, ['flow-json', 'branch-json'], 'spend')
     assertProvider(opts.provider, 'spend')
@@ -3065,11 +3146,11 @@ program
     if (opts.format === 'branch-json') {
       // Spend per canonical project x branch (the desktop "By branch" lens).
       const { computeBranchSpend } = await import('./branch-spend.js')
-      console.log(JSON.stringify(await computeBranchSpend(range, opts.provider, opts.project, opts.exclude)))
+      console.log(JSON.stringify(await computeBranchSpend(range, opts.provider, opts.project, opts.exclude, opts.desktopProjectId)))
       return
     }
 
-    console.log(JSON.stringify(await computeSpendFlow(range, opts.provider, opts.project, opts.exclude)))
+    console.log(JSON.stringify(await computeSpendFlow(range, opts.provider, opts.project, opts.exclude, opts.desktopProjectId)))
   })
 
 program

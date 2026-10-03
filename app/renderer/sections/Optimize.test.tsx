@@ -3,12 +3,13 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { MenubarPayload, OptimizeBlock, OptimizeSnapshot, OptimizeJsonReport, YieldJsonReport } from '../lib/types'
+import { PROJECT_ALPHA } from '../test/projectScopeFixtures'
 import { Optimize, OptimizeContent } from './Optimize'
 
 const { getOverview, getOptimizeReport, getOptimizeSnapshot, getYield, telemetryTrack } = vi.hoisted(() => ({
   getOverview: vi.fn(),
   getOptimizeReport: vi.fn(),
-  getOptimizeSnapshot: vi.fn<(...args: unknown[]) => Promise<OptimizeSnapshot>>(),
+  getOptimizeSnapshot: vi.fn<(query: { maxAgeMs?: number }) => Promise<OptimizeSnapshot>>(),
   getYield: vi.fn(),
   telemetryTrack: vi.fn<(name: string, props?: Record<string, unknown>) => Promise<boolean>>(),
 }))
@@ -137,6 +138,22 @@ describe('Optimize', () => {
     writeText.mockReset().mockResolvedValue(undefined)
     telemetryTrack.mockReset().mockResolvedValue(true)
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
+  })
+
+  it('passes the exact project and device scope to optimize, yield, and snapshot reports', async () => {
+    const scopedProps = {
+      period: 'week',
+      provider: 'all',
+      projectId: PROJECT_ALPHA.id,
+      deviceScope: 'local',
+    } as any
+    render(<Optimize {...scopedProps} />)
+
+    await screen.findByText('Opus is doing your small talk')
+    expect(getOverview).toHaveBeenCalledWith(expect.objectContaining({ projectId: PROJECT_ALPHA.id, deviceScope: 'local' }))
+    expect(getOptimizeReport).toHaveBeenCalledWith(expect.objectContaining({ projectId: PROJECT_ALPHA.id, deviceScope: 'local' }))
+    expect(getYield).toHaveBeenCalledWith(expect.objectContaining({ projectId: PROJECT_ALPHA.id, deviceScope: 'local' }))
+    await waitFor(() => expect(getOptimizeSnapshot).toHaveBeenCalledWith(expect.objectContaining({ projectId: PROJECT_ALPHA.id, deviceScope: 'local' })))
   })
 
   it('lists applied fixes with a glyph per verdict and the undo hint', async () => {
@@ -325,8 +342,8 @@ describe('Optimize', () => {
   it('passes provider and custom range to the optimize report and yield bridges', async () => {
     render(<Optimize period="30days" provider="claude" range={{ from: '2026-07-01', to: '2026-07-11' }} />)
     await screen.findByText('Opus is doing your small talk')
-    expect(getOptimizeReport).toHaveBeenCalledWith('30days', 'claude', { from: '2026-07-01', to: '2026-07-11' })
-    expect(getYield).toHaveBeenCalledWith('30days', 'claude', { from: '2026-07-01', to: '2026-07-11' })
+    expect(getOptimizeReport).toHaveBeenCalledWith({ period: '30days', provider: 'claude', range: { from: '2026-07-01', to: '2026-07-11' }, deviceScope: 'local', projectId: null })
+    expect(getYield).toHaveBeenCalledWith({ period: '30days', provider: 'claude', range: { from: '2026-07-01', to: '2026-07-11' }, deviceScope: 'local', projectId: null })
   })
 
   it('keeps last-good yield totals and rows visible during revalidation', async () => {
@@ -398,6 +415,6 @@ describe('Optimize refresh tiers', () => {
     rerender(<OptimizeContent period="30days" overview={overview} refreshToken={1} />)
 
     expect(await screen.findByRole('tab', { name: 'Waste $94.40' })).toBeInTheDocument()
-    expect(getOptimizeSnapshot.mock.calls.at(-1)![5]).toBe(0) // forced rescan
+    expect(getOptimizeSnapshot.mock.calls.at(-1)![0]?.maxAgeMs).toBe(0) // forced rescan
   })
 })

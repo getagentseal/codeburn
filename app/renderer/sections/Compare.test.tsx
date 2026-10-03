@@ -3,14 +3,15 @@ import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import type { CohortComparisonReport, CompareJsonReport, ModelStats } from '../lib/types'
+import type { CohortComparisonReport, CompareJsonReport, DesktopCohortQuery, DesktopCompareQuery, DesktopReportQuery, ModelStats } from '../lib/types'
+import { PROJECT_ALPHA } from '../test/projectScopeFixtures'
 import { Compare } from './Compare'
 
 const mocks = vi.hoisted(() => ({
-  getCompareModels: vi.fn<(period: string, provider: string) => Promise<ModelStats[]>>(),
-  getCompare: vi.fn<(period: string, provider: string, modelA: string, modelB: string) => Promise<CompareJsonReport>>(),
-  getCompareCohortModels: vi.fn<(period: string, provider: string) => Promise<import('../lib/types').CohortFacets>>(),
-  getCompareCohort: vi.fn<(period: string, provider: string, modelA: string, modelB: string, range?: unknown, projects?: string[], category?: string) => Promise<CohortComparisonReport>>(),
+  getCompareModels: vi.fn<(query: DesktopReportQuery) => Promise<ModelStats[]>>(),
+  getCompare: vi.fn<(query: DesktopCompareQuery) => Promise<CompareJsonReport>>(),
+  getCompareCohortModels: vi.fn<(query: DesktopReportQuery) => Promise<import('../lib/types').CohortFacets>>(),
+  getCompareCohort: vi.fn<(query: DesktopCohortQuery) => Promise<CohortComparisonReport>>(),
   telemetryTrack: vi.fn<(name: string, props?: Record<string, unknown>) => Promise<boolean>>(),
 }))
 vi.mock('../lib/ipc', async orig => {
@@ -53,6 +54,32 @@ describe('Compare', () => {
     mocks.getCompareCohortModels.mockReset()
     mocks.getCompareCohort.mockReset()
     mocks.telemetryTrack.mockReset().mockResolvedValue(true)
+  })
+
+  it('Scenario: Compare classic, cohort, and custom range calls intersect project scope', async () => {
+    mocks.getCompareModels.mockResolvedValue([modelA, modelB])
+    mocks.getCompare.mockResolvedValue(report)
+    const range = { from: '2026-09-01', to: '2026-09-07' }
+    const scopedProps = {
+      period: 'week',
+      provider: 'all',
+      range,
+      projectId: PROJECT_ALPHA.id,
+      deviceScope: 'local',
+    } as any
+
+    render(<Compare {...scopedProps} />)
+    await screen.findByText('Performance')
+    expect(mocks.getCompareModels).toHaveBeenCalledWith(expect.objectContaining({
+      range,
+      projectId: PROJECT_ALPHA.id,
+      deviceScope: 'local',
+    }))
+    expect(mocks.getCompare).toHaveBeenCalledWith(expect.objectContaining({
+      range,
+      projectId: PROJECT_ALPHA.id,
+      deviceScope: 'local',
+    }))
   })
 
   it('shows an empty note instead of a bare legend when no category is comparable', async () => {
@@ -122,7 +149,7 @@ describe('Compare', () => {
     })
 
     expect(await screen.findByText('Performance')).toBeInTheDocument()
-    expect(mocks.getCompare).toHaveBeenCalledWith('30days', 'all', 'Opus 4.8', 'Sonnet 5')
+    expect(mocks.getCompare).toHaveBeenCalledWith({ period: '30days', provider: 'all', range: null, modelA: 'Opus 4.8', modelB: 'Sonnet 5', deviceScope: 'local', projectId: null })
     expect(screen.getByText('Efficiency')).toBeInTheDocument()
     expect(screen.getByText('Context')).toBeInTheDocument()
     expect(screen.getByText('71%')).toHaveClass('cmp-best')
@@ -138,7 +165,7 @@ describe('Compare', () => {
     await user.click(second)
     await user.click(screen.getByRole('option', { name: 'Opus 4.8 · 4,812 calls' }))
     await waitFor(() => expect(first).toHaveTextContent('Sonnet 5 · 3,318 calls'))
-    expect(mocks.getCompare).toHaveBeenCalledWith('30days', 'all', 'Sonnet 5', 'Opus 4.8')
+    expect(mocks.getCompare).toHaveBeenCalledWith({ period: '30days', provider: 'all', range: null, modelA: 'Sonnet 5', modelB: 'Opus 4.8', deviceScope: 'local', projectId: null })
   })
 
   it('computes cache hit rate over input + cache reads (excludes cache writes)', async () => {
@@ -158,8 +185,8 @@ describe('Compare', () => {
     mocks.getCompare.mockResolvedValue(report)
     render(<Compare period="30days" provider="all" range={{ from: '2026-07-01', to: '2026-07-11' }} />)
 
-    expect(await screen.findByText('Compare uses the selected period, custom dates are not supported yet.')).toBeInTheDocument()
-    expect(mocks.getCompareModels).toHaveBeenCalledWith('30days', 'all')
+    expect(screen.queryByText('Compare uses the selected period, custom dates are not supported yet.')).not.toBeInTheDocument()
+    expect(mocks.getCompareModels).toHaveBeenCalledWith({ period: '30days', provider: 'all', range: { from: '2026-07-01', to: '2026-07-11' }, deviceScope: 'local', projectId: null })
   })
 
   it('renders the need-two-models note without requesting a report', async () => {
@@ -258,7 +285,7 @@ describe('Compare cohorts mode', () => {
 
   it('shows the population disclosure before the metrics and requests the cohort report', async () => {
     await openCohorts()
-    expect(mocks.getCompareCohort).toHaveBeenCalledWith('30days', 'all', 'Opus 4.8', 'Sonnet 5', undefined, undefined, undefined)
+    expect(mocks.getCompareCohort).toHaveBeenCalledWith({ period: '30days', provider: 'all', range: null, modelA: 'Opus 4.8', modelB: 'Sonnet 5', projects: undefined, category: undefined, deviceScope: 'local', projectId: null })
     // Exclusion ledger visible: mixed-model turns with their combined cost.
     expect(screen.getAllByText(/Excluded turns mixing models/).length).toBeGreaterThan(0)
     expect(screen.getAllByText('1 ($0.15)').length).toBe(2)
@@ -281,7 +308,7 @@ describe('Compare cohorts mode', () => {
     const user = await openCohorts()
     await user.click(screen.getByLabelText('Cohort project'))
     await user.click(await screen.findByRole('option', { name: 'work/app' }))
-    await waitFor(() => expect(mocks.getCompareCohort).toHaveBeenCalledWith('30days', 'all', 'Opus 4.8', 'Sonnet 5', undefined, ['/work/app'], undefined))
+    await waitFor(() => expect(mocks.getCompareCohort).toHaveBeenCalledWith({ period: '30days', provider: 'all', range: null, modelA: 'Opus 4.8', modelB: 'Sonnet 5', projects: ['/work/app'], category: undefined, deviceScope: 'local', projectId: null }))
   })
 
   it('applies a volume band from the declared population and shows what it excluded', async () => {

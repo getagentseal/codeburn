@@ -6,6 +6,7 @@ import type { ClaudeConfigSelector, DateRange } from '../lib/types'
 import { AnchoredSurface } from './AnchoredSurface'
 import { Dropdown } from './Dropdown'
 import { Icon } from './icons'
+import { ProjectScopePicker } from './ProjectScopePicker'
 import { ProviderPop, type ProviderOption } from './ProviderPop'
 import { RangeCalendar } from './RangeCalendar'
 import { SegTabs, type SegOption } from './SegTabs'
@@ -112,6 +113,7 @@ export function TopBar({
       <SegTabs options={periodOptions()} value={customRange ? '' : period} onChange={onPeriodChange} />
       <CalendarPop value={customRange} onSelect={onRangeSelect} />
       <ProviderPop value={provider} label={providerLabel} options={providerOptions} onSelect={onProviderSelect} />
+      <ProjectScopePicker />
       {claudeConfigs && <ConfigPicker configs={claudeConfigs} value={configSource} onSelect={onConfigSelect} />}
     </div>
   )

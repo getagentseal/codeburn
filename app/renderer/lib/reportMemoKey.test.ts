@@ -1,5 +1,7 @@
+// @vitest-environment jsdom
 import { describe, expect, it } from 'vitest'
 
+import { desktopProjectScopeKey } from './projectScope'
 import { reportMemoKey } from './reportMemoKey'
 
 describe('reportMemoKey', () => {
@@ -22,5 +24,24 @@ describe('reportMemoKey', () => {
     const september = new Date(2026, 8, 1, 0, 0, 1)
     expect(reportMemoKey('plans', 'month', 'all', null, '', august))
       .not.toBe(reportMemoKey('plans', 'month', 'all', null, '', september))
+  })
+
+  it('separates All projects from an exact project even when every report dimension matches', () => {
+    const now = new Date(2026, 7, 28, 12, 0, 0)
+    const allProjects = reportMemoKey('sessions', 'week', 'all', null, '', desktopProjectScopeKey(null), now)
+    const alpha = reportMemoKey('sessions', 'week', 'all', null, '', desktopProjectScopeKey('path:/work/alpha'), now)
+    const beta = reportMemoKey('sessions', 'week', 'all', null, '', desktopProjectScopeKey('path:/work/beta'), now)
+
+    expect(allProjects).not.toBe(alpha)
+    expect(alpha).not.toBe(beta)
+    expect(desktopProjectScopeKey('all')).not.toBe(desktopProjectScopeKey(null))
+  })
+
+  it('keeps a filter revision in the report identity when a persistent filter changes', () => {
+    const scope = desktopProjectScopeKey('path:/work/alpha')
+    const before = `${reportMemoKey('overview', 'week', 'all', null, '', scope)}|filter:before`
+    const after = `${reportMemoKey('overview', 'week', 'all', null, '', scope)}|filter:after`
+
+    expect(before).not.toBe(after)
   })
 })

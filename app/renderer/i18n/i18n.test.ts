@@ -1,6 +1,21 @@
 import { describe, expect, it } from 'vitest'
 
+import { en, fr, ja, ko, zhCN, zhTW } from './catalog'
 import { effectiveLocale, normalizeLocale, translate } from './index'
+
+const PROJECT_SCOPE_KEYS = [
+  'shell.projectScope.trigger',
+  'shell.projectScope.all',
+  'shell.projectScope.search',
+  'shell.projectScope.loading',
+  'shell.projectScope.noPermitted',
+  'shell.projectScope.noMatches',
+  'shell.projectScope.loadError',
+  'shell.projectScope.retry',
+  'shell.projectScope.pathUnavailable',
+  'shell.projectScope.footer',
+  'settings.scope.hintProjectSelected',
+]
 
 describe('t() fallback', () => {
   it('returns the English key when a locale has no translation', () => {
@@ -31,5 +46,18 @@ describe('locale resolution', () => {
     expect(effectiveLocale('system', 'zh-TW')).toBe('zh-TW')
     // ...and to English when the OS locale is unsupported.
     expect(effectiveLocale('system', 'de-DE')).toBe('en')
+  })
+})
+
+describe('project scope copy', () => {
+  it('has translated picker and Settings copy in every supported locale', () => {
+    const catalogs = { en, fr, ja, ko, 'zh-CN': zhCN, 'zh-TW': zhTW }
+    for (const [locale, catalog] of Object.entries(catalogs)) {
+      for (const key of PROJECT_SCOPE_KEYS) {
+        expect({ locale, key, value: catalog[key] }).toEqual(expect.objectContaining({ locale, key }))
+        expect(catalog[key]).toBeTruthy()
+        expect(catalog[key]).not.toBe(key)
+      }
+    }
   })
 })

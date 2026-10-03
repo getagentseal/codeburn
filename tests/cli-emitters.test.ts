@@ -141,4 +141,25 @@ describe('CLI JSON emitters', () => {
       await rm(home, { recursive: true, force: true })
     }
   })
+
+  it('accepts hidden Desktop scope on classic Compare and Sessions JSON paths', async () => {
+    const home = await makeHome()
+    try {
+      const compare = runCli([
+        'compare', '--format', 'json', '--period', 'all', '--provider', 'claude',
+        '--desktop-project-id=label:-missing-project',
+      ], home)
+      expect(compare.status, compare.stderr).toBe(0)
+      expect(JSON.parse(compare.stdout)).toEqual([])
+
+      const sessions = runCli([
+        'sessions', '--format', 'json', '--period', 'all', '--provider', 'claude',
+        '--desktop-project-id=label:-missing-project',
+      ], home)
+      expect(sessions.status, sessions.stderr).toBe(0)
+      expect(JSON.parse(sessions.stdout)).toEqual([])
+    } finally {
+      await rm(home, { recursive: true, force: true })
+    }
+  })
 })
