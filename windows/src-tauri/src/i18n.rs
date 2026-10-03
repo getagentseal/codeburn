@@ -248,6 +248,7 @@ fn token_kind(rest: &str) -> Option<TokenKind> {
     }
 }
 
+#[cfg(test)]
 fn placeholder_tokens(text: &str) -> Vec<&str> {
     let mut tokens = Vec::new();
     let mut rest = text;
@@ -392,7 +393,7 @@ fn decode_ui_languages(units: &[u16]) -> Vec<String> {
 
 #[cfg(test)]
 thread_local! {
-    static FORCED_LOCALE: std::cell::Cell<Option<&'static str>> = std::cell::Cell::new(None);
+    static FORCED_LOCALE: std::cell::Cell<Option<&'static str>> = const { std::cell::Cell::new(None) };
 }
 
 #[cfg(test)]
