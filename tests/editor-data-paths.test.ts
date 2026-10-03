@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { join, posix, win32 } from 'node:path'
 import { tmpdir } from 'node:os'
+import * as os from 'os'
 import { createRequire } from 'node:module'
 import { createCopilotProvider, getVSCodeGlobalStorageDirs, getVSCodeWorkspaceStorageDirs } from '../src/providers/copilot.js'
 import { clearCursorWorkspaceMapCache, createCursorProvider } from '../src/providers/cursor.js'
@@ -9,6 +10,10 @@ import { computeEnvFingerprint } from '../src/session-cache.js'
 import { isSqliteAvailable } from '../src/sqlite.js'
 
 const requireForTest = createRequire(import.meta.url)
+vi.mock('os', async importOriginal => {
+  const actual = await importOriginal<typeof import('os')>()
+  return { ...actual, platform: vi.fn(actual.platform) }
+})
 let root: string
 
 beforeEach(async () => {
@@ -20,6 +25,7 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
+  vi.restoreAllMocks()
   vi.unstubAllEnvs()
   clearCursorWorkspaceMapCache()
   await rm(root, { recursive: true, force: true })
@@ -97,6 +103,32 @@ describe('redirected editor data paths', () => {
     expect(roots).toEqual(expect.arrayContaining([workspace, global]))
     expect(roots).not.toContain(join(root, 'Code', 'User', 'workspaceStorage'))
     expect(await createCursorProvider(join(root, 'explicit.vscdb')).probeRoots!()).toEqual([{ path: join(root, 'explicit.vscdb'), label: 'db' }])
+  })
+
+  it.skipIf(!isSqliteAvailable())('discovers OTel in a redirected Linux global-storage root', async () => {
+    vi.stubEnv('APPDATA', join(root, 'unused-windows-root'))
+    const { DatabaseSync } = requireForTest('node:sqlite') as typeof import('node:sqlite')
+    // posix.join can operate on this temporary Windows path too: Node's fs
+    // accepts its forward slashes, so Linux discovery is exercised on any host.
+    const global = getVSCodeGlobalStorageDirs(root, 'linux')[0]!
+    const otelDir = posix.join(global, 'github.copilot-chat')
+    const dbPath = posix.join(otelDir, 'agent-traces.db')
+    await mkdir(otelDir, { recursive: true })
+    const db = new DatabaseSync(dbPath)
+    db.exec(`
+      CREATE TABLE spans (span_id TEXT PRIMARY KEY, trace_id TEXT, operation_name TEXT, start_time_ms INTEGER, response_model TEXT);
+      CREATE TABLE span_attributes (id INTEGER PRIMARY KEY, span_id TEXT, key TEXT, value TEXT);
+      INSERT INTO spans VALUES ('span', 'trace', 'chat', 1780157113020, 'gpt-4o');
+      INSERT INTO span_attributes VALUES (1, 'span', 'gen_ai.conversation.id', 'redirected-otel');
+      INSERT INTO span_attributes VALUES (2, 'span', 'gen_ai.usage.input_tokens', '100');
+      INSERT INTO span_attributes VALUES (3, 'span', 'gen_ai.usage.output_tokens', '20');
+    `)
+    db.close()
+    vi.spyOn(os, 'platform').mockReturnValue('linux')
+    vi.stubEnv('CODEBURN_COPILOT_DISABLE_OTEL', '')
+    const provider = createCopilotProvider(join(root, 'no-cli'), undefined, undefined, join(root, 'no-jb'), join(root, 'no-store'))
+    expect((await provider.discoverSessions()).map(s => s.path)).toContain(join(dbPath))
+    expect((await provider.probeRoots!()).map(r => r.path)).toContain(join(otelDir))
   })
 
   it.each(['APPDATA', 'XDG_CONFIG_HOME'])('invalidates Cursor caches on %s changes without discarding durable Copilot history', variable => {
