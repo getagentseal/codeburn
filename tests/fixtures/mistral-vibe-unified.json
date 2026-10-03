@@ -1,0 +1,801 @@
+{
+  "turn1": {
+    "CURRENT": {
+      "generation": "0000000000000008",
+      "manifest_sha256": "67e1b8469c09956b8139781f63f77d0d727ede7366922bfac6b21a01aaabf1b6",
+      "session_id": "e5e3f04f-278a-6604-efbe-6c25f12f81de",
+      "snapshot_sequence": 8,
+      "store_format": "mistral.vibe.unified-session-store/v1",
+      "store_format_minor": 7
+    },
+    "meta.json": {
+      "session_id": "e5e3f04f-278a-6604-efbe-6c25f12f81de",
+      "start_time": "2026-10-01T23:33:27.582000+00:00",
+      "end_time": "2026-10-01T23:33:28.883000+00:00",
+      "environment": {
+        "working_directory": "/tmp/vibe-repro"
+      },
+      "config": null,
+      "title": null
+    },
+    "generations/0000000000000008/manifest.json": {
+      "checkpoint": {
+        "checkpoint_version": 1,
+        "chunks": [
+          "e26368dbad7c6038ed3197c97fedaaa73053eb235dda533a7c80f19b5ee0bcce"
+        ],
+        "path": "checkpoint.json",
+        "sha256": "7c2d0e779a6acd5adddf8f247eea94ab0affd41b092a27d77e60332b476e665e"
+      },
+      "created_at": "2026-10-01T23:33:28.940Z",
+      "execution_state": "quiescent",
+      "generation": "0000000000000008",
+      "interop_export": null,
+      "manifest_version": 1,
+      "projection_state": {
+        "chunks": [
+          "295c777bdde625d7e4d889c5d061b07e7d6b88af41d42de85b040f80c8e245a7"
+        ],
+        "path": "projection-state.json",
+        "sha256": "bf910877281b52d190644d5c58c937ea31105a732507e9368413b4ab4f04b449"
+      },
+      "recovery_journal_segment": {
+        "first_sequence": 9,
+        "path": "journal/0000000000000009.jsonl"
+      },
+      "runtime_state": {
+        "chunks": null,
+        "path": "runtime-state.json",
+        "sha256": "78a046ebc6462f17a2dae701088a8c6cafdf4200dcf89a18d579bf039273f1f7"
+      },
+      "session_id": "e5e3f04f-278a-6604-efbe-6c25f12f81de",
+      "snapshot_sequence": 8
+    },
+    "generations/0000000000000008/projection-state.json": {
+      "projection_state_version": 1,
+      "session_id": "e5e3f04f-278a-6604-efbe-6c25f12f81de",
+      "snapshot": {
+        "activeCallbacks": [],
+        "format": "harness.public-session-state/v1",
+        "history": {
+          "cursor": {
+            "after": null,
+            "before": null
+          },
+          "entries": [],
+          "range": "latest"
+        },
+        "latestTurn": {
+          "completedAt": 1790897608883,
+          "id": "turn-7b0dbc3228e7fac94f5f61388fdf6ac0",
+          "queueItemId": null,
+          "sessionId": "e5e3f04f-278a-6604-efbe-6c25f12f81de",
+          "startedAt": 1790897608324,
+          "status": "completed",
+          "stopReason": null
+        },
+        "session": {
+          "contextUsage": {
+            "cachedInputTokens": 80,
+            "inputTokens": 120,
+            "outputTokens": 15,
+            "totalTokens": 135
+          },
+          "createdAt": 1790897607582,
+          "id": "e5e3f04f-278a-6604-efbe-6c25f12f81de",
+          "parentSessionId": null,
+          "preview": "Reply exactly: CODEBURN_MISTRAL_REPRO_OK",
+          "rootSessionId": "e5e3f04f-278a-6604-efbe-6c25f12f81de",
+          "status": {
+            "type": "idle"
+          },
+          "title": null,
+          "titleSource": "auto",
+          "tokenUsage": {
+            "cachedInputTokens": 80,
+            "inputTokens": 120,
+            "outputTokens": 15,
+            "totalTokens": 135
+          },
+          "updatedAt": 1790897608883
+        },
+        "turnQueue": {
+          "items": [],
+          "maxItems": 32,
+          "paused": false
+        }
+      },
+      "snapshot_sequence": 8,
+      "watermark": 2
+    },
+    "generations/0000000000000008/runtime-state.json": {
+      "runtime_state_version": 3,
+      "session_id": "e5e3f04f-278a-6604-efbe-6c25f12f81de",
+      "session_metadata": {
+        "active_model": "mistral-medium-3.5",
+        "agent_name": null,
+        "cwd": "/tmp/vibe-repro",
+        "hook_bindings": [
+          {
+            "id": "builtin:agents_md",
+            "order": 0,
+            "point": "post_tool_call",
+            "selector": {
+              "type": "always"
+            }
+          }
+        ],
+        "parent_session_id": null,
+        "reasoning_effort": "off",
+        "root_session_id": "e5e3f04f-278a-6604-efbe-6c25f12f81de",
+        "subagent_policy_ceiling_digest": null,
+        "subagent_spawn_key": null,
+        "subagent_template_digest": null
+      }
+    },
+    "chunks/295c777bdde625d7e4d889c5d061b07e7d6b88af41d42de85b040f80c8e245a7.json": [
+      {
+        "content": [
+          {
+            "text": "Reply exactly: CODEBURN_MISTRAL_REPRO_OK",
+            "type": "text"
+          }
+        ],
+        "createdAt": 1790897608324,
+        "generationStatus": "completed",
+        "id": "user-turn-7b0dbc3228e7fac94f5f61388fdf6ac0-1",
+        "relatedEntryId": null,
+        "role": "user",
+        "sessionId": "e5e3f04f-278a-6604-efbe-6c25f12f81de",
+        "source": "turn_start",
+        "turnId": "turn-7b0dbc3228e7fac94f5f61388fdf6ac0",
+        "type": "message",
+        "updatedAt": 1790897608324
+      },
+      {
+        "content": [
+          {
+            "text": "CODEBURN_MISTRAL_REPRO_OK_1",
+            "type": "text"
+          }
+        ],
+        "createdAt": 1790897608883,
+        "generationStatus": "completed",
+        "id": "assistant-e6d6e722-0d24-5d5f-a441-31f6de3dd49f",
+        "outcome": {
+          "type": "committed"
+        },
+        "relatedEntryId": null,
+        "role": "assistant",
+        "sessionId": "e5e3f04f-278a-6604-efbe-6c25f12f81de",
+        "source": "harness",
+        "turnId": "turn-7b0dbc3228e7fac94f5f61388fdf6ac0",
+        "type": "message",
+        "updatedAt": 1790897608883
+      }
+    ],
+    "journal/0000000000000009.jsonl": [],
+    "journal/0000000000000001.jsonl": [
+      {
+        "payload": {
+          "delta": [
+            {
+              "entry": {
+                "content": [
+                  {
+                    "text": "Reply exactly: CODEBURN_MISTRAL_REPRO_OK",
+                    "type": "text"
+                  }
+                ],
+                "createdAt": 1790897608324,
+                "generationStatus": "completed",
+                "id": "user-turn-7b0dbc3228e7fac94f5f61388fdf6ac0-1",
+                "relatedEntryId": null,
+                "role": "user",
+                "sessionId": "e5e3f04f-278a-6604-efbe-6c25f12f81de",
+                "source": "turn_start",
+                "turnId": "turn-7b0dbc3228e7fac94f5f61388fdf6ac0",
+                "type": "message",
+                "updatedAt": 1790897608324
+              },
+              "op": "append_entry"
+            },
+            {
+              "op": "set_envelope",
+              "state": {
+                "activeCallbacks": [],
+                "format": "harness.public-session-state/v1",
+                "history": {
+                  "cursor": {
+                    "after": null,
+                    "before": null
+                  },
+                  "entries": [],
+                  "range": "latest"
+                },
+                "latestTurn": {
+                  "id": "turn-7b0dbc3228e7fac94f5f61388fdf6ac0",
+                  "queueItemId": null,
+                  "sessionId": "e5e3f04f-278a-6604-efbe-6c25f12f81de",
+                  "startedAt": 1790897608324,
+                  "status": "in_progress"
+                },
+                "session": {
+                  "contextUsage": null,
+                  "createdAt": 1790897607582,
+                  "id": "e5e3f04f-278a-6604-efbe-6c25f12f81de",
+                  "parentSessionId": null,
+                  "preview": "Reply exactly: CODEBURN_MISTRAL_REPRO_OK",
+                  "rootSessionId": "e5e3f04f-278a-6604-efbe-6c25f12f81de",
+                  "status": {
+                    "activeTurnId": "turn-7b0dbc3228e7fac94f5f61388fdf6ac0",
+                    "type": "running"
+                  },
+                  "title": null,
+                  "titleSource": "auto",
+                  "tokenUsage": null,
+                  "updatedAt": 1790897608324
+                },
+                "turnQueue": {
+                  "items": [],
+                  "maxItems": 32,
+                  "paused": false
+                }
+              }
+            }
+          ],
+          "watermark": 1
+        },
+        "previous_record_sha256": "f8baf6a135cf6ae7c6184e9006a34b670492ed26ed1aa37f58b7e6baf4b92fe8",
+        "record_sha256": "735b21e8df3e405c5d90104dd7799ecb5358532702086efaa048c43a614f7ed3",
+        "recovery_journal_record_version": 1,
+        "sequence": 3,
+        "type": "projection_delta"
+      },
+      {
+        "payload": {
+          "action_id": "e6d6e722-0d24-5d5f-a441-31f6de3dd49f",
+          "result": {
+            "action_id": "e6d6e722-0d24-5d5f-a441-31f6de3dd49f",
+            "result": {
+              "finish_reason": "stop",
+              "parts": [
+                {
+                  "text": "CODEBURN_MISTRAL_REPRO_OK_1",
+                  "type": "text"
+                }
+              ],
+              "usage": {
+                "cached_input_tokens": 80,
+                "input_tokens": 120,
+                "output_tokens": 15,
+                "total_tokens": 135
+              }
+            },
+            "type": "completion_succeeded"
+          },
+          "state": "succeeded"
+        },
+        "previous_record_sha256": "0b2243a7459c554715759a9299d21b5243cff6107a42e9db81517fbdb24ec267",
+        "record_sha256": "178f8356f9652c22240ade0c2516853d96a64569e511b3739254eccafbec5e2d",
+        "recovery_journal_record_version": 1,
+        "sequence": 5,
+        "type": "action_result"
+      },
+      {
+        "payload": {
+          "delta": [
+            {
+              "entry": {
+                "content": [
+                  {
+                    "text": "CODEBURN_MISTRAL_REPRO_OK_1",
+                    "type": "text"
+                  }
+                ],
+                "createdAt": 1790897608883,
+                "generationStatus": "completed",
+                "id": "assistant-e6d6e722-0d24-5d5f-a441-31f6de3dd49f",
+                "outcome": {
+                  "type": "committed"
+                },
+                "relatedEntryId": null,
+                "role": "assistant",
+                "sessionId": "e5e3f04f-278a-6604-efbe-6c25f12f81de",
+                "source": "harness",
+                "turnId": "turn-7b0dbc3228e7fac94f5f61388fdf6ac0",
+                "type": "message",
+                "updatedAt": 1790897608883
+              },
+              "op": "append_entry"
+            },
+            {
+              "op": "set_envelope",
+              "state": {
+                "activeCallbacks": [],
+                "format": "harness.public-session-state/v1",
+                "history": {
+                  "cursor": {
+                    "after": null,
+                    "before": null
+                  },
+                  "entries": [],
+                  "range": "latest"
+                },
+                "latestTurn": {
+                  "completedAt": 1790897608883,
+                  "id": "turn-7b0dbc3228e7fac94f5f61388fdf6ac0",
+                  "queueItemId": null,
+                  "sessionId": "e5e3f04f-278a-6604-efbe-6c25f12f81de",
+                  "startedAt": 1790897608324,
+                  "status": "completed",
+                  "stopReason": null
+                },
+                "session": {
+                  "contextUsage": {
+                    "cachedInputTokens": 80,
+                    "inputTokens": 120,
+                    "outputTokens": 15,
+                    "totalTokens": 135
+                  },
+                  "createdAt": 1790897607582,
+                  "id": "e5e3f04f-278a-6604-efbe-6c25f12f81de",
+                  "parentSessionId": null,
+                  "preview": "Reply exactly: CODEBURN_MISTRAL_REPRO_OK",
+                  "rootSessionId": "e5e3f04f-278a-6604-efbe-6c25f12f81de",
+                  "status": {
+                    "type": "idle"
+                  },
+                  "title": null,
+                  "titleSource": "auto",
+                  "tokenUsage": {
+                    "cachedInputTokens": 80,
+                    "inputTokens": 120,
+                    "outputTokens": 15,
+                    "totalTokens": 135
+                  },
+                  "updatedAt": 1790897608883
+                },
+                "turnQueue": {
+                  "items": [],
+                  "maxItems": 32,
+                  "paused": false
+                }
+              }
+            }
+          ],
+          "watermark": 2
+        },
+        "previous_record_sha256": "008c8130e7fe3582858ad44314534690697f79838bb698af11b885e8bdd30b83",
+        "record_sha256": "2ba334640e511404a9c67f56446a4270fdcfde898e7da1fcc9d877e6ab465a5b",
+        "recovery_journal_record_version": 1,
+        "sequence": 7,
+        "type": "projection_delta"
+      }
+    ]
+  },
+  "turn2": {
+    "CURRENT": {
+      "generation": "0000000000000016",
+      "manifest_sha256": "b06ee12b3161b7fcfb31976bd33e3395f560908b731ccf085eedf13585173720",
+      "session_id": "e5e3f04f-278a-6604-efbe-6c25f12f81de",
+      "snapshot_sequence": 16,
+      "store_format": "mistral.vibe.unified-session-store/v1",
+      "store_format_minor": 7
+    },
+    "meta.json": {
+      "session_id": "e5e3f04f-278a-6604-efbe-6c25f12f81de",
+      "start_time": "2026-10-01T23:33:27.582000+00:00",
+      "end_time": "2026-10-01T23:33:43.273000+00:00",
+      "environment": {
+        "working_directory": "/tmp/vibe-repro"
+      },
+      "config": null,
+      "title": null
+    },
+    "generations/0000000000000016/manifest.json": {
+      "checkpoint": {
+        "checkpoint_version": 1,
+        "chunks": [
+          "9b820017d720c888e61baa02e9ffa2b7c19650d25939f3e93647a9bb4c579541"
+        ],
+        "path": "checkpoint.json",
+        "sha256": "cbb575e57fba698512febef8b9f8832ea98b5f7f2d8fbfdc651a074f516233f9"
+      },
+      "created_at": "2026-10-01T23:33:43.323Z",
+      "execution_state": "quiescent",
+      "generation": "0000000000000016",
+      "interop_export": null,
+      "manifest_version": 1,
+      "projection_state": {
+        "chunks": [
+          "f6fcb81734343e577421024747680914d7ae28e36e198a2db3fdf8ee4864f37c"
+        ],
+        "path": "projection-state.json",
+        "sha256": "8549944647abb856ee7509e5aa6ce0c421e84e5d9f18f57270a723a8e8fbdd6a"
+      },
+      "recovery_journal_segment": {
+        "first_sequence": 17,
+        "path": "journal/0000000000000017.jsonl"
+      },
+      "runtime_state": {
+        "chunks": null,
+        "path": "runtime-state.json",
+        "sha256": "434ec4956afd78e9145e12f3ac9621bbf43e02deff185431935502cbffc37fee"
+      },
+      "session_id": "e5e3f04f-278a-6604-efbe-6c25f12f81de",
+      "snapshot_sequence": 16
+    },
+    "generations/0000000000000016/projection-state.json": {
+      "projection_state_version": 1,
+      "session_id": "e5e3f04f-278a-6604-efbe-6c25f12f81de",
+      "snapshot": {
+        "activeCallbacks": [],
+        "format": "harness.public-session-state/v1",
+        "history": {
+          "cursor": {
+            "after": null,
+            "before": null
+          },
+          "entries": [],
+          "range": "latest"
+        },
+        "latestTurn": {
+          "completedAt": 1790897623273,
+          "id": "turn-4f76f79c4f5d115f4511b93d43316578",
+          "queueItemId": null,
+          "sessionId": "e5e3f04f-278a-6604-efbe-6c25f12f81de",
+          "startedAt": 1790897622912,
+          "status": "completed",
+          "stopReason": null
+        },
+        "session": {
+          "contextUsage": {
+            "cachedInputTokens": 64,
+            "inputTokens": 128,
+            "outputTokens": 10,
+            "totalTokens": 138
+          },
+          "createdAt": 1790897607582,
+          "id": "e5e3f04f-278a-6604-efbe-6c25f12f81de",
+          "parentSessionId": null,
+          "preview": "Reply exactly: CODEBURN_MISTRAL_REPRO_OK",
+          "rootSessionId": "e5e3f04f-278a-6604-efbe-6c25f12f81de",
+          "status": {
+            "type": "idle"
+          },
+          "title": null,
+          "titleSource": "auto",
+          "tokenUsage": {
+            "cachedInputTokens": 144,
+            "inputTokens": 248,
+            "outputTokens": 25,
+            "totalTokens": 273
+          },
+          "updatedAt": 1790897623273
+        },
+        "turnQueue": {
+          "items": [],
+          "maxItems": 32,
+          "paused": false
+        }
+      },
+      "snapshot_sequence": 16,
+      "watermark": 4
+    },
+    "generations/0000000000000016/runtime-state.json": {
+      "runtime_state_version": 3,
+      "session_id": "e5e3f04f-278a-6604-efbe-6c25f12f81de",
+      "session_metadata": {
+        "active_model": "mistral-medium-3.5",
+        "agent_name": null,
+        "cwd": "/tmp/vibe-repro",
+        "hook_bindings": [
+          {
+            "id": "builtin:agents_md",
+            "order": 0,
+            "point": "post_tool_call",
+            "selector": {
+              "type": "always"
+            }
+          }
+        ],
+        "parent_session_id": null,
+        "reasoning_effort": "off",
+        "root_session_id": "e5e3f04f-278a-6604-efbe-6c25f12f81de",
+        "subagent_policy_ceiling_digest": null,
+        "subagent_spawn_key": null,
+        "subagent_template_digest": null
+      }
+    },
+    "chunks/f6fcb81734343e577421024747680914d7ae28e36e198a2db3fdf8ee4864f37c.json": [
+      {
+        "content": [
+          {
+            "text": "Reply exactly: CODEBURN_MISTRAL_REPRO_OK",
+            "type": "text"
+          }
+        ],
+        "createdAt": 1790897608324,
+        "generationStatus": "completed",
+        "id": "user-turn-7b0dbc3228e7fac94f5f61388fdf6ac0-1",
+        "relatedEntryId": null,
+        "role": "user",
+        "sessionId": "e5e3f04f-278a-6604-efbe-6c25f12f81de",
+        "source": "turn_start",
+        "turnId": "turn-7b0dbc3228e7fac94f5f61388fdf6ac0",
+        "type": "message",
+        "updatedAt": 1790897608324
+      },
+      {
+        "content": [
+          {
+            "text": "CODEBURN_MISTRAL_REPRO_OK_1",
+            "type": "text"
+          }
+        ],
+        "createdAt": 1790897608883,
+        "generationStatus": "completed",
+        "id": "assistant-e6d6e722-0d24-5d5f-a441-31f6de3dd49f",
+        "outcome": {
+          "type": "committed"
+        },
+        "relatedEntryId": null,
+        "role": "assistant",
+        "sessionId": "e5e3f04f-278a-6604-efbe-6c25f12f81de",
+        "source": "harness",
+        "turnId": "turn-7b0dbc3228e7fac94f5f61388fdf6ac0",
+        "type": "message",
+        "updatedAt": 1790897608883
+      },
+      {
+        "content": [
+          {
+            "text": "Reply exactly: CODEBURN_MISTRAL_REPRO_OK",
+            "type": "text"
+          }
+        ],
+        "createdAt": 1790897622912,
+        "generationStatus": "completed",
+        "id": "user-turn-4f76f79c4f5d115f4511b93d43316578-3",
+        "relatedEntryId": null,
+        "role": "user",
+        "sessionId": "e5e3f04f-278a-6604-efbe-6c25f12f81de",
+        "source": "turn_start",
+        "turnId": "turn-4f76f79c4f5d115f4511b93d43316578",
+        "type": "message",
+        "updatedAt": 1790897622912
+      },
+      {
+        "content": [
+          {
+            "text": "CODEBURN_MISTRAL_REPRO_OK_2",
+            "type": "text"
+          }
+        ],
+        "createdAt": 1790897623273,
+        "generationStatus": "completed",
+        "id": "assistant-f092f4e1-afb8-53af-9710-cd0da761d798",
+        "outcome": {
+          "type": "committed"
+        },
+        "relatedEntryId": null,
+        "role": "assistant",
+        "sessionId": "e5e3f04f-278a-6604-efbe-6c25f12f81de",
+        "source": "harness",
+        "turnId": "turn-4f76f79c4f5d115f4511b93d43316578",
+        "type": "message",
+        "updatedAt": 1790897623273
+      }
+    ],
+    "journal/0000000000000009.jsonl": [
+      {
+        "payload": {
+          "delta": [
+            {
+              "entry": {
+                "content": [
+                  {
+                    "text": "Reply exactly: CODEBURN_MISTRAL_REPRO_OK",
+                    "type": "text"
+                  }
+                ],
+                "createdAt": 1790897622912,
+                "generationStatus": "completed",
+                "id": "user-turn-4f76f79c4f5d115f4511b93d43316578-3",
+                "relatedEntryId": null,
+                "role": "user",
+                "sessionId": "e5e3f04f-278a-6604-efbe-6c25f12f81de",
+                "source": "turn_start",
+                "turnId": "turn-4f76f79c4f5d115f4511b93d43316578",
+                "type": "message",
+                "updatedAt": 1790897622912
+              },
+              "op": "append_entry"
+            },
+            {
+              "op": "set_envelope",
+              "state": {
+                "activeCallbacks": [],
+                "format": "harness.public-session-state/v1",
+                "history": {
+                  "cursor": {
+                    "after": null,
+                    "before": null
+                  },
+                  "entries": [],
+                  "range": "latest"
+                },
+                "latestTurn": {
+                  "id": "turn-4f76f79c4f5d115f4511b93d43316578",
+                  "queueItemId": null,
+                  "sessionId": "e5e3f04f-278a-6604-efbe-6c25f12f81de",
+                  "startedAt": 1790897622912,
+                  "status": "in_progress"
+                },
+                "session": {
+                  "contextUsage": {
+                    "cachedInputTokens": 80,
+                    "inputTokens": 120,
+                    "outputTokens": 15,
+                    "totalTokens": 135
+                  },
+                  "createdAt": 1790897607582,
+                  "id": "e5e3f04f-278a-6604-efbe-6c25f12f81de",
+                  "parentSessionId": null,
+                  "preview": "Reply exactly: CODEBURN_MISTRAL_REPRO_OK",
+                  "rootSessionId": "e5e3f04f-278a-6604-efbe-6c25f12f81de",
+                  "status": {
+                    "activeTurnId": "turn-4f76f79c4f5d115f4511b93d43316578",
+                    "type": "running"
+                  },
+                  "title": null,
+                  "titleSource": "auto",
+                  "tokenUsage": {
+                    "cachedInputTokens": 80,
+                    "inputTokens": 120,
+                    "outputTokens": 15,
+                    "totalTokens": 135
+                  },
+                  "updatedAt": 1790897622912
+                },
+                "turnQueue": {
+                  "items": [],
+                  "maxItems": 32,
+                  "paused": false
+                }
+              }
+            }
+          ],
+          "watermark": 3
+        },
+        "previous_record_sha256": "ffa674204a66c44739a65b21ffbcc23cec6184c0945ee44077d84aaa0955baa0",
+        "record_sha256": "0c6bdc8b074314515c4d7be69ffca267113e88849745640ba74691ee4bd05f8c",
+        "recovery_journal_record_version": 1,
+        "sequence": 11,
+        "type": "projection_delta"
+      },
+      {
+        "payload": {
+          "action_id": "f092f4e1-afb8-53af-9710-cd0da761d798",
+          "result": {
+            "action_id": "f092f4e1-afb8-53af-9710-cd0da761d798",
+            "result": {
+              "finish_reason": "stop",
+              "parts": [
+                {
+                  "text": "CODEBURN_MISTRAL_REPRO_OK_2",
+                  "type": "text"
+                }
+              ],
+              "usage": {
+                "cached_input_tokens": 64,
+                "input_tokens": 128,
+                "output_tokens": 10,
+                "total_tokens": 138
+              }
+            },
+            "type": "completion_succeeded"
+          },
+          "state": "succeeded"
+        },
+        "previous_record_sha256": "dab7c0b0db4a638c6267978104f1479912bccd1eed3fcb3f8cc470cbf8c281ca",
+        "record_sha256": "6baa17c3035f666122a1e0c7017be4f85d4556d2c3967c41633b4c5d5adfeea6",
+        "recovery_journal_record_version": 1,
+        "sequence": 13,
+        "type": "action_result"
+      },
+      {
+        "payload": {
+          "delta": [
+            {
+              "entry": {
+                "content": [
+                  {
+                    "text": "CODEBURN_MISTRAL_REPRO_OK_2",
+                    "type": "text"
+                  }
+                ],
+                "createdAt": 1790897623273,
+                "generationStatus": "completed",
+                "id": "assistant-f092f4e1-afb8-53af-9710-cd0da761d798",
+                "outcome": {
+                  "type": "committed"
+                },
+                "relatedEntryId": null,
+                "role": "assistant",
+                "sessionId": "e5e3f04f-278a-6604-efbe-6c25f12f81de",
+                "source": "harness",
+                "turnId": "turn-4f76f79c4f5d115f4511b93d43316578",
+                "type": "message",
+                "updatedAt": 1790897623273
+              },
+              "op": "append_entry"
+            },
+            {
+              "op": "set_envelope",
+              "state": {
+                "activeCallbacks": [],
+                "format": "harness.public-session-state/v1",
+                "history": {
+                  "cursor": {
+                    "after": null,
+                    "before": null
+                  },
+                  "entries": [],
+                  "range": "latest"
+                },
+                "latestTurn": {
+                  "completedAt": 1790897623273,
+                  "id": "turn-4f76f79c4f5d115f4511b93d43316578",
+                  "queueItemId": null,
+                  "sessionId": "e5e3f04f-278a-6604-efbe-6c25f12f81de",
+                  "startedAt": 1790897622912,
+                  "status": "completed",
+                  "stopReason": null
+                },
+                "session": {
+                  "contextUsage": {
+                    "cachedInputTokens": 64,
+                    "inputTokens": 128,
+                    "outputTokens": 10,
+                    "totalTokens": 138
+                  },
+                  "createdAt": 1790897607582,
+                  "id": "e5e3f04f-278a-6604-efbe-6c25f12f81de",
+                  "parentSessionId": null,
+                  "preview": "Reply exactly: CODEBURN_MISTRAL_REPRO_OK",
+                  "rootSessionId": "e5e3f04f-278a-6604-efbe-6c25f12f81de",
+                  "status": {
+                    "type": "idle"
+                  },
+                  "title": null,
+                  "titleSource": "auto",
+                  "tokenUsage": {
+                    "cachedInputTokens": 144,
+                    "inputTokens": 248,
+                    "outputTokens": 25,
+                    "totalTokens": 273
+                  },
+                  "updatedAt": 1790897623273
+                },
+                "turnQueue": {
+                  "items": [],
+                  "maxItems": 32,
+                  "paused": false
+                }
+              }
+            }
+          ],
+          "watermark": 4
+        },
+        "previous_record_sha256": "825c15bca94bc2c00816b680ef91324cfe07a3186a2d9eba4c7af0949cc7af8c",
+        "record_sha256": "2a880b28bad68c5abfae0c6477923e8e464dc7a18675c547b9f781d32dc59ddc",
+        "recovery_journal_record_version": 1,
+        "sequence": 15,
+        "type": "projection_delta"
+      }
+    ],
+    "journal/0000000000000017.jsonl": []
+  }
+}
