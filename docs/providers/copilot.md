@@ -24,6 +24,8 @@ dedupe.
 
 JSONL in the first three locations (schemas differ; the parser switches by source type / event shape), a SQLite DB for the OTel source, and a Nitrite (H2 MVStore) `.db` for the JetBrains source. VS Code core chat sessions use a delta journal: `kind:0` sets the root object, `kind:1` writes a value at path `k`, and `kind:2` appends items to an array path.
 
+Core chat-session journals read input from `result.metadata.promptTokens`, falling back to the request's `promptTokens` when metadata has no positive count. Output keeps the existing `result.metadata.outputTokens` then request `completionTokens` precedence. These fields are alternatives, never summed. Input-only requests count; rows without reported usage remain skipped rather than estimated from text. The request-level prompt count is the value VS Code recorded, not a reconstructed total across an agent loop's model calls.
+
 ## OpenTelemetry (OTel) source
 
 When VS Code Copilot Chat's `agent-traces.db` exists, the parser reads per-LLM-call token

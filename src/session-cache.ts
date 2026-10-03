@@ -453,7 +453,9 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // attribute take their VS Code workspace name instead of `copilot-chat`, and
   // multi-root workspaces are named after their .code-workspace file. Dedup
   // keys are unchanged, so the durable union replaces the cached calls in place.
-  copilot: 'cli-shutdown-cost-v1-skills-source-provenance-v1-session-store-v3-chatsession-otel-skills-v1-otel-trace-metadata-once-v1-transcript-unknown-usage-v1-otel-workspace-project-v1',
+  // journal-request-input-v1: journals also record promptTokens directly on
+  // each request. Re-parse unchanged sources to repair cached input totals.
+  copilot: 'cli-shutdown-cost-v1-skills-source-provenance-v1-session-store-v3-chatsession-otel-skills-v1-otel-trace-metadata-once-v1-transcript-unknown-usage-v1-otel-workspace-project-v1-journal-request-input-v1',
   // authoritative-usage-v4: persist one Grok session call from top-level
   // authoritative totals, use modelUsage only for priced attribution, clamp
   // reasoning per record, and label mixed sessions estimated.

@@ -240,7 +240,10 @@ import type { DateRange, ProjectSummary } from './types.js'
 // session's last activity. Days finalized at v45 miss most Devin calls, and a
 // day can also lose calls that now land on their real date, so devin joins
 // PENDING_REDERIVE_PROVIDER_VERSIONS.
-export const DAILY_CACHE_VERSION = 46
+// v47: Copilot chat-session journals read request-level promptTokens, repairing
+// missing input usage and input-only calls. Re-derive settled days from the
+// corrected session cache; calls and cost only rise.
+export const DAILY_CACHE_VERSION = 47
 const MIN_SUPPORTED_VERSION = 28
 
 /// Providers whose per-day CALL COUNT means something different at
