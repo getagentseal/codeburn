@@ -1801,7 +1801,9 @@ function createChatSessionParser(
         const rawMetadata = resultRecord?.['metadata']
         const metadata = isRecord(rawMetadata) ? rawMetadata : createReplayObject()
 
-        const inputTokens = numberOrZero(metadata['promptTokens'])
+        // VS Code also serializes usage on the request itself. Keep the
+        // extension metadata's precedence, as in the legacy JSON parser.
+        const inputTokens = numberOrZero(metadata['promptTokens']) || numberOrZero(rawReq['promptTokens'])
         const metadataOutputTokens = numberOrZero(metadata['outputTokens'])
         const outputTokens = metadataOutputTokens || numberOrZero(rawReq['completionTokens'])
 
