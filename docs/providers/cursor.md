@@ -18,6 +18,8 @@ A single SQLite database per platform:
 
 Windows honors `APPDATA`, falling back to `AppData/Roaming` under the home directory when it is unset or empty. Workspace mappings come from the database's sibling `workspaceStorage` folder, so they follow the same redirected root. Explicit database overrides take precedence. Changes to `APPDATA` or `XDG_CONFIG_HOME` invalidate Cursor's session-cache fingerprint.
 
+The result cache also checks the resolved database path, so a different data root cannot reuse the previous database's calls just because its size and modification time match. The daily-cache migration backfills historical usage found under corrected editor roots.
+
 ## Storage format
 
 SQLite. Two parallel sources within the same db:

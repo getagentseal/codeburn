@@ -198,6 +198,7 @@ describe('unsuffixed result caches coexist with mixed-version binaries', () => {
 
     await writeFile(join(root, CURSOR_LEGACY_CACHE_FILE), JSON.stringify({
       version: CURSOR_CACHE_VERSION,
+      dbPath,
       dbMtimeMs: fp.mtimeMs,
       dbSizeBytes: fp.size,
       lookbackFloor: floor,

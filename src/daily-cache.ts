@@ -254,7 +254,9 @@ import type { DateRange, ProjectSummary } from './types.js'
 // needed.
 // v50: Hermes uses its native Windows LOCALAPPDATA root; finalized days can
 // miss sessions there and must be re-derived after the default path is fixed.
-export const DAILY_CACHE_VERSION = 50
+// v51: honor redirected Copilot and Cursor editor data roots. Backfill settled
+// days that previously missed usage stored under APPDATA or XDG_CONFIG_HOME.
+export const DAILY_CACHE_VERSION = 51
 const MIN_SUPPORTED_VERSION = 28
 
 /// Providers whose per-day CALL COUNT means something different at
