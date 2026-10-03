@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { clearSessionCache, parseAllSessions } from '../src/parser.js'
 import { PROVIDER_PARSE_VERSIONS, computeEnvFingerprint } from '../src/session-cache.js'
-import { DAILY_CACHE_VERSION, currentTzKey, ensureCacheHydrated } from '../src/daily-cache.js'
+import { DAILY_CACHE_VERSION, currentTzKey, ensureCacheHydrated, toDateString } from '../src/daily-cache.js'
 import { aggregateProjectsIntoDays } from '../src/day-aggregator.js'
 import { calculateCost } from '../src/models.js'
 import { readCacheOnDisk, writeCacheOnDisk } from './fixtures/session-cache-io.js'
@@ -27,7 +27,7 @@ beforeEach(async () => {
   vi.stubEnv('CODEBURN_COPILOT_SESSION_STATE_DIR', join(root, 'no-cli'))
   vi.stubEnv('CODEBURN_COPILOT_SESSION_STORE_DB', join(root, 'no-store'))
   timestamp = new Date(Date.now() - 4 * 86400000).toISOString()
-  date = timestamp.slice(0, 10)
+  date = toDateString(new Date(timestamp))
   path = join(chats, 'journal.jsonl')
   await writeFile(path, JSON.stringify({ kind: 0, v: { sessionId: 'cache-journal', creationDate: Date.parse(timestamp), requests: [
     { requestId: 'output', modelId: 'copilot/gpt-4o', promptTokens: 12345, completionTokens: 678 },
