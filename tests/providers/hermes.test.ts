@@ -22,12 +22,18 @@ let tmpDir: string
 let cacheDir: string
 let originalHermesHome: string | undefined
 let originalCodeburnCacheDir: string | undefined
+let originalLocalAppData: string | undefined
+let originalHome: string | undefined
+let originalUserProfile: string | undefined
 
 beforeEach(async () => {
   tmpDir = await mkdtemp(join(tmpdir(), 'hermes-provider-test-'))
   cacheDir = await mkdtemp(join(tmpdir(), 'hermes-provider-cache-'))
   originalHermesHome = process.env['HERMES_HOME']
   originalCodeburnCacheDir = process.env['CODEBURN_CACHE_DIR']
+  originalLocalAppData = process.env['LOCALAPPDATA']
+  originalHome = process.env['HOME']
+  originalUserProfile = process.env['USERPROFILE']
   process.env['HERMES_HOME'] = tmpDir
   process.env['CODEBURN_CACHE_DIR'] = cacheDir
   const { resetHermesSessionLedgerForTests } = await import('../../src/hermes-session-ledger.js')
@@ -39,9 +45,26 @@ afterEach(async () => {
   else process.env['HERMES_HOME'] = originalHermesHome
   if (originalCodeburnCacheDir === undefined) delete process.env['CODEBURN_CACHE_DIR']
   else process.env['CODEBURN_CACHE_DIR'] = originalCodeburnCacheDir
+  if (originalLocalAppData === undefined) delete process.env['LOCALAPPDATA']
+  else process.env['LOCALAPPDATA'] = originalLocalAppData
+  if (originalHome === undefined) delete process.env['HOME']
+  else process.env['HOME'] = originalHome
+  if (originalUserProfile === undefined) delete process.env['USERPROFILE']
+  else process.env['USERPROFILE'] = originalUserProfile
   await rm(tmpDir, { recursive: true, force: true })
   await rm(cacheDir, { recursive: true, force: true })
 })
+
+async function withProcessPlatform(platform: NodeJS.Platform, action: () => Promise<void>): Promise<void> {
+  const original = Object.getOwnPropertyDescriptor(process, 'platform')
+  if (!original?.configurable) throw new Error('process.platform cannot be mocked in this runtime')
+  Object.defineProperty(process, 'platform', { ...original, value: platform })
+  try {
+    await action()
+  } finally {
+    Object.defineProperty(process, 'platform', original)
+  }
+}
 
 function createHermesDb(homeDir: string): string {
   const { DatabaseSync: Database } = requireForTest('node:sqlite')
@@ -120,6 +143,23 @@ async function createProfileHermesDb(hermesHome: string, profile: string): Promi
   const profileDir = join(hermesHome, 'profiles', profile)
   await mkdir(profileDir, { recursive: true })
   return createHermesDb(profileDir)
+}
+
+async function createHermesDbWithSession(hermesHome: string, sessionId: string): Promise<string> {
+  await mkdir(hermesHome, { recursive: true })
+  const dbPath = createHermesDb(hermesHome)
+  withTestDb(dbPath, (db) => {
+    insertSession(db, {
+      id: sessionId,
+      inputTokens: 100,
+      outputTokens: 20,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      reasoningTokens: 0,
+      startedAt: 1779549200,
+    })
+  })
+  return dbPath
 }
 
 function insertSession(db: TestDb, values: {
@@ -207,6 +247,74 @@ async function collectCalls(hermesHome: string, sourcePath: string): Promise<Par
 const skipUnlessSqlite = isSqliteAvailable() ? describe : describe.skip
 
 skipUnlessSqlite('hermes provider', () => {
+  it('uses LOCALAPPDATA for the Windows default and discovers default and named profiles', async () => {
+    await withProcessPlatform('win32', async () => {
+      delete process.env['HERMES_HOME']
+      const localAppData = join(tmpDir, 'local-app-data')
+      process.env['LOCALAPPDATA'] = localAppData
+      const hermesHome = join(localAppData, 'hermes')
+      const rootDbPath = await createHermesDbWithSession(hermesHome, 'windows-default')
+      const profileDbPath = await createHermesDbWithSession(join(hermesHome, 'profiles', 'coder'), 'windows-profile')
+
+      const provider = createHermesProvider()
+      expect(await provider.probeRoots()).toEqual([{ path: hermesHome, label: 'home' }])
+      const sessions = await provider.discoverSessions()
+      expect(sessions.map(session => session.path).sort()).toEqual([
+        `${profileDbPath}#hermes-session=windows-profile`,
+        `${rootDbPath}#hermes-session=windows-default`,
+      ].sort())
+      expect(sessions.map(session => session.project).sort()).toEqual(['coder', 'hermes'])
+    })
+  })
+
+  it('falls back to the Windows home AppData path when LOCALAPPDATA is blank', async () => {
+    await withProcessPlatform('win32', async () => {
+      delete process.env['HERMES_HOME']
+      process.env['HOME'] = tmpDir
+      process.env['USERPROFILE'] = tmpDir
+      process.env['LOCALAPPDATA'] = '  \t  '
+      const hermesHome = join(homedir(), 'AppData', 'Local', 'hermes')
+      await createHermesDbWithSession(hermesHome, 'windows-fallback')
+
+      const provider = createHermesProvider()
+      expect(await provider.probeRoots()).toEqual([{ path: hermesHome, label: 'home' }])
+      expect((await provider.discoverSessions()).map(session => session.project)).toEqual(['hermes'])
+    })
+  })
+
+  it('keeps Unix home discovery and explicit Hermes home overrides', async () => {
+    await withProcessPlatform('linux', async () => {
+      delete process.env['HERMES_HOME']
+      process.env['HOME'] = tmpDir
+      process.env['USERPROFILE'] = tmpDir
+      delete process.env['LOCALAPPDATA']
+      const unixHome = join(homedir(), '.hermes')
+      await createHermesDbWithSession(unixHome, 'unix-default')
+
+      const defaultProvider = createHermesProvider()
+      expect(await defaultProvider.probeRoots()).toEqual([{ path: unixHome, label: 'home' }])
+
+      const localAppData = join(tmpDir, 'local-app-data')
+      const legacyHome = join(tmpDir, 'legacy-hermes-home')
+      process.env['LOCALAPPDATA'] = localAppData
+      process.env['HERMES_HOME'] = legacyHome
+      const envOverrideDb = await createHermesDbWithSession(legacyHome, 'env-override')
+      const envProvider = createHermesProvider()
+      expect(await envProvider.probeRoots()).toEqual([{ path: legacyHome, label: 'home' }])
+      expect((await envProvider.discoverSessions()).map(session => session.path)).toEqual([
+        `${envOverrideDb}#hermes-session=env-override`,
+      ])
+
+      const constructorOverride = join(tmpDir, 'constructor-hermes-home')
+      const constructorDb = await createHermesDbWithSession(constructorOverride, 'constructor-override')
+      const constructorProvider = createHermesProvider(constructorOverride)
+      expect(await constructorProvider.probeRoots()).toEqual([{ path: constructorOverride, label: 'home' }])
+      expect((await constructorProvider.discoverSessions()).map(session => session.path)).toEqual([
+        `${constructorDb}#hermes-session=constructor-override`,
+      ])
+    })
+  })
+
   it('discovers state.db sessions with token usage', async () => {
     const dbPath = createHermesDb(tmpDir)
     withTestDb(dbPath, (db) => {
