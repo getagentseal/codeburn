@@ -7,6 +7,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { calculateCost } from '../../src/models.js'
 import { createHermesProvider } from '../../src/providers/hermes.js'
 import { isSqliteAvailable } from '../../src/sqlite.js'
+import { aggregateProjectsIntoDays } from '../../src/day-aggregator.js'
+import { currentTzKey, ensureCacheHydrated, toDateString, type DailyEntry } from '../../src/daily-cache.js'
 import type { ParsedProviderCall } from '../../src/providers/types.js'
 import type { DateRange } from '../../src/types.js'
 
@@ -55,12 +57,12 @@ afterEach(async () => {
   await rm(cacheDir, { recursive: true, force: true })
 })
 
-async function withProcessPlatform(platform: NodeJS.Platform, action: () => Promise<void>): Promise<void> {
+async function withProcessPlatform<T>(platform: NodeJS.Platform, action: () => Promise<T>): Promise<T> {
   const original = Object.getOwnPropertyDescriptor(process, 'platform')
   if (!original?.configurable) throw new Error('process.platform cannot be mocked in this runtime')
   Object.defineProperty(process, 'platform', { ...original, value: platform })
   try {
-    await action()
+    return await action()
   } finally {
     Object.defineProperty(process, 'platform', original)
   }
@@ -227,8 +229,9 @@ function dayRange(): DateRange {
   }
 }
 
-async function loadParserWithHermesHome(hermesHome: string, codeburnCacheDir: string) {
-  process.env['HERMES_HOME'] = hermesHome
+async function loadParserWithHermesHome(hermesHome: string | undefined, codeburnCacheDir: string) {
+  if (hermesHome === undefined) delete process.env['HERMES_HOME']
+  else process.env['HERMES_HOME'] = hermesHome
   process.env['CODEBURN_CACHE_DIR'] = codeburnCacheDir
   vi.resetModules()
   const parser = await import('../../src/parser.js')
@@ -247,9 +250,14 @@ async function collectCalls(hermesHome: string, sourcePath: string): Promise<Par
 const skipUnlessSqlite = isSqliteAvailable() ? describe : describe.skip
 
 skipUnlessSqlite('hermes provider', () => {
-  it('uses LOCALAPPDATA for the Windows default and discovers default and named profiles', async () => {
+  it.each([
+    ['unset', undefined],
+    ['empty', ''],
+    ['whitespace', ' \t '],
+  ])('uses LOCALAPPDATA for the Windows default with %s HERMES_HOME and discovers default and named profiles', async (_label, configuredHome) => {
     await withProcessPlatform('win32', async () => {
-      delete process.env['HERMES_HOME']
+      if (configuredHome === undefined) delete process.env['HERMES_HOME']
+      else process.env['HERMES_HOME'] = configuredHome
       const localAppData = join(tmpDir, 'local-app-data')
       process.env['LOCALAPPDATA'] = localAppData
       const hermesHome = join(localAppData, 'hermes')
@@ -264,6 +272,114 @@ skipUnlessSqlite('hermes provider', () => {
         `${rootDbPath}#hermes-session=windows-default`,
       ].sort())
       expect(sessions.map(session => session.project).sort()).toEqual(['coder', 'hermes'])
+    })
+  })
+
+  it('re-derives a finalized v47 daily cache from the Windows Hermes home and carries unavailable history', async () => {
+    const now = new Date()
+    const sessionStartedAt = Math.floor((now.getTime() - 4 * 24 * 60 * 60 * 1000) / 1000)
+    const hermesDate = toDateString(new Date(sessionStartedAt * 1000))
+    const sourceGoneDate = toDateString(new Date(now.getTime() - 9 * 24 * 60 * 60 * 1000))
+    const yesterday = toDateString(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1))
+
+    const localAppData = join(tmpDir, 'local-app-data')
+    const hermesHome = join(localAppData, 'hermes')
+    delete process.env['HERMES_HOME']
+    process.env['LOCALAPPDATA'] = localAppData
+    await mkdir(hermesHome, { recursive: true })
+    const dbPath = createHermesDb(hermesHome)
+    withTestDb(dbPath, (db) => {
+      insertSession(db, {
+        id: 'daily-cache-windows-session',
+        inputTokens: 123,
+        outputTokens: 45,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        reasoningTokens: 0,
+        actualCost: 0.75,
+        startedAt: sessionStartedAt,
+      })
+    })
+
+    const cachedDay = (date: string, provider: string, calls: number, cost: number, inputTokens: number): DailyEntry => {
+      const modelStats = {
+        calls,
+        cost,
+        savingsUSD: 0,
+        inputTokens,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+      }
+      const slice = {
+        calls,
+        cost,
+        savingsUSD: 0,
+        sessions: 1,
+        inputTokens,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        models: { 'gpt-5.5': modelStats },
+        categories: {},
+      }
+      return {
+        date,
+        cost,
+        savingsUSD: 0,
+        calls,
+        sessions: 1,
+        inputTokens,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        editTurns: 0,
+        oneShotTurns: 0,
+        models: { 'gpt-5.5': modelStats },
+        categories: {},
+        providers: { [provider]: slice },
+      }
+    }
+
+    await writeFile(join(cacheDir, 'daily-cache.v47.json'), JSON.stringify({
+      version: 47,
+      savingsConfigHash: '',
+      tzKey: currentTzKey(),
+      lastComputedDate: yesterday,
+      days: [
+        cachedDay(hermesDate, 'codex', 2, 0.4, 80),
+        cachedDay(sourceGoneDate, 'claude', 3, 1.2, 300),
+      ],
+      complete: true,
+      watermarkTrusted: true,
+    }), 'utf-8')
+
+    const { clearSessionCache, parseAllSessions } = await withProcessPlatform('win32', () =>
+      loadParserWithHermesHome(undefined, cacheDir),
+    )
+    clearSessionCache()
+    let reparsedProjects: Awaited<ReturnType<typeof parseAllSessions>> = []
+    const hydrated = await ensureCacheHydrated(
+      async range => {
+        reparsedProjects = await parseAllSessions(range)
+        return reparsedProjects
+      },
+      aggregateProjectsIntoDays,
+    )
+
+    expect(hydrated.version).toBe(48)
+    expect(reparsedProjects.flatMap(project => project.sessions)).toHaveLength(1)
+    const refreshedHermesDay = hydrated.days.find(day => day.date === hermesDate)
+    expect(refreshedHermesDay?.providers['hermes']).toMatchObject({
+      calls: 1,
+      cost: 0.75,
+      inputTokens: 123,
+      outputTokens: 45,
+    })
+    expect(refreshedHermesDay?.providers['codex']).toMatchObject({ calls: 2, cost: 0.4, inputTokens: 80 })
+    expect(hydrated.days.find(day => day.date === sourceGoneDate)).toMatchObject({
+      carried: true,
+      providers: { claude: { calls: 3, cost: 1.2, inputTokens: 300 } },
     })
   })
 

@@ -104,8 +104,10 @@ const toolNameMap: Record<string, string> = {
 }
 
 function getHermesHome(override?: string): string {
-  const configuredHome = override ?? process.env['HERMES_HOME']
-  if (configuredHome !== undefined) return configuredHome
+  if (override !== undefined) return override
+
+  const configuredHome = process.env['HERMES_HOME']?.trim()
+  if (configuredHome) return configuredHome
 
   if (process.platform === 'win32') {
     const localAppData = process.env['LOCALAPPDATA']?.trim()

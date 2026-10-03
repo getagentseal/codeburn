@@ -243,7 +243,9 @@ import type { DateRange, ProjectSummary } from './types.js'
 // v47: Copilot chat-session journals read request-level promptTokens, repairing
 // missing input usage and input-only calls. Re-derive settled days from the
 // corrected session cache; calls and cost only rise.
-export const DAILY_CACHE_VERSION = 47
+// v48: Hermes uses its native Windows LOCALAPPDATA root; finalized days can
+// miss sessions there and must be re-derived after the default path is fixed.
+export const DAILY_CACHE_VERSION = 48
 const MIN_SUPPORTED_VERSION = 28
 
 /// Providers whose per-day CALL COUNT means something different at
