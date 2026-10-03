@@ -12,6 +12,7 @@
 
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
+import { t } from './i18n'
 import { readSetting, writeSetting } from './settings'
 
 /// What the tray shows beside the flame. The mac's fifth choice, Credits (Codex), is not
@@ -55,12 +56,21 @@ export function nextTheme(current: ThemeChoice): ThemeChoice {
   return current === 'light' ? 'dark' : current === 'dark' ? 'system' : 'light'
 }
 
-export function themeCycleLabel(current: ThemeChoice): string {
+/// The English sentence `theme_menu_text` looks up in Rust. The footer and the tray item
+/// both name the theme the control moves to, so they have to share this key.
+export function themeMenuKey(current: ThemeChoice): string {
   const next = nextTheme(current)
   if (next === 'light') return 'Switch to Light Theme'
   if (next === 'dark') return 'Switch to Dark Theme'
   return 'Switch to System Theme'
 }
+
+export function themeCycleLabel(current: ThemeChoice): string {
+  return t(themeMenuKey(current))
+}
+
+/// What `windows-settings.json` stores. `system` follows the Windows UI language.
+export type LanguageChoice = 'system' | 'en' | 'zh-Hans'
 
 /// UsageRefreshCadence. Auto is the adaptive default, manual never auto-spawns.
 export const USAGE_CADENCES: Array<{ id: number; label: string }> = [
@@ -98,6 +108,7 @@ export type AppSettings = {
   menubarScope: MenubarScope
   accent: string
   theme: ThemeChoice
+  language: LanguageChoice
   trayBadge: boolean
   usageRefreshSeconds: number
   quotaCadenceSeconds: number
@@ -110,6 +121,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   menubarScope: 'local',
   accent: 'ember',
   theme: 'system',
+  language: 'system',
   // Off by default: a second tray icon for the number reads as clutter beside the logo, so
   // the figure lives in the tooltip and the menu until someone asks for it.
   trayBadge: false,
@@ -135,6 +147,7 @@ export function parseSettings(raw: Record<string, unknown>): AppSettings {
     menubarScope: oneOf(raw.menubarScope, ['local', 'combined'] as const, DEFAULT_SETTINGS.menubarScope),
     accent: typeof raw.accent === 'string' ? raw.accent : DEFAULT_SETTINGS.accent,
     theme: oneOf(raw.theme, ['system', 'light', 'dark'] as const, DEFAULT_SETTINGS.theme),
+    language: oneOf(raw.language, ['system', 'en', 'zh-Hans'] as const, DEFAULT_SETTINGS.language),
     trayBadge: typeof raw.trayBadge === 'boolean' ? raw.trayBadge : DEFAULT_SETTINGS.trayBadge,
     usageRefreshSeconds: oneOfNumber(raw.usageRefreshSeconds, USAGE_CADENCES.map(c => c.id), DEFAULT_SETTINGS.usageRefreshSeconds),
     quotaCadenceSeconds: oneOfNumber(raw.quotaCadenceSeconds, QUOTA_CADENCES.map(c => c.id), DEFAULT_SETTINGS.quotaCadenceSeconds),
