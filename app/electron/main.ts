@@ -342,6 +342,10 @@ function vPeriod(period: string): string {
   if (!PERIODS.has(period)) throw new CliError('bad-args', 'invalid period')
   return period
 }
+function vSpeedHarness(harness: string): string {
+  if (!['codex', 'claude', 'zcode', 'dsh', 'hermes', 'antigravity'].includes(harness)) throw new CliError('bad-args', 'invalid speed harness')
+  return harness
+}
 function vProvider(provider: string): string {
   if (!/^[a-z0-9-]+$/.test(provider)) throw new CliError('bad-args', 'invalid provider')
   return provider
@@ -720,6 +724,17 @@ export function createBridgeHandlers(deps: Deps = { spawnCli, spawnCliAction, re
     // Unfiltered like combined scope: a plan is billed on every project.
     'codeburn:getPlans': run((period: string) => ['status', '--format', 'json', '--period', vPeriod(period)], 1),
     'codeburn:getActReport': run(() => ['act', 'report', '--json']),
+    // Timing records have no project/account/device attribution. The UI labels
+    // that local scope explicitly instead of applying unrelated usage filters.
+    'codeburn:getSpeed': run((period: string, provider: string, range?: DateRange) => [
+      'speed', '--json', '--period', vPeriod(period), '--history-limit', '100000', '--typical-days', '7', '--no-turn-estimates',
+      ...(provider === 'all' ? [] : ['--harness', vSpeedHarness(provider)]),
+      ...rangeArgs(vRange(range)),
+    ], 3),
+    'codeburn:getSpeedEvents': run((id: string, harness: string) => {
+      if (typeof id !== 'string' || !id || id.length > 256 || /[\x00-\x1f\x7f]/.test(id)) throw new CliError('bad-args', 'invalid speed request id')
+      return ['speed', 'events', vToken(id), '--harness', vSpeedHarness(harness)]
+    }),
     'codeburn:getModels': run((period: string, provider: string, byTask: boolean, range?: DateRange) => [
       // The CLI defaults minCost to $0.01, which silently dropped every row
       // below a cent — including ALL unpriced rows, so the dimming and

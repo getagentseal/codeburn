@@ -101,6 +101,20 @@ struct DataClient {
         }
     }
 
+    static func fetchSpeed(now: Date = Date()) async throws -> SpeedReport {
+        let since = ISO8601DateFormatter().string(from: now.addingTimeInterval(-86_400))
+        let result = try await runCLI(
+            // The whole window, plus a typical day from the week before it, so the
+            // popover and dock can show when a provider got slower or faster.
+            subcommand: ["speed", "--json", "--since", since, "--history-limit", "100000", "--typical-days", "7", "--no-turn-estimates"],
+            qualityOfService: .utility
+        )
+        guard result.exitCode == 0 else {
+            throw DataClientError.nonZeroExit(code: result.exitCode, stderr: result.stderr)
+        }
+        return try JSONDecoder().decode(SpeedReport.self, from: result.stdout)
+    }
+
     static func statusSubcommand(period: Period,
                                  day: String? = nil,
                                  days: Set<String> = [],

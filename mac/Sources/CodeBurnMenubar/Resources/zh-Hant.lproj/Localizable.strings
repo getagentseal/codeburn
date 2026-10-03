@@ -714,3 +714,37 @@
 "Anonymous usage statistics" = "匿名使用統計";
 "Managed by the CodeBurn desktop app. Change it there under Settings → Privacy & data." = "由 CodeBurn 桌面應用程式管理。請在設定 → 隱私與資料中更改。";
 "Optional usage statistics: the names of the models, tools and providers you use, with bucketed counts of how often each one came up, plus when the app is opened. A random install id, the app version and your country code travel with them. Never your prompts, your code, your project and file names, or exact amounts." = "選填的使用統計資訊:您使用的模型、工具和服務商的名稱,以及每項出現頻率的分段計數,還有應用程式的開啟次數。隨附的還有隨機安裝 ID、應用程式版本和國家/地區代碼。絕不包含您的提示詞、程式碼、專案與檔案名稱或確切金額。";
+
+"Generation speed" = "生成速度";
+
+"Last 24h · this device · all accounts and projects" = "過去24小時 · 此裝置 · 所有帳戶與專案";
+
+"No timing samples. Set up capture in the desktop Speed tab." = "尚無計時樣本。請在桌面應用程式速度頁設定擷取。";
+
+
+"Speed refresh failed. Showing the last available snapshot." = "速度重新整理失敗。顯示最後可用快照。";
+
+"Some timing records are unavailable. See desktop Speed for details." = "部分計時紀錄無法使用。詳情見桌面應用程式速度頁。";
+
+"Speed snapshot is stale" = "速度快照已過期";
+
+"24h · local · all accounts/projects" = "24小時 · 本機 · 所有帳戶/專案";
+
+"Turn estimate" = "輪次估算";
+
+"Reading local timings…" = "正在讀取本機計時…";
+
+"Individual tokens" = "逐 token";
+
+"Chunk timing" = "區塊計時";
+
+"Request timing" = "請求計時";
+
+"Turn timing" = "輪次計時";
+
+
+"First arrival" = "首次到達";
+"Buffered delivery" = "緩衝傳送";
+"Typical" = "典型";
+"Typical = median day of the previous %1$lld days. A colored change is %2$lld%% or more: green is better, orange is worse." = "典型 = 前 %1$lld 天的中位日。帶顏色的變化達 %2$lld%% 或以上：綠色為改善，橘色為變差。";
+"Generation excludes the initial wait. ~ = estimate; short or buffered replies may distort it. — = unavailable." = "生成速度不含初始等待。~ 為估算，短回覆或緩衝可能使其失真。— 為無法使用。";
