@@ -12,7 +12,7 @@ afterEach(() => {
   vi.unstubAllEnvs()
 })
 
-it.skipIf(process.platform === 'darwin')('backfills redirected editor history in a finalized v46 cache while retaining other providers', async () => {
+it.skipIf(process.platform === 'darwin')('backfills redirected editor history in a finalized v50 cache while retaining other providers', async () => {
   const root = await mkdtemp(join(tmpdir(), 'editor-discovery-cache-'))
   try {
     const cache = join(root, 'cache')
@@ -47,8 +47,8 @@ it.skipIf(process.platform === 'darwin')('backfills redirected editor history in
       call.costUSD = calculateCost(call.model, 50, 10, 0, 0, 0)
     }
     await mkdir(cache, { recursive: true })
-    await writeFile(join(cache, 'daily-cache.v46.json'), JSON.stringify({
-      version: 46, savingsConfigHash: '', tzKey: currentTzKey(),
+    await writeFile(join(cache, 'daily-cache.v50.json'), JSON.stringify({
+      version: 50, savingsConfigHash: '', tzKey: currentTzKey(),
       lastComputedDate: toDateString(new Date(Date.now() - 86400000)),
       days: aggregateProjectsIntoDays(historical), complete: true, watermarkTrusted: true,
     }))

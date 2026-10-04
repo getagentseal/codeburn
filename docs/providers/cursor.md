@@ -31,7 +31,7 @@ The parser tries both and dedupes via `seenKeys`.
 
 ## Caching
 
-`src/cursor-cache.ts` writes `~/.cache/codeburn/cursor-results.v<n>.json` (override with `$CODEBURN_CACHE_DIR`). The unsuffixed `cursor-results.json` is left for older binaries; a matching-version copy is adopted once and never overwritten. The fingerprint is `dbMtimeMs + dbSizeBytes` of `state.vscdb`. Atomic write via temp + rename.
+`src/cursor-cache.ts` writes `~/.cache/codeburn/cursor-results.v<n>.json` (override with `$CODEBURN_CACHE_DIR`). The unsuffixed `cursor-results.json` is left for older binaries; a matching-version copy is adopted once and never overwritten. Cache identity includes the resolved database path and the combined modification time and size of `state.vscdb` and its WAL, when present. Atomic write via temp + rename.
 
 ## Deduplication
 
