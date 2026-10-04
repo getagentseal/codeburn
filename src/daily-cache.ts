@@ -243,13 +243,16 @@ import type { DateRange, ProjectSummary } from './types.js'
 // v47: Copilot chat-session journals read request-level promptTokens, repairing
 // missing input usage and input-only calls. Re-derive settled days from the
 // corrected session cache; calls and cost only rise.
-// v48: Crush's recorded cumulative session cost now passes through the session
+// v48: #1620 Antigravity manage_task/search_web/read_url_content/invoke_subagent
+// reclassify turns. Calls and cost are unchanged, but settled antigravity
+// category totals need re-derivation.
+// v49: Crush's recorded cumulative session cost now passes through the session
 // cache instead of being re-priced from its non-cumulative token counters. Days
-// finalized at v47 hold the re-priced figure with unchanged call counts, so the
+// finalized before v49 hold the re-priced figure with unchanged call counts, so the
 // read path's equal-call rule keeps them; the bump re-derives surviving days.
 // Call counts are unchanged, so no PENDING_REDERIVE_PROVIDER_VERSIONS entry is
 // needed.
-export const DAILY_CACHE_VERSION = 48
+export const DAILY_CACHE_VERSION = 49
 const MIN_SUPPORTED_VERSION = 28
 
 /// Providers whose per-day CALL COUNT means something different at

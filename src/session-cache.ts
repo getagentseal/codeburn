@@ -568,7 +568,7 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // token floor on every read, so they must re-parse once for the real dollars
   // to land.
   warp: 'worktree-project-grouping-v1-est-cost-billing-cost-v1',
-  antigravity: 'worktree-project-grouping-v6',
+  antigravity: 'worktree-project-grouping-v7',
   // pr-attribution-v1: the parser now reads the `message`/`part` tables for
   // per-turn user prompt text and the GitHub PR URLs it references. Cached
   // ZCode sessions hold empty userMessage turns and no session prLinks, so

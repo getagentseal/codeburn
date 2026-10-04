@@ -21,7 +21,6 @@ import {
 } from '../src/daily-cache.js'
 
 const TMP_CACHE_ROOT = join(tmpdir(), `codeburn-carry-test-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
-const PREVIOUS_DAILY_CACHE_VERSION = 47
 
 beforeEach(async () => {
   process.env['CODEBURN_CACHE_DIR'] = TMP_CACHE_ROOT
@@ -297,8 +296,8 @@ describe('never-lose invariant: invalidations with vanished sources', () => {
     // previous version's file (older internal schema version) is still in the
     // cache dir under its old name.
     const oldContent = JSON.parse(await readFile(dailyCachePath(), 'utf-8'))
-    oldContent.version = PREVIOUS_DAILY_CACHE_VERSION
-    await writeFile(join(TMP_CACHE_ROOT, `daily-cache.v${PREVIOUS_DAILY_CACHE_VERSION}.json`), JSON.stringify(oldContent), 'utf-8')
+    oldContent.version = DAILY_CACHE_VERSION - 1
+    await writeFile(join(TMP_CACHE_ROOT, `daily-cache.v${DAILY_CACHE_VERSION - 1}.json`), JSON.stringify(oldContent), 'utf-8')
     await rm(dailyCachePath())
     const out = await ensureCacheHydrated(noSessions, () => [], 'cfg-A')
     expect(out.days).toHaveLength(1)

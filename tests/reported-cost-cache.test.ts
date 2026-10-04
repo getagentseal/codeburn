@@ -17,7 +17,6 @@ import { mkdirSync } from 'fs'
 import { join } from 'path'
 import { createRequire } from 'node:module'
 import { isSqliteAvailable } from '../src/sqlite.js'
-import type { ParsedProviderCall } from '../src/providers/types.js'
 
 const testRoot = vi.hoisted(() => {
   const root = `${process.env['TMPDIR'] || '/tmp'}/reported-cost-cache-${process.pid}-${Date.now()}`
@@ -94,12 +93,6 @@ function insertCrushMessage(db: TestDb, sessionId: string, id: string): void {
 async function writeCrushRegistry(globalData: string, projectDir: string): Promise<void> {
   await mkdir(globalData, { recursive: true })
   await writeFile(join(globalData, 'projects.json'), JSON.stringify([{ path: projectDir, data_dir: '.crush' }]))
-}
-
-async function collectCrush(parser: { parse(): AsyncGenerator<ParsedProviderCall> }): Promise<ParsedProviderCall[]> {
-  const out: ParsedProviderCall[] = []
-  for await (const call of parser.parse()) out.push(call)
-  return out
 }
 
 const ts = (offsetSec: number) => new Date(Date.UTC(2026, 7, 16, 10, 0, offsetSec)).toISOString()
