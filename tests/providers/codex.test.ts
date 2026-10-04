@@ -5,7 +5,7 @@ import { tmpdir } from 'os'
 
 import { createCodexProvider } from '../../src/providers/codex.js'
 import { clearCodexMemCaches, CODEX_CACHE_VERSION, codexCacheFileName } from '../../src/codex-cache.js'
-import { calculateCost } from '../../src/models.js'
+import { calculateCost, parseLiteLLMEntry, restorePricingState, snapshotPricingState } from '../../src/models.js'
 import type { ParsedProviderCall } from '../../src/providers/types.js'
 
 let tmpDir: string
@@ -1706,3 +1706,225 @@ describe('codex auto-review pricing (#1047)', () => {
     }
   })
 })
+
+// #1616: Codex's Fast speed setting bills through the priority service tier,
+// which the rollout records per thread settings change
+// (event_msg/thread_settings_applied -> payload.thread_settings.service_tier),
+// never per call. The setting covers every turn after it in file order.
+describe('codex provider - priority service tier (#1616)', () => {
+  // gpt-5.4 as quoted from LiteLLM's live table: 2.5e-6 in / 15e-6 out /
+  // 2.5e-7 cached read, with the priority tier exactly 2x on all three. The
+  // bundled snapshot cannot carry the derived multiplier until its next routine
+  // refresh, so install the live-parsed row for the duration of a test exactly
+  // as fetchAndCachePricing would.
+  const GPT54 = { input: 2.5e-6, output: 15e-6, cacheRead: 2.5e-7 }
+
+  async function withLiveGpt54<T>(run: () => Promise<T>): Promise<T> {
+    const snap = snapshotPricingState()
+    const pricing = new Map(snap.pricing)
+    const costs = parseLiteLLMEntry({
+      input_cost_per_token: GPT54.input,
+      output_cost_per_token: GPT54.output,
+      cache_read_input_token_cost: GPT54.cacheRead,
+      input_cost_per_token_priority: 5e-6,
+      output_cost_per_token_priority: 30e-6,
+      cache_read_input_token_cost_priority: 5e-7,
+    } as never)
+    if (costs) pricing.set('gpt-5.4', costs)
+    restorePricingState({ ...snap, pricing })
+    try {
+      return await run()
+    } finally {
+      restorePricingState(snap)
+    }
+  }
+
+  function threadSettings(tier: string | null, timestamp: string): string {
+    return JSON.stringify({
+      type: 'event_msg',
+      timestamp,
+      payload: {
+        type: 'thread_settings_applied',
+        // Older builds (and a settings record that predates the tier toggle)
+        // carry no service_tier at all; `null` here omits the key entirely.
+        thread_settings: {
+          model: 'gpt-5.4',
+          ...(tier === null ? {} : { service_tier: tier }),
+          cwd: '/Users/test/myproject',
+        },
+      },
+    })
+  }
+
+  async function parseCalls(lines: string[]): Promise<ParsedProviderCall[]> {
+    const filePath = await writeSession(tmpDir, '2026-09-28', 'rollout-tier.jsonl', lines)
+    const provider = createCodexProvider(tmpDir)
+    const calls: ParsedProviderCall[] = []
+    for await (const call of provider.createSessionParser({ path: filePath, project: 'test', provider: 'codex' }, new Set()).parse()) {
+      calls.push(call)
+    }
+    return calls
+  }
+
+  it('prices turns under service_tier "priority" at 2x and turns after a switch back at 1x', async () => {
+    // calculateCost must run inside the injected-pricing window too, so the
+    // reference values are captured alongside the parse.
+    const { calls, fastRef, standardRef } = await withLiveGpt54(async () => ({
+      calls: await parseCalls([
+        sessionMeta({ session_id: 'sess-tier', model: 'gpt-5.4', timestamp: '2026-09-28T10:00:00Z' }),
+        threadSettings('priority', '2026-09-28T10:00:01Z'),
+        userMessage('fast turn one', '2026-09-28T10:01:00Z'),
+        tokenCount({ timestamp: '2026-09-28T10:01:30Z', last: { input: 1000, cached: 200, output: 500 }, total: { input: 1000, cached: 200, output: 500, total: 1700 } }),
+        userMessage('fast turn two', '2026-09-28T10:02:00Z'),
+        tokenCount({ timestamp: '2026-09-28T10:02:30Z', last: { input: 1200, cached: 100, output: 400 }, total: { input: 2200, cached: 300, output: 900, total: 3400 } }),
+        threadSettings('default', '2026-09-28T10:03:00Z'),
+        userMessage('standard turn', '2026-09-28T10:04:00Z'),
+        tokenCount({ timestamp: '2026-09-28T10:04:30Z', last: { input: 1000, cached: 200, output: 500 }, total: { input: 3200, cached: 500, output: 1400, total: 5100 } }),
+      ]),
+      fastRef: calculateCost('gpt-5.4', 800, 500, 0, 200, 0, 'fast', 0, 'codex'),
+      standardRef: calculateCost('gpt-5.4', 800, 500, 0, 200, 0, 'standard', 0, 'codex'),
+    }))
+
+    expect(calls.map(call => call.speed)).toEqual(['fast', 'fast', 'standard'])
+
+    // Explicit arithmetic, not self-consistency with calculateCost: the first
+    // turn is 800 uncached input + 200 cached + 500 output, and the priority
+    // tier doubles every published rate.
+    const standard = 800 * GPT54.input + 200 * GPT54.cacheRead + 500 * GPT54.output
+    expect(calls[0]!.costUSD).toBeCloseTo(standard * 2, 12)
+    expect(calls[2]!.costUSD).toBeCloseTo(standard, 12)
+    expect(calls[0]!.costUSD).toBe(fastRef)
+    expect(calls[2]!.costUSD).toBe(standardRef)
+  })
+
+  it('accepts service_tier "fast" as an alias of "priority" (spec: a build may write the speed name)', async () => {
+    // The spec's acceptance clause: `"fast"` must bill like `"priority"`. A
+    // future "simplification" of speedForServiceTier to `tier === 'priority'`
+    // would silently drop the alias, so pin it with the same 2x arithmetic.
+    const { calls, fastRef } = await withLiveGpt54(async () => ({
+      calls: await parseCalls([
+        sessionMeta({ session_id: 'sess-tier-fast-alias', model: 'gpt-5.4', timestamp: '2026-09-28T10:00:00Z' }),
+        threadSettings('fast', '2026-09-28T10:00:01Z'),
+        userMessage('aliased fast turn', '2026-09-28T10:01:00Z'),
+        tokenCount({ timestamp: '2026-09-28T10:01:30Z', last: { input: 1000, cached: 200, output: 500 }, total: { input: 1000, cached: 200, output: 500, total: 1700 } }),
+      ]),
+      fastRef: calculateCost('gpt-5.4', 800, 500, 0, 200, 0, 'fast', 0, 'codex'),
+    }))
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.speed).toBe('fast')
+    const standard = 800 * GPT54.input + 200 * GPT54.cacheRead + 500 * GPT54.output
+    expect(calls[0]!.costUSD).toBeCloseTo(standard * 2, 12)
+    expect(calls[0]!.costUSD).toBe(fastRef)
+  })
+
+  it('treats a settings record with no service_tier as the default tier', async () => {
+    const calls = await parseCalls([
+      sessionMeta({ session_id: 'sess-no-tier', model: 'gpt-5.4', timestamp: '2026-09-28T10:00:00Z' }),
+      threadSettings(null, '2026-09-28T10:00:01Z'),
+      userMessage('plain turn', '2026-09-28T10:01:00Z'),
+      tokenCount({ timestamp: '2026-09-28T10:01:30Z', last: { input: 1000, cached: 200, output: 500 }, total: { input: 1000, cached: 200, output: 500, total: 1700 } }),
+    ])
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.speed).toBe('standard')
+  })
+
+  it('reads service_tier out of an oversized thread_settings record', async () => {
+    // The compact head decoder handles rollout lines past the buffer
+    // threshold; service_tier sits early in the payload, so it must survive
+    // that path too. The padding sits in a later field, exactly where a fat
+    // permission profile or plugin list sits in a real record. The decoy
+    // same-name key in an EARLIER payload field pins the depth-aware scan: a
+    // naive first-match sweep of the head would read it as the tier, while
+    // the full-JSON path only ever reads thread_settings.service_tier.
+    const line = JSON.stringify({
+      type: 'event_msg',
+      timestamp: '2026-09-28T10:00:01Z',
+      payload: {
+        type: 'thread_settings_applied',
+        editor_context: { service_tier: 'default' },
+        thread_settings: {
+          model: 'gpt-5.4',
+          service_tier: 'priority',
+          cwd: '/Users/test/myproject',
+          permission_profile: 'x'.repeat(70 * 1024),
+        },
+      },
+    })
+    const calls = await parseCalls([
+      sessionMeta({ session_id: 'sess-big-tier', model: 'gpt-5.4', timestamp: '2026-09-28T10:00:00Z' }),
+      line,
+      userMessage('big settings turn', '2026-09-28T10:01:00Z'),
+      tokenCount({ timestamp: '2026-09-28T10:01:30Z', last: { input: 1000, cached: 200, output: 500 }, total: { input: 1000, cached: 200, output: 500, total: 1700 } }),
+    ])
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.speed).toBe('fast')
+  })
+
+  it('discards a warm v18 exact hit so priority turns reprice (#1075 pattern)', async () => {
+    const cacheDir = join(tmpDir, 'cache')
+    await mkdir(cacheDir, { recursive: true })
+    const prev = process.env['CODEBURN_CACHE_DIR']
+    process.env['CODEBURN_CACHE_DIR'] = cacheDir
+    try {
+      const filePath = await writeSession(tmpDir, '2026-09-28', 'rollout-stale-tier.jsonl', [
+        sessionMeta({ session_id: 'sess-stale-tier', model: 'gpt-5.4', timestamp: '2026-09-28T10:00:00Z' }),
+        threadSettings('priority', '2026-09-28T10:00:01Z'),
+        userMessage('fast turn', '2026-09-28T10:01:00Z'),
+        tokenCount({ timestamp: '2026-09-28T10:01:30Z', last: { input: 1000, cached: 200, output: 500 }, total: { input: 1000, cached: 200, output: 500, total: 1700 } }),
+      ])
+      const st = await stat(filePath)
+      // Main's #1618 already owns v18, and that file holds the pre-fix
+      // standard-rate cost (and speed) verbatim, so it must not be served.
+      expect(CODEX_CACHE_VERSION).toBeGreaterThan(18)
+      const standardCost = 800 * GPT54.input + 200 * GPT54.cacheRead + 500 * GPT54.output
+      await writeFile(join(cacheDir, codexCacheFileName(18)), JSON.stringify({
+        version: 18,
+        files: {
+          [filePath]: {
+            mtimeMs: st.mtimeMs,
+            sizeBytes: st.size,
+            project: 'test',
+            calls: [{
+              provider: 'codex',
+              model: 'gpt-5.4',
+              inputTokens: 800,
+              outputTokens: 500,
+              cacheCreationInputTokens: 0,
+              cacheReadInputTokens: 200,
+              cachedInputTokens: 200,
+              reasoningTokens: 0,
+              webSearchRequests: 0,
+              costUSD: standardCost,
+              tools: [],
+              bashCommands: [],
+              timestamp: '2026-09-28T10:01:30Z',
+              speed: 'standard',
+              deduplicationKey: 'stale-tier',
+            }],
+          },
+        },
+      }))
+      clearCodexMemCaches()
+
+      const calls = await withLiveGpt54(() => {
+        const provider = createCodexProvider(tmpDir)
+        const parsed: ParsedProviderCall[] = []
+        return (async () => {
+          for await (const call of provider.createSessionParser({ path: filePath, project: 'test', provider: 'codex' }, new Set()).parse()) {
+            parsed.push(call)
+          }
+          return parsed
+        })()
+      })
+      expect(calls).toHaveLength(1)
+      expect(calls[0]!.speed).toBe('fast')
+      expect(calls[0]!.costUSD).toBeCloseTo(standardCost * 2, 12)
+    } finally {
+      clearCodexMemCaches()
+      if (prev === undefined) delete process.env['CODEBURN_CACHE_DIR']
+      else process.env['CODEBURN_CACHE_DIR'] = prev
+    }
+  })
+})
+

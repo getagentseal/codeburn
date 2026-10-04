@@ -57,7 +57,11 @@ import { isWslUncPath } from './wsl.js'
 // v18: read response-level token_usage_record and ignore later token_count
 // twins. v17 entries miss interrupted/compaction usage and can include counts
 // now suppressed after the source handover, so they must reparse.
-export const CODEX_CACHE_VERSION = 18
+// v19: codex priority-tier pricing (#1616) - turns run under Codex's Fast
+// speed setting (thread_settings_applied service_tier "priority") now bill at
+// the priority rates. This file stores each call's costUSD and speed verbatim,
+// so v18 entries carry the standard-rate cost and must be re-derived.
+export const CODEX_CACHE_VERSION = 19
 export const CODEX_LEGACY_CACHE_FILE = 'codex-results.json'
 export function codexCacheFileName(version = CODEX_CACHE_VERSION): string {
   return `codex-results.v${version}.json`

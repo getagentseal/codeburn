@@ -13,7 +13,8 @@ import { createHash } from 'crypto'
 import { join } from 'path'
 
 import { clearSessionCache, parseAllSessions } from '../src/parser.js'
-import type { SessionCache } from '../src/session-cache.js'
+import { PROVIDER_PARSE_VERSIONS, type SessionCache } from '../src/session-cache.js'
+import { parseLiteLLMEntry, restorePricingState, snapshotPricingState } from '../src/models.js'
 import { readCacheOnDisk, writeCacheOnDisk } from './fixtures/session-cache-io.js'
 
 const testRoot = vi.hoisted(() => {
@@ -36,6 +37,16 @@ function preFixFingerprint(): string {
 // Exact fingerprint emitted before token_usage_record accounting was added.
 function preUsageRecordFingerprint(): string {
   const parseVersion = 'mcp-attribution-v5-est-cost-active-timing-mcp-wait-rich-capture-v1-cross-provider-pr-v1-session-meta-model-v1-session-meta-fields-v1-codex-pricing-v1-codex-tps-v1-codex-mcp-skills-v1-activity-price-v1'
+  return createHash('sha256')
+    .update(`CODEX_HOME=${CODEX_HOME}\0parser=${parseVersion}`)
+    .digest('hex')
+    .slice(0, 16)
+}
+
+// Exact fingerprint emitted before #1616 appended codex-priority-tier-v1 —
+// what every warm user session-cache holds when upgrading.
+function prePriorityTierFingerprint(): string {
+  const parseVersion = 'mcp-attribution-v5-est-cost-active-timing-mcp-wait-rich-capture-v1-cross-provider-pr-v1-session-meta-model-v1-session-meta-fields-v1-codex-pricing-v1-codex-tps-v1-codex-mcp-skills-v1-activity-price-v1-fork-replay-burst-v1-codex-token-usage-record-v1'
   return createHash('sha256')
     .update(`CODEX_HOME=${CODEX_HOME}\0parser=${parseVersion}`)
     .digest('hex')
@@ -150,5 +161,78 @@ describe('codex parser change invalidates stale session-cache (#478/#513)', () =
     const migrated = await parseAllSessions(undefined, 'codex')
     const migratedSession = migrated.flatMap(project => project.sessions).find(session => session.sessionId === 'sess-usage-record-cache')
     expect(migratedSession && migratedSession.totalInputTokens + migratedSession.totalOutputTokens).toBe(1200)
+  })
+
+  // #1616's session-cache layer: the codex-priority-tier-v1 suffix is what
+  // makes already-cached SESSIONS re-record `speed` (read-time re-pricing uses
+  // the stored speed, so the multiplier alone cannot reach them). The
+  // codex-results layer is pinned in tests/providers/codex.test.ts; this pins
+  // the layer above it end to end through parseAllSessions.
+  it('re-parses warm session-cache turns after the priority-tier suffix (#1616)', async () => {
+    const sessionDir = join(CODEX_HOME, 'sessions', '2026', '09', '28')
+    await mkdir(sessionDir, { recursive: true })
+    await mkdir(CACHE_DIR, { recursive: true })
+    const lines = [
+      JSON.stringify({ type: 'session_meta', timestamp: '2026-09-28T10:00:00Z', payload: { session_id: 'sess-tier-cache', model: 'gpt-5.4', cwd: '/Users/test/proj', originator: 'codex_cli_rs' } }),
+      JSON.stringify({ type: 'event_msg', timestamp: '2026-09-28T10:00:01Z', payload: { type: 'thread_settings_applied', thread_settings: { model: 'gpt-5.4', service_tier: 'priority', cwd: '/Users/test/proj' } } }),
+      JSON.stringify({ type: 'response_item', timestamp: '2026-09-28T10:01:00Z', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'fast turn via the session cache' }] } }),
+      JSON.stringify({ type: 'event_msg', timestamp: '2026-09-28T10:01:30Z', payload: { type: 'token_count', info: { last_token_usage: { input_tokens: 1000, cached_input_tokens: 200, output_tokens: 500, reasoning_output_tokens: 0, total_tokens: 1700 }, total_token_usage: { input_tokens: 1000, cached_input_tokens: 200, output_tokens: 500, reasoning_output_tokens: 0, total_tokens: 1700 } } } }),
+    ]
+    await writeFile(join(sessionDir, 'rollout-tier-cache.jsonl'), lines.join('\n') + '\n')
+
+    // gpt-5.4 as quoted from LiteLLM's live table, priority tier exactly 2x on
+    // all three rates (same row as tests/providers/codex.test.ts). The bundled
+    // snapshot cannot carry the derived multiplier until its next routine
+    // refresh, so install the live-parsed row for the duration of the test
+    // exactly as fetchAndCachePricing would.
+    const GPT54 = { input: 2.5e-6, output: 15e-6, cacheRead: 2.5e-7 }
+    const standard = 800 * GPT54.input + 200 * GPT54.cacheRead + 500 * GPT54.output
+    const snap = snapshotPricingState()
+    const pricing = new Map(snap.pricing)
+    const costs = parseLiteLLMEntry({
+      input_cost_per_token: GPT54.input,
+      output_cost_per_token: GPT54.output,
+      cache_read_input_token_cost: GPT54.cacheRead,
+      input_cost_per_token_priority: 5e-6,
+      output_cost_per_token_priority: 30e-6,
+      cache_read_input_token_cost_priority: 5e-7,
+    } as never)
+    if (costs) pricing.set('gpt-5.4', costs)
+    restorePricingState({ ...snap, pricing })
+    try {
+      // Run 1: cold cache. Sanity — the priority turn is recorded fast at 2x.
+      clearSessionCache()
+      const fresh = await parseAllSessions(undefined, 'codex')
+      const freshSession = fresh.flatMap(project => project.sessions).find(session => session.sessionId === 'sess-tier-cache')
+      expect(freshSession && freshSession.totalCostUSD).toBeCloseTo(standard * 2, 12)
+
+      // Simulate a warm session-cache written by the PRE-#1616 release: the
+      // codex fingerprint predates codex-priority-tier-v1 and the stored call
+      // holds speed 'standard'. Without the suffix this fingerprint matches,
+      // the stale turns are served as-is (re-priced from the stored standard
+      // speed), and the multiplier can never reach them.
+      expect(PROVIDER_PARSE_VERSIONS['codex']!.endsWith('codex-priority-tier-v1')).toBe(true)
+      const cache = await readCacheOnDisk() as SessionCache
+      cache.providers['codex']!.envFingerprint = prePriorityTierFingerprint()
+      for (const file of Object.values(cache.providers['codex']!.files)) {
+        for (const turn of file.turns) {
+          for (const call of turn.calls) call.speed = 'standard'
+        }
+      }
+      await writeCacheOnDisk(cache)
+
+      clearSessionCache()
+      const second = await parseAllSessions(undefined, 'codex')
+      const migratedSession = second.flatMap(project => project.sessions).find(session => session.sessionId === 'sess-tier-cache')
+      expect(migratedSession && migratedSession.totalCostUSD).toBeCloseTo(standard * 2, 12)
+
+      // The rebuilt cache re-recorded the speed itself, not just the cost.
+      const rebuilt = await readCacheOnDisk() as SessionCache
+      const storedSpeeds = Object.values(rebuilt.providers['codex']!.files)
+        .flatMap(file => file.turns.flatMap(turn => turn.calls.map(call => call.speed)))
+      expect(storedSpeeds).toEqual(['fast'])
+    } finally {
+      restorePricingState(snap)
+    }
   })
 })

@@ -84,6 +84,36 @@ const entries = Object.entries(data).filter(([k]) => k !== 'sample_spec')
 // threshold field (#1076). Mirrored in src/models.ts parseLiteLLMEntry.
 const TIER_KEY_RE = /^(input_cost_per_token|output_cost_per_token|cache_read_input_token_cost|cache_creation_input_token_cost)_above_(\d+)k_tokens$/
 
+// OpenAI's priority processing tier ships as explicit `<rate>_priority` keys
+// beside the standard ones (and `_above_<n>k_tokens_priority` for gpt-5.6's
+// long-context tier). Codex's Fast speed setting bills through it (#1616), so
+// slot 5 falls back to that ratio when the row carries no
+// `provider_specific_entry.fast`. Derived only where every bucket the row
+// prices agrees on one ratio — models without priority keys, or rows whose
+// ratios disagree (azure/gpt-5.5: 2.5x base, 2x above 272k), stay null (1x).
+// Never a hand-picked number. Mirrored in src/models.ts parseLiteLLMEntry.
+const PRIORITY_KEY_SUFFIX = '_priority'
+const MAX_DERIVED_FAST_MULTIPLIER = 100
+
+function priorityMultiplierOf(entry) {
+  const ratios = []
+  let inputRatio
+  let outputRatio
+  for (const [key, value] of Object.entries(entry)) {
+    if (!key.endsWith(PRIORITY_KEY_SUFFIX)) continue
+    const base = entry[key.slice(0, -PRIORITY_KEY_SUFFIX.length)]
+    if (typeof value !== 'number' || typeof base !== 'number') continue
+    if (!Number.isFinite(value) || !Number.isFinite(base) || value <= 0 || base <= 0) continue
+    const ratio = value / base
+    if (key === 'input_cost_per_token_priority') inputRatio = ratio
+    else if (key === 'output_cost_per_token_priority') outputRatio = ratio
+    ratios.push(ratio)
+  }
+  if (inputRatio === undefined || outputRatio === undefined) return null
+  const agreed = ratios.every((r) => Math.abs(r - inputRatio) <= 1e-9 * Math.max(r, inputRatio))
+  return agreed && inputRatio <= MAX_DERIVED_FAST_MULTIPLIER ? inputRatio : null
+}
+
 function tierOf(entry) {
   // Rates are read ONLY from the largest threshold a model carries, so a
   // hypothetical entry with two tiers can never mix a smaller tier's rates
@@ -112,7 +142,7 @@ function toVal(entry) {
   const inp = entry.input_cost_per_token
   const out = entry.output_cost_per_token
   if (inp == null || out == null) return null
-  return [inp, out, entry.cache_creation_input_token_cost ?? null, entry.cache_read_input_token_cost ?? null, entry.provider_specific_entry?.fast ?? null, tierOf(entry)]
+  return [inp, out, entry.cache_creation_input_token_cost ?? null, entry.cache_read_input_token_cost ?? null, entry.provider_specific_entry?.fast ?? priorityMultiplierOf(entry), tierOf(entry)]
 }
 
 // Pass 1: direct entries (no prefix) get priority

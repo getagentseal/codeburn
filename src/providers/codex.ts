@@ -150,6 +150,13 @@ type CodexEntry = {
     source?: { subagent?: { thread_spawn?: { parent_thread_id?: string } } }
     model?: string
     name?: string
+    /// event_msg/thread_settings_applied: the thread's service tier, flattened
+    /// out of `thread_settings.service_tier` (#1616) so both the full-JSON and
+    /// the compact-head decoders surface it at payload depth 1.
+    serviceTier?: string
+    /// Raw shape of the `thread_settings_applied` payload; only the service
+    /// tier is read off it.
+    thread_settings?: { service_tier?: string }
     invocation?: { server?: string; tool?: string }
     content?: Array<{ type?: string; text?: string }>
     info?: {
@@ -440,12 +447,35 @@ function countFirstJsonText(source: Buffer): number {
   return countJsonStringBytes(source, qStart + 1)
 }
 
+// `thread_settings.service_tier` (#1616). The field comes off an unchecked
+// JSON.parse cast, so only a genuine non-empty string reads as a tier; anything
+// else is "the rollout states no tier", which prices as standard.
+function serviceTierFromThreadSettings(payload: CodexEntry['payload']): string | undefined {
+  const tier = payload?.thread_settings?.service_tier
+  return typeof tier === 'string' && tier ? tier : undefined
+}
+
+// The billable speed a service tier maps to (#1616). `"priority"` is Codex's
+// Fast speed setting and bills through the priority tier; `"fast"` is accepted
+// too in case a build writes the speed name where the tier name belongs.
+// Everything else - `"default"`, an unrecognised value, no tier at all - is
+// standard, never a guess.
+function speedForServiceTier(tier: string): 'standard' | 'fast' {
+  return tier === 'priority' || tier === 'fast' ? 'fast' : 'standard'
+}
+
 function parseCodexLine(line: string | Buffer): CodexEntry | null {
   if (typeof line === 'string') {
     const trimmed = line.trim()
     if (!trimmed) return null
     try {
-      return JSON.parse(trimmed) as CodexEntry
+      const entry = JSON.parse(trimmed) as CodexEntry
+      // #1616: `thread_settings.service_tier` sits at payload depth 2, which
+      // the compact path below cannot express; flatten it the same way for the
+      // fully-parsed path so both decoders agree.
+      const tier = serviceTierFromThreadSettings(entry.payload)
+      if (tier !== undefined && entry.payload) entry.payload.serviceTier = tier
+      return entry
     } catch {
       return null
     }
@@ -512,6 +542,19 @@ function parseCodexLine(line: string | Buffer): CodexEntry | null {
       invocation,
       call_id: getRawJsonStringField(pHead, 'call_id'),
       turn_id: getRawJsonStringField(pHead, 'turn_id'),
+      // #1616: oversized thread_settings_applied records (a fat permission
+      // profile or plugin list can push them past the buffer threshold) still
+      // carry `service_tier` within the first few hundred bytes of the
+      // thread_settings object, so the windowed scan reaches it. Scanning
+      // inside the payload-depth-1 `thread_settings` window - the session_meta
+      // treatment above - keeps this decoder agreeing with the full-JSON path
+      // (which reads the nested field) even if a same-name key ever appears in
+      // an earlier payload field, and the payload-type guard keeps a
+      // coincidental same-name key inside another event's bulk from reading as
+      // a tier.
+      serviceTier: type === 'event_msg' && payloadType === 'thread_settings_applied'
+        ? getRawJsonStringField(getRawPayloadFieldWindow(line, 'thread_settings') ?? '', 'service_tier')
+        : undefined,
       // On mcp_tool_call_end a coincidental `duration_ms` inside the large
       // invocation.arguments object can shadow the payload-level duration, so the
       // depth-aware value wins. The naive scan stays as the fallback for
@@ -659,6 +702,11 @@ type CodexResumeState = {
   /// Newer Codex builds emit one token_usage_record before each token_count
   /// twin. Persist the source handover across append resumes.
   hasTokenUsageRecord?: boolean
+  /// #1616: service tier the thread currently runs under
+  /// (`thread_settings_applied`), so an append resume keeps pricing Fast
+  /// (priority) turns as Fast. Optional so a resume state written before the
+  /// field existed still decodes; absent reads as the default (standard) tier.
+  serviceTier?: string
   prevInput: number
   prevCached: number
   prevCacheWrite: number
@@ -697,6 +745,7 @@ function isResumeState(value: unknown): value is CodexResumeState {
     && (v['prevCumulativeTotal'] === null || typeof v['prevCumulativeTotal'] === 'number')
     && (v['prevInfoIdentity'] === undefined || v['prevInfoIdentity'] === null || typeof v['prevInfoIdentity'] === 'string')
     && (v['hasTokenUsageRecord'] === undefined || typeof v['hasTokenUsageRecord'] === 'boolean')
+    && (v['serviceTier'] === undefined || typeof v['serviceTier'] === 'string')
     && typeof v['prevInput'] === 'number'
     && typeof v['prevCached'] === 'number'
     && typeof v['prevCacheWrite'] === 'number'
@@ -759,6 +808,11 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
       let prevCumulativeTotal: number | null = resume?.state.prevCumulativeTotal ?? null
       let prevInfoIdentity: string | null = resume?.state.prevInfoIdentity ?? null
       let hasTokenUsageRecord = resume?.state.hasTokenUsageRecord ?? false
+      // #1616: the service tier `thread_settings_applied` last set. Everything
+      // the loop reads from a PRIOR line must ride CodexResumeState, and this
+      // one can change mid-file, so a resume that starts after the change must
+      // not fall back to standard.
+      let serviceTier: string = resume?.state.serviceTier ?? 'default'
       let prevInput = resume?.state.prevInput ?? 0
       let prevCached = resume?.state.prevCached ?? 0
       let prevCacheWrite = resume?.state.prevCacheWrite ?? 0
@@ -872,6 +926,9 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
         // added here. The cache-rehydration twin of this line lives in
         // src/parser.ts (cachedCallToApiCall); both call billableOutputTokens
         // so a fresh parse and a cache read can never price differently.
+        // #1616: a turn running under the priority service tier (Codex's Fast
+        // speed setting) bills at the priority rates via the fast multiplier.
+        const speed = speedForServiceTier(serviceTier)
         const costUSD = calculateCost(
           model,
           billedInputTokens,
@@ -879,7 +936,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
           billedCacheWriteTokens,
           cachedInputTokens,
           0,
-          'standard',
+          speed,
           0,
           'codex',
         )
@@ -898,7 +955,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
           tools: pendingTools,
           bashCommands: [],
           timestamp,
-          speed: 'standard',
+          speed,
           deduplicationKey: dedupKey,
           turnId: currentTurnId,
           toolSequence: pendingToolSequence.length > 0 ? pendingToolSequence : undefined,
@@ -991,6 +1048,20 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
           continue
         }
 
+        // #1616: Codex's Fast speed setting bills through OpenAI's priority
+        // service tier, which the rollout records per THREAD SETTINGS change
+        // (event_msg/thread_settings_applied), never per call. The setting
+        // covers every turn after it in file order, so track the latest value;
+        // a settings event with no `service_tier` (older builds never wrote
+        // one) reads as the default tier. Deliberately NOT skipped during a
+        // fork replay: the replayed parent events carry the setting the fork
+        // inherited, so tracking them keeps the fork's first own turn on the
+        // parent's tier.
+        if (entry.type === 'event_msg' && entry.payload?.type === 'thread_settings_applied') {
+          serviceTier = entry.payload.serviceTier ?? 'default'
+          continue
+        }
+
         if (isForkReplay && (
           entry.payload?.type === 'task_started' ||
           entry.payload?.type === 'task_complete' ||
@@ -1055,6 +1126,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
             prevCumulativeTotal,
             prevInfoIdentity,
             hasTokenUsageRecord,
+            serviceTier,
             prevInput,
             prevCached,
             prevCacheWrite,
@@ -1276,8 +1348,10 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
             seenKeys.add(dedupKey)
 
             // An estimated prompt can cross a long-context threshold and tier
-            // itself; measured corpora hold no estimated calls that cross.
-            const costUSD = calculateCost(model, estInput, estOutput, 0, 0, 0, 'standard', 0, 'codex')
+            // itself; measured corpora hold no estimated calls that cross. The
+            // service tier applies to it exactly as to a measured turn (#1616).
+            const speed = speedForServiceTier(serviceTier)
+            const costUSD = calculateCost(model, estInput, estOutput, 0, 0, 0, speed, 0, 'codex')
 
             pendingTaskCalls.push({
               provider: 'codex',
@@ -1294,7 +1368,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
               tools: pendingTools,
               bashCommands: [],
               timestamp,
-              speed: 'standard',
+              speed,
               deduplicationKey: dedupKey,
               turnId: currentTurnId,
               toolSequence: pendingToolSequence.length > 0 ? pendingToolSequence : undefined,

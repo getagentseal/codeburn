@@ -95,7 +95,10 @@ const CACHE_TTL_MS = 24 * 60 * 60 * 1000
 // the on-disk LiteLLM cache, not just the on-disk cache itself.
 // 4: calculateCost bills an implicit cache-write rate as input for non-Anthropic models.
 // 5: longContextTier rides ModelCosts, so a cached costs object is tier-aware (#1076).
-export const CACHE_SCHEMA_VERSION = 5
+// 6: fastMultiplier is now derived from LiteLLM's `<rate>_priority` keys when the
+// source publishes no `provider_specific_entry.fast` (#1616), so a cached costs
+// object can carry a multiplier the pre-fix fetch left at 1.
+export const CACHE_SCHEMA_VERSION = 6
 const WEB_SEARCH_COST = 0.01
 const ONE_HOUR_CACHE_WRITE_MULTIPLIER_FROM_FIVE_MINUTE_RATE = 1.6
 
@@ -282,6 +285,49 @@ function safePerTokenRate(n: number | undefined): number | null {
 // because the bundler is a standalone .mjs script.
 const TIER_KEY_RE = /^(input_cost_per_token|output_cost_per_token|cache_read_input_token_cost|cache_creation_input_token_cost)_above_(\d+)k_tokens$/
 
+// OpenAI bills its priority processing tier through explicit `<rate>_priority`
+// keys sat beside the standard ones (input/output/cache-read/cache-write, plus
+// the `_above_<n>k_tokens_priority` variants for gpt-5.6's long-context tier).
+// Codex's Fast speed setting runs on that tier (#1616), so those keys are where
+// its multiplier comes from — LiteLLM publishes none as a
+// `provider_specific_entry.fast` for OpenAI models. Derived, never invented:
+// only a ratio the source publishes for EVERY bucket it prices is used, so a
+// model with no priority keys (gpt-5-codex, gpt-5.1-codex) or one whose ratios
+// disagree between buckets (azure/gpt-5.5: 2.5x base, 2x above 272k) stays at
+// 1x. The multiplier has to cover the tier too, because calculateCost applies
+// it to whichever costs object is in effect, so the tier's priority ratios join
+// the same agreement check. `provider_specific_entry.fast` (Anthropic's own
+// multiplier) always wins where the source ships one.
+const PRIORITY_KEY_SUFFIX = '_priority'
+// Generous bound: the largest ratio any vendor actually publishes is 2.5x, so
+// anything past this is a corrupted or hostile upstream row, not a price.
+const MAX_DERIVED_FAST_MULTIPLIER = 100
+
+function priorityMultiplierOf(entry: LiteLLMEntry): number | null {
+  const record = entry as Record<string, unknown>
+  const ratios: number[] = []
+  let inputRatio: number | undefined
+  let outputRatio: number | undefined
+  for (const [key, value] of Object.entries(record)) {
+    if (!key.endsWith(PRIORITY_KEY_SUFFIX)) continue
+    const base = record[key.slice(0, -PRIORITY_KEY_SUFFIX.length)]
+    if (typeof value !== 'number' || typeof base !== 'number') continue
+    if (!Number.isFinite(value) || !Number.isFinite(base) || value <= 0 || base <= 0) continue
+    const ratio = value / base
+    if (key === 'input_cost_per_token_priority') inputRatio = ratio
+    else if (key === 'output_cost_per_token_priority') outputRatio = ratio
+    ratios.push(ratio)
+  }
+  // No priority input AND output rate means there is no priority price to
+  // scale the bill by, whatever stray priority keys the row carries.
+  if (inputRatio === undefined || outputRatio === undefined) return null
+  // "Within rounding": published ratios agree exactly in the JSON but can pick
+  // up a few ulps in the division (2.5 vs 2.4999999999999996), so compare
+  // relatively rather than for bitwise equality.
+  const agreed = ratios.every(r => Math.abs(r - inputRatio!) <= 1e-9 * Math.max(r, inputRatio!))
+  return agreed && inputRatio <= MAX_DERIVED_FAST_MULTIPLIER ? inputRatio : null
+}
+
 function tierOfLiteLLMEntry(entry: LiteLLMEntry): SnapshotTier | null {
   // Rates are read ONLY from the largest threshold a model carries, mirroring
   // scripts/bundle-litellm.mjs tierOf, so a two-tier entry can never mix a
@@ -321,7 +367,7 @@ export function parseLiteLLMEntry(entry: LiteLLMEntry): ModelCosts | null {
     outputCost,
     safePerTokenRate(entry.cache_creation_input_token_cost),
     safePerTokenRate(entry.cache_read_input_token_cost),
-    entry.provider_specific_entry?.fast,
+    entry.provider_specific_entry?.fast ?? priorityMultiplierOf(entry),
     tierOfLiteLLMEntry(entry),
   )
 }

@@ -27,6 +27,8 @@ import {
   cacheWriteCostPerToken,
   tieredCostsFor,
   modelKeyMatches,
+  snapshotPricingState,
+  restorePricingState,
 } from '../src/models.js'
 import { getDailyCacheConfigHash } from '../src/usage-aggregator.js'
 import snapshotData from '../src/data/litellm-snapshot.json' with { type: 'json' }
@@ -237,6 +239,142 @@ describe('getModelCosts', () => {
       const legacy = parseLiteLLMEntry({ input_cost_per_token: 1e-6, output_cost_per_token: 2e-5 })!
       expect(legacy.longContextTier).toBeUndefined()
       expect(legacy.inputCostPerToken).toBe(1e-6)
+    })
+  })
+
+  // #1616: Codex's Fast speed setting bills through OpenAI's priority service
+  // tier, which LiteLLM publishes as `<rate>_priority` keys beside the standard
+  // ones (and `_above_<n>k_tokens_priority` for gpt-5.6's long-context tier)
+  // rather than as a `provider_specific_entry.fast`. The entries below are
+  // quoted from the live model_prices_and_context_window.json (2026-10-05
+  // refresh); the bundled snapshot cannot carry the derived slot until its next
+  // routine refresh, so these pin the live path that applies the change at once.
+  describe('priority service-tier fast multipliers (#1616)', () => {
+    /// Install `entries` as the live pricing rows for the duration of `run`,
+    /// exactly as fetchAndCachePricing would, so calculateCost's full pipeline
+    /// (getModelCosts -> tieredCostsFor -> multiplier) prices off them.
+    function withLiveEntries(entries: Record<string, Record<string, number>>, run: () => void): void {
+      const snap = snapshotPricingState()
+      const pricing = new Map(snap.pricing)
+      for (const [name, entry] of Object.entries(entries)) {
+        const costs = parseLiteLLMEntry(entry as never)
+        if (costs) pricing.set(name, costs)
+      }
+      restorePricingState({ ...snap, pricing })
+      try {
+        run()
+      } finally {
+        restorePricingState(snap)
+      }
+    }
+
+    it('derives gpt-5.4\'s uniform 2x ratio as the fast multiplier', () => {
+      const costs = parseLiteLLMEntry({
+        input_cost_per_token: 2.5e-6,
+        output_cost_per_token: 15e-6,
+        cache_read_input_token_cost: 2.5e-7,
+        input_cost_per_token_priority: 5e-6,
+        output_cost_per_token_priority: 30e-6,
+        cache_read_input_token_cost_priority: 5e-7,
+      } as never)
+      expect(costs?.fastMultiplier).toBe(2)
+    })
+
+    it('derives gpt-5.5\'s uniform 2.5x ratio as the fast multiplier', () => {
+      const costs = parseLiteLLMEntry({
+        input_cost_per_token: 5e-6,
+        output_cost_per_token: 30e-6,
+        cache_read_input_token_cost: 5e-7,
+        input_cost_per_token_priority: 1.25e-5,
+        output_cost_per_token_priority: 7.5e-5,
+        cache_read_input_token_cost_priority: 1.25e-6,
+      } as never)
+      expect(costs?.fastMultiplier).toBe(2.5)
+    })
+
+    it('prices a gpt-5.6 fast call past 272k at the published priority tier rates', () => {
+      // gpt-5.6 quotes the priority long-context rates as exactly 2x its
+      // standard tier, so the single base multiplier carries the tier too.
+      withLiveEntries({
+        'gpt-5.6': {
+          input_cost_per_token: 4e-6,
+          output_cost_per_token: 20e-6,
+          cache_creation_input_token_cost: 5e-6,
+          cache_read_input_token_cost: 4e-7,
+          input_cost_per_token_above_272k_tokens: 8e-6,
+          output_cost_per_token_above_272k_tokens: 30e-6,
+          cache_creation_input_token_cost_above_272k_tokens: 1e-5,
+          cache_read_input_token_cost_above_272k_tokens: 8e-7,
+          input_cost_per_token_priority: 8e-6,
+          output_cost_per_token_priority: 40e-6,
+          cache_creation_input_token_cost_priority: 1e-5,
+          cache_read_input_token_cost_priority: 8e-7,
+          input_cost_per_token_above_272k_tokens_priority: 1.6e-5,
+          output_cost_per_token_above_272k_tokens_priority: 6e-5,
+          cache_creation_input_token_cost_above_272k_tokens_priority: 2e-5,
+          cache_read_input_token_cost_above_272k_tokens_priority: 1.6e-6,
+        },
+      }, () => {
+        const fast = calculateCost('gpt-5.6', 300_000, 1_000, 500, 2_000, 0, 'fast', 0, 'codex')
+        // The literal priority tier rates, not 2x-of-nothing: 300k input (past
+        // the 272k threshold), 1k output, 500 cache write, 2k cache read.
+        expect(fast).toBeCloseTo(300_000 * 1.6e-5 + 1_000 * 6e-5 + 500 * 2e-5 + 2_000 * 1.6e-6, 12)
+        const standard = calculateCost('gpt-5.6', 300_000, 1_000, 500, 2_000, 0, 'standard', 0, 'codex')
+        expect(standard).toBeCloseTo(300_000 * 8e-6 + 1_000 * 3e-5 + 500 * 1e-5 + 2_000 * 8e-7, 12)
+        expect(fast).toBeCloseTo(standard * 2, 12)
+      })
+    })
+
+    it('leaves a model without priority keys at 1x', () => {
+      // gpt-5-codex / gpt-5.1-codex publish no priority rates upstream; no
+      // multiplier may be invented for them.
+      const costs = parseLiteLLMEntry({
+        input_cost_per_token: 1.25e-6,
+        output_cost_per_token: 1e-5,
+        cache_read_input_token_cost: 1.25e-7,
+      } as never)
+      expect(costs?.fastMultiplier).toBe(1)
+    })
+
+    it('does not guess when the published ratios disagree', () => {
+      // azure/gpt-5.5 as quoted live: 2.5x on every base rate but 2x on the
+      // above-272k tier, so no single multiplier can price both regimes. The
+      // honest answer is 1x (standard rates), never an average.
+      const costs = parseLiteLLMEntry({
+        input_cost_per_token: 5e-6,
+        output_cost_per_token: 30e-6,
+        cache_read_input_token_cost: 5e-7,
+        cache_read_input_token_cost_above_272k_tokens: 1e-6,
+        input_cost_per_token_priority: 1.25e-5,
+        output_cost_per_token_priority: 7.5e-5,
+        cache_read_input_token_cost_priority: 1.25e-6,
+        input_cost_per_token_above_272k_tokens_priority: 2e-5,
+        output_cost_per_token_above_272k_tokens_priority: 6e-5,
+        cache_read_input_token_cost_above_272k_tokens_priority: 2e-6,
+      } as never)
+      expect(costs?.fastMultiplier).toBe(1)
+      // A row with only a stray priority cache-read rate (no input/output pair)
+      // is equally unusable.
+      const stray = parseLiteLLMEntry({
+        input_cost_per_token: 5e-8,
+        output_cost_per_token: 4e-7,
+        cache_read_input_token_cost: 5e-9,
+        input_cost_per_token_priority: 2.5e-6,
+      } as never)
+      expect(stray?.fastMultiplier).toBe(1)
+    })
+
+    it('keeps provider_specific_entry.fast (Anthropic) winning over a derived ratio', () => {
+      const costs = parseLiteLLMEntry({
+        input_cost_per_token: 5e-6,
+        output_cost_per_token: 25e-6,
+        cache_read_input_token_cost: 5e-7,
+        input_cost_per_token_priority: 1e-5,
+        output_cost_per_token_priority: 5e-5,
+        cache_read_input_token_cost_priority: 1e-6,
+        provider_specific_entry: { fast: 1.4 },
+      } as never)
+      expect(costs?.fastMultiplier).toBe(1.4)
     })
   })
 
