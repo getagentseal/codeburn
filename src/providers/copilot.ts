@@ -3368,8 +3368,8 @@ async function resolveJetBrainsProjectNames(
  * (Code, Code Insiders, VSCodium) on the given platform. Used to discover
  * transcript sessions written by the Copilot Chat extension.
  *
- * Accepts explicit `home` and `os` arguments so callers (and tests) can pass
- * custom values without relying on process-level globals.
+ * Accepts explicit `home` and `os` arguments for the platform fallback.
+ * APPDATA and XDG_CONFIG_HOME still come from the process environment.
  */
 export function getVSCodeWorkspaceStorageDirs(home: string, os: string): string[] {
   const j = os === 'win32' ? win32.join : posix.join
