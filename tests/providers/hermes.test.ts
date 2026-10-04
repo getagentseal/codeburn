@@ -8,7 +8,7 @@ import { calculateCost } from '../../src/models.js'
 import { createHermesProvider } from '../../src/providers/hermes.js'
 import { isSqliteAvailable } from '../../src/sqlite.js'
 import { aggregateProjectsIntoDays } from '../../src/day-aggregator.js'
-import { currentTzKey, ensureCacheHydrated, toDateString, type DailyEntry } from '../../src/daily-cache.js'
+import { currentTzKey, DAILY_CACHE_VERSION, ensureCacheHydrated, toDateString, type DailyEntry } from '../../src/daily-cache.js'
 import type { ParsedProviderCall } from '../../src/providers/types.js'
 import type { DateRange } from '../../src/types.js'
 
@@ -367,7 +367,7 @@ skipUnlessSqlite('hermes provider', () => {
       aggregateProjectsIntoDays,
     )
 
-    expect(hydrated.version).toBe(48)
+    expect(hydrated.version).toBe(DAILY_CACHE_VERSION)
     expect(reparsedProjects.flatMap(project => project.sessions)).toHaveLength(1)
     const refreshedHermesDay = hydrated.days.find(day => day.date === hermesDate)
     expect(refreshedHermesDay?.providers['hermes']).toMatchObject({

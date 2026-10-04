@@ -411,6 +411,9 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // reparse because session-cache otherwise bypasses the provider parser.
   // Compose both suffixes so cached sessions receive both accounting fixes.
   codex: 'mcp-attribution-v5-est-cost-active-timing-mcp-wait-rich-capture-v1-cross-provider-pr-v1-session-meta-model-v1-session-meta-fields-v1-codex-pricing-v1-codex-tps-v1-codex-mcp-skills-v1-activity-price-v1-fork-replay-burst-v1-codex-token-usage-record-v1',
+  // reported-cost-v1: cached Crush calls stored costUSD: undefined and must
+  // re-parse to keep the recorded session cost.
+  crush: 'reported-cost-v1',
   cursor: 'composer-anchored-crediting-v1-est-cost',
   // full-turn-accounting: every assistant message counts as a turn
   // (previously only the first after each user message survived), tool_use
@@ -565,7 +568,7 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // token floor on every read, so they must re-parse once for the real dollars
   // to land.
   warp: 'worktree-project-grouping-v1-est-cost-billing-cost-v1',
-  antigravity: 'worktree-project-grouping-v6',
+  antigravity: 'worktree-project-grouping-v7',
   // pr-attribution-v1: the parser now reads the `message`/`part` tables for
   // per-turn user prompt text and the GitHub PR URLs it references. Cached
   // ZCode sessions hold empty userMessage turns and no session prLinks, so

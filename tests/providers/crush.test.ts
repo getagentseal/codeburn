@@ -224,6 +224,7 @@ describe('crush provider', () => {
     expect(call.inputTokens).toBe(1234)
     expect(call.outputTokens).toBe(567)
     expect(call.costUSD).toBeCloseTo(0.0789, 6)
+    expect(call.costFromBilling).toBe(true)
     expect(call.sessionId).toBe('sess-1')
     expect(call.deduplicationKey).toBe('crush:sess-1')
     // Crush stores epoch seconds; 1_700_000_999 sec → 2023-11-14T22:29:59.000Z.

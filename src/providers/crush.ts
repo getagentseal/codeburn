@@ -182,6 +182,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
           reasoningTokens: 0,
           webSearchRequests: 0,
           costUSD,
+          ...(cost > 0 ? { costFromBilling: true } : {}),
           tools: [],
           bashCommands: [],
           timestamp: epochSecondsToIso(session.updated_at ?? session.created_at),

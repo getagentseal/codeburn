@@ -50,7 +50,7 @@ function conversationRoots(): readonly AntigravityConversationRoot[] {
     },
   ]
 }
-const CACHE_VERSION = 6
+const CACHE_VERSION = 7
 export const ANTIGRAVITY_CACHE_VERSION = CACHE_VERSION
 export const ANTIGRAVITY_LEGACY_CACHE_FILE = 'antigravity-results.json'
 export function antigravityCacheFileName(version = CACHE_VERSION): string {
@@ -829,6 +829,56 @@ function antigravitySqliteCreatedAt(chatFields: readonly ProtoField[]): string {
 
 const SKILL_MD_PATTERN = /(?:^|[\\/])([^\\/]+)[\\/]SKILL\.md$/i
 
+const toolNameMap: Record<string, string> = {
+  invoke_subagent: 'Agent',
+  manage_task: 'TodoWrite',
+  search_web: 'WebSearch',
+  read_url_content: 'WebFetch',
+}
+
+/**
+ * Normalizes Antigravity tool calls to the canonical Codeburn format (`mcp__<server>__<tool>`).
+ *
+ * Antigravity emits MCP tool calls in two distinct shapes:
+ * 1. Eager: `mcp_<server>_<tool>` (single underscore delimiter between prefix, server, and tool).
+ * 2. Lazy: `call_mcp_tool` with JSON arguments `{ ServerName: "...", ToolName: "..." }`.
+ *
+ * Both are normalized to `mcp__<server>__<tool>` so they match `extractMcpTools`,
+ * attribute properly to MCP inventory, and deduplicate cleanly in dashboards.
+ */
+export function normalizeAntigravityToolCall(toolName: string, args?: Record<string, unknown> | null): string {
+  if (!toolName) return ''
+
+  if (toolName === 'call_mcp_tool') {
+    const rawServer = args?.['ServerName'] ?? args?.['server_name'] ?? args?.['serverName'] ?? args?.['server'] ?? args?.['Server']
+    const server = typeof rawServer === 'string' ? rawServer.trim() : ''
+    const rawTool = args?.['ToolName'] ?? args?.['tool_name'] ?? args?.['toolName'] ?? args?.['tool'] ?? args?.['Tool']
+    const tool = typeof rawTool === 'string' ? rawTool.trim() : ''
+    if (server && tool) {
+      return `mcp__${server}__${tool}`
+    }
+    return 'call_mcp_tool'
+  }
+
+  if (toolName.startsWith('mcp__')) {
+    return toolName
+  }
+
+  if (toolName.startsWith('mcp_')) {
+    const rest = toolName.slice(4)
+    // ponytail: first-underscore split misattributes servers whose names contain '_'; upgrade: longest-prefix match against mcp_config.json server keys
+    const sep = rest.indexOf('_')
+    if (sep > 0 && sep < rest.length - 1) {
+      const server = rest.slice(0, sep)
+      const tool = rest.slice(sep + 1)
+      return `mcp__${server}__${tool}`
+    }
+    return toolName
+  }
+
+  return toolName
+}
+
 function extractAntigravityToolFromStep(metadataBytes: Uint8Array, turn: TurnTools): void {
   const fields = parseProtoFields(metadataBytes)
   for (const field of fields) {
@@ -848,13 +898,7 @@ function extractAntigravityToolFromStep(metadataBytes: Uint8Array, turn: TurnToo
     }
 
     if (toolName === 'call_mcp_tool') {
-      const server = typeof args?.['ServerName'] === 'string' ? args['ServerName'].trim() : ''
-      const tool = typeof args?.['ToolName'] === 'string' ? args['ToolName'].trim() : ''
-      if (server && tool) {
-        turn.tools.push(`mcp__${server}__${tool}`)
-      } else {
-        turn.tools.push('call_mcp_tool')
-      }
+      turn.tools.push(normalizeAntigravityToolCall(toolName, args))
       continue
     }
 
@@ -881,7 +925,7 @@ function extractAntigravityToolFromStep(metadataBytes: Uint8Array, turn: TurnToo
     }
 
     if (toolName === 'invoke_subagent') {
-      turn.tools.push(toolName)
+      turn.tools.push(toolNameMap[toolName])
       if (Array.isArray(args?.['Subagents'])) {
         for (const sa of args['Subagents']) {
           if (sa && typeof sa === 'object') {
@@ -898,7 +942,7 @@ function extractAntigravityToolFromStep(metadataBytes: Uint8Array, turn: TurnToo
       continue
     }
 
-    turn.tools.push(toolName)
+    turn.tools.push(toolNameMap[toolName] ?? normalizeAntigravityToolCall(toolName, args))
   }
 }
 
@@ -1642,7 +1686,7 @@ export function createAntigravityProvider(): Provider {
     },
 
     toolDisplayName(rawTool: string): string {
-      return rawTool
+      return normalizeAntigravityToolCall(rawTool)
     },
 
     async probeRoots(): Promise<ProbeRoot[]> {
