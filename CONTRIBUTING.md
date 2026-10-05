@@ -4,7 +4,7 @@ Thanks for your interest. This document covers what you need to know to send a w
 
 ## Prerequisites
 
-- Node.js 22.20 or newer (`engines.node` in `package.json`).
+- Node.js 22.13.0 or newer (`engines.node` in `package.json`).
 - npm 10 or newer (ships with recent Node).
 - macOS or Linux for full provider coverage. Windows works for most providers but Cursor / Antigravity development is easier on macOS.
 - Optional: Swift 6 toolchain if you are touching the macOS menubar (`mac/`).
@@ -18,7 +18,19 @@ cd codeburn
 npm install
 ```
 
-There is no separate build step required to run the dev CLI. `npm run dev` runs `tsx` against `src/cli.ts` directly.
+There is no separate build step required to run the dev CLI. `npm run dev` loads
+`tsx` through Node's `--import` flag and runs `src/cli.ts` directly. The command
+works with npm's default shell on Windows, macOS, and Linux; no shell configuration
+or extra environment assignment is required. Deprecation warnings are suppressed
+for this invocation, and any existing `NODE_OPTIONS` are retained.
+
+Use `--` to pass CLI arguments through npm. For a quick setup check that does not
+scan your session history, run:
+
+```bash
+npm run dev -- --version
+npm run dev -- status --help
+```
 
 ## Common Commands
 
