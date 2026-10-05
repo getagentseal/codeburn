@@ -130,6 +130,7 @@ type CodexEntry = {
   timestamp?: string
   payload?: {
     type?: string
+    id?: string
     turn_id?: string
     call_id?: string
     started_at?: number
@@ -157,6 +158,7 @@ type CodexEntry = {
     /// Raw shape of the `thread_settings_applied` payload; only the service
     /// tier is read off it.
     thread_settings?: { service_tier?: string }
+    item?: Record<string, unknown>
     invocation?: { server?: string; tool?: string }
     content?: Array<{ type?: string; text?: string }>
     info?: {
@@ -167,6 +169,44 @@ type CodexEntry = {
     }
     usage?: CodexTokenUsage
   }
+}
+
+type CodexNativeToolEvent = {
+  tool: 'WebSearch' | 'ToolSearch' | 'ImageGeneration'
+  identity?: string
+}
+
+type CodexPendingNativeToolEvent = {
+  tool: CodexNativeToolEvent['tool']
+  toolIndex: number
+  sequenceIndex: number
+}
+
+function nativeToolEvent(entry: CodexEntry): CodexNativeToolEvent | null {
+  const payload = entry.payload
+  if (!payload) return null
+
+  let tool: CodexNativeToolEvent['tool'] | null = null
+  let identity: string | undefined
+  if (entry.type === 'response_item') {
+    if (payload.type === 'web_search_call') tool = 'WebSearch'
+    else if (payload.type === 'tool_search_call') tool = 'ToolSearch'
+    else if (payload.type === 'image_generation_call') tool = 'ImageGeneration'
+    if (!tool) return null
+    identity = typeof payload.id === 'string' && payload.id
+      ? payload.id
+      : typeof payload.call_id === 'string' && payload.call_id
+        ? payload.call_id
+        : undefined
+  } else if (entry.type === 'event_msg' && payload.type === 'item_completed') {
+    const item = payload.item
+    if (!item || item['type'] !== 'WebSearch') return null
+    tool = 'WebSearch'
+    identity = typeof item['id'] === 'string' && item['id'] ? item['id'] : undefined
+  }
+
+  if (!tool) return null
+  return { tool, ...(identity ? { identity: `${tool}:${identity}` } : {}) }
 }
 
 type CodexTokenUsage = {
@@ -520,6 +560,14 @@ function parseCodexLine(line: string | Buffer): CodexEntry | null {
   const compactModelName = getRawJsonStringField(pHead, 'model_name')
   const compactLastUsage = getRawTokenUsage(pHead, 'last_token_usage')
   const compactTotalUsage = getRawTokenUsage(pHead, 'total_token_usage')
+  const itemWindow = type === 'event_msg' && payloadType === 'item_completed'
+    ? getRawPayloadFieldWindow(line, 'item')
+    : undefined
+  const compactItemType = itemWindow ? getRawJsonStringField(itemWindow, 'type') : undefined
+  const compactItemId = itemWindow ? getRawJsonStringField(itemWindow, 'id') : undefined
+  const compactItem = compactItemType
+    ? { type: compactItemType, ...(compactItemId ? { id: compactItemId } : {}) }
+    : undefined
   const compactInfo = compactModel || compactModelName || compactLastUsage || compactTotalUsage
     ? { model: compactModel, model_name: compactModelName, last_token_usage: compactLastUsage, total_token_usage: compactTotalUsage }
     : undefined
@@ -530,6 +578,7 @@ function parseCodexLine(line: string | Buffer): CodexEntry | null {
     timestamp: getRawJsonStringField(head, 'timestamp'),
     payload: {
       type: payloadType,
+      id: getRawJsonStringField(pHead, 'id'),
       role,
       cwd: payloadString('cwd'),
       model_provider: payloadString('model_provider'),
@@ -541,6 +590,7 @@ function parseCodexLine(line: string | Buffer): CodexEntry | null {
         : undefined,
       model: compactModel,
       name: payloadString('name'),
+      item: compactItem,
       invocation,
       call_id: getRawJsonStringField(pHead, 'call_id'),
       turn_id: getRawJsonStringField(pHead, 'turn_id'),
@@ -716,6 +766,10 @@ type CodexResumeState = {
   prevReasoning: number
   pendingTools: string[]
   pendingToolSequence: ToolCall[][]
+  /// Native tool identities make response_item / item_completed mirrors one
+  /// attribution after an append resume or a task-boundary checkpoint.
+  pendingNativeToolEvents?: CodexPendingNativeToolEvent[]
+  nativeToolEventIdentities?: string[]
   /// Optional so a resume state written before skills attribution existed still
   /// decodes (isResumeState does not require it); absent reads as "no skills".
   pendingSkills?: string[]
@@ -741,6 +795,32 @@ type CodexResumeState = {
 function isResumeState(value: unknown): value is CodexResumeState {
   if (!value || typeof value !== 'object') return false
   const v = value as Record<string, unknown>
+  const pendingTools = v['pendingTools']
+  const pendingToolSequence = v['pendingToolSequence']
+  const pendingNativeToolEvents = v['pendingNativeToolEvents']
+  const nativeToolEventIdentities = v['nativeToolEventIdentities']
+  const validPendingNativeToolEvents = pendingNativeToolEvents === undefined || (
+    Array.isArray(pendingNativeToolEvents)
+    && Array.isArray(pendingTools)
+    && Array.isArray(pendingToolSequence)
+    && pendingNativeToolEvents.every(event => {
+      if (!event || typeof event !== 'object') return false
+      const item = event as Record<string, unknown>
+      const toolIndex = item['toolIndex']
+      const sequenceIndex = item['sequenceIndex']
+      return (item['tool'] === 'WebSearch' || item['tool'] === 'ToolSearch' || item['tool'] === 'ImageGeneration')
+        && typeof toolIndex === 'number'
+        && Number.isInteger(toolIndex)
+        && toolIndex >= 0
+        && toolIndex < pendingTools.length
+        && pendingTools[toolIndex] === item['tool']
+        && typeof sequenceIndex === 'number'
+        && Number.isInteger(sequenceIndex)
+        && sequenceIndex >= 0
+        && sequenceIndex < pendingToolSequence.length
+        && Array.isArray(pendingToolSequence[sequenceIndex])
+    })
+  )
   return typeof v['sessionId'] === 'string'
     && typeof v['forkedFromId'] === 'string'
     && (v['forkReplayState'] === undefined || isCodexForkReplayState(v['forkReplayState']))
@@ -753,8 +833,10 @@ function isResumeState(value: unknown): value is CodexResumeState {
     && typeof v['prevCacheWrite'] === 'number'
     && typeof v['prevOutput'] === 'number'
     && typeof v['prevReasoning'] === 'number'
-    && Array.isArray(v['pendingTools'])
-    && Array.isArray(v['pendingToolSequence'])
+    && Array.isArray(pendingTools)
+    && Array.isArray(pendingToolSequence)
+    && validPendingNativeToolEvents
+    && (nativeToolEventIdentities === undefined || (Array.isArray(nativeToolEventIdentities) && nativeToolEventIdentities.every(id => typeof id === 'string')))
     && typeof v['pendingUserMessage'] === 'string'
     && typeof v['pendingOutputChars'] === 'number'
     && typeof v['pendingLocAdded'] === 'number'
@@ -839,6 +921,10 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
       let prevReasoning = resume?.state.prevReasoning ?? 0
       let pendingTools: string[] = resume ? [...resume.state.pendingTools] : []
       let pendingToolSequence: ToolCall[][] = resume ? [...resume.state.pendingToolSequence] : []
+      let pendingNativeToolEvents: CodexPendingNativeToolEvent[] = resume?.state.pendingNativeToolEvents
+        ? resume.state.pendingNativeToolEvents.map(event => ({ ...event }))
+        : []
+      const nativeToolEventIdentities = new Set(resume?.state.nativeToolEventIdentities ?? [])
       let pendingSkills: string[] = resume?.state.pendingSkills ? [...resume.state.pendingSkills] : []
       // Attribution names already emitted from a `response_item` tool call.
       // Codex's item model repeats a finished shell command as
@@ -879,6 +965,16 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
           pendingToolSequence.push([{ tool: 'Skill', file: skill }])
         }
       }
+
+      const attributeNativeToolEvent = (event: CodexNativeToolEvent): void => {
+        if (event.identity && nativeToolEventIdentities.has(event.identity)) return
+        if (event.identity) nativeToolEventIdentities.add(event.identity)
+        const toolIndex = pendingTools.length
+        const sequenceIndex = pendingToolSequence.length
+        pendingTools.push(event.tool)
+        pendingToolSequence.push([{ tool: event.tool }])
+        pendingNativeToolEvents.push({ tool: event.tool, toolIndex, sequenceIndex })
+      }
       let pendingUserMessage = resume?.state.pendingUserMessage ?? ''
       let pendingOutputChars = resume?.state.pendingOutputChars ?? 0
       // Rich-session-capture: edit LOC deltas and failed-patch count accumulated
@@ -911,6 +1007,28 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
       let taskStartedAt: number | undefined = resume?.state.taskStartedAt
       let taskActiveStartedAt: number | undefined = resume?.state.taskActiveStartedAt
       const openToolStarts = new Map<string, number>()
+
+      // Tool items can be serialized after their response's usage record. Keep
+      // normal forward attribution as the first choice, but attach any still
+      // pending native items to the last call in this task before it is flushed.
+      // The parallel indexes let this move just the native items without
+      // disturbing other pending tool attribution across a resume boundary.
+      const attachPendingNativeToolEvents = (target: ParsedProviderCall | undefined): void => {
+        if (!target || pendingNativeToolEvents.length === 0) return
+        const ordered = [...pendingNativeToolEvents].sort((a, b) => a.sequenceIndex - b.sequenceIndex)
+        target.tools.push(...ordered.map(event => event.tool))
+        target.toolSequence = [
+          ...(target.toolSequence ?? []),
+          ...ordered.map(event => [{ tool: event.tool }]),
+        ]
+        for (const event of [...pendingNativeToolEvents].sort((a, b) => b.toolIndex - a.toolIndex)) {
+          pendingTools.splice(event.toolIndex, 1)
+        }
+        for (const event of [...pendingNativeToolEvents].sort((a, b) => b.sequenceIndex - a.sequenceIndex)) {
+          pendingToolSequence.splice(event.sequenceIndex, 1)
+        }
+        pendingNativeToolEvents = []
+      }
 
       const accountUsage = (entry: CodexEntry, usage: CodexTokenUsage, dedupKey: string): void => {
         const inputTokens = usage.input_tokens ?? 0
@@ -992,6 +1110,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
 
         pendingTools = []
         pendingToolSequence = []
+        pendingNativeToolEvents = []
         pendingSkills = []
         pendingUserMessage = ''
         pendingOutputChars = 0
@@ -1092,6 +1211,9 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
           entry.payload?.type === 'function_call_output' ||
           entry.payload?.type === 'custom_tool_call' ||
           entry.payload?.type === 'custom_tool_call_output' ||
+          entry.payload?.type === 'web_search_call' ||
+          entry.payload?.type === 'tool_search_call' ||
+          entry.payload?.type === 'image_generation_call' ||
           entry.payload?.type === 'mcp_tool_call_end' ||
           entry.payload?.type === 'item_completed' ||
           entry.payload?.type === 'patch_apply_end'
@@ -1129,6 +1251,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
         if (entry.type === 'event_msg' && entry.payload?.type === 'task_started') {
           // Emit the previous task. If it never reached task_complete its timing
           // fields simply stay unset, matching the un-buffered behaviour.
+          attachPendingNativeToolEvents(pendingTaskCalls.at(-1))
           results.push(...pendingTaskCalls)
           pendingTaskCalls = []
           taskGeneratedTokens = 0
@@ -1158,6 +1281,8 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
             prevReasoning,
             pendingTools: [...pendingTools],
             pendingToolSequence: [...pendingToolSequence],
+            pendingNativeToolEvents: pendingNativeToolEvents.map(event => ({ ...event })),
+            nativeToolEventIdentities: [...nativeToolEventIdentities],
             pendingSkills: [...pendingSkills],
             pendingUserMessage,
             pendingOutputChars,
@@ -1170,6 +1295,15 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
             ...(taskStartedAt !== undefined ? { taskStartedAt } : {}),
             ...(taskActiveStartedAt !== undefined ? { taskActiveStartedAt } : {}),
           }
+          continue
+        }
+
+        const nativeEvent = nativeToolEvent(entry)
+        if (nativeEvent) {
+          // Status transitions share an item identity. The first observed
+          // record proves tool activity even when the rollout ends before its
+          // completed status; mirrors from the item model are ignored by id.
+          attributeNativeToolEvent(nativeEvent)
           continue
         }
 
@@ -1368,7 +1502,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
             const timestamp = entry.timestamp ?? ''
             const dedupKey = `codex:${sessionId}:${timestamp}:est${estCounter++}`
 
-            if (seenKeys.has(dedupKey)) { pendingTools = []; pendingToolSequence = []; pendingSkills = []; pendingUserMessage = ''; pendingOutputChars = 0; pendingLocAdded = 0; pendingLocRemoved = 0; pendingEditFailed = 0; continue }
+            if (seenKeys.has(dedupKey)) { pendingTools = []; pendingToolSequence = []; pendingNativeToolEvents = []; pendingSkills = []; pendingUserMessage = ''; pendingOutputChars = 0; pendingLocAdded = 0; pendingLocRemoved = 0; pendingEditFailed = 0; continue }
             seenKeys.add(dedupKey)
 
             // An estimated prompt can cross a long-context threshold and tier
@@ -1408,6 +1542,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
 
             pendingTools = []
             pendingToolSequence = []
+            pendingNativeToolEvents = []
             pendingSkills = []
             pendingUserMessage = ''
             pendingOutputChars = 0
@@ -1525,6 +1660,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
       }
 
       // Flush the final task, which has no following task_started to trigger it.
+      attachPendingNativeToolEvents(pendingTaskCalls.at(-1))
       results.push(...pendingTaskCalls)
 
       const resumeWrite = resumeState ? { offset: resumeOffset, state: resumeState, callCount: resumeCallCount } : undefined
