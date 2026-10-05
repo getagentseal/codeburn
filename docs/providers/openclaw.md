@@ -8,14 +8,26 @@ OpenClaw, plus the older Clawdbot / Moltbot / Moldbot lineage.
 
 ## Where it reads from
 
-Four directories, all checked on every run (`openclaw.ts`):
+When set, `OPENCLAW_STATE_DIR/agents` is checked first. The environment variable
+names the state directory, so CodeBurn appends `agents` itself. Whitespace is
+trimmed, relative paths resolve from the current working directory, and a leading
+`~` expands against OpenClaw's effective home (`OPENCLAW_HOME`, or the OS home).
+This follows OpenClaw's [state directory resolver](https://github.com/openclaw/openclaw/blob/main/src/config/state-dir.ts)
+and [home path resolver](https://github.com/openclaw/openclaw/blob/main/src/infra/home-dir.ts).
+
+Four historical directories are also checked on every run (`openclaw.ts`), under
+that same effective home:
 
 - `~/.openclaw/agents`
 - `~/.clawdbot/agents`
 - `~/.moltbot/agents`
 - `~/.moldbot/agents`
 
-The legacy directories are kept for users who upgraded from older builds.
+The legacy directories are kept for users who upgraded from older builds. An
+override that resolves to one of these roots is scanned once. Discovery and root
+probes use the same list, so relocated sessions also receive watcher coverage.
+The explicit `createOpenClawProvider(agentsDirectory)` constructor still selects
+only its supplied agents directory, taking precedence over environment settings.
 
 ## Storage format
 
@@ -28,7 +40,11 @@ The SQLite source path carries the session id after the database path (`<db>:<se
 
 ## Caching
 
-None.
+Parsed sessions use the shared session cache. Both `OPENCLAW_STATE_DIR` and
+`OPENCLAW_HOME` are fingerprinted so changing the selected roots invalidates that
+provider's entries. The `state-dir-v1` parser revision and daily cache v74 backfill
+surviving history that earlier versions missed. Archived daily totals continue to
+be carried forward when their source logs are unavailable.
 
 ## Deduplication
 
@@ -46,7 +62,7 @@ When a session id exists both as a legacy `.jsonl` file and in the store (a part
 
 ## When fixing a bug here
 
-1. If the bug is "session not found", check the four legacy dirs first. A user might have a stray `~/.moltbot/` that the parser is reading instead of the real `~/.openclaw/`.
+1. If the bug is "session not found", check `OPENCLAW_STATE_DIR` and `OPENCLAW_HOME`, then the four historical dirs. A user might have a stray `~/.moltbot/` that the parser is reading instead of the real `~/.openclaw/`.
 2. If the bug is "wrong cost", confirm whether `costUSD` is present in the source data; the parser trusts it over its own calculation.
 3. The `sessions.json` index can drift when the user crashes mid-session. Make sure the directory-scan fallback triggers in those cases.
 4. If a migrated install reports empty, confirm `agent/openclaw-agent.sqlite` exists and has a `transcript_events` table; a DB without that table is skipped silently (it is not an agent-schema store).

@@ -361,7 +361,9 @@ import type { DateRange, ProjectSummary } from './types.js'
 // copilotCredits, and a chat session that also ran on the agent host is left
 // to it. That twin drops calls, so copilot joins
 // PENDING_REDERIVE_PROVIDER_VERSIONS at 75.
-export const DAILY_CACHE_VERSION = 75
+// v76: discover OpenClaw's configured state directory and effective home.
+// Finalized days may have omitted those sessions before the root override fix.
+export const DAILY_CACHE_VERSION = 76
 const MIN_SUPPORTED_VERSION = 28
 
 /// Providers whose per-day CALL COUNT means something different at
