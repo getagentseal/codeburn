@@ -3239,6 +3239,12 @@ if (process.argv[2] === 'serve') {
   // this child running as an orphan for as long as the machine is up.
   hardExit(0)
 } else {
+  // Beat for the app watchdogs from the first moment, not just inside a parse:
+  // a one-shot is also silent while it waits on another process's cold
+  // hydration lock or aggregates after the parse. Never stopped; the timer is
+  // unref'd and the process exits when the command does. Serve beats per
+  // request instead, so it must not take this.
+  startProgressKeepalive()
   const program = buildProgram()
   await registerLoadedPluginCommands(program)
   program.parse()

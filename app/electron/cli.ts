@@ -716,7 +716,8 @@ async function runScheduledCli(
 //  - a child left idle for CODEBURN_SERVE_IDLE_MS retires; the next request
 //    restarts one through the same lazy path a crash uses;
 //  - any serve failure falls back to a normal spawn for that call;
-//  - three child deaths permanently disable serve for this app run.
+//  - three child deaths (watchdog kills included) with no answer between them
+//    disable serve for this app run; any answer resets that count.
 const SERVE_ROUTED = new Set(['status', 'models', 'sessions', 'compare', 'yield', 'spend', 'optimize', 'audit', 'report'])
 const SERVE_MAX_RESTARTS = 3
 
@@ -853,6 +854,7 @@ class ServeClient {
       waiter.clear()
       if (msg.ok && typeof msg.output === 'string') {
         if (waiter.warmsServe) this.warmed = true
+        this.deaths = 0
         try { waiter.resolve(JSON.parse(msg.output)) }
         catch { waiter.reject(new CliError('bad-json', 'codeburn produced output that was not valid JSON')) }
       } else {
@@ -1092,7 +1094,7 @@ function restartServeAfterMutation(): void {
   // CLI-only consumers never started serve, so do not create a surprise daemon
   // for them. In Electron, replace the resident child immediately so its parser
   // and output memos cannot survive a successful config mutation. Reusing the
-  // client preserves its app-lifetime budget of unexpected child deaths.
+  // client preserves its budget of unexpected child deaths.
   if (!serveClient) return
   serveClient.restartAfterMutation()
 }
@@ -1142,7 +1144,7 @@ export function spawnCli(
   if (SERVE_ROUTED.has(args[0] ?? '') && isServeCompatibleEnv(opts.extraEnv)) {
     const serve = serveClient
     // Recover lazily from an unexpected child death. start() is synchronous and
-    // idempotent, and the client's lifetime death budget prevents an endlessly
+    // idempotent, and the client's consecutive-death budget prevents an endlessly
     // crashing binary from being respawned on every poll.
     if (serve && !serve.isRunning() && !serve.disabled()) serve.start()
     if (serve?.isRunning()) {
