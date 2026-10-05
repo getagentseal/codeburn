@@ -91,6 +91,13 @@ Compare periods puts two date ranges side by side and shows the difference. Use 
 
 The Pull requests page matches spend against the pull requests your sessions recorded, so you can see which spend shipped ([Yield](docs/yield.md)).
 
+Generation speed is available in the desktop **Speed** tab, with compact macOS
+menubar and Capacity Dock summaries, and with `codeburn speed`, grouped by model and
+harness. Generation tok/s excludes the initial wait; first-token latency is
+shown separately. Chunk/request estimates are marked and missing generation
+timing stays unavailable. [Speed measurement and opt-in local telemetry](docs/speed.md)
+explain coverage, first-token latency and individual-token timelines.
+
 ## Fix it
 
 ```bash

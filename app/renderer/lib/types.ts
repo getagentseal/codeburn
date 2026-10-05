@@ -1,3 +1,4 @@
+import type { SpeedHarness, SpeedReport, SpeedSample } from './speed'
 // Types mirrored verbatim from the codeburn CLI (`src/*`). The renderer is a
 // pure view over CLI JSON, so these shapes must match the emitters exactly.
 // Do not invent fields — copy from the cited source files.
@@ -1173,6 +1174,8 @@ export interface CodeburnBridge {
   /** Node process.arch of the host ('arm64', 'x64', ...). Absent on preloads
    *  that predate the direct-download update link. */
   readonly arch?: string
+  getSpeed(period: Period, provider: string, range?: DateRange, background?: boolean): Promise<SpeedReport>
+  getSpeedEvents(id: string, harness: SpeedHarness): Promise<SpeedSample>
   getModels(period: Period, provider: string, byTask: boolean, range?: DateRange, background?: boolean): Promise<ModelReportRow[]>
   getSessions(period: Period, provider: string, range?: DateRange, background?: boolean): Promise<SessionRow[]>
   /** Session rows with per-turn contribution segments (`sessions --contributions`).

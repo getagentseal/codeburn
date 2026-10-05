@@ -43,6 +43,8 @@ import { runOptimize } from './optimize.js'
 import { registerActCommands } from './act/cli.js'
 import { registerGuardCommands } from './guard/cli.js'
 import { registerSyncCommands } from './sync/cli.js'
+import { registerSpeedCommands } from './speed/cli.js'
+import { awaitAntigravitySpeedCapture } from './speed/antigravity.js'
 import { registerPluginCommands, registerLoadedPluginCommands } from './plugins/cli.js'
 import { runContextCommand } from './context-tree.js'
 import { renderCompare } from './compare.js'
@@ -75,11 +77,15 @@ import { CodexThroughputReader, newestCodexSession, renderCodexThroughput } from
 // | head` is the ordinary way to read that command, and a token grant the
 // server has already accepted must reach disk whichever door the process
 // leaves through. The drain resolves immediately when nothing is outstanding,
-// which is every other command.
+// which is every other command. An active speed capture also saves its partial
+// timing record before returning control to a downstream reader that closed.
 process.stdout.on('error', (err: NodeJS.ErrnoException) => {
   if (err.code !== 'EPIPE') throw err
   void import('./quota/security.js')
-    .then(({ awaitCredentialWrites }) => awaitCredentialWrites())
+    .then(async ({ awaitCredentialWrites }) => {
+      await awaitCredentialWrites()
+      await awaitAntigravitySpeedCapture()
+    })
     .catch(() => undefined)
     .then(() => process.exit(0))
 })
@@ -3173,6 +3179,7 @@ program
 registerActCommands(program)
 registerGuardCommands(program)
 registerSyncCommands(program)
+registerSpeedCommands(program)
 registerPluginCommands(program)
 
 program

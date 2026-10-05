@@ -8,6 +8,7 @@ struct MenuBarContent: View {
     var body: some View {
         VStack(spacing: 0) {
             Header()
+                .task { store.refreshSpeedIfNeeded() }
 
             Divider()
 
@@ -31,6 +32,8 @@ struct MenuBarContent: View {
                         Divider().opacity(0.5)
                         PeriodSegmentedControl()
                         ScopeSegmentedControl()
+                        Divider().opacity(0.5)
+                        SpeedSection()
                         Divider().opacity(0.5)
                         if isFilteredEmpty {
                             EmptyProviderState(provider: store.selectedProvider, periodLabel: store.selectionLabel)

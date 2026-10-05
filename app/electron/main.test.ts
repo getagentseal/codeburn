@@ -42,6 +42,8 @@ const CHANNELS = [
   'codeburn:getQuota',
   'codeburn:getPlans',
   'codeburn:getActReport',
+  'codeburn:getSpeed',
+  'codeburn:getSpeedEvents',
   'codeburn:getModels',
   'codeburn:getSessions',
   'codeburn:getSessionsContributions',
@@ -112,6 +114,9 @@ const CHANNELS = [
 ] as const
 
 const ARGV_CASES: Array<{ channel: string; args: unknown[]; argv: string[] }> = [
+  { channel: 'codeburn:getSpeed', args: ['week', 'all'], argv: ['speed', '--json', '--period', 'week', '--history-limit', '100000', '--typical-days', '7', '--no-turn-estimates'] },
+  { channel: 'codeburn:getSpeed', args: ['today', 'dsh', { from: '2026-10-01', to: '2026-10-02' }], argv: ['speed', '--json', '--period', 'today', '--history-limit', '100000', '--typical-days', '7', '--no-turn-estimates', '--harness', 'dsh', '--from', '2026-10-01', '--to', '2026-10-02'] },
+  { channel: 'codeburn:getSpeedEvents', args: ['request-1', 'hermes'], argv: ['speed', 'events', 'request-1', '--harness', 'hermes'] },
   { channel: 'codeburn:getOverview', args: ['30days', 'claude'], argv: ['status', '--format', 'menubar-json', '--period', '30days', '--no-timeline', '--no-optimize', '--provider', 'claude'] },
   { channel: 'codeburn:getOverview', args: ['30days', 'all'], argv: ['status', '--format', 'menubar-json', '--period', '30days', '--no-timeline', '--no-optimize'] },
   { channel: 'codeburn:getPlans', args: ['week'], argv: ['status', '--format', 'json', '--period', 'week'] },
@@ -1151,5 +1156,20 @@ describe('project filter', () => {
       if (previous === undefined) delete process.env.CODEBURN_APP_FILTER
       else process.env.CODEBURN_APP_FILTER = previous
     }
+  })
+})
+
+
+describe('speed IPC validation', () => {
+  it.each([
+    ['codeburn:getSpeed', ['today', 'cursor']],
+    ['codeburn:getSpeedEvents', ['--file', 'hermes']],
+    ['codeburn:getSpeedEvents', ['request', 'all']],
+    ['codeburn:getSpeedEvents', ['', 'codex']],
+  ])('rejects invalid identity for %s before spawning', async (channel, args) => {
+    const spawn = fakeSpawn()
+    const handlers = createBridgeHandlers({ ...spawn, resolveCodeburnPath: () => '/bin/codeburn', getQuota: async () => ({}) as any })
+    expect(await handlers[channel as string](...(args as string[]))).toMatchObject({ ok: false, error: { kind: 'bad-args' } })
+    expect(spawn.calls).toEqual([])
   })
 })

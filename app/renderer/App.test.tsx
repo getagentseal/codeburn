@@ -28,6 +28,8 @@ const mocks = vi.hoisted(() => ({
   getTimeline: vi.fn<(period: string, provider: string, range?: DateRange) => Promise<MenubarPayload>>(),
   getOptimizeReport: vi.fn<(period: string, provider: string, range?: DateRange, background?: boolean) => Promise<OptimizeJsonReport>>(),
   getModels: vi.fn(),
+  getSpeed: vi.fn(),
+  getSpeedEvents: vi.fn(),
   getSessions: vi.fn(),
   getCompareModels: vi.fn(),
   getCompare: vi.fn(),
@@ -202,6 +204,7 @@ function installDefaultMocks() {
   mocks.getAliases.mockResolvedValue([])
   mocks.setCurrency.mockResolvedValue({ ok: true, stdout: '', stderr: '' })
   mocks.resetCurrency.mockResolvedValue({ ok: true, stdout: '', stderr: '' })
+  mocks.getSpeed.mockResolvedValue({ rows: [], unavailableHarnesses: [], rejectedRecords: 0, omittedRecords: 0, warnings: [], historyLimit: 10 })
   mocks.telemetryTrack.mockResolvedValue(true)
 }
 
@@ -405,6 +408,18 @@ describe('App shortcuts', () => {
     expect(mocks.getOverview).not.toHaveBeenCalledWith('week', 'all')
   })
 
+  it('opens Speed with command-0 and offers all capture harnesses even without usage history', async () => {
+    render(<App />)
+    fireEvent.keyDown(document, { key: '0', metaKey: true })
+    expect(await screen.findByText('Generation speed by model and harness')).toBeInTheDocument()
+    expect(mocks.getSpeed).toHaveBeenCalledWith('30days', 'all', undefined)
+    fireEvent.click(screen.getByRole('button', { name: 'Providers' }))
+    const deepseek = await screen.findByRole('option', { name: /DeepSeek Harness/ })
+    fireEvent.click(deepseek)
+    await waitFor(() => expect(mocks.getSpeed).toHaveBeenCalledWith('30days', 'dsh', undefined))
+    expect(screen.getAllByText(/This device · all projects and accounts/).length).toBeGreaterThan(0)
+  })
+
   it('switches sections with command-number shortcuts', async () => {
     render(<App />)
 
@@ -422,7 +437,7 @@ describe('App shortcuts', () => {
     render(<App />)
 
     expect(await screen.findByText('Most expensive sessions')).toBeInTheDocument()
-    expect(screen.getByText(`${mod}1-9`)).toBeInTheDocument()
+    expect(screen.getByText(`${mod}0-9`)).toBeInTheDocument()
     expect(screen.getAllByText(`${mod},`).length).toBeGreaterThan(0)
     expect(screen.getByText(`${mod}R`)).toBeInTheDocument()
     expect(screen.queryByText('Command')).not.toBeInTheDocument()

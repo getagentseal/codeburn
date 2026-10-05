@@ -1,0 +1,43 @@
+.speed-note { color: var(--mut); font-size: 12px; line-height: 1.6; margin: 10px 0; }
+.speed-scroll { overflow-x: auto; max-width: 100%; }
+.speed-table { min-width: 810px; width: 100%; border-collapse: collapse; font-size: 12px; }
+.speed-table th, .speed-table td { padding: 12px 8px; text-align: right; white-space: nowrap; border-bottom: 1px solid var(--line, #8883); }
+.speed-table th { color: var(--mut); font-size: 11px; font-weight: 500; white-space: normal; max-width: 100px; }
+.speed-table th:nth-child(-n+2), .speed-table td:nth-child(-n+2) { text-align: left; }
+.speed-table .speed-model { min-width: 155px; max-width: 210px; white-space: normal; overflow-wrap: anywhere; font-weight: 550; }
+.speed-model b { font-size: 12px; font-weight: 550; }
+.speed-harness { display: block; color: var(--mut); margin-top: 5px; font-size: 11px; font-weight: 400; }
+.speed-table td:nth-child(2) { white-space: normal; min-width: 100px; max-width: 145px; }
+.speed-table .speed-rate { font-size: 17px; font-variant-numeric: tabular-nums; }
+.speed-typical { display: flex; justify-content: flex-end; align-items: center; gap: 6px; margin-top: 5px; color: var(--mut); font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.speed-delta { display: inline-block; padding: 1px 7px; border-radius: 999px; font-family: var(--mono); font-size: 11px; font-weight: 600; line-height: 1.5; font-variant-numeric: tabular-nums; color: var(--mut2); background: color-mix(in srgb, currentColor 11%, transparent); }
+.speed-delta.tone-good, .speed-spark.tone-good, .speed-dot.tone-good { color: var(--ok); }
+.speed-delta.tone-bad, .speed-spark.tone-bad, .speed-dot.tone-bad { color: var(--warn); }
+.speed-spark { display: inline-block; background: none; border: 1px solid transparent; border-radius: 8px; padding: 3px 4px; color: var(--mut2); cursor: pointer; line-height: 0; transition: border-color var(--dur-fast, .12s), background-color var(--dur-fast, .12s); }
+.speed-spark:hover { border-color: var(--line); }
+.speed-spark.on { border-color: var(--line); background: var(--card-inner); box-shadow: 0 1px 2px rgba(0,0,0,.06); }
+.speed-spark.on.tone-flat { color: var(--accent); }
+.speed-spark:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.speed-spark-line { fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.speed-trend-chart { margin: 6px 0 18px; }
+.speed-chart-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 6px; }
+.speed-chart-label { color: var(--ink); font-size: 12px; font-weight: 550; }
+.speed-chips { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.speed-chip { display: inline-flex; align-items: center; gap: 6px; padding: 2px 9px; border: 1px solid var(--line); border-radius: 999px; background: var(--card-inner); color: var(--ink); font-family: var(--mono); font-size: 11px; font-variant-numeric: tabular-nums; }
+.speed-chip-sw { width: 12px; height: 0; border-top: 2px solid var(--accent); }
+.speed-chip-sw.dashed { border-top: 2px dashed var(--mut2); }
+.speed-trend-chart svg { max-height: 240px; cursor: crosshair; }
+.speed-grid { stroke: var(--line); stroke-dasharray: 2 4; }
+.speed-axis { stroke: var(--line); }
+.speed-axis-text { fill: var(--mut); font-family: var(--mono); font-size: 11px; font-variant-numeric: tabular-nums; }
+.speed-typical-text { paint-order: stroke; stroke: var(--card-inner); stroke-width: 4px; stroke-linejoin: round; }
+.speed-typical-line { stroke: var(--mut2); stroke-width: 1.25; stroke-dasharray: 5 5; }
+.speed-line { fill: none; stroke: var(--accent); stroke-width: 2.25; stroke-linecap: round; stroke-linejoin: round; }
+.speed-crosshair { stroke: var(--mut2); stroke-width: 1; opacity: .45; }
+.speed-dot { fill: var(--accent); stroke: var(--card-inner); stroke-width: 2; }
+.speed-dot.tone-good, .speed-dot.tone-bad { fill: currentColor; }
+.speed-stats { display: flex; flex-wrap: wrap; gap: 24px; }
+.speed-stats dt { color: var(--mut); font-size: 12px; }
+.speed-stats dd { font-size: 22px; font-variant-numeric: tabular-nums; margin: 6px 0; }
+.speed-chart { margin: 16px 0 0; }
+.speed-chart svg { width: 100%; max-height: 220px; display: block; color: var(--mut); }

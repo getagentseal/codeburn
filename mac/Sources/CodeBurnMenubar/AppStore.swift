@@ -68,6 +68,48 @@ final class AppStore {
         let lifecycleGeneration: Int
     }
 
+    private(set) var speedReport: SpeedReport?
+    private(set) var speedRefreshedAt: Date?
+    private(set) var speedRefreshFailed = false
+    private var speedRefreshTask: Task<Void, Never>?
+    private var speedAttemptedAt: Date?
+    private var speedGeneration = 0
+
+    /// Independent, bounded background read. Usage and quota refreshes never
+    /// wait for a history scan, and a failure retains an explicitly stale view.
+    func refreshSpeedIfNeeded(force: Bool = false) {
+        guard speedRefreshTask == nil,
+              force || speedAttemptedAt.map({ Date().timeIntervalSince($0) >= 60 }) ?? true else { return }
+        speedAttemptedAt = Date()
+        speedGeneration += 1
+        let generation = speedGeneration
+        speedRefreshTask = Task { [weak self] in
+            guard let self else { return }
+            defer { if self.speedGeneration == generation { self.speedRefreshTask = nil } }
+            do {
+                let report = try await DataClient.fetchSpeed()
+                guard !Task.isCancelled, self.speedGeneration == generation else { return }
+                self.speedReport = report
+                self.speedRefreshedAt = Date()
+                self.speedRefreshFailed = false
+            } catch {
+                guard !Task.isCancelled, self.speedGeneration == generation else { return }
+                self.speedRefreshFailed = true
+            }
+        }
+    }
+
+    func cancelSpeedRefresh() {
+        speedGeneration += 1
+        speedRefreshTask?.cancel()
+        speedRefreshTask = nil
+        speedAttemptedAt = nil
+    }
+
+    func capacityDockSpeed(for provider: CapacityDockProvider) -> SpeedRow? {
+        speedReport?.recentRows(harness: provider.payloadProviderID).first
+    }
+
     var selectedProvider: ProviderFilter = .all
     var selectedPeriod: Period = .today
     var selectedScope: MenubarScope = MenubarScope.savedMenubarScope()
