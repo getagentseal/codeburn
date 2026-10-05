@@ -128,26 +128,36 @@ export function parseCursorUsageCsv(text: string): CursorUsageEvent[] {
 }
 
 /// `2026-08-27`, an ISO instant, or epoch milliseconds (what the dashboard's
-/// export URL carries). A bare date is a whole UTC day: its start for `from`,
-/// its last millisecond for `to`.
+/// export URL carries). A bare date is a whole local day, the same day reports
+/// bucket by: its start for `from`, its last millisecond for `to`.
 export function parseBoundary(value: string, edge: 'from' | 'to'): number {
   const v = value.trim()
   let ms: number
   if (/^\d{9,}$/.test(v)) ms = Number(v)
-  else if (/^\d{4}-\d{2}-\d{2}$/.test(v)) ms = Date.parse(`${v}T00:00:00.000Z`) + (edge === 'to' ? 86_400_000 - 1 : 0)
+  else if (/^\d{4}-\d{2}-\d{2}$/.test(v)) {
+    const [y, m, d] = v.split('-').map(Number) as [number, number, number]
+    ms = edge === 'to' ? new Date(y, m - 1, d + 1).getTime() - 1 : new Date(y, m - 1, d).getTime()
+  }
   else ms = Date.parse(v)
   if (Number.isNaN(ms)) throw new Error(`--${edge} must be a date (2026-08-27), an ISO timestamp or epoch milliseconds, got "${value}"`)
   return ms
 }
 
-function utcDayStart(ms: number): number {
-  return Math.floor(ms / 86_400_000) * 86_400_000
+function localDayStart(ms: number): number {
+  const d = new Date(ms)
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()
+}
+
+function localDayEnd(ms: number): number {
+  const d = new Date(ms)
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1).getTime() - 1
 }
 
 /// The span one export covers. The export records no range of its own, so it
-/// is the `--from`/`--to` the user exported with, else the UTC days of its
-/// first and last event. The end never passes the moment the file was saved:
-/// usage after the export is not in it and keeps its local estimate.
+/// is the `--from`/`--to` the user exported with, else the local days of its
+/// first and last event, so no report day is split between imported and local
+/// usage. The end never passes the moment the file was saved: usage after the
+/// export is not in it and keeps its local estimate.
 function exportCoverage(
   events: CursorUsageEvent[],
   fileSavedMs: number,
@@ -157,8 +167,8 @@ function exportCoverage(
   const times = events.map(e => Date.parse(e.date))
   const first = Math.min(...times)
   const last = Math.max(...times)
-  const start = from ?? utcDayStart(first)
-  const declaredEnd = to ?? utcDayStart(last) + 86_400_000 - 1
+  const start = from ?? localDayStart(first)
+  const declaredEnd = to ?? localDayEnd(last)
   if (start > declaredEnd) throw new Error('--from is after --to')
   if (first < start || last > declaredEnd) {
     throw new Error(`the export holds events from ${new Date(first).toISOString()} to ${new Date(last).toISOString()}, outside ${new Date(start).toISOString()} .. ${new Date(declaredEnd).toISOString()}`)

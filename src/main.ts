@@ -1628,8 +1628,8 @@ program
 program
   .command('import <tool> [file]')
   .description('Replace local estimates with usage a tool exported itself. Supported: cursor (Export CSV at cursor.com/dashboard/usage)')
-  .option('--from <date>', 'Start of the exported range (date, ISO time or epoch ms). Default: the first event\'s UTC day')
-  .option('--to <date>', 'End of the exported range (date, ISO time or epoch ms). Default: the last event\'s UTC day')
+  .option('--from <date>', 'Start of the exported range (date, ISO time or epoch ms). Default: the first event\'s local day')
+  .option('--to <date>', 'End of the exported range (date, ISO time or epoch ms). Default: the last event\'s local day')
   .option('--remove', 'Delete the imported usage and go back to local estimates')
   .action(async (tool: string, file: string | undefined, opts: { from?: string; to?: string; remove?: boolean }) => {
     if (tool !== 'cursor') {

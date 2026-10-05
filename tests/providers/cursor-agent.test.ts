@@ -185,6 +185,7 @@ describe('cursor-agent provider', () => {
     expect(calls[0]!.outputTokens).toBe(estimateTokensFromChars(assistantText.length))
     expect(calls[0]!.reasoningTokens).toBe(0)
     expect(calls[0]!.deduplicationKey).toBe(`cursor-agent:${FIXED_UUID}:0`)
+    expect(calls[0]!.costIsEstimated).toBe(true)
   })
 
   it('parses without sqlite db and defaults model', async () => {

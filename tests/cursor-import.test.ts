@@ -212,6 +212,43 @@ describe('Cursor import through the report pipeline', () => {
   })
 })
 
+describe('Cursor import coverage in a non-UTC zone', () => {
+  it.each(['America/Los_Angeles', 'Asia/Kolkata'])('%s: a local day is wholly imported and its neighbours keep their estimates', async (tz) => {
+    process.env.TZ = tz
+    const b = new Date(base)
+    const at = (dayOffset: number, hour: number, minute = 0) =>
+      new Date(b.getUTCFullYear(), b.getUTCMonth(), b.getUTCDate() + dayOffset, hour, minute).getTime()
+    const day = toDateString(new Date(at(0, 12)))
+
+    await writeAgentTranscript('prev-evening', at(-1, 20))
+    await writeAgentTranscript('same-day', at(0, 12))
+    await writeAgentTranscript('next-night', at(1, 1))
+    const path = await writeCsv([
+      { date: new Date(at(0, 0, 30)).toISOString(), model: 'auto', input: 100 },
+      { date: new Date(at(0, 23, 30)).toISOString(), model: 'auto', input: 200 },
+    ], 'tz.csv')
+
+    const s = await importCursorCsv(path)
+    expect([toDateString(new Date(s.coverage.start)), toDateString(new Date(s.coverage.end))]).toEqual([day, day])
+
+    clearSessionCache()
+    const perDay: Record<string, Record<string, number>> = {}
+    for (const p of await parseAllSessions(whole, 'all')) for (const ses of p.sessions) for (const t of ses.turns) for (const c of t.assistantCalls) {
+      const d = perDay[toDateString(new Date(c.timestamp))] ??= {}
+      d[c.provider] = (d[c.provider] ?? 0) + 1
+    }
+    expect(perDay).toEqual({
+      [toDateString(new Date(at(-1, 20)))]: { 'cursor-agent': 1 },
+      [day]: { cursor: 2 },
+      [toDateString(new Date(at(1, 1)))]: { 'cursor-agent': 1 },
+    })
+
+    // The same day passed as --from/--to is the span inferred above.
+    const explicit = await importCursorCsv(path, { from: parseBoundary(day, 'from'), to: parseBoundary(day, 'to') })
+    expect(explicit).toMatchObject({ changed: false, coverage: { start: new Date(at(0, 0)).toISOString(), end: new Date(at(1, 0) - 1).toISOString() } })
+  })
+})
+
 describe('invalidateProviderDays', () => {
   it('drops only the named providers on the named days and pulls the watermark back', async () => {
     const day = (date: string): DailyEntry => ({

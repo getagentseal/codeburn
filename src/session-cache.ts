@@ -423,7 +423,7 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // once per user message instead of once per assistant message.
   // store-db-v1 (#986): sessions with no exported transcript are read from
   // ~/.cursor/chats/*/*/store.db.
-  'cursor-agent': 'workspaceless-transcript-v1-full-turn-accounting-v2-store-db-v1',
+  'cursor-agent': 'workspaceless-transcript-v1-full-turn-accounting-v2-store-db-v1-est-cost',
   // source-provenance-v1 (#944): CLI sessions were misread as VS Code
   // transcripts (both carry producer 'copilot-agent'), skipping the shutdown
   // input/cache rollup; this bump re-parses them so the missing tokens land.
