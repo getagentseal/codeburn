@@ -762,6 +762,29 @@ describe('OpenClaw state directory discovery', () => {
     expect(await provider.probeRoots!()).toEqual([{ path: agents, label: 'agents' }])
   })
 
+  it('counts a session mirrored in custom and legacy roots only once', async () => {
+    const state = join(root, 'custom-state')
+    vi.stubEnv('OPENCLAW_STATE_DIR', state)
+    await setupFixture(join(state, 'agents'), 'custom', 'mirror', SESSION_LINES)
+    await setupFixture(join(homedir(), '.clawdbot', 'agents'), 'legacy', 'mirror', SESSION_LINES)
+    const provider = createOpenClawProvider()
+    const seen = new Set<string>()
+    const counts: number[] = []
+    for (const source of await provider.discoverSessions()) {
+      counts.push((await parseAll(provider, source, seen)).length)
+    }
+    expect(counts).toEqual([2, 0])
+  })
+
+  it.skipIf(process.platform !== 'win32')('deduplicates Windows case aliases of the default state root', async () => {
+    const state = join(homedir(), '.openclaw')
+    vi.stubEnv('OPENCLAW_STATE_DIR', state.toUpperCase())
+    await setupFixture(join(state, 'agents'), 'default', 'default', SESSION_LINES)
+    const provider = createOpenClawProvider()
+    expect(await provider.probeRoots!()).toHaveLength(4)
+    expect(await provider.discoverSessions()).toHaveLength(1)
+  })
+
   it('honors OPENCLAW_HOME for the default state root and home-relative override', async () => {
     const home = join(root, 'openclaw-home')
     vi.stubEnv('OPENCLAW_HOME', home)
