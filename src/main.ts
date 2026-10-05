@@ -8,7 +8,7 @@ import { reportUnmatchedProjectPatterns } from './project-filter-warnings.js'
 import { getVercelGatewayApiKey } from './providers/vercel-gateway.js'
 import { BILLING_FILTER_VALUES, ROUTE_FILTER_VALUES, filterProjectsByBillingRoute } from './billing-filter.js'
 import { AGGREGATE_ONLY_PROVIDER, aggregateOnlyCostUSD, excludesAggregateOnlyProviders, parseAllSessions, filterProjectsByName, filterProjectsByDateRange, clearSessionCache, setInteractiveScanUI, computeCorpusFingerprint, isSessionHydrationComplete, startProgressKeepalive, stopProgressKeepalive, withLoadWindow } from './parser.js'
-import { allProviderNames, getAllProviders } from './providers/index.js'
+import { allProviderNames, getAllProviders, safeDiscoverSessions } from './providers/index.js'
 import { getProvider } from './providers/index.js'
 import { getClaudeConfigDirs, getDesktopSessionsDirs } from './providers/claude.js'
 import { convertCost, formatCost } from './currency.js'
@@ -2546,7 +2546,7 @@ program
       const providers = await getAllProviders()
       const dirs: string[] = []
       for (const provider of providers) {
-        const sessions = await provider.discoverSessions()
+        const sessions = await safeDiscoverSessions(provider)
         for (const session of sessions) dirs.push(session.path)
       }
       const scope = opts.project.length > 0 || opts.exclude.length > 0 ? projectSessionIds(projects) : undefined

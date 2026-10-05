@@ -5,7 +5,7 @@ import type { ModelStats, ComparisonRow, CategoryComparison, WorkingStyleRow } f
 import { aggregateModelStats, computeComparison, computeCategoryComparison, computeWorkingStyle, findModelStat, projectSessionIds, scanSelfCorrections } from './compare-stats.js'
 import { formatCost, formatTokens } from './format.js'
 import { filterProjectsByName, parseAllSessions, setInteractiveScanUI } from './parser.js'
-import { getAllProviders } from './providers/index.js'
+import { getAllProviders, safeDiscoverSessions } from './providers/index.js'
 import type { ProjectSummary, DateRange } from './types.js'
 import { patchStdoutForWindows } from './ink-win.js'
 import { startUserTimingGuard } from './user-timing-guard.js'
@@ -420,7 +420,7 @@ export function CompareView({ projects, onBack, presetModels, scopeToProjects }:
       const providers = await getAllProviders()
       const dirs: string[] = []
       for (const p of providers) {
-        const sessions = await p.discoverSessions()
+        const sessions = await safeDiscoverSessions(p)
         for (const s of sessions) dirs.push(s.path)
       }
       const corrections = await scanSelfCorrections(dirs, scopeToProjects ? projectSessionIds(projectsRef.current) : undefined)
