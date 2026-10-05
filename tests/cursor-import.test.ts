@@ -204,9 +204,18 @@ describe('importCursorCsvText as a sync', () => {
     expect((await stored()).events).toEqual([expect.not.objectContaining({ source: 'sync' })])
     expect((await stored()).events[0]).not.toHaveProperty('account')
 
-    // Cursor revised the row: the sync adds the new version and the manual one stays.
+    // Cursor revised the row: manual coverage wins, so only the manual row is priced.
     await importCursorCsvText(csv([{ ...row, cost: '$0.10' }]), base + 30 * DAY, { from, to: base + 30 * DAY, source: 'sync', account: 'aaaa' })
-    expect((await stored()).events.map(e => [e.cost, e.source])).toEqual([['Included', undefined], ['$0.10', 'sync']])
+    expect((await stored()).events.map(e => [e.cost, e.source])).toEqual([['Included', undefined]])
+  })
+
+  it('a synced row after the manual coverage end is still added', async () => {
+    const saved = base + DAY + 6 * 3_600_000
+    const manual = await importCursorCsv(await writeCsv([{ date: iso(1, 3), model: 'auto', input: 11 }], 'manual.csv', saved))
+    expect(manual.coverage.end).toBe(new Date(saved).toISOString())
+    const s = await importCursorCsvText(csv([{ date: iso(1, 5), model: 'auto', input: 1 }, { date: iso(1, 7), model: 'auto', input: 2 }, { date: iso(2, 1), model: 'auto', input: 3 }]), base + 30 * DAY, { from, to: base + 30 * DAY, source: 'sync', account: 'aaaa' })
+    expect(s).toMatchObject({ added: 2, skipped: 1, total: 3 })
+    expect((await stored()).events.map(e => [e.date, e.source])).toEqual([[iso(1, 3), undefined], [iso(1, 7), 'sync'], [iso(2, 1), 'sync']])
   })
 
   it('keeps every account\'s synced rows and coverage apart; a sync replaces only its own account\'s rows', async () => {

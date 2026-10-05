@@ -278,6 +278,9 @@ export async function importCursorCsvText(
   const replaced = new Set(sync ? existing?.events.filter(e => e.source === 'sync' && e.account === opts.account && Date.parse(e.date) >= coverage.start) : [])
   const before = new Set(existing?.events.map(e => e.hash))
   const byHash = new Map((existing?.events ?? []).filter(e => !replaced.has(e)).map(e => [e.hash, e]))
+  // Manual coverage wins inside its range: a row Cursor revised there would
+  // otherwise be priced twice, once as the manual row and once as the sync's.
+  const manualRanges = sync ? (existing?.ranges ?? []).filter(r => !r.source).map(r => [Date.parse(r.start), Date.parse(r.end)] as const) : []
   let added = 0
   let converted = 0
   for (const e of incoming) {
@@ -292,6 +295,8 @@ export async function importCursorCsvText(
       }
       continue
     }
+    const ms = Date.parse(e.date)
+    if (manualRanges.some(([start, end]) => ms >= start && ms <= end)) continue
     byHash.set(e.hash, sync ? { ...e, source: 'sync', ...(opts.account ? { account: opts.account } : {}) } : e)
     if (!before.has(e.hash)) added++
   }
