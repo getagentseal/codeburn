@@ -794,4 +794,44 @@ describe('OpenClaw state directory discovery', () => {
     const custom = await setupFixture(join(home, 'relocated', 'agents'), 'custom', 'custom', SESSION_LINES)
     expect((await createOpenClawProvider().discoverSessions()).map(s => s.path)).toEqual([custom, defaultPath])
   })
+
+  it('prefers HOME to USERPROFILE when OpenClaw resolves its home', async () => {
+    const home = join(root, 'shell-home')
+    vi.stubEnv('HOME', home)
+    vi.stubEnv('USERPROFILE', join(root, 'profile-home'))
+    const path = await setupFixture(join(home, '.openclaw', 'agents'), 'default', 'default', SESSION_LINES)
+    expect((await createOpenClawProvider().discoverSessions()).map(s => s.path)).toEqual([path])
+    vi.stubEnv('OPENCLAW_STATE_DIR', '~/relocated')
+    expect((await createOpenClawProvider().probeRoots!())[0].path).toBe(join(home, 'relocated', 'agents'))
+  })
+
+  it.each(['', '  ', ' undefined ', ' null '])('treats an unset OPENCLAW_HOME placeholder (%j) as absent', async value => {
+    vi.stubEnv('OPENCLAW_HOME', value)
+    const path = await setupFixture(join(homedir(), '.openclaw', 'agents'), 'default', 'default', SESSION_LINES)
+    expect((await createOpenClawProvider().discoverSessions()).map(s => s.path)).toEqual([path])
+  })
+
+  it('expands OPENCLAW_HOME against the OS home fallback chain', async () => {
+    const home = join(root, 'shell-home')
+    vi.stubEnv('HOME', home)
+    vi.stubEnv('OPENCLAW_HOME', ' ~/service ')
+    vi.stubEnv('OPENCLAW_STATE_DIR', '~/state')
+    expect((await createOpenClawProvider().probeRoots!())[0].path).toBe(join(home, 'service', 'state', 'agents'))
+  })
+
+  it.each(['undefined', 'null', ''])('falls back to USERPROFILE for an unset HOME value (%j)', async value => {
+    const profile = join(root, 'profile-home')
+    vi.stubEnv('HOME', value)
+    vi.stubEnv('USERPROFILE', profile)
+    expect((await createOpenClawProvider().probeRoots!())[0].path).toBe(join(profile, '.openclaw', 'agents'))
+  })
+
+  it('supports OpenClaw\'s Termux home fallback before the OS resolver', async () => {
+    vi.stubEnv('HOME', '')
+    vi.stubEnv('USERPROFILE', '')
+    const termux = join(root, 'com.termux', 'files')
+    vi.stubEnv('PREFIX', join(termux, 'usr'))
+    vi.stubEnv('ANDROID_DATA', '/data')
+    expect((await createOpenClawProvider().probeRoots!())[0].path).toBe(join(termux, 'home', '.openclaw', 'agents'))
+  })
 })

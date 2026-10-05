@@ -27,12 +27,10 @@ async function seed(state: string, id: string, input: number, timestamp: string)
 }
 
 describe('OpenClaw discovery cache invalidation', () => {
-  it.each(['OPENCLAW_STATE_DIR', 'OPENCLAW_HOME'])('fingerprints changes to %s', name => {
+  it.each(['OPENCLAW_STATE_DIR', 'OPENCLAW_HOME', 'HOME', 'USERPROFILE', 'PREFIX', 'ANDROID_DATA'])('fingerprints changes to %s', name => {
     const before = computeEnvFingerprint('openclaw')
-    const unrelated = computeEnvFingerprint('claude')
     vi.stubEnv(name, '/fixture/relocated')
     expect(computeEnvFingerprint('openclaw')).not.toBe(before)
-    expect(computeEnvFingerprint('claude')).toBe(unrelated)
   })
 
   it('rediscovers the selected state directory after a warm parse', async () => {

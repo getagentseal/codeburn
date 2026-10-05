@@ -11,7 +11,9 @@ OpenClaw, plus the older Clawdbot / Moltbot / Moldbot lineage.
 When set, `OPENCLAW_STATE_DIR/agents` is checked first. The environment variable
 names the state directory, so CodeBurn appends `agents` itself. Whitespace is
 trimmed, relative paths resolve from the current working directory, and a leading
-`~` expands against OpenClaw's effective home (`OPENCLAW_HOME`, or the OS home).
+`~` expands against OpenClaw's effective home: `OPENCLAW_HOME`, then `HOME`,
+`USERPROFILE`, the Termux home fallback, and finally the OS home. Blank home
+values and the literal strings `undefined` and `null` are treated as unset.
 This follows OpenClaw's [state directory resolver](https://github.com/openclaw/openclaw/blob/main/src/config/state-dir.ts)
 and [home path resolver](https://github.com/openclaw/openclaw/blob/main/src/infra/home-dir.ts).
 
@@ -40,9 +42,10 @@ The SQLite source path carries the session id after the database path (`<db>:<se
 
 ## Caching
 
-Parsed sessions use the shared session cache. Both `OPENCLAW_STATE_DIR` and
-`OPENCLAW_HOME` are fingerprinted so changing the selected roots invalidates that
-provider's entries. The `state-dir-v1` parser revision and daily cache v74 backfill
+Parsed sessions use the shared session cache. `OPENCLAW_STATE_DIR`,
+`OPENCLAW_HOME`, and their home fallback variables are fingerprinted so changing
+the selected roots invalidates that provider's entries. The `state-dir-v1` parser
+revision and daily cache v74 backfill
 surviving history that earlier versions missed. Archived daily totals continue to
 be carried forward when their source logs are unavailable.
 

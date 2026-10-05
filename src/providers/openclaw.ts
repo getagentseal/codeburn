@@ -221,13 +221,28 @@ async function* finalizeCalls(
   }
 }
 
+function normalizeHomeDir(value: string | undefined): string | undefined {
+  const trimmed = value?.trim()
+  return trimmed && trimmed !== 'undefined' && trimmed !== 'null' ? trimmed : undefined
+}
+
 function getOpenClawDirs(): string[] {
-  const osHome = homedir()
+  let osHome = normalizeHomeDir(process.env['HOME']) ?? normalizeHomeDir(process.env['USERPROFILE'])
+  // OpenClaw also supports Termux when neither conventional home variable is
+  // set. A generic PREFIX alone is not enough to select this fallback.
+  if (!osHome) {
+    const prefix = normalizeHomeDir(process.env['PREFIX'])
+    if (prefix && normalizeHomeDir(process.env['ANDROID_DATA'])
+      && /(?:^|\/)com\.termux\/files\/usr\/?$/.test(prefix.replace(/\\/g, '/'))) {
+      osHome = resolve(prefix, '..', 'home')
+    }
+  }
+  osHome ??= homedir()
   const expandHome = (path: string, home: string): string => resolve(path.replace(/^~(?=$|[\\/])/, () => home))
   // OpenClaw resolves state overrides against its effective home. Trim before
   // expanding so a quoted "~/state" works just like its own path resolver.
-  const configuredHome = process.env['OPENCLAW_HOME']?.trim()
-  const home = configuredHome ? expandHome(configuredHome, osHome) : osHome
+  const configuredHome = normalizeHomeDir(process.env['OPENCLAW_HOME'])
+  const home = configuredHome ? expandHome(configuredHome, osHome) : resolve(osHome)
   const stateDir = process.env['OPENCLAW_STATE_DIR']?.trim()
   const roots = [
     ...(stateDir ? [join(expandHome(stateDir, home), 'agents')] : []),

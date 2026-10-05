@@ -315,7 +315,7 @@ export const PROVIDER_ENV_VARS: Record<string, string[]> = {
   'cursor-agent': ['XDG_DATA_HOME'],
   'open-design': ['CODEBURN_OPEN_DESIGN_DIR', 'APPDATA'],
   openclaude: ['CODEBURN_OPENCLAUDE_DIR'],
-  openclaw: ['OPENCLAW_STATE_DIR', 'OPENCLAW_HOME'],
+  openclaw: ['OPENCLAW_STATE_DIR', 'OPENCLAW_HOME', 'HOME', 'USERPROFILE', 'PREFIX', 'ANDROID_DATA'],
   opencode: ['XDG_DATA_HOME', 'OPENCODE_DATA_DIR', 'OPENCODE_DB_PREFIX'],
   goose: ['XDG_DATA_HOME', 'GOOSE_PATH_ROOT'],
   grok: ['GROK_HOME'],
