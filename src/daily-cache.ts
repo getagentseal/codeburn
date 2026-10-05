@@ -256,7 +256,10 @@ import type { DateRange, ProjectSummary } from './types.js'
 // miss sessions there and must be re-derived after the default path is fixed.
 // v51: honor redirected Copilot and Cursor editor data roots. Backfill settled
 // days that previously missed usage stored under APPDATA or XDG_CONFIG_HOME.
-export const DAILY_CACHE_VERSION = 51
+// v52: DSH session format v4 (dsh 0.2.0-rc.2) is read; days finalized while
+// those sessions were skipped re-derive. Calls only rise, so no
+// PENDING_REDERIVE_PROVIDER_VERSIONS entry is needed.
+export const DAILY_CACHE_VERSION = 52
 const MIN_SUPPORTED_VERSION = 28
 
 /// Providers whose per-day CALL COUNT means something different at
