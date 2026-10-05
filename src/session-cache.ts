@@ -429,8 +429,11 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // 'standard'), and `gpt-reserve` now splits cache writes like GPT-5.6 Luna.
   // codex-fork-mask-v1: a fork's replay burst drops only records the parent
   // rollout holds, so cached forks that dropped the whole burst re-parse.
+  // native-tool-events-v1: capture built-in Responses tools and item-model
+  // WebSearch mirrors, preserving the first observed item identity across
+  // cached turns and append checkpoints.
   // Compose every suffix so cached sessions receive all accounting fixes.
-  codex: 'mcp-attribution-v5-est-cost-active-timing-mcp-wait-rich-capture-v1-cross-provider-pr-v1-session-meta-model-v1-session-meta-fields-v1-codex-pricing-v1-codex-tps-v1-codex-mcp-skills-v1-activity-price-v1-fork-replay-burst-v1-codex-token-usage-record-v1-codex-priority-tier-v1-codex-auto-review-date-v1-codex-flex-reserve-v1-codex-fork-mask-v1',
+  codex: 'mcp-attribution-v5-est-cost-active-timing-mcp-wait-rich-capture-v1-cross-provider-pr-v1-session-meta-model-v1-session-meta-fields-v1-codex-pricing-v1-codex-tps-v1-codex-mcp-skills-v1-activity-price-v1-fork-replay-burst-v1-codex-token-usage-record-v1-codex-priority-tier-v1-codex-auto-review-date-v1-codex-flex-reserve-v1-codex-fork-mask-v1-native-tool-events-v1',
   // reported-cost-v1: cached Crush calls stored costUSD: undefined and must
   // re-parse to keep the recorded session cost.
   crush: 'reported-cost-v1',

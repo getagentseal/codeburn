@@ -1621,21 +1621,91 @@ describe('codex provider - native tool events', () => {
     expect(forkCalls[0]?.tools).toEqual(['WebSearch'])
   })
 
-  it('attributes a large image-generation result through the compact line decoder', async () => {
+  it('keeps direct native identities in large lines without reading nested or sibling ids', async () => {
     const largeImage = JSON.stringify({
       type: 'response_item', timestamp: '2026-04-14T10:00:10Z',
-      payload: { type: 'image_generation_call', id: 'ig-large', status: 'completed', revised_prompt: 'fixture', result: 'a'.repeat(2 * 1024 * 1024) },
+      payload: { type: 'image_generation_call', status: 'completed', revised_prompt: 'fixture', result: 'a'.repeat(2 * 1024 * 1024), id: 'ig-late' },
+    })
+    const duplicateImage = JSON.stringify({
+      type: 'response_item', timestamp: '2026-04-14T10:00:11Z',
+      payload: { type: 'image_generation_call', id: 'ig-late', status: 'completed', result: 'small' },
+    })
+    const imageWithoutId = JSON.stringify({
+      type: 'response_item', timestamp: '2026-04-14T10:00:12Z',
+      payload: { type: 'image_generation_call', status: 'completed', result: 'b'.repeat(128 * 1024) },
+      metadata: { id: 'ig-sibling' },
+    })
+    const imageSiblingControl = JSON.stringify({
+      type: 'response_item', timestamp: '2026-04-14T10:00:13Z',
+      payload: { type: 'image_generation_call', id: 'ig-sibling', status: 'completed', result: 'small' },
+    })
+    const largeToolSearch = JSON.stringify({
+      type: 'response_item', timestamp: '2026-04-14T10:00:14Z',
+      payload: { type: 'tool_search_call', arguments: { filler: 'c'.repeat(128 * 1024) }, call_id: 'ts-late' },
+    })
+    const duplicateToolSearch = JSON.stringify({
+      type: 'response_item', timestamp: '2026-04-14T10:00:15Z',
+      payload: { type: 'tool_search_call', call_id: 'ts-late', arguments: {} },
+    })
+    const toolSearchWithoutId = JSON.stringify({
+      type: 'response_item', timestamp: '2026-04-14T10:00:16Z',
+      payload: { type: 'tool_search_call', arguments: { filler: 'd'.repeat(128 * 1024) } },
+      metadata: { call_id: 'ts-sibling' },
+    })
+    const toolSearchSiblingControl = JSON.stringify({
+      type: 'response_item', timestamp: '2026-04-14T10:00:17Z',
+      payload: { type: 'tool_search_call', call_id: 'ts-sibling', arguments: {} },
+    })
+    const largeItemCompleted = JSON.stringify({
+      type: 'event_msg', timestamp: '2026-04-14T10:00:18Z',
+      payload: {
+        type: 'item_completed',
+        item: {
+          results: [{ type: 'NestedResult', id: 'nested-result', body: 'e'.repeat(128 * 1024) }],
+          action: { type: 'search', id: 'nested-action' },
+          type: 'WebSearch',
+          id: 'ws-late',
+        },
+      },
+    })
+    const duplicateItemCompleted = JSON.stringify({
+      type: 'event_msg', timestamp: '2026-04-14T10:00:19Z',
+      payload: { type: 'item_completed', item: { results: [], type: 'WebSearch', id: 'ws-late' } },
+    })
+    const itemWithoutId = JSON.stringify({
+      type: 'event_msg', timestamp: '2026-04-14T10:00:20Z',
+      payload: { type: 'item_completed', item: { results: [{ type: 'NestedResult', id: 'nested-result' }], type: 'WebSearch' } },
+      metadata: { item: { type: 'WebSearch', id: 'ws-sibling' } },
+    })
+    const itemSiblingControl = JSON.stringify({
+      type: 'event_msg', timestamp: '2026-04-14T10:00:21Z',
+      payload: { type: 'item_completed', item: { type: 'WebSearch', id: 'ws-sibling' } },
     })
     const filePath = await writeSession(tmpDir, '2026-04-14', 'rollout-native-large-image.jsonl', [
       sessionMeta({ session_id: 'sess-native-large-image' }),
       largeImage,
+      duplicateImage,
+      imageWithoutId,
+      imageSiblingControl,
+      largeToolSearch,
+      duplicateToolSearch,
+      toolSearchWithoutId,
+      toolSearchSiblingControl,
+      largeItemCompleted,
+      duplicateItemCompleted,
+      itemWithoutId,
+      itemSiblingControl,
       tokenUsageRecord({ responseId: 'resp-native-large-image', usage: { input: 100, output: 20 } }),
     ])
 
     const calls = await parseFile(filePath)
 
     expect(calls).toHaveLength(1)
-    expect(calls[0]?.tools).toEqual(['ImageGeneration'])
+    expect(calls[0]?.tools).toEqual([
+      'ImageGeneration', 'ImageGeneration', 'ImageGeneration',
+      'ToolSearch', 'ToolSearch', 'ToolSearch',
+      'WebSearch', 'WebSearch', 'WebSearch',
+    ])
   })
 })
 
