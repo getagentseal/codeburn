@@ -4,7 +4,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { ACCEPTS_KEY, refreshQuota, summaryFor, type Connection, type QuotaState } from '../lib/quota'
 import { QUOTA_CADENCES, subscribeSettings, writeSettings, type AppSettings } from '../lib/appSettings'
 import { homePath } from '../lib/platform'
-import { Field, Group, Note, Pane, Row, Select } from './controls'
+import { Field, Group, Note, Pane, Row, Select, Switch } from './controls'
 import { CheckCircleIcon, KeySlashIcon, RetryIcon, WarningIcon, XIcon } from '../components/Icons'
 
 /// One pane per provider the CLI has a live quota adapter for, from the mac's
@@ -113,6 +113,8 @@ export function ProviderPane({ id, name, quota }: Props) {
 
       {id === 'claude' && <ClaudeConfigDirs />}
 
+      {id === 'cursor' && <CursorSync />}
+
       {ACCEPTS_KEY.includes(id) && <ProviderKey id={id} name={name} />}
 
       <QuotaCadence />
@@ -179,6 +181,33 @@ function ClaudeConfigDirs() {
       )}
       {error && <Note><span className="stg-error">{error}</span></Note>}
       <Row control={<button type="button" className="btn" onClick={add}>Add Directory...</button>} />
+    </Group>
+  )
+}
+
+/// The CLI's `cursorSync` config key. The status line lives in the popover's Cursor tab.
+function CursorSync() {
+  const [enabled, setEnabled] = useState<boolean | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    invoke<boolean>('cursor_sync').then(setEnabled).catch(() => {})
+  }, [])
+
+  const toggle = async () => {
+    setError(null)
+    try {
+      setEnabled(await invoke<boolean>('set_cursor_sync', { enabled: !enabled }))
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  if (enabled === null) return null
+  return (
+    <Group title="Usage Sync" footer="CodeBurn downloads your own usage export with the Cursor app's login, at most once an hour.">
+      <Row label="Sync Cursor usage from cursor.com" control={<Switch on={enabled} onToggle={() => { void toggle() }} ariaLabel="Sync Cursor usage from cursor.com" />} />
+      {error && <Note><span className="stg-error">{error}</span></Note>}
     </Group>
   )
 }

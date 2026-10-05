@@ -646,6 +646,9 @@ td:first-child { font-size: var(--fs-body); font-weight: var(--fw-medium); }
 .quota-window-labels span:last-child { margin-left: auto; color: var(--mut); font-family: var(--mono); font-size: var(--fs-meta); font-variant-numeric: tabular-nums; text-align: right; }
 .quota-window .track { margin-top: 7px; }
 .quota-footer { display: flex; flex-direction: column; gap: 3px; margin-top: 13px; padding-top: 10px; border-top: 1px solid var(--line2); color: var(--mut); font-size: var(--fs-label); }
+.cursor-sync-line { margin: 6px 0 0; color: var(--mut); font-size: var(--fs-label); line-height: 1.4; }
+.cursor-sync-line.warn { color: var(--warn); }
+.about-row .tx small .cursor-sync-line { margin: 0; }
 .plans-section-heading { margin: 2px 0 8px; color: var(--mut); font-size: var(--fs-eyebrow); font-weight: var(--fw-subhead); letter-spacing: .04em; text-transform: uppercase; }
 .budget-plans { display: grid; width: 100%; gap: 12px; }
 /* Provider cards side by side: the Overview grid's intrinsic auto-fit — two or

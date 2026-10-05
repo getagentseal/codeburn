@@ -1389,7 +1389,11 @@ program
           // best-effort only: the local payload is still emitted below
         }
       }
-      console.log(JSON.stringify(payload))
+      // Attached last: the snapshot and the per-device payloads above must not
+      // carry this machine's sync status.
+      const { cursorSyncStatus } = await import('./cursor-sync.js')
+      const cursorSync = await cursorSyncStatus().catch(() => null)
+      console.log(JSON.stringify(cursorSync ? { ...payload, cursorSync } : payload))
       return
     }
 

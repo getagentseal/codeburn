@@ -615,6 +615,7 @@ export function App() {
               metric={settings.metric}
               dailyBudget={isTokenMetric ? budgets.tokens : budgets.cost}
               combinedScope={effectiveScope === 'combined'}
+              cursorSync={provider === 'cursor' || provider === 'cursor-agent' ? payload?.cursorSync : undefined}
             />
             <PeriodTabs
               selected={period}

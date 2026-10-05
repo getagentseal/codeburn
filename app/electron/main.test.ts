@@ -68,6 +68,8 @@ const CHANNELS = [
   'codeburn:getUnfilteredProjects',
   'codeburn:getLanguage',
   'codeburn:setLanguage',
+  'codeburn:getCursorSync',
+  'codeburn:setCursorSync',
   'codeburn:setCurrency',
   'codeburn:resetCurrency',
   'codeburn:addAlias',
@@ -1150,6 +1152,30 @@ describe('project filter', () => {
     } finally {
       if (previous === undefined) delete process.env.CODEBURN_APP_FILTER
       else process.env.CODEBURN_APP_FILTER = previous
+    }
+  })
+})
+
+describe('codeburn:setCursorSync', () => {
+  it('writes only the shared config cursorSync key, clearing it when on', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'cb-cursor-sync-'))
+    const previous = process.env.HOME
+    process.env.HOME = home
+    try {
+      const config = join(home, '.config', 'codeburn', 'config.json')
+      mkdirSync(dirname(config), { recursive: true })
+      writeFileSync(config, JSON.stringify({ language: 'fr', currency: { code: 'EUR' } }))
+      const handlers = createBridgeHandlers({ spawnCli: vi.fn(), spawnCliAction: vi.fn(), resolveCodeburnPath: () => null, getQuota: vi.fn(async () => []) })
+      expect(await handlers['codeburn:getCursorSync']!()).toEqual({ ok: true, value: true })
+      expect(await handlers['codeburn:setCursorSync']!(false)).toEqual({ ok: true, value: undefined })
+      expect(JSON.parse(fs.readFileSync(config, 'utf8'))).toEqual({ language: 'fr', currency: { code: 'EUR' }, cursorSync: false })
+      expect(await handlers['codeburn:getCursorSync']!()).toEqual({ ok: true, value: false })
+      await handlers['codeburn:setCursorSync']!(true)
+      expect(JSON.parse(fs.readFileSync(config, 'utf8'))).toEqual({ language: 'fr', currency: { code: 'EUR' } })
+      expect(await handlers['codeburn:setCursorSync']!('off')).toMatchObject({ ok: false })
+    } finally {
+      process.env.HOME = previous
+      rmSync(home, { recursive: true, force: true })
     }
   })
 })

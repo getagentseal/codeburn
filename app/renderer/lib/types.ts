@@ -169,6 +169,14 @@ export type OptimizeSnapshot = {
   optimize: OptimizeBlock
 }
 
+export type CursorSyncStatus = {
+  enabled: boolean
+  state: 'ok' | 'syncing-never' | 'error' | 'off' | 'no-login'
+  lastSuccessAt: string | null
+  errorCode?: 'login' | 'network' | 'export'
+  error?: string
+}
+
 export type MenubarPayload = {
   generated: string
   /** Consecutive active days across every provider, independent of the selected
@@ -188,6 +196,9 @@ export type MenubarPayload = {
   // older CLI, or any one-shot spawn including the spawn fallback — must be
   // read as complete.
   hydration?: HydrationState
+  /** Cursor's usage sync from cursor.com (src/cursor-sync.ts). Absent on older
+   *  CLIs and whenever Cursor is not on this machine. */
+  cursorSync?: CursorSyncStatus
   current: {
     label: string
     cost: number
@@ -1154,6 +1165,9 @@ export interface CodeburnBridge {
   getLanguage?(): Promise<string | null>
   /** Persist the config `language` (null clears it) and propagate to the menu bar. */
   setLanguage?(language: string | null): Promise<void>
+  /** The config `cursorSync` switch (absent = on). */
+  getCursorSync?(): Promise<boolean>
+  setCursorSync?(enabled: boolean): Promise<void>
   /** Subscribe to cold-start scan progress; returns an unsubscribe fn. */
   onProgress(cb: (event: ScanProgressEvent) => void): () => void
   /** Read the cached update-availability status (launch + 24h background check). */

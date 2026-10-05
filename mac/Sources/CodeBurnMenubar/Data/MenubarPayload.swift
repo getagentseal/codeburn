@@ -22,6 +22,9 @@ struct MenubarPayload: Codable, Sendable {
     /// carried opaquely so telemetry forwards exactly what the CLI computed
     /// rather than re-deriving any of it here. Absent on an older CLI.
     let telemetrySnapshot: JSONValue?
+    /// Cursor's usage sync from cursor.com. Absent on an older CLI and whenever
+    /// Cursor is not on this machine.
+    let cursorSync: CursorSyncStatus?
 
     init(generated: String,
          current: CurrentBlock,
@@ -31,7 +34,9 @@ struct MenubarPayload: Codable, Sendable {
          claudeConfigs: ClaudeConfigSelector? = nil,
          stale: Bool? = nil,
          liveSessions: LiveSessionsBlock? = nil,
-         telemetrySnapshot: JSONValue? = nil) {
+         telemetrySnapshot: JSONValue? = nil,
+         cursorSync: CursorSyncStatus? = nil) {
+        self.cursorSync = cursorSync
         self.liveSessions = liveSessions
         self.telemetrySnapshot = telemetrySnapshot
         self.generated = generated
@@ -45,7 +50,7 @@ struct MenubarPayload: Codable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case generated, stale, current, optimize, history, combined, claudeConfigs, liveSessions
-        case telemetrySnapshot
+        case telemetrySnapshot, cursorSync
     }
 
     init(from decoder: Decoder) throws {
@@ -59,6 +64,33 @@ struct MenubarPayload: Codable, Sendable {
         claudeConfigs = try c.decodeIfPresent(ClaudeConfigSelector.self, forKey: .claudeConfigs)
         liveSessions = try c.decodeIfPresent(LiveSessionsBlock.self, forKey: .liveSessions)
         telemetrySnapshot = try c.decodeIfPresent(JSONValue.self, forKey: .telemetrySnapshot)
+        // A status line must never cost the whole payload.
+        cursorSync = try? c.decodeIfPresent(CursorSyncStatus.self, forKey: .cursorSync)
+    }
+}
+
+struct CursorSyncStatus: Codable, Sendable, Equatable {
+    let enabled: Bool
+    let state: String
+    let lastSuccessAt: String?
+    let errorCode: String?
+    let error: String?
+
+    /// The one line the popover and Settings show; nil when the sync is off.
+    /// Error codes map to fixed copy, never the CLI's text.
+    func line(now: Date = Date()) -> (text: String, warn: Bool)? {
+        if state == "off" { return nil }
+        if let errorCode {
+            switch errorCode {
+            case "login": return (L("Cursor login expired, open Cursor to sign in again"), true)
+            case "network": return (L("Couldn't reach cursor.com, will retry"), true)
+            default: return (L("Couldn't read the usage export from cursor.com, will retry"), true)
+            }
+        }
+        guard let lastSuccessAt, let date = LiveSession.parseISO8601(lastSuccessAt) else {
+            return (L("Not synced from cursor.com yet"), false)
+        }
+        return (L("Synced from cursor.com %@", CodexBankedResetPresentation.compactAge(of: date, now: now)), false)
     }
 }
 

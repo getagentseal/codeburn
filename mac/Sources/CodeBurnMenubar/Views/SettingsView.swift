@@ -1873,9 +1873,42 @@ private struct GenericProviderSettingsTab: View {
         Form {
             GenericProviderConnectionSections(provider: provider)
                 .id(provider.id)
+            if provider.id == "cursor" {
+                CursorSyncSettingsSection()
+            }
         }
         .formStyle(.grouped)
         .padding()
+    }
+}
+
+/// The CLI's `cursorSync` config switch, with the sync's last outcome under it.
+private struct CursorSyncSettingsSection: View {
+    @Environment(AppStore.self) private var store
+    @State private var enabled = CLICursorSyncConfig.load()
+
+    var body: some View {
+        Section {
+            Toggle(L("Sync Cursor usage from cursor.com"), isOn: Binding(
+                get: { enabled },
+                set: { next in
+                    do {
+                        try CLICursorSyncConfig.persist(enabled: next)
+                        enabled = next
+                    } catch {
+                        NSLog("CodeBurn: failed to persist cursorSync config: \(error)")
+                    }
+                }
+            ))
+        } footer: {
+            Text(footer)
+                .font(.system(size: 11))
+        }
+    }
+
+    private var footer: String {
+        if enabled, let line = store.payload.cursorSync?.line() { return line.text }
+        return L("Downloads your own usage export with the Cursor app's login, at most once an hour.")
     }
 }
 

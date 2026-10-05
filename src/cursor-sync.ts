@@ -70,6 +70,53 @@ export async function cursorSyncEnabled(): Promise<boolean> {
   return (await readConfig()).cursorSync !== false
 }
 
+export type CursorSyncStatus = {
+  enabled: boolean
+  state: 'ok' | 'syncing-never' | 'error' | 'off' | 'no-login'
+  lastSuccessAt: string | null
+  // A fixed code for the apps to localize; `error` is its English text.
+  errorCode?: 'login' | 'network' | 'export'
+  error?: string
+}
+
+const STATUS_ERRORS = {
+  login: 'Cursor login expired, open Cursor to sign in again',
+  network: "Couldn't reach cursor.com, will retry",
+  export: "Couldn't read the usage export from cursor.com, will retry",
+} as const
+
+function statusErrorCode(lastError: string): keyof typeof STATUS_ERRORS {
+  if (/sign in again|HTTP 40[13]\b/.test(lastError)) return 'login'
+  if (/HTTP (429|5\d\d)\b|fetch failed|time(d)? ?out|abort|network|socket|ENOTFOUND|ECONN|ETIMEDOUT|EAI_AGAIN/i.test(lastError)) return 'network'
+  return 'export'
+}
+
+/// What the apps show about the sync, read from the sidecar, the config and the
+/// Cursor app's login. Never syncs and never makes a request. Null when Cursor
+/// is not signed in on this machine and has never synced.
+export async function cursorSyncStatus(now = Date.now()): Promise<CursorSyncStatus | null> {
+  const state = await readState()
+  const dbPath = cursorDatabasePath()
+  // undefined: the database is there but could not be read this time.
+  const token = existsSync(dbPath)
+    ? await cursorAccessTokenFromDatabase(dbPath).then(t => t?.trim() || null, () => undefined)
+    : null
+  if (token === null && state.lastAttemptAt === undefined && state.lastSuccessAt === undefined) return null
+  const enabled = await cursorSyncEnabled()
+  const lastSuccessAt = state.lastSuccessAt !== undefined ? new Date(state.lastSuccessAt).toISOString() : null
+  if (!enabled) return { enabled, state: 'off', lastSuccessAt }
+  const claims = token ? cursorTokenClaims(token) : null
+  if (token === null || (token !== undefined && (!claims || !cursorSessionCookie(token, now)))) {
+    return { enabled, state: 'no-login', lastSuccessAt, errorCode: 'login', error: STATUS_ERRORS.login }
+  }
+  const code = state.lastError ? statusErrorCode(state.lastError) : null
+  // A rejection of an earlier token says nothing about a newer one, which the
+  // next poll tries.
+  const staleRejection = code === 'login' && claims !== null && state.rejectedExp !== undefined && state.rejectedExp !== claims.exp
+  if (code && !staleRejection) return { enabled, state: 'error', lastSuccessAt, errorCode: code, error: STATUS_ERRORS[code] }
+  return { enabled, state: lastSuccessAt ? 'ok' : 'syncing-never', lastSuccessAt }
+}
+
 // The day before too: Cursor can post a row for the previous local day late.
 function previousLocalDayStart(ms: number): number {
   const d = new Date(ms)

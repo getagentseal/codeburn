@@ -137,6 +137,7 @@ import { getShortModelName, modelRowKey } from './models.js'
 import type { ReworkedFile } from './workflow-insights.js'
 import type { PrRow, BranchRow } from './sessions-report.js'
 import type { LiveSessionsBlock } from './live-sessions.js'
+import type { CursorSyncStatus } from './cursor-sync.js'
 import { buildTelemetrySnapshot, type TelemetrySnapshot, type TelemetrySnapshotInput } from './telemetry-snapshot.js'
 import type { SessionCountBasis } from './session-count-label.js'
 
@@ -291,6 +292,9 @@ export type MenubarPayload = {
   /// window, with the context each is holding. Omitted when the producer did
   /// not compute it, so absence means "unknown", never "nothing is running".
   liveSessions?: LiveSessionsBlock
+  /// Add-only. Emitted only by `status --format menubar-json`, and only when
+  /// Cursor is on this machine or has synced before; absence means "no Cursor".
+  cursorSync?: CursorSyncStatus
   current: {
     label: string
     cost: number

@@ -533,6 +533,23 @@ pub fn set_claude_config_dirs(dirs: &[String]) -> Result<()> {
     Ok(())
 }
 
+/// The CLI's automatic Cursor usage sync. Absent means on, so turning it on removes the key
+/// rather than storing a `true` the CLI never needs.
+pub fn cursor_sync() -> bool {
+    crate::config::read().get("cursorSync").and_then(Value::as_bool) != Some(false)
+}
+
+pub fn set_cursor_sync(enabled: bool) -> Result<()> {
+    crate::config::update(|obj| {
+        if enabled {
+            obj.remove("cursorSync");
+        } else {
+            obj.insert("cursorSync".into(), Value::Bool(false));
+        }
+    })?;
+    Ok(())
+}
+
 /// The daily alert thresholds. Both live in the CLI's config because the tray reads them from
 /// Rust, before any webview exists. Zero means off, which is stored as the key's absence
 /// rather than a zero the CLI would have to special-case.

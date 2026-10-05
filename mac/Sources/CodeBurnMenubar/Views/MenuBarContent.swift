@@ -28,6 +28,10 @@ struct MenuBarContent: View {
                                 .padding(.horizontal, 14)
                                 .padding(.bottom, 6)
                         }
+                        if store.selectedProvider == .cursor || store.selectedProvider == .cursorAgent,
+                           let sync = store.payload.cursorSync?.line() {
+                            CursorSyncLine(text: sync.text, warn: sync.warn)
+                        }
                         Divider().opacity(0.5)
                         PeriodSegmentedControl()
                         ScopeSegmentedControl()
@@ -238,6 +242,23 @@ private struct ClaudeConfigPicker: View {
         .menuStyle(.borderlessButton)
         .fixedSize(horizontal: true, vertical: false)
         .help(L("Claude config"))
+    }
+}
+
+private struct CursorSyncLine: View {
+    let text: String
+    let warn: Bool
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: 11))
+            .foregroundStyle(warn
+                ? Color(quotaWarning: QuotaWarningPalette.foreground(.warning, colorScheme == .dark ? .dark : .light))
+                : Color.secondary.opacity(0.75))
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 14)
+            .padding(.bottom, 6)
     }
 }
 

@@ -8,7 +8,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 
 import { CURSOR_CSV_HEADER, cursorImportPath, importCursorCsv } from '../src/cursor-import.js'
-import { cursorSyncStatePath, maybeSyncCursor } from '../src/cursor-sync.js'
+import { cursorSyncStatePath, cursorSyncStatus, maybeSyncCursor } from '../src/cursor-sync.js'
 import { isSupersededCacheFile } from '../src/cache-sweep.js'
 import { ensureCacheHydrated, toDateString, type DailyEntry } from '../src/daily-cache.js'
 import { aggregateProjectsIntoDays } from '../src/day-aggregator.js'
@@ -275,5 +275,70 @@ describe.skipIf(!isSqliteAvailable())('offline commands', () => {
 
     await maybeSyncCursor()
     expect(cursorCalls()).toBe(1)
+  })
+})
+
+describe.skipIf(!isSqliteAvailable())('cursorSyncStatus', () => {
+  const later = NOW + 5 * MIN
+
+  it('is absent without a Cursor login or any sync, and never syncs by itself', async () => {
+    await rm(cursorDatabasePath(), { force: true })
+    const f = vi.spyOn(globalThis, 'fetch')
+    expect(await cursorSyncStatus(NOW)).toBeNull()
+    expect(f).not.toHaveBeenCalled()
+    expect(existsSync(cursorSyncStatePath())).toBe(false)
+  })
+
+  it('reports signed in but not synced yet, then the last success', async () => {
+    expect(await cursorSyncStatus(NOW)).toEqual({ enabled: true, state: 'syncing-never', lastSuccessAt: null })
+    await maybeSyncCursor({ now: NOW, fetchImpl: fakeFetch() })
+    expect(await cursorSyncStatus(later)).toEqual({ enabled: true, state: 'ok', lastSuccessAt: new Date(NOW).toISOString() })
+  })
+
+  it('maps every failure to a fixed message and leaks no token, id or server text', async () => {
+    const cases: Array<[Reply | Error, string, string]> = [
+      [{ status: 401 }, 'login', 'Cursor login expired, open Cursor to sign in again'],
+      [{ status: 429 }, 'network', "Couldn't reach cursor.com, will retry"],
+      [{ status: 503, body: 'upstream user_sync_test secret' }, 'network', "Couldn't reach cursor.com, will retry"],
+      [new TypeError('fetch failed'), 'network', "Couldn't reach cursor.com, will retry"],
+      [{ body: 'not,a,csv\nuser_sync_test,1,2' }, 'export', "Couldn't read the usage export from cursor.com, will retry"],
+    ]
+    for (const [reply, errorCode, error] of cases) {
+      await rm(dirname(cursorSyncStatePath()), { recursive: true, force: true })
+      const f = reply instanceof Error ? vi.fn(async () => { throw reply }) : fakeFetch(reply)
+      await maybeSyncCursor({ now: NOW, fetchImpl: f as unknown as typeof fetch })
+      const status = await cursorSyncStatus(later)
+      expect(status).toEqual({ enabled: true, state: 'error', lastSuccessAt: null, errorCode, error })
+      const json = JSON.stringify(status)
+      const sidecar = await state()
+      for (const secret of [jwt(), SUB, 'user_sync_test', sidecar.account, sidecar.lastError]) expect(json).not.toContain(secret)
+    }
+  })
+
+  it('drops a rejection once Cursor holds a different token', async () => {
+    await maybeSyncCursor({ now: NOW, fetchImpl: fakeFetch({ status: 403 }) })
+    expect((await cursorSyncStatus(later))?.state).toBe('error')
+    writeToken(jwt(SUB, NOW + 48 * HOUR))
+    expect(await cursorSyncStatus(later)).toEqual({ enabled: true, state: 'syncing-never', lastSuccessAt: null })
+  })
+
+  it('reports no-login for a signed-out or expired Cursor with sync history', async () => {
+    await maybeSyncCursor({ now: NOW, fetchImpl: fakeFetch() })
+    writeToken(jwt(SUB, NOW - HOUR))
+    const expired = { enabled: true, state: 'no-login', lastSuccessAt: new Date(NOW).toISOString(), errorCode: 'login', error: 'Cursor login expired, open Cursor to sign in again' }
+    expect(await cursorSyncStatus(later)).toEqual(expired)
+    await rm(cursorDatabasePath(), { force: true })
+    expect(await cursorSyncStatus(later)).toEqual(expired)
+  })
+
+  it('reports off from the config key or the env switch', async () => {
+    await maybeSyncCursor({ now: NOW, fetchImpl: fakeFetch() })
+    const off = { enabled: false, state: 'off', lastSuccessAt: new Date(NOW).toISOString() }
+    process.env['CODEBURN_CURSOR_SYNC'] = '0'
+    expect(await cursorSyncStatus(later)).toEqual(off)
+    delete process.env['CODEBURN_CURSOR_SYNC']
+    await mkdir(join(HOME, '.config', 'codeburn'), { recursive: true })
+    await writeFile(join(HOME, '.config', 'codeburn', 'config.json'), JSON.stringify({ cursorSync: false }))
+    expect(await cursorSyncStatus(later)).toEqual(off)
   })
 })
