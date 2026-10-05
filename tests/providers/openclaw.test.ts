@@ -695,8 +695,8 @@ describe('OpenClaw state directory discovery', () => {
     expect(await provider.probeRoots!()).toContainEqual({ path: join(state, 'agents'), label: 'agents' })
     const calls = await parseAll(provider, sources[0], new Set())
     expect(calls).toHaveLength(2)
-    expect(calls[0].usage.inputTokens).toBe(500)
-    expect(calls[1].usage.outputTokens).toBe(200)
+    expect(calls[0].inputTokens).toBe(500)
+    expect(calls[1].outputTokens).toBe(200)
   })
 
   it('discovers the SQLite store under the same relocated agents root', async () => {

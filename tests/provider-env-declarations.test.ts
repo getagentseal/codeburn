@@ -45,6 +45,7 @@ const FILE_PROVIDERS: Record<string, string[]> = {
   // The ENV_DIR const (open-design.ts:10) resolves to CODEBURN_OPEN_DESIGN_DIR.
   'open-design.ts': ['open-design'],
   'openclaude.ts': ['openclaude'],
+  'openclaw.ts': ['openclaw'],
   'opencode.ts': ['opencode'],
   'goose.ts': ['goose'],
   'grok.ts': ['grok'],

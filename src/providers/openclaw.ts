@@ -1,5 +1,5 @@
 import { readdir, readFile, stat } from 'fs/promises'
-import { basename, join } from 'path'
+import { basename, join, resolve } from 'path'
 import { homedir } from 'os'
 import { createHash } from 'node:crypto'
 import zlib from 'zlib'
@@ -222,13 +222,28 @@ async function* finalizeCalls(
 }
 
 function getOpenClawDirs(): string[] {
-  const home = homedir()
-  return [
+  const osHome = homedir()
+  const expandHome = (path: string, home: string): string => resolve(path.replace(/^~(?=$|[\\/])/, () => home))
+  // OpenClaw resolves state overrides against its effective home. Trim before
+  // expanding so a quoted "~/state" works just like its own path resolver.
+  const configuredHome = process.env['OPENCLAW_HOME']?.trim()
+  const home = configuredHome ? expandHome(configuredHome, osHome) : osHome
+  const stateDir = process.env['OPENCLAW_STATE_DIR']?.trim()
+  const roots = [
+    ...(stateDir ? [join(expandHome(stateDir, home), 'agents')] : []),
     join(home, '.openclaw', 'agents'),
     join(home, '.clawdbot', 'agents'),
     join(home, '.moltbot', 'agents'),
     join(home, '.moldbot', 'agents'),
   ]
+  // Keep the historical roots for pre-migration sessions, but scan an override
+  // pointing at one of those roots only once (including case aliases on Windows).
+  const unique = new Map<string, string>()
+  for (const root of roots) {
+    const key = process.platform === 'win32' ? root.toLowerCase() : root
+    if (!unique.has(key)) unique.set(key, root)
+  }
+  return [...unique.values()]
 }
 
 function extractTools(content: Array<{ type?: string; name?: string; arguments?: Record<string, unknown> }> | undefined): { tools: string[]; bashCommands: string[] } {
