@@ -521,6 +521,13 @@ async function runJsonReport(period: Period, provider: string, project: string[]
   console.log(JSON.stringify(report, null, 2))
 }
 
+// Only for commands that show Cursor dollars; never mcp, doctor or audit,
+// which promise to stay offline.
+async function syncCursor(): Promise<void> {
+  const { maybeSyncCursor } = await import('./cursor-sync.js')
+  await maybeSyncCursor()
+}
+
 const program = new Command()
   .name('codeburn')
   .description('See where your AI coding tokens go - by task, tool, model, and project')
@@ -869,6 +876,7 @@ program
     }
 
     const period = toPeriod(opts.period)
+    await syncCursor()
     if (opts.format === 'json') {
       await loadPricing()
       if (daySelection || customRange) {
@@ -1043,6 +1051,7 @@ program
   .option('--no-color', 'Disable ANSI colors')
   .action(async (opts) => {
     assertProvider(opts.provider, 'overview')
+    await syncCursor()
     await loadPricing()
     let customRange: DateRange | null = null
     try {
@@ -1209,6 +1218,7 @@ program
     const pf = opts.provider
     const fp = (p: ProjectSummary[]) => filterProjectsByName(p, opts.project, opts.exclude)
     if (opts.format === 'menubar-json') {
+      await syncCursor()
       const daysSelection = parseDaysFlag(opts.days)
       const customRange = daysSelection ? null : parseDateRangeFlags(opts.from, opts.to)
       const daySelection = parseDayFlag(opts.day)
@@ -1439,6 +1449,7 @@ program
   .action(async (opts) => {
     assertFormat(opts.format, ['tui', 'json'], 'today')
     assertProvider(opts.provider, 'today')
+    await syncCursor()
     if (opts.format === 'json') {
       await runJsonReport('today', opts.provider, opts.project, opts.exclude)
       return
@@ -1457,6 +1468,7 @@ program
   .action(async (opts) => {
     assertFormat(opts.format, ['tui', 'json'], 'month')
     assertProvider(opts.provider, 'month')
+    await syncCursor()
     if (opts.format === 'json') {
       await runJsonReport('month', opts.provider, opts.project, opts.exclude)
       return
@@ -1627,11 +1639,12 @@ program
 
 program
   .command('import <tool> [file]')
-  .description('Replace local estimates with usage a tool exported itself. Supported: cursor (Export CSV at cursor.com/dashboard/usage)')
+  .description('Replace local estimates with usage a tool exported itself. Supported: cursor (Export CSV at cursor.com/dashboard/usage, or --sync)')
   .option('--from <date>', 'Start of the exported range (date, ISO time or epoch ms). Default: the first event\'s local day')
   .option('--to <date>', 'End of the exported range (date, ISO time or epoch ms). Default: the last event\'s local day')
   .option('--remove', 'Delete the imported usage and go back to local estimates')
-  .action(async (tool: string, file: string | undefined, opts: { from?: string; to?: string; remove?: boolean }) => {
+  .option('--sync', 'Download the usage export from cursor.com now, with the Cursor app\'s login')
+  .action(async (tool: string, file: string | undefined, opts: { from?: string; to?: string; remove?: boolean; sync?: boolean }) => {
     if (tool !== 'cursor') {
       console.error(`\n  Unknown import "${tool}". Supported: cursor\n`)
       process.exitCode = 1
@@ -1652,17 +1665,31 @@ program
           return
         }
         await invalidate(ranges)
-        console.log('\n  Removed the Cursor import. Local Cursor estimates are back for the days it covered.\n')
+        console.log('\n  Removed the Cursor import. Local Cursor estimates are back for the days it covered.')
+        const { cursorSyncEnabled } = await import('./cursor-sync.js')
+        if (await cursorSyncEnabled()) console.log('  Automatic Cursor sync downloads it again within 15 minutes; set "cursorSync": false in config.json or CODEBURN_CURSOR_SYNC=0 to stop it.')
+        console.log()
         return
       }
-      if (!file) throw new Error('give the path of the CSV exported at cursor.com/dashboard/usage')
-      const summary = await importCursorCsv(file, {
-        ...(opts.from ? { from: parseBoundary(opts.from, 'from') } : {}),
-        ...(opts.to ? { to: parseBoundary(opts.to, 'to') } : {}),
-      })
-      if (summary.changed) await invalidate([summary.coverage])
+      let summary
+      if (opts.sync) {
+        if (file || opts.from || opts.to) throw new Error('--sync takes no file, --from or --to')
+        const { maybeSyncCursor } = await import('./cursor-sync.js')
+        summary = await maybeSyncCursor({ force: true })
+        if (!summary) {
+          console.log('\n  Cursor sync: cursor.com holds no usage events for the sync window.\n')
+          return
+        }
+      } else {
+        if (!file) throw new Error('give the path of the CSV exported at cursor.com/dashboard/usage, or pass --sync')
+        summary = await importCursorCsv(file, {
+          ...(opts.from ? { from: parseBoundary(opts.from, 'from') } : {}),
+          ...(opts.to ? { to: parseBoundary(opts.to, 'to') } : {}),
+        })
+        if (summary.changed) await invalidate([summary.coverage])
+      }
       const pct = summary.tokens > 0 ? ` (${(summary.grokBotTokens / summary.tokens * 100).toFixed(1)}%)` : ''
-      console.log(`\n  Imported Cursor usage from ${file}`)
+      console.log(`\n  Imported Cursor usage from ${opts.sync ? 'cursor.com' : file}`)
       console.log(`  Events:   ${summary.added.toLocaleString()} added, ${summary.skipped.toLocaleString()} already imported (${summary.total.toLocaleString()} stored)`)
       console.log(`  Covers:   ${summary.coverage.start} to ${summary.coverage.end} UTC`)
       if (summary.coverage.inferred) console.log('            (range taken from the events; pass --from/--to from the export to set it)')

@@ -40,9 +40,12 @@ export type CursorUsageEvent = {
   cacheRead: number
   output: number
   cost: string
+  // Downloaded by cursor-sync.ts rather than imported from a CSV file. A later
+  // sync may replace these; manually imported rows are never replaced.
+  source?: 'sync'
 }
 
-export type CoverageRange = { start: string; end: string }
+export type CoverageRange = { start: string; end: string; source?: 'sync' }
 
 export type CursorImportStore = {
   version: 1
@@ -176,15 +179,20 @@ function exportCoverage(
   return { start, end: Math.min(declaredEnd, Math.max(fileSavedMs, last)), inferred: from === undefined || to === undefined }
 }
 
+// Synced coverage is merged apart from imported coverage so an account change
+// can drop exactly what the sync added.
 function mergeRanges(ranges: CoverageRange[]): CoverageRange[] {
-  const sorted = ranges.map(r => [Date.parse(r.start), Date.parse(r.end)] as [number, number]).sort((a, b) => a[0] - b[0])
-  const out: Array<[number, number]> = []
-  for (const r of sorted) {
-    const last = out[out.length - 1]
-    if (last && r[0] <= last[1] + 1) last[1] = Math.max(last[1], r[1])
-    else out.push([...r])
-  }
-  return out.map(([s, e]) => ({ start: new Date(s).toISOString(), end: new Date(e).toISOString() }))
+  return [undefined, 'sync' as const].flatMap(source => {
+    const sorted = ranges.filter(r => r.source === source)
+      .map(r => [Date.parse(r.start), Date.parse(r.end)] as [number, number]).sort((a, b) => a[0] - b[0])
+    const out: Array<[number, number]> = []
+    for (const r of sorted) {
+      const last = out[out.length - 1]
+      if (last && r[0] <= last[1] + 1) last[1] = Math.max(last[1], r[1])
+      else out.push([...r])
+    }
+    return out.map(([s, e]) => ({ start: new Date(s).toISOString(), end: new Date(e).toISOString(), ...(source ? { source } : {}) }))
+  })
 }
 
 let memo: { key: string; store: CursorImportStore | null } | null = null
@@ -230,25 +238,53 @@ export type CursorImportSummary = {
 
 export async function importCursorCsv(csvPath: string, opts: { from?: number; to?: number } = {}): Promise<CursorImportSummary> {
   const [text, fileStat] = await Promise.all([readFile(csvPath, 'utf-8'), stat(csvPath)])
+  return (await importCursorCsvText(text, fileStat.mtimeMs, opts))!
+}
+
+/// A sync (`source: 'sync'`, `from` required) covers `from` to its newest
+/// event, so usage after that keeps its local estimate, and it replaces the
+/// synced events it covers. Manually imported events are never replaced, and a
+/// synced row equal to one of them is skipped by its hash. A sync with no
+/// events returns null and changes nothing.
+export async function importCursorCsvText(
+  text: string,
+  savedMs: number,
+  opts: { from?: number; to?: number; source?: 'sync' } = {},
+): Promise<CursorImportSummary | null> {
   const incoming = parseCursorUsageCsv(text)
-  if (incoming.length === 0) throw new Error('the export holds no usage events')
-  const coverage = exportCoverage(incoming, fileStat.mtimeMs, opts.from, opts.to)
+  const sync = opts.source === 'sync'
+  if (incoming.length === 0) {
+    if (sync) return null
+    throw new Error('the export holds no usage events')
+  }
+  let coverage: { start: number; end: number; inferred: boolean }
+  if (sync) {
+    const times = incoming.map(e => Date.parse(e.date))
+    const first = Math.min(...times)
+    if (first < opts.from!) throw new Error(`the export holds an event at ${new Date(first).toISOString()}, before the requested ${new Date(opts.from!).toISOString()}`)
+    coverage = { start: opts.from!, end: Math.max(...times), inferred: false }
+  } else {
+    coverage = exportCoverage(incoming, savedMs, opts.from, opts.to)
+  }
 
   const existing = await loadCursorImport()
-  const known = new Set(existing?.events.map(e => e.hash))
-  const events = [...(existing?.events ?? [])]
+  const replaced = new Set(sync ? existing?.events.filter(e => e.source === 'sync' && Date.parse(e.date) >= coverage.start) : [])
+  const before = new Set(existing?.events.map(e => e.hash))
+  const events = (existing?.events ?? []).filter(e => !replaced.has(e))
+  const known = new Set(events.map(e => e.hash))
   let added = 0
   for (const e of incoming) {
     if (known.has(e.hash)) continue
     known.add(e.hash)
-    events.push(e)
-    added++
+    events.push(sync ? { ...e, source: 'sync' } : e)
+    if (!before.has(e.hash)) added++
   }
+  const removed = [...replaced].filter(e => !known.has(e.hash)).length
   events.sort((a, b) => a.date.localeCompare(b.date))
   const range = { start: new Date(coverage.start).toISOString(), end: new Date(coverage.end).toISOString() }
-  const ranges = mergeRanges([...(existing?.ranges ?? []), range])
+  const ranges = mergeRanges([...(existing?.ranges ?? []), sync ? { ...range, source: 'sync' } : range])
   // An unchanged store keeps its mtime, so a repeat import re-parses nothing.
-  const changed = added > 0 || JSON.stringify(ranges) !== JSON.stringify(existing?.ranges)
+  const changed = added > 0 || removed > 0 || JSON.stringify(ranges) !== JSON.stringify(existing?.ranges)
   if (changed) await saveCursorImport({ version: 1, ranges, events })
 
   const tokensOf = (e: CursorUsageEvent) => e.inputCacheWrite + e.input + e.cacheRead + e.output
@@ -266,6 +302,18 @@ export async function importCursorCsv(csvPath: string, opts: { from?: number; to
     grokBotTokens: bot.reduce((s, e) => s + tokensOf(e), 0),
     grokBotEvents: bot.length,
   }
+}
+
+/// Drops every synced event and synced range, keeping manual imports, and
+/// returns the dropped coverage for the caller to re-derive.
+export async function dropCursorSync(): Promise<CoverageRange[]> {
+  const store = await loadCursorImport()
+  if (!store) return []
+  const dropped = store.ranges.filter(r => r.source === 'sync')
+  const events = store.events.filter(e => e.source !== 'sync')
+  if (dropped.length === 0 && events.length === store.events.length) return []
+  await saveCursorImport({ version: 1, ranges: store.ranges.filter(r => r.source !== 'sync'), events })
+  return dropped
 }
 
 /// Deletes the import and returns the coverage it held, so the caller can
