@@ -41,11 +41,13 @@ export type CursorUsageEvent = {
   output: number
   cost: string
   // Downloaded by cursor-sync.ts rather than imported from a CSV file. A later
-  // sync may replace these; manually imported rows are never replaced.
+  // sync of the same account may replace these inside its window; manually
+  // imported rows are never replaced. `account` is cursor-sync's short hash.
   source?: 'sync'
+  account?: string
 }
 
-export type CoverageRange = { start: string; end: string; source?: 'sync' }
+export type CoverageRange = { start: string; end: string; source?: 'sync'; account?: string }
 
 export type CursorImportStore = {
   version: 1
@@ -179,11 +181,13 @@ function exportCoverage(
   return { start, end: Math.min(declaredEnd, Math.max(fileSavedMs, last)), inferred: from === undefined || to === undefined }
 }
 
-// Synced coverage is merged apart from imported coverage so an account change
-// can drop exactly what the sync added.
+// Each account's synced coverage is merged apart from imported coverage and
+// from other accounts', so it stays attributable to the export it came from.
 function mergeRanges(ranges: CoverageRange[]): CoverageRange[] {
-  return [undefined, 'sync' as const].flatMap(source => {
-    const sorted = ranges.filter(r => r.source === source)
+  const groups = new Map<string, Pick<CoverageRange, 'source' | 'account'>>()
+  for (const r of ranges) groups.set(`${r.source ?? ''}\0${r.account ?? ''}`, { source: r.source, account: r.account })
+  return [...groups.values()].flatMap(({ source, account }) => {
+    const sorted = ranges.filter(r => r.source === source && r.account === account)
       .map(r => [Date.parse(r.start), Date.parse(r.end)] as [number, number]).sort((a, b) => a[0] - b[0])
     const out: Array<[number, number]> = []
     for (const r of sorted) {
@@ -191,7 +195,7 @@ function mergeRanges(ranges: CoverageRange[]): CoverageRange[] {
       if (last && r[0] <= last[1] + 1) last[1] = Math.max(last[1], r[1])
       else out.push([...r])
     }
-    return out.map(([s, e]) => ({ start: new Date(s).toISOString(), end: new Date(e).toISOString(), ...(source ? { source } : {}) }))
+    return out.map(([s, e]) => ({ start: new Date(s).toISOString(), end: new Date(e).toISOString(), ...(source ? { source } : {}), ...(account ? { account } : {}) }))
   })
 }
 
@@ -243,19 +247,23 @@ export async function importCursorCsv(csvPath: string, opts: { from?: number; to
 
 /// A sync (`source: 'sync'`, `from` required) covers `from` to its newest
 /// event, so usage after that keeps its local estimate, and it replaces the
-/// synced events it covers. Manually imported events are never replaced, and a
-/// synced row equal to one of them is skipped by its hash. A sync with no
-/// events returns null and changes nothing.
+/// same account's synced events from `from` on. Manually imported events and
+/// other accounts' synced events are never replaced, and a row already stored
+/// is skipped by its hash. A sync with no events returns null and changes no
+/// stored usage.
 export async function importCursorCsvText(
   text: string,
   savedMs: number,
-  opts: { from?: number; to?: number; source?: 'sync' } = {},
+  opts: { from?: number; to?: number; source?: 'sync'; account?: string } = {},
 ): Promise<CursorImportSummary | null> {
   const incoming = parseCursorUsageCsv(text)
   const sync = opts.source === 'sync'
   if (incoming.length === 0) {
-    if (sync) return null
-    throw new Error('the export holds no usage events')
+    if (!sync) throw new Error('the export holds no usage events')
+    // An empty store records that this machine has synced, so a quiet account
+    // is not downloaded from scratch again.
+    if (!existsSync(cursorImportPath())) await saveCursorImport({ version: 1, ranges: [], events: [] })
+    return null
   }
   let coverage: { start: number; end: number; inferred: boolean }
   if (sync) {
@@ -268,7 +276,7 @@ export async function importCursorCsvText(
   }
 
   const existing = await loadCursorImport()
-  const replaced = new Set(sync ? existing?.events.filter(e => e.source === 'sync' && Date.parse(e.date) >= coverage.start) : [])
+  const replaced = new Set(sync ? existing?.events.filter(e => e.source === 'sync' && e.account === opts.account && Date.parse(e.date) >= coverage.start) : [])
   const before = new Set(existing?.events.map(e => e.hash))
   const events = (existing?.events ?? []).filter(e => !replaced.has(e))
   const known = new Set(events.map(e => e.hash))
@@ -276,13 +284,13 @@ export async function importCursorCsvText(
   for (const e of incoming) {
     if (known.has(e.hash)) continue
     known.add(e.hash)
-    events.push(sync ? { ...e, source: 'sync' } : e)
+    events.push(sync ? { ...e, source: 'sync', ...(opts.account ? { account: opts.account } : {}) } : e)
     if (!before.has(e.hash)) added++
   }
   const removed = [...replaced].filter(e => !known.has(e.hash)).length
   events.sort((a, b) => a.date.localeCompare(b.date))
   const range = { start: new Date(coverage.start).toISOString(), end: new Date(coverage.end).toISOString() }
-  const ranges = mergeRanges([...(existing?.ranges ?? []), sync ? { ...range, source: 'sync' } : range])
+  const ranges = mergeRanges([...(existing?.ranges ?? []), sync ? { ...range, source: 'sync', ...(opts.account ? { account: opts.account } : {}) } : range])
   // An unchanged store keeps its mtime, so a repeat import re-parses nothing.
   const changed = added > 0 || removed > 0 || JSON.stringify(ranges) !== JSON.stringify(existing?.ranges)
   if (changed) await saveCursorImport({ version: 1, ranges, events })
@@ -302,18 +310,6 @@ export async function importCursorCsvText(
     grokBotTokens: bot.reduce((s, e) => s + tokensOf(e), 0),
     grokBotEvents: bot.length,
   }
-}
-
-/// Drops every synced event and synced range, keeping manual imports, and
-/// returns the dropped coverage for the caller to re-derive.
-export async function dropCursorSync(): Promise<CoverageRange[]> {
-  const store = await loadCursorImport()
-  if (!store) return []
-  const dropped = store.ranges.filter(r => r.source === 'sync')
-  const events = store.events.filter(e => e.source !== 'sync')
-  if (dropped.length === 0 && events.length === store.events.length) return []
-  await saveCursorImport({ version: 1, ranges: store.ranges.filter(r => r.source !== 'sync'), events })
-  return dropped
 }
 
 /// Deletes the import and returns the coverage it held, so the caller can

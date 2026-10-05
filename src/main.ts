@@ -1667,7 +1667,7 @@ program
         await invalidate(ranges)
         console.log('\n  Removed the Cursor import. Local Cursor estimates are back for the days it covered.')
         const { cursorSyncEnabled } = await import('./cursor-sync.js')
-        if (await cursorSyncEnabled()) console.log('  Automatic Cursor sync downloads it again within 15 minutes; set "cursorSync": false in config.json or CODEBURN_CURSOR_SYNC=0 to stop it.')
+        if (await cursorSyncEnabled()) console.log('  Automatic Cursor sync downloads it again within the hour; set "cursorSync": false in config.json or CODEBURN_CURSOR_SYNC=0 to stop it.')
         console.log()
         return
       }

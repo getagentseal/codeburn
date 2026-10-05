@@ -7,7 +7,6 @@ import { homedir, tmpdir } from 'os'
 import {
   CURSOR_CSV_HEADER,
   cursorImportPath,
-  dropCursorSync,
   importCursorCsv,
   importCursorCsvText,
   parseBoundary,
@@ -192,13 +191,18 @@ describe('importCursorCsvText as a sync', () => {
     await expect(importCursorCsvText(csv([{ date: iso(-1), model: 'auto' }]), base, { from, to: base + DAY, source: 'sync' })).rejects.toThrow(/before the requested/)
   })
 
-  it('dropCursorSync removes synced events and coverage only', async () => {
-    await importCursorCsv(csvPath)
-    await importCursorCsvText(csv([{ date: iso(4, 15), model: 'auto', input: 4 }]), base + 30 * DAY, { from, to: base + 30 * DAY, source: 'sync' })
-    expect(await dropCursorSync()).toEqual([{ start: new Date(from).toISOString(), end: iso(4, 15), source: 'sync' }])
-    const after = await stored()
-    expect(after.events).toHaveLength(5)
-    expect(after.ranges).toEqual([{ start: `${dayOf(0)}T00:00:00.000Z`, end: `${dayOf(2)}T23:59:59.999Z` }])
+  it('keeps every account\'s synced rows and coverage apart; a sync replaces only its own account\'s rows', async () => {
+    const a = { date: iso(1, 9), model: 'auto', input: 3 }
+    await importCursorCsvText(csv([a]), base + 30 * DAY, { from, to: base + 30 * DAY, source: 'sync', account: 'aaaa' })
+    const b = { date: iso(4, 15), model: 'auto', input: 4 }
+    const s = await importCursorCsvText(csv([b]), base + 30 * DAY, { from, to: base + 30 * DAY, source: 'sync', account: 'bbbb' })
+    expect(s).toMatchObject({ changed: true, added: 1, total: 2 })
+    const after = await stored() as { ranges: unknown[]; events: Array<{ source?: string; account?: string }> }
+    expect(after.events.map(e => [e.source, e.account])).toEqual([['sync', 'aaaa'], ['sync', 'bbbb']])
+    expect(after.ranges).toEqual([
+      { start: new Date(from).toISOString(), end: iso(1, 9), source: 'sync', account: 'aaaa' },
+      { start: new Date(from).toISOString(), end: iso(4, 15), source: 'sync', account: 'bbbb' },
+    ])
   })
 })
 

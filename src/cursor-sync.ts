@@ -1,10 +1,11 @@
 import { createHash, randomBytes } from 'crypto'
+import { existsSync } from 'fs'
 import { mkdir, readFile, rename, writeFile } from 'fs/promises'
 import { dirname, join } from 'path'
 
 import { getCodeburnCacheDir } from './cache-dir.js'
 import { readConfig } from './config.js'
-import { dropCursorSync, importCursorCsvText, loadCursorImport, replacedProviders, type CoverageRange, type CursorImportSummary } from './cursor-import.js'
+import { cursorImportPath, importCursorCsvText, loadCursorImport, replacedProviders, type CoverageRange, type CursorImportSummary } from './cursor-import.js'
 import { invalidateProviderDays, toDateString } from './daily-cache.js'
 import { cursorAccessTokenFromDatabase, cursorDatabasePath, cursorSessionCookie, cursorTokenClaims } from './quota/cursor.js'
 import { sanitizeError } from './quota/security.js'
@@ -14,21 +15,32 @@ import { sanitizeError } from './quota/security.js'
 // (see quota/cursor.ts), and merges it into the Cursor import store.
 
 const EXPORT_URL = 'https://cursor.com/api/dashboard/export-usage-events-csv'
-const THROTTLE_MS = 15 * 60_000
+// The menubar refresh calls this every poll, so the throttle is what bounds
+// traffic to cursor.com. The jitter spreads installs that started together.
+const THROTTLE_MS = 3_600_000
+const JITTER_MS = 5 * 60_000
 const REJECTED_BACKOFF_MS = 6 * 3_600_000
+const MAX_FAILURES = 3
+const FAILURE_BACKOFF_MS = 6 * 3_600_000
 // A 30-day first backfill took about 10s for 11k events.
 const TIMEOUT_MS = 15_000
 const FORCED_TIMEOUT_MS = 60_000
 
 type SyncState = {
   lastAttemptAt?: number
+  nextAttemptAt?: number
   lastSuccessAt?: number
   backoffUntil?: number
+  // Consecutive failed requests; reset by a success.
+  failures?: number
   // Token expiry Cursor rejected; a new token lifts the 401/403 backoff.
   rejectedExp?: number
   lastError?: string
   // Short hash of the token subject, never the subject itself.
   account?: string
+  // Per account: the newest synced event, or the start of the day a sync
+  // found nothing, so a quiet account is not re-downloaded from scratch.
+  through?: Record<string, number>
 }
 
 // A sidecar, so recording an attempt never moves the import store's mtime.
@@ -81,14 +93,25 @@ class Skip extends Error {}
 /// stored usage, and `force` (`codeburn import cursor --sync`) turns every skip
 /// and failure into an error and ignores the throttle, backoff and off switch.
 /// Null from a forced sync means the window held no usage.
+///
+/// The first sync of an account reaches back a month; every later one starts
+/// at the local day of its newest synced event, so closed days are downloaded
+/// once. Earlier accounts' synced usage stays, and a new account's window
+/// starts after their coverage so no stretch of local usage is replaced twice.
 export async function maybeSyncCursor(opts: { force?: boolean; now?: number; fetchImpl?: typeof fetch } = {}): Promise<CursorImportSummary | null> {
   const force = opts.force === true
   const now = opts.now ?? Date.now()
+  let state: SyncState = {}
   let attempt: SyncState | null = null
+  const fail = async (lastError: string, backoffUntil = 0, rejectedExp?: number | null) => {
+    const failures = (state.failures ?? 0) + 1
+    const until = Math.max(backoffUntil, failures >= MAX_FAILURES ? now + FAILURE_BACKOFF_MS : 0)
+    await writeState({ ...attempt, failures, lastError, ...(until > 0 ? { backoffUntil: until } : {}), ...(rejectedExp != null ? { rejectedExp } : {}) })
+  }
   try {
     if (!force && !(await cursorSyncEnabled())) return null
-    const state = await readState()
-    if (!force && state.lastAttemptAt !== undefined && now - state.lastAttemptAt < THROTTLE_MS) return null
+    state = await readState()
+    if (!force && state.nextAttemptAt !== undefined && now < state.nextAttemptAt) return null
     const token = (await cursorAccessTokenFromDatabase(cursorDatabasePath()))?.trim()
     if (!token) throw new Skip('the Cursor app is not signed in on this machine')
     const claims = cursorTokenClaims(token)
@@ -99,13 +122,22 @@ export async function maybeSyncCursor(opts: { force?: boolean; now?: number; fet
     if (!force && backedOff) return null
 
     const account = createHash('sha256').update(claims.sub).digest('hex').slice(0, 16)
-    attempt = { lastAttemptAt: now, ...(state.lastSuccessAt !== undefined ? { lastSuccessAt: state.lastSuccessAt } : {}), account }
+    attempt = {
+      lastAttemptAt: now,
+      nextAttemptAt: now + THROTTLE_MS + Math.floor(Math.random() * JITTER_MS),
+      account,
+      ...(state.lastSuccessAt !== undefined ? { lastSuccessAt: state.lastSuccessAt } : {}),
+      ...(state.through ? { through: state.through } : {}),
+    }
     await writeState({ ...state, ...attempt })
-    if (state.account !== undefined && state.account !== account) await invalidate(await dropCursorSync())
 
-    const store = await loadCursorImport()
-    const syncEnds = store?.ranges.filter(r => r.source === 'sync').map(r => Date.parse(r.end)) ?? []
-    const from = syncEnds.length > 0 ? localDayStart(Math.max(...syncEnds)) : firstSyncStart(now)
+    const store = existsSync(cursorImportPath()) ? await loadCursorImport() : null
+    // A loop, not a spread: the store keeps every event forever.
+    let ownNewest = -Infinity
+    for (const e of store?.events ?? []) if (e.source === 'sync' && e.account === account) ownNewest = Math.max(ownNewest, Date.parse(e.date))
+    const through = store ? Math.max(ownNewest, state.through?.[account] ?? -Infinity) : -Infinity
+    const othersEnd = Math.max(-Infinity, ...(store?.ranges.filter(r => r.source === 'sync' && r.account !== account).map(r => Date.parse(r.end)) ?? []))
+    const from = Math.max(Number.isFinite(through) ? localDayStart(through) : firstSyncStart(now), othersEnd + 1)
     const res = await (opts.fetchImpl ?? globalThis.fetch)(`${EXPORT_URL}?startDate=${from}&endDate=${now}&strategy=tokens`, {
       method: 'GET',
       headers: { Accept: 'text/csv', Cookie: cookie, Origin: 'https://cursor.com', 'User-Agent': 'CodeBurn' },
@@ -113,24 +145,25 @@ export async function maybeSyncCursor(opts: { force?: boolean; now?: number; fet
     })
     if (res.status === 401 || res.status === 403) {
       const lastError = `Cursor rejected the app session (HTTP ${res.status}); open Cursor and sign in again`
-      await writeState({ ...attempt, backoffUntil: now + REJECTED_BACKOFF_MS, ...(claims.exp !== null ? { rejectedExp: claims.exp } : {}), lastError })
+      await fail(lastError, now + REJECTED_BACKOFF_MS, claims.exp)
       throw new Skip(lastError)
     }
     if (res.status === 429) {
       const seconds = Number(res.headers.get('Retry-After') ?? NaN)
       const lastError = 'Cursor rate-limited the usage export (HTTP 429)'
-      await writeState({ ...attempt, backoffUntil: now + Math.max(Number.isFinite(seconds) ? Math.ceil(seconds) : 300, 60) * 1000, lastError })
+      await fail(lastError, now + Math.max(Number.isFinite(seconds) ? Math.ceil(seconds) : 300, 60) * 1000)
       throw new Skip(lastError)
     }
     if (!res.ok) throw new Error(`Cursor returned HTTP ${res.status} for the usage export`)
-    const summary = await importCursorCsvText(await res.text(), now, { from, to: now, source: 'sync' })
+    const summary = await importCursorCsvText(await res.text(), now, { from, to: now, source: 'sync', account })
     if (summary?.changed) await invalidate([{ start: new Date(from).toISOString(), end: new Date(now).toISOString() }])
-    await writeState({ lastAttemptAt: now, lastSuccessAt: now, account })
+    const newest = Math.max(state.through?.[account] ?? -Infinity, summary ? Date.parse(summary.lastEvent) : localDayStart(now))
+    await writeState({ ...attempt, lastSuccessAt: now, through: { ...state.through, [account]: newest } })
     return summary
   } catch (err) {
     // Only the first line: a header mismatch quotes the response body below it.
     const message = err instanceof Skip ? err.message : sanitizeError(err).split('\n')[0]!
-    if (attempt && !(err instanceof Skip)) await writeState({ ...attempt, lastError: message }).catch(() => {})
+    if (attempt && !(err instanceof Skip)) await fail(message).catch(() => {})
     if (force) throw new Error(message)
     return null
   }
