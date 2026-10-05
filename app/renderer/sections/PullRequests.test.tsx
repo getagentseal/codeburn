@@ -6,12 +6,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { formatDayShort } from '../lib/format'
 import { prFilters } from '../lib/investigation'
 import type { MenubarPayload } from '../lib/types'
+import { PROJECT_ALPHA } from '../test/projectScopeFixtures'
 import { PullRequests } from './PullRequests'
 
 type PrPayload = NonNullable<MenubarPayload['current']['pullRequests']>
 
 const { getOverview, openExternal } = vi.hoisted(() => ({
-  getOverview: vi.fn<(period: string, provider: string) => Promise<MenubarPayload>>(),
+  getOverview: vi.fn(),
   openExternal: vi.fn<(url: string) => Promise<void>>(),
 }))
 vi.mock('../lib/ipc', async orig => {
@@ -68,6 +69,22 @@ describe('PullRequests', () => {
     getOverview.mockReset()
     openExternal.mockReset()
     openExternal.mockResolvedValue(undefined)
+  })
+
+  it('uses the shared scoped overview query for pull requests', async () => {
+    getOverview.mockResolvedValue(makePayload(SAMPLE))
+    render(<PullRequests
+      period="lifetime"
+      provider="all"
+      projectId={PROJECT_ALPHA.id}
+      deviceScope="local"
+    /> as any)
+
+    await screen.findByRole('link', { name: 'getagentseal/codeburn#780' })
+    expect(getOverview).toHaveBeenCalledWith(expect.objectContaining({
+      projectId: PROJECT_ALPHA.id,
+      deviceScope: 'local',
+    }))
   })
 
   it('renders PR cards with linked labels, cost, activity, and a date span', async () => {
@@ -127,7 +144,7 @@ describe('PullRequests', () => {
 
   it('closes an open expansion when the period changes the PR set', async () => {
     const changed: PrPayload = { ...SAMPLE, rows: [SAMPLE.rows[0]!] } // #781 dropped
-    getOverview.mockImplementation((period: string) => Promise.resolve(makePayload(period === 'lifetime' ? SAMPLE : changed)))
+    getOverview.mockImplementation((query: { period: string }) => Promise.resolve(makePayload(query.period === 'lifetime' ? SAMPLE : changed)))
     const { rerender } = render(<PullRequests period="lifetime" provider="all" />)
 
     const link = await screen.findByRole('link', { name: 'getagentseal/codeburn#780' })
@@ -352,15 +369,15 @@ describe('PullRequests', () => {
   })
 
   it('names Today and points at Lifetime when a wider window has rows', async () => {
-    getOverview.mockImplementation(async (period: string) => {
-      if (period === 'lifetime') return makePayload(SAMPLE)
+    getOverview.mockImplementation(async (query: { period: string }) => {
+      if (query.period === 'lifetime') return makePayload(SAMPLE)
       return makePayload()
     })
     render(<PullRequests period="today" provider="all" />)
 
     expect(await screen.findByText(/No sessions in Today mentioned a pull request URL/)).toBeInTheDocument()
     expect(await screen.findByText(/Lifetime has 2 pull requests/)).toBeInTheDocument()
-    expect(getOverview).toHaveBeenCalledWith('lifetime', 'all')
+    expect(getOverview).toHaveBeenCalledWith({ period: 'lifetime', provider: 'all', range: null, deviceScope: 'local', projectId: null })
   })
 
   it('names the custom range, not the dormant standard period', async () => {

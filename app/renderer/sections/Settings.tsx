@@ -12,9 +12,10 @@ import { clearPolledMemo, usePolled } from '../hooks/usePolled'
 import { updateDownloadUrl, useUpdateStatus } from '../hooks/useUpdateStatus'
 import { version as appVersion } from '../../package.json'
 import { readDailyBudget } from '../lib/budget'
-import { formatConverted, formatCount, formatUsd, shortenProjectPath } from '../lib/format'
+import { formatConverted, formatCount, formatUsd } from '../lib/format'
 import { codeburn, normalizeCliError } from '../lib/ipc'
 import { t, useLocale, type LocaleChoice } from '../i18n'
+import { projectDisplayLines } from '../lib/projectDisplay'
 import { projectMatches, projectPattern } from '../lib/projectMatch'
 import { shortcutLabel } from '../lib/platform'
 import { motionClass } from '../lib/motion'
@@ -145,7 +146,7 @@ function ConfirmButton({ label, prompt, onConfirm }: { label: string; prompt: st
   )
 }
 
-export function Settings({ period, refreshToken = 0, onNavigate, initialPane, claudeConfigs, claudeConfigSource = null, onConfigMutated, scope = 'local', onScopeChange, projectFiltered = false }: { period: Period; refreshToken?: number; onNavigate?: (section: Section) => void; initialPane?: SettingsPane; claudeConfigs?: ClaudeConfigSelector; claudeConfigSource?: string | null; onConfigMutated?: () => void; scope?: Scope; onScopeChange?: (scope: string) => void; projectFiltered?: boolean }) {
+export function Settings({ period, refreshToken = 0, onNavigate, initialPane, claudeConfigs, claudeConfigSource = null, onConfigMutated, onProjectFilterMutating, scope = 'local', onScopeChange, projectFiltered = false, projectScopeSelected = false }: { period: Period; refreshToken?: number; onNavigate?: (section: Section) => void; initialPane?: SettingsPane; claudeConfigs?: ClaudeConfigSelector; claudeConfigSource?: string | null; onConfigMutated?: () => void; onProjectFilterMutating?: () => void; scope?: Scope; onScopeChange?: (scope: string) => void; projectFiltered?: boolean; projectScopeSelected?: boolean }) {
   const [pane, setPane] = useState<Pane>(initialPane ?? 'general')
   // The tray app's own two panes, Windows only, each shown only while its switch in the
   // sidebar corner is on: there is nothing to configure about a tray app that is not running,
@@ -176,9 +177,9 @@ export function Settings({ period, refreshToken = 0, onNavigate, initialPane, cl
           ))}
         </nav>
         <main className="set-pane">
-          {pane === 'general' && <GeneralPane period={period} refreshToken={refreshToken} claudeConfigs={claudeConfigs} claudeConfigSource={claudeConfigSource} onConfigMutated={onConfigMutated} scope={scope} onScopeChange={onScopeChange} projectFiltered={projectFiltered} />}
+          {pane === 'general' && <GeneralPane period={period} refreshToken={refreshToken} claudeConfigs={claudeConfigs} claudeConfigSource={claudeConfigSource} onConfigMutated={onConfigMutated} scope={scope} onScopeChange={onScopeChange} projectFiltered={projectFiltered} projectScopeSelected={projectScopeSelected} />}
           {pane === 'providers' && <ProvidersPane refreshToken={refreshToken} />}
-          {pane === 'projects' && <ProjectsPane refreshToken={refreshToken} onConfigMutated={onConfigMutated} />}
+          {pane === 'projects' && <ProjectsPane refreshToken={refreshToken} onConfigMutated={onConfigMutated} onProjectFilterMutating={onProjectFilterMutating} />}
           {pane === 'aliases' && <AliasesPane refreshToken={refreshToken} onConfigMutated={onConfigMutated} />}
           {pane === 'pricing' && <PricingPane refreshToken={refreshToken} onConfigMutated={onConfigMutated} />}
           {pane === 'plans' && <PlansPane period={period} refreshToken={refreshToken} onNavigate={onNavigate} onConfigMutated={onConfigMutated} />}
@@ -201,7 +202,7 @@ export function Settings({ period, refreshToken = 0, onNavigate, initialPane, cl
   )
 }
 
-function GeneralPane({ period, refreshToken, claudeConfigs, claudeConfigSource, onConfigMutated, scope = 'local', onScopeChange, projectFiltered = false }: { period: Period; refreshToken: number; claudeConfigs?: ClaudeConfigSelector; claudeConfigSource: string | null; onConfigMutated?: () => void; scope?: Scope; onScopeChange?: (scope: string) => void; projectFiltered?: boolean }) {
+function GeneralPane({ period, refreshToken, claudeConfigs, claudeConfigSource, onConfigMutated, scope = 'local', onScopeChange, projectFiltered = false, projectScopeSelected = false }: { period: Period; refreshToken: number; claudeConfigs?: ClaudeConfigSelector; claudeConfigSource: string | null; onConfigMutated?: () => void; scope?: Scope; onScopeChange?: (scope: string) => void; projectFiltered?: boolean; projectScopeSelected?: boolean }) {
   const [currencyNonce, setCurrencyNonce] = useState(0)
   const plans = usePolled<StatusJson>(() => codeburn.getPlans(period), [period, refreshToken, currencyNonce], {
     memoKey: reportMemoKey('plans', period),
@@ -257,6 +258,15 @@ function GeneralPane({ period, refreshToken, claudeConfigs, claudeConfigSource, 
   const activeConfigLabel = claudeConfigSource
     ? claudeConfigs?.options.find(option => option.id === claudeConfigSource)?.label ?? claudeConfigSource
     : t('settings.claudeConfig.all')
+  const effectiveScope: Scope = projectScopeSelected ? 'local' : scope
+  const scopeHint = projectScopeSelected
+    ? t('settings.scope.hintProjectSelected')
+    : projectFiltered
+    ? t('settings.scope.hintFiltered')
+    : t('settings.scope.hintDefault')
+  const scopeOptions = projectFiltered || projectScopeSelected
+    ? [{ value: 'local', label: t('settings.scope.option.local') }]
+    : [{ value: 'local', label: t('settings.scope.option.local') }, { value: 'combined', label: t('settings.scope.option.combined') }]
 
   return (
     <section className="set-p on">
@@ -282,7 +292,7 @@ function GeneralPane({ period, refreshToken, claudeConfigs, claudeConfigSource, 
             {plans.data ? <Dropdown id="settings-currency" ariaLabel={t('settings.currency.label')} value={plans.data.currency} options={currencies.map(code => ({ value: code, label: code }))} onChange={value => { trackEvent('settings_change', { setting: 'currency', value }); void codeburn.setCurrency(value).then(finishCurrency).catch(toastRejection(t('settings.toast.currencyError'))) }} width={92} /> : plans.error ? <SettingsErrorText error={plans.error} /> : <span className="set-cap">{t('settings.loading')}</span>}
           </span></div>
           <div className="about-row"><label className="tx" htmlFor="settings-period">{t('settings.period.label')}<small>{t('settings.period.hint')}</small></label><span className="r"><Dropdown id="settings-period" ariaLabel={t('settings.period.label')} value={defaultPeriod} options={[{ value: 'today', label: t('settings.period.option.today') }, { value: 'week', label: '7d' }, { value: '30days', label: '30d' }, { value: 'month', label: t('settings.period.option.month') }, { value: 'all', label: t('settings.period.option.all') }]} onChange={value => { setDefaultPeriod(value); writeSetting('codeburn.defaultPeriod', value); trackEvent('settings_change', { setting: 'defaultPeriod', value }) }} width={92} /></span></div>
-          <div className="about-row"><label className="tx" htmlFor="settings-scope">{t('settings.scope.label')}<small>{projectFiltered ? t('settings.scope.hintFiltered') : t('settings.scope.hintDefault')}</small></label><span className="r"><Dropdown id="settings-scope" ariaLabel={t('settings.scope.label')} value={scope} options={projectFiltered ? [{ value: 'local', label: t('settings.scope.option.local') }] : [{ value: 'local', label: t('settings.scope.option.local') }, { value: 'combined', label: t('settings.scope.option.combined') }]} onChange={value => onScopeChange?.(value)} width={110} /></span></div>
+          <div className="about-row"><label className="tx" htmlFor="settings-scope">{t('settings.scope.label')}<small>{scopeHint}</small></label><span className="r"><Dropdown id="settings-scope" ariaLabel={t('settings.scope.label')} value={effectiveScope} options={scopeOptions} onChange={value => onScopeChange?.(value)} width={110} /></span></div>
           <div className="about-row"><label className="tx" htmlFor="settings-refresh">{t('settings.refresh.label')}<small>{t('settings.refresh.hint', { key: shortcutLabel('R') })}</small></label><span className="r"><Dropdown id="settings-refresh" ariaLabel={t('settings.refresh.label')} value={cadence.value} options={REFRESH_OPTIONS.map(option => ({ value: option.value, label: option.label }))} onChange={cadence.setValue} width={124} /></span></div>
           <div className="about-row"><label className="tx" htmlFor="settings-budget">{t('settings.budget.label')}<small>{t('settings.budget.hint')}</small></label><span className="r"><Dropdown id="settings-budget" ariaLabel={t('settings.budget.label')} value={budgetKind} options={[{ value: 'off', label: t('settings.budget.option.off') }, { value: 'usd', label: t('settings.budget.option.usd') }, { value: 'tokens', label: t('settings.budget.option.tokens') }]} onChange={value => { const kind = value as 'off' | 'usd' | 'tokens'; setBudgetKind(kind); persistBudget(kind, budgetInput) }} width={120} />{budgetKind !== 'off' && <input className="set-input" type="text" inputMode="decimal" aria-label={t('settings.budget.amountAriaLabel')} placeholder={budgetKind === 'usd' ? 'USD' : t('settings.budget.placeholderTokens')} value={budgetInput} onChange={event => { setBudgetInput(event.target.value); persistBudget(budgetKind, event.target.value) }} style={{ width: 90 }} />}</span></div>
           {budgetError && <p className="set-action-msg error">{budgetError}</p>}
@@ -300,7 +310,7 @@ function ProvidersPane({ refreshToken }: { refreshToken: number }) {
   // Detection only needs to know which providers are live and a small headline, so it
   // always uses a cheap 1-day window instead of the global period — a 6-month period
   // would otherwise recompute every provider over 6 months just to render this list.
-  const overview = usePolled<MenubarPayload>(() => codeburn.getOverview('today', 'all'), [refreshToken])
+  const overview = usePolled<MenubarPayload>(() => codeburn.getOverview({ period: 'today', provider: 'all' }), [refreshToken])
   const providers = detectedProviders(overview.data?.current)
   return <section className="set-p on">
     <div><h3 className="set-h">{t('settings.providers.heading')}</h3><p className="set-sub">{t('settings.providers.subtitle')}</p></div>
@@ -315,7 +325,7 @@ function projectVisible(project: ProjectRow, filter: ProjectFilter): boolean {
   return filter.project.length === 0 || filter.project.some(pattern => projectMatches(project, pattern))
 }
 
-function ProjectsPane({ refreshToken, onConfigMutated }: { refreshToken: number; onConfigMutated?: () => void }) {
+function ProjectsPane({ refreshToken, onConfigMutated, onProjectFilterMutating }: { refreshToken: number; onConfigMutated?: () => void; onProjectFilterMutating?: () => void }) {
   const [actionNonce, setActionNonce] = useState(0)
   const [pattern, setPattern] = useState('')
   const [search, setSearch] = useState('')
@@ -349,6 +359,7 @@ function ProjectsPane({ refreshToken, onConfigMutated }: { refreshToken: number;
   // One write at a time, or a second click drops the first.
   const apply = (next: ProjectFilter, clearInput = false): void => {
     if (busy) return
+    onProjectFilterMutating?.()
     setBusy(true)
     void codeburn.setProjectFilter(next).then(() => {
       setError('')
@@ -396,8 +407,9 @@ function ProjectsPane({ refreshToken, onConfigMutated }: { refreshToken: number;
         : shown.map(project => {
           const visible = projectVisible(project, filter)
           const pattern_ = projectPattern(project)
+          const display = projectDisplayLines(project)
           return <div className="about-row" key={pattern_}>
-            <span className="tx set-mono">{shortenProjectPath(project.path || project.name, 2)}<small>{pattern_}</small></span>
+            <span className="tx set-mono">{display.primary}<small>{display.pattern ?? t('shell.projectScope.pathUnavailable')}</small></span>
             <span className="r set-status"><span className="set-cap">{formatConverted(project.cost)} · {formatCount(project.sessions, 'session')}</span></span>
             <button type="button" role="switch" aria-checked={visible} aria-label={t('settings.projects.showAriaLabel', { pattern: pattern_ })} className={visible ? 'switch on' : 'switch'} disabled={busy} onClick={() => toggle(project, !visible)}><span className="switch-knob" /></button>
           </div>
@@ -611,7 +623,7 @@ function PlansPane({ period, refreshToken, onNavigate, onConfigMutated }: { peri
 }
 
 function ExportPane({ period, refreshToken }: { period: Period; refreshToken: number }) {
-  const overview = usePolled<MenubarPayload>(() => codeburn.getOverview(period, 'all'), [period, refreshToken])
+  const overview = usePolled<MenubarPayload>(() => codeburn.getOverview({ period, provider: 'all' }), [period, refreshToken])
   const [format, setFormat] = useState<'csv' | 'json'>('csv')
   const [provider, setProvider] = useState('all')
   const [destination, setDestination] = useState<string | null>(null)

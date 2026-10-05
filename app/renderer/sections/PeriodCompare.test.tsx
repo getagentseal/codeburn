@@ -1,15 +1,16 @@
 // @vitest-environment jsdom
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import type { PeriodDiffReport, PeriodSessionDiff } from '../lib/types'
-import { __resetPolledMemo } from '../hooks/usePolled'
+import type { DesktopPeriodQuery, DesktopPeriodSessionsQuery, PeriodDiffReport, PeriodSessionDiff } from '../lib/types'
+import { clearPolledMemo, __resetPolledMemo } from '../hooks/usePolled'
+import { PROJECT_ALPHA, PROJECT_ALPHA_SAME_NAME } from '../test/projectScopeFixtures'
 import { PeriodCompare, defaultSevenRanges, leadSentence } from './PeriodCompare'
 
 const mocks = vi.hoisted(() => ({
-  getPeriodCompare: vi.fn<(a: { from: string; to: string }, b: { from: string; to: string }, provider: string) => Promise<PeriodDiffReport>>(),
-  getPeriodCompareSessions: vi.fn<(a: { from: string; to: string }, b: { from: string; to: string }, provider: string, dimension: string, key: string) => Promise<PeriodSessionDiff>>(),
+  getPeriodCompare: vi.fn<(query: DesktopPeriodQuery) => Promise<PeriodDiffReport>>(),
+  getPeriodCompareSessions: vi.fn<(query: DesktopPeriodSessionsQuery) => Promise<PeriodSessionDiff>>(),
   telemetryTrack: vi.fn<(name: string, props?: Record<string, unknown>) => Promise<boolean>>(),
 }))
 vi.mock('../lib/ipc', async orig => {
@@ -19,6 +20,12 @@ vi.mock('../lib/ipc', async orig => {
 
 const RANGE_A = { from: '2026-03-02', to: '2026-03-08' }
 const RANGE_B = { from: '2026-03-09', to: '2026-03-15' }
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>(resolvePromise => { resolve = resolvePromise })
+  return { promise, resolve }
+}
 
 const report: PeriodDiffReport = {
   schema: 1,
@@ -93,6 +100,66 @@ beforeEach(() => {
 })
 
 describe('PeriodCompare', () => {
+  it('Scenario: Compare Periods sends the same project id to both ranges and drill-down', async () => {
+    const user = userEvent.setup()
+    render(<PeriodCompare provider="all" projectId={PROJECT_ALPHA.id} deviceScope="local" /> as any)
+
+    await screen.findByText('What changed, biggest movers')
+    await waitFor(() => expect(mocks.getPeriodCompare).toHaveBeenCalledWith(expect.objectContaining({
+      projectId: PROJECT_ALPHA.id,
+      deviceScope: 'local',
+    })))
+    await user.click(screen.getByRole('button', { name: /\/work\/eff/ }))
+    await waitFor(() => expect(mocks.getPeriodCompareSessions).toHaveBeenCalledWith(expect.objectContaining({
+      projectId: PROJECT_ALPHA.id,
+      deviceScope: 'local',
+    })))
+  })
+
+  it('Scenario: real Compare Periods drill-down construction keeps Beta after a late Alpha response', async () => {
+    const alpha = deferred<PeriodSessionDiff>()
+    const beta = deferred<PeriodSessionDiff>()
+    mocks.getPeriodCompareSessions.mockImplementation((query: DesktopPeriodSessionsQuery) =>
+      query.projectId === PROJECT_ALPHA.id ? alpha.promise : beta.promise)
+    const alphaReport: PeriodSessionDiff = {
+      ...sessionsReport,
+      sessions: [{ ...sessionsReport.sessions[0]!, title: 'Alpha drill response', costB: 11, diff: 1 }],
+    }
+    const betaReport: PeriodSessionDiff = {
+      ...sessionsReport,
+      sessions: [{ ...sessionsReport.sessions[0]!, title: 'Beta drill response', costB: 22, diff: 2 }],
+    }
+
+    const user = userEvent.setup()
+    const view = render(<PeriodCompare provider="all" projectId={PROJECT_ALPHA.id} deviceScope="local" /> as any)
+    await screen.findByText('What changed, biggest movers')
+    await user.click(screen.getByRole('button', { name: /\/work\/eff/ }))
+    await waitFor(() => expect(mocks.getPeriodCompareSessions).toHaveBeenCalledWith(expect.objectContaining({
+      projectId: PROJECT_ALPHA.id,
+      deviceScope: 'local',
+    })))
+
+    clearPolledMemo()
+    view.rerender(<PeriodCompare provider="all" projectId={PROJECT_ALPHA_SAME_NAME.id} deviceScope="local" /> as any)
+    await waitFor(() => expect(mocks.getPeriodCompareSessions).toHaveBeenCalledWith(expect.objectContaining({
+      projectId: PROJECT_ALPHA_SAME_NAME.id,
+      deviceScope: 'local',
+    })))
+
+    await act(async () => {
+      beta.resolve(betaReport)
+      await beta.promise
+    })
+    expect(await screen.findByText('Beta drill response')).toBeInTheDocument()
+
+    await act(async () => {
+      alpha.resolve(alphaReport)
+      await alpha.promise
+    })
+    expect(screen.getByText('Beta drill response')).toBeInTheDocument()
+    expect(screen.queryByText('Alpha drill response')).not.toBeInTheDocument()
+  })
+
   it('recomputes percentages and direction for daily averages with unequal lengths', async () => {
     const unequal: PeriodDiffReport = { ...report, rangeA: { ...report.rangeA, days: 1 }, rangeB: { ...report.rangeB, days: 10 },
       projects: [{ key: '/work/eff', costA: 100, costB: 160, diff: 60, pct: 60, status: 'up', callsA: 10, callsB: 10 }] }
@@ -158,7 +225,7 @@ describe('PeriodCompare', () => {
     // Clicking a contribution opens the session drill-down for it.
     await user.click(screen.getByRole('button', { name: /\/work\/eff/ }))
     expect(await screen.findByLabelText('Sessions behind /work/eff')).toBeInTheDocument()
-    expect(mocks.getPeriodCompareSessions).toHaveBeenCalledWith(RANGE_A, RANGE_B, 'all', 'project', '/work/eff')
+    expect(mocks.getPeriodCompareSessions).toHaveBeenCalledWith({ rangeA: RANGE_A, rangeB: RANGE_B, provider: 'all', dimension: 'project', key: '/work/eff', deviceScope: 'local', projectId: null })
     expect(screen.getByText('long run')).toBeInTheDocument()
   })
 
@@ -197,7 +264,7 @@ describe('PeriodCompare', () => {
     await user.click(screen.getByRole('tab', { name: 'By model' }))
     expect(await screen.findByRole('columnheader', { name: 'Model' })).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: /claude-sonnet-4-5/ }))
-    await waitFor(() => expect(mocks.getPeriodCompareSessions).toHaveBeenCalledWith(RANGE_A, RANGE_B, 'all', 'model', 'claude-sonnet-4-5'))
+    await waitFor(() => expect(mocks.getPeriodCompareSessions).toHaveBeenCalledWith({ rangeA: RANGE_A, rangeB: RANGE_B, provider: 'all', dimension: 'model', key: 'claude-sonnet-4-5', deviceScope: 'local', projectId: null }))
   })
 
   it('persists the A/B selection so returning to the section keeps it', async () => {
@@ -206,7 +273,7 @@ describe('PeriodCompare', () => {
     await screen.findByText('What changed, biggest movers')
     await user.click(screen.getByRole('button', { name: 'Swap A and B' }))
     // The swap re-fetches with the ranges exchanged.
-    await waitFor(() => expect(mocks.getPeriodCompare).toHaveBeenCalledWith(RANGE_B, RANGE_A, 'all'))
+    await waitFor(() => expect(mocks.getPeriodCompare).toHaveBeenCalledWith({ rangeA: RANGE_B, rangeB: RANGE_A, provider: 'all', deviceScope: 'local', projectId: null }))
     unmount()
 
     // Returning to the section (fresh component, no refetch needed) restores

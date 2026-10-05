@@ -1,7 +1,7 @@
 import { homedir } from 'node:os'
 import { CATEGORY_LABELS, type ProjectSummary, type SessionSummary, type TaskCategory, type DateRange } from './types.js'
 import { behavioralCallWeight } from './behavioral-weight.js'
-import { type PeriodData, type ProviderCost, type BreakdownArrays, type MenubarPayload, type ClaudeConfigSelector, type HydrationState, buildMenubarPayload } from './menubar-json.js'
+import { type PeriodData, type ProviderCost, type BreakdownArrays, type MenubarPayload, type ClaudeConfigSelector, type HydrationState, applyScopedPayloadPolicy, buildMenubarPayload } from './menubar-json.js'
 import { type SessionCountBasis } from './session-count-label.js'
 import { parseAllSessions, filterProjectsByName, filterProjectsByDays, filterProjectsByClaudeConfigSource, filterProjectsByDateRange, isSessionHydrationComplete, makeProjectFilter, type ProjectFilterTarget, sessionHydrationSnapshot } from './parser.js'
 type ProjectFilter = (entry: ProjectFilterTarget) => boolean
@@ -22,10 +22,11 @@ import { scanAndDetect } from './optimize.js'
 import { callBillableOutputTokens, sessionBillableOutput, sessionBillableOutputTokens, inferSessionProvider } from './session-output.js'
 import { getDateRange } from './cli-date.js'
 import { activityStreak } from './streak.js'
-import { getDaysInRange, ensureCacheHydrated, loadDailyCache, cachedProjectIdentities, emptyCache, mergeDayEntries, BACKFILL_DAYS, toDateString, type DailyCache, type DailyEntry, type ProjectDayStats, type ProviderDaySlice } from './daily-cache.js'
+import { getDaysInRange, ensureCacheHydrated, loadDailyCache, cachedProjectIdentities, emptyCache, mergeDayEntries, BACKFILL_DAYS, toDateString, type CategoryDayStats, type DailyCache, type DailyEntry, type ModelDayStats, type ProjectDayStats, type ProviderDaySlice } from './daily-cache.js'
 import { buildGranularHistory } from './granular-history.js'
 import { spendProjectIdentity } from './spend-flow.js'
 import { AGGREGATE_ONLY_PROVIDER, excludeAggregateOnlyProjects, excludesAggregateOnlyProviders } from './parser.js'
+import { canonicalDesktopProjectId, catalogRevision, matchesDesktopProjectId, type DesktopProjectId } from './project-scope.js'
 
 // Row caps for the by-PR / by-branch payload aggregations, ranked by cost.
 const TOP_BRANCHES = 15
@@ -293,6 +294,7 @@ export type AggregateOpts = {
   provider?: string
   project?: string[]
   exclude?: string[]
+  desktopProjectId?: DesktopProjectId
   daysSelection?: { range: DateRange; label: string; days: Set<string> } | null
   optimize?: boolean
   claudeConfigSourceId?: string | null
@@ -303,6 +305,111 @@ export type AggregateOpts = {
 }
 
 type ConfigOption = { id: string; label: string; path: string }
+
+export type ProjectScopeCatalog = {
+  revision: string
+  options: Array<{ id: DesktopProjectId; name: string; path: string | null }>
+}
+
+function filterProjectsForScope(projects: ProjectSummary[], opts: AggregateOpts): ProjectSummary[] {
+  const persistent = filterProjectsByName(projects, opts.project ?? [], opts.exclude ?? [])
+  if (opts.desktopProjectId === undefined) return persistent
+  return persistent.filter(project => matchesDesktopProjectId(project, opts.desktopProjectId!))
+}
+
+function projectDisplayName(project: { project: string; projectPath?: string }): string {
+  const path = project.projectPath?.trim().replace(/\\/g, '/').replace(/\/+$/, '')
+  return path ? path.split('/').filter(Boolean).at(-1) ?? project.project : project.project
+}
+
+function projectPathForCatalog(project: { project: string; projectPath?: string }): string | null {
+  return project.projectPath?.trim() ? project.projectPath : null
+}
+
+export function buildProjectScopeCatalog(
+  liveProjects: readonly ProjectSummary[],
+  cache: DailyCache,
+  filter: { project: readonly string[]; exclude: readonly string[] },
+): ProjectScopeCatalog {
+  const matches = makeProjectFilter(filter.project, filter.exclude)
+  const ambiguousPathless = new Set<string>()
+  const pathlessCounts = new Map<string, number>()
+  const pathIdsByLabel = new Map<string, Set<string>>()
+  const pathValuesByLabel = new Map<string, Set<string>>()
+  for (const project of liveProjects) {
+    const id = canonicalDesktopProjectId(project)
+    if (project.projectPath) {
+      const ids = pathIdsByLabel.get(project.project) ?? new Set<string>()
+      ids.add(id)
+      pathIdsByLabel.set(project.project, ids)
+      const paths = pathValuesByLabel.get(project.project) ?? new Set<string>()
+      paths.add(project.projectPath.trim().replace(/\\/g, '/').replace(/\/+$/, ''))
+      pathValuesByLabel.set(project.project, paths)
+    } else {
+      pathlessCounts.set(id, (pathlessCounts.get(id) ?? 0) + 1)
+    }
+  }
+  for (const day of cache.days) {
+    const retained = [
+      ...Object.values(day.projects ?? {}),
+      ...Object.values(day.providers).flatMap(slice => Object.values(slice.projects ?? {})),
+    ]
+    for (const project of retained) {
+      if (project.provenance !== 'exact' || !project.canonicalId || !project.canonicalId.startsWith('path:')) continue
+      const ids = pathIdsByLabel.get(project.sourceLabel) ?? new Set<string>()
+      ids.add(project.canonicalId)
+      pathIdsByLabel.set(project.sourceLabel, ids)
+    }
+  }
+  for (const [id, count] of pathlessCounts) {
+    if (count > 1) ambiguousPathless.add(id)
+  }
+  for (const [label, ids] of pathIdsByLabel) {
+    if (ids.size > 1) ambiguousPathless.add(`label:${label}`)
+  }
+  for (const [label, paths] of pathValuesByLabel) {
+    if (paths.size > 1 || pathlessCounts.has(`label:${label}`)) ambiguousPathless.add(`label:${label}`)
+  }
+
+  const options = new Map<DesktopProjectId, { id: DesktopProjectId; name: string; path: string | null }>()
+  const add = (id: DesktopProjectId, name: string, path: string | null): void => {
+    if (ambiguousPathless.has(id)) return
+    const current = options.get(id)
+    if (!current || (current.path === null && path !== null)) options.set(id, { id, name, path })
+  }
+
+  for (const project of liveProjects) {
+    const id = canonicalDesktopProjectId(project)
+    if (!matches(project) || ambiguousPathless.has(id)) continue
+    add(id, projectDisplayName(project), projectPathForCatalog(project))
+  }
+  for (const day of cache.days) {
+    const retained = [
+      ...Object.values(day.projects ?? {}),
+      ...Object.values(day.providers).flatMap(slice => Object.values(slice.projects ?? {})),
+    ]
+    for (const project of retained) {
+      if (project.provenance !== 'exact' || !project.canonicalId) continue
+      if (!matches({ project: project.sourceLabel, projectPath: project.path ?? '' })) continue
+      add(project.canonicalId, project.displayName || project.sourceLabel, project.path)
+    }
+  }
+
+  const sorted = [...options.values()].sort((a, b) =>
+    a.name.localeCompare(b.name) || (a.path ?? '').localeCompare(b.path ?? '') || a.id.localeCompare(b.id),
+  )
+  const generation = JSON.stringify({
+    version: cache.version,
+    savingsConfigHash: cache.savingsConfigHash,
+    tzKey: cache.tzKey ?? '',
+    lastComputedDate: cache.lastComputedDate,
+    complete: cache.complete === true,
+    watermarkTrusted: cache.watermarkTrusted === true,
+    pendingRederive: [...(cache.pendingRederive ?? [])].sort(),
+    options: sorted,
+  })
+  return { revision: catalogRevision(filter.project, filter.exclude, generation), options: sorted }
+}
 
 function buildSelector(byId: Map<string, ConfigOption>, selectedId?: string | null): ClaudeConfigSelector | undefined {
   const options = [...byId.values()].sort((a, b) => a.label.localeCompare(b.label))
@@ -459,7 +566,8 @@ export function excludeProviderFromDay(day: DailyEntry, provider: string): Daily
   // Clamped: a slice adopted from a cache generation that recorded more than
   // the day-level field can account for must leave a zero, never a negative
   // headline.
-  const sub = (total: number, part: number | undefined): number => Math.max(0, total - (part ?? 0))
+  const numeric = (value: number | undefined): number => typeof value === 'number' && Number.isFinite(value) ? value : 0
+  const sub = (total: number | undefined, part: number | undefined): number => Math.max(0, numeric(total) - numeric(part))
 
   const models: DailyEntry['models'] = {}
   for (const [key, m] of Object.entries(day.models)) {
@@ -484,16 +592,52 @@ export function excludeProviderFromDay(day: DailyEntry, provider: string): Daily
   const projects: DailyEntry['projects'] = day.projects ? {} : undefined
   if (day.projects && projects) {
     for (const [key, p] of Object.entries(day.projects)) {
-      const mine = s.projects?.[key]
+      const mine = s.projects && Object.hasOwn(s.projects, key) ? s.projects[key] : undefined
       const left = {
         cost: sub(p.cost, mine?.cost),
         calls: sub(p.calls, mine?.calls),
         savingsUSD: sub(p.savingsUSD ?? 0, mine?.savingsUSD),
         sessions: sub(p.sessions ?? 0, mine?.sessions),
+        inputTokens: sub(p.inputTokens, mine?.inputTokens),
+        outputTokens: sub(p.outputTokens, mine?.outputTokens),
+        cacheReadTokens: sub(p.cacheReadTokens, mine?.cacheReadTokens),
+        cacheWriteTokens: sub(p.cacheWriteTokens, mine?.cacheWriteTokens),
+        editTurns: sub(p.editTurns, mine?.editTurns),
+        oneShotTurns: sub(p.oneShotTurns, mine?.oneShotTurns),
       }
-      if (Object.values(left).some(v => v > 0)) {
+      const models: Record<string, ModelDayStats> = {}
+      for (const [model, stats] of Object.entries(p.models ?? {})) {
+        const mineModel = mine?.models && Object.hasOwn(mine.models, model) ? mine.models[model] : undefined
+        const remaining = {
+          calls: sub(stats.calls, mineModel?.calls),
+          cost: sub(stats.cost, mineModel?.cost),
+          savingsUSD: sub(stats.savingsUSD, mineModel?.savingsUSD),
+          inputTokens: sub(stats.inputTokens, mineModel?.inputTokens),
+          outputTokens: sub(stats.outputTokens, mineModel?.outputTokens),
+          cacheReadTokens: sub(stats.cacheReadTokens, mineModel?.cacheReadTokens),
+          cacheWriteTokens: sub(stats.cacheWriteTokens, mineModel?.cacheWriteTokens),
+        }
+        if (Object.values(remaining).some(value => value > 0)) {
+          Object.defineProperty(models, model, { value: remaining, enumerable: true, writable: true, configurable: true })
+        }
+      }
+      const categories: Record<string, CategoryDayStats> = {}
+      for (const [category, stats] of Object.entries(p.categories ?? {})) {
+        const mineCategory = mine?.categories && Object.hasOwn(mine.categories, category) ? mine.categories[category] : undefined
+        const remaining = {
+          turns: sub(stats.turns, mineCategory?.turns),
+          cost: sub(stats.cost, mineCategory?.cost),
+          savingsUSD: sub(stats.savingsUSD, mineCategory?.savingsUSD),
+          editTurns: sub(stats.editTurns, mineCategory?.editTurns),
+          oneShotTurns: sub(stats.oneShotTurns, mineCategory?.oneShotTurns),
+        }
+        if (Object.values(remaining).some(value => value > 0)) {
+          Object.defineProperty(categories, category, { value: remaining, enumerable: true, writable: true, configurable: true })
+        }
+      }
+      if (Object.values(left).some(value => value > 0) || Object.keys(models).length > 0 || Object.keys(categories).length > 0) {
         Object.defineProperty(projects, key, {
-          value: { ...left, ...(p.path ? { path: p.path } : {}) },
+          value: { ...p, ...left, models, categories },
           enumerable: true, writable: true, configurable: true,
         })
       }
@@ -592,15 +736,76 @@ export function overlayProviderDaySlices(
 function sumMatchingProjects(
   projects: Record<string, ProjectDayStats>,
   matches: ProjectFilter,
-): { cost: number; calls: number; savingsUSD: number; sessions: number; projects: Record<string, ProjectDayStats>; matched: number } {
-  const out = { cost: 0, calls: 0, savingsUSD: 0, sessions: 0, projects: {} as Record<string, ProjectDayStats>, matched: 0 }
+  desktopProjectId?: DesktopProjectId,
+): {
+  cost: number
+  calls: number
+  savingsUSD: number
+  sessions: number
+  inputTokens: number
+  outputTokens: number
+  cacheReadTokens: number
+  cacheWriteTokens: number
+  editTurns: number
+  oneShotTurns: number
+  models: Record<string, ModelDayStats>
+  categories: Record<string, CategoryDayStats>
+  projects: Record<string, ProjectDayStats>
+  matched: number
+} {
+  const out = {
+    cost: 0,
+    calls: 0,
+    savingsUSD: 0,
+    sessions: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    editTurns: 0,
+    oneShotTurns: 0,
+    models: {} as Record<string, ModelDayStats>,
+    categories: {} as Record<string, CategoryDayStats>,
+    projects: {} as Record<string, ProjectDayStats>,
+    matched: 0,
+  }
   for (const [name, p] of Object.entries(projects)) {
-    if (!matches({ project: name, projectPath: p.path ?? '' })) continue
+    if (!matches({ project: p.sourceLabel ?? name, projectPath: p.path ?? '' })) continue
+    if (desktopProjectId !== undefined && (p.provenance !== 'exact' || p.canonicalId !== desktopProjectId)) continue
     out.cost += p.cost
     out.calls += p.calls
     out.savingsUSD += p.savingsUSD ?? 0
     out.sessions += p.sessions ?? 0
+    out.inputTokens += p.inputTokens ?? 0
+    out.outputTokens += p.outputTokens ?? 0
+    out.cacheReadTokens += p.cacheReadTokens ?? 0
+    out.cacheWriteTokens += p.cacheWriteTokens ?? 0
+    out.editTurns += p.editTurns ?? 0
+    out.oneShotTurns += p.oneShotTurns ?? 0
     out.matched += 1
+    for (const [model, stats] of Object.entries(p.models ?? {})) {
+      const acc = Object.hasOwn(out.models, model) ? out.models[model]! : {
+        calls: 0, cost: 0, savingsUSD: 0,
+        inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0,
+      }
+      acc.calls += stats.calls
+      acc.cost += stats.cost
+      acc.savingsUSD += stats.savingsUSD ?? 0
+      acc.inputTokens += stats.inputTokens
+      acc.outputTokens += stats.outputTokens
+      acc.cacheReadTokens += stats.cacheReadTokens
+      acc.cacheWriteTokens += stats.cacheWriteTokens
+      Object.defineProperty(out.models, model, { value: acc, enumerable: true, writable: true, configurable: true })
+    }
+    for (const [category, stats] of Object.entries(p.categories ?? {})) {
+      const acc = Object.hasOwn(out.categories, category) ? out.categories[category]! : { turns: 0, cost: 0, savingsUSD: 0, editTurns: 0, oneShotTurns: 0 }
+      acc.turns += stats.turns
+      acc.cost += stats.cost
+      acc.savingsUSD += stats.savingsUSD ?? 0
+      acc.editTurns += stats.editTurns
+      acc.oneShotTurns += stats.oneShotTurns
+      Object.defineProperty(out.categories, category, { value: acc, enumerable: true, writable: true, configurable: true })
+    }
     Object.defineProperty(out.projects, name, { value: p, enumerable: true, writable: true, configurable: true })
   }
   return out
@@ -613,19 +818,21 @@ function sumMatchingProjects(
 /// Model, all built from the name-filtered live parse) left them out, so the two
 /// could not be reconciled.
 ///
-/// `DailyEntry.projects` (cache v15+) carries cost/calls/savingsUSD/sessions per
-/// project, so those four are recomputed EXACTLY. The day's tokens, models and
-/// categories have no per-project split to slice, so they are dropped here
-/// rather than reported as if they belonged to the surviving projects;
-/// buildDurablePeriod refills them from the project-filtered live parse, which
-/// is exact for every session that still exists.
+/// `DailyEntry.projects` (cache v46+) carries the complete per-project
+/// projection, so every day-level field can be recomputed from the surviving
+/// exact buckets. Legacy rows retain zero/empty rich fields because those
+/// values were not present in the old cache.
 ///
 /// A day recorded before v15 has no `projects` at all and nothing can
 /// reconstruct one once the sources are gone. Such a day cannot be attributed to
 /// any project, so it contributes nothing to a project-filtered total and its
 /// cost is surfaced as `unattributedCostUSD` instead of being silently folded in
 /// (understating with a stated figure beats overstating with excluded spend).
-function sliceDayToProject(day: DailyEntry, matches: ProjectFilter): DailyEntry {
+export function sliceDayToProject(
+  day: DailyEntry,
+  matches: ProjectFilter,
+  desktopProjectId?: DesktopProjectId,
+): DailyEntry {
   const zeroDay = (): DailyEntry => ({
     date: day.date, cost: 0, savingsUSD: 0, calls: 0, sessions: 0,
     inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0,
@@ -633,7 +840,7 @@ function sliceDayToProject(day: DailyEntry, matches: ProjectFilter): DailyEntry 
     ...(day.carried ? { carried: true as const } : {}),
   })
   if (!day.projects) return zeroDay()
-  const totals = sumMatchingProjects(day.projects, matches)
+  const totals = sumMatchingProjects(day.projects, matches, desktopProjectId)
   if (totals.matched === 0) return zeroDay()
 
   // Provider slices carry their own per-project split, so `--provider X` on top
@@ -643,10 +850,24 @@ function sliceDayToProject(day: DailyEntry, matches: ProjectFilter): DailyEntry 
   const providers: Record<string, ProviderDaySlice> = {}
   for (const [name, slice] of Object.entries(day.providers)) {
     if (!slice.projects) continue
-    const sliced = sumMatchingProjects(slice.projects, matches)
+    const sliced = sumMatchingProjects(slice.projects, matches, desktopProjectId)
     if (sliced.matched === 0) continue
     Object.defineProperty(providers, name, {
-      value: { cost: sliced.cost, calls: sliced.calls, savingsUSD: sliced.savingsUSD, sessions: sliced.sessions, projects: sliced.projects },
+      value: {
+        cost: sliced.cost,
+        calls: sliced.calls,
+        savingsUSD: sliced.savingsUSD,
+        sessions: sliced.sessions,
+        inputTokens: sliced.inputTokens,
+        outputTokens: sliced.outputTokens,
+        cacheReadTokens: sliced.cacheReadTokens,
+        cacheWriteTokens: sliced.cacheWriteTokens,
+        editTurns: sliced.editTurns,
+        oneShotTurns: sliced.oneShotTurns,
+        models: sliced.models,
+        categories: sliced.categories,
+        projects: sliced.projects,
+      },
       enumerable: true, writable: true, configurable: true,
     })
   }
@@ -657,8 +878,14 @@ function sliceDayToProject(day: DailyEntry, matches: ProjectFilter): DailyEntry 
     savingsUSD: totals.savingsUSD,
     calls: totals.calls,
     sessions: totals.sessions,
-    inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0,
-    editTurns: 0, oneShotTurns: 0, models: {}, categories: {},
+    inputTokens: totals.inputTokens,
+    outputTokens: totals.outputTokens,
+    cacheReadTokens: totals.cacheReadTokens,
+    cacheWriteTokens: totals.cacheWriteTokens,
+    editTurns: totals.editTurns,
+    oneShotTurns: totals.oneShotTurns,
+    models: totals.models,
+    categories: totals.categories,
     providers,
     projects: totals.projects,
     ...(day.carried ? { carried: true as const } : {}),
@@ -757,9 +984,11 @@ export function buildDurableOverviewFromNormalizedIndex(
   opts: AggregateOpts = {},
 ): IndexedDurableOverview {
   const pf = opts.provider ?? 'all'
-  const hasProjectFilter = (opts.project?.length ?? 0) > 0 || (opts.exclude?.length ?? 0) > 0
+  const hasPersistentProjectFilter = (opts.project?.length ?? 0) > 0 || (opts.exclude?.length ?? 0) > 0
+  const hasProjectScope = opts.desktopProjectId !== undefined
+  const hasProjectFilter = hasPersistentProjectFilter || hasProjectScope
   const matchesFilter = makeProjectFilter(opts.project, opts.exclude)
-  const filteredProjects = filterProjectsByName(normalizedProjects, opts.project ?? [], opts.exclude ?? [])
+  const filteredProjects = filterProjectsForScope(normalizedProjects, opts)
   // Detail/enrichment population only: same exclusion as the headline below,
   // while `normalizedDays` keeps the whole corpus so the day entries (and the
   // durable cache they fill) still carry the gateway slice.
@@ -770,7 +999,7 @@ export function buildDurableOverviewFromNormalizedIndex(
   const todayDays = normalizedDays
     .filter(day => day.date === todayStr)
   const historicalSlice = hasProjectFilter
-    ? (day: DailyEntry): DailyEntry => sliceDayToProject(day, matchesFilter)
+    ? (day: DailyEntry): DailyEntry => sliceDayToProject(day, matchesFilter, opts.desktopProjectId)
     : undefined
   const cachedAllDays = unionDaysForPeriod(
     cache,
@@ -819,7 +1048,7 @@ export function buildDurableOverviewFromNormalizedIndex(
   const sessionCount = uniquePeriodSessionCount(scanProjects, days)
   data.sessions = sessionCount.sessions
   data.sessionCountBasis = sessionCount.basis
-  if (hasProjectFilter) {
+  if (hasPersistentProjectFilter && !hasProjectScope) {
     data.inputTokens = scan.inputTokens
     data.outputTokens = scan.outputTokens
     data.cacheReadTokens = scan.cacheReadTokens
@@ -903,7 +1132,7 @@ export async function buildDurablePeriod(periodInfo: PeriodInfo, opts: Aggregate
   const seenProjects: ProjectFilterTarget[] = []
   const fp = (p: ProjectSummary[]) => {
     seenProjects.push(...p)
-    return filterProjectsByName(p, opts.project ?? [], opts.exclude ?? [])
+    return filterProjectsForScope(p, opts)
   }
 
   const now = new Date()
@@ -966,7 +1195,9 @@ export async function buildDurablePeriod(periodInfo: PeriodInfo, opts: Aggregate
   // name-filtered above (`fp`), but the historical remainder comes straight out
   // of the day cache, so without this slice a --project/--exclude headline
   // counted every expired-source day whole while the detail panels did not.
-  const hasProjectFilter = (opts.project?.length ?? 0) > 0 || (opts.exclude?.length ?? 0) > 0
+  const hasPersistentProjectFilter = (opts.project?.length ?? 0) > 0 || (opts.exclude?.length ?? 0) > 0
+  const hasProjectScope = opts.desktopProjectId !== undefined
+  const hasProjectFilter = hasPersistentProjectFilter || hasProjectScope
   const matchesFilter = makeProjectFilter(opts.project, opts.exclude)
   // What a filtered total cannot claim, and therefore has to leave out: a cached
   // day with no project split at all, or — with a provider filter also active,
@@ -983,7 +1214,7 @@ export async function buildDurablePeriod(periodInfo: PeriodInfo, opts: Aggregate
   const sliceHistorical = hasProjectFilter
     ? (day: DailyEntry): DailyEntry => {
         unattributedCostUSD += unattributableCost(day)
-        return sliceDayToProject(day, matchesFilter)
+        return sliceDayToProject(day, matchesFilter, opts.desktopProjectId)
       }
     : undefined
 
@@ -1034,7 +1265,7 @@ export async function buildDurablePeriod(periodInfo: PeriodInfo, opts: Aggregate
   // with the By Model / By Activity panels that read the same parse. Cost, calls,
   // sessions and savings stay durable — sliced out of the cache, expired days
   // included.
-  if (hasProjectFilter) {
+  if (hasPersistentProjectFilter && !hasProjectScope) {
     data.inputTokens = scanData.inputTokens
     data.outputTokens = scanData.outputTokens
     data.cacheReadTokens = scanData.cacheReadTokens
@@ -1410,23 +1641,28 @@ export function buildPayloadProjects(
       if (sessions > into.maxDaySessions) into.maxDaySessions = sessions
     }
   }
+  const exactCacheIdentitiesByPath = new Set<string>()
   if (cacheDays) {
     for (const d of cacheDays) {
       for (const [name, p] of Object.entries(d.projects ?? {})) {
+        // v46 bucket keys are namespaced identities, not the raw project label
+        // used by the existing payload reconciliation contract.
+        const slug = p.sourceLabel ?? name
         if (p.path) {
-          const id = spendProjectIdentity({ project: name, projectPath: p.path }).id
-          let byId = knownBySlug.get(name)
+          const id = spendProjectIdentity({ project: slug, projectPath: p.path }).id
+          let byId = knownBySlug.get(slug)
           if (!byId) {
             byId = new Map()
-            knownBySlug.set(name, byId)
+            knownBySlug.set(slug, byId)
           }
           const acc = byId.get(id) ?? emptyTotals()
           addTotals(acc, p.cost, p.savingsUSD, p.sessions, p.calls)
           byId.set(id, acc)
+          if (p.provenance === 'exact') exactCacheIdentitiesByPath.add(id)
         } else {
-          const acc = pathlessBySlug.get(name) ?? emptyTotals()
+          const acc = pathlessBySlug.get(slug) ?? emptyTotals()
           addTotals(acc, p.cost, p.savingsUSD, p.sessions, p.calls)
-          pathlessBySlug.set(name, acc)
+          pathlessBySlug.set(slug, acc)
         }
       }
     }
@@ -1464,7 +1700,10 @@ export function buildPayloadProjects(
   }
 
   const policyFor = (slug: string, liveId: string): 'use-cache' | 'use-live' | 'suppress' => {
-    if (cacheIdentities.get(slug)?.has(liveId)) return 'use-cache'
+    // Exact path buckets can collapse provider-specific source labels (for
+    // example `shared-vault` and `-tmp-shared-vault`). A matching path is
+    // authoritative even when the live provider's raw label differs.
+    if (cacheIdentities.get(slug)?.has(liveId) || exactCacheIdentitiesByPath.has(liveId)) return 'use-cache'
     if (unallocatedSlugs.has(slug)) return 'suppress'
     return 'use-live'
   }
@@ -1566,7 +1805,7 @@ export function buildPayloadProjects(
 export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: AggregateOpts = {}): Promise<MenubarPayload> {
   const pf = opts.provider ?? 'all'
   const daysSelection = opts.daysSelection ?? null
-  const fp = (p: ProjectSummary[]) => filterProjectsByName(p, opts.project ?? [], opts.exclude ?? [])
+  const fp = (p: ProjectSummary[]) => filterProjectsForScope(p, opts)
 
   const now = new Date()
   const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate())
@@ -1646,6 +1885,7 @@ export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: 
       provider: pf,
       project: opts.project,
       exclude: opts.exclude,
+      desktopProjectId: opts.desktopProjectId,
       daysSelection,
     })
     hydration = sessionHydrationSnapshot()
@@ -1766,8 +2006,10 @@ export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: 
   // day with no project split contributes nothing rather than everything.
   const rawCacheDays = getDaysInRange(cache, historyStartStr, yesterdayStr)
   const historyFilter = makeProjectFilter(opts.project, opts.exclude)
-  const allCacheDays = (opts.project?.length ?? 0) > 0 || (opts.exclude?.length ?? 0) > 0
-    ? rawCacheDays.map(day => sliceDayToProject(day, historyFilter))
+  const hasPersistentProjectFilter = (opts.project?.length ?? 0) > 0 || (opts.exclude?.length ?? 0) > 0
+  const hasProjectScope = opts.desktopProjectId !== undefined
+  const allCacheDays = hasPersistentProjectFilter || hasProjectScope
+    ? rawCacheDays.map(day => sliceDayToProject(day, historyFilter, opts.desktopProjectId))
     : rawCacheDays
 
   let dailyHistory
@@ -1837,16 +2079,19 @@ export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: 
     }))
   ).sort((a, b) => (b.cost + b.savingsUSD) - (a.cost + a.savingsUSD)).slice(0, 5)
 
-  // PULL REQUESTS + BRANCHES (all-provider path only). Both are session-layer
-  // aggregations over the surviving-session parse, so carried history cannot
-  // contribute — expected and fine. PR links and per-turn git branches are
-  // captured natively by Claude or correlated from any provider's saved session
-  // through explicit references, exact launcher prompts, or unambiguous cwds.
+  // PULL REQUESTS + BRANCHES. Both are session-layer aggregations over the
+  // surviving-session parse, so carried history cannot contribute — expected
+  // and fine. The parse is already narrowed by provider and exact project
+  // scope, so these rows must use that same corpus rather than silently
+  // disappearing on a provider-filtered Desktop report. PR links and per-turn
+  // git branches are captured natively by Claude or correlated from any
+  // provider's saved session through explicit references, exact launcher
+  // prompts, or unambiguous cwds.
   // Set only when non-empty so the payload omits them (and the app renders its
   // quiet empty state) whenever there is nothing to show. Excluded on the
   // Claude-config-scoped path (which replaces scanProjects with one config's
-  // sessions) so this stays the genuine unscoped all-provider aggregation.
-  if (isAllProviders && !effectivelyScoped) {
+  // sessions) so that path remains intentionally omitted.
+  if (!isClaudeConfigScoped) {
     // One pass yields both rows and totals, so they never disagree.
     const { rows: prRows, totals: prTotals } = buildPrAttribution(scanProjects)
     if (prRows.length > 0) {
@@ -2002,7 +2247,7 @@ export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: 
     }
   })()
 
-  const optimize = opts.optimize === false ? null : await scanAndDetect(scanProjects, scanRange, opts.provider)
+  const optimize = opts.optimize === false ? null : await scanAndDetect(scanProjects, scanRange, opts.provider, opts.desktopProjectId)
   const granularRange = opts.daysSelection?.range ?? scanRange
   const granularHistory = opts.timeline === false ? undefined : buildGranularHistory(scanProjects, granularRange)
   // `stale` keeps its original meaning: a read-only serve that could not see
@@ -2020,11 +2265,22 @@ export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: 
   // keep the last one they were given.
   if (durablePeriodTotals) payload.periodTotals = durablePeriodTotals
   if (isAllProviders) {
-    payload.streak = activityStreak(
-      [...getDaysInRange(cache, historyStartStr, yesterdayStr), ...(await getTodayAllDays()).filter(d => d.date === todayStr)],
-      now,
-    )
+    if (hasProjectScope) {
+      // A selected project has no trustworthy global streak. The cache rows
+      // above are already exact-project projections, so this remains a
+      // project-local streak rather than a global day count.
+      payload.streak = activityStreak(
+        [...allCacheDays, ...(await getTodayAllDays()).filter(d => d.date === todayStr)],
+        now,
+      )
+    } else {
+      payload.streak = activityStreak(
+        [...getDaysInRange(cache, historyStartStr, yesterdayStr), ...(await getTodayAllDays()).filter(d => d.date === todayStr)],
+        now,
+      )
+    }
   }
+  applyScopedPayloadPolicy(payload, hasProjectScope, hasProjectScope && isAllProviders && !isClaudeConfigScoped)
   // Plugin socket: add-only sections from loaded plugins (empty socket by
   // default, so the payload is byte-identical without plugins installed).
   const pluginSections = await pluginPayloadSections(await loadPlugins())

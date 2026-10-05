@@ -16,6 +16,15 @@ costing tokens without earning them, and grades the setup A to F.
 
 Nothing is written during a scan. Only `--apply` writes.
 
+## Desktop project scope
+
+On Desktop, selecting a project scopes Optimize to evidence attributable to
+that exact project. Global configuration and applied-action findings are
+excluded when their evidence cannot be proven to belong to the selected
+project; they are never relabeled under a project name. The scoped result
+cache is separate from the unscoped result, while unscoped Optimize continues
+to report the global evidence available to it.
+
 ## The three classes
 
 Every finding carries a `class`, and both the CLI and the apps group by it:

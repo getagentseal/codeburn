@@ -57,6 +57,10 @@ afterEach(async () => {
 })
 
 describe('loadDailyCache', () => {
+  it('uses the v54 project-identity schema', () => {
+    expect(DAILY_CACHE_VERSION).toBe(54)
+  })
+
   it('returns an empty cache when the file does not exist', async () => {
     const cache = await loadDailyCache()
     expect(cache.version).toBe(DAILY_CACHE_VERSION)

@@ -6,7 +6,10 @@ import { join } from 'path'
 import { getCodeburnCacheDir, RETIRED_PROVIDER_NAMES } from './cache-dir.js'
 import { sweepSupersededCacheFiles } from './cache-sweep.js'
 import type { ProjectFilterTarget } from './parser.js'
+import { exactProjectBucketKey, legacyProjectBucketKey, type DesktopProjectId, type ProjectBucketKey, type ProjectScopeProvenance } from './project-scope.js'
 import type { DateRange, ProjectSummary } from './types.js'
+
+export type { ProjectScopeProvenance } from './project-scope.js'
 
 // Bumped to 27: claude-haiku-4.5 copilot store rows now price correctly (alias added) — #1093.
 // Previously the raw id 'claude-haiku-4.5' (tier-first, dot) from session-store.db had no
@@ -265,7 +268,11 @@ import type { DateRange, ProjectSummary } from './types.js'
 // under-price them; the bump re-derives surviving days off the warm session
 // cache. MIN_SUPPORTED_VERSION stays at 28 (#1478's convention: a version bump
 // alone re-derives warm caches, so raising the floor buys nothing).
-export const DAILY_CACHE_VERSION = 53
+// v54: Desktop project history uses exact/legacy bucket namespaces and stores
+// the complete per-project/provider projection needed for exact historical
+// scope. Old cache files are adopted and migrated in place; they are never
+// deleted or summed twice.
+export const DAILY_CACHE_VERSION = 54
 const MIN_SUPPORTED_VERSION = 28
 
 /// Providers whose per-day CALL COUNT means something different at
@@ -332,8 +339,26 @@ export type CategoryDayStats = { turns: number; cost: number; savingsUSD: number
 
 /// `path` is the project's filesystem path when known — it is what display
 /// layers derive a friendly name from once the sessions that carried the
-/// mapping are gone.
-export type ProjectDayStats = { cost: number; calls: number; savingsUSD: number; sessions: number; path?: string }
+/// mapping are gone. Legacy rows keep null when the old cache had no path.
+export type ProjectDayStats = {
+  canonicalId: DesktopProjectId | null
+  sourceLabel: string
+  displayName: string
+  path: string | null
+  provenance: ProjectScopeProvenance
+  cost: number
+  calls: number
+  savingsUSD: number
+  sessions: number
+  inputTokens: number
+  outputTokens: number
+  cacheReadTokens: number
+  cacheWriteTokens: number
+  editTurns: number
+  oneShotTurns: number
+  models: Record<string, ModelDayStats>
+  categories: Record<string, CategoryDayStats>
+}
 
 export type ProviderDaySlice = {
   calls: number
@@ -493,7 +518,7 @@ const OPTIONAL_SLICE_NUMERICS = ['sessions', 'inputTokens', 'outputTokens', 'cac
 /// hold anything under a provider slice, and structuredClone in the merge
 /// would faithfully preserve that junk into the next cache generation. Numeric
 /// fields and nested maps are sanitized before the slice enters the cache.
-function sanitizeProviders(raw: unknown): DailyEntry['providers'] {
+function sanitizeProviders(raw: unknown, legacyProjectBuckets = false): DailyEntry['providers'] {
   if (!isRecord(raw)) return {}
   const out: DailyEntry['providers'] = {}
   for (const [name, s] of Object.entries(raw)) {
@@ -505,7 +530,7 @@ function sanitizeProviders(raw: unknown): DailyEntry['providers'] {
     }
     if (isRecord(slice.models)) clean.models = sanitizeModels(slice.models)
     if (isRecord(slice.categories)) clean.categories = sanitizeCategories(slice.categories)
-    const projects = sanitizeProjects(slice.projects).projects
+    const projects = sanitizeProjects(slice.projects, legacyProjectBuckets).projects
     if (projects) clean.projects = projects
     setOwn(out, name, clean)
   }
@@ -514,27 +539,81 @@ function sanitizeProviders(raw: unknown): DailyEntry['providers'] {
 
 /// Foreign or hand-edited caches can hold anything under `projects`; keep only
 /// a plain record of finite numeric stats (arrays and null entries dropped) so
-/// later carry merges can't crash on junk.
-function sanitizeProjects(raw: unknown): { projects?: DailyEntry['projects'] } {
+/// later carry merges can't crash on junk. Pre-v46 records are label-keyed and
+/// are deliberately converted to the legacy namespace without deriving a path
+/// from the lossy label.
+function sanitizeProjects(raw: unknown, legacyProjectBuckets = false): { projects?: DailyEntry['projects'] } {
   if (!isRecord(raw)) return {}
   const out: NonNullable<DailyEntry['projects']> = {}
-  for (const [name, p] of Object.entries(raw)) {
+  for (const [name, value] of Object.entries(raw)) {
     // A project key is a directory basename, so it can legitimately be a
     // prototype-member name ("constructor", "valueOf", ...). `setOwn` writes it
     // as an own property via defineProperty, so keeping it is pollution-safe —
     // and dropping it would silently subtract that project's cost from a
     // --project/--exclude total (the day's split would no longer sum to its own
     // cost, which the filtered headline relies on).
-    if (!isRecord(p)) continue
-    setOwn(out, name, {
+    if (!isRecord(value)) continue
+
+    const p = value
+    const keyFromExactNamespace = !legacyProjectBuckets && name.startsWith('exact:')
+      ? decodeBucketSegment(name.slice('exact:'.length))
+      : null
+    const rawCanonicalId = typeof p.canonicalId === 'string' && p.canonicalId.length > 0 ? p.canonicalId : null
+    const canonicalId = rawCanonicalId ?? keyFromExactNamespace
+    const exact = !legacyProjectBuckets
+      && (p.provenance === 'exact' || keyFromExactNamespace !== null)
+      && canonicalId !== null
+
+    const rawSourceLabel = typeof p.sourceLabel === 'string' ? p.sourceLabel : undefined
+    const namespaceStrippedLabel = !legacyProjectBuckets && name.startsWith('legacy:')
+      ? decodeBucketSegment(name.slice('legacy:'.length)) ?? name.slice('legacy:'.length)
+      : name
+    const sourceLabel = rawSourceLabel ?? namespaceStrippedLabel
+    const path = typeof p.path === 'string' && p.path.length > 0 ? p.path : null
+    const displayName = typeof p.displayName === 'string' && p.displayName.length > 0
+      ? p.displayName
+      : projectDisplayName(path, sourceLabel)
+    const bucketKey: ProjectBucketKey = exact
+      ? exactProjectBucketKey(canonicalId!)
+      : legacyProjectBucketKey(sourceLabel)
+
+    setOwn(out, bucketKey, {
+      canonicalId: exact ? canonicalId : null,
+      sourceLabel,
+      displayName,
+      path,
+      provenance: exact ? 'exact' : 'legacy',
       cost: num(p.cost),
       calls: num(p.calls),
       savingsUSD: num(p.savingsUSD),
       sessions: num(p.sessions),
-      ...(typeof p.path === 'string' && p.path.length > 0 ? { path: p.path } : {}),
+      inputTokens: num(p.inputTokens),
+      outputTokens: num(p.outputTokens),
+      cacheReadTokens: num(p.cacheReadTokens),
+      cacheWriteTokens: num(p.cacheWriteTokens),
+      editTurns: num(p.editTurns),
+      oneShotTurns: num(p.oneShotTurns),
+      models: sanitizeModels(p.models),
+      categories: sanitizeCategories(p.categories),
     })
   }
   return Object.keys(out).length > 0 ? { projects: out } : {}
+}
+
+function projectDisplayName(path: string | null, label: string): string {
+  if (!path) return label
+  const normalized = path.replace(/\\/g, '/').replace(/\/+$/, '')
+  const basename = normalized.slice(normalized.lastIndexOf('/') + 1)
+  return basename || label
+}
+
+function decodeBucketSegment(value: string): string | null {
+  try {
+    const decoded = Buffer.from(value, 'base64url').toString('utf8')
+    return Buffer.from(decoded, 'utf8').toString('base64url') === value ? decoded : null
+  } catch {
+    return null
+  }
 }
 
 const DATE_KEY_RE = /^\d{4}-\d{2}-\d{2}$/
@@ -577,7 +656,7 @@ function creditCarriedRemainder(
   setOwn(models, CARRIED_MODEL_NAME, acc)
 }
 
-function migrateDays(days: Record<string, unknown>[]): DailyEntry[] {
+function migrateDays(days: Record<string, unknown>[], legacyProjectBuckets = false): DailyEntry[] {
   return days
     .filter(d => d && typeof d === 'object' && typeof d.date === 'string' && DATE_KEY_RE.test(d.date))
     .map((d): DailyEntry => ({
@@ -594,8 +673,8 @@ function migrateDays(days: Record<string, unknown>[]): DailyEntry[] {
       oneShotTurns: num(d.oneShotTurns),
       models: sanitizeModels(d.models),
       categories: sanitizeCategories(d.categories),
-      providers: sanitizeProviders(d.providers),
-      ...(sanitizeProjects(d.projects)),
+      providers: sanitizeProviders(d.providers, legacyProjectBuckets),
+      ...(sanitizeProjects(d.projects, legacyProjectBuckets)),
       ...(d.carried === true ? { carried: true as const } : {}),
     }))
     .filter(day => {
@@ -641,7 +720,7 @@ function migratedFrom(parsed: { version: number; lastComputedDate: string | null
     lastComputedDate: typeof parsed.lastComputedDate === 'string' && DATE_KEY_RE.test(parsed.lastComputedDate)
       ? parsed.lastComputedDate
       : null,
-    days: migrateDays(parsed.days),
+    days: migrateDays(parsed.days, parsed.version < DAILY_CACHE_VERSION),
     // Only a cache explicitly marked complete stays trusted; one written before
     // the marker existed reads false and is re-backfilled once.
     complete: parsed.complete === true,
@@ -726,7 +805,7 @@ async function adoptOlderDailyCaches(): Promise<DailyCache> {
   }
   let days = base.days
   for (const { parsed } of rest) {
-    days = mergeDayEntries(days, migrateDays(parsed.days), true)
+    days = mergeDayEntries(days, migrateDays(parsed.days, parsed.version < DAILY_CACHE_VERSION), true)
   }
   // loadDailyCache has standalone readers, so the adopted result must already
   // satisfy the cache's own invariants: no today/future entries (they would be
@@ -810,6 +889,7 @@ export function addNewDays(cache: DailyCache, incoming: DailyEntry[], newestDate
     days: applyRetention(merged, newestDate),
     complete: cache.complete,
     watermarkTrusted: cache.watermarkTrusted,
+    pendingRederive: cache.pendingRederive,
   }
 }
 
@@ -840,6 +920,108 @@ function isOpaqueDay(day: DailyEntry): boolean {
 
 function emptyModelStats(): ModelDayStats {
   return { calls: 0, cost: 0, savingsUSD: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 }
+}
+
+function emptyCategoryStats(): CategoryDayStats {
+  return { turns: 0, cost: 0, savingsUSD: 0, editTurns: 0, oneShotTurns: 0 }
+}
+
+function hasRichProjectStats(project: ProjectDayStats): boolean {
+  return project.canonicalId !== undefined
+    || project.sourceLabel !== undefined
+    || project.displayName !== undefined
+    || project.provenance !== undefined
+    || project.inputTokens !== undefined
+    || project.models !== undefined
+    || project.categories !== undefined
+}
+
+function richProjectStats(project: ProjectDayStats): ProjectDayStats {
+  return {
+    canonicalId: typeof project.canonicalId === 'string' || project.canonicalId === null ? project.canonicalId : null,
+    sourceLabel: typeof project.sourceLabel === 'string' ? project.sourceLabel : '',
+    displayName: typeof project.displayName === 'string' ? project.displayName : '',
+    path: typeof project.path === 'string' ? project.path : null,
+    provenance: project.provenance === 'exact' ? 'exact' : 'legacy',
+    cost: num(project.cost),
+    calls: num(project.calls),
+    savingsUSD: num(project.savingsUSD),
+    sessions: num(project.sessions),
+    inputTokens: num(project.inputTokens),
+    outputTokens: num(project.outputTokens),
+    cacheReadTokens: num(project.cacheReadTokens),
+    cacheWriteTokens: num(project.cacheWriteTokens),
+    editTurns: num(project.editTurns),
+    oneShotTurns: num(project.oneShotTurns),
+    models: project.models ?? {},
+    categories: project.categories ?? {},
+  }
+}
+
+function emptyProjectStatsLike(project: ProjectDayStats): ProjectDayStats {
+  if (!hasRichProjectStats(project)) {
+    return { cost: 0, calls: 0, savingsUSD: 0, sessions: 0 } as ProjectDayStats
+  }
+  const rich = richProjectStats(project)
+  return {
+    ...rich,
+    cost: 0,
+    calls: 0,
+    savingsUSD: 0,
+    sessions: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    editTurns: 0,
+    oneShotTurns: 0,
+    models: {},
+    categories: {},
+  }
+}
+
+function addProjectStats(target: ProjectDayStats, source: ProjectDayStats): void {
+  target.cost = num(target.cost) + num(source.cost)
+  target.calls = num(target.calls) + num(source.calls)
+  target.savingsUSD = num(target.savingsUSD) + num(source.savingsUSD)
+  target.sessions = num(target.sessions) + num(source.sessions)
+  if (!hasRichProjectStats(target) && !hasRichProjectStats(source)) return
+
+  if (!hasRichProjectStats(target)) Object.assign(target, richProjectStats(target))
+  const richSource = richProjectStats(source)
+  target.models ??= {}
+  target.categories ??= {}
+  target.inputTokens = num(target.inputTokens) + richSource.inputTokens
+  target.outputTokens = num(target.outputTokens) + richSource.outputTokens
+  target.cacheReadTokens = num(target.cacheReadTokens) + richSource.cacheReadTokens
+  target.cacheWriteTokens = num(target.cacheWriteTokens) + richSource.cacheWriteTokens
+  target.editTurns = num(target.editTurns) + richSource.editTurns
+  target.oneShotTurns = num(target.oneShotTurns) + richSource.oneShotTurns
+  if ((!target.path || target.path.length === 0) && richSource.path) target.path = richSource.path
+  if (!target.sourceLabel && richSource.sourceLabel) target.sourceLabel = richSource.sourceLabel
+  if (!target.displayName && richSource.displayName) target.displayName = richSource.displayName
+  if (target.canonicalId === null && richSource.canonicalId !== null) target.canonicalId = richSource.canonicalId
+  if (target.provenance !== 'exact' && richSource.provenance === 'exact') target.provenance = richSource.provenance
+  for (const [name, model] of Object.entries(richSource.models)) {
+    const acc = target.models[name] ?? emptyModelStats()
+    acc.calls += model.calls
+    acc.cost += model.cost
+    acc.savingsUSD += model.savingsUSD
+    acc.inputTokens += model.inputTokens
+    acc.outputTokens += model.outputTokens
+    acc.cacheReadTokens += model.cacheReadTokens
+    acc.cacheWriteTokens += model.cacheWriteTokens
+    setOwn(target.models, name, acc)
+  }
+  for (const [name, category] of Object.entries(richSource.categories)) {
+    const acc = target.categories[name] ?? emptyCategoryStats()
+    acc.turns += category.turns
+    acc.cost += category.cost
+    acc.savingsUSD += category.savingsUSD
+    acc.editTurns += category.editTurns
+    acc.oneShotTurns += category.oneShotTurns
+    setOwn(target.categories, name, acc)
+  }
 }
 
 /// Fold one provider's day slice into a day: the providers map, the day-level
@@ -906,15 +1088,13 @@ function addSliceIntoDay(day: DailyEntry, provider: string, slice: ProviderDaySl
   for (const [name, p] of Object.entries(slice.projects ?? {})) {
     if (!p || typeof p !== 'object' || Array.isArray(p)) continue
     const dayProjects = (day.projects ??= {})
-    const acc = Object.hasOwn(dayProjects, name) ? dayProjects[name]! : { cost: 0, calls: 0, savingsUSD: 0, sessions: 0 }
-    acc.cost += num(p.cost)
-    acc.calls += num(p.calls)
-    acc.savingsUSD += num(p.savingsUSD)
-    if (!acc.path && typeof p.path === 'string') acc.path = p.path
+    const acc = Object.hasOwn(dayProjects, name) ? dayProjects[name]! : emptyProjectStatsLike(p)
+    addProjectStats(acc, p)
     // Same session dedup as the slice-level sessions above: a placeholder's
     // project sessions were already counted into the day when the fresh day
     // was built, so only the excess is added.
     const placeholderProjectSessions = Object.hasOwn(placeholderProjects, name) ? num(placeholderProjects[name]?.sessions) : 0
+    acc.sessions -= num(p.sessions)
     acc.sessions += residual ? num(p.sessions) : Math.max(0, num(p.sessions) - placeholderProjectSessions)
     setOwn(dayProjects, name, acc)
   }
@@ -931,7 +1111,10 @@ function addSliceIntoDay(day: DailyEntry, provider: string, slice: ProviderDaySl
           mergedProjects[name]!.sessions = num(p.sessions)
         }
       } else {
-        setOwn(mergedProjects, name, { cost: 0, calls: 0, savingsUSD: 0, sessions: num(p.sessions) })
+        const placeholderProject = hasRichProjectStats(p)
+          ? { ...emptyProjectStatsLike(p), sessions: num(p.sessions) }
+          : { cost: 0, calls: 0, savingsUSD: 0, sessions: num(p.sessions) }
+        setOwn(mergedProjects, name, placeholderProject)
       }
     }
   } else if (placeholder?.projects) {
@@ -1042,8 +1225,39 @@ function subtractProjectStats(base: ProjectDayStats, sub: ProjectDayStats): Proj
   const calls = Math.max(0, base.calls - (sub.calls ?? 0))
   const savingsUSD = Math.max(0, (base.savingsUSD ?? 0) - (sub.savingsUSD ?? 0))
   const sessions = Math.max(0, (base.sessions ?? 0) - (sub.sessions ?? 0))
-  if (cost === 0 && calls === 0 && savingsUSD === 0 && sessions === 0) return null
-  return { cost, calls, savingsUSD, sessions, ...(base.path ? { path: base.path } : {}) }
+  const rich = hasRichProjectStats(base) || hasRichProjectStats(sub)
+  const inputTokens = Math.max(0, num(base.inputTokens) - num(sub.inputTokens))
+  const outputTokens = Math.max(0, num(base.outputTokens) - num(sub.outputTokens))
+  const cacheReadTokens = Math.max(0, num(base.cacheReadTokens) - num(sub.cacheReadTokens))
+  const cacheWriteTokens = Math.max(0, num(base.cacheWriteTokens) - num(sub.cacheWriteTokens))
+  const editTurns = Math.max(0, num(base.editTurns) - num(sub.editTurns))
+  const oneShotTurns = Math.max(0, num(base.oneShotTurns) - num(sub.oneShotTurns))
+  const models = rich ? subtractModels(base.models, sub.models) : undefined
+  const categories = rich ? subtractCategories(base.categories, sub.categories) : undefined
+  if (cost === 0 && calls === 0 && savingsUSD === 0 && sessions === 0
+    && inputTokens === 0 && outputTokens === 0 && cacheReadTokens === 0 && cacheWriteTokens === 0
+    && editTurns === 0 && oneShotTurns === 0 && (!models || Object.keys(models).length === 0)
+    && (!categories || Object.keys(categories).length === 0)) return null
+  if (!rich) return { cost, calls, savingsUSD, sessions } as ProjectDayStats
+  return {
+    canonicalId: base.canonicalId ?? null,
+    sourceLabel: base.sourceLabel ?? '',
+    displayName: base.displayName ?? '',
+    path: base.path ?? null,
+    provenance: base.provenance === 'exact' ? 'exact' : 'legacy',
+    cost,
+    calls,
+    savingsUSD,
+    sessions,
+    inputTokens,
+    outputTokens,
+    cacheReadTokens,
+    cacheWriteTokens,
+    editTurns,
+    oneShotTurns,
+    models: models ?? {},
+    categories: categories ?? {},
+  }
 }
 
 function subtractProjects(base: DailyEntry['projects'] | undefined, sub: DailyEntry['projects'] | undefined): DailyEntry['projects'] | undefined {
@@ -1088,8 +1302,42 @@ function projectStatsDelta(base: ProjectDayStats, reduced: ProjectDayStats): Pro
   const calls = base.calls - reduced.calls
   const savingsUSD = (base.savingsUSD ?? 0) - (reduced.savingsUSD ?? 0)
   const sessions = (base.sessions ?? 0) - (reduced.sessions ?? 0)
-  if (cost === 0 && calls === 0 && savingsUSD === 0 && sessions === 0) return null
-  return { cost, calls, savingsUSD, sessions }
+  const rich = hasRichProjectStats(base) || hasRichProjectStats(reduced)
+  if (!rich) {
+    if (cost === 0 && calls === 0 && savingsUSD === 0 && sessions === 0) return null
+    return { cost, calls, savingsUSD, sessions } as ProjectDayStats
+  }
+  const inputTokens = num(base.inputTokens) - num(reduced.inputTokens)
+  const outputTokens = num(base.outputTokens) - num(reduced.outputTokens)
+  const cacheReadTokens = num(base.cacheReadTokens) - num(reduced.cacheReadTokens)
+  const cacheWriteTokens = num(base.cacheWriteTokens) - num(reduced.cacheWriteTokens)
+  const editTurns = num(base.editTurns) - num(reduced.editTurns)
+  const oneShotTurns = num(base.oneShotTurns) - num(reduced.oneShotTurns)
+  const models = subtractModels(base.models, reduced.models)
+  const categories = subtractCategories(base.categories, reduced.categories)
+  if (cost === 0 && calls === 0 && savingsUSD === 0 && sessions === 0
+    && inputTokens === 0 && outputTokens === 0 && cacheReadTokens === 0 && cacheWriteTokens === 0
+    && editTurns === 0 && oneShotTurns === 0 && (!models || Object.keys(models).length === 0)
+    && (!categories || Object.keys(categories).length === 0)) return null
+  return {
+    canonicalId: base.canonicalId ?? null,
+    sourceLabel: base.sourceLabel ?? '',
+    displayName: base.displayName ?? '',
+    path: base.path ?? null,
+    provenance: base.provenance === 'exact' ? 'exact' : 'legacy',
+    cost,
+    calls,
+    savingsUSD,
+    sessions,
+    inputTokens,
+    outputTokens,
+    cacheReadTokens,
+    cacheWriteTokens,
+    editTurns,
+    oneShotTurns,
+    models: models ?? {},
+    categories: categories ?? {},
+  }
 }
 
 /// Remove `sub`'s contribution from a carried baseline day (the baseline-only
@@ -1711,8 +1959,8 @@ export function cachedProjectIdentities(cache: DailyCache, startStr: string, end
   const identities: ProjectFilterTarget[] = []
   for (const day of cache.days) {
     if (day.date < startStr || day.date > endStr || !day.projects) continue
-    for (const [name, stats] of Object.entries(day.projects)) {
-      identities.push({ project: name, projectPath: stats.path ?? '' })
+    for (const [, stats] of Object.entries(day.projects)) {
+      identities.push({ project: stats.sourceLabel, projectPath: stats.path ?? '' })
     }
   }
   return identities

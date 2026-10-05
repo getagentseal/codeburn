@@ -62,6 +62,7 @@ import { behavioralCallWeight, isBehavioralTurn } from './behavioral-weight.js'
 import { gatewayIncludedInTotals } from './config.js'
 import { coverageFor, cursorImportPath, dropImportCoveredCalls, loadCursorImport, replacedProviders } from './cursor-import.js'
 import type { ParsedProviderCall, Provider, SessionSource } from './providers/types.js'
+import { matchesDesktopProjectId, type DesktopProjectId } from './project-scope.js'
 import type {
   ApiUsageIteration,
   AssistantMessageContent,
@@ -4867,6 +4868,7 @@ function hit(entry: ProjectFilterTarget, pattern: CompiledPattern, key: string |
 export function makeProjectFilter(
   include?: readonly string[],
   exclude?: readonly string[],
+  desktopProjectId?: DesktopProjectId | null,
 ): (entry: ProjectFilterTarget) => boolean {
   const inc = compile(include ?? [])
   const exc = compile(exclude ?? [])
@@ -4878,7 +4880,7 @@ export function makeProjectFilter(
     const key = needsKey ? normalizeAbsProjectPathKey(entry.projectPath ?? '') : null
     if (inc.length > 0 && !inc.some(pattern => hit(entry, pattern, key))) return false
     if (exc.length > 0 && exc.some(pattern => hit(entry, pattern, key))) return false
-    return true
+    return desktopProjectId === null || desktopProjectId === undefined || matchesDesktopProjectId(entry, desktopProjectId)
   }
 }
 
@@ -4901,10 +4903,11 @@ export function filterProjectsByName(
   projects: ProjectSummary[],
   include?: string[],
   exclude?: string[],
+  desktopProjectId?: DesktopProjectId | null,
 ): ProjectSummary[] {
-  if ((include?.length ?? 0) === 0 && (exclude?.length ?? 0) === 0) return projects
-  const matches = makeProjectFilter(include, exclude)
-  return projects.filter(matches)
+  if ((include?.length ?? 0) === 0 && (exclude?.length ?? 0) === 0
+    && (desktopProjectId === null || desktopProjectId === undefined)) return projects
+  return projects.filter(makeProjectFilter(include, exclude, desktopProjectId))
 }
 
 function turnDayString(turn: ClassifiedTurn): string | null {

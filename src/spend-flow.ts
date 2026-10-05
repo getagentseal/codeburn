@@ -3,6 +3,7 @@ import { reportUnmatchedProjectPatterns } from './project-filter-warnings.js'
 import { filterProjectsByName, foldIdentifiedWindowsPath, parseAllSessions } from './parser.js'
 import { toDateString } from './daily-cache.js'
 import type { DateRange } from './types.js'
+import type { DesktopProjectId } from './project-scope.js'
 
 export type SpendFlowNode = { id: string; label: string; cost: number }
 export type SpendFlowLink = { model: string; project: string; cost: number }
@@ -89,10 +90,16 @@ function assignDistinguishingProjectLabels(nodes: SpendFlowNode[], labels: Map<s
   }
 }
 
-export async function computeSpendFlow(range: DateRange, provider: string, projectFilter?: string[], excludeFilter?: string[]): Promise<SpendFlow> {
+export async function computeSpendFlow(
+  range: DateRange,
+  provider: string,
+  projectFilter?: string[],
+  excludeFilter?: string[],
+  desktopProjectId?: DesktopProjectId | null,
+): Promise<SpendFlow> {
   const parsed = await parseAllSessions(range, provider)
   await reportUnmatchedProjectPatterns(parsed, projectFilter, excludeFilter, () => cachedProjectIdentitiesForRange(range))
-  const projects = filterProjectsByName(parsed, projectFilter, excludeFilter)
+  const projects = filterProjectsByName(parsed, projectFilter, excludeFilter, desktopProjectId)
   const matrix = new Map<string, Map<string, number>>()
   const projectTotals = new Map<string, number>()
   const modelTotals = new Map<string, number>()

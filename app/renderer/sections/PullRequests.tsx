@@ -10,7 +10,9 @@ import { type Polled, usePolled } from '../hooks/usePolled'
 import { formatCount, formatDayShort, formatUsd } from '../lib/format'
 import { codeburn } from '../lib/ipc'
 import { PERIOD_LABELS } from '../lib/period'
-import type { CliError, DateRange, MenubarPayload, Period } from '../lib/types'
+import { desktopProjectScopeKey } from '../lib/projectScope'
+import { reportMemoKey } from '../lib/reportMemoKey'
+import type { CliError, DateRange, DesktopProjectId, MenubarPayload, Period, Scope } from '../lib/types'
 import { prFilters } from '../lib/investigation'
 import { rangeLabel } from '../components/TopBar'
 import type { InvestigateRequest } from './Overview'
@@ -55,26 +57,32 @@ function rowKeyDown(event: KeyboardEvent<HTMLDivElement>, toggle: () => void): v
 
 /** Standalone entry: self-fetches the overview payload (used in tests). The App
  *  passes its shared overview poll straight into PullRequestsContent instead. */
-export function PullRequests({ period, provider, range = null, onInvestigate }: {
+export function PullRequests({ period, provider, range = null, projectId = null, deviceScope = 'local', onInvestigate }: {
   period: Period
   provider: string
   range?: DateRange | null
+  projectId?: DesktopProjectId | null
+  deviceScope?: Scope
   onInvestigate?: (request: InvestigateRequest) => void
 }) {
+  const projectScopeKey = desktopProjectScopeKey(projectId)
   const overview = usePolled<MenubarPayload>(
-    () => range ? codeburn.getOverview(period, provider, range) : codeburn.getOverview(period, provider),
-    [period, provider, range?.from, range?.to],
+    () => codeburn.getOverview({ period, provider, range, deviceScope, projectId }),
+    [period, provider, range?.from, range?.to, deviceScope, projectId],
+    { memoKey: reportMemoKey('overview', period, provider, range, '', projectScopeKey) },
   )
   // The key remounts the content on a period/provider/range switch so row state
   // (an open expansion) never survives onto the same PR rendered from new data.
-  return <PullRequestsContent key={`${period}|${provider}|${range?.from ?? ''}|${range?.to ?? ''}`} overview={overview} period={period} provider={provider} range={range} onInvestigate={onInvestigate} />
+  return <PullRequestsContent key={`${period}|${provider}|${range?.from ?? ''}|${range?.to ?? ''}|${deviceScope}|${projectId ?? ''}`} overview={overview} period={period} provider={provider} range={range} projectId={projectId} deviceScope={deviceScope} onInvestigate={onInvestigate} />
 }
 
-export function PullRequestsContent({ overview, period, provider, range = null, onInvestigate }: {
+export function PullRequestsContent({ overview, period, provider, range = null, projectId = null, deviceScope = 'local', onInvestigate }: {
   overview: Polled<MenubarPayload>
   period: Period
   provider: string
   range?: DateRange | null
+  projectId?: DesktopProjectId | null
+  deviceScope?: Scope
   onInvestigate?: (request: InvestigateRequest) => void
 }) {
   if (!overview.data) {
@@ -87,16 +95,20 @@ export function PullRequestsContent({ overview, period, provider, range = null, 
     period={period}
     provider={provider}
     range={range}
+    projectId={projectId}
+    deviceScope={deviceScope}
     onInvestigate={onInvestigate}
   />
 }
 
-function PullRequestsPage({ pullRequests, staleError, period, provider, range, onInvestigate }: {
+function PullRequestsPage({ pullRequests, staleError, period, provider, range, projectId, deviceScope, onInvestigate }: {
   pullRequests?: PullRequests
   staleError: CliError | null
   period: Period
   provider: string
   range: DateRange | null
+  projectId: DesktopProjectId | null
+  deviceScope: Scope
   onInvestigate?: (request: InvestigateRequest) => void
 }) {
   const empty = !pullRequests || pullRequests.rows.length === 0
@@ -105,7 +117,7 @@ function PullRequestsPage({ pullRequests, staleError, period, provider, range, o
       {staleError && <StaleBanner error={staleError} />}
       {empty ? (
         <Panel title={t('pullRequests.summary.title')}>
-          <PrEmptyNote period={period} provider={provider} range={range} />
+           <PrEmptyNote period={period} provider={provider} range={range} projectId={projectId} deviceScope={deviceScope} />
         </Panel>
       ) : (
         <PrTable pullRequests={pullRequests} onInvestigate={onInvestigate} />
@@ -114,20 +126,20 @@ function PullRequestsPage({ pullRequests, staleError, period, provider, range, o
   )
 }
 
-function PrEmptyNote({ period, provider, range }: { period: Period; provider: string; range: DateRange | null }) {
+function PrEmptyNote({ period, provider, range, projectId, deviceScope }: { period: Period; provider: string; range: DateRange | null; projectId: DesktopProjectId | null; deviceScope: Scope }) {
   const [widerCount, setWiderCount] = useState<number | null>(null)
   const canProbeWider = !range && period !== 'lifetime'
   useEffect(() => {
     if (!canProbeWider) return
     let cancelled = false
-    void codeburn.getOverview('lifetime', provider).then(payload => {
+    void codeburn.getOverview({ period: 'lifetime', provider, range: null, deviceScope, projectId }).then(payload => {
       if (cancelled) return
       setWiderCount(payload.current.pullRequests?.rows.length ?? 0)
     }).catch(() => {
       if (!cancelled) setWiderCount(null)
     })
     return () => { cancelled = true }
-  }, [canProbeWider, provider])
+  }, [canProbeWider, provider, deviceScope, projectId])
 
   const periodLabel = range ? rangeLabel(range) : PERIOD_LABELS[period]
   const widerHint = widerCount && widerCount > 0

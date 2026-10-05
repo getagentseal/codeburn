@@ -37,6 +37,8 @@ function fakeSpawn(result: unknown = { current: { cost: 12.34 } }) {
 const CHANNELS = [
   'codeburn:getOverview',
   'codeburn:getOptimizeSnapshot',
+  'codeburn:getProjectScopeCatalog',
+  'codeburn:validateProjectScope',
   'codeburn:powerStatus',
   'codeburn:getTimeline',
   'codeburn:getQuota',
@@ -112,54 +114,45 @@ const CHANNELS = [
 ] as const
 
 const ARGV_CASES: Array<{ channel: string; args: unknown[]; argv: string[] }> = [
-  { channel: 'codeburn:getOverview', args: ['30days', 'claude'], argv: ['status', '--format', 'menubar-json', '--period', '30days', '--no-timeline', '--no-optimize', '--provider', 'claude'] },
-  { channel: 'codeburn:getOverview', args: ['30days', 'all'], argv: ['status', '--format', 'menubar-json', '--period', '30days', '--no-timeline', '--no-optimize'] },
+  { channel: 'codeburn:getOverview', args: [{ period: '30days', provider: 'claude' }], argv: ['status', '--format', 'menubar-json', '--period', '30days', '--no-timeline', '--no-optimize', '--provider', 'claude'] },
+  { channel: 'codeburn:getOverview', args: [{ period: '30days', provider: 'all' }], argv: ['status', '--format', 'menubar-json', '--period', '30days', '--no-timeline', '--no-optimize'] },
+  { channel: 'codeburn:getOptimizeSnapshot', args: [{ period: 'month', provider: 'openai', projectId: 'path:/work/app', maxAgeMs: 0, background: true }], argv: ['status', '--format', 'menubar-json', '--period', 'month', '--no-timeline', '--provider', 'openai', '--desktop-project-id=path:/work/app'] },
+  { channel: 'codeburn:getTimeline', args: [{ period: '30days', provider: 'claude', projectId: 'path:/work/app', range: { from: '2026-07-01', to: '2026-07-11' } }], argv: ['status', '--format', 'menubar-json', '--period', '30days', '--provider', 'claude', '--desktop-project-id=path:/work/app', '--from', '2026-07-01', '--to', '2026-07-11'] },
   { channel: 'codeburn:getPlans', args: ['week'], argv: ['status', '--format', 'json', '--period', 'week'] },
   { channel: 'codeburn:getActReport', args: [], argv: ['act', 'report', '--json'] },
-  { channel: 'codeburn:getModels', args: ['week', 'claude', true], argv: ['models', '--format', 'json', '--period', 'week', '--min-cost', '0', '--provider', 'claude', '--by-task'] },
-  { channel: 'codeburn:getModels', args: ['week', 'all', false], argv: ['models', '--format', 'json', '--period', 'week', '--min-cost', '0'] },
-  { channel: 'codeburn:getSessions', args: ['week', 'all'], argv: ['sessions', '--format', 'json', '--period', 'week'] },
-  { channel: 'codeburn:getSessions', args: ['30days', 'claude', { from: '2026-07-01', to: '2026-07-11' }], argv: ['sessions', '--format', 'json', '--period', '30days', '--provider', 'claude', '--from', '2026-07-01', '--to', '2026-07-11'] },
-  { channel: 'codeburn:getSessionsContributions', args: ['week', 'all'], argv: ['sessions', '--format', 'json', '--contributions', '--period', 'week'] },
-  { channel: 'codeburn:getSessionsContributions', args: ['30days', 'claude', { from: '2026-07-01', to: '2026-07-11' }], argv: ['sessions', '--format', 'json', '--contributions', '--period', '30days', '--provider', 'claude', '--from', '2026-07-01', '--to', '2026-07-11'] },
-  { channel: 'codeburn:getCompareModels', args: ['month', 'codex'], argv: ['compare', '--format', 'json', '--period', 'month', '--provider', 'codex'] },
-  { channel: 'codeburn:getCompare', args: ['month', 'all', 'model-a', 'model-b'], argv: ['compare', '--format', 'json', '--period', 'month', '--model-a', 'model-a', '--model-b', 'model-b'] },
-  { channel: 'codeburn:getPeriodCompare', args: [{ from: '2026-07-01', to: '2026-07-07' }, { from: '2026-07-08', to: '2026-07-14' }, 'claude'], argv: ['compare-periods', '--format', 'json', '--from-a', '2026-07-01', '--to-a', '2026-07-07', '--from-b', '2026-07-08', '--to-b', '2026-07-14', '--provider', 'claude'] },
-  { channel: 'codeburn:getPeriodCompare', args: [{ from: '2026-07-01', to: '2026-07-07' }, { from: '2026-07-08', to: '2026-07-14' }, 'all'], argv: ['compare-periods', '--format', 'json', '--from-a', '2026-07-01', '--to-a', '2026-07-07', '--from-b', '2026-07-08', '--to-b', '2026-07-14'] },
-  { channel: 'codeburn:getPeriodCompareSessions', args: [{ from: '2026-07-01', to: '2026-07-07' }, { from: '2026-07-08', to: '2026-07-14' }, 'all', 'project', '/work/app'], argv: ['compare-periods', '--format', 'sessions', '--from-a', '2026-07-01', '--to-a', '2026-07-07', '--from-b', '2026-07-08', '--to-b', '2026-07-14', '--dimension', 'project', '--key', '/work/app'] },
+  { channel: 'codeburn:getModels', args: [{ period: 'week', provider: 'claude', byTask: true }], argv: ['models', '--format', 'json', '--period', 'week', '--min-cost', '0', '--provider', 'claude', '--by-task'] },
+  { channel: 'codeburn:getModels', args: [{ period: 'week', provider: 'all', byTask: false }], argv: ['models', '--format', 'json', '--period', 'week', '--min-cost', '0'] },
+  { channel: 'codeburn:getSessions', args: [{ period: 'week', provider: 'all' }], argv: ['sessions', '--format', 'json', '--period', 'week'] },
+  { channel: 'codeburn:getSessions', args: [{ period: '30days', provider: 'claude', range: { from: '2026-07-01', to: '2026-07-11' }, projectId: 'path:/work/app' }], argv: ['sessions', '--format', 'json', '--period', '30days', '--provider', 'claude', '--desktop-project-id=path:/work/app', '--from', '2026-07-01', '--to', '2026-07-11'] },
+  { channel: 'codeburn:getSessionsContributions', args: [{ period: 'week', provider: 'all' }], argv: ['sessions', '--format', 'json', '--contributions', '--period', 'week'] },
+  { channel: 'codeburn:getSessionsContributions', args: [{ period: '30days', provider: 'claude', range: { from: '2026-07-01', to: '2026-07-11' } }], argv: ['sessions', '--format', 'json', '--contributions', '--period', '30days', '--provider', 'claude', '--from', '2026-07-01', '--to', '2026-07-11'] },
+  { channel: 'codeburn:getCompareModels', args: [{ period: 'month', provider: 'codex' }], argv: ['compare', '--format', 'json', '--period', 'month', '--provider', 'codex'] },
+  { channel: 'codeburn:getCompare', args: [{ period: 'month', provider: 'all', modelA: 'model-a', modelB: 'model-b', projectId: 'path:/work/app' }], argv: ['compare', '--format', 'json', '--period', 'month', '--desktop-project-id=path:/work/app', '--model-a', 'model-a', '--model-b', 'model-b'] },
+  { channel: 'codeburn:getPeriodCompare', args: [{ rangeA: { from: '2026-07-01', to: '2026-07-07' }, rangeB: { from: '2026-07-08', to: '2026-07-14' }, provider: 'claude', projectId: 'path:/work/app' }], argv: ['compare-periods', '--format', 'json', '--from-a', '2026-07-01', '--to-a', '2026-07-07', '--from-b', '2026-07-08', '--to-b', '2026-07-14', '--provider', 'claude', '--desktop-project-id=path:/work/app'] },
+  { channel: 'codeburn:getPeriodCompare', args: [{ rangeA: { from: '2026-07-01', to: '2026-07-07' }, rangeB: { from: '2026-07-08', to: '2026-07-14' }, provider: 'all' }], argv: ['compare-periods', '--format', 'json', '--from-a', '2026-07-01', '--to-a', '2026-07-07', '--from-b', '2026-07-08', '--to-b', '2026-07-14'] },
+  { channel: 'codeburn:getPeriodCompareSessions', args: [{ rangeA: { from: '2026-07-01', to: '2026-07-07' }, rangeB: { from: '2026-07-08', to: '2026-07-14' }, provider: 'all', dimension: 'project', key: '/work/app', projectId: 'path:/work/app' }], argv: ['compare-periods', '--format', 'sessions', '--from-a', '2026-07-01', '--to-a', '2026-07-07', '--from-b', '2026-07-08', '--to-b', '2026-07-14', '--desktop-project-id=path:/work/app', '--dimension', 'project', '--key', '/work/app'] },
   // Claude sanitizes project paths to dash-leading slugs; the key rides in the
   // VALUE position of --key, so a dash-leading key must survive validation.
-  { channel: 'codeburn:getPeriodCompareSessions', args: [{ from: '2026-07-01', to: '2026-07-07' }, { from: '2026-07-08', to: '2026-07-14' }, 'all', 'project', '-work-pricing'], argv: ['compare-periods', '--format', 'sessions', '--from-a', '2026-07-01', '--to-a', '2026-07-07', '--from-b', '2026-07-08', '--to-b', '2026-07-14', '--dimension', 'project', '--key', '-work-pricing'] },
-  { channel: 'codeburn:getCompareCohortModels', args: ['month', 'claude', { from: '2026-07-01', to: '2026-07-11' }], argv: ['compare', '--format', 'cohort-json', '--period', 'month', '--provider', 'claude', '--from', '2026-07-01', '--to', '2026-07-11'] },
-  { channel: 'codeburn:getCompareCohort', args: ['month', 'all', 'model-a', 'model-b'], argv: ['compare', '--format', 'cohort-json', '--period', 'month', '--model-a', 'model-a', '--model-b', 'model-b'] },
-  { channel: 'codeburn:getCompareCohort', args: ['month', 'all', 'model-a', 'model-b', undefined, ['/Users/gone/alpha', '-Users-gone-alpha'], 'coding'], argv: ['compare', '--format', 'cohort-json', '--period', 'month', '--model-a', 'model-a', '--model-b', 'model-b', '--project-id=/Users/gone/alpha', '--project-id=-Users-gone-alpha', '--category', 'coding'] },
-  { channel: 'codeburn:getYield', args: ['today', 'all'], argv: ['yield', '--format', 'json', '--period', 'today'] },
-  { channel: 'codeburn:getYield', args: ['today', 'claude'], argv: ['yield', '--format', 'json', '--period', 'today', '--provider', 'claude'] },
-  { channel: 'codeburn:getSpendFlow', args: ['month', 'openai'], argv: ['spend', '--format', 'flow-json', '--period', 'month', '--provider', 'openai'] },
-  { channel: 'codeburn:getOptimizeReport', args: ['month', 'openai'], argv: ['optimize', '--format', 'json', '--period', 'month', '--provider', 'openai'] },
-  { channel: 'codeburn:getOverview', args: ['30days', 'all', { from: '2026-07-01', to: '2026-07-11' }], argv: ['status', '--format', 'menubar-json', '--period', '30days', '--no-timeline', '--no-optimize', '--from', '2026-07-01', '--to', '2026-07-11'] },
-  { channel: 'codeburn:getOverview', args: ['30days', 'all', undefined, 'claude-config:91dda17e8cf35193'], argv: ['status', '--format', 'menubar-json', '--period', '30days', '--no-timeline', '--no-optimize', '--claude-config-source', 'claude-config:91dda17e8cf35193'] },
-  { channel: 'codeburn:getOverview', args: ['month', 'claude', { from: '2026-07-01', to: '2026-07-11' }, 'claude-desktop:980e1e488a654830'], argv: ['status', '--format', 'menubar-json', '--period', 'month', '--no-timeline', '--no-optimize', '--provider', 'claude', '--from', '2026-07-01', '--to', '2026-07-11', '--claude-config-source', 'claude-desktop:980e1e488a654830'] },
-  // Combined scope emits --scope combined; an explicit local scope is identical
-  // to the default (no flag). The CLI rejects --scope with --provider, so a
-  // provider passed alongside combined is dropped (the renderer forces 'all').
-  { channel: 'codeburn:getOverview', args: ['30days', 'all', undefined, undefined, undefined, 'combined'], argv: ['status', '--format', 'menubar-json', '--period', '30days', '--no-timeline', '--no-optimize', '--scope', 'combined'] },
-  { channel: 'codeburn:getOverview', args: ['30days', 'claude', undefined, undefined, undefined, 'combined'], argv: ['status', '--format', 'menubar-json', '--period', '30days', '--no-timeline', '--no-optimize', '--scope', 'combined'] },
-  { channel: 'codeburn:getOverview', args: ['30days', 'claude', undefined, undefined, undefined, 'local'], argv: ['status', '--format', 'menubar-json', '--period', '30days', '--no-timeline', '--no-optimize', '--provider', 'claude'] },
-  { channel: 'codeburn:getModels', args: ['week', 'claude', true, { from: '2026-07-01', to: '2026-07-11' }], argv: ['models', '--format', 'json', '--period', 'week', '--min-cost', '0', '--provider', 'claude', '--by-task', '--from', '2026-07-01', '--to', '2026-07-11'] },
-  { channel: 'codeburn:getYield', args: ['today', 'all', { from: '2026-07-01', to: '2026-07-11' }], argv: ['yield', '--format', 'json', '--period', 'today', '--from', '2026-07-01', '--to', '2026-07-11'] },
-  { channel: 'codeburn:getSpendFlow', args: ['month', 'all', { from: '2026-07-01', to: '2026-07-11' }], argv: ['spend', '--format', 'flow-json', '--period', 'month', '--from', '2026-07-01', '--to', '2026-07-11'] },
-  { channel: 'codeburn:getBranchSpend', args: ['month', 'openai'], argv: ['spend', '--format', 'branch-json', '--period', 'month', '--provider', 'openai'] },
-  { channel: 'codeburn:getBranchSpend', args: ['30days', 'all', { from: '2026-07-01', to: '2026-07-11' }], argv: ['spend', '--format', 'branch-json', '--period', '30days', '--from', '2026-07-01', '--to', '2026-07-11'] },
-  { channel: 'codeburn:getOptimizeReport', args: ['month', 'all', { from: '2026-07-01', to: '2026-07-11' }], argv: ['optimize', '--format', 'json', '--period', 'month', '--from', '2026-07-01', '--to', '2026-07-11'] },
+  { channel: 'codeburn:getPeriodCompareSessions', args: [{ rangeA: { from: '2026-07-01', to: '2026-07-07' }, rangeB: { from: '2026-07-08', to: '2026-07-14' }, provider: 'all', dimension: 'project', key: '-work-pricing' }], argv: ['compare-periods', '--format', 'sessions', '--from-a', '2026-07-01', '--to-a', '2026-07-07', '--from-b', '2026-07-08', '--to-b', '2026-07-14', '--dimension', 'project', '--key', '-work-pricing'] },
+  { channel: 'codeburn:getCompareCohortModels', args: [{ period: 'month', provider: 'claude', range: { from: '2026-07-01', to: '2026-07-11' }, projectId: 'path:/work/app' }], argv: ['compare', '--format', 'cohort-json', '--period', 'month', '--provider', 'claude', '--desktop-project-id=path:/work/app', '--from', '2026-07-01', '--to', '2026-07-11'] },
+  { channel: 'codeburn:getCompareCohort', args: [{ period: 'month', provider: 'all', modelA: 'model-a', modelB: 'model-b' }], argv: ['compare', '--format', 'cohort-json', '--period', 'month', '--model-a', 'model-a', '--model-b', 'model-b'] },
+  { channel: 'codeburn:getCompareCohort', args: [{ period: 'month', provider: 'all', modelA: 'model-a', modelB: 'model-b', projects: ['/Users/gone/alpha', '-Users-gone-alpha'], category: 'coding', projectId: 'path:/work/app' }], argv: ['compare', '--format', 'cohort-json', '--period', 'month', '--desktop-project-id=path:/work/app', '--model-a', 'model-a', '--model-b', 'model-b', '--project-id=/Users/gone/alpha', '--project-id=-Users-gone-alpha', '--category', 'coding'] },
+  { channel: 'codeburn:getYield', args: [{ period: 'today', provider: 'all' }], argv: ['yield', '--format', 'json', '--period', 'today'] },
+  { channel: 'codeburn:getYield', args: [{ period: 'today', provider: 'claude', projectId: 'path:/work/app' }], argv: ['yield', '--format', 'json', '--period', 'today', '--provider', 'claude', '--desktop-project-id=path:/work/app'] },
+  { channel: 'codeburn:getSpendFlow', args: [{ period: 'month', provider: 'openai' }], argv: ['spend', '--format', 'flow-json', '--period', 'month', '--provider', 'openai'] },
+  { channel: 'codeburn:getSpendFlow', args: [{ period: 'month', provider: 'all', range: { from: '2026-07-01', to: '2026-07-11' }, projectId: 'path:/work/app' }], argv: ['spend', '--format', 'flow-json', '--period', 'month', '--desktop-project-id=path:/work/app', '--from', '2026-07-01', '--to', '2026-07-11'] },
+  { channel: 'codeburn:getBranchSpend', args: [{ period: 'month', provider: 'openai' }], argv: ['spend', '--format', 'branch-json', '--period', 'month', '--provider', 'openai'] },
+  { channel: 'codeburn:getBranchSpend', args: [{ period: '30days', provider: 'all', range: { from: '2026-07-01', to: '2026-07-11' }, projectId: 'path:/work/app' }], argv: ['spend', '--format', 'branch-json', '--period', '30days', '--desktop-project-id=path:/work/app', '--from', '2026-07-01', '--to', '2026-07-11'] },
+  { channel: 'codeburn:getOptimizeReport', args: [{ period: 'month', provider: 'openai', projectId: 'path:/work/app' }], argv: ['optimize', '--format', 'json', '--period', 'month', '--provider', 'openai', '--desktop-project-id=path:/work/app'] },
+  { channel: 'codeburn:getOptimizeReport', args: [{ period: 'month', provider: 'all', range: { from: '2026-07-01', to: '2026-07-11' } }], argv: ['optimize', '--format', 'json', '--period', 'month', '--from', '2026-07-01', '--to', '2026-07-11'] },
+  { channel: 'codeburn:getAudit', args: [{ period: 'month', provider: 'claude', projectId: 'path:/work/app' }], argv: ['audit', '--format', 'json', '--period', 'month', '--provider', 'claude', '--desktop-project-id=path:/work/app'] },
+  { channel: 'codeburn:getAudit', args: [{ period: '30days', provider: 'all', range: { from: '2026-07-01', to: '2026-07-11' } }], argv: ['audit', '--format', 'json', '--period', '30days', '--from', '2026-07-01', '--to', '2026-07-11'] },
   { channel: 'codeburn:getDevices', args: ['week'], argv: ['devices', '--format', 'json', '--period', 'week'] },
   { channel: 'codeburn:getDevicesScan', args: [], argv: ['devices', 'scan', '--format', 'json'] },
   { channel: 'codeburn:getShareStatus', args: [], argv: ['share', 'status', '--format', 'json'] },
   { channel: 'codeburn:getIdentity', args: [], argv: ['identity', '--format', 'json'] },
   { channel: 'codeburn:getAliases', args: [], argv: ['model-alias', '--list', '--format', 'json'] },
   { channel: 'codeburn:getProxyPaths', args: [], argv: ['proxy-path', '--list', '--format', 'json'] },
-  { channel: 'codeburn:getAudit', args: ['month', 'claude'], argv: ['audit', '--format', 'json', '--period', 'month', '--provider', 'claude'] },
-  { channel: 'codeburn:getAudit', args: ['30days', 'all', { from: '2026-07-01', to: '2026-07-11' }], argv: ['audit', '--format', 'json', '--period', '30days', '--from', '2026-07-01', '--to', '2026-07-11'] },
   { channel: 'codeburn:getPriceOverrides', args: [], argv: ['price-override', '--list', '--format', 'json'] },
   { channel: 'codeburn:getUnfilteredProjects', args: [], argv: ['report', '--format', 'json', '--period', 'lifetime'] },
   { channel: 'codeburn:setPriceOverride', args: ['unpriced/test-model', { input: 0.27, output: 1.1 }], argv: ['price-override', 'unpriced/test-model', '--input', '0.27', '--output', '1.1'] },
@@ -204,7 +197,9 @@ describe('createBridgeHandlers (channel → argv for all channels)', () => {
   })
 
   it.each(ARGV_CASES)('$channel with $args spawns the expected argv', async ({ channel, args, argv }) => {
-    const { spawnCli, spawnCliAction, calls } = fakeSpawn()
+    const { spawnCli, spawnCliAction, calls } = fakeSpawn(channel === 'codeburn:getOptimizeSnapshot'
+      ? { current: { cost: 12.34 }, optimize: { findingCount: 0, savingsUSD: 0, topFindings: [] } }
+      : undefined)
     const handlers = createBridgeHandlers(deps({ spawnCli, spawnCliAction, resolveCodeburnPath: () => '/bin/codeburn' }))
     const res = await handlers[channel]!(...args)
     expect(calls[0]).toEqual(argv)
@@ -236,7 +231,7 @@ describe('createBridgeHandlers (IPC wiring)', () => {
   it('getOverview spawns menubar-json for the period, omitting --provider for "all"', async () => {
     const { spawnCli, spawnCliAction, calls } = fakeSpawn()
     const handlers = createBridgeHandlers(withQuota({ spawnCli, spawnCliAction, resolveCodeburnPath: () => '/bin/codeburn' }))
-    const res = await handlers['codeburn:getOverview']!('30days', 'all')
+    const res = await handlers['codeburn:getOverview']!({ period: '30days', provider: 'all' })
     expect(calls[0]).toEqual(['status', '--format', 'menubar-json', '--period', '30days', '--no-timeline', '--no-optimize'])
     expect(res).toEqual({ ok: true, value: { current: { cost: 12.34 } } })
   })
@@ -244,7 +239,7 @@ describe('createBridgeHandlers (IPC wiring)', () => {
   it('adds --provider and --by-task when requested', async () => {
     const { spawnCli, spawnCliAction, calls } = fakeSpawn([])
     const handlers = createBridgeHandlers(withQuota({ spawnCli, spawnCliAction, resolveCodeburnPath: () => null }))
-    await handlers['codeburn:getModels']!('week', 'claude', true)
+    await handlers['codeburn:getModels']!({ period: 'week', provider: 'claude', byTask: true })
     expect(calls[0]).toEqual(['models', '--format', 'json', '--period', 'week', '--min-cost', '0', '--provider', 'claude', '--by-task'])
   })
 
@@ -253,7 +248,7 @@ describe('createBridgeHandlers (IPC wiring)', () => {
       throw new CliError('nonzero', 'boom')
     })
     const handlers = createBridgeHandlers(withQuota({ spawnCli, spawnCliAction: vi.fn(), resolveCodeburnPath: () => '/bin/codeburn' }))
-    const res = await handlers['codeburn:getYield']!('today', 'all')
+    const res = await handlers['codeburn:getYield']!({ period: 'today', provider: 'all' })
     expect(res).toEqual({ ok: false, error: { kind: 'nonzero', message: 'boom' } })
   })
 
@@ -271,26 +266,29 @@ describe('createBridgeHandlers (IPC wiring)', () => {
 describe('createBridgeHandlers (IPC input validation)', () => {
   const withQuota = <T extends object>(value: T) => ({ ...value, getQuota: vi.fn(async () => []) })
   const REJECTIONS: Array<{ name: string; channel: string; args: unknown[] }> = [
-    { name: 'unknown period', channel: 'codeburn:getOverview', args: ['yesterday', 'all'] },
-    { name: 'provider with shell metacharacters', channel: 'codeburn:getOverview', args: ['30days', 'claude; rm -rf'] },
-    { name: 'uppercase provider', channel: 'codeburn:getModels', args: ['week', 'Claude', false] },
-    { name: 'malformed date range', channel: 'codeburn:getYield', args: ['today', 'all', { from: '2026/07/01', to: '2026-07-11' }] },
+    { name: 'unknown period', channel: 'codeburn:getOverview', args: [{ period: 'yesterday', provider: 'all' }] },
+    { name: 'provider with shell metacharacters', channel: 'codeburn:getOverview', args: [{ period: '30days', provider: 'claude; rm -rf' }] },
+    { name: 'uppercase provider', channel: 'codeburn:getModels', args: [{ period: 'week', provider: 'Claude', byTask: false }] },
+    { name: 'malformed date range', channel: 'codeburn:getYield', args: [{ period: 'today', provider: 'all', range: { from: '2026/07/01', to: '2026-07-11' } }] },
     { name: 'lowercase currency code', channel: 'codeburn:setCurrency', args: ['eur'] },
     { name: 'alias token that looks like a flag', channel: 'codeburn:addAlias', args: ['--evil', 'safe'] },
     { name: 'device name that looks like a flag', channel: 'codeburn:removeDevice', args: ['-rf'] },
     { name: 'relative export path', channel: 'codeburn:exportData', args: ['json', 'all', 'relative/out'] },
-    { name: 'compare model that looks like a flag', channel: 'codeburn:getCompare', args: ['month', 'all', '-a', 'model-b'] },
-    { name: 'cohort model that looks like a flag', channel: 'codeburn:getCompareCohort', args: ['month', 'all', '-a', 'model-b'] },
-    { name: 'cohort project identity containing NUL', channel: 'codeburn:getCompareCohort', args: ['month', 'all', 'model-a', 'model-b', undefined, ['bad\0id']] },
-    { name: 'empty cohort project identity', channel: 'codeburn:getCompareCohort', args: ['month', 'all', 'model-a', 'model-b', undefined, ['']] },
-    { name: 'unknown cohort category', channel: 'codeburn:getCompareCohort', args: ['month', 'all', 'model-a', 'model-b', undefined, undefined, 'not-a-category'] },
+    { name: 'compare model that looks like a flag', channel: 'codeburn:getCompare', args: [{ period: 'month', provider: 'all', modelA: '-a', modelB: 'model-b' }] },
+    { name: 'cohort model that looks like a flag', channel: 'codeburn:getCompareCohort', args: [{ period: 'month', provider: 'all', modelA: '-a', modelB: 'model-b' }] },
+    { name: 'cohort project identity containing NUL', channel: 'codeburn:getCompareCohort', args: [{ period: 'month', provider: 'all', modelA: 'model-a', modelB: 'model-b', projects: ['bad\0id'] }] },
+    { name: 'empty cohort project identity', channel: 'codeburn:getCompareCohort', args: [{ period: 'month', provider: 'all', modelA: 'model-a', modelB: 'model-b', projects: [''] }] },
+    { name: 'unknown cohort category', channel: 'codeburn:getCompareCohort', args: [{ period: 'month', provider: 'all', modelA: 'model-a', modelB: 'model-b', category: 'not-a-category' }] },
     { name: 'price override model that looks like a flag', channel: 'codeburn:setPriceOverride', args: ['-x', { input: 1, output: 2 }] },
     { name: 'non-positive price override rate', channel: 'codeburn:setPriceOverride', args: ['my-model', { input: 0, output: 2 }] },
     { name: 'non-finite price override rate', channel: 'codeburn:setPriceOverride', args: ['my-model', { input: 1, output: Number.POSITIVE_INFINITY }] },
     { name: 'remove price override model that looks like a flag', channel: 'codeburn:removePriceOverride', args: ['--all'] },
-    { name: 'claude config source that looks like a flag', channel: 'codeburn:getOverview', args: ['30days', 'all', undefined, '-rf'] },
-    { name: 'claude config source with shell metacharacters', channel: 'codeburn:getOverview', args: ['30days', 'all', undefined, 'id; rm -rf'] },
-    { name: 'unknown scope', channel: 'codeburn:getOverview', args: ['30days', 'all', undefined, undefined, undefined, 'everything'] },
+    { name: 'claude config source that looks like a flag', channel: 'codeburn:getOverview', args: [{ period: '30days', provider: 'all', configSource: '-rf' }] },
+    { name: 'claude config source with shell metacharacters', channel: 'codeburn:getOverview', args: [{ period: '30days', provider: 'all', configSource: 'id; rm -rf' }] },
+    { name: 'unknown scope', channel: 'codeburn:getOverview', args: [{ period: '30days', provider: 'all', deviceScope: 'everything' }] },
+    { name: 'empty Desktop project id', channel: 'codeburn:getOverview', args: [{ period: '30days', provider: 'all', projectId: '' }] },
+    { name: 'NUL Desktop project id', channel: 'codeburn:getOverview', args: [{ period: '30days', provider: 'all', projectId: 'path:/work/\0app' }] },
+    { name: 'combined scope with Desktop project id', channel: 'codeburn:getOverview', args: [{ period: '30days', provider: 'all', deviceScope: 'combined', projectId: 'path:/work/app' }] },
   ]
 
   it.each(REJECTIONS)('rejects $name with a bad-args envelope and never spawns', async ({ channel, args }) => {
@@ -515,13 +513,13 @@ describe('createBridgeHandlers (cold-start warmup)', () => {
     const emitProgress = vi.fn()
     const handlers = createBridgeHandlers(base({ spawnCli, emitProgress }))
 
-    await handlers['codeburn:getOverview']!('30days', 'all')
+    await handlers['codeburn:getOverview']!({ period: '30days', provider: 'all' })
     expect(opts[0]?.timeoutMs).toBe(10 * 60_000)
     expect((opts[0]?.extraEnv as Record<string, string> | undefined)?.CODEBURN_PROGRESS).toBe('1')
     expect(typeof opts[0]?.onStderr).toBe('function')
     expect(emitProgress).toHaveBeenCalledWith({ kind: 'done' })
 
-    await handlers['codeburn:getOverview']!('30days', 'all')
+    await handlers['codeburn:getOverview']!({ period: '30days', provider: 'all' })
     expect(opts[1]?.timeoutMs).toBeUndefined()
     expect(opts[1]?.extraEnv).toBeUndefined()
   })
@@ -531,9 +529,9 @@ describe('createBridgeHandlers (cold-start warmup)', () => {
     const spawnCli = vi.fn(async (_args: string[], o?: Record<string, unknown>) => { opts.push(o); return { current: { cost: 1 } } })
     const handlers = createBridgeHandlers(base({ spawnCli, emitProgress: vi.fn() }))
 
-    await handlers['codeburn:getOverview']!('30days', 'all') // cold warmup → interactive
-    await handlers['codeburn:getOverview']!('30days', 'claude') // warmed, no flag → interactive
-    await handlers['codeburn:getOverview']!('30days', 'grok', undefined, null, true) // prefetch → background
+    await handlers['codeburn:getOverview']!({ period: '30days', provider: 'all' }) // cold warmup → interactive
+    await handlers['codeburn:getOverview']!({ period: '30days', provider: 'claude' }) // warmed, no flag → interactive
+    await handlers['codeburn:getOverview']!({ period: '30days', provider: 'grok', background: true }) // prefetch → background
 
     expect(opts[0]?.priority).toBeUndefined()
     expect(opts[1]?.priority).toBeUndefined()
@@ -549,13 +547,13 @@ describe('createBridgeHandlers (cold-start warmup)', () => {
     const handlers = createBridgeHandlers(base({ spawnCli }))
     const cases: Array<[string, unknown[]]> = [
       ['codeburn:getPlans', ['today', true]],
-      ['codeburn:getModels', ['today', 'all', false, undefined, true]],
-      ['codeburn:getSessions', ['today', 'all', undefined, true]],
-      ['codeburn:getCompareModels', ['today', 'all', true]],
-      ['codeburn:getYield', ['today', 'all', undefined, true]],
-      ['codeburn:getSpendFlow', ['today', 'all', undefined, true]],
-      ['codeburn:getBranchSpend', ['today', 'all', undefined, true]],
-      ['codeburn:getOptimizeReport', ['today', 'all', undefined, true]],
+      ['codeburn:getModels', [{ period: 'today', provider: 'all', byTask: false, background: true }]],
+      ['codeburn:getSessions', [{ period: 'today', provider: 'all', background: true }]],
+      ['codeburn:getCompareModels', [{ period: 'today', provider: 'all', background: true }]],
+      ['codeburn:getYield', [{ period: 'today', provider: 'all', background: true }]],
+      ['codeburn:getSpendFlow', [{ period: 'today', provider: 'all', background: true }]],
+      ['codeburn:getBranchSpend', [{ period: 'today', provider: 'all', background: true }]],
+      ['codeburn:getOptimizeReport', [{ period: 'today', provider: 'all', background: true }]],
     ]
 
     for (const [channel, args] of cases) await handlers[channel]!(...args)
@@ -563,6 +561,24 @@ describe('createBridgeHandlers (cold-start warmup)', () => {
     expect(calls).toHaveLength(cases.length)
     expect(calls.every(call => call.opts?.priority === 'background')).toBe(true)
     expect(calls.every(call => !call.args.includes('true'))).toBe(true)
+  })
+
+  it('keeps Optimize snapshot background metadata out of its attached argv', async () => {
+    const calls: Array<{ args: string[]; opts?: Record<string, unknown> }> = []
+    const spawnCli = vi.fn(async (args: string[], opts?: Record<string, unknown>) => {
+      calls.push({ args, opts })
+      return { optimize: { findingCount: 0, savingsUSD: 0, topFindings: [] } }
+    })
+    const handlers = createBridgeHandlers(base({ spawnCli }))
+
+    await handlers['codeburn:getOptimizeSnapshot']!({ period: 'today', provider: 'all', projectId: 'path:/work/app', background: true, maxAgeMs: 0 })
+
+    expect(calls[0]?.args).toEqual([
+      'status', '--format', 'menubar-json', '--period', 'today', '--no-timeline',
+      '--desktop-project-id=path:/work/app',
+    ])
+    expect(calls[0]?.args).not.toContain('true')
+    expect(calls[0]?.opts?.priority).toBe('background')
   })
 
   it('re-arms the long timeout when the first overview fails (cache is still cold)', async () => {
@@ -575,8 +591,8 @@ describe('createBridgeHandlers (cold-start warmup)', () => {
     })
     const handlers = createBridgeHandlers(base({ spawnCli, emitProgress: vi.fn() }))
 
-    expect(await handlers['codeburn:getOverview']!('30days', 'all')).toMatchObject({ ok: false })
-    expect(await handlers['codeburn:getOverview']!('30days', 'all')).toMatchObject({ ok: true })
+    expect(await handlers['codeburn:getOverview']!({ period: '30days', provider: 'all' })).toMatchObject({ ok: false })
+    expect(await handlers['codeburn:getOverview']!({ period: '30days', provider: 'all' })).toMatchObject({ ok: true })
     expect(opts[0]?.timeoutMs).toBe(10 * 60_000)
     expect(opts[1]?.timeoutMs).toBe(10 * 60_000)
   })
@@ -593,12 +609,12 @@ describe('createBridgeHandlers (cold-start warmup)', () => {
 
     await handlers['codeburn:getActReport']!()
     await handlers['codeburn:getPlans']!('30days')
-    await handlers['codeburn:getOptimizeReport']!('30days', 'all')
+    await handlers['codeburn:getOptimizeReport']!({ period: '30days', provider: 'all' })
     expect(opts.map(o => o?.timeoutMs)).toEqual([10 * 60_000, 10 * 60_000, 10 * 60_000])
 
     // Once the overview lands, the cold cache is hot and reads revert to the
     // plain default so a genuinely stuck child is still caught quickly.
-    await handlers['codeburn:getOverview']!('30days', 'all')
+    await handlers['codeburn:getOverview']!({ period: '30days', provider: 'all' })
     await handlers['codeburn:getActReport']!()
     expect(opts[4]?.timeoutMs).toBeUndefined()
   })
@@ -609,7 +625,7 @@ describe('createBridgeHandlers (cold-start warmup)', () => {
 
     expect(await handlers['codeburn:getActReport']!())
       .toMatchObject({ ok: false, error: { kind: 'timeout', cold: true } })
-    expect(await handlers['codeburn:getOverview']!('30days', 'all'))
+    expect(await handlers['codeburn:getOverview']!({ period: '30days', provider: 'all' }))
       .toMatchObject({ ok: false, error: { kind: 'timeout', cold: true } })
   })
 
@@ -623,13 +639,13 @@ describe('createBridgeHandlers (cold-start warmup)', () => {
       const spawnCli = vi.fn(async () => { throw new CliError('timeout', 'no output for 45000ms') })
       const handlers = createBridgeHandlers(base({ spawnCli, emitProgress: vi.fn() }))
 
-      expect(await handlers['codeburn:getOverview']!('30days', 'all'))
+      expect(await handlers['codeburn:getOverview']!({ period: '30days', provider: 'all' }))
         .toMatchObject({ ok: false, error: { cold: true } })
 
       // Past the 10-minute cold floor, still failing: this is an error, not news
       // that indexing is in progress.
       vi.setSystemTime(new Date('2026-08-16T00:10:01Z'))
-      const late = await handlers['codeburn:getOverview']!('30days', 'all') as { error: { kind: string; cold?: true } }
+      const late = await handlers['codeburn:getOverview']!({ period: '30days', provider: 'all' }) as { error: { kind: string; cold?: true } }
       expect(late.error.kind).toBe('timeout')
       expect(late.error.cold).toBeUndefined()
       expect((await handlers['codeburn:getActReport']!() as { error: { cold?: true } }).error.cold).toBeUndefined()
@@ -655,7 +671,7 @@ describe('createBridgeHandlers (cold-start warmup)', () => {
     })
     const emitProgress = vi.fn()
     const handlers = createBridgeHandlers(base({ spawnCli, emitProgress }))
-    await handlers['codeburn:getOverview']!('30days', 'all')
+    await handlers['codeburn:getOverview']!({ period: '30days', provider: 'all' })
 
     expect(emitProgress).toHaveBeenCalledWith({ kind: 'providers', providers: ['claude', 'codex'] })
     expect(emitProgress).toHaveBeenCalledWith({ kind: 'tick', provider: 'claude', done: 5, total: 10 })
@@ -700,8 +716,8 @@ describe('createBridgeHandlers (telemetry wiring)', () => {
   it('tracks cold_start once on the first overview success, with duration', async () => {
     const telemetry = fakeTelemetry()
     const handlers = createBridgeHandlers(deps(telemetry))
-    await handlers['codeburn:getOverview']!('30days', 'all')
-    await handlers['codeburn:getOverview']!('30days', 'all')
+    await handlers['codeburn:getOverview']!({ period: '30days', provider: 'all' })
+    await handlers['codeburn:getOverview']!({ period: '30days', provider: 'all' })
     const coldStarts = telemetry.track.mock.calls.filter(([name]) => name === 'cold_start')
     expect(coldStarts.length).toBe(1)
     expect(coldStarts[0]![1]).toMatchObject({ timedOut: false })
@@ -719,11 +735,11 @@ describe('createBridgeHandlers (telemetry wiring)', () => {
       const spawnCli = vi.fn(() => shared)
       const handlers = createBridgeHandlers({ ...deps(telemetry), spawnCli })
 
-      const p1 = handlers['codeburn:getOverview']!('30days', 'all') // anchors cold clock at t=0
+      const p1 = handlers['codeburn:getOverview']!({ period: '30days', provider: 'all' }) // anchors cold clock at t=0
       vi.setSystemTime(30_000)
-      const p2 = handlers['codeburn:getOverview']!('30days', 'all')
+      const p2 = handlers['codeburn:getOverview']!({ period: '30days', provider: 'all' })
       vi.setSystemTime(60_000)
-      const p3 = handlers['codeburn:getOverview']!('30days', 'all')
+      const p3 = handlers['codeburn:getOverview']!({ period: '30days', provider: 'all' })
 
       // The stuck child finally settles ~102.8s after launch.
       vi.setSystemTime(102_801)
@@ -743,7 +759,7 @@ describe('createBridgeHandlers (telemetry wiring)', () => {
     const telemetry = fakeTelemetry()
     const spawnCli = vi.fn(async () => { throw new CliError('timeout', 'timed out') })
     const handlers = createBridgeHandlers({ ...deps(telemetry), spawnCli })
-    await handlers['codeburn:getOverview']!('30days', 'all')
+    await handlers['codeburn:getOverview']!({ period: '30days', provider: 'all' })
     const coldStarts = telemetry.track.mock.calls.filter(([name]) => name === 'cold_start')
     expect(coldStarts.length).toBe(1)
     expect(coldStarts[0]![1]).toMatchObject({ timedOut: true })
@@ -757,8 +773,8 @@ describe('createBridgeHandlers (telemetry wiring)', () => {
       return { current: { cost: 1 } } // re-armed cold attempt succeeds
     })
     const handlers = createBridgeHandlers({ ...deps(telemetry), spawnCli })
-    await handlers['codeburn:getOverview']!('30days', 'all')
-    await handlers['codeburn:getOverview']!('30days', 'all')
+    await handlers['codeburn:getOverview']!({ period: '30days', provider: 'all' })
+    await handlers['codeburn:getOverview']!({ period: '30days', provider: 'all' })
     const coldStarts = telemetry.track.mock.calls.filter(([name]) => name === 'cold_start')
     expect(coldStarts.length).toBe(1)
     expect(coldStarts[0]![1]).toMatchObject({ timedOut: true })
@@ -771,7 +787,7 @@ describe('createBridgeHandlers (telemetry wiring)', () => {
       spawnCli: vi.fn(async () => { throw new CliError('timeout', 'timed out') }),
     }
     const handlers = createBridgeHandlers(failing)
-    await handlers['codeburn:getSessions']!('week', 'all')
+    await handlers['codeburn:getSessions']!({ period: 'week', provider: 'all' })
     expect(telemetry.track).toHaveBeenCalledWith('cli_error', { cmd: 'sessions', kind: 'timeout' })
   })
 
@@ -797,7 +813,7 @@ describe('createBridgeHandlers (telemetry wiring)', () => {
       }),
     }
     const handlers = createBridgeHandlers(failing)
-    await handlers['codeburn:getSessions']!('week', 'all')
+    await handlers['codeburn:getSessions']!({ period: 'week', provider: 'all' })
     const props = telemetry.track.mock.calls.find(([name]) => name === 'cli_error')![1] as Record<string, unknown>
     expect(props).toEqual({ cmd: 'sessions', kind: 'not-found', detail: 'spawn-error' })
     expect(JSON.stringify(props)).not.toContain('secret')
@@ -860,24 +876,24 @@ describe('project filter', () => {
 
       const { spawnCli, spawnCliAction, calls } = fakeSpawn()
       const handlers = createBridgeHandlers(deps({ spawnCli, spawnCliAction, resolveCodeburnPath: () => '/bin/codeburn' }))
-      await handlers['codeburn:getSessions']!('week', 'all')
+      await handlers['codeburn:getSessions']!({ period: 'week', provider: 'all' })
       expect(calls[0]).toEqual(['sessions', '--format', 'json', '--period', 'week', '--project=my-company', '--exclude=scratch'])
-      await handlers['codeburn:getSessionsContributions']!('week', 'all')
+      await handlers['codeburn:getSessionsContributions']!({ period: 'week', provider: 'all' })
       expect(calls[1]).toEqual(['sessions', '--format', 'json', '--contributions', '--period', 'week', '--project=my-company', '--exclude=scratch'])
-      await handlers['codeburn:getBranchSpend']!('week', 'all')
+      await handlers['codeburn:getBranchSpend']!({ period: 'week', provider: 'all' })
       expect(calls[2]).toEqual(['spend', '--format', 'branch-json', '--period', 'week', '--project=my-company', '--exclude=scratch'])
       const rangeA = { from: '2026-07-01', to: '2026-07-07' }
       const rangeB = { from: '2026-07-08', to: '2026-07-14' }
-      await handlers['codeburn:getPeriodCompare']!(rangeA, rangeB, 'all')
+      await handlers['codeburn:getPeriodCompare']!({ rangeA, rangeB, provider: 'all' })
       expect(calls[3]).toEqual(['compare-periods', '--format', 'json', '--from-a', '2026-07-01', '--to-a', '2026-07-07', '--from-b', '2026-07-08', '--to-b', '2026-07-14', '--project=my-company', '--exclude=scratch'])
       // The drill-down too: a filtered-out project must not surface behind a
       // contribution row either.
-      await handlers['codeburn:getPeriodCompareSessions']!(rangeA, rangeB, 'all', 'model', 'sonnet')
+      await handlers['codeburn:getPeriodCompareSessions']!({ rangeA, rangeB, provider: 'all', dimension: 'model', key: 'sonnet' })
       expect(calls[4]).toEqual(['compare-periods', '--format', 'sessions', '--from-a', '2026-07-01', '--to-a', '2026-07-07', '--from-b', '2026-07-08', '--to-b', '2026-07-14', '--project=my-company', '--exclude=scratch', '--dimension', 'model', '--key', 'sonnet'])
-      await handlers['codeburn:getCompareCohortModels']!('week', 'all')
+      await handlers['codeburn:getCompareCohortModels']!({ period: 'week', provider: 'all' })
       expect(calls[5]).toEqual(['compare', '--format', 'cohort-json', '--period', 'week', '--project=my-company', '--exclude=scratch'])
       // --project-id narrows WITHIN the saved filter; it never replaces it.
-      await handlers['codeburn:getCompareCohort']!('week', 'all', 'model-a', 'model-b', undefined, ['/Users/gone/alpha'])
+      await handlers['codeburn:getCompareCohort']!({ period: 'week', provider: 'all', modelA: 'model-a', modelB: 'model-b', projects: ['/Users/gone/alpha'] })
       expect(calls[6]).toEqual([
         'compare', '--format', 'cohort-json', '--period', 'week', '--project=my-company', '--exclude=scratch',
         '--model-a', 'model-a', '--model-b', 'model-b', '--project-id=/Users/gone/alpha',
@@ -892,6 +908,22 @@ describe('project filter', () => {
       const handlers = createBridgeHandlers(deps({ spawnCli, spawnCliAction, resolveCodeburnPath: () => '/bin/codeburn' }))
       await handlers['codeburn:getUnfilteredProjects']!()
       expect(calls[0]).toEqual(['report', '--format', 'json', '--period', 'lifetime'])
+    })
+  })
+
+  it('carries the persistent filter into the Desktop project catalog fetch', async () => {
+    await withFilterFile(async () => {
+      writeProjectFilter({ project: ['my-company'], exclude: ['scratch'] })
+      const { spawnCli, spawnCliAction, calls } = fakeSpawn({
+        revision: 'revision-1',
+        options: [{ id: 'path:/work/app', name: 'app', path: '/work/app' }],
+      })
+      const handlers = createBridgeHandlers(deps({ spawnCli, spawnCliAction, resolveCodeburnPath: () => '/bin/codeburn' }))
+      await handlers['codeburn:getProjectScopeCatalog']!()
+      expect(calls[0]).toEqual([
+        'report', '--format', 'json', '--period', 'lifetime', '--desktop-project-catalog',
+        '--project=my-company', '--exclude=scratch',
+      ])
     })
   })
 
@@ -913,7 +945,7 @@ describe('project filter', () => {
       writeProjectFilter({ project: [], exclude: ['my-company'] })
       const { spawnCli, spawnCliAction, calls } = fakeSpawn()
       const handlers = createBridgeHandlers(deps({ spawnCli, spawnCliAction, resolveCodeburnPath: () => '/bin/codeburn' }))
-      await handlers['codeburn:getOverview']!('30days', 'all', undefined, undefined, undefined, 'combined')
+      await handlers['codeburn:getOverview']!({ period: '30days', provider: 'all', deviceScope: 'combined' })
       // No --scope combined: the CLI rejects it next to --exclude.
       expect(calls[0]).toEqual(['status', '--format', 'menubar-json', '--period', '30days', '--no-timeline', '--no-optimize', '--exclude=my-company'])
     })
@@ -924,7 +956,7 @@ describe('project filter', () => {
       writeProjectFilter({ project: [], exclude: [] })
       const { spawnCli, spawnCliAction, calls } = fakeSpawn()
       const handlers = createBridgeHandlers(deps({ spawnCli, spawnCliAction, resolveCodeburnPath: () => '/bin/codeburn' }))
-      await handlers['codeburn:getOverview']!('30days', 'all', undefined, undefined, undefined, 'combined')
+      await handlers['codeburn:getOverview']!({ period: '30days', provider: 'all', deviceScope: 'combined' })
       expect(calls[0]).toEqual(['status', '--format', 'menubar-json', '--period', '30days', '--no-timeline', '--no-optimize', '--scope', 'combined'])
     })
   })
@@ -970,7 +1002,7 @@ describe('project filter', () => {
       writeProjectFilter({ project: [], exclude: ['-Users-me-Web-Github-notes-app'] })
       const { spawnCli, spawnCliAction, calls } = fakeSpawn()
       const handlers = createBridgeHandlers(deps({ spawnCli, spawnCliAction, resolveCodeburnPath: () => '/bin/codeburn' }))
-      await handlers['codeburn:getSessions']!('week', 'all')
+      await handlers['codeburn:getSessions']!({ period: 'week', provider: 'all' })
       expect(calls[0]).toEqual(['sessions', '--format', 'json', '--period', 'week', '--exclude=-Users-me-Web-Github-notes-app'])
     })
   })
@@ -1035,7 +1067,7 @@ describe('project filter', () => {
       mkdirSync(filterPath)
       const { spawnCli, spawnCliAction, calls } = fakeSpawn()
       const handlers = createBridgeHandlers(deps({ spawnCli, spawnCliAction, resolveCodeburnPath: () => '/bin/codeburn' }))
-      const res = await handlers['codeburn:getSessions']!('week', 'all')
+      const res = await handlers['codeburn:getSessions']!({ period: 'week', provider: 'all' })
       expect(calls).toEqual([])
       expect(res).toMatchObject({ ok: false, error: { kind: 'nonzero' } })
     })
@@ -1056,7 +1088,7 @@ describe('project filter', () => {
       mkdirSync(filterPath)
       const { spawnCli, spawnCliAction, calls } = fakeSpawn()
       const handlers = createBridgeHandlers(deps({ spawnCli, spawnCliAction, resolveCodeburnPath: () => '/bin/codeburn' }))
-      const res = await handlers['codeburn:getOverview']!('30days', 'all', undefined, undefined, undefined, 'combined')
+      const res = await handlers['codeburn:getOverview']!({ period: '30days', provider: 'all', deviceScope: 'combined' })
       expect(calls).toEqual([])
       expect(res).toMatchObject({ ok: false })
     })

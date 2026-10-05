@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { buildMenubarPayload, type CombinedUsage, type LocalModelSavings, type PeriodData, type ProviderCost } from '../src/menubar-json.js'
+import { applyScopedPayloadPolicy, buildMenubarPayload, type CombinedUsage, type LocalModelSavings, type PeriodData, type ProviderCost } from '../src/menubar-json.js'
 import { getShortModelName } from '../src/models.js'
 import type { OptimizeResult } from '../src/optimize.js'
 
@@ -20,6 +20,17 @@ function emptyPeriod(label: string): PeriodData {
 }
 
 describe('buildMenubarPayload', () => {
+  it('omits unscoped generation fields when a project scope is active', () => {
+    const payload = buildMenubarPayload(emptyPeriod('Today'), [], null)
+    payload.periodTotals = { today: { cost: 1, calls: 1 } }
+    payload.streak = 4
+
+    applyScopedPayloadPolicy(payload, true)
+
+    expect(payload.periodTotals).toBeUndefined()
+    expect(payload.streak).toBeUndefined()
+  })
+
   it('emits the full schema with current-period metrics and iso timestamp', () => {    const period: PeriodData = {
       label: '7 Days',
       cost: 1248.01,

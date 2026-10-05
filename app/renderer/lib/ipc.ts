@@ -9,7 +9,9 @@ declare global {
   }
 }
 
-/** The typed bridge. Import this instead of touching `window` directly. */
+/** The typed bridge. Import this instead of touching `window` directly. Report
+ * methods receive one named query object so project scope cannot be dropped by
+ * positional argument reordering. */
 export const codeburn: CodeburnBridge = window.codeburn
 
 /** Coerce anything thrown across the IPC boundary into a CliError shape. */

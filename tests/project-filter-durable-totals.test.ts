@@ -8,6 +8,7 @@ import { DAILY_CACHE_VERSION, currentTzKey, type DailyCache, type DailyEntry, ty
 import { loadPricing } from '../src/models.js'
 import { buildDurablePeriod, buildMenubarPayloadForRange, buildPeriodData, getDailyCacheConfigHash } from '../src/usage-aggregator.js'
 import { parseAllSessions, filterProjectsByName, clearSessionCache } from '../src/parser.js'
+import { exactProjectBucketKey } from '../src/project-scope.js'
 import { renderOverview } from '../src/overview.js'
 import type { DateRange } from '../src/types.js'
 import { setHome } from './setup/home.js'
@@ -124,6 +125,68 @@ function carriedDaySiblingProjects(date: string): DailyEntry {
   return day
 }
 
+function carriedRichProjectDay(date: string): DailyEntry {
+  const key = exactProjectBucketKey('path:/Users/gone/rich')
+  const model = {
+    calls: 2, cost: 5, savingsUSD: 0,
+    inputTokens: 100, outputTokens: 200, cacheReadTokens: 300, cacheWriteTokens: 40,
+  }
+  const category = { turns: 2, cost: 5, savingsUSD: 0, editTurns: 2, oneShotTurns: 1 }
+  const stats: ProjectDayStats = {
+    canonicalId: 'path:/Users/gone/rich',
+    sourceLabel: 'rich',
+    displayName: 'rich',
+    path: '/Users/gone/rich',
+    provenance: 'exact',
+    cost: 5,
+    calls: 2,
+    savingsUSD: 0,
+    sessions: 1,
+    inputTokens: 100,
+    outputTokens: 200,
+    cacheReadTokens: 300,
+    cacheWriteTokens: 40,
+    editTurns: 2,
+    oneShotTurns: 1,
+    models: { 'Opus 4.8': model },
+    categories: { coding: category },
+  }
+  return {
+    date,
+    cost: 5,
+    savingsUSD: 0,
+    calls: 2,
+    sessions: 1,
+    inputTokens: 100,
+    outputTokens: 200,
+    cacheReadTokens: 300,
+    cacheWriteTokens: 40,
+    editTurns: 2,
+    oneShotTurns: 1,
+    models: { 'Opus 4.8': model },
+    categories: { coding: category },
+    providers: {
+      claude: {
+        calls: 2,
+        cost: 5,
+        savingsUSD: 0,
+        sessions: 1,
+        inputTokens: 100,
+        outputTokens: 200,
+        cacheReadTokens: 300,
+        cacheWriteTokens: 40,
+        editTurns: 2,
+        oneShotTurns: 1,
+        models: { 'Opus 4.8': model },
+        categories: { coding: category },
+        projects: { [key]: stats },
+      },
+    },
+    projects: { [key]: stats },
+    carried: true,
+  }
+}
+
 async function seedCache(...days: DailyEntry[]): Promise<void> {
   const cache: DailyCache = {
     version: DAILY_CACHE_VERSION,
@@ -204,6 +267,35 @@ const coveringRange = (): DateRange => ({
 })
 
 describe('durable headline honours --project / --exclude on carried days', () => {
+  it('keeps rich project tokens, models, categories, and turn fields when filtering retained history', async () => {
+    const date = daysAgoStr(10)
+    await seedCache(carriedRichProjectDay(date))
+    const durable = await buildDurablePeriod({ range: coveringRange(), label: 'p' }, { provider: 'all', project: ['rich'] })
+    const retained = durable.days.find(day => day.date === date)!
+    const projectStats = retained.projects?.[exactProjectBucketKey('path:/Users/gone/rich')]!
+
+    expect(retained).toMatchObject({
+      inputTokens: 100,
+      outputTokens: 200,
+      cacheReadTokens: 300,
+      cacheWriteTokens: 40,
+      editTurns: 2,
+      oneShotTurns: 1,
+      models: { 'Opus 4.8': { calls: 2, inputTokens: 100, outputTokens: 200 } },
+      categories: { coding: { turns: 2, editTurns: 2, oneShotTurns: 1 } },
+    })
+    expect(projectStats).toMatchObject({
+      inputTokens: 100,
+      outputTokens: 200,
+      cacheReadTokens: 300,
+      cacheWriteTokens: 40,
+      editTurns: 2,
+      oneShotTurns: 1,
+      models: { 'Opus 4.8': { calls: 2, inputTokens: 100, outputTokens: 200 } },
+      categories: { coding: { turns: 2, editTurns: 2, oneShotTurns: 1 } },
+    })
+  })
+
   it('drops an excluded project from the headline so it reconciles with the By Project panel', async () => {
     await seedCache(carriedDayWithProjects(daysAgoStr(10)))
     await seedLiveTodaySession()

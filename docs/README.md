@@ -8,14 +8,14 @@ One line per file in this directory, recursively.
 - [by-branch.md](by-branch.md) — The Spend view in CodeBurn Desktop has a By branch panel: pick a project and see where its AI spend went, per git branch, with the recorded worktrees and the individual sessions behind each branch.
 - [cli.md](cli.md) — Every CodeBurn command and keyboard shortcut, plus the report-focused flags for filtering, JSON output, and diagnosing detection.
 - [compare-cohorts.md](compare-cohorts.md) — The classic Compare view answers "how do these two models differ across my whole history?" by aggregating everything each model ever did.
-- [compare-periods.md](compare-periods.md) — Compare two date ranges side by side and see exactly what drove the change in usage and cost.
+- [compare-periods.md](compare-periods.md) — Compare two date ranges side by side, including exact Desktop project scope across both ranges and drill-down.
 - [configuration.md](configuration.md) — Currency, model aliases, local/custom-priced/proxy models, and environment variables.
 - [drill-through.md](drill-through.md) — CodeBurn Desktop can open any aggregate as a session list that explains exactly what composes it, without losing your place.
 - [guard.md](guard.md) — Opt-in Claude Code hooks that watch session cost while you work: soft cap, hard cap, checkpoint nudge, session openers.
 - [how-it-works.md](how-it-works.md) — Pricing, task categories, breakdowns, one-shot rate, per-tool data locations and parsing, and how to read the dashboard.
 - [mcp.md](mcp.md) — `codeburn mcp` runs a local MCP server over stdio so an AI agent can ask about your usage and savings mid-conversation.
 - [menubar.md](menubar.md) — The macOS menu bar app, Windows tray app (with WSL discovery), and Linux GNOME Shell extension.
-- [optimize.md](optimize.md) — `codeburn optimize` scans your Claude Code sessions and your `~/.claude/` setup, reports what is costing tokens without earning them, and grades the setup A to F.
+- [optimize.md](optimize.md) — `codeburn optimize` scans sessions and configuration, reports attributable waste honestly, and grades the setup A to F.
 - [plans-and-quota.md](plans-and-quota.md) — Subscription plan tracking and live provider quota via `codeburn quota`.
 - [web.md](web.md) — The local browser dashboard and combining usage across your paired devices.
 - [yield.md](yield.md) — `codeburn yield` correlates AI sessions with git commits to show what actually shipped.
@@ -28,6 +28,7 @@ One line per file in this directory, recursively.
 - [design/codeburn-mcp-plan.md](design/codeburn-mcp-plan.md) — Goal: add a `codeburn mcp` stdio MCP server exposing CodeBurn's usage/cost data to AI agents via two tools (`get_usage`, `get_savings`).
 - [design/codeburn-mcp.md](design/codeburn-mcp.md) — CodeBurn already aggregates rich AI-coding usage/cost data (by task, model, project, provider; retry tax; routing waste; optimize findings; 365-day history).
 - [design/desktop-data-lifecycle.md](design/desktop-data-lifecycle.md) — Status: implementation contract for the quality/performance epic.
+- [design/desktop-transient-project-filter.md](design/desktop-transient-project-filter.md) — Implemented contract for a session-only, exact-project Desktop report scope (#1585).
 - [design/perf-cache-fix.md](design/perf-cache-fix.md) — `codeburn status --format menubar-json` was measured taking 25-90+ seconds per call, with no speedup on a repeat call against an unchanged, freshly-warmed cache.
 
 ## docs/providers/

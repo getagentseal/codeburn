@@ -2,6 +2,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
 import { buildDurablePeriod, buildMenubarPayloadForRange, excludeProviderFromDay } from '../src/usage-aggregator.js'
 import { aggregateProjectsIntoDays } from '../src/day-aggregator.js'
+import { exactProjectBucketKey } from '../src/project-scope.js'
 import { getDateRange } from '../src/cli-date.js'
 import { loadPricing } from '../src/models.js'
 import { setIncludeGatewayInTotals } from '../src/config.js'
@@ -417,8 +418,21 @@ describe('vercel-gateway: daily aggregates are shown but not totalled', () => {
     expect(left.providers['vercel-gateway']!.cost).toBeCloseTo(GATEWAY_COST, 10)
     expect(left.providers['vercel-gateway']!.calls).toBe(3)
     // The gateway's own synthetic project leaves the day's project split.
-    expect(Object.keys(left.projects ?? {})).toEqual(['local-repo'])
+    expect(Object.keys(left.projects ?? {})).toEqual([exactProjectBucketKey('label:local-repo')])
     // A day with no slice for the provider is returned untouched.
     expect(excludeProviderFromDay(day!, 'nope')).toBe(day)
+  })
+
+  it('subtracts rich project fields when gateway and local usage share an identity', () => {
+    const gateway = makeProject('vercel-gateway', 'shared-repo', GATEWAY_COST, 'vercel-gateway:shared', 3)
+    const local = makeProject('claude', 'shared-repo', LOCAL_COST, 'claude:shared')
+    const [combined] = aggregateProjectsIntoDays([gateway, local])
+    const [localOnly] = aggregateProjectsIntoDays([local])
+    const key = exactProjectBucketKey('label:shared-repo')
+
+    const projected = excludeProviderFromDay(combined!, 'vercel-gateway')
+
+    expect(projected.projects?.[key]).toEqual(localOnly!.projects?.[key])
+    expect(projected.providers.claude?.projects?.[key]).toEqual(localOnly!.providers.claude?.projects?.[key])
   })
 })

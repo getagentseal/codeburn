@@ -7,8 +7,24 @@ import path from 'node:path'
 import { CliError, DESKTOP_COLD_TIMEOUT_MS, PROGRESS_LINE_PREFIX, reapOrphanServe, resolveCodeburnPath, serveUsage, shutdownAll, spawnCli, spawnCliAction, startServe, type ActionResult, type SpawnPriority } from './cli'
 import { MenubarCompanion, readDockEnabled, STARTUP_APPS_SETTINGS_URL, type CompanionStatus } from './menubar'
 import { MacMenubar, NO_MAC_MENUBAR, type InstallPhase } from './mac-menubar'
-import { readOptimizeSnapshot, sameLocalDay, writeOptimizeSnapshot, type OptimizeBlock, type OptimizeSnapshot } from './optimize-store'
+import { optimizeSnapshotScope, readOptimizeSnapshot, sameLocalDay, writeOptimizeSnapshot, type OptimizeBlock, type OptimizeSnapshot } from './optimize-store'
 import { getQuota, sanitizeError } from './quota'
+import {
+  decodeProjectScopeCatalog,
+  desktopProjectArg,
+  validateCatalogSelection,
+  validateDesktopPeriodQuery,
+  validateDesktopReportQuery,
+  type DateRange,
+  type DesktopCohortQuery,
+  type DesktopCompareQuery,
+  type DesktopModelsQuery,
+  type DesktopOptimizeSnapshotQuery,
+  type DesktopOverviewQuery,
+  type DesktopPeriodQuery,
+  type DesktopPeriodSessionsQuery,
+  type DesktopReportQuery,
+} from './projectScope'
 import { Telemetry } from './telemetry'
 import { createUpdateChecker, type UpdateChecker, type UpdateStatus } from './updates'
 
@@ -324,9 +340,7 @@ function projectArgs(): string[] {
   return args
 }
 
-type DateRange = { from: string; to: string }
-
-function rangeArgs(range: DateRange | undefined): string[] {
+function rangeArgs(range: DateRange | null | undefined): string[] {
   return range ? ['--from', range.from, '--to', range.to] : []
 }
 
@@ -346,7 +360,8 @@ function vProvider(provider: string): string {
   if (!/^[a-z0-9-]+$/.test(provider)) throw new CliError('bad-args', 'invalid provider')
   return provider
 }
-function vRange(range: DateRange | undefined): DateRange | undefined {
+function vRange(range: DateRange | null | undefined): DateRange | undefined {
+  if (range === null) return undefined
   if (range && (!/^\d{4}-\d{2}-\d{2}$/.test(range.from) || !/^\d{4}-\d{2}-\d{2}$/.test(range.to))) {
     throw new CliError('bad-args', 'invalid date range')
   }
@@ -586,6 +601,31 @@ export function createBridgeHandlers(deps: Deps = { spawnCli, spawnCliAction, re
     }
   }
 
+  const runQuery = <Q extends DesktopReportQuery | DesktopPeriodQuery>(
+    build: (query: Q) => string[],
+    periodQuery = false,
+  ): Handler => async (value: Q) => {
+    let cmd: string | undefined
+    try {
+      const query = (periodQuery
+        ? validateDesktopPeriodQuery(value as DesktopPeriodQuery)
+        : validateDesktopReportQuery(value as DesktopReportQuery)) as Q
+      const argv = build(query)
+      cmd = argv[0]
+      const baseOpts = readOpts()
+      return {
+        ok: true,
+        value: await deps.spawnCli(argv, query.background
+          ? { ...(baseOpts ?? {}), priority: 'background' }
+          : baseOpts),
+      }
+    } catch (err) {
+      const error = coldError(err)
+      telemetry?.track('cli_error', cliErrorProps(err, cmd))
+      return { ok: false, error }
+    }
+  }
+
   // The desktop never renders the granular timeline, so it always passes
   // --no-timeline (skips buildGranularHistory on every poll). The Swift menubar
   // omits the flag and keeps the timeline unchanged.
@@ -604,16 +644,17 @@ export function createBridgeHandlers(deps: Deps = { spawnCli, spawnCliAction, re
   // fresh ~0.2s scan on every poll. The three figures the UI takes from it come
   // from the once-a-day cache below (`codeburn:getOptimizeSnapshot`), which
   // runs this same argv WITHOUT the flag, so no displayed number changes value.
-  const buildOverviewArgs = (period: string, provider: string, range?: DateRange, configSource?: string | null, scope?: string, optimize = false): string[] => {
-    const vScopeValue = vScope(scope)
+  const buildOverviewArgs = (query: DesktopOverviewQuery | DesktopOptimizeSnapshotQuery, optimize = false): string[] => {
+    const vScopeValue = vScope(query.deviceScope)
     const filterArgs = projectArgs()
     const combined = vScopeValue === 'combined' && filterArgs.length === 0
     return [
-      'status', '--format', 'menubar-json', '--period', vPeriod(period), '--no-timeline',
+      'status', '--format', 'menubar-json', '--period', vPeriod(query.period), '--no-timeline',
       ...(optimize ? [] : ['--no-optimize']),
-      ...(combined ? ['--scope', 'combined'] : providerArgs(vProvider(provider))),
+      ...(combined ? ['--scope', 'combined'] : providerArgs(vProvider(query.provider))),
       ...filterArgs,
-      ...rangeArgs(vRange(range)), ...configSourceArgs(vConfigSource(configSource)),
+      ...desktopProjectArg(query.projectId),
+      ...rangeArgs(vRange(query.range)), ...configSourceArgs(vConfigSource(query.configSource)),
     ]
   }
 
@@ -629,26 +670,33 @@ export function createBridgeHandlers(deps: Deps = { spawnCli, spawnCliAction, re
   // the LOCAL day, not a fixed date. Without it a scan taken at 23:50 would be
   // served at 00:10 as today's, and every rolling window would be a day stale.
   const OPTIMIZE_MAX_AGE_MS = 24 * 60 * 60 * 1000
-  const getOptimizeSnapshot: Handler = async (period: string, provider: string, range?: DateRange, configSource?: string | null, scope?: string, maxAgeMs?: number) => {
-    const argv = buildOverviewArgs(period, provider, range, configSource, scope, true)
-    const key = argv.join(' ')
-    const appVersion = deps.appVersion ?? '0'
-    const maxAge = typeof maxAgeMs === 'number' && maxAgeMs >= 0 ? maxAgeMs : OPTIMIZE_MAX_AGE_MS
-    if (deps.stateDir) {
-      const cached = readOptimizeSnapshot(deps.stateDir, key, appVersion)
-      // An unparseable computedAt yields NaN, which fails both tests and
-      // recomputes — the safe direction.
-      const computedAt = cached ? Date.parse(cached.computedAt) : NaN
-      const now = Date.now()
-      if (cached && now - computedAt < maxAge && sameLocalDay(computedAt, now)) return { ok: true, value: cached }
-    }
+  const getOptimizeSnapshot: Handler = async (value: DesktopOptimizeSnapshotQuery) => {
+    let cmd: string | undefined
     try {
-      // Background priority, which only applies to the one-shot fallback path:
-      // a serve-routed command (this one is `status`) is dispatched before
-      // priority is read, and the resident child answers strictly FIFO. So this
-      // does NOT let a click overtake it — it only keeps it out of the way when
-      // serve is unavailable.
-      const payload = await deps.spawnCli(argv, { ...(readOpts() ?? {}), priority: 'background' })
+      const query = validateDesktopReportQuery(value) as DesktopOptimizeSnapshotQuery
+      if (query.maxAgeMs !== undefined && (typeof query.maxAgeMs !== 'number' || !Number.isFinite(query.maxAgeMs) || query.maxAgeMs < 0)) {
+        throw new CliError('bad-args', 'invalid optimize snapshot age')
+      }
+      const argv = buildOverviewArgs(query, true)
+      cmd = argv[0]
+      const key = optimizeSnapshotScope(argv)
+      const appVersion = deps.appVersion ?? '0'
+      const maxAge = query.maxAgeMs ?? OPTIMIZE_MAX_AGE_MS
+      if (deps.stateDir) {
+        const cached = readOptimizeSnapshot(deps.stateDir, key, appVersion)
+        // An unparseable computedAt yields NaN, which fails both tests and
+        // recomputes — the safe direction.
+        const computedAt = cached ? Date.parse(cached.computedAt) : NaN
+        const now = Date.now()
+        if (cached && now - computedAt < maxAge && sameLocalDay(computedAt, now)) return { ok: true, value: cached }
+      }
+      // Background is explicit in the named query. The renderer's optimize
+      // hook sets it because the snapshot is off the critical path.
+      const baseOpts = readOpts()
+      const payload = await deps.spawnCli(argv, {
+        ...(baseOpts ?? {}),
+        ...(query.background ? { priority: 'background' as const } : {}),
+      })
       const optimize = (payload as { optimize?: OptimizeBlock } | null)?.optimize
       if (!optimize || !Array.isArray(optimize.topFindings)) {
         return { ok: false, error: { kind: 'nonzero', message: 'No optimize findings in the payload.' } }
@@ -658,7 +706,7 @@ export function createBridgeHandlers(deps: Deps = { spawnCli, spawnCliAction, re
       return { ok: true, value: snapshot }
     } catch (err) {
       const error = coldError(err)
-      telemetry?.track('cli_error', cliErrorProps(err, 'status'))
+      telemetry?.track('cli_error', cliErrorProps(err, cmd ?? 'status'))
       return { ok: false, error }
     }
   }
@@ -666,13 +714,16 @@ export function createBridgeHandlers(deps: Deps = { spawnCli, spawnCliAction, re
   // `background` (renderer prefetch only) drops this fetch to background priority
   // so it yields the CLI's run slots to any interactive poll or click. Optional
   // and defaulting to interactive, so an older preload that omits it is unchanged.
-  const getOverview: Handler = async (period: string, provider: string, range?: DateRange, configSource?: string | null, background?: boolean, scope?: string) => {
+  const getOverview: Handler = async (value: DesktopOverviewQuery) => {
     coldStartBegan ??= Date.now()
-    const priority: SpawnPriority | undefined = background ? 'background' : undefined
+    let cmd: string | undefined
     try {
-      const args = buildOverviewArgs(period, provider, range, configSource, scope)
+      const query = validateDesktopReportQuery(value) as DesktopOverviewQuery
+      const args = buildOverviewArgs(query)
+      cmd = args[0]
+      const priority: SpawnPriority | undefined = query.background ? 'background' : undefined
       if (overviewWarmed) return { ok: true, value: await deps.spawnCli(args, priority ? { priority } : undefined) }
-      const value = await deps.spawnCli(args, {
+      const payload = await deps.spawnCli(args, {
         timeoutMs: WARMUP_TIMEOUT_MS,
         extraEnv: { CODEBURN_PROGRESS: '1' },
         onStderr: makeProgressReader(emitProgress),
@@ -681,11 +732,11 @@ export function createBridgeHandlers(deps: Deps = { spawnCli, spawnCliAction, re
       overviewWarmed = true
       emitProgress({ kind: 'done' })
       emitColdStart(false)
-      return { ok: true, value }
+      return { ok: true, value: payload }
     } catch (err) {
       const error = coldError(err)
       if (!overviewWarmed) emitColdStart(error.kind === 'timeout')
-      telemetry?.track('cli_error', cliErrorProps(err, 'status'))
+      telemetry?.track('cli_error', cliErrorProps(err, cmd ?? 'status'))
       return { ok: false, error }
     }
   }
@@ -705,130 +756,171 @@ export function createBridgeHandlers(deps: Deps = { spawnCli, spawnCliAction, re
     },
     'codeburn:getOverview': getOverview,
     'codeburn:getOptimizeSnapshot': getOptimizeSnapshot,
+    'codeburn:getProjectScopeCatalog': async () => {
+      try {
+        const value = await deps.spawnCli([
+          'report', '--format', 'json', '--period', 'lifetime', '--desktop-project-catalog',
+          ...projectArgs(),
+        ], readOpts())
+        return { ok: true, value: decodeProjectScopeCatalog(value) }
+      } catch (err) {
+        const error = coldError(err)
+        telemetry?.track('cli_error', cliErrorProps(err, 'report'))
+        return { ok: false, error }
+      }
+    },
+    'codeburn:validateProjectScope': async (projectId: string, revision: string) => {
+      try {
+        const value = await deps.spawnCli([
+          'report', '--format', 'json', '--period', 'lifetime', '--desktop-project-catalog',
+          ...projectArgs(),
+        ], readOpts())
+        const catalog = decodeProjectScopeCatalog(value)
+        return { ok: true, value: validateCatalogSelection(catalog, projectId, revision) }
+      } catch (err) {
+        const error = coldError(err)
+        telemetry?.track('cli_error', cliErrorProps(err, 'report'))
+        return { ok: false, error }
+      }
+    },
     'codeburn:powerStatus': async () => {
       try { return { ok: true, value: deps.isOnBatteryPower ? deps.isOnBatteryPower() : false } }
       catch { return { ok: true, value: false } }
     },
     // Timeline variant for the Spend punchcard only: identical payload WITH
     // history.timeline (every other fetch keeps --no-timeline lean).
-    'codeburn:getTimeline': run((period: string, provider: string, range?: DateRange) => [
-      'status', '--format', 'menubar-json', '--period', vPeriod(period),
-      ...providerArgs(vProvider(provider)),
-      ...projectArgs(),
-      ...rangeArgs(vRange(range)),
-    ]),
+    'codeburn:getTimeline': runQuery((query: DesktopReportQuery) => {
+      const vScopeValue = vScope(query.deviceScope)
+      const filterArgs = projectArgs()
+      const combined = vScopeValue === 'combined' && filterArgs.length === 0
+      return [
+        'status', '--format', 'menubar-json', '--period', vPeriod(query.period),
+        ...(combined ? ['--scope', 'combined'] : providerArgs(vProvider(query.provider))),
+        ...filterArgs,
+        ...desktopProjectArg(query.projectId),
+        ...rangeArgs(vRange(query.range)),
+      ]
+    }),
     // Unfiltered like combined scope: a plan is billed on every project.
     'codeburn:getPlans': run((period: string) => ['status', '--format', 'json', '--period', vPeriod(period)], 1),
     'codeburn:getActReport': run(() => ['act', 'report', '--json']),
-    'codeburn:getModels': run((period: string, provider: string, byTask: boolean, range?: DateRange) => [
+    'codeburn:getModels': runQuery((query: DesktopModelsQuery) => [
       // The CLI defaults minCost to $0.01, which silently dropped every row
       // below a cent — including ALL unpriced rows, so the dimming and
       // add-alias affordances could never fire. Ask for the whole table;
       // the renderer already distinguishes unpriced rows (#1465).
-      'models', '--format', 'json', '--period', vPeriod(period), '--min-cost', '0',
-      ...providerArgs(vProvider(provider)),
+      ...(typeof query.byTask !== 'boolean' ? (() => { throw new CliError('bad-args', 'invalid by-task flag') })() : []),
+      'models', '--format', 'json', '--period', vPeriod(query.period), '--min-cost', '0',
+      ...providerArgs(vProvider(query.provider)),
       ...projectArgs(),
-      ...(byTask ? ['--by-task'] : []),
-      ...rangeArgs(vRange(range)),
-    ], 4),
-    'codeburn:getSessions': run((period: string, provider: string, range?: DateRange) => [
-      'sessions', '--format', 'json', '--period', vPeriod(period),
-      ...providerArgs(vProvider(provider)),
-      ...projectArgs(),
-      ...rangeArgs(vRange(range)),
-    ], 3),
+      ...desktopProjectArg(query.projectId),
+      ...(query.byTask ? ['--by-task'] : []),
+      ...rangeArgs(vRange(query.range)),
+    ]),
+    'codeburn:getSessions': runQuery((query: DesktopReportQuery) => [
+      'sessions', '--format', 'json', '--period', vPeriod(query.period),
+      ...providerArgs(vProvider(query.provider)),
+      ...projectArgs(), ...desktopProjectArg(query.projectId),
+      ...rangeArgs(vRange(query.range)),
+    ]),
     // Drill-through report: plain session rows plus per-turn contribution
     // segments (day/category/branch/model/PR). Same filtering semantics as
     // getSessions — one filtering mechanism, additive payload fields only.
-    'codeburn:getSessionsContributions': run((period: string, provider: string, range?: DateRange) => [
-      'sessions', '--format', 'json', '--contributions', '--period', vPeriod(period),
-      ...providerArgs(vProvider(provider)),
-      ...projectArgs(),
-      ...rangeArgs(vRange(range)),
-    ], 3),
-    'codeburn:getCompareModels': run((period: string, provider: string) => [
-      'compare', '--format', 'json', '--period', vPeriod(period),
-      ...providerArgs(vProvider(provider)),
-      ...projectArgs(),
-    ], 2),
-    'codeburn:getCompare': run((period: string, provider: string, modelA: string, modelB: string) => [
-      'compare', '--format', 'json', '--period', vPeriod(period),
-      ...providerArgs(vProvider(provider)),
-      ...projectArgs(),
-      '--model-a', vToken(modelA), '--model-b', vToken(modelB),
+    'codeburn:getSessionsContributions': runQuery((query: DesktopReportQuery) => [
+      'sessions', '--format', 'json', '--contributions', '--period', vPeriod(query.period),
+      ...providerArgs(vProvider(query.provider)),
+      ...projectArgs(), ...desktopProjectArg(query.projectId),
+      ...rangeArgs(vRange(query.range)),
+    ]),
+    'codeburn:getCompareModels': runQuery((query: DesktopReportQuery) => [
+      'compare', '--format', 'json', '--period', vPeriod(query.period),
+      ...providerArgs(vProvider(query.provider)),
+      ...projectArgs(), ...desktopProjectArg(query.projectId),
+    ]),
+    'codeburn:getCompare': runQuery((query: DesktopCompareQuery) => [
+      ...(query.modelA === undefined || query.modelB === undefined ? (() => { throw new CliError('bad-args', 'model A and model B are required') })() : []),
+      'compare', '--format', 'json', '--period', vPeriod(query.period),
+      ...providerArgs(vProvider(query.provider)),
+      ...projectArgs(), ...desktopProjectArg(query.projectId),
+      '--model-a', vToken(query.modelA), '--model-b', vToken(query.modelB),
     ]),
     // Compare periods (B minus A). Both ranges are REQUIRED local YYYY-MM-DD
     // key pairs; the renderer computes the 7v7 default so argv stays explicit.
-    'codeburn:getPeriodCompare': run((rangeA: DateRange, rangeB: DateRange, provider: string, background?: boolean) => [
+    'codeburn:getPeriodCompare': runQuery((query: DesktopPeriodQuery) => [
       'compare-periods', '--format', 'json',
-      '--from-a', vRequiredRange(rangeA, 'A').from, '--to-a', vRequiredRange(rangeA, 'A').to,
-      '--from-b', vRequiredRange(rangeB, 'B').from, '--to-b', vRequiredRange(rangeB, 'B').to,
-      ...providerArgs(vProvider(provider)),
-      ...projectArgs(),
-    ], 3),
-    'codeburn:getPeriodCompareSessions': run((rangeA: DateRange, rangeB: DateRange, provider: string, dimension: string, key: string) => {
-      if (dimension !== 'project' && dimension !== 'model') throw new CliError('bad-args', 'invalid drill-down dimension')
+      '--from-a', vRequiredRange(query.rangeA, 'A').from, '--to-a', vRequiredRange(query.rangeA, 'A').to,
+      '--from-b', vRequiredRange(query.rangeB, 'B').from, '--to-b', vRequiredRange(query.rangeB, 'B').to,
+      ...providerArgs(vProvider(query.provider)),
+      ...projectArgs(), ...desktopProjectArg(query.projectId),
+    ], true),
+    'codeburn:getPeriodCompareSessions': runQuery((query: DesktopPeriodSessionsQuery) => {
+      if (query.dimension !== 'project' && query.dimension !== 'model') throw new CliError('bad-args', 'invalid drill-down dimension')
       return [
         'compare-periods', '--format', 'sessions',
-        '--from-a', vRequiredRange(rangeA, 'A').from, '--to-a', vRequiredRange(rangeA, 'A').to,
-        '--from-b', vRequiredRange(rangeB, 'B').from, '--to-b', vRequiredRange(rangeB, 'B').to,
-        ...providerArgs(vProvider(provider)),
-        ...projectArgs(),
-        '--dimension', dimension, '--key', vContributionKey(key),
+        '--from-a', vRequiredRange(query.rangeA, 'A').from, '--to-a', vRequiredRange(query.rangeA, 'A').to,
+        '--from-b', vRequiredRange(query.rangeB, 'B').from, '--to-b', vRequiredRange(query.rangeB, 'B').to,
+        ...providerArgs(vProvider(query.provider)),
+        ...projectArgs(), ...desktopProjectArg(query.projectId),
+        '--dimension', query.dimension, '--key', vContributionKey(query.key),
       ]
-    }),
+    }, true),
     // Cohort mode: the facet query (models/projects/categories) and the report
     // for two models over an explicit selection. Same `compare` command, new
     // cohort-json format; project identities are exact, category is one id.
-    'codeburn:getCompareCohortModels': run((period: string, provider: string, range?: DateRange) => [
-      'compare', '--format', 'cohort-json', '--period', vPeriod(period), ...providerArgs(vProvider(provider)),
-      ...projectArgs(), ...rangeArgs(vRange(range)),
-    ], 3),
+    'codeburn:getCompareCohortModels': runQuery((query: DesktopReportQuery) => [
+      'compare', '--format', 'cohort-json', '--period', vPeriod(query.period), ...providerArgs(vProvider(query.provider)),
+      ...projectArgs(), ...desktopProjectArg(query.projectId), ...rangeArgs(vRange(query.range)),
+    ]),
     // The saved project filter still scopes the population; --project-id then
     // narrows it further to one identity the facet report offered.
-    'codeburn:getCompareCohort': run((period: string, provider: string, modelA: string, modelB: string, range?: DateRange, projects?: string[], category?: string) => [
-      'compare', '--format', 'cohort-json', '--period', vPeriod(period), ...providerArgs(vProvider(provider)),
-      ...projectArgs(),
-      '--model-a', vToken(modelA), '--model-b', vToken(modelB), ...rangeArgs(vRange(range)),
-      ...(vProjectIds(projects)), ...(category ? ['--category', vCategory(category)] : []),
-    ], 7),
-    'codeburn:getYield': run((period: string, provider: string, range?: DateRange) => [
-      'yield', '--format', 'json', '--period', vPeriod(period),
-      ...providerArgs(vProvider(provider)),
-      ...projectArgs(),
-      ...rangeArgs(vRange(range)),
-    ], 3),
-    'codeburn:getSpendFlow': run((period: string, provider: string, range?: DateRange) => [
-      'spend', '--format', 'flow-json', '--period', vPeriod(period),
-      ...providerArgs(vProvider(provider)),
-      ...projectArgs(),
-      ...rangeArgs(vRange(range)),
-    ], 3),
+    'codeburn:getCompareCohort': runQuery((query: DesktopCohortQuery) => {
+      const hasModel = query.modelA !== undefined || query.modelB !== undefined
+      if (hasModel && (query.modelA === undefined || query.modelB === undefined)) throw new CliError('bad-args', 'model A and model B must be provided together')
+      return [
+        'compare', '--format', 'cohort-json', '--period', vPeriod(query.period), ...providerArgs(vProvider(query.provider)),
+        ...projectArgs(), ...desktopProjectArg(query.projectId),
+        ...(hasModel ? ['--model-a', vToken(query.modelA!), '--model-b', vToken(query.modelB!)] : []),
+        ...rangeArgs(vRange(query.range)),
+        ...(vProjectIds(query.projects)), ...(query.category ? ['--category', vCategory(query.category)] : []),
+      ]
+    }),
+    'codeburn:getYield': runQuery((query: DesktopReportQuery) => [
+      'yield', '--format', 'json', '--period', vPeriod(query.period),
+      ...providerArgs(vProvider(query.provider)),
+      ...projectArgs(), ...desktopProjectArg(query.projectId),
+      ...rangeArgs(vRange(query.range)),
+    ]),
+    'codeburn:getSpendFlow': runQuery((query: DesktopReportQuery) => [
+      'spend', '--format', 'flow-json', '--period', vPeriod(query.period),
+      ...providerArgs(vProvider(query.provider)),
+      ...projectArgs(), ...desktopProjectArg(query.projectId),
+      ...rangeArgs(vRange(query.range)),
+    ]),
     // Spend "By branch" lens: spend per canonical project × branch (plus
     // coverage for sources without branch metadata).
-    'codeburn:getBranchSpend': run((period: string, provider: string, range?: DateRange) => [
-      'spend', '--format', 'branch-json', '--period', vPeriod(period),
-      ...providerArgs(vProvider(provider)),
-      ...projectArgs(),
-      ...rangeArgs(vRange(range)),
-    ], 3),
-    'codeburn:getOptimizeReport': run((period: string, provider: string, range?: DateRange) => [
-      'optimize', '--format', 'json', '--period', vPeriod(period),
-      ...providerArgs(vProvider(provider)),
-      ...projectArgs(),
-      ...rangeArgs(vRange(range)),
-    ], 3),
+    'codeburn:getBranchSpend': runQuery((query: DesktopReportQuery) => [
+      'spend', '--format', 'branch-json', '--period', vPeriod(query.period),
+      ...providerArgs(vProvider(query.provider)),
+      ...projectArgs(), ...desktopProjectArg(query.projectId),
+      ...rangeArgs(vRange(query.range)),
+    ]),
+    'codeburn:getOptimizeReport': runQuery((query: DesktopReportQuery) => [
+      'optimize', '--format', 'json', '--period', vPeriod(query.period),
+      ...providerArgs(vProvider(query.provider)),
+      ...projectArgs(), ...desktopProjectArg(query.projectId),
+      ...rangeArgs(vRange(query.range)),
+    ]),
     'codeburn:getDevices': run((period: string) => ['devices', '--format', 'json', '--period', vPeriod(period)]),
     'codeburn:getDevicesScan': run(() => ['devices', 'scan', '--format', 'json']),
     'codeburn:getShareStatus': run(() => ['share', 'status', '--format', 'json']),
     'codeburn:getIdentity': run(() => ['identity', '--format', 'json']),
     'codeburn:getAliases': run(() => ['model-alias', '--list', '--format', 'json']),
     'codeburn:getProxyPaths': run(() => ['proxy-path', '--list', '--format', 'json']),
-    'codeburn:getAudit': run((period: string, provider: string, range?: DateRange) => [
-      'audit', '--format', 'json', '--period', vPeriod(period),
-      ...providerArgs(vProvider(provider)),
-      ...projectArgs(),
-      ...rangeArgs(vRange(range)),
+    'codeburn:getAudit': runQuery((query: DesktopReportQuery) => [
+      'audit', '--format', 'json', '--period', vPeriod(query.period),
+      ...providerArgs(vProvider(query.provider)),
+      ...projectArgs(), ...desktopProjectArg(query.projectId),
+      ...rangeArgs(vRange(query.range)),
     ]),
     'codeburn:getPriceOverrides': run(() => ['price-override', '--list', '--format', 'json']),
     'codeburn:getProjectFilter': async () => {

@@ -4,8 +4,19 @@ import { contextBridge, ipcRenderer } from 'electron'
 // `kind` survives the contextBridge boundary. `import type` is erased at build,
 // so this shares main.ts's declaration without pulling its runtime in.
 import type { Envelope } from './main'
+import type {
+  DesktopCohortQuery,
+  DesktopCompareQuery,
+  DesktopModelsQuery,
+  DesktopOptimizeSnapshotQuery,
+  DesktopOverviewQuery,
+  DesktopPeriodQuery,
+  DesktopPeriodSessionsQuery,
+  DesktopReportQuery,
+  ProjectScopeCatalog,
+  ProjectScopeOption,
+} from './projectScope'
 
-type DateRange = { from: string; to: string }
 type PriceRates = { input?: number; output?: number; cacheRead?: number; cacheCreation?: number }
 
 async function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
@@ -26,28 +37,28 @@ const bridge = {
   getLanguage: () => invoke('codeburn:getLanguage'),
   setLanguage: (language: string | null) => invoke('codeburn:setLanguage', language),
   getQuota: (force?: boolean, disabled?: string[]) => invoke('codeburn:getQuota', force, disabled),
-  getOverview: (period: string, provider: string, range?: DateRange, configSource?: string | null, background?: boolean, scope?: string) => invoke('codeburn:getOverview', period, provider, range, configSource, background, scope),
-  getTimeline: (period: string, provider: string, range?: DateRange) => invoke('codeburn:getTimeline', period, provider, range),
+  getOverview: (query: DesktopOverviewQuery) => invoke('codeburn:getOverview', query),
+  getTimeline: (query: DesktopReportQuery) => invoke('codeburn:getTimeline', query),
   getPlans: (period: string, background?: boolean) => invoke('codeburn:getPlans', period, background),
   getActReport: () => invoke('codeburn:getActReport'),
-  getModels: (period: string, provider: string, byTask: boolean, range?: DateRange, background?: boolean) => invoke('codeburn:getModels', period, provider, byTask, range, background),
-  getSessions: (period: string, provider: string, range?: DateRange, background?: boolean) => invoke('codeburn:getSessions', period, provider, range, background),
-  getSessionsContributions: (period: string, provider: string, range?: DateRange, background?: boolean) => invoke('codeburn:getSessionsContributions', period, provider, range, background),
-  getCompareModels: (period: string, provider: string, background?: boolean) => invoke('codeburn:getCompareModels', period, provider, background),
-  getCompare: (period: string, provider: string, modelA: string, modelB: string) => invoke('codeburn:getCompare', period, provider, modelA, modelB),
-  getPeriodCompare: (rangeA: DateRange, rangeB: DateRange, provider: string, background?: boolean) => invoke('codeburn:getPeriodCompare', rangeA, rangeB, provider, background),
-  getPeriodCompareSessions: (rangeA: DateRange, rangeB: DateRange, provider: string, dimension: string, key: string) => invoke('codeburn:getPeriodCompareSessions', rangeA, rangeB, provider, dimension, key),
-  getCompareCohortModels: (period: string, provider: string, range?: DateRange, background?: boolean) => invoke('codeburn:getCompareCohortModels', period, provider, range, background),
-  getCompareCohort: (period: string, provider: string, modelA: string, modelB: string, range?: DateRange, projects?: string[], category?: string, background?: boolean) =>
-    invoke('codeburn:getCompareCohort', period, provider, modelA, modelB, range, projects, category, background),
-  getYield: (period: string, provider: string, range?: DateRange, background?: boolean) => invoke('codeburn:getYield', period, provider, range, background),
-  getSpendFlow: (period: string, provider: string, range?: DateRange, background?: boolean) => invoke('codeburn:getSpendFlow', period, provider, range, background),
-  getBranchSpend: (period: string, provider: string, range?: DateRange, background?: boolean) => invoke('codeburn:getBranchSpend', period, provider, range, background),
-  getOptimizeReport: (period: string, provider: string, range?: DateRange, background?: boolean) => invoke('codeburn:getOptimizeReport', period, provider, range, background),
+  getModels: (query: DesktopModelsQuery) => invoke('codeburn:getModels', query),
+  getSessions: (query: DesktopReportQuery) => invoke('codeburn:getSessions', query),
+  getSessionsContributions: (query: DesktopReportQuery) => invoke('codeburn:getSessionsContributions', query),
+  getCompareModels: (query: DesktopReportQuery) => invoke('codeburn:getCompareModels', query),
+  getCompare: (query: DesktopCompareQuery) => invoke('codeburn:getCompare', query),
+  getPeriodCompare: (query: DesktopPeriodQuery) => invoke('codeburn:getPeriodCompare', query),
+  getPeriodCompareSessions: (query: DesktopPeriodSessionsQuery) => invoke('codeburn:getPeriodCompareSessions', query),
+  getCompareCohortModels: (query: DesktopReportQuery) => invoke('codeburn:getCompareCohortModels', query),
+  getCompareCohort: (query: DesktopCohortQuery) => invoke('codeburn:getCompareCohort', query),
+  getYield: (query: DesktopReportQuery) => invoke('codeburn:getYield', query),
+  getSpendFlow: (query: DesktopReportQuery) => invoke('codeburn:getSpendFlow', query),
+  getBranchSpend: (query: DesktopReportQuery) => invoke('codeburn:getBranchSpend', query),
+  getOptimizeReport: (query: DesktopReportQuery) => invoke('codeburn:getOptimizeReport', query),
   // The once-a-day optimize scan, cached on disk per query scope. `maxAgeMs` 0
   // forces a recompute (Optimize page, manual refresh).
-  getOptimizeSnapshot: (period: string, provider: string, range?: DateRange, configSource?: string | null, scope?: string, maxAgeMs?: number) =>
-    invoke('codeburn:getOptimizeSnapshot', period, provider, range, configSource, scope, maxAgeMs),
+  getOptimizeSnapshot: (query: DesktopOptimizeSnapshotQuery) => invoke('codeburn:getOptimizeSnapshot', query),
+  getProjectScopeCatalog: () => invoke<ProjectScopeCatalog>('codeburn:getProjectScopeCatalog'),
+  validateProjectScope: (projectId: string, revision: string) => invoke<ProjectScopeOption>('codeburn:validateProjectScope', projectId, revision),
   // Power source for the battery-aware live cadence: one read plus a push.
   powerStatus: () => invoke('codeburn:powerStatus'),
   onPowerStatus: (cb: (onBattery: boolean) => void) => {
@@ -61,7 +72,7 @@ const bridge = {
   getIdentity: () => invoke('codeburn:getIdentity'),
   getAliases: () => invoke('codeburn:getAliases'),
   getProxyPaths: () => invoke('codeburn:getProxyPaths'),
-  getAudit: (period: string, provider: string, range?: DateRange) => invoke('codeburn:getAudit', period, provider, range),
+  getAudit: (query: DesktopReportQuery) => invoke('codeburn:getAudit', query),
   getPriceOverrides: () => invoke('codeburn:getPriceOverrides'),
   getProjectFilter: () => invoke('codeburn:getProjectFilter'),
   setProjectFilter: (filter: { project: string[]; exclude: string[] }) => invoke('codeburn:setProjectFilter', filter),

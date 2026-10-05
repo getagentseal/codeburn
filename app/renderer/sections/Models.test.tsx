@@ -2,12 +2,13 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import type { AuditRow, ModelReportRow } from '../lib/types'
+import type { AuditRow, DesktopModelsQuery, DesktopReportQuery, ModelReportRow } from '../lib/types'
+import { PROJECT_ALPHA } from '../test/projectScopeFixtures'
 import { Models } from './Models'
 
 const { getModels, getAudit } = vi.hoisted(() => ({
-  getModels: vi.fn<(period: string, provider: string, byTask: boolean) => Promise<ModelReportRow[]>>(),
-  getAudit: vi.fn<(period: string, provider: string) => Promise<AuditRow[]>>(),
+  getModels: vi.fn<(query: DesktopModelsQuery) => Promise<ModelReportRow[]>>(),
+  getAudit: vi.fn<(query: DesktopReportQuery) => Promise<AuditRow[]>>(),
 }))
 vi.mock('../lib/ipc', async orig => {
   const actual = await orig<typeof import('../lib/ipc')>()
@@ -151,6 +152,25 @@ describe('Models', () => {
     getAudit.mockReset()
   })
 
+  it('passes the exact project and device scope to model and audit reports', async () => {
+    getModels.mockResolvedValue(rows)
+    getAudit.mockResolvedValue(auditRows)
+    const scopedProps = {
+      period: 'week',
+      provider: 'all',
+      projectId: PROJECT_ALPHA.id,
+      deviceScope: 'local',
+    } as any
+
+    render(<Models {...scopedProps} />)
+    await screen.findByText('Claude Opus 4.8')
+    expect(getModels).toHaveBeenCalledWith(expect.objectContaining({ projectId: PROJECT_ALPHA.id, deviceScope: 'local' }))
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Audit' }))
+    await screen.findByText('my-proxy-model')
+    expect(getAudit).toHaveBeenCalledWith(expect.objectContaining({ projectId: PROJECT_ALPHA.id, deviceScope: 'local' }))
+  })
+
   it('renders priced model rows with series dots, costs, and savings', async () => {
     getModels.mockResolvedValue(rows)
 
@@ -247,11 +267,11 @@ describe('Models', () => {
     render(<Models period="week" provider="anthropic" />)
 
     expect(await screen.findByText('Claude Opus 4.8')).toBeInTheDocument()
-    expect(getModels).toHaveBeenCalledWith('week', 'anthropic', false)
+    expect(getModels).toHaveBeenCalledWith({ period: 'week', provider: 'anthropic', byTask: false, range: null, deviceScope: 'local', projectId: null })
 
     fireEvent.click(screen.getByRole('tab', { name: 'By task' }))
 
-    await waitFor(() => expect(getModels).toHaveBeenCalledWith('week', 'anthropic', true))
+    await waitFor(() => expect(getModels).toHaveBeenCalledWith({ period: 'week', provider: 'anthropic', byTask: true, range: null, deviceScope: 'local', projectId: null }))
     expect(await screen.findByText('coding')).toBeInTheDocument()
     expect(screen.getByText('delegation')).toBeInTheDocument()
     expect(screen.getByText('3,520')).toBeInTheDocument()
@@ -273,7 +293,7 @@ describe('Models', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Audit' }))
 
     expect(await screen.findByText('my-proxy-model')).toBeInTheDocument()
-    expect(getAudit).toHaveBeenCalledWith('30days', 'all')
+    expect(getAudit).toHaveBeenCalledWith({ period: '30days', provider: 'all', range: null, deviceScope: 'local', projectId: null })
     // Raw output (3.1M) and normalized output (4M = output + reasoning) both show.
     expect(screen.getByText('3.1M')).toBeInTheDocument()
     expect(screen.getByText('900K')).toBeInTheDocument()

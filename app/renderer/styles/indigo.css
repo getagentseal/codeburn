@@ -81,6 +81,11 @@ h2 { font-size: 20px; font-weight: 650; letter-spacing: -.015em; margin: 0 0 6px
 .seg .on { background: #232A3F; color: var(--ink); font-weight: 550; box-shadow: inset 0 1px 0 rgba(255,255,255,.09); }
 .pop { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--line2); border-radius: 7px; padding: 2.5px 9px; font-size: 11px; color: #C6CBDA; white-space: nowrap; }
 .pop::after { content: "⌄"; color: var(--mut2); }
+.project-scope-trigger { background: rgba(91,140,255,.06); border-color: rgba(160,175,255,.14); }
+.project-scope-trigger:hover { background: rgba(91,140,255,.12); border-color: rgba(160,175,255,.24); }
+.project-scope-menu { box-shadow: 0 12px 30px rgba(0,0,0,.34), inset 0 1px 0 rgba(255,255,255,.035); }
+.project-scope-search { background: #0F1320; border-color: rgba(160,175,255,.15); }
+.project-scope-option-path { color: #8A90A3; }
 .btn { display: inline-flex; align-items: center; font-size: 11.5px; font-weight: 550; padding: 3.5px 12px; border-radius: 7px; white-space: nowrap; }
 .btn-p { background: var(--grad); color: #fff; box-shadow: 0 2px 12px rgba(107,124,246,.4), inset 0 1px 0 rgba(255,255,255,.28); }
 .btn-s { background: #1B2030; color: var(--ink); border: 1px solid var(--line2); }

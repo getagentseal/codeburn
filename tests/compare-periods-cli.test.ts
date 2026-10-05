@@ -184,4 +184,30 @@ describe('codeburn compare-periods (CLI)', () => {
       await rm(home, { recursive: true, force: true })
     }
   })
+
+  it('applies a hidden exact identity to both periods, history, and drill-down', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'codeburn-cli-periods-hidden-scope-'))
+    try {
+      await writeFixture(home)
+      const report = runCli([
+        'compare-periods', '--format', 'json',
+        '--desktop-project-id=label:work',
+        ...ARGS_A,
+      ], home)
+      expect(report.status, report.stderr).toBe(0)
+      const body = JSON.parse(report.stdout)
+      expect(body.projects).toHaveLength(1)
+      expect(body.history.basis).toContain('Totals come from parsed session transcripts')
+
+      const drill = runCli([
+        'compare-periods', '--format', 'sessions', '--dimension', 'project', '--key', 'label:work',
+        '--desktop-project-id=label:work',
+        ...ARGS_A,
+      ], home)
+      expect(drill.status, drill.stderr).toBe(0)
+      expect(JSON.parse(drill.stdout).sessions).toHaveLength(3)
+    } finally {
+      await rm(home, { recursive: true, force: true })
+    }
+  })
 })

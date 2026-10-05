@@ -14,7 +14,8 @@ import { Usd, tokensOf } from '../components/Usd'
 import { codeburn } from '../lib/ipc'
 import { categoryFilters, modelFilters } from '../lib/investigation'
 import { reportMemoKey } from '../lib/reportMemoKey'
-import type { AuditRow, DateRange, ModelReportRow, Period } from '../lib/types'
+import { desktopProjectScopeKey } from '../lib/projectScope'
+import type { AuditRow, DateRange, DesktopProjectId, ModelReportRow, Period, Scope } from '../lib/types'
 import { t } from '../i18n'
 import type { SettingsPane } from './Settings'
 import type { InvestigateRequest } from './Overview'
@@ -33,6 +34,8 @@ export function Models({
   period,
   provider,
   range = null,
+  projectId = null,
+  deviceScope = 'local',
   refreshToken = 0,
   onNavigate,
   onInvestigate,
@@ -41,6 +44,8 @@ export function Models({
   period: Period
   provider: string
   range?: DateRange | null
+  projectId?: DesktopProjectId | null
+  deviceScope?: Scope
   refreshToken?: number
   onNavigate?: (section: Section, pane?: SettingsPane) => void
   onInvestigate?: (request: InvestigateRequest) => void
@@ -69,12 +74,14 @@ export function Models({
   return (
     <>
       {lens === 'audit' ? (
-        <AuditLens period={period} provider={provider} range={range} refreshToken={refreshToken} ready={ready} title={title} controls={controls} />
+        <AuditLens period={period} provider={provider} range={range} projectId={projectId} deviceScope={deviceScope} refreshToken={refreshToken} ready={ready} title={title} controls={controls} />
       ) : (
         <ModelsUsage
           period={period}
           provider={provider}
           range={range}
+          projectId={projectId}
+          deviceScope={deviceScope}
           byTask={lens === 'task'}
           refreshToken={refreshToken}
           onAddAlias={onAddAlias}
@@ -92,6 +99,8 @@ function ModelsUsage({
   period,
   provider,
   range,
+  projectId,
+  deviceScope,
   byTask,
   refreshToken,
   onAddAlias,
@@ -103,6 +112,8 @@ function ModelsUsage({
   period: Period
   provider: string
   range: DateRange | null
+  projectId: DesktopProjectId | null
+  deviceScope: Scope
   byTask: boolean
   refreshToken: number
   onAddAlias: () => void
@@ -111,10 +122,11 @@ function ModelsUsage({
   title: ReactNode
   controls: ReactNode
 }) {
+  const projectScopeKey = desktopProjectScopeKey(projectId)
   const report = usePolled<ModelReportRow[]>(
-    () => range ? codeburn.getModels(period, provider, byTask, range) : codeburn.getModels(period, provider, byTask),
-    [period, provider, byTask, range?.from, range?.to, refreshToken],
-    { enabled: ready, memoKey: reportMemoKey('models', period, provider, range, String(byTask)) },
+    () => codeburn.getModels({ period, provider, byTask, range, deviceScope, projectId }),
+    [period, provider, byTask, range?.from, range?.to, deviceScope, projectId, projectScopeKey, refreshToken],
+    { enabled: ready, memoKey: reportMemoKey('models', period, provider, range, String(byTask), projectScopeKey) },
   )
 
   if (!report.data) {
@@ -148,6 +160,8 @@ function AuditLens({
   period,
   provider,
   range,
+  projectId,
+  deviceScope,
   refreshToken,
   ready,
   title,
@@ -156,15 +170,18 @@ function AuditLens({
   period: Period
   provider: string
   range: DateRange | null
+  projectId: DesktopProjectId | null
+  deviceScope: Scope
   refreshToken: number
   ready: boolean
   title: ReactNode
   controls: ReactNode
 }) {
+  const projectScopeKey = desktopProjectScopeKey(projectId)
   const report = usePolled<AuditRow[]>(
-    () => range ? codeburn.getAudit(period, provider, range) : codeburn.getAudit(period, provider),
-    [period, provider, range?.from, range?.to, refreshToken],
-    { enabled: ready, memoKey: reportMemoKey('audit', period, provider, range) },
+    () => codeburn.getAudit({ period, provider, range, deviceScope, projectId }),
+    [period, provider, range?.from, range?.to, deviceScope, projectId, projectScopeKey, refreshToken],
+    { enabled: ready, memoKey: reportMemoKey('audit', period, provider, range, '', projectScopeKey) },
   )
 
   if (!report.data) {

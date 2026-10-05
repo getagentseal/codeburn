@@ -5,6 +5,7 @@ import { cachedProjectIdentitiesForRange } from './daily-cache.js'
 import { reportUnmatchedProjectPatterns } from './project-filter-warnings.js'
 import { filterProjectsByName, parseAllSessions } from './parser.js'
 import { isTrustedAbsoluteWorkingDirectory } from './path-privacy.js'
+import type { DesktopProjectId } from './project-scope.js'
 import type { DateRange, ProjectSummary, SessionSummary } from './types.js'
 
 export type YieldCategory = 'productive' | 'reverted' | 'abandoned' | 'ambiguous'
@@ -577,10 +578,17 @@ function buildRepoGroups(
   return repoGroups
 }
 
-export async function computeYield(range: DateRange, cwd: string, provider: string = 'all', projectFilter?: string[], excludeFilter?: string[]): Promise<YieldSummary> {
+export async function computeYield(
+  range: DateRange,
+  cwd: string,
+  provider: string = 'all',
+  projectFilter?: string[],
+  excludeFilter?: string[],
+  desktopProjectId?: DesktopProjectId | null,
+): Promise<YieldSummary> {
   const parsed = await parseAllSessions(range, provider)
   await reportUnmatchedProjectPatterns(parsed, projectFilter, excludeFilter, () => cachedProjectIdentitiesForRange(range))
-  const projects = filterProjectsByName(parsed, projectFilter, excludeFilter)
+  const projects = filterProjectsByName(parsed, projectFilter, excludeFilter, desktopProjectId)
 
   const summary: YieldSummary = {
     productive: { cost: 0, sessions: 0 },

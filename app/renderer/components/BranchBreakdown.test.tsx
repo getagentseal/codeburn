@@ -4,10 +4,10 @@ import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { BranchBreakdown } from './BranchBreakdown'
-import type { BranchSpendReport } from '../lib/types'
+import type { BranchSpendReport, DesktopReportQuery } from '../lib/types'
 
 const { getBranchSpend } = vi.hoisted(() => ({
-  getBranchSpend: vi.fn<(period: string, provider: string) => Promise<BranchSpendReport>>(),
+  getBranchSpend: vi.fn<(query: DesktopReportQuery) => Promise<BranchSpendReport>>(),
 }))
 vi.mock('../lib/ipc', async orig => {
   const actual = await orig<typeof import('../lib/ipc')>()
@@ -101,7 +101,7 @@ describe('BranchBreakdown', () => {
 
   it('defaults to the top project and shows its branch rows with cost, sessions and calls', async () => {
     render(<BranchBreakdown period="30days" provider="all" />)
-    await waitFor(() => expect(getBranchSpend).toHaveBeenCalledWith('30days', 'all'))
+    await waitFor(() => expect(getBranchSpend).toHaveBeenCalledWith({ period: '30days', provider: 'all', range: null, deviceScope: 'local', projectId: null }))
     // alpha is the top project: its rows show, beta's do not.
     expect(await screen.findByText('feat/auth')).toBeInTheDocument()
     expect(screen.getByText('fix/parser')).toBeInTheDocument()

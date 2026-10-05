@@ -19,6 +19,7 @@ import {
   mergeDayEntries,
   saveDailyCache,
 } from '../src/daily-cache.js'
+import { legacyProjectBucketKey } from '../src/project-scope.js'
 
 const TMP_CACHE_ROOT = join(tmpdir(), `codeburn-carry-test-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
 
@@ -527,7 +528,12 @@ describe('adoption union across older cache files', () => {
     const cache = await loadDailyCache()
     const claude = cache.days[0]!.providers['claude']!
     expect(claude).toMatchObject({ calls: 2, cost: 0, savingsUSD: 0 })
-    expect(claude.projects).toEqual({ good: { cost: 5, calls: 2, savingsUSD: 0, sessions: 0 } })
+    expect(claude.projects).toMatchObject({
+      [legacyProjectBucketKey('good')]: {
+        cost: 5, calls: 2, savingsUSD: 0, sessions: 0,
+        canonicalId: null, provenance: 'legacy', sourceLabel: 'good',
+      },
+    })
     expect(cache.days[0]!.providers['junk']).toBeUndefined()
   })
 
