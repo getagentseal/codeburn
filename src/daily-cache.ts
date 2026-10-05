@@ -357,7 +357,9 @@ import type { DateRange, ProjectSummary } from './types.js'
 // instead of dropped, Gemini 3.8 Flash placeholders get their own ids and
 // Gemini 3 Flash -a/-d rows are priced. Calls and cost only rise, so no
 // PENDING_REDERIVE_PROVIDER_VERSIONS entry is needed.
-export const DAILY_CACHE_VERSION = 74
+// v75: discover OpenClaw's configured state directory and effective home.
+// Finalized days may have omitted those sessions before the root override fix.
+export const DAILY_CACHE_VERSION = 75
 const MIN_SUPPORTED_VERSION = 28
 
 /// Providers whose per-day CALL COUNT means something different at
