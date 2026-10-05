@@ -594,8 +594,9 @@ const BUILTIN_ALIASES: Record<string, string> = {
   'codex-auto-review':             'gpt-5.6-luna',
   // Luna Reserve: the quota Codex falls back to once ordinary usage runs out
   // (openai/codex#42372, LUNA_RESERVE_MODEL in codex-rs/tui/src/model_catalog.rs).
-  // OpenAI's model catalog serves `gpt-reserve` with GPT-5.6 Luna's exact model
-  // config (instructions, tools, context window), not GPT-6 Luna's.
+  // The backend picks the real model and rollouts don't record it. GPT-5.6 Luna
+  // was the client fallback until 22 Sep 2026 (then GPT-6 Luna, half the
+  // price), so this is an upper-bound estimate and the codex parser marks it so.
   'gpt-reserve':                   'gpt-5.6-luna',
   // Short spelling of the only 5.3 Spark model (openai/codex uses it as a
   // config model id in codex-rs/app-server/tests/suite/v2/config_rpc.rs).

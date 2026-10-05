@@ -969,6 +969,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
           ...(pendingLocAdded ? { locAdded: pendingLocAdded } : {}),
           ...(pendingLocRemoved ? { locRemoved: pendingLocRemoved } : {}),
           ...(pendingEditFailed ? { editFailed: pendingEditFailed } : {}),
+          ...(model.toLowerCase() === 'gpt-reserve' ? { costIsEstimated: true } : {}),
         })
         taskGeneratedTokens += billableOutputTokens('codex', outputTokens, reasoningTokens)
 

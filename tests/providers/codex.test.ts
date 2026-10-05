@@ -1900,6 +1900,18 @@ describe('codex provider - priority service tier (#1616)', () => {
     expect(calls[0]!.costUSD).toBeCloseTo(800 * 1.75e-6 + 200 * 1.75e-7 + 500 * 14e-6, 12)
   })
 
+  it('marks gpt-reserve turns as estimated', async () => {
+    const calls = await parseCalls([
+      sessionMeta({ session_id: 'sess-reserve', model: 'gpt-reserve', timestamp: '2026-09-28T10:00:00Z' }),
+      userMessage('reserve turn', '2026-09-28T10:01:00Z'),
+      tokenCount({ timestamp: '2026-09-28T10:01:30Z', last: { input: 1000, cached: 200, output: 500 }, total: { input: 1000, cached: 200, output: 500, total: 1700 } }),
+    ])
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.model).toBe('gpt-reserve')
+    expect(calls[0]!.costIsEstimated).toBe(true)
+    expect(calls[0]!.costUSD).toBeGreaterThan(0)
+  })
+
   it('reads service_tier out of an oversized thread_settings record', async () => {
     // The compact head decoder handles rollout lines past the buffer
     // threshold; service_tier sits early in the payload, so it must survive
