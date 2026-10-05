@@ -16,6 +16,8 @@ Anthropic Claude Code CLI and Claude Desktop's local agent mode.
 | Claude Desktop (Windows, MSIX) | `%LOCALAPPDATA%/Packages/<Claude package>/LocalCache/Roaming/Claude/local-agent-mode-sessions/` |
 | Claude Desktop (Linux) | `~/.config/Claude/local-agent-mode-sessions/` |
 
+From October 6, 2026, new Claude Cowork tasks on Pro and Max plans run in Anthropic's cloud instead of on your computer, so they no longer write local session files and CodeBurn can't price them. Tasks started on your computer before then are still read. Plan limits are unaffected: the Claude quota windows come from Anthropic's own usage figures, which include cloud Cowork. Claude Code runs locally and is tracked as before.
+
 For Desktop, `findDesktopProjectDirs` walks up to 8 levels deep looking for `projects/` subdirectories, skipping `node_modules` and `.git`.
 
 Desktop session roots are resolved in this order:
