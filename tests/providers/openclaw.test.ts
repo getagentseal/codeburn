@@ -1,10 +1,10 @@
-import { describe, it, expect, afterAll, vi } from 'vitest'
+import { describe, it, expect, afterAll, beforeEach, afterEach, vi } from 'vitest'
 import { createOpenClawProvider } from '../../src/providers/openclaw.js'
 import { isSqliteBusyError } from '../../src/sqlite.js'
-import { writeFile, mkdir, rm, stat } from 'fs/promises'
+import { writeFile, mkdir, rm, stat, mkdtemp } from 'fs/promises'
 import { mkdirSync } from 'node:fs'
-import { join } from 'path'
-import { tmpdir } from 'os'
+import { join, relative } from 'path'
+import { tmpdir, homedir } from 'os'
 import { createRequire } from 'node:module'
 import zlib from 'node:zlib'
 
@@ -668,5 +668,107 @@ describe('openclaw provider', () => {
 
   afterAll(async () => {
     await rm(baseDir, { recursive: true, force: true })
+  })
+})
+
+describe('OpenClaw state directory discovery', () => {
+  let root: string
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'codeburn-openclaw-state-'))
+    vi.stubEnv('HOME', join(root, 'home'))
+    vi.stubEnv('USERPROFILE', join(root, 'home'))
+  })
+
+  afterEach(async () => {
+    vi.unstubAllEnvs()
+    await rm(root, { recursive: true, force: true })
+  })
+
+  it('discovers and parses JSONL beneath OPENCLAW_STATE_DIR/agents', async () => {
+    const state = join(root, 'custom state')
+    const path = await setupFixture(join(state, 'agents'), 'custom-agent', 'custom-session', SESSION_LINES)
+    vi.stubEnv('OPENCLAW_STATE_DIR', state)
+    const provider = createOpenClawProvider()
+    const sources = await provider.discoverSessions()
+    expect(sources.map(s => s.path)).toEqual([path])
+    expect(await provider.probeRoots!()).toContainEqual({ path: join(state, 'agents'), label: 'agents' })
+    const calls = await parseAll(provider, sources[0], new Set())
+    expect(calls).toHaveLength(2)
+    expect(calls[0].usage.inputTokens).toBe(500)
+    expect(calls[1].usage.outputTokens).toBe(200)
+  })
+
+  it('discovers the SQLite store under the same relocated agents root', async () => {
+    const state = join(root, 'sqlite-state')
+    const events = sessionEvents()
+    const db = createAgentDb(join(state, 'agents'), 'custom-agent', [{
+      sessionId: 'test-sess-1',
+      rows: [events.session, events.modelChange, events.user, events.assistant].map((event, seq) => ({
+        seq, event, createdAt: Date.parse('2026-04-20T10:00:03Z'),
+      })),
+    }])
+    vi.stubEnv('OPENCLAW_STATE_DIR', state)
+    const provider = createOpenClawProvider()
+    const sources = await provider.discoverSessions()
+    expect(sources.map(s => s.path)).toEqual([`${db}:test-sess-1`])
+    expect(await parseAll(provider, sources[0], new Set())).toHaveLength(1)
+  })
+
+  it('keeps legacy home roots alongside the relocated state directory', async () => {
+    const state = join(root, 'custom-state')
+    const custom = await setupFixture(join(state, 'agents'), 'custom', 'custom', SESSION_LINES)
+    const legacy = await setupFixture(join(homedir(), '.clawdbot', 'agents'), 'old', 'old', SESSION_LINES)
+    vi.stubEnv('OPENCLAW_STATE_DIR', state)
+    expect((await createOpenClawProvider().discoverSessions()).map(s => s.path)).toEqual([custom, legacy])
+  })
+
+  it.each(['', '   '])('uses default roots when the override is blank (%j)', async value => {
+    vi.stubEnv('OPENCLAW_STATE_DIR', value)
+    const path = await setupFixture(join(homedir(), '.openclaw', 'agents'), 'default', 'default', SESSION_LINES)
+    expect((await createOpenClawProvider().discoverSessions()).map(s => s.path)).toEqual([path])
+    expect(await createOpenClawProvider().probeRoots!()).toHaveLength(4)
+  })
+
+  it('trims the override and expands a leading home prefix', async () => {
+    vi.stubEnv('OPENCLAW_STATE_DIR', '  ~/custom-state  ')
+    const path = await setupFixture(join(homedir(), 'custom-state', 'agents'), 'custom', 'custom', SESSION_LINES)
+    expect((await createOpenClawProvider().discoverSessions()).map(s => s.path)).toEqual([path])
+  })
+
+  it('resolves relative overrides consistently for discovery and probing', async () => {
+    const state = join(root, 'relative-state')
+    vi.stubEnv('OPENCLAW_STATE_DIR', relative(process.cwd(), state))
+    const path = await setupFixture(join(state, 'agents'), 'custom', 'custom', SESSION_LINES)
+    const provider = createOpenClawProvider()
+    expect((await provider.discoverSessions()).map(s => s.path)).toEqual([path])
+    expect((await provider.probeRoots!())[0].path).toBe(join(state, 'agents'))
+  })
+
+  it('deduplicates an override that resolves to the default state root', async () => {
+    vi.stubEnv('OPENCLAW_STATE_DIR', join(homedir(), '.openclaw', '.'))
+    const path = await setupFixture(join(homedir(), '.openclaw', 'agents'), 'default', 'default', SESSION_LINES)
+    const provider = createOpenClawProvider()
+    expect((await provider.discoverSessions()).map(s => s.path)).toEqual([path])
+    expect(await provider.probeRoots!()).toHaveLength(4)
+  })
+
+  it('preserves the explicit agents-directory constructor override', async () => {
+    vi.stubEnv('OPENCLAW_STATE_DIR', join(root, 'ignored-state'))
+    const agents = join(root, 'explicit-agents')
+    const path = await setupFixture(agents, 'explicit', 'explicit', SESSION_LINES)
+    const provider = createOpenClawProvider(agents)
+    expect((await provider.discoverSessions()).map(s => s.path)).toEqual([path])
+    expect(await provider.probeRoots!()).toEqual([{ path: agents, label: 'agents' }])
+  })
+
+  it('honors OPENCLAW_HOME for the default state root and home-relative override', async () => {
+    const home = join(root, 'openclaw-home')
+    vi.stubEnv('OPENCLAW_HOME', home)
+    const defaultPath = await setupFixture(join(home, '.openclaw', 'agents'), 'default', 'default', SESSION_LINES)
+    expect((await createOpenClawProvider().discoverSessions()).map(s => s.path)).toEqual([defaultPath])
+    vi.stubEnv('OPENCLAW_STATE_DIR', '~/relocated')
+    const custom = await setupFixture(join(home, 'relocated', 'agents'), 'custom', 'custom', SESSION_LINES)
+    expect((await createOpenClawProvider().discoverSessions()).map(s => s.path)).toEqual([custom, defaultPath])
   })
 })
