@@ -108,6 +108,99 @@ describe('daily-cache re-derivation on a DAILY_CACHE_VERSION bump', () => {
     expect(refreshedDay?.cost).toBe(2)
     expect(JSON.parse(await readFile(oldPath, 'utf8'))).toEqual(oldCache)
   })
+
+  it('refreshes finalized Codex categories on v51 migration without changing usage totals', async () => {
+    const date = toDateString(new Date(Date.now() - 14 * 24 * 60 * 60 * 1000))
+    const yesterday = toDateString(new Date(Date.now() - 24 * 60 * 60 * 1000))
+    const oldVersion = DAILY_CACHE_VERSION - 1
+    const oldPath = join(cacheRoot, `daily-cache.v${oldVersion}.json`)
+    const makeCodexDay = (category: 'general' | 'exploration'): DailyEntry => {
+      const categoryStats = { turns: 1, cost: 2, savingsUSD: 0, editTurns: 0, oneShotTurns: 0 }
+      const modelStats = {
+        calls: 1,
+        cost: 2,
+        savingsUSD: 0,
+        inputTokens: 100,
+        outputTokens: 20,
+        cacheReadTokens: 30,
+        cacheWriteTokens: 0,
+      }
+      const providerSlice = {
+        calls: 1,
+        cost: 2,
+        savingsUSD: 0,
+        sessions: 1,
+        inputTokens: 100,
+        outputTokens: 20,
+        cacheReadTokens: 30,
+        cacheWriteTokens: 0,
+        models: { 'GPT-5.4': { ...modelStats } },
+        categories: { [category]: { ...categoryStats } },
+      }
+      return {
+        ...day(date, 2),
+        models: { 'GPT-5.4': { ...modelStats } },
+        categories: { [category]: { ...categoryStats } },
+        providers: { codex: providerSlice },
+      }
+    }
+    const oldDay = makeCodexDay('general')
+    const freshDay = makeCodexDay('exploration')
+    const oldCache = {
+      version: oldVersion,
+      savingsConfigHash: '',
+      tzKey: currentTzKey(),
+      lastComputedDate: yesterday,
+      days: [oldDay],
+      complete: true,
+      watermarkTrusted: true,
+    }
+    await writeFile(oldPath, JSON.stringify(oldCache))
+
+    let parseCount = 0
+    const hydrated = await ensureCacheHydrated(
+      async () => {
+        parseCount++
+        return []
+      },
+      () => [freshDay],
+      '',
+      () => true,
+    )
+
+    const refreshedDay = hydrated.days.find(entry => entry.date === date)
+    expect(parseCount).toBe(1)
+    expect(hydrated.version).toBe(DAILY_CACHE_VERSION)
+    expect(refreshedDay?.categories).toEqual({ exploration: freshDay.categories.exploration })
+    expect(refreshedDay?.providers.codex?.categories).toEqual({ exploration: freshDay.providers.codex.categories?.exploration })
+    expect({
+      calls: refreshedDay?.calls,
+      cost: refreshedDay?.cost,
+      savingsUSD: refreshedDay?.savingsUSD,
+      sessions: refreshedDay?.sessions,
+      inputTokens: refreshedDay?.inputTokens,
+      outputTokens: refreshedDay?.outputTokens,
+      cacheReadTokens: refreshedDay?.cacheReadTokens,
+      cacheWriteTokens: refreshedDay?.cacheWriteTokens,
+      provider: refreshedDay?.providers.codex,
+      models: refreshedDay?.models,
+    }).toEqual({
+      calls: oldDay.calls,
+      cost: oldDay.cost,
+      savingsUSD: oldDay.savingsUSD,
+      sessions: oldDay.sessions,
+      inputTokens: oldDay.inputTokens,
+      outputTokens: oldDay.outputTokens,
+      cacheReadTokens: oldDay.cacheReadTokens,
+      cacheWriteTokens: oldDay.cacheWriteTokens,
+      provider: {
+        ...oldDay.providers.codex,
+        categories: freshDay.providers.codex.categories,
+      },
+      models: oldDay.models,
+    })
+    expect(JSON.parse(await readFile(oldPath, 'utf8'))).toEqual(oldCache)
+  })
 })
 
 // v30 is claimed by two open branches at once: this one and #1132. A v30 file
