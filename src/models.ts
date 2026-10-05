@@ -331,7 +331,8 @@ function priorityMultiplierOf(entry: LiteLLMEntry): number | null {
   // up a few ulps in the division (2.5 vs 2.4999999999999996), so compare
   // relatively rather than for bitwise equality.
   const agreed = ratios.every(r => Math.abs(r - inputRatio!) <= 1e-9 * Math.max(r, inputRatio!))
-  return agreed && inputRatio <= MAX_DERIVED_FAST_MULTIPLIER ? inputRatio : null
+  // Rounded to 4 decimals so division noise (1.7999999999999998) never ships.
+  return agreed && inputRatio <= MAX_DERIVED_FAST_MULTIPLIER ? Math.round(inputRatio * 1e4) / 1e4 : null
 }
 
 function tierOfLiteLLMEntry(entry: LiteLLMEntry): SnapshotTier | null {

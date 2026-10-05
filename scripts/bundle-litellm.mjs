@@ -113,7 +113,8 @@ function priorityMultiplierOf(entry) {
   }
   if (inputRatio === undefined || outputRatio === undefined) return null
   const agreed = ratios.every((r) => Math.abs(r - inputRatio) <= 1e-9 * Math.max(r, inputRatio))
-  return agreed && inputRatio <= MAX_DERIVED_FAST_MULTIPLIER ? inputRatio : null
+  // Rounded to 4 decimals so division noise (1.7999999999999998) never ships.
+  return agreed && inputRatio <= MAX_DERIVED_FAST_MULTIPLIER ? Math.round(inputRatio * 1e4) / 1e4 : null
 }
 
 function tierOf(entry) {

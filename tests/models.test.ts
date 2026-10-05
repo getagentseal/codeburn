@@ -325,6 +325,17 @@ describe('getModelCosts', () => {
       })
     })
 
+    it('rounds a derived ratio to 4 decimals', () => {
+      // gemini-2.5-pro's published rates divide to 1.7999999999999998.
+      const costs = parseLiteLLMEntry({
+        input_cost_per_token: 1.25e-6,
+        output_cost_per_token: 1e-5,
+        input_cost_per_token_priority: 2.25e-6,
+        output_cost_per_token_priority: 1.8e-5,
+      } as never)
+      expect(costs?.fastMultiplier).toBe(1.8)
+    })
+
     it('leaves a model without priority keys at 1x', () => {
       // gpt-5-codex / gpt-5.1-codex publish no priority rates upstream; no
       // multiplier may be invented for them.
