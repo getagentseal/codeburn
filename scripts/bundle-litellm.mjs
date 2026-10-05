@@ -59,8 +59,8 @@ const MANUAL_ENTRIES = {
   // codex-equals-base assertion can hold. These are full-row mirrors, not
   // hand-picked rates: drop both entries entirely once LiteLLM ships the
   // codex SKUs, rather than editing them in place.
-  'gpt-5.6-codex':          [4e-6, 2e-5, 5e-6, 4e-7, null, { threshold: 272000, input: 8e-6, output: 3e-5, cacheWrite: 1e-5, cacheRead: 8e-7 }],
-  'gpt-5.6-codex-max':      [4e-6, 2e-5, 5e-6, 4e-7, null, { threshold: 272000, input: 8e-6, output: 3e-5, cacheWrite: 1e-5, cacheRead: 8e-7 }],
+  'gpt-5.6-codex':          [4e-6, 2e-5, 5e-6, 4e-7, 2, { threshold: 272000, input: 8e-6, output: 3e-5, cacheWrite: 1e-5, cacheRead: 8e-7 }],
+  'gpt-5.6-codex-max':      [4e-6, 2e-5, 5e-6, 4e-7, 2, { threshold: 272000, input: 8e-6, output: 3e-5, cacheWrite: 1e-5, cacheRead: 8e-7 }],
   // LiteLLM dropped `claude-opus-4` upstream (a refresh moves dropped ids to
   // the fallback tier), but the Cursor-style alias `claude-4-opus` resolves
   // against PRIMARY rows - without this pin the bare id falls to the
@@ -91,6 +91,8 @@ const TIER_KEY_RE = /^(input_cost_per_token|output_cost_per_token|cache_read_inp
 // `provider_specific_entry.fast`. Derived only where every bucket the row
 // prices agrees on one ratio — models without priority keys, or rows whose
 // ratios disagree (azure/gpt-5.5: 2.5x base, 2x above 272k), stay null (1x).
+// A tier without its own priority keys (gpt-5.4, gpt-5.5) gets `fast: 1` so it
+// stays at standard tier rates: OpenAI quotes no Fast long-context price there.
 // Never a hand-picked number. Mirrored in src/models.ts parseLiteLLMEntry.
 const PRIORITY_KEY_SUFFIX = '_priority'
 const MAX_DERIVED_FAST_MULTIPLIER = 100
@@ -142,7 +144,13 @@ function toVal(entry) {
   const inp = entry.input_cost_per_token
   const out = entry.output_cost_per_token
   if (inp == null || out == null) return null
-  return [inp, out, entry.cache_creation_input_token_cost ?? null, entry.cache_read_input_token_cost ?? null, entry.provider_specific_entry?.fast ?? priorityMultiplierOf(entry), tierOf(entry)]
+  const explicitFast = entry.provider_specific_entry?.fast
+  const priorityFast = explicitFast == null ? priorityMultiplierOf(entry) : null
+  const tier = tierOf(entry)
+  if (tier && priorityFast !== null && !Object.keys(entry).some((k) => k.endsWith(`_above_${tier.threshold / 1000}k_tokens${PRIORITY_KEY_SUFFIX}`))) {
+    tier.fast = 1
+  }
+  return [inp, out, entry.cache_creation_input_token_cost ?? null, entry.cache_read_input_token_cost ?? null, explicitFast ?? priorityFast, tier]
 }
 
 // Pass 1: direct entries (no prefix) get priority

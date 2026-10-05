@@ -16,7 +16,7 @@ export const CURSOR_CSV_HEADER = [
   'Input (w/ Cache Write)', 'Input (w/o Cache Write)', 'Cache Read', 'Output Tokens', 'Total Tokens', 'Cost',
 ] as const
 
-const CURSOR_IMPORT_KEY_PREFIX = 'cursor-import:'
+export const CURSOR_IMPORT_KEY_PREFIX = 'cursor-import:'
 const CURSOR_IMPORT_PROJECT = 'Cursor (imported)'
 const GROK_BOT_IMPORT_PROJECT = 'Grok Bot (imported)'
 

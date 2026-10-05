@@ -39,6 +39,8 @@ export type LongContextTier = {
   outputCostPerToken: number
   cacheWriteCostPerToken?: number
   cacheReadCostPerToken?: number
+  /// Replaces the base fastMultiplier above the threshold; absent inherits it.
+  fastMultiplier?: number
 }
 
 /// Providers whose reported `reasoningTokens` are a SUBSET of `outputTokens`
@@ -81,7 +83,7 @@ type LiteLLMEntry = {
 // provider_specific_entry.fast so new models pick it up automatically — no
 // hand-maintained per-model table. The optional sixth slot carries the
 // vendor's long-context tier; older bundles without it parse unchanged.
-type SnapshotTier = { threshold: number, input: number, output: number, cacheWrite: number | null, cacheRead: number | null }
+type SnapshotTier = { threshold: number, input: number, output: number, cacheWrite: number | null, cacheRead: number | null, fast?: number }
 type SnapshotEntry = [number, number, number | null, number | null, (number | null)?, (SnapshotTier | null)?]
 
 const LITELLM_URL = 'https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json'
@@ -141,6 +143,7 @@ function buildCosts(
       outputCostPerToken: tier.output,
       ...(tier.cacheWrite !== null ? { cacheWriteCostPerToken: tier.cacheWrite } : {}),
       ...(tier.cacheRead !== null ? { cacheReadCostPerToken: tier.cacheRead } : {}),
+      ...(tier.fast !== undefined ? { fastMultiplier: tier.fast } : {}),
     } } : {}),
   }
 }
@@ -187,6 +190,7 @@ export function tieredCostsFor(model: string, baseCosts: ModelCosts, promptToken
       outputCostPerToken: tier.outputCostPerToken,
       ...(tier.cacheWriteCostPerToken !== undefined ? { cacheWriteCostPerToken: tier.cacheWriteCostPerToken } : {}),
       ...(tier.cacheReadCostPerToken !== undefined ? { cacheReadCostPerToken: tier.cacheReadCostPerToken } : {}),
+      ...(tier.fastMultiplier !== undefined ? { fastMultiplier: tier.fastMultiplier } : {}),
     }
   }
   return baseCosts
@@ -294,10 +298,12 @@ const TIER_KEY_RE = /^(input_cost_per_token|output_cost_per_token|cache_read_inp
 // only a ratio the source publishes for EVERY bucket it prices is used, so a
 // model with no priority keys (gpt-5-codex, gpt-5.1-codex) or one whose ratios
 // disagree between buckets (azure/gpt-5.5: 2.5x base, 2x above 272k) stays at
-// 1x. The multiplier has to cover the tier too, because calculateCost applies
-// it to whichever costs object is in effect, so the tier's priority ratios join
-// the same agreement check. `provider_specific_entry.fast` (Anthropic's own
-// multiplier) always wins where the source ships one.
+// 1x. Where the tier publishes priority rates they join the same agreement
+// check, so the one multiplier prices both regimes (gpt-5.6). Where it publishes
+// none (gpt-5.4, gpt-5.5) OpenAI quotes no Fast long-context price, so the tier
+// carries fast 1 and stays at its standard rates rather than a guessed product.
+// `provider_specific_entry.fast` (Anthropic's own multiplier) always wins where
+// the source ships one and is left to cover the tier as before.
 const PRIORITY_KEY_SUFFIX = '_priority'
 // Generous bound: the largest ratio any vendor actually publishes is 2.5x, so
 // anything past this is a corrupted or hostile upstream row, not a price.
@@ -362,13 +368,19 @@ export function parseLiteLLMEntry(entry: LiteLLMEntry): ModelCosts | null {
   const inputCost = safePerTokenRate(entry.input_cost_per_token)
   const outputCost = safePerTokenRate(entry.output_cost_per_token)
   if (inputCost === null || outputCost === null) return null
+  const explicitFast = entry.provider_specific_entry?.fast
+  const priorityFast = explicitFast == null ? priorityMultiplierOf(entry) : null
+  const tier = tierOfLiteLLMEntry(entry)
+  if (tier && priorityFast !== null && !Object.keys(entry).some(k => k.endsWith(`_above_${tier.threshold / 1000}k_tokens${PRIORITY_KEY_SUFFIX}`))) {
+    tier.fast = 1
+  }
   return buildCosts(
     inputCost,
     outputCost,
     safePerTokenRate(entry.cache_creation_input_token_cost),
     safePerTokenRate(entry.cache_read_input_token_cost),
-    entry.provider_specific_entry?.fast ?? priorityMultiplierOf(entry),
-    tierOfLiteLLMEntry(entry),
+    explicitFast ?? priorityFast,
+    tier,
   )
 }
 

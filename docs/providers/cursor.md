@@ -48,7 +48,7 @@ The parser tries both and dedupes via `seenKeys`.
 
 ## Importing Cursor's own usage export
 
-The local database carries no per-turn token counts and none of the cache reads Cursor re-sends on every request, so local figures are estimates and run far below Cursor's dashboard. Cursor's dashboard exports every usage event with the token split it billed:
+The local database carries no per-turn token counts and none of the cache reads Cursor re-sends on every request, so local figures are estimates and run far below Cursor's dashboard. When a period still holds local Cursor or Cursor Agent dollars that no import covers, `codeburn overview` says so in one dim line under the bottom line (`includes $X of Cursor priced from local files, not Cursor's bill`) instead of letting the estimate read as the bill (#1545). Cursor's dashboard exports every usage event with the token split it billed:
 
 ```
 codeburn import cursor ~/Downloads/usage-events-2026-09-25.csv --from 2026-08-27 --to 2026-09-25

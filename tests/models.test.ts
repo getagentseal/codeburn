@@ -247,8 +247,8 @@ describe('getModelCosts', () => {
   // ones (and `_above_<n>k_tokens_priority` for gpt-5.6's long-context tier)
   // rather than as a `provider_specific_entry.fast`. The entries below are
   // quoted from the live model_prices_and_context_window.json (2026-10-05
-  // refresh); the bundled snapshot cannot carry the derived slot until its next
-  // routine refresh, so these pin the live path that applies the change at once.
+  // refresh). The bundled snapshot carries the same derived slots; these pin the
+  // live path, and the bundled-rate cases below pin the snapshot.
   describe('priority service-tier fast multipliers (#1616)', () => {
     /// Install `entries` as the live pricing rows for the duration of `run`,
     /// exactly as fetchAndCachePricing would, so calculateCost's full pipeline
@@ -362,6 +362,36 @@ describe('getModelCosts', () => {
         input_cost_per_token_priority: 2.5e-6,
       } as never)
       expect(stray?.fastMultiplier).toBe(1)
+    })
+
+    it('keeps gpt-5.5\'s long-context tier at standard rates when no Fast tier price is published', () => {
+      const costs = parseLiteLLMEntry({
+        input_cost_per_token: 5e-6,
+        output_cost_per_token: 30e-6,
+        cache_read_input_token_cost: 5e-7,
+        input_cost_per_token_above_272k_tokens: 1e-5,
+        output_cost_per_token_above_272k_tokens: 4.5e-5,
+        cache_read_input_token_cost_above_272k_tokens: 1e-6,
+        input_cost_per_token_priority: 1.25e-5,
+        output_cost_per_token_priority: 7.5e-5,
+        cache_read_input_token_cost_priority: 1.25e-6,
+      } as never)
+      expect(costs?.fastMultiplier).toBe(2.5)
+      expect(costs?.longContextTier?.fastMultiplier).toBe(1)
+    })
+
+    it('prices bundled gpt-5.5 Fast past 272k at the standard long-context rate', () => {
+      const fast = calculateCost('gpt-5.5', 300_000, 1_000, 0, 2_000, 0, 'fast', 0, 'codex')
+      expect(fast).toBeCloseTo(300_000 * 1e-5 + 1_000 * 4.5e-5 + 2_000 * 1e-6, 12)
+      expect(fast).toBeCloseTo(calculateCost('gpt-5.5', 300_000, 1_000, 0, 2_000, 0, 'standard', 0, 'codex'), 12)
+      // Below the threshold Fast still bills at the 2.5x priority rate.
+      expect(calculateCost('gpt-5.5', 100_000, 1_000, 0, 0, 0, 'fast', 0, 'codex'))
+        .toBeCloseTo((100_000 * 5e-6 + 1_000 * 3e-5) * 2.5, 12)
+    })
+
+    it('prices bundled gpt-5.6-sol Fast past 272k at the published Fast tier', () => {
+      expect(calculateCost('gpt-5.6-sol', 300_000, 1_000, 0, 0, 0, 'fast', 0, 'codex'))
+        .toBeCloseTo(300_000 * 16e-6 + 1_000 * 60e-6, 12)
     })
 
     it('keeps provider_specific_entry.fast (Anthropic) winning over a derived ratio', () => {

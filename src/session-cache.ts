@@ -470,9 +470,9 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   grok: 'authoritative-usage-v4',
   // Estimated from message text: Grok Bot's local mirror records no tokens.
   grokbot: 'estimated-usage-v1',
-  // v0-v3 generations, embedded attempt streams, retry accounting, and the
+  // v0-v4 generations, embedded attempt streams, retry accounting, and the
   // version-specific inherited-prefix rules all change cached DSH calls.
-  dsh: 'session-formats-v0-v3-attempts-v5',
+  dsh: 'session-formats-v0-v4-attempts-v6',
   // cost-provenance-v3: preserve Hermes included/estimated/actual status and
   // rebuild the provider section alongside the v3 lifetime ledger. The parse
   // bump is required with the ledger bump: seeding a new ledger from a section

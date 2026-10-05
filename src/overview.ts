@@ -10,6 +10,7 @@ import { markEstimated, excludedGatewayNote } from './format.js'
 import { AGGREGATE_ONLY_PROVIDER } from './parser.js'
 import { maxOf } from './math-utils.js'
 import { formatSessionCount, SESSION_COUNT_HELP, type SessionCountBasis } from './session-count-label.js'
+import { CURSOR_IMPORT_KEY_PREFIX } from './cursor-import.js'
 import { normalizeAbsProjectPathKey } from './parser.js'
 import { dateKey } from './day-aggregator.js'
 import type { DailyEntry } from './daily-cache.js'
@@ -72,6 +73,13 @@ type OverviewBudget = {
   status: BudgetStatus
   inProgress: boolean
 }
+
+// Local Cursor rows are priced from IDE composer bubbles, which never see the
+// context Cursor re-sends on every request, so their dollars are a local
+// estimate that can sit far below the dashboard bill (#1545). Imported events
+// are Cursor's own numbers; covered local rows are already dropped at serve
+// time, so any non-imported Cursor call that survives is an uncovered estimate.
+const CURSOR_LOCAL_PROVIDERS = new Set(['cursor', 'cursor-agent'])
 
 // Visible width, ignoring ANSI color codes, so padding stays aligned.
 function vlen(s: string): number {
@@ -147,6 +155,7 @@ export function renderOverview(
 
   let cost = 0, savings = 0, calls = 0, sessions = 0
   let inTok = 0, outTok = 0, cacheR = 0, cacheW = 0
+  let cursorLocalEstimateUSD = 0
   const byProvider = new Map<string, { cost: number; tokens: number }>()
   const byModel = new Map<string, { cost: number; calls: number; tokens: number; estimatedCost: number }>()
   const byCat = new Map<string, { cost: number; turns: number }>()
@@ -203,6 +212,10 @@ export function renderOverview(
           pv.cost += call.costUSD
           pv.tokens += tk
           byProvider.set(call.provider, pv)
+          if (CURSOR_LOCAL_PROVIDERS.has(call.provider)
+            && !(call.deduplicationKey ?? '').startsWith(CURSOR_IMPORT_KEY_PREFIX)) {
+            cursorLocalEstimateUSD += call.costUSD
+          }
           if (day) {
             const dd = byDay.get(day) ?? { cost: 0, tokens: 0, providers: new Set<string>() }
             dd.cost += call.costUSD
@@ -415,6 +428,15 @@ export function renderOverview(
 
   const gatewayNote = excludedGatewayNote(durable?.excludedGateway?.costUSD ?? 0)
   if (gatewayNote) out.push(c.dim(`  ${gatewayNote}`))
+
+  // #1545: say so when Cursor dollars in this period are local estimates
+  // rather than Cursor's bill, instead of letting the figure look exact.
+  if (cursorLocalEstimateUSD > 0) {
+    out.push(c.dim(
+      `  includes ${formatCost(cursorLocalEstimateUSD)} of Cursor priced from local files, not Cursor's bill — ` +
+      'codeburn import cursor <file.csv> replaces it with the dashboard\'s own totals',
+    ))
+  }
 
   return out.join('\n') + '\n'
 }

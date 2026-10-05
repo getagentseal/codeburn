@@ -256,13 +256,16 @@ import type { DateRange, ProjectSummary } from './types.js'
 // miss sessions there and must be re-derived after the default path is fixed.
 // v51: honor redirected Copilot and Cursor editor data roots. Backfill settled
 // days that previously missed usage stored under APPDATA or XDG_CONFIG_HOME.
-// v52: #1616 Codex priority-tier pricing. Turns run under Codex's Fast speed
+// v52: DSH session format v4 (dsh 0.2.0-rc.2) is read; days finalized while
+// those sessions were skipped re-derive. Calls only rise, so no
+// PENDING_REDERIVE_PROVIDER_VERSIONS entry is needed.
+// v53: #1616 Codex priority-tier pricing. Turns run under Codex's Fast speed
 // setting bill at the published priority rates (2x on most gpt-5/6 rows, 2.5x
 // on gpt-5.5; per-row, derived from LiteLLM's priority keys), so settled days
 // under-price them; the bump re-derives surviving days off the warm session
 // cache. MIN_SUPPORTED_VERSION stays at 28 (#1478's convention: a version bump
 // alone re-derives warm caches, so raising the floor buys nothing).
-export const DAILY_CACHE_VERSION = 52
+export const DAILY_CACHE_VERSION = 53
 const MIN_SUPPORTED_VERSION = 28
 
 /// Providers whose per-day CALL COUNT means something different at

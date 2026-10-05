@@ -173,6 +173,22 @@ it('derives the fast multiplier from priority rates without inventing one (#1616
         output_cost_per_token_priority: 7.5e-5,
         cache_read_input_token_cost_priority: 1.25e-6,
       }),
+      // A tier without priority keys: OpenAI quotes no Fast long-context price.
+      'gpt-5.5-tiered': row(5e-6, 30e-6, {
+        input_cost_per_token_above_272k_tokens: 1e-5,
+        output_cost_per_token_above_272k_tokens: 4.5e-5,
+        input_cost_per_token_priority: 1.25e-5,
+        output_cost_per_token_priority: 7.5e-5,
+      }),
+      // A tier with agreeing priority keys inherits the base multiplier.
+      'gpt-5.6-tiered': row(4e-6, 20e-6, {
+        input_cost_per_token_above_272k_tokens: 8e-6,
+        output_cost_per_token_above_272k_tokens: 3e-5,
+        input_cost_per_token_priority: 8e-6,
+        output_cost_per_token_priority: 4e-5,
+        input_cost_per_token_above_272k_tokens_priority: 1.6e-5,
+        output_cost_per_token_above_272k_tokens_priority: 6e-5,
+      }),
       // No priority keys at all: stays 1x (null slot).
       'gpt-5-codex': row(1.25e-6, 1e-5, { cache_read_input_token_cost: 1.25e-7 }),
       // azure/gpt-5.5 as quoted live: 2.5x base but 2x above 272k, so no single
@@ -207,6 +223,10 @@ it('derives the fast multiplier from priority rates without inventing one (#1616
     const snapshot = JSON.parse(readFileSync(join(dir, 'src/data/litellm-snapshot.json'), 'utf8'))
     expect(snapshot['gpt-5.4']![4]).toBe(2)
     expect(snapshot['gpt-5.5']![4]).toBe(2.5)
+    expect(snapshot['gpt-5.5-tiered']![4]).toBe(2.5)
+    expect(snapshot['gpt-5.5-tiered']![5].fast).toBe(1)
+    expect(snapshot['gpt-5.6-tiered']![4]).toBe(2)
+    expect(snapshot['gpt-5.6-tiered']![5]).not.toHaveProperty('fast')
     expect(snapshot['gpt-5-codex']![4]).toBeNull()
     expect(snapshot['azure/gpt-5.5']![4]).toBeNull()
     expect(snapshot['claude-opus-4-8']![4]).toBe(1.4)
