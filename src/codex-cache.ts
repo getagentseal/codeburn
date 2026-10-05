@@ -63,7 +63,10 @@ import { isWslUncPath } from './wsl.js'
 // so v18 entries carry the standard-rate cost and must be re-derived.
 // v20: `codex-auto-review` prices by date (gpt-5.4 before 30 Jul 2026, GPT-5.6
 // Luna from then on) instead of gpt-5.5. Stored costUSD is the old price.
-export const CODEX_CACHE_VERSION = 20
+// v21: service_tier "flex" bills at the published Flex rates (it billed at
+// standard), and `gpt-reserve` / `gpt-5.3-spark` price as GPT-5.6 Luna /
+// GPT-5.3 Codex Spark instead of $0. Stored costUSD and speed are the old ones.
+export const CODEX_CACHE_VERSION = 21
 export const CODEX_LEGACY_CACHE_FILE = 'codex-results.json'
 export function codexCacheFileName(version = CODEX_CACHE_VERSION): string {
   return `codex-results.v${version}.json`

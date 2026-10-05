@@ -55,12 +55,12 @@ const MANUAL_ENTRIES = {
   // gpt-5.3-codex == gpt-5.3 (all four rates identical, verified against the
   // live model_prices_and_context_window.json). Mirroring that pattern onto
   // gpt-5.6 rather than inventing a number: both ids carry the exact gpt-5.6
-  // row, verbatim INCLUDING the >272k tier block, so the tests/models.test.ts
-  // codex-equals-base assertion can hold. These are full-row mirrors, not
+  // row, verbatim INCLUDING the >272k tier block and the Flex slot, so the
+  // tests/models.test.ts codex-equals-base assertion can hold. These are full-row mirrors, not
   // hand-picked rates: drop both entries entirely once LiteLLM ships the
   // codex SKUs, rather than editing them in place.
-  'gpt-5.6-codex':          [4e-6, 2e-5, 5e-6, 4e-7, 2, { threshold: 272000, input: 8e-6, output: 3e-5, cacheWrite: 1e-5, cacheRead: 8e-7 }],
-  'gpt-5.6-codex-max':      [4e-6, 2e-5, 5e-6, 4e-7, 2, { threshold: 272000, input: 8e-6, output: 3e-5, cacheWrite: 1e-5, cacheRead: 8e-7 }],
+  'gpt-5.6-codex':          [4e-6, 2e-5, 5e-6, 4e-7, 2, { threshold: 272000, input: 8e-6, output: 3e-5, cacheWrite: 1e-5, cacheRead: 8e-7 }, [2e-6, 1e-5, 2.5e-6, 2e-7, null, { threshold: 272000, input: 4e-6, output: 1.5e-5, cacheWrite: 5e-6, cacheRead: 4e-7 }]],
+  'gpt-5.6-codex-max':      [4e-6, 2e-5, 5e-6, 4e-7, 2, { threshold: 272000, input: 8e-6, output: 3e-5, cacheWrite: 1e-5, cacheRead: 8e-7 }, [2e-6, 1e-5, 2.5e-6, 2e-7, null, { threshold: 272000, input: 4e-6, output: 1.5e-5, cacheWrite: 5e-6, cacheRead: 4e-7 }]],
   // LiteLLM dropped `claude-opus-4` upstream (a refresh moves dropped ids to
   // the fallback tier), but the Cursor-style alias `claude-4-opus` resolves
   // against PRIMARY rows - without this pin the bare id falls to the
@@ -141,6 +141,32 @@ function tierOf(entry) {
   return { threshold, input: rates.input, output: rates.output, cacheWrite: rates.cacheWrite ?? null, cacheRead: rates.cacheRead ?? null }
 }
 
+// OpenAI's Flex processing tier ships as explicit `<rate>_flex` keys
+// (`_above_<n>k_tokens_flex` for the long-context tier), carried as slot 6: a
+// full tuple of Flex rates, appended only where the row publishes input and
+// output flex rates so every other row stays byte-identical. Rates, not a
+// ratio (gpt-5.4's flex cache read is $0.13/M, not half of $0.25/M); a bucket
+// without a flex rate keeps its standard rate. Mirrored in src/models.ts flexOf.
+const FLEX_KEY_SUFFIX = '_flex'
+
+function flexOf(entry, cacheWrite, cacheRead, tier) {
+  const rate = (key) => {
+    const v = entry[key + FLEX_KEY_SUFFIX]
+    return typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : null
+  }
+  const input = rate('input_cost_per_token')
+  const output = rate('output_cost_per_token')
+  if (input === null || output === null) return null
+  const above = (key) => `${key}_above_${tier.threshold / 1000}k_tokens`
+  return [input, output, rate('cache_creation_input_token_cost') ?? cacheWrite, rate('cache_read_input_token_cost') ?? cacheRead, null, tier ? {
+    threshold: tier.threshold,
+    input: rate(above('input_cost_per_token')) ?? tier.input,
+    output: rate(above('output_cost_per_token')) ?? tier.output,
+    cacheWrite: rate(above('cache_creation_input_token_cost')) ?? tier.cacheWrite,
+    cacheRead: rate(above('cache_read_input_token_cost')) ?? tier.cacheRead,
+  } : null]
+}
+
 function toVal(entry) {
   const inp = entry.input_cost_per_token
   const out = entry.output_cost_per_token
@@ -151,7 +177,9 @@ function toVal(entry) {
   if (tier && priorityFast !== null && !Object.keys(entry).some((k) => k.endsWith(`_above_${tier.threshold / 1000}k_tokens${PRIORITY_KEY_SUFFIX}`))) {
     tier.fast = 1
   }
-  return [inp, out, entry.cache_creation_input_token_cost ?? null, entry.cache_read_input_token_cost ?? null, explicitFast ?? priorityFast, tier]
+  const val = [inp, out, entry.cache_creation_input_token_cost ?? null, entry.cache_read_input_token_cost ?? null, explicitFast ?? priorityFast, tier]
+  const flex = flexOf(entry, val[2], val[3], tier)
+  return flex ? [...val, flex] : val
 }
 
 // Pass 1: direct entries (no prefix) get priority

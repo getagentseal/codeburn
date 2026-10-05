@@ -28,6 +28,9 @@ export type ModelCosts = {
   /// rate; a slot the source omitted keeps the base. Optional: absent on
   /// models without a published tier and on tuples predating the extension.
   longContextTier?: LongContextTier
+  /// The Flex service tier's rates (LiteLLM `<rate>_flex`), priced instead of
+  /// these when a call runs under Flex. Absent: Flex bills at standard.
+  flex?: ModelCosts
 }
 
 /** Long-context pricing tier, e.g. OpenAI's above-272k or Anthropic's
@@ -78,13 +81,14 @@ type LiteLLMEntry = {
   provider_specific_entry?: { fast?: number }
 }
 
-// [input, output, cacheWrite, cacheRead, fastMultiplier, longContextTier?].
+// [input, output, cacheWrite, cacheRead, fastMultiplier, longContextTier?, flex?].
 // The trailing fast multiplier is carried straight from LiteLLM's
 // provider_specific_entry.fast so new models pick it up automatically — no
 // hand-maintained per-model table. The optional sixth slot carries the
-// vendor's long-context tier; older bundles without it parse unchanged.
+// vendor's long-context tier; older bundles without it parse unchanged. The
+// optional seventh is the Flex tier's own tuple, present only where published.
 type SnapshotTier = { threshold: number, input: number, output: number, cacheWrite: number | null, cacheRead: number | null, fast?: number }
-type SnapshotEntry = [number, number, number | null, number | null, (number | null)?, (SnapshotTier | null)?]
+type SnapshotEntry = [number, number, number | null, number | null, (number | null)?, (SnapshotTier | null)?, (SnapshotEntry | null)?]
 
 const LITELLM_URL = 'https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json'
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000
@@ -100,7 +104,8 @@ const CACHE_TTL_MS = 24 * 60 * 60 * 1000
 // 6: fastMultiplier is now derived from LiteLLM's `<rate>_priority` keys when the
 // source publishes no `provider_specific_entry.fast` (#1616), so a cached costs
 // object can carry a multiplier the pre-fix fetch left at 1.
-export const CACHE_SCHEMA_VERSION = 6
+// 7: ModelCosts carries the Flex tier's rates (`flex`), read from `<rate>_flex`.
+export const CACHE_SCHEMA_VERSION = 7
 const WEB_SEARCH_COST = 0.01
 const ONE_HOUR_CACHE_WRITE_MULTIPLIER_FROM_FIVE_MINUTE_RATE = 1.6
 
@@ -128,6 +133,7 @@ function buildCosts(
   cacheRead: number | null | undefined,
   fast: number | null | undefined,
   tier?: SnapshotTier | null,
+  flex?: SnapshotEntry | null,
 ): ModelCosts {
   return {
     inputCostPerToken: input,
@@ -145,6 +151,7 @@ function buildCosts(
       ...(tier.cacheRead !== null ? { cacheReadCostPerToken: tier.cacheRead } : {}),
       ...(tier.fast !== undefined ? { fastMultiplier: tier.fast } : {}),
     } } : {}),
+    ...(flex ? { flex: tupleToCosts(flex) } : {}),
   }
 }
 // For grok-4.6, prompt tokens mean input tokens plus cached input tokens for a
@@ -198,8 +205,8 @@ export function tieredCostsFor(model: string, baseCosts: ModelCosts, promptToken
 
 
 function tupleToCosts(raw: SnapshotEntry): ModelCosts {
-  const [input, output, cacheWrite, cacheRead, fast, tier] = raw
-  return buildCosts(input, output, cacheWrite, cacheRead, fast, tier)
+  const [input, output, cacheWrite, cacheRead, fast, tier, flex] = raw
+  return buildCosts(input, output, cacheWrite, cacheRead, fast, tier, flex)
 }
 
 function applyBuiltinPriceOverrides(pricing: Map<string, ModelCosts>): Map<string, ModelCosts> {
@@ -361,6 +368,34 @@ function tierOfLiteLLMEntry(entry: LiteLLMEntry): SnapshotTier | null {
   }
 }
 
+// OpenAI's Flex processing tier (Codex service_tier "flex") ships as explicit
+// `<rate>_flex` keys, `_above_<n>k_tokens_flex` for the long-context tier.
+// Read as rates, not one ratio: gpt-5.4's flex cache read is $0.13/M, not half
+// of $0.25/M, so a priority-style agreement check would drop it. Without both
+// input and output flex rates the row has no Flex price and Flex bills at
+// standard; any other bucket without a flex rate keeps its standard rate.
+// Mirrored in scripts/bundle-litellm.mjs flexOf.
+const FLEX_KEY_SUFFIX = '_flex'
+
+function flexOf(entry: LiteLLMEntry, cacheWrite: number | null, cacheRead: number | null, tier: SnapshotTier | null): SnapshotEntry | null {
+  const record = entry as Record<string, unknown>
+  const rate = (key: string) => {
+    const value = record[key + FLEX_KEY_SUFFIX]
+    return typeof value === 'number' ? safePerTokenRate(value) : null
+  }
+  const input = rate('input_cost_per_token')
+  const output = rate('output_cost_per_token')
+  if (input === null || output === null) return null
+  const above = (key: string) => `${key}_above_${tier!.threshold / 1000}k_tokens`
+  return [input, output, rate('cache_creation_input_token_cost') ?? cacheWrite, rate('cache_read_input_token_cost') ?? cacheRead, null, tier ? {
+    threshold: tier.threshold,
+    input: rate(above('input_cost_per_token')) ?? tier.input,
+    output: rate(above('output_cost_per_token')) ?? tier.output,
+    cacheWrite: rate(above('cache_creation_input_token_cost')) ?? tier.cacheWrite,
+    cacheRead: rate(above('cache_read_input_token_cost')) ?? tier.cacheRead,
+  } : null]
+}
+
 export function parseLiteLLMEntry(entry: LiteLLMEntry): ModelCosts | null {
   // The live LiteLLM map is remote JSON; a null (or non-object) value for a
   // model would make the field reads below throw and abort the whole pricing
@@ -375,13 +410,16 @@ export function parseLiteLLMEntry(entry: LiteLLMEntry): ModelCosts | null {
   if (tier && priorityFast !== null && !Object.keys(entry).some(k => k.endsWith(`_above_${tier.threshold / 1000}k_tokens${PRIORITY_KEY_SUFFIX}`))) {
     tier.fast = 1
   }
+  const cacheWrite = safePerTokenRate(entry.cache_creation_input_token_cost)
+  const cacheRead = safePerTokenRate(entry.cache_read_input_token_cost)
   return buildCosts(
     inputCost,
     outputCost,
-    safePerTokenRate(entry.cache_creation_input_token_cost),
-    safePerTokenRate(entry.cache_read_input_token_cost),
+    cacheWrite,
+    cacheRead,
     explicitFast ?? priorityFast,
     tier,
+    flexOf(entry, cacheWrite, cacheRead, tier),
   )
 }
 
@@ -554,6 +592,14 @@ const BUILTIN_ALIASES: Record<string, string> = {
   // A rollout that records the real model (API-key auth writes gpt-5.6-luna)
   // is priced as recorded. Display stays on autoModelNames.
   'codex-auto-review':             'gpt-5.6-luna',
+  // Luna Reserve: the quota Codex falls back to once ordinary usage runs out
+  // (openai/codex#42372, LUNA_RESERVE_MODEL in codex-rs/tui/src/model_catalog.rs).
+  // OpenAI's model catalog serves `gpt-reserve` with GPT-5.6 Luna's exact model
+  // config (instructions, tools, context window), not GPT-6 Luna's.
+  'gpt-reserve':                   'gpt-5.6-luna',
+  // Short spelling of the only 5.3 Spark model (openai/codex uses it as a
+  // config model id in codex-rs/app-server/tests/suite/v2/config_rpc.rs).
+  'gpt-5.3-spark':                 'gpt-5.3-codex-spark',
   'grok-build':                    'grok-build-0.1',
   // Grok Bot's desktop app serves opaque `sand-*` aliases and records no model
   // id at all, so there is nothing truthful to price it by. It is xAI's own
@@ -791,7 +837,7 @@ export function calculateLocalModelSavings(
   cacheCreationTokens: number,
   cacheReadTokens: number,
   webSearchRequests: number,
-  speed: 'standard' | 'fast' = 'standard',
+  speed: 'standard' | 'fast' | 'flex' = 'standard',
   oneHourCacheCreationTokens = 0,
 ): { savingsUSD: number; baselineModel: string } | null {
   const baseline = getLocalSavingsBaseline(rawModel)
@@ -1400,7 +1446,7 @@ export function calculateCost(
   cacheCreationTokens: number,
   cacheReadTokens: number,
   webSearchRequests: number,
-  speed: 'standard' | 'fast' = 'standard',
+  speed: 'standard' | 'fast' | 'flex' = 'standard',
   oneHourCacheCreationTokens = 0,
   provider?: string,
 ): number {
@@ -1425,7 +1471,7 @@ export function calculateCost(
   const safeCacheCreation = Math.max(safe(cacheCreationTokens), safeOneHourCacheCreation)
   const safeFiveMinuteCacheCreation = Math.max(0, safeCacheCreation - safeOneHourCacheCreation)
   const promptTokens = safe(inputTokens) + safe(cacheReadTokens)
-  const tieredCosts = tieredCostsFor(model, costs, promptTokens, provider)
+  const tieredCosts = tieredCostsFor(model, speed === 'flex' ? costs.flex ?? costs : costs, promptTokens, provider)
   const multiplier = speed === 'fast' ? tieredCosts.fastMultiplier : 1
 
   // Clamp negative inputs to 0. A corrupt JSONL that emits a negative token
@@ -1467,6 +1513,7 @@ const autoModelNames: Record<string, string> = {
   'qwen-auto': 'Qwen (auto)',
   'kimi-auto': 'Kimi (auto)',
   'codex-auto-review': 'Codex Auto Review',
+  'gpt-reserve': 'Luna Reserve',
 }
 
 const SHORT_NAMES: Record<string, string> = {

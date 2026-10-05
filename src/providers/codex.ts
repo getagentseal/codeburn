@@ -458,9 +458,11 @@ function serviceTierFromThreadSettings(payload: CodexEntry['payload']): string |
 // The billable speed a service tier maps to (#1616). `"priority"` is Codex's
 // Fast speed setting and bills through the priority tier; `"fast"` is accepted
 // too in case a build writes the speed name where the tier name belongs.
+// `"flex"` bills at the model's published Flex rates, or standard without them.
 // Everything else - `"default"`, an unrecognised value, no tier at all - is
 // standard, never a guess.
-function speedForServiceTier(tier: string): 'standard' | 'fast' {
+function speedForServiceTier(tier: string): 'standard' | 'fast' | 'flex' {
+  if (tier === 'flex') return 'flex'
   return tier === 'priority' || tier === 'fast' ? 'fast' : 'standard'
 }
 

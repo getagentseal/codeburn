@@ -1226,6 +1226,63 @@ describe('Codex activity ids (#1047)', () => {
   })
 })
 
+describe('Codex model aliases without their own rate', () => {
+  it('prices gpt-reserve (Luna Reserve) as the bundled GPT-5.6 Luna object and keeps its own label', () => {
+    expect(getModelCosts('gpt-reserve')).toBe(getModelCosts('gpt-5.6-luna'))
+    expect(calculateCost('gpt-reserve', 1_000_000, 1_000_000, 0, 0, 0)).toBeCloseTo(0.2 + 1.2, 10)
+    expect(getShortModelName('gpt-reserve')).toBe('Luna Reserve')
+  })
+
+  it('prices gpt-5.3-spark as GPT-5.3 Codex Spark', () => {
+    const spark = getModelCosts('gpt-5.3-codex-spark')
+    expect(spark).not.toBeNull()
+    expect(getModelCosts('gpt-5.3-spark')).toBe(spark)
+    expect(calculateCost('gpt-5.3-spark', 1_000_000, 1_000_000, 0, 0, 0)).toBeCloseTo(1.75 + 14, 10)
+    expect(getShortModelName('gpt-5.3-spark')).toBe('GPT-5.3 Codex Spark')
+  })
+})
+
+describe('Flex service tier pricing', () => {
+  it('prices a flex call at the model\'s published flex rates (gpt-5.4: cached input $0.13/M, not half)', () => {
+    const flex = 800 * 1.25e-6 + 200 * 1.3e-7 + 500 * 7.5e-6
+    expect(calculateCost('gpt-5.4', 800, 500, 0, 200, 0, 'flex', 0, 'codex')).toBeCloseTo(flex, 15)
+    expect(calculateCost('gpt-5.4', 800, 500, 0, 200, 0, 'standard', 0, 'codex')).toBeCloseTo(800 * 2.5e-6 + 200 * 2.5e-7 + 500 * 15e-6, 15)
+  })
+
+  it('applies the flex long-context tier above 272k prompt tokens', () => {
+    expect(calculateCost('gpt-5.4', 300_000, 1000, 0, 0, 0, 'flex', 0, 'codex')).toBeCloseTo(300_000 * 2.5e-6 + 1000 * 11.25e-6, 12)
+  })
+
+  it('falls back to standard rates for a model with no flex rates', () => {
+    expect(getModelCosts('gpt-5.3-codex')?.flex).toBeUndefined()
+    expect(calculateCost('gpt-5.3-codex', 800, 500, 0, 200, 0, 'flex', 0, 'codex'))
+      .toBe(calculateCost('gpt-5.3-codex', 800, 500, 0, 200, 0, 'standard', 0, 'codex'))
+  })
+
+  it('leaves the priority tier unchanged', () => {
+    const standard = calculateCost('gpt-5.4', 800, 500, 0, 200, 0, 'standard', 0, 'codex')
+    expect(calculateCost('gpt-5.4', 800, 500, 0, 200, 0, 'fast', 0, 'codex')).toBeCloseTo(standard * 2, 15)
+  })
+
+  it('reads flex rates off a live LiteLLM row; buckets without one keep their standard rate', () => {
+    const costs = parseLiteLLMEntry({
+      input_cost_per_token: 2e-6,
+      output_cost_per_token: 1e-5,
+      cache_read_input_token_cost: 2e-7,
+      input_cost_per_token_above_272k_tokens: 4e-6,
+      output_cost_per_token_above_272k_tokens: 1.5e-5,
+      input_cost_per_token_flex: 1e-6,
+      output_cost_per_token_flex: 5e-6,
+      input_cost_per_token_above_272k_tokens_flex: 2e-6,
+    } as never)!
+    expect(costs.flex?.inputCostPerToken).toBe(1e-6)
+    expect(costs.flex?.outputCostPerToken).toBe(5e-6)
+    expect(costs.flex?.cacheReadCostPerToken).toBe(2e-7)
+    expect(costs.flex?.longContextTier).toMatchObject({ thresholdTokens: 272_000, inputCostPerToken: 2e-6, outputCostPerToken: 1.5e-5 })
+    expect(parseLiteLLMEntry({ input_cost_per_token: 2e-6, output_cost_per_token: 1e-5, input_cost_per_token_flex: 1e-6 } as never)!.flex).toBeUndefined()
+  })
+})
+
 describe('Cursor house model pricing', () => {
   const cases: Array<[string, { input: number; output: number; cacheWrite: number; cacheRead: number }]> = [
     ['composer-2.5', { input: 0.5, output: 2.5, cacheWrite: 0.5, cacheRead: 0.2 }],

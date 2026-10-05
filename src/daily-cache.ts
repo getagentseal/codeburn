@@ -269,7 +269,11 @@ import type { DateRange, ProjectSummary } from './types.js'
 // Luna from then on (OpenAI's auto-review move), not gpt-5.5, so settled days
 // over-price it. Only cost falls; call counts are unchanged, so no
 // PENDING_REDERIVE_PROVIDER_VERSIONS entry is needed.
-export const DAILY_CACHE_VERSION = 54
+// v55: Codex service_tier "flex" bills at the published Flex rates instead of
+// standard, and `gpt-reserve` / `gpt-5.3-spark` price as GPT-5.6 Luna / GPT-5.3
+// Codex Spark instead of $0. Only cost moves; call counts are unchanged, so no
+// PENDING_REDERIVE_PROVIDER_VERSIONS entry is needed.
+export const DAILY_CACHE_VERSION = 55
 const MIN_SUPPORTED_VERSION = 28
 
 /// Providers whose per-day CALL COUNT means something different at

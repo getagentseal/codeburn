@@ -1872,6 +1872,34 @@ describe('codex provider - priority service tier (#1616)', () => {
     expect(calls[0]!.speed).toBe('standard')
   })
 
+  it('prices service_tier "flex" turns at the bundled flex rates, then priority at 2x', async () => {
+    const calls = await parseCalls([
+      sessionMeta({ session_id: 'sess-flex', model: 'gpt-5.4', timestamp: '2026-09-28T10:00:00Z' }),
+      threadSettings('flex', '2026-09-28T10:00:01Z'),
+      userMessage('flex turn', '2026-09-28T10:01:00Z'),
+      tokenCount({ timestamp: '2026-09-28T10:01:30Z', last: { input: 1000, cached: 200, output: 500 }, total: { input: 1000, cached: 200, output: 500, total: 1700 } }),
+      threadSettings('priority', '2026-09-28T10:02:00Z'),
+      userMessage('fast turn', '2026-09-28T10:03:00Z'),
+      tokenCount({ timestamp: '2026-09-28T10:03:30Z', last: { input: 1000, cached: 200, output: 500 }, total: { input: 2000, cached: 400, output: 1000, total: 3400 } }),
+    ])
+    expect(calls.map(call => call.speed)).toEqual(['flex', 'fast'])
+    // gpt-5.4 flex: $1.25 in, $0.13 cached, $7.50 out per 1M.
+    expect(calls[0]!.costUSD).toBeCloseTo(800 * 1.25e-6 + 200 * 1.3e-7 + 500 * 7.5e-6, 12)
+    expect(calls[1]!.costUSD).toBeCloseTo((800 * GPT54.input + 200 * GPT54.cacheRead + 500 * GPT54.output) * 2, 12)
+  })
+
+  it('prices a flex turn at standard when the model publishes no flex rates', async () => {
+    const calls = await parseCalls([
+      sessionMeta({ session_id: 'sess-flex-none', model: 'gpt-5.3-codex', timestamp: '2026-09-28T10:00:00Z' }),
+      threadSettings('flex', '2026-09-28T10:00:01Z'),
+      userMessage('flex turn', '2026-09-28T10:01:00Z'),
+      tokenCount({ timestamp: '2026-09-28T10:01:30Z', last: { input: 1000, cached: 200, output: 500 }, total: { input: 1000, cached: 200, output: 500, total: 1700 } }),
+    ])
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.speed).toBe('flex')
+    expect(calls[0]!.costUSD).toBeCloseTo(800 * 1.75e-6 + 200 * 1.75e-7 + 500 * 14e-6, 12)
+  })
+
   it('reads service_tier out of an oversized thread_settings record', async () => {
     // The compact head decoder handles rollout lines past the buffer
     // threshold; service_tier sits early in the payload, so it must survive

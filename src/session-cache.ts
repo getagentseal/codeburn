@@ -33,7 +33,7 @@ export type CachedCall = {
   /// True when `costUSD` (or the tokens it is priced from) is estimated rather
   /// than metered. Persisted so the estimated-cost marker survives the cache.
   isEstimated?: boolean
-  speed: 'standard' | 'fast'
+  speed: 'standard' | 'fast' | 'flex'
   timestamp: string
   tools: string[]
   bashCommands: string[]
@@ -416,8 +416,10 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // multiplier alone cannot reach them - they must re-parse to re-record it.
   // codex-auto-review-date-v1: the cached cache-write split follows the
   // auto-review model by date (gpt-5.4 before 30 Jul 2026, Luna after).
+  // codex-flex-reserve-v1: flex turns record speed 'flex' (cached calls hold
+  // 'standard'), and `gpt-reserve` now splits cache writes like GPT-5.6 Luna.
   // Compose every suffix so cached sessions receive all accounting fixes.
-  codex: 'mcp-attribution-v5-est-cost-active-timing-mcp-wait-rich-capture-v1-cross-provider-pr-v1-session-meta-model-v1-session-meta-fields-v1-codex-pricing-v1-codex-tps-v1-codex-mcp-skills-v1-activity-price-v1-fork-replay-burst-v1-codex-token-usage-record-v1-codex-priority-tier-v1-codex-auto-review-date-v1',
+  codex: 'mcp-attribution-v5-est-cost-active-timing-mcp-wait-rich-capture-v1-cross-provider-pr-v1-session-meta-model-v1-session-meta-fields-v1-codex-pricing-v1-codex-tps-v1-codex-mcp-skills-v1-activity-price-v1-fork-replay-burst-v1-codex-token-usage-record-v1-codex-priority-tier-v1-codex-auto-review-date-v1-codex-flex-reserve-v1',
   // reported-cost-v1: cached Crush calls stored costUSD: undefined and must
   // re-parse to keep the recorded session cost.
   crush: 'reported-cost-v1',
@@ -1141,7 +1143,7 @@ function validateCall(c: unknown): c is CachedCall {
     && typeof o['model'] === 'string'
     && typeof o['deduplicationKey'] === 'string'
     && typeof o['timestamp'] === 'string'
-    && (o['speed'] === 'standard' || o['speed'] === 'fast')
+    && (o['speed'] === 'standard' || o['speed'] === 'fast' || o['speed'] === 'flex')
     && isOptionalNum(o['costUSD'])
     && isOptionalNum(o['fallbackCostUSD'])
     && isOptionalBool(o['isEstimated'])
