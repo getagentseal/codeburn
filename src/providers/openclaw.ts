@@ -237,7 +237,15 @@ function getOpenClawDirs(): string[] {
       osHome = resolve(prefix, '..', 'home')
     }
   }
-  osHome ??= homedir()
+  if (!osHome) {
+    try {
+      osHome = normalizeHomeDir(homedir())
+    } catch {
+      // OpenClaw's required-home resolver falls back to cwd when the OS
+      // lookup cannot provide a home. Apply the same rule without aborting.
+    }
+  }
+  osHome ??= process.cwd()
   const expandHome = (path: string, home: string): string => resolve(path.replace(/^~(?=$|[\\/])/, () => home))
   // OpenClaw resolves state overrides against its effective home. Trim before
   // expanding so a quoted "~/state" works just like its own path resolver.

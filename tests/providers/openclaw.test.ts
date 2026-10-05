@@ -9,6 +9,17 @@ import { createRequire } from 'node:module'
 import zlib from 'node:zlib'
 
 let sqliteRuntimeAvailable = true
+const homeResolver = vi.hoisted(() => ({ value: undefined as string | undefined, throws: false }))
+vi.mock('os', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('os')>()
+  return {
+    ...actual,
+    homedir: () => {
+      if (homeResolver.throws) throw new Error('fixture home lookup failed')
+      return homeResolver.value ?? actual.homedir()
+    },
+  }
+})
 vi.mock('../../src/sqlite.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/sqlite.js')>()
   return {
@@ -681,6 +692,8 @@ describe('OpenClaw state directory discovery', () => {
   })
 
   afterEach(async () => {
+    homeResolver.value = undefined
+    homeResolver.throws = false
     vi.unstubAllEnvs()
     await rm(root, { recursive: true, force: true })
   })
@@ -833,5 +846,19 @@ describe('OpenClaw state directory discovery', () => {
     vi.stubEnv('PREFIX', join(termux, 'usr'))
     vi.stubEnv('ANDROID_DATA', '/data')
     expect((await createOpenClawProvider().probeRoots!())[0].path).toBe(join(termux, 'home', '.openclaw', 'agents'))
+  })
+
+  it.each(['null', 'undefined', ''])('uses cwd when every home candidate is unset, including the OS value (%j)', async value => {
+    vi.stubEnv('HOME', value)
+    vi.stubEnv('USERPROFILE', '')
+    homeResolver.value = value
+    expect((await createOpenClawProvider().probeRoots!())[0].path).toBe(join(process.cwd(), '.openclaw', 'agents'))
+  })
+
+  it('uses cwd when the OS home lookup fails and no home override exists', async () => {
+    vi.stubEnv('HOME', '')
+    vi.stubEnv('USERPROFILE', '')
+    homeResolver.throws = true
+    expect((await createOpenClawProvider().probeRoots!())[0].path).toBe(join(process.cwd(), '.openclaw', 'agents'))
   })
 })

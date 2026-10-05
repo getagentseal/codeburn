@@ -14,6 +14,8 @@ trimmed, relative paths resolve from the current working directory, and a leadin
 `~` expands against OpenClaw's effective home: `OPENCLAW_HOME`, then `HOME`,
 `USERPROFILE`, the Termux home fallback, and finally the OS home. Blank home
 values and the literal strings `undefined` and `null` are treated as unset.
+If no home candidate resolves, OpenClaw falls back to the current working
+directory, and CodeBurn uses that same fallback.
 This follows OpenClaw's [state directory resolver](https://github.com/openclaw/openclaw/blob/main/src/config/state-dir.ts)
 and [home path resolver](https://github.com/openclaw/openclaw/blob/main/src/infra/home-dir.ts).
 
