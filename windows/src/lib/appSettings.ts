@@ -69,9 +69,6 @@ export function themeCycleLabel(current: ThemeChoice): string {
   return t(themeMenuKey(current))
 }
 
-/// What `windows-settings.json` stores. `system` follows the Windows UI language.
-export type LanguageChoice = 'system' | 'en' | 'zh-Hans'
-
 /// UsageRefreshCadence. Auto is the adaptive default, manual never auto-spawns.
 export const USAGE_CADENCES: Array<{ id: number; label: string }> = [
   // The mac's label promises "less on battery", which is the adaptive refresh that comes
@@ -108,7 +105,6 @@ export type AppSettings = {
   menubarScope: MenubarScope
   accent: string
   theme: ThemeChoice
-  language: LanguageChoice
   trayBadge: boolean
   usageRefreshSeconds: number
   quotaCadenceSeconds: number
@@ -121,7 +117,6 @@ export const DEFAULT_SETTINGS: AppSettings = {
   menubarScope: 'local',
   accent: 'ember',
   theme: 'system',
-  language: 'system',
   // Off by default: a second tray icon for the number reads as clutter beside the logo, so
   // the figure lives in the tooltip and the menu until someone asks for it.
   trayBadge: false,
@@ -147,7 +142,6 @@ export function parseSettings(raw: Record<string, unknown>): AppSettings {
     menubarScope: oneOf(raw.menubarScope, ['local', 'combined'] as const, DEFAULT_SETTINGS.menubarScope),
     accent: typeof raw.accent === 'string' ? raw.accent : DEFAULT_SETTINGS.accent,
     theme: oneOf(raw.theme, ['system', 'light', 'dark'] as const, DEFAULT_SETTINGS.theme),
-    language: oneOf(raw.language, ['system', 'en', 'zh-Hans'] as const, DEFAULT_SETTINGS.language),
     trayBadge: typeof raw.trayBadge === 'boolean' ? raw.trayBadge : DEFAULT_SETTINGS.trayBadge,
     usageRefreshSeconds: oneOfNumber(raw.usageRefreshSeconds, USAGE_CADENCES.map(c => c.id), DEFAULT_SETTINGS.usageRefreshSeconds),
     quotaCadenceSeconds: oneOfNumber(raw.quotaCadenceSeconds, QUOTA_CADENCES.map(c => c.id), DEFAULT_SETTINGS.quotaCadenceSeconds),

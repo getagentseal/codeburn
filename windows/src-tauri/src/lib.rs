@@ -1190,12 +1190,10 @@ mod commands {
     }
 
     /// The usage row at the top of the tray menu: disabled, and there only to say what today
-    /// cost without opening the popover. `english` is the line before translation, and the
-    /// row is shortened to that line's display-cell count so a wide-glyph translation cannot
-    /// draw wider. Static titles are not clamped.
+    /// cost without opening the popover. The native menu sizes itself to the translated text.
     #[tauri::command]
-    pub fn set_tray_usage(text: String, english: String) {
-        super::set_tray_usage_text(&crate::i18n::clamp_usage(&text, &english));
+    pub fn set_tray_usage(text: String) {
+        super::set_tray_usage_text(&text);
     }
 
     /// `text` is a short spend string ("$87", "142", "1.2K"); `None` hides the badge icon.

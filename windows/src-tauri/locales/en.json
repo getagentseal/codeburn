@@ -1,4 +1,6 @@
 {
+  "%@ · no usage yet": "%@ · no usage yet",
+  "%1$lld of %2$lld devices": "%1$lld of %2$lld devices",
   "%lld calls": "%lld calls",
   "1 call": "1 call",
   "6 Months": "6 Months",
@@ -6,7 +8,7 @@
   "Bottom": "Bottom",
   "Capacity Dock Settings…": "Capacity Dock Settings…",
   "Check for Updates": "Check for Updates",
-  "CodeBurn %1$@ · %2$lld of %3$lld devices reporting": "CodeBurn %1$@ · %2$lld of %3$lld devices reporting",
+  "CodeBurn %1$@ · %2$lld of %3$lld devices reporting": "CodeBurn · %1$@ · %2$lld of %3$lld devices reporting",
   "Dock to Edge": "Dock to Edge",
   "Hide Capacity Dock": "Hide Capacity Dock",
   "Language": "Language",

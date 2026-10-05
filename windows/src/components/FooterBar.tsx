@@ -1,7 +1,7 @@
 import type { CurrencyState } from '../lib/currency'
 import { CURRENCY_CODES } from '../lib/currency'
 import { themeCycleLabel, type ThemeChoice } from '../lib/appSettings'
-import { useI18nRevision } from '../lib/i18n'
+import { t, useI18nRevision } from '../lib/i18n'
 import { TRAY_BADGE_SUPPORTED } from '../lib/platform'
 import { DropMenu } from './DropMenu'
 import { CoinIcon, DownloadIcon, EllipsisIcon, RefreshIcon, TerminalIcon } from './Icons'
@@ -66,12 +66,12 @@ export function FooterBar({
         label={<EllipsisIcon size={12} />}
         className="dropmenu-more"
         items={[
-          { id: 'settings', label: 'Settings...' },
+          { id: 'settings', label: t('Settings…') },
           ...(TRAY_BADGE_SUPPORTED
             ? [{ id: 'badge', label: "Show today's cost in tray", checked: trayBadge, separatorBefore: true }]
             : []),
           { id: 'theme', label: themeCycleLabel(theme) },
-          { id: 'quit', label: 'Quit CodeBurn', separatorBefore: true },
+          { id: 'quit', label: t('Quit CodeBurn'), separatorBefore: true },
         ]}
         footnote={footnote}
         onSelect={id => {

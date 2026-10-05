@@ -67,12 +67,12 @@ pub fn format_message(key: &str, args: &[Value]) -> String {
     fill(&lookup(key), args)
 }
 
-/// Stored preference. Anything other than the two shipped languages reads as `system`.
+/// Shared config preference; only a missing language follows the system.
 pub fn normalize_preference(value: Option<&str>) -> &'static str {
     match value {
-        Some("en") => "en",
-        Some("zh-Hans") => "zh-Hans",
-        _ => "system",
+        Some("zh-CN") => "zh-Hans",
+        Some(_) => "en",
+        None => "system",
     }
 }
 
@@ -112,7 +112,7 @@ fn language_is(tag: &str, want: &str) -> bool {
 }
 
 fn language_preference() -> &'static str {
-    let stored = crate::settings::read();
+    let stored = crate::config::read();
     normalize_preference(stored.get("language").and_then(Value::as_str))
 }
 
@@ -123,63 +123,6 @@ fn resolved_language() -> String {
     }
     let languages = host_ui_languages();
     resolve_language(language_preference(), languages.iter().map(String::as_str)).to_owned()
-}
-
-/// Display cells `text` occupies. Han, kana and Hangul count as 2, matching
-/// `MenubarSecondRow.displayCells`. `6 小时 2 分` is 8 characters and 11 cells.
-pub fn display_cells(text: &str) -> usize {
-    text.chars().map(|ch| scalar_cells(ch as u32)).sum()
-}
-
-fn scalar_cells(value: u32) -> usize {
-    match value {
-        0x1100..=0x115F
-        | 0x2E80..=0xA4CF
-        | 0xAC00..=0xD7A3
-        | 0xF900..=0xFAFF
-        | 0xFE30..=0xFE6F
-        | 0xFF00..=0xFF60
-        | 0xFFE0..=0xFFE6
-        | 0x20000..=0x3FFFD => 2,
-        _ => 1,
-    }
-}
-
-/// Shortens `text` to `limit` display cells, marking the cut with an ellipsis. Returns ""
-/// when there is no room for one character plus the mark, so the caller never shows a bare
-/// "…". An all-Latin line is unchanged when it already fits.
-pub fn abbreviate(text: &str, limit: usize) -> String {
-    if display_cells(text) <= limit {
-        return text.to_owned();
-    }
-    if limit < 2 {
-        return String::new();
-    }
-    let mut kept = String::new();
-    let mut used = 0usize;
-    for ch in text.chars() {
-        let width = scalar_cells(ch as u32);
-        if used + width > limit - 1 {
-            break;
-        }
-        kept.push(ch);
-        used += width;
-    }
-    while kept.ends_with(' ') {
-        kept.pop();
-    }
-    if kept.is_empty() {
-        String::new()
-    } else {
-        kept.push('…');
-        kept
-    }
-}
-
-/// The usage row may not draw wider than the English line it replaces. Static titles are
-/// not passed through here: the menubar's 24-cell budget does not apply to them.
-pub fn clamp_usage(translated: &str, english: &str) -> String {
-    abbreviate(translated, display_cells(english))
 }
 
 #[derive(Clone, Copy)]
@@ -477,17 +420,41 @@ mod tests {
     }
 
     #[test]
-    fn a_stored_language_keeps_zh_hans_and_reads_garbage_as_system() {
-        assert_eq!(normalize_preference(Some("zh-Hans")), "zh-Hans");
+    fn shared_config_language_maps_zh_cn_and_defaults_only_when_missing() {
+        assert_eq!(normalize_preference(Some("zh-Hans")), "en");
         assert_eq!(normalize_preference(Some("en")), "en");
-        assert_eq!(normalize_preference(Some("garbage")), "system");
-        assert_eq!(normalize_preference(Some("zh-CN")), "system");
+        assert_eq!(normalize_preference(Some("garbage")), "en");
+        assert_eq!(normalize_preference(Some("zh-CN")), "zh-Hans");
+        assert_eq!(normalize_preference(Some("zh-TW")), "en");
         assert_eq!(normalize_preference(None), "system");
+    }
+
+    #[test]
+    fn english_shortfall_tooltip_keeps_the_separator_after_codeburn() {
+        let _lock = LocaleLock::acquire("en");
+        assert_eq!(
+            format_message(
+                "CodeBurn %1$@ · %2$lld of %3$lld devices reporting",
+                &[Value::from("$4"), Value::from(1), Value::from(2)]
+            ),
+            "CodeBurn · $4 · 1 of 2 devices reporting"
+        );
     }
 
     #[test]
     fn format_fills_calls_today_and_the_device_shortfall() {
         let _lock = LocaleLock::acquire("zh-Hans");
+        assert_eq!(
+            format_message("%@ · no usage yet", &[Value::from("本周")]),
+            "本周 · 暂无用量"
+        );
+        assert_eq!(
+            format_message(
+                "%1$lld of %2$lld devices",
+                &[Value::from(1), Value::from(2)]
+            ),
+            "1/2 台设备"
+        );
         assert_eq!(format_message("1 call", &[]), "1 次调用");
         assert_eq!(format_message("%lld calls", &[Value::from(3)]), "3 次调用");
         assert_eq!(
@@ -504,23 +471,5 @@ mod tests {
             ),
             "CodeBurn $4 · 1/2 台设备已上报"
         );
-    }
-
-    #[test]
-    fn wide_glyphs_count_as_two_cells_and_abbreviate_to_the_english_line() {
-        let sample = "6 小时 2 分";
-        assert_eq!(display_cells(sample), 11);
-        assert_eq!(sample.chars().count(), 8);
-
-        let english = "Today · $1.0 · 1 call";
-        assert_eq!(abbreviate(english, display_cells(english)), english);
-        assert_eq!(clamp_usage(english, english), english);
-
-        let wide = "今天今天今天今天今天今天今天今天";
-        let clamped = abbreviate(wide, display_cells(english));
-        assert!(display_cells(&clamped) <= display_cells(english));
-        assert_ne!(clamped, "…");
-        assert!(clamped.ends_with('…'));
-        assert_eq!(abbreviate("小时", display_cells("Hi")), "");
     }
 }

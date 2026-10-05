@@ -1,4 +1,6 @@
 {
+  "%@ · no usage yet": "%@ · 暂无用量",
+  "%1$lld of %2$lld devices": "%1$lld/%2$lld 台设备",
   "%lld calls": "%lld 次调用",
   "1 call": "1 次调用",
   "6 Months": "6 个月",

@@ -4,7 +4,7 @@ import { listen } from '@tauri-apps/api/event'
 
 import type { MenubarPayload } from './lib/payload'
 import type { CurrencyState } from './lib/currency'
-import { USD, formatCurrency, formatTokens, plural, trayBadgeText } from './lib/currency'
+import { USD, formatCurrency, formatTokens, trayBadgeText } from './lib/currency'
 import { PayloadCache, sameSelection, selectionKey, type Selection } from './lib/cache'
 import { relativePast } from './lib/dates'
 import { applyTheme, readSetting, writeSetting } from './lib/settings'
@@ -487,18 +487,13 @@ export function App() {
     let live = true
     const periodLabel = MENUBAR_PERIODS.find(p => p.id === settings.menubarPeriod)?.label ?? 'Today'
     const figure = `${trayFigure}`
-    const devices = trayShortfall ? ` · ${trayShortfall.reachable}/${trayShortfall.total} devices` : ''
-    const englishCalls = trayCurrent ? plural(trayCurrent.calls, 'call') : ''
-    const english = trayCurrent
-      ? `${periodLabel} · ${figure} · ${englishCalls}${devices}`
-      : `${periodLabel} · no usage yet`
     void (async () => {
       try {
         let text: string
         if (!trayCurrent) {
           text = settings.menubarPeriod === 'today'
             ? t('Today · no usage yet')
-            : `${t(periodLabel)} · no usage yet`
+            : await formatMessage('%@ · no usage yet', [t(periodLabel)])
         } else {
           const calls = trayCurrent.calls === 1
             ? t('1 call')
@@ -506,9 +501,11 @@ export function App() {
           text = settings.menubarPeriod === 'today'
             ? await formatMessage('Today · %1$@ · %2$@', [figure, calls])
             : `${t(periodLabel)} · ${figure} · ${calls}`
-          text += devices
+          if (trayShortfall) {
+            text += ` · ${await formatMessage('%1$lld of %2$lld devices', [trayShortfall.reachable, trayShortfall.total])}`
+          }
         }
-        if (live) await invoke('set_tray_usage', { text, english })
+        if (live) await invoke('set_tray_usage', { text })
       } catch {
         // The row already on the menu stays until the webview can send another.
       }
