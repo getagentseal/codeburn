@@ -29,6 +29,7 @@ import {
   modelKeyMatches,
   snapshotPricingState,
   restorePricingState,
+  pricingModelAt,
 } from '../src/models.js'
 import { getDailyCacheConfigHash } from '../src/usage-aggregator.js'
 import snapshotData from '../src/data/litellm-snapshot.json' with { type: 'json' }
@@ -1136,8 +1137,8 @@ describe('Cursor model variants resolve to pricing', () => {
     ['claude-4.6-haiku', 'claude-haiku-4-5'],
     // Cursor auto proxy
     ['cursor-auto', 'claude-sonnet-4-5'],
-    // Codex activity surface (official rate card, observed raw id)
-    ['codex-auto-review', 'gpt-5.5'],
+    // Codex auto-review alias: forward default is GPT-5.6 Luna (30 Jul 2026)
+    ['codex-auto-review', 'gpt-5.6-luna'],
     // OpenAI variants Cursor emits
     ['gpt-5', 'gpt-5'],
     ['gpt-5-fast', 'gpt-5'],
@@ -1178,12 +1179,41 @@ describe('Codex activity ids (#1047)', () => {
     expect(getShortModelName('codex-auto-review')).toBe('Codex Auto Review')
   })
 
-  it('prices as the exact bundled GPT-5.5 object, not an invented rate', () => {
-    expect(getModelCosts('codex-auto-review')).toBe(getModelCosts('gpt-5.5'))
+  it('prices as the exact bundled GPT-5.6 Luna object, not an invented rate', () => {
+    expect(getModelCosts('codex-auto-review')).toBe(getModelCosts('gpt-5.6-luna'))
     const auto = calculateCost('codex-auto-review', 1_000_000, 1_000_000, 0, 0, 0)
-    const gpt55 = calculateCost('gpt-5.5', 1_000_000, 1_000_000, 0, 0, 0)
     expect(auto).toBeGreaterThan(0)
-    expect(auto).toBe(gpt55)
+    expect(auto).toBe(calculateCost('gpt-5.6-luna', 1_000_000, 1_000_000, 0, 0, 0))
+  })
+
+  it('prices auto-review by date: gpt-5.4 before 30 Jul 2026, Luna from then on', () => {
+    expect(pricingModelAt('codex-auto-review', '2026-07-29T23:59:59.999Z')).toBe('gpt-5.4')
+    expect(pricingModelAt('codex-auto-review', '2026-05-06T16:53:28Z')).toBe('gpt-5.4')
+    expect(pricingModelAt('codex-auto-review', '2026-07-30T00:00:00.000Z')).toBe('codex-auto-review')
+    expect(pricingModelAt('codex-auto-review', '2026-07-30T01:30:00+02:00')).toBe('gpt-5.4')
+    expect(pricingModelAt('codex-auto-review', '')).toBe('codex-auto-review')
+    expect(pricingModelAt('codex-auto-review', undefined)).toBe('codex-auto-review')
+    expect(pricingModelAt('gpt-5.6-luna', '2026-05-06T16:53:28Z')).toBe('gpt-5.6-luna')
+    expect(pricingModelAt('gpt-5.5', '2026-05-06T16:53:28Z')).toBe('gpt-5.5')
+  })
+
+  it('lets a user alias for auto-review win over the date rule', () => {
+    setModelAliases({ 'codex-auto-review': 'gpt-5.5' })
+    try {
+      expect(pricingModelAt('codex-auto-review', '2026-05-06T16:53:28Z')).toBe('codex-auto-review')
+    } finally {
+      setModelAliases({})
+    }
+  })
+
+  it('lets a user price override for auto-review win over the date rule', () => {
+    setPriceOverrides({ 'codex-auto-review': { input: 1, output: 2 } })
+    try {
+      expect(pricingModelAt('codex-auto-review', '2026-05-06T16:53:28Z')).toBe('codex-auto-review')
+      expect(calculateCost(pricingModelAt('codex-auto-review', '2026-05-06T16:53:28Z'), 1_000_000, 1_000_000, 0, 0, 0)).toBeCloseTo(3)
+    } finally {
+      setPriceOverrides({})
+    }
   })
 
   it('does not invent a family or an unobserved sibling id', () => {
@@ -1638,7 +1668,7 @@ describe('findUnpricedModels', () => {
     ]
     expect(findUnpricedModels(rows)).toEqual([
       { model: 'warp', calls: 449, tokens: 17_700_000 },
-      // Note: NOT 'codex-auto-review' — #1056 aliases it to gpt-5.5, so it
+      // Note: NOT 'codex-auto-review' — it aliases to gpt-5.6-luna, so it
       // now resolves a billable rate and is filtered out here (a $0 row for
       // it is stale data, not evidence of missing pricing). It still left
       // the flat-rate list, verified separately in the "Codex activity ids

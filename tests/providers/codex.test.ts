@@ -1605,7 +1605,7 @@ describe('codex provider - token_usage_record accounting', () => {
 })
 
 describe('codex auto-review pricing (#1047)', () => {
-  it('prices an auto-review whose prompt crosses gpt-5.5\'s above-272k tier at the tier (#1076)', async () => {
+  it('prices a pre-30-Jul auto-review whose prompt crosses gpt-5.4\'s above-272k tier at the tier (#1076)', async () => {
     // End-to-end through the codex provider path: the gate is keyed on the
     // provider string threaded from codex.ts, so a typo there would leave the
     // call at base rates and fail this. 400k input puts the prompt well past
@@ -1625,16 +1625,16 @@ describe('codex auto-review pricing (#1047)', () => {
       calls.push(call)
     }
     expect(calls).toHaveLength(1)
-    // gpt-5.5 tier (bundled): input 1e-5, output 4.5e-5 - explicit arithmetic,
+    // gpt-5.4 tier (bundled): input 5e-6, output 2.25e-5 - explicit arithmetic,
     // not just self-consistency with calculateCost.
-    expect(calls[0]!.costUSD).toBeCloseTo(400_000 * 1e-5 + 1_000 * 4.5e-5, 12)
-    expect(calls[0]!.costUSD).toBe(calculateCost('gpt-5.5', 400_000, 1_000, 0, 0, 0, 'standard', 0, 'codex'))
+    expect(calls[0]!.costUSD).toBeCloseTo(400_000 * 5e-6 + 1_000 * 2.25e-5, 12)
+    expect(calls[0]!.costUSD).toBe(calculateCost('gpt-5.4', 400_000, 1_000, 0, 0, 0, 'standard', 0, 'codex'))
     // The same call without the codex provider stays at base rates (the
-    // refreshed bundle's gpt-5.5 base is 5e-6/3e-5) - the gate that keeps the
+    // bundle's gpt-5.4 base is 2.5e-6/1.5e-5) - the gate that keeps the
     // real Copilot billing of tests/parser.test.ts (c4) intact.
-    expect(calculateCost('gpt-5.5', 400_000, 1_000, 0, 0, 0)).toBeCloseTo(400_000 * 5e-6 + 1_000 * 3e-5, 12)
+    expect(calculateCost('gpt-5.4', 400_000, 1_000, 0, 0, 0)).toBeCloseTo(400_000 * 2.5e-6 + 1_000 * 1.5e-5, 12)
   })
-  it('parses auto-review as itself and prices it as GPT-5.5', async () => {
+  it('parses auto-review as itself and prices it as GPT-5.4 before 30 Jul 2026', async () => {
     const filePath = await writeSession(tmpDir, '2026-04-14', 'rollout-auto-review.jsonl', [
       sessionMeta({ session_id: 'sess-auto', model: 'codex-auto-review' }),
       userMessage('review the PR'),
@@ -1651,7 +1651,50 @@ describe('codex auto-review pricing (#1047)', () => {
     }
     expect(calls).toHaveLength(1)
     expect(calls[0]!.model).toBe('codex-auto-review')
-    expect(calls[0]!.costUSD).toBe(calculateCost('gpt-5.5', 1_000_000, 1_000_000, 0, 0, 0, 'standard', 0, 'codex'))
+    expect(calls[0]!.costUSD).toBe(calculateCost('gpt-5.4', 1_000_000, 1_000_000, 0, 0, 0, 'standard', 0, 'codex'))
+  })
+
+  it('prices auto-review from 30 Jul 2026 as GPT-5.6 Luna', async () => {
+    const filePath = await writeSession(tmpDir, '2026-07-30', 'rollout-auto-review-luna.jsonl', [
+      sessionMeta({ session_id: 'sess-auto-luna', model: 'codex-auto-review' }),
+      userMessage('review the PR'),
+      tokenCount({
+        timestamp: '2026-07-30T00:00:00Z',
+        last: { input: 100_000, output: 100_000 },
+        total: { total: 200_000 },
+      }),
+    ])
+    const provider = createCodexProvider(tmpDir)
+    const calls: ParsedProviderCall[] = []
+    for await (const call of provider.createSessionParser({ path: filePath, project: 'test', provider: 'codex' }, new Set()).parse()) {
+      calls.push(call)
+    }
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.model).toBe('codex-auto-review')
+    // Luna base (bundled): input 2e-7, output 1.2e-6.
+    expect(calls[0]!.costUSD).toBeCloseTo(100_000 * 2e-7 + 100_000 * 1.2e-6, 12)
+    expect(calls[0]!.costUSD).toBe(calculateCost('gpt-5.6-luna', 100_000, 100_000, 0, 0, 0, 'standard', 0, 'codex'))
+  })
+
+  it('prices a recorded gpt-5.6-luna as recorded, whatever the date', async () => {
+    const filePath = await writeSession(tmpDir, '2026-04-14', 'rollout-auto-review-recorded.jsonl', [
+      sessionMeta({ session_id: 'sess-auto-recorded', model: 'codex-auto-review' }),
+      JSON.stringify({ type: 'turn_context', timestamp: '2026-04-14T10:00:30Z', payload: { model: 'gpt-5.6-luna' } }),
+      userMessage('review the PR'),
+      tokenCount({
+        timestamp: '2026-04-14T10:01:00Z',
+        last: { input: 1_000_000, output: 1_000_000 },
+        total: { total: 2_000_000 },
+      }),
+    ])
+    const provider = createCodexProvider(tmpDir)
+    const calls: ParsedProviderCall[] = []
+    for await (const call of provider.createSessionParser({ path: filePath, project: 'test', provider: 'codex' }, new Set()).parse()) {
+      calls.push(call)
+    }
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.model).toBe('gpt-5.6-luna')
+    expect(calls[0]!.costUSD).toBe(calculateCost('gpt-5.6-luna', 1_000_000, 1_000_000, 0, 0, 0, 'standard', 0, 'codex'))
   })
 
   it('discards a warm v11 versioned $0 exact hit so unchanged rollouts reprice', async () => {
@@ -1698,7 +1741,7 @@ describe('codex auto-review pricing (#1047)', () => {
       }
       expect(calls).toHaveLength(1)
       expect(calls[0]!.costUSD).toBeGreaterThan(0)
-      expect(calls[0]!.costUSD).toBe(calculateCost('gpt-5.5', 1_000_000, 1_000_000, 0, 0, 0, 'standard', 0, 'codex'))
+      expect(calls[0]!.costUSD).toBe(calculateCost('gpt-5.4', 1_000_000, 1_000_000, 0, 0, 0, 'standard', 0, 'codex'))
     } finally {
       clearCodexMemCaches()
       if (prev === undefined) delete process.env['CODEBURN_CACHE_DIR']

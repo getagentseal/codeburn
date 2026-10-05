@@ -414,8 +414,10 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // (service_tier "priority") now bill at the priority rates. Cached calls
   // hold speed: 'standard' and are re-priced from that field on read, so the
   // multiplier alone cannot reach them - they must re-parse to re-record it.
+  // codex-auto-review-date-v1: the cached cache-write split follows the
+  // auto-review model by date (gpt-5.4 before 30 Jul 2026, Luna after).
   // Compose every suffix so cached sessions receive all accounting fixes.
-  codex: 'mcp-attribution-v5-est-cost-active-timing-mcp-wait-rich-capture-v1-cross-provider-pr-v1-session-meta-model-v1-session-meta-fields-v1-codex-pricing-v1-codex-tps-v1-codex-mcp-skills-v1-activity-price-v1-fork-replay-burst-v1-codex-token-usage-record-v1-codex-priority-tier-v1',
+  codex: 'mcp-attribution-v5-est-cost-active-timing-mcp-wait-rich-capture-v1-cross-provider-pr-v1-session-meta-model-v1-session-meta-fields-v1-codex-pricing-v1-codex-tps-v1-codex-mcp-skills-v1-activity-price-v1-fork-replay-burst-v1-codex-token-usage-record-v1-codex-priority-tier-v1-codex-auto-review-date-v1',
   // reported-cost-v1: cached Crush calls stored costUSD: undefined and must
   // re-parse to keep the recorded session cost.
   crush: 'reported-cost-v1',

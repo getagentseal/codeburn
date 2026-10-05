@@ -5,7 +5,7 @@ import { createHash } from 'crypto'
 import { performance } from 'node:perf_hooks'
 import { basename, dirname, join, resolve, sep } from 'path'
 import { FS_SCAN_CONCURRENCY, mapWithConcurrency, readSessionLines } from './fs-utils.js'
-import { billableOutputTokens, calculateCost, calculateLocalModelSavings, getShortModelName, modelRowKey, isProxiedPath, getProxyPathsConfigHash, getModelAliasesConfigHash, getPriceOverridesConfigHash, getLocalModelSavingsConfigHash, recordedCostFallback } from './models.js'
+import { billableOutputTokens, calculateCost, calculateLocalModelSavings, getShortModelName, modelRowKey, pricingModelAt, isProxiedPath, getProxyPathsConfigHash, getModelAliasesConfigHash, getPriceOverridesConfigHash, getLocalModelSavingsConfigHash, recordedCostFallback } from './models.js'
 import { resolveSubagentAttribution, sessionIdentity } from './sessions-report.js'
 import { normalizeContentBlocks, flatSlice, flatString } from './content-utils.js'
 import { discoverAllSessions, discoverAllSessionsWithFailures, getProvider } from './providers/index.js'
@@ -2850,7 +2850,7 @@ function cachedCallToApiCall(call: CachedCall): ParsedApiCall {
   // disagree about whether reasoning is already inside output (#1075).
   const outputForCost = billableOutputTokens(call.provider, u.outputTokens, u.reasoningTokens)
   const costUSD = calculateCost(
-    call.model, u.inputTokens, outputForCost,
+    pricingModelAt(call.model, call.timestamp), u.inputTokens, outputForCost,
     u.cacheCreationInputTokens, u.cacheReadInputTokens,
     u.webSearchRequests, call.speed, u.cacheCreationOneHourTokens, call.provider,
   )

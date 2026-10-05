@@ -67,3 +67,28 @@ it('prices a codex call the same on a cold parse and a cache-rehydrated read', a
   expect(coldCost).toBeCloseTo(EXPECTED, 12)
   expect(warmCost).toBeCloseTo(EXPECTED, 12)
 })
+
+it('prices a pre-30-Jul auto-review as gpt-5.4 on a cold parse and a cache-rehydrated read', async () => {
+  const sessionDir = join(CODEX_HOME, 'sessions', '2026', '06', '01')
+  await mkdir(sessionDir, { recursive: true })
+  await mkdir(CACHE_DIR, { recursive: true })
+  const usage = { input_tokens: 1000, cached_input_tokens: 200, output_tokens: 1000, reasoning_output_tokens: 400, total_tokens: 2000 }
+  await writeFile(join(sessionDir, 'rollout-auto-review-date.jsonl'), [
+    JSON.stringify({ type: 'session_meta', timestamp: '2026-06-01T10:00:00Z', payload: { session_id: 'sauto', model: 'codex-auto-review', cwd: '/Users/test/proj', originator: 'codex_cli_rs' } }),
+    JSON.stringify({ type: 'response_item', timestamp: '2026-06-01T10:00:10Z', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'review' }] } }),
+    JSON.stringify({ type: 'event_msg', timestamp: '2026-06-01T10:01:00Z', payload: { type: 'token_count', info: { model: 'codex-auto-review', last_token_usage: usage, total_token_usage: usage } } }),
+  ].join('\n') + '\n')
+  // gpt-5.4: input 2.5e-6, output 15e-6, cacheRead 2.5e-7.
+  const expected = 800 * 2.5e-6 + 200 * 2.5e-7 + 1000 * 15e-6
+
+  const { clearSessionCache, parseAllSessions } = await import('../src/parser.js')
+  const autoReviewCost = (projects: Awaited<ReturnType<typeof parseAllSessions>>) => projects
+    .flatMap(p => p.sessions).flatMap(s => s.turns).flatMap(t => t.assistantCalls)
+    .filter(c => c.model === 'codex-auto-review')
+    .reduce((sum, c) => sum + c.costUSD, 0)
+
+  clearSessionCache()
+  expect(autoReviewCost(await parseAllSessions(undefined, 'codex'))).toBeCloseTo(expected, 12)
+  clearSessionCache()
+  expect(autoReviewCost(await parseAllSessions(undefined, 'codex'))).toBeCloseTo(expected, 12)
+})

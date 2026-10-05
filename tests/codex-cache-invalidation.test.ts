@@ -211,7 +211,7 @@ describe('codex parser change invalidates stale session-cache (#478/#513)', () =
       // holds speed 'standard'. Without the suffix this fingerprint matches,
       // the stale turns are served as-is (re-priced from the stored standard
       // speed), and the multiplier can never reach them.
-      expect(PROVIDER_PARSE_VERSIONS['codex']!.endsWith('codex-priority-tier-v1')).toBe(true)
+      expect(PROVIDER_PARSE_VERSIONS['codex']!.includes('-codex-priority-tier-v1')).toBe(true)
       const cache = await readCacheOnDisk() as SessionCache
       cache.providers['codex']!.envFingerprint = prePriorityTierFingerprint()
       for (const file of Object.values(cache.providers['codex']!.files)) {

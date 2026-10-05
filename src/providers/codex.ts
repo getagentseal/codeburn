@@ -5,7 +5,7 @@ import { basename, join, resolve } from 'path'
 import { homedir } from 'os'
 
 import { FS_SCAN_CONCURRENCY, mapWithConcurrency, readSessionLines } from '../fs-utils.js'
-import { billableOutputTokens, calculateCost, getModelCosts } from '../models.js'
+import { billableOutputTokens, calculateCost, getModelCosts, pricingModelAt } from '../models.js'
 import { readCachedCodexResults, writeCachedCodexResults, getCachedCodexProject, fingerprintFile, type CodexFileFingerprint } from '../codex-cache.js'
 import { mergeToolIntervals } from '../codex-throughput.js'
 import { isCodexForkReplay, isCodexForkReplayState, startCodexForkReplay, type CodexForkReplayState } from '../codex-fork-replay.js'
@@ -912,14 +912,15 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
         const cacheWriteInputTokens = Math.max(0, Math.min(cacheWriteTokens, uncachedInputTokens))
 
         const model = resolveModel(entry.payload, sessionModel)
+        const timestamp = entry.timestamp ?? ''
+        const pricingModel = pricingModelAt(model, timestamp)
         // Only move tokens into the cache-write bucket when the pricing
         // source publishes a real cache-write rate for this model (gpt-5.6+)
         // charges 1.25x input; otherwise don't invent an unbilled surcharge.
-        const billedCacheWriteTokens = cacheWriteInputTokens > 0 && getModelCosts(model)?.cacheWriteCostIsExplicit
+        const billedCacheWriteTokens = cacheWriteInputTokens > 0 && getModelCosts(pricingModel)?.cacheWriteCostIsExplicit
           ? cacheWriteInputTokens
           : 0
         const billedInputTokens = uncachedInputTokens - billedCacheWriteTokens
-        const timestamp = entry.timestamp ?? ''
         seenKeys.add(dedupKey)
 
         // Reasoning tokens are already inside output_tokens, so they are NOT
@@ -930,7 +931,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
         // speed setting) bills at the priority rates via the fast multiplier.
         const speed = speedForServiceTier(serviceTier)
         const costUSD = calculateCost(
-          model,
+          pricingModel,
           billedInputTokens,
           billableOutputTokens('codex', outputTokens, reasoningTokens),
           billedCacheWriteTokens,
@@ -1351,7 +1352,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
             // itself; measured corpora hold no estimated calls that cross. The
             // service tier applies to it exactly as to a measured turn (#1616).
             const speed = speedForServiceTier(serviceTier)
-            const costUSD = calculateCost(model, estInput, estOutput, 0, 0, 0, speed, 0, 'codex')
+            const costUSD = calculateCost(pricingModelAt(model, timestamp), estInput, estOutput, 0, 0, 0, speed, 0, 'codex')
 
             pendingTaskCalls.push({
               provider: 'codex',

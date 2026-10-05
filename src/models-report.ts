@@ -107,6 +107,10 @@ type Bucket = {
   offPeakCostUSD: number
   peakCalls: number
   offPeakCalls: number
+  /// Codex credits summed per call (an alias's rate can depend on the call's
+  /// date); null until a call is rated. creditsUnrated marks any unrated call.
+  credits: number | null
+  creditsUnrated: boolean
 }
 
 type ModelKey = string
@@ -223,6 +227,8 @@ export async function aggregateModels(projects: ProjectSummary[], opts: Aggregat
               offPeakCostUSD: 0,
               peakCalls: 0,
               offPeakCalls: 0,
+              credits: null,
+              creditsUnrated: false,
             }
             buckets.set(key, bucket)
           }
@@ -236,6 +242,19 @@ export async function aggregateModels(projects: ProjectSummary[], opts: Aggregat
           bucket.cacheReadTokens += Math.max(call.usage.cacheReadInputTokens, call.usage.cachedInputTokens)
           bucket.costUSD += call.costUSD
           bucket.savingsUSD += call.savingsUSD ?? 0
+          // outputTokens is the billable output (for Codex that includes
+          // reasoning, so nothing is added on top), and inputTokens is
+          // non-cached with the cache read holding cached input - exactly what
+          // the credit rates expect.
+          if (provider === 'codex') {
+            const credits = codexCredits(model, {
+              inputTokens: call.usage.inputTokens,
+              cachedReadTokens: Math.max(call.usage.cacheReadInputTokens, call.usage.cachedInputTokens),
+              outputTokens: billableOutputTokens(provider, call.usage.outputTokens, call.usage.reasoningTokens),
+            }, call.timestamp)
+            if (credits === null) bucket.creditsUnrated = true
+            else bucket.credits = (bucket.credits ?? 0) + credits
+          }
           if (!bucket.savingsBaselineModel && call.savingsBaselineModel) {
             bucket.savingsBaselineModel = call.savingsBaselineModel
           }
@@ -310,20 +329,10 @@ export async function aggregateModels(projects: ProjectSummary[], opts: Aggregat
     const resolvedKey = bucketKey(bucket.provider, canonicalId, null, bucket.category, bucket.agentType)
     const foldKey = `${bucket.provider} ${canonicalId}`
     const total = bucket.inputTokens + bucket.outputTokens + bucket.cacheWriteTokens + bucket.cacheReadTokens
-    // Credits are per raw id (aliases can have different rates). Sum the
-    // rated buckets and flag the row incomplete when any contributor is
+    // Sum the rated calls and flag the row incomplete when any contributor is
     // unrated — nulling the whole merge would zero a real menubar total.
-    // outputTokens is already the billable output (for Codex that includes
-    // reasoning, so nothing is added on top), and inputTokens is non-cached
-    // with cacheReadTokens holding cached input - exactly what the credit
-    // rates expect.
-    const bucketCredits = bucket.provider === 'codex'
-      ? codexCredits(bucket.model, {
-          inputTokens: bucket.inputTokens,
-          cachedReadTokens: bucket.cacheReadTokens,
-          outputTokens: bucket.outputTokens,
-        })
-      : null
+    const bucketCredits = bucket.credits
+    const bucketCreditsIncomplete = bucketCredits !== null && bucket.creditsUnrated
 
     const baselines = baselinesByKey.get(resolvedKey) ?? new Set<string>()
     if (bucket.savingsBaselineModel) baselines.add(bucket.savingsBaselineModel)
@@ -346,7 +355,7 @@ export async function aggregateModels(projects: ProjectSummary[], opts: Aggregat
       const existingRated = existing.credits !== null
       const incomingRated = bucketCredits !== null
       if (incomingRated) existing.credits = (existing.credits ?? 0) + bucketCredits
-      if (existingRated !== incomingRated) existing.creditsIncomplete = true
+      if (existingRated !== incomingRated || bucketCreditsIncomplete) existing.creditsIncomplete = true
     } else {
       rowsByKey.set(resolvedKey, {
         provider: bucket.provider,
@@ -367,6 +376,7 @@ export async function aggregateModels(projects: ProjectSummary[], opts: Aggregat
         calls: bucket.calls,
         rawModels: [bucket.model],
         credits: bucketCredits,
+        ...(bucketCreditsIncomplete ? { creditsIncomplete: true } : {}),
         ...peakSplitForRow(bucket),
       })
     }

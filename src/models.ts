@@ -546,16 +546,14 @@ const BUILTIN_ALIASES: Record<string, string> = {
   'openclaw-auto':                 'claude-sonnet-4-5',
   'warp-auto-efficient':           'gpt-5.3-codex',
   'warp-auto-powerful':            'claude-opus-4-6',
-  // Codex activity ids are product surfaces, not subscription SKUs and not
-  // LiteLLM rows. OpenAI's tracker (openai/codex#32224) says auto review
-  // consumes normal model usage. Public evidence: review_model defaults to
-  // the session model; GPT-5.5 is the currently recommended review model.
-  // Price as that existing bundled row. Do not invent a rate. Do not treat
-  // the id as honestly $0 — it draws from the same credit pool. Display
-  // stays on autoModelNames (same class as cursor-auto / copilot-openai-auto).
-  // Only alias ids observed in Codex source / real rollouts. Do not infer
-  // `codex-code-review` from the activity name "code review".
-  'codex-auto-review':             'gpt-5.5',
+  // `codex-auto-review` is a server-routed alias: rollouts record it in
+  // turn_context.model and nothing on disk names the real model. OpenAI moved
+  // auto review from GPT-5.4 to GPT-5.6 Luna on 30 Jul 2026 (announcement:
+  // "major price drop for 5.6 Terra and Luna"). This row is the forward
+  // default; pricingModelAt prices calls before 2026-07-30T00:00Z as gpt-5.4.
+  // A rollout that records the real model (API-key auth writes gpt-5.6-luna)
+  // is priced as recorded. Display stays on autoModelNames.
+  'codex-auto-review':             'gpt-5.6-luna',
   'grok-build':                    'grok-build-0.1',
   // Grok Bot's desktop app serves opaque `sand-*` aliases and records no model
   // id at all, so there is nothing truthful to price it by. It is xAI's own
@@ -1161,6 +1159,16 @@ function stripKnownPricingVariantSuffix(model: string): string | null {
   if (withoutTeeSuffix !== model) return withoutTeeSuffix
 
   return null
+}
+
+const AUTO_REVIEW_LUNA_FROM = Date.parse('2026-07-30T00:00:00Z')
+
+/// The model a call is priced by. Only `codex-auto-review` depends on the
+/// call's date (see BUILTIN_ALIASES); a user alias for it still wins, and a
+/// missing or unparseable timestamp keeps the forward default.
+export function pricingModelAt(model: string, timestamp: string | undefined): string {
+  if (model.toLowerCase() !== 'codex-auto-review' || Object.hasOwn(userAliases, model) || userPriceOverrides.has(model)) return model
+  return Date.parse(timestamp ?? '') < AUTO_REVIEW_LUNA_FROM ? 'gpt-5.4' : model
 }
 
 export function getModelCosts(model: string): ModelCosts | null {

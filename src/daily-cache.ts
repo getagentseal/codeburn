@@ -265,7 +265,11 @@ import type { DateRange, ProjectSummary } from './types.js'
 // under-price them; the bump re-derives surviving days off the warm session
 // cache. MIN_SUPPORTED_VERSION stays at 28 (#1478's convention: a version bump
 // alone re-derives warm caches, so raising the floor buys nothing).
-export const DAILY_CACHE_VERSION = 53
+// v54: `codex-auto-review` prices as gpt-5.4 before 30 Jul 2026 and GPT-5.6
+// Luna from then on (OpenAI's auto-review move), not gpt-5.5, so settled days
+// over-price it. Only cost falls; call counts are unchanged, so no
+// PENDING_REDERIVE_PROVIDER_VERSIONS entry is needed.
+export const DAILY_CACHE_VERSION = 54
 const MIN_SUPPORTED_VERSION = 28
 
 /// Providers whose per-day CALL COUNT means something different at

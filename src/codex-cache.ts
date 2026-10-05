@@ -61,7 +61,9 @@ import { isWslUncPath } from './wsl.js'
 // speed setting (thread_settings_applied service_tier "priority") now bill at
 // the priority rates. This file stores each call's costUSD and speed verbatim,
 // so v18 entries carry the standard-rate cost and must be re-derived.
-export const CODEX_CACHE_VERSION = 19
+// v20: `codex-auto-review` prices by date (gpt-5.4 before 30 Jul 2026, GPT-5.6
+// Luna from then on) instead of gpt-5.5. Stored costUSD is the old price.
+export const CODEX_CACHE_VERSION = 20
 export const CODEX_LEGACY_CACHE_FILE = 'codex-results.json'
 export function codexCacheFileName(version = CODEX_CACHE_VERSION): string {
   return `codex-results.v${version}.json`
