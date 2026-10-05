@@ -27,6 +27,7 @@ Run `codeburn` for the dashboard, or use a subcommand below. Most commands also 
 | `codeburn export` | CSV covering today, 7 days, and 30 days |
 | `codeburn export -f json` | Export as JSON instead of CSV |
 | `codeburn export -f json -o <dir>/` | Write the export inside a folder, as `codeburn-export-YYYY-MM-DD.json` |
+| `codeburn card --out assets/codeburn-card.svg` | Shareable SVG usage card for a GitHub profile README (aggregates only) |
 
 **Sync (team telemetry)** _preview_
 
@@ -129,6 +130,16 @@ By tool
 
 (plus Top models, Highest-value days, Top projects, a per-day table, By activity, and Tools)
 ```
+
+## Usage card
+
+```bash
+codeburn card                                  # this month, SVG to stdout
+codeburn card --out assets/codeburn-card.svg   # write a file
+codeburn card -p week --top 5 --theme dark     # today, week, 30days or month; dark, light or auto
+```
+
+`codeburn card` renders the top tools with their cost, a 14-day sparkline with the peak day, and the period total with calls and cache hit rate, as a self-contained SVG. The numbers match `codeburn report` for the period, in your configured currency. Only aggregates go in it: no project names, paths, session ids or prompts. `--theme auto` (the default) follows the viewer's light or dark color scheme. To put it on your GitHub profile and refresh it nightly, see [Show your usage on your GitHub profile](profile-card.md).
 
 ## Compare models
 

@@ -1,4 +1,5 @@
-import { isAbsolute } from 'path'
+import { dirname, isAbsolute } from 'path'
+import { mkdir, writeFile } from 'fs/promises'
 import { Command, Option } from 'commander'
 import { installMenubarApp, uninstallMenubarApp } from './menubar-installer.js'
 import { exportCsv, exportJson, type PeriodExport } from './export.js'
@@ -40,6 +41,7 @@ import { getSharingDir, loadRemotes, saveRemotes } from './sharing/store.js'
 import type { UsageQuery } from './sharing/share-server.js'
 import { formatDateRangeLabel, parseDateRangeFlags, parseDayFlag, parseDaysFlag, getDateRange, periodInfoFromQuery, toPeriod, type Period } from './cli-date.js'
 import { runOptimize } from './optimize.js'
+import { cardDataFromPayload, renderCard, type CardTheme } from './card.js'
 import { registerActCommands } from './act/cli.js'
 import { registerGuardCommands } from './guard/cli.js'
 import { registerSyncCommands } from './sync/cli.js'
@@ -1447,6 +1449,43 @@ program
       today: { cost: todayDurable.data.cost, calls: todayDurable.data.calls },
       month: { cost: monthDurable.data.cost, calls: monthDurable.data.calls },
     }))
+  })
+
+program
+  .command('card')
+  .description('Write a shareable SVG usage card for a GitHub profile README')
+  .option('-p, --period <period>', 'Period: today, week, 30days, month', 'month')
+  .option('--top <n>', 'Number of tools to list', parseInteger, 3)
+  .option('--out <file>', 'Write the SVG to this file instead of stdout')
+  .option('--theme <theme>', "Colors: dark, light, auto (follows the viewer's color scheme)", 'auto')
+  .option('--provider <provider>', 'Filter by provider (e.g. claude, codex, cursor)', 'all')
+  .addHelpText('after', '\nPrivacy: the card holds aggregates only (tool names, totals, daily totals, calls, cache hit).\nNo project names, paths, session ids or prompts are written to it.\n')
+  .action(async (opts) => {
+    const periods = ['today', 'week', '30days', 'month']
+    if (!periods.includes(opts.period)) {
+      process.stderr.write(`codeburn card: unknown period "${opts.period}". Valid values: ${periods.join(', ')}.\n`)
+      process.exit(1)
+    }
+    if (!['dark', 'light', 'auto'].includes(opts.theme)) {
+      process.stderr.write(`codeburn card: unknown theme "${opts.theme}". Valid values: dark, light, auto.\n`)
+      process.exit(1)
+    }
+    if (!Number.isInteger(opts.top) || opts.top < 1) {
+      process.stderr.write('codeburn card: --top must be a whole number of at least 1.\n')
+      process.exit(1)
+    }
+    assertProvider(opts.provider, 'card')
+    await syncCursor(opts.provider)
+    await loadPricing()
+    const payload = await buildMenubarPayloadForRange(getDateRange(opts.period), { provider: opts.provider, optimize: false, timeline: false })
+    const svg = renderCard(cardDataFromPayload(payload, opts.period, new Date(), opts.top), opts.theme as CardTheme)
+    if (!opts.out) {
+      process.stdout.write(svg)
+      return
+    }
+    await mkdir(dirname(opts.out), { recursive: true })
+    await writeFile(opts.out, svg)
+    process.stderr.write(`Wrote ${opts.out}\n`)
   })
 
 program

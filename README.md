@@ -156,6 +156,14 @@ That registers a local MCP server over stdio. Your agent can then answer "where 
 
 It reads the same files on disk that the CLI reads. The server answers from that local data and makes no network call of its own, and project names are pseudonymized unless the agent asks for them.
 
+## On your profile
+
+```bash
+npx codeburn card --out assets/codeburn-card.svg
+```
+
+Writes a small SVG card with your top tools, the last 14 days and the month total, for your GitHub profile README. Only totals go in it, never project names or prompts. [Set it up and refresh it nightly](docs/profile-card.md).
+
 ## Works with 41 tools
 
 CodeBurn detects the tools you already use. There is nothing to configure and no folder to point it at. If a tool is installed and has sessions on disk, it shows up. Each logo links to that tool's page.
@@ -285,6 +293,7 @@ MIT licensed. Development happens in this repo.
 | [Web dashboard](docs/web.md) | The browser view, and combining usage across your devices |
 | [Yield](docs/yield.md) | Which spend actually shipped, correlated against git |
 | [MCP](docs/mcp.md) | The local MCP server and its two tools |
+| [Profile card](docs/profile-card.md) | A usage card for your GitHub profile, refreshed nightly |
 | [Configuration](docs/configuration.md) | Currency, model aliases, price overrides, environment variables |
 | [Tools](docs/providers/README.md) | One page per tool: data location, format, known quirks |
 | [All docs](docs/README.md) | The full index |
