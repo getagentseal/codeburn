@@ -56,12 +56,18 @@ describe('development CLI command', () => {
 
   it('suppresses deprecation warnings while retaining inherited NODE_OPTIONS', () => {
     const preload = join(fixture, 'warning.mjs')
-    writeFileSync(preload, 'process.emitWarning("dev-command-fixture", "DeprecationWarning")\n')
+    const marker = join(fixture, 'preload-marker')
+    writeFileSync(preload, [
+      'import { writeFileSync } from "node:fs"',
+      `writeFileSync(${JSON.stringify(marker)}, "loaded")`,
+      'process.emitWarning("dev-command-fixture", "DeprecationWarning")',
+    ].join('\n'))
     const result = runDev('--version', {
       NODE_OPTIONS: `--import="${pathToFileURL(preload).href}"`,
     })
     expect(result.status, result.stderr).toBe(0)
     expect(result.stdout.trim()).toBe(manifest.version)
+    expect(readFileSync(marker, 'utf8')).toBe('loaded')
     expect(result.stderr).not.toContain('dev-command-fixture')
   })
 })
