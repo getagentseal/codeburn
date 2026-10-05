@@ -188,7 +188,25 @@ describe('importCursorCsvText as a sync', () => {
       { start: new Date(from).toISOString(), end: iso(4, 15), source: 'sync' },
     ])
     expect(await importCursorCsvText(csv([]), base + 30 * DAY, { from, to: base + 30 * DAY, source: 'sync' })).toBeNull()
-    await expect(importCursorCsvText(csv([{ date: iso(-1), model: 'auto' }]), base, { from, to: base + DAY, source: 'sync' })).rejects.toThrow(/before the requested/)
+  })
+
+  it('drops synced rows from before the window instead of failing', async () => {
+    const s = await importCursorCsvText(csv([{ date: iso(-1), model: 'auto', input: 1 }, { date: iso(0, 5), model: 'auto', input: 2 }]), base + DAY, { from, to: base + DAY, source: 'sync' })
+    expect(s).toMatchObject({ added: 1, total: 1, firstEvent: iso(0, 5) })
+    expect(await importCursorCsvText(csv([{ date: iso(-1), model: 'auto', input: 1 }]), base + DAY, { from, to: base + DAY, source: 'sync' })).toBeNull()
+  })
+
+  it('a manual import claims a row a sync stored first, so a later sync cannot delete it', async () => {
+    const row = { date: iso(1, 3), model: 'auto', input: 11 }
+    await importCursorCsvText(csv([row]), base + 30 * DAY, { from, to: base + 30 * DAY, source: 'sync', account: 'aaaa' })
+    const manual = await importCursorCsv(await writeCsv([row], 'manual.csv'))
+    expect(manual).toMatchObject({ changed: true, added: 0, skipped: 1, total: 1 })
+    expect((await stored()).events).toEqual([expect.not.objectContaining({ source: 'sync' })])
+    expect((await stored()).events[0]).not.toHaveProperty('account')
+
+    // Cursor revised the row: the sync adds the new version and the manual one stays.
+    await importCursorCsvText(csv([{ ...row, cost: '$0.10' }]), base + 30 * DAY, { from, to: base + 30 * DAY, source: 'sync', account: 'aaaa' })
+    expect((await stored()).events.map(e => [e.cost, e.source])).toEqual([['Included', undefined], ['$0.10', 'sync']])
   })
 
   it('keeps every account\'s synced rows and coverage apart; a sync replaces only its own account\'s rows', async () => {

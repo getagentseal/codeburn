@@ -256,8 +256,10 @@ export async function importCursorCsvText(
   savedMs: number,
   opts: { from?: number; to?: number; source?: 'sync'; account?: string } = {},
 ): Promise<CursorImportSummary | null> {
-  const incoming = parseCursorUsageCsv(text)
   const sync = opts.source === 'sync'
+  // Rows before a sync's window are already stored by an earlier sync; a
+  // server that rounds startDate down must not fail every later sync.
+  const incoming = parseCursorUsageCsv(text).filter(e => !sync || Date.parse(e.date) >= opts.from!)
   if (incoming.length === 0) {
     if (!sync) throw new Error('the export holds no usage events')
     // An empty store records that this machine has synced, so a quiet account
@@ -267,10 +269,7 @@ export async function importCursorCsvText(
   }
   let coverage: { start: number; end: number; inferred: boolean }
   if (sync) {
-    const times = incoming.map(e => Date.parse(e.date))
-    const first = Math.min(...times)
-    if (first < opts.from!) throw new Error(`the export holds an event at ${new Date(first).toISOString()}, before the requested ${new Date(opts.from!).toISOString()}`)
-    coverage = { start: opts.from!, end: Math.max(...times), inferred: false }
+    coverage = { start: opts.from!, end: Math.max(...incoming.map(e => Date.parse(e.date))), inferred: false }
   } else {
     coverage = exportCoverage(incoming, savedMs, opts.from, opts.to)
   }
@@ -278,21 +277,30 @@ export async function importCursorCsvText(
   const existing = await loadCursorImport()
   const replaced = new Set(sync ? existing?.events.filter(e => e.source === 'sync' && e.account === opts.account && Date.parse(e.date) >= coverage.start) : [])
   const before = new Set(existing?.events.map(e => e.hash))
-  const events = (existing?.events ?? []).filter(e => !replaced.has(e))
-  const known = new Set(events.map(e => e.hash))
+  const byHash = new Map((existing?.events ?? []).filter(e => !replaced.has(e)).map(e => [e.hash, e]))
   let added = 0
+  let converted = 0
   for (const e of incoming) {
-    if (known.has(e.hash)) continue
-    known.add(e.hash)
-    events.push(sync ? { ...e, source: 'sync', ...(opts.account ? { account: opts.account } : {}) } : e)
+    const stored = byHash.get(e.hash)
+    if (stored) {
+      // A manual import claims a row a sync stored first, so no later sync
+      // replace can delete a row manual coverage relies on.
+      if (!sync && stored.source === 'sync') {
+        const { source: _source, account: _account, ...manual } = stored
+        byHash.set(e.hash, manual)
+        converted++
+      }
+      continue
+    }
+    byHash.set(e.hash, sync ? { ...e, source: 'sync', ...(opts.account ? { account: opts.account } : {}) } : e)
     if (!before.has(e.hash)) added++
   }
-  const removed = [...replaced].filter(e => !known.has(e.hash)).length
-  events.sort((a, b) => a.date.localeCompare(b.date))
+  const removed = [...replaced].filter(e => !byHash.has(e.hash)).length
+  const events = [...byHash.values()].sort((a, b) => a.date.localeCompare(b.date))
   const range = { start: new Date(coverage.start).toISOString(), end: new Date(coverage.end).toISOString() }
   const ranges = mergeRanges([...(existing?.ranges ?? []), sync ? { ...range, source: 'sync', ...(opts.account ? { account: opts.account } : {}) } : range])
   // An unchanged store keeps its mtime, so a repeat import re-parses nothing.
-  const changed = added > 0 || removed > 0 || JSON.stringify(ranges) !== JSON.stringify(existing?.ranges)
+  const changed = added > 0 || removed > 0 || converted > 0 || JSON.stringify(ranges) !== JSON.stringify(existing?.ranges)
   if (changed) await saveCursorImport({ version: 1, ranges, events })
 
   const tokensOf = (e: CursorUsageEvent) => e.inputCacheWrite + e.input + e.cacheRead + e.output

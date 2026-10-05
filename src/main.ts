@@ -7,7 +7,7 @@ import { cachedProjectIdentitiesForRange } from './daily-cache.js'
 import { reportUnmatchedProjectPatterns } from './project-filter-warnings.js'
 import { getVercelGatewayApiKey } from './providers/vercel-gateway.js'
 import { BILLING_FILTER_VALUES, ROUTE_FILTER_VALUES, filterProjectsByBillingRoute } from './billing-filter.js'
-import { AGGREGATE_ONLY_PROVIDER, aggregateOnlyCostUSD, excludesAggregateOnlyProviders, parseAllSessions, filterProjectsByName, filterProjectsByDateRange, clearSessionCache, setInteractiveScanUI, computeCorpusFingerprint, isSessionHydrationComplete, withLoadWindow } from './parser.js'
+import { AGGREGATE_ONLY_PROVIDER, aggregateOnlyCostUSD, excludesAggregateOnlyProviders, parseAllSessions, filterProjectsByName, filterProjectsByDateRange, clearSessionCache, setInteractiveScanUI, computeCorpusFingerprint, isSessionHydrationComplete, startProgressKeepalive, stopProgressKeepalive, withLoadWindow } from './parser.js'
 import { allProviderNames, getAllProviders } from './providers/index.js'
 import { getProvider } from './providers/index.js'
 import { getClaudeConfigDirs, getDesktopSessionsDirs } from './providers/claude.js'
@@ -522,10 +522,17 @@ async function runJsonReport(period: Period, provider: string, project: string[]
 }
 
 // Only for commands that show Cursor dollars; never mcp, doctor or audit,
-// which promise to stay offline.
-async function syncCursor(): Promise<void> {
+// which promise to stay offline. The keepalive beats through the download for
+// the app watchdogs; it is reference-counted, so the stop never silences a
+// beat serve armed around the whole request.
+async function syncCursor(provider: string): Promise<void> {
   const { maybeSyncCursor } = await import('./cursor-sync.js')
-  await maybeSyncCursor()
+  startProgressKeepalive()
+  try {
+    await maybeSyncCursor({ provider })
+  } finally {
+    stopProgressKeepalive()
+  }
 }
 
 const program = new Command()
@@ -876,7 +883,7 @@ program
     }
 
     const period = toPeriod(opts.period)
-    await syncCursor()
+    await syncCursor(opts.provider)
     if (opts.format === 'json') {
       await loadPricing()
       if (daySelection || customRange) {
@@ -1051,7 +1058,7 @@ program
   .option('--no-color', 'Disable ANSI colors')
   .action(async (opts) => {
     assertProvider(opts.provider, 'overview')
-    await syncCursor()
+    await syncCursor(opts.provider)
     await loadPricing()
     let customRange: DateRange | null = null
     try {
@@ -1218,7 +1225,7 @@ program
     const pf = opts.provider
     const fp = (p: ProjectSummary[]) => filterProjectsByName(p, opts.project, opts.exclude)
     if (opts.format === 'menubar-json') {
-      await syncCursor()
+      await syncCursor(pf)
       const daysSelection = parseDaysFlag(opts.days)
       const customRange = daysSelection ? null : parseDateRangeFlags(opts.from, opts.to)
       const daySelection = parseDayFlag(opts.day)
@@ -1449,7 +1456,7 @@ program
   .action(async (opts) => {
     assertFormat(opts.format, ['tui', 'json'], 'today')
     assertProvider(opts.provider, 'today')
-    await syncCursor()
+    await syncCursor(opts.provider)
     if (opts.format === 'json') {
       await runJsonReport('today', opts.provider, opts.project, opts.exclude)
       return
@@ -1468,7 +1475,7 @@ program
   .action(async (opts) => {
     assertFormat(opts.format, ['tui', 'json'], 'month')
     assertProvider(opts.provider, 'month')
-    await syncCursor()
+    await syncCursor(opts.provider)
     if (opts.format === 'json') {
       await runJsonReport('month', opts.provider, opts.project, opts.exclude)
       return

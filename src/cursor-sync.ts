@@ -22,8 +22,9 @@ const JITTER_MS = 5 * 60_000
 const REJECTED_BACKOFF_MS = 6 * 3_600_000
 const MAX_FAILURES = 3
 const FAILURE_BACKOFF_MS = 6 * 3_600_000
-// A 30-day first backfill took about 10s for 11k events.
+// A month's first backfill took 11-12.5s for 11k events on a real account.
 const TIMEOUT_MS = 15_000
+const BACKFILL_TIMEOUT_MS = 45_000
 const FORCED_TIMEOUT_MS = 60_000
 
 type SyncState = {
@@ -69,6 +70,12 @@ export async function cursorSyncEnabled(): Promise<boolean> {
   return (await readConfig()).cursorSync !== false
 }
 
+// The day before too: Cursor can post a row for the previous local day late.
+function previousLocalDayStart(ms: number): number {
+  const d = new Date(ms)
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate() - 1).getTime()
+}
+
 function localDayStart(ms: number): number {
   const d = new Date(ms)
   return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()
@@ -95,10 +102,12 @@ class Skip extends Error {}
 /// Null from a forced sync means the window held no usage.
 ///
 /// The first sync of an account reaches back a month; every later one starts
-/// at the local day of its newest synced event, so closed days are downloaded
-/// once. Earlier accounts' synced usage stays, and a new account's window
+/// the local day before its newest synced event, so older closed days are
+/// downloaded once. A `provider` filter that leaves out every Cursor provider
+/// skips the sync. Earlier accounts' synced usage stays, and a new account's window
 /// starts after their coverage so no stretch of local usage is replaced twice.
-export async function maybeSyncCursor(opts: { force?: boolean; now?: number; fetchImpl?: typeof fetch } = {}): Promise<CursorImportSummary | null> {
+export async function maybeSyncCursor(opts: { force?: boolean; now?: number; fetchImpl?: typeof fetch; provider?: string } = {}): Promise<CursorImportSummary | null> {
+  if (opts.provider !== undefined && opts.provider !== 'all' && !replacedProviders().includes(opts.provider)) return null
   const force = opts.force === true
   const now = opts.now ?? Date.now()
   let state: SyncState = {}
@@ -122,14 +131,16 @@ export async function maybeSyncCursor(opts: { force?: boolean; now?: number; fet
     if (!force && backedOff) return null
 
     const account = createHash('sha256').update(claims.sub).digest('hex').slice(0, 16)
+    const throttle = { lastAttemptAt: now, nextAttemptAt: now + THROTTLE_MS + Math.floor(Math.random() * JITTER_MS) }
+    // Only the throttle before the request; the account is recorded once the
+    // store reflects it.
+    await writeState({ ...state, ...throttle })
     attempt = {
-      lastAttemptAt: now,
-      nextAttemptAt: now + THROTTLE_MS + Math.floor(Math.random() * JITTER_MS),
+      ...throttle,
       account,
       ...(state.lastSuccessAt !== undefined ? { lastSuccessAt: state.lastSuccessAt } : {}),
       ...(state.through ? { through: state.through } : {}),
     }
-    await writeState({ ...state, ...attempt })
 
     const store = existsSync(cursorImportPath()) ? await loadCursorImport() : null
     // A loop, not a spread: the store keeps every event forever.
@@ -137,11 +148,12 @@ export async function maybeSyncCursor(opts: { force?: boolean; now?: number; fet
     for (const e of store?.events ?? []) if (e.source === 'sync' && e.account === account) ownNewest = Math.max(ownNewest, Date.parse(e.date))
     const through = store ? Math.max(ownNewest, state.through?.[account] ?? -Infinity) : -Infinity
     const othersEnd = Math.max(-Infinity, ...(store?.ranges.filter(r => r.source === 'sync' && r.account !== account).map(r => Date.parse(r.end)) ?? []))
-    const from = Math.max(Number.isFinite(through) ? localDayStart(through) : firstSyncStart(now), othersEnd + 1)
+    const backfill = !Number.isFinite(through)
+    const from = Math.max(backfill ? firstSyncStart(now) : previousLocalDayStart(through), othersEnd + 1)
     const res = await (opts.fetchImpl ?? globalThis.fetch)(`${EXPORT_URL}?startDate=${from}&endDate=${now}&strategy=tokens`, {
       method: 'GET',
       headers: { Accept: 'text/csv', Cookie: cookie, Origin: 'https://cursor.com', 'User-Agent': 'CodeBurn' },
-      signal: AbortSignal.timeout(force ? FORCED_TIMEOUT_MS : TIMEOUT_MS),
+      signal: AbortSignal.timeout(force ? FORCED_TIMEOUT_MS : backfill ? BACKFILL_TIMEOUT_MS : TIMEOUT_MS),
     })
     if (res.status === 401 || res.status === 403) {
       const lastError = `Cursor rejected the app session (HTTP ${res.status}); open Cursor and sign in again`

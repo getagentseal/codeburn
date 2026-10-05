@@ -75,9 +75,11 @@ beforeEach(async () => {
 afterEach(() => vi.restoreAllMocks())
 
 const dayStart = (ms: number) => { const d = new Date(ms); return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime() }
+const dayBefore = (ms: number) => { const d = new Date(ms); return new Date(d.getFullYear(), d.getMonth(), d.getDate() - 1).getTime() }
 
 describe.skipIf(!isSqliteAvailable())('maybeSyncCursor', () => {
-  it('syncs the first month once, then only from the day of the newest synced event, at most hourly', async () => {
+  it('syncs the first month once, then only from the day before the newest synced event, at most hourly', async () => {
+    const timeouts = vi.spyOn(AbortSignal, 'timeout')
     const f = fakeFetch()
     const s = await maybeSyncCursor({ now: NOW, fetchImpl: f })
     expect(s).toMatchObject({ changed: true, added: 3 })
@@ -96,16 +98,18 @@ describe.skipIf(!isSqliteAvailable())('maybeSyncCursor', () => {
     expect(saved.nextAttemptAt).toBeLessThan(NOW + HOUR + 5 * MIN)
     expect(JSON.stringify(saved)).not.toContain('user_sync_test')
 
-    const g = fakeFetch({ body: csv([ROWS[2]!, { date: at(-1), input: 40 }]) })
+    const g = fakeFetch({ body: csv([...ROWS.filter(r => Date.parse(r.date) >= dayBefore(Date.parse(at(2)))), { date: at(-1), input: 40 }]) })
     expect(await maybeSyncCursor({ now: NOW + 59 * MIN, fetchImpl: g })).toBeNull()
     expect(g).not.toHaveBeenCalled()
     await maybeSyncCursor({ now: NOW + 2 * HOUR, fetchImpl: g })
-    expect(urlOf(g).searchParams.get('startDate')).toBe(String(dayStart(Date.parse(at(2)))))
+    expect(urlOf(g).searchParams.get('startDate')).toBe(String(dayBefore(Date.parse(at(2)))))
     expect((await stored()).events).toHaveLength(4)
+    // The month-long first backfill gets 45s, an incremental sync 15s.
+    expect(timeouts.mock.calls.map(c => c[0])).toEqual([45_000, 15_000])
 
     const h = fakeFetch({ body: csv([]) })
     await maybeSyncCursor({ now: NOW + 4 * HOUR, fetchImpl: h })
-    expect(urlOf(h).searchParams.get('startDate')).toBe(String(dayStart(Date.parse(at(-1)))))
+    expect(urlOf(h).searchParams.get('startDate')).toBe(String(dayBefore(Date.parse(at(-1)))))
   })
 
   it('a quiet account is not downloaded from scratch again; a missing store is', async () => {
@@ -113,7 +117,7 @@ describe.skipIf(!isSqliteAvailable())('maybeSyncCursor', () => {
     expect(await maybeSyncCursor({ now: NOW, fetchImpl: f })).toBeNull()
     expect(existsSync(cursorImportPath())).toBe(true)
     await maybeSyncCursor({ now: NOW + 2 * HOUR, fetchImpl: f })
-    expect(urlOf(f, 1).searchParams.get('startDate')).toBe(String(dayStart(NOW)))
+    expect(urlOf(f, 1).searchParams.get('startDate')).toBe(String(dayBefore(dayStart(NOW))))
     await rm(cursorImportPath())
     await maybeSyncCursor({ now: NOW + 4 * HOUR, fetchImpl: f })
     expect(urlOf(f, 2).searchParams.get('startDate')).toBe(String(firstStartAt(NOW + 4 * HOUR)))
@@ -201,6 +205,13 @@ describe.skipIf(!isSqliteAvailable())('maybeSyncCursor', () => {
       { start: new Date(firstStart).toISOString(), end: at(2), source: 'sync', account: first },
       { start: new Date(Date.parse(at(2)) + 1).toISOString(), end: at(1), source: 'sync', account: second },
     ])
+  })
+
+  it('skips when the provider filter leaves out every Cursor provider', async () => {
+    const f = fakeFetch()
+    expect(await maybeSyncCursor({ now: NOW, fetchImpl: f, provider: 'claude' })).toBeNull()
+    expect(f).not.toHaveBeenCalled()
+    expect(await maybeSyncCursor({ now: NOW, fetchImpl: f, provider: 'grokbot' })).toMatchObject({ added: 3 })
   })
 
   it('the off switch (env or config) stops automatic syncs, not a forced one', async () => {
