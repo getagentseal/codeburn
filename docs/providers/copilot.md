@@ -13,6 +13,8 @@ sections). OTel is preferred when present; chatSessions are only discovered when
 source is found. Other discovered sources are walked on every run; results merge and
 dedupe.
 
+VS Code, VS Code Insiders and VSCodium storage roots honor `APPDATA` on Windows and `XDG_CONFIG_HOME` on Linux. Unset or empty values fall back to `AppData/Roaming` under the home directory and `~/.config`, respectively; macOS keeps `~/Library/Application Support`. Workspace journals, global journals and OTel databases share these platform defaults. `CODEBURN_COPILOT_WS_STORAGE_DIR` and `CODEBURN_COPILOT_GLOBAL_STORAGE_DIR` override journal locations; `CODEBURN_COPILOT_OTEL_DB` selects the OTel database directly. New roots are discovered without invalidating Copilot's durable cached history from the previous location.
+
 1. **Legacy CLI sessions:** `~/.copilot/session-state/`
 2. **VS Code core chat sessions:** `~/Library/Application Support/Code/User/workspaceStorage/<hash>/chatSessions/*.jsonl` plus `~/Library/Application Support/Code/User/globalStorage/emptyWindowChatSessions/*.jsonl` and equivalents on Windows / Linux. Sessions saved by VS Code before 1.109 (February 2026) sit beside them as flat `*.json` files; VS Code keeps the flat file when it migrates a session to the journal, so both formats of one session dedupe on the same `copilot-chatsession:` key.
 3. **VS Code transcripts:** `~/Library/Application Support/Code/User/workspaceStorage/<hash>/GitHub.copilot-chat/transcripts/` and equivalents on Windows / Linux

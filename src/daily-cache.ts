@@ -243,7 +243,20 @@ import type { DateRange, ProjectSummary } from './types.js'
 // v47: Copilot chat-session journals read request-level promptTokens, repairing
 // missing input usage and input-only calls. Re-derive settled days from the
 // corrected session cache; calls and cost only rise.
-export const DAILY_CACHE_VERSION = 47
+// v48: #1620 Antigravity manage_task/search_web/read_url_content/invoke_subagent
+// reclassify turns. Calls and cost are unchanged, but settled antigravity
+// category totals need re-derivation.
+// v49: Crush's recorded cumulative session cost now passes through the session
+// cache instead of being re-priced from its non-cumulative token counters. Days
+// finalized before v49 hold the re-priced figure with unchanged call counts, so the
+// read path's equal-call rule keeps them; the bump re-derives surviving days.
+// Call counts are unchanged, so no PENDING_REDERIVE_PROVIDER_VERSIONS entry is
+// needed.
+// v50: Hermes uses its native Windows LOCALAPPDATA root; finalized days can
+// miss sessions there and must be re-derived after the default path is fixed.
+// v51: honor redirected Copilot and Cursor editor data roots. Backfill settled
+// days that previously missed usage stored under APPDATA or XDG_CONFIG_HOME.
+export const DAILY_CACHE_VERSION = 51
 const MIN_SUPPORTED_VERSION = 28
 
 /// Providers whose per-day CALL COUNT means something different at

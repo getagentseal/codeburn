@@ -1469,6 +1469,8 @@ describe('copilot provider - discoverSessions', () => {
   })
 
   it('includes VSCodium workspaceStorage paths on all supported platforms', () => {
+    vi.stubEnv('APPDATA', undefined)
+    vi.stubEnv('XDG_CONFIG_HOME', undefined)
     expect(getVSCodeWorkspaceStorageDirs('/Users/test', 'darwin')).toContain(
       posix.join('/Users/test', 'Library', 'Application Support', 'VSCodium', 'User', 'workspaceStorage'),
     )
@@ -1481,6 +1483,8 @@ describe('copilot provider - discoverSessions', () => {
   })
 
   it('includes VSCodium globalStorage paths on all supported platforms', () => {
+    vi.stubEnv('APPDATA', undefined)
+    vi.stubEnv('XDG_CONFIG_HOME', undefined)
     expect(getVSCodeGlobalStorageDirs('/Users/test', 'darwin')).toContain(
       posix.join('/Users/test', 'Library', 'Application Support', 'VSCodium', 'User', 'globalStorage'),
     )

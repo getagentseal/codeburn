@@ -3,17 +3,20 @@
 // cachedCallToApiCall, so a cost that providerCallToCachedCall drops is
 // re-priced from tokens on EVERY read, cold and warm alike.
 //
-// OpenClaw and Pi both write a per-message `usage.cost.total` and both were
-// dropping it. Their fallback — an absent or zero reported cost — is a token
-// estimate and must keep being re-priced, so the decision is per call
-// (`costFromBilling`), not per provider.
+// OpenClaw and Pi write per-message `usage.cost.total`; Crush's `sessions.cost`
+// is its recorded cumulative session cost, while `prompt_tokens` and
+// `completion_tokens` are non-cumulative counters. Their recorded costs must
+// survive caching, while zero-cost rows retain the existing token repricing.
 //
-// Own file because both providers resolve their roots from the home directory
-// when their module is first evaluated, so HOME must be set before any import.
+// Own file because providers resolve roots from the home directory when their
+// modules are first evaluated, so HOME must be set before any import.
 
 import { afterAll, beforeEach, expect, it, vi } from 'vitest'
 import { mkdir, rm, writeFile } from 'fs/promises'
+import { mkdirSync } from 'fs'
 import { join } from 'path'
+import { createRequire } from 'node:module'
+import { isSqliteAvailable } from '../src/sqlite.js'
 
 const testRoot = vi.hoisted(() => {
   const root = `${process.env['TMPDIR'] || '/tmp'}/reported-cost-cache-${process.pid}-${Date.now()}`
@@ -33,6 +36,64 @@ const SMALL_FLOOR = 500 * 3e-6 + 100 * 15e-6 + 200 * 3e-7 + 50 * 3.75e-6 // 0.00
 const LARGE_FLOOR = 600 * 3e-6 + 200 * 15e-6 + 100 * 3e-7 // 0.00483
 const OPENCLAW_REPORTED = 0.05 // ~10x its token floor
 const PI_REPORTED = 0.4 // ~83x its token floor
+
+const requireForTest = createRequire(import.meta.url)
+
+type TestDb = {
+  exec(sql: string): void
+  prepare(sql: string): { run(...params: unknown[]): void }
+  close(): void
+}
+
+function createCrushDb(dir: string): string {
+  const { DatabaseSync: Database } = requireForTest('node:sqlite')
+  mkdirSync(dir, { recursive: true })
+  const dbPath = join(dir, 'crush.db')
+  const db = new Database(dbPath)
+  db.exec(`
+    CREATE TABLE sessions (
+      id TEXT PRIMARY KEY, parent_session_id TEXT, title TEXT NOT NULL,
+      message_count INTEGER NOT NULL DEFAULT 0, prompt_tokens INTEGER NOT NULL DEFAULT 0,
+      completion_tokens INTEGER NOT NULL DEFAULT 0, cost REAL NOT NULL DEFAULT 0.0,
+      updated_at INTEGER NOT NULL, created_at INTEGER NOT NULL, summary_message_id TEXT, todos TEXT
+    )
+  `)
+  db.exec(`
+    CREATE TABLE messages (
+      id TEXT PRIMARY KEY, session_id TEXT NOT NULL, role TEXT NOT NULL,
+      parts TEXT NOT NULL DEFAULT '[]', model TEXT, created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL, finished_at INTEGER, provider TEXT,
+      is_summary_message INTEGER DEFAULT 0 NOT NULL
+    )
+  `)
+  db.close()
+  return dbPath
+}
+
+function withCrushDb(dbPath: string, fn: (db: TestDb) => void): void {
+  const { DatabaseSync: Database } = requireForTest('node:sqlite')
+  const db = new Database(dbPath)
+  try {
+    fn(db)
+  } finally {
+    db.close()
+  }
+}
+
+function insertCrushSession(db: TestDb, id: string, promptTokens: number, completionTokens: number, cost: number): void {
+  db.prepare('INSERT INTO sessions (id, title, message_count, prompt_tokens, completion_tokens, cost, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+    .run(id, 'test session', 1, promptTokens, completionTokens, cost, 1_700_000_000, 1_700_000_000)
+}
+
+function insertCrushMessage(db: TestDb, sessionId: string, id: string): void {
+  db.prepare("INSERT INTO messages (id, session_id, role, parts, model, created_at, updated_at) VALUES (?, ?, 'assistant', '[]', 'claude-sonnet-4-6', 1700000000, 1700000000)")
+    .run(id, sessionId)
+}
+
+async function writeCrushRegistry(globalData: string, projectDir: string): Promise<void> {
+  await mkdir(globalData, { recursive: true })
+  await writeFile(join(globalData, 'projects.json'), JSON.stringify([{ path: projectDir, data_dir: '.crush' }]))
+}
 
 const ts = (offsetSec: number) => new Date(Date.UTC(2026, 7, 16, 10, 0, offsetSec)).toISOString()
 
@@ -92,6 +153,7 @@ beforeEach(async () => {
   process.env['HOME'] = HOME
   process.env['USERPROFILE'] = HOME
   process.env['CODEBURN_CACHE_DIR'] = CACHE_DIR
+  process.env['CRUSH_GLOBAL_DATA'] = join(testRoot, 'crush-global')
   await rm(HOME, { recursive: true, force: true })
   await rm(CACHE_DIR, { recursive: true, force: true })
   await mkdir(CACHE_DIR, { recursive: true })
@@ -99,6 +161,7 @@ beforeEach(async () => {
 
 afterAll(async () => {
   await rm(testRoot, { recursive: true, force: true })
+  delete process.env['CRUSH_GLOBAL_DATA']
 })
 
 it('keeps an OpenClaw reported cost cold and warm, and re-prices the rest', async () => {
@@ -137,6 +200,49 @@ it('keeps a Pi reported cost cold and warm, and re-prices the rest', async () =>
   expect(costs.get('r1')).toBeCloseTo(PI_REPORTED, 10)
   expect(costs.get('r2')).toBeUndefined()
   expect(costs.get('r3')).toBeUndefined()
+})
+
+it('a positive recorded cost survives the cache cold and warm', async () => {
+  if (!isSqliteAvailable()) return
+
+  const globalData = join(testRoot, 'crush-global')
+  const projectDir = join(testRoot, 'crush-project-positive')
+  const dbPath = createCrushDb(join(projectDir, '.crush'))
+  withCrushDb(dbPath, db => {
+    insertCrushSession(db, 'positive', 1, 1, 1.23)
+    insertCrushMessage(db, 'positive', 'positive-message')
+  })
+  await writeCrushRegistry(globalData, projectDir)
+
+  const { clearSessionCache, parseAllSessions } = await import('../src/parser.js')
+  clearSessionCache()
+  const cold = (await parseAllSessions(undefined, 'crush')).reduce((sum, project) => sum + project.totalCostUSD, 0)
+  clearSessionCache()
+  const warm = (await parseAllSessions(undefined, 'crush')).reduce((sum, project) => sum + project.totalCostUSD, 0)
+  expect(cold).toBeCloseTo(1.23, 10)
+  expect(warm).toBeCloseTo(1.23, 10)
+})
+
+it('a zero-cost row keeps the existing token-repricing behavior', async () => {
+  if (!isSqliteAvailable()) return
+
+  const globalData = join(testRoot, 'crush-global')
+  const projectDir = join(testRoot, 'crush-project-zero')
+  const dbPath = createCrushDb(join(projectDir, '.crush'))
+  withCrushDb(dbPath, db => {
+    insertCrushSession(db, 'zero', 1000, 500, 0)
+    insertCrushMessage(db, 'zero', 'zero-message')
+  })
+  await writeCrushRegistry(globalData, projectDir)
+
+  const { clearSessionCache, parseAllSessions } = await import('../src/parser.js')
+  clearSessionCache()
+  const cold = (await parseAllSessions(undefined, 'crush')).reduce((sum, project) => sum + project.totalCostUSD, 0)
+  clearSessionCache()
+  const warm = (await parseAllSessions(undefined, 'crush')).reduce((sum, project) => sum + project.totalCostUSD, 0)
+  const expected = 1000 * 3e-6 + 500 * 15e-6
+  expect(cold).toBeCloseTo(expected, 10)
+  expect(warm).toBeCloseTo(expected, 10)
 })
 
 it('holds the reported-cost provider set to its documented membership', async () => {

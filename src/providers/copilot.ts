@@ -62,6 +62,7 @@ import { readdir, stat } from 'fs/promises'
 import { homedir, platform } from 'os'
 import { join, basename, dirname, posix, win32 } from 'path'
 import { existsSync } from 'fs'
+import { getEditorDataDir } from '../editor-data-dir.js'
 import { createHash } from 'crypto'
 import { readSessionFile } from '../fs-utils.js'
 import { calculateCost, modelKeyMatches } from '../models.js'
@@ -942,33 +943,8 @@ function getAgentTracesDbPath(): string | null {
     return existsSync(envOverride) ? envOverride : null
   }
 
-  const home = homedir()
-  const candidates: string[] = []
-
-  const p = platform()
-  if (p === 'darwin') {
-    // macOS: VS Code, VS Code Insiders, VSCodium
-    candidates.push(
-      join(home, 'Library', 'Application Support', 'Code', 'User', 'globalStorage', 'github.copilot-chat', 'agent-traces.db'),
-      join(home, 'Library', 'Application Support', 'Code - Insiders', 'User', 'globalStorage', 'github.copilot-chat', 'agent-traces.db'),
-      join(home, 'Library', 'Application Support', 'VSCodium', 'User', 'globalStorage', 'github.copilot-chat', 'agent-traces.db'),
-    )
-  } else if (p === 'linux') {
-    // Linux: VS Code, VS Code Insiders, VSCodium
-    candidates.push(
-      join(home, '.config', 'Code', 'User', 'globalStorage', 'github.copilot-chat', 'agent-traces.db'),
-      join(home, '.config', 'Code - Insiders', 'User', 'globalStorage', 'github.copilot-chat', 'agent-traces.db'),
-      join(home, '.config', 'VSCodium', 'User', 'globalStorage', 'github.copilot-chat', 'agent-traces.db'),
-    )
-  } else if (p === 'win32') {
-    // Windows
-    const appdata = process.env['APPDATA'] ?? join(home, 'AppData', 'Roaming')
-    candidates.push(
-      join(appdata, 'Code', 'User', 'globalStorage', 'github.copilot-chat', 'agent-traces.db'),
-      join(appdata, 'Code - Insiders', 'User', 'globalStorage', 'github.copilot-chat', 'agent-traces.db'),
-      join(appdata, 'VSCodium', 'User', 'globalStorage', 'github.copilot-chat', 'agent-traces.db'),
-    )
-  }
+  const candidates = getVSCodeGlobalStorageDirs(homedir(), platform())
+    .map(dir => join(dir, 'github.copilot-chat', 'agent-traces.db'))
 
   for (const candidate of candidates) {
     if (existsSync(candidate)) return candidate
@@ -3392,54 +3368,19 @@ async function resolveJetBrainsProjectNames(
  * (Code, Code Insiders, VSCodium) on the given platform. Used to discover
  * transcript sessions written by the Copilot Chat extension.
  *
- * Accepts explicit `home` and `os` arguments so callers (and tests) can pass
- * custom values without relying on process-level globals.
+ * Accepts explicit `home` and `os` arguments for the platform fallback.
+ * APPDATA and XDG_CONFIG_HOME still come from the process environment.
  */
 export function getVSCodeWorkspaceStorageDirs(home: string, os: string): string[] {
   const j = os === 'win32' ? win32.join : posix.join
-  if (os === 'darwin') {
-    return [
-      j(home, 'Library', 'Application Support', 'Code', 'User', 'workspaceStorage'),
-      j(home, 'Library', 'Application Support', 'Code - Insiders', 'User', 'workspaceStorage'),
-      j(home, 'Library', 'Application Support', 'VSCodium', 'User', 'workspaceStorage'),
-    ]
-  }
-  if (os === 'linux') {
-    return [
-      j(home, '.config', 'Code', 'User', 'workspaceStorage'),
-      j(home, '.config', 'Code - Insiders', 'User', 'workspaceStorage'),
-      j(home, '.config', 'VSCodium', 'User', 'workspaceStorage'),
-    ]
-  }
-  // win32
-  return [
-    j(home, 'AppData', 'Roaming', 'Code', 'User', 'workspaceStorage'),
-    j(home, 'AppData', 'Roaming', 'Code - Insiders', 'User', 'workspaceStorage'),
-    j(home, 'AppData', 'Roaming', 'VSCodium', 'User', 'workspaceStorage'),
-  ]
+  return ['Code', 'Code - Insiders', 'VSCodium']
+    .map(editor => j(getEditorDataDir(editor, home, os), 'User', 'workspaceStorage'))
 }
 
 export function getVSCodeGlobalStorageDirs(home: string, os: string): string[] {
   const j = os === 'win32' ? win32.join : posix.join
-  if (os === 'darwin') {
-    return [
-      j(home, 'Library', 'Application Support', 'Code', 'User', 'globalStorage'),
-      j(home, 'Library', 'Application Support', 'Code - Insiders', 'User', 'globalStorage'),
-      j(home, 'Library', 'Application Support', 'VSCodium', 'User', 'globalStorage'),
-    ]
-  }
-  if (os === 'linux') {
-    return [
-      j(home, '.config', 'Code', 'User', 'globalStorage'),
-      j(home, '.config', 'Code - Insiders', 'User', 'globalStorage'),
-      j(home, '.config', 'VSCodium', 'User', 'globalStorage'),
-    ]
-  }
-  return [
-    j(home, 'AppData', 'Roaming', 'Code', 'User', 'globalStorage'),
-    j(home, 'AppData', 'Roaming', 'Code - Insiders', 'User', 'globalStorage'),
-    j(home, 'AppData', 'Roaming', 'VSCodium', 'User', 'globalStorage'),
-  ]
+  return ['Code', 'Code - Insiders', 'VSCodium']
+    .map(editor => j(getEditorDataDir(editor, home, os), 'User', 'globalStorage'))
 }
 
 // workspace.json holds `folder` (single root) or `workspace` (a multi-root

@@ -7,6 +7,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { calculateCost } from '../../src/models.js'
 import { createHermesProvider } from '../../src/providers/hermes.js'
 import { isSqliteAvailable } from '../../src/sqlite.js'
+import { aggregateProjectsIntoDays } from '../../src/day-aggregator.js'
+import { currentTzKey, DAILY_CACHE_VERSION, ensureCacheHydrated, toDateString, type DailyEntry } from '../../src/daily-cache.js'
 import type { ParsedProviderCall } from '../../src/providers/types.js'
 import type { DateRange } from '../../src/types.js'
 
@@ -22,12 +24,18 @@ let tmpDir: string
 let cacheDir: string
 let originalHermesHome: string | undefined
 let originalCodeburnCacheDir: string | undefined
+let originalLocalAppData: string | undefined
+let originalHome: string | undefined
+let originalUserProfile: string | undefined
 
 beforeEach(async () => {
   tmpDir = await mkdtemp(join(tmpdir(), 'hermes-provider-test-'))
   cacheDir = await mkdtemp(join(tmpdir(), 'hermes-provider-cache-'))
   originalHermesHome = process.env['HERMES_HOME']
   originalCodeburnCacheDir = process.env['CODEBURN_CACHE_DIR']
+  originalLocalAppData = process.env['LOCALAPPDATA']
+  originalHome = process.env['HOME']
+  originalUserProfile = process.env['USERPROFILE']
   process.env['HERMES_HOME'] = tmpDir
   process.env['CODEBURN_CACHE_DIR'] = cacheDir
   const { resetHermesSessionLedgerForTests } = await import('../../src/hermes-session-ledger.js')
@@ -39,9 +47,26 @@ afterEach(async () => {
   else process.env['HERMES_HOME'] = originalHermesHome
   if (originalCodeburnCacheDir === undefined) delete process.env['CODEBURN_CACHE_DIR']
   else process.env['CODEBURN_CACHE_DIR'] = originalCodeburnCacheDir
+  if (originalLocalAppData === undefined) delete process.env['LOCALAPPDATA']
+  else process.env['LOCALAPPDATA'] = originalLocalAppData
+  if (originalHome === undefined) delete process.env['HOME']
+  else process.env['HOME'] = originalHome
+  if (originalUserProfile === undefined) delete process.env['USERPROFILE']
+  else process.env['USERPROFILE'] = originalUserProfile
   await rm(tmpDir, { recursive: true, force: true })
   await rm(cacheDir, { recursive: true, force: true })
 })
+
+async function withProcessPlatform<T>(platform: NodeJS.Platform, action: () => Promise<T>): Promise<T> {
+  const original = Object.getOwnPropertyDescriptor(process, 'platform')
+  if (!original?.configurable) throw new Error('process.platform cannot be mocked in this runtime')
+  Object.defineProperty(process, 'platform', { ...original, value: platform })
+  try {
+    return await action()
+  } finally {
+    Object.defineProperty(process, 'platform', original)
+  }
+}
 
 function createHermesDb(homeDir: string): string {
   const { DatabaseSync: Database } = requireForTest('node:sqlite')
@@ -122,6 +147,23 @@ async function createProfileHermesDb(hermesHome: string, profile: string): Promi
   return createHermesDb(profileDir)
 }
 
+async function createHermesDbWithSession(hermesHome: string, sessionId: string): Promise<string> {
+  await mkdir(hermesHome, { recursive: true })
+  const dbPath = createHermesDb(hermesHome)
+  withTestDb(dbPath, (db) => {
+    insertSession(db, {
+      id: sessionId,
+      inputTokens: 100,
+      outputTokens: 20,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      reasoningTokens: 0,
+      startedAt: 1779549200,
+    })
+  })
+  return dbPath
+}
+
 function insertSession(db: TestDb, values: {
   id: string
   source?: string
@@ -187,8 +229,9 @@ function dayRange(): DateRange {
   }
 }
 
-async function loadParserWithHermesHome(hermesHome: string, codeburnCacheDir: string) {
-  process.env['HERMES_HOME'] = hermesHome
+async function loadParserWithHermesHome(hermesHome: string | undefined, codeburnCacheDir: string) {
+  if (hermesHome === undefined) delete process.env['HERMES_HOME']
+  else process.env['HERMES_HOME'] = hermesHome
   process.env['CODEBURN_CACHE_DIR'] = codeburnCacheDir
   vi.resetModules()
   const parser = await import('../../src/parser.js')
@@ -207,6 +250,187 @@ async function collectCalls(hermesHome: string, sourcePath: string): Promise<Par
 const skipUnlessSqlite = isSqliteAvailable() ? describe : describe.skip
 
 skipUnlessSqlite('hermes provider', () => {
+  it.each([
+    ['unset', undefined],
+    ['empty', ''],
+    ['whitespace', ' \t '],
+  ])('uses LOCALAPPDATA for the Windows default with %s HERMES_HOME and discovers default and named profiles', async (_label, configuredHome) => {
+    await withProcessPlatform('win32', async () => {
+      if (configuredHome === undefined) delete process.env['HERMES_HOME']
+      else process.env['HERMES_HOME'] = configuredHome
+      const localAppData = join(tmpDir, 'local-app-data')
+      process.env['LOCALAPPDATA'] = localAppData
+      const hermesHome = join(localAppData, 'hermes')
+      const rootDbPath = await createHermesDbWithSession(hermesHome, 'windows-default')
+      const profileDbPath = await createHermesDbWithSession(join(hermesHome, 'profiles', 'coder'), 'windows-profile')
+
+      const provider = createHermesProvider()
+      expect(await provider.probeRoots()).toEqual([{ path: hermesHome, label: 'home' }])
+      const sessions = await provider.discoverSessions()
+      expect(sessions.map(session => session.path).sort()).toEqual([
+        `${profileDbPath}#hermes-session=windows-profile`,
+        `${rootDbPath}#hermes-session=windows-default`,
+      ].sort())
+      expect(sessions.map(session => session.project).sort()).toEqual(['coder', 'hermes'])
+    })
+  })
+
+  it('re-derives a finalized v47 daily cache from the Windows Hermes home and carries unavailable history', async () => {
+    const now = new Date()
+    const sessionStartedAt = Math.floor((now.getTime() - 4 * 24 * 60 * 60 * 1000) / 1000)
+    const hermesDate = toDateString(new Date(sessionStartedAt * 1000))
+    const sourceGoneDate = toDateString(new Date(now.getTime() - 9 * 24 * 60 * 60 * 1000))
+    const yesterday = toDateString(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1))
+
+    const localAppData = join(tmpDir, 'local-app-data')
+    const hermesHome = join(localAppData, 'hermes')
+    delete process.env['HERMES_HOME']
+    process.env['LOCALAPPDATA'] = localAppData
+    await mkdir(hermesHome, { recursive: true })
+    const dbPath = createHermesDb(hermesHome)
+    withTestDb(dbPath, (db) => {
+      insertSession(db, {
+        id: 'daily-cache-windows-session',
+        inputTokens: 123,
+        outputTokens: 45,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        reasoningTokens: 0,
+        actualCost: 0.75,
+        startedAt: sessionStartedAt,
+      })
+    })
+
+    const cachedDay = (date: string, provider: string, calls: number, cost: number, inputTokens: number): DailyEntry => {
+      const modelStats = {
+        calls,
+        cost,
+        savingsUSD: 0,
+        inputTokens,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+      }
+      const slice = {
+        calls,
+        cost,
+        savingsUSD: 0,
+        sessions: 1,
+        inputTokens,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        models: { 'gpt-5.5': modelStats },
+        categories: {},
+      }
+      return {
+        date,
+        cost,
+        savingsUSD: 0,
+        calls,
+        sessions: 1,
+        inputTokens,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        editTurns: 0,
+        oneShotTurns: 0,
+        models: { 'gpt-5.5': modelStats },
+        categories: {},
+        providers: { [provider]: slice },
+      }
+    }
+
+    await writeFile(join(cacheDir, 'daily-cache.v47.json'), JSON.stringify({
+      version: 47,
+      savingsConfigHash: '',
+      tzKey: currentTzKey(),
+      lastComputedDate: yesterday,
+      days: [
+        cachedDay(hermesDate, 'codex', 2, 0.4, 80),
+        cachedDay(sourceGoneDate, 'claude', 3, 1.2, 300),
+      ],
+      complete: true,
+      watermarkTrusted: true,
+    }), 'utf-8')
+
+    const { clearSessionCache, parseAllSessions } = await withProcessPlatform('win32', () =>
+      loadParserWithHermesHome(undefined, cacheDir),
+    )
+    clearSessionCache()
+    let reparsedProjects: Awaited<ReturnType<typeof parseAllSessions>> = []
+    const hydrated = await ensureCacheHydrated(
+      async range => {
+        reparsedProjects = await parseAllSessions(range)
+        return reparsedProjects
+      },
+      aggregateProjectsIntoDays,
+    )
+
+    expect(hydrated.version).toBe(DAILY_CACHE_VERSION)
+    expect(reparsedProjects.flatMap(project => project.sessions)).toHaveLength(1)
+    const refreshedHermesDay = hydrated.days.find(day => day.date === hermesDate)
+    expect(refreshedHermesDay?.providers['hermes']).toMatchObject({
+      calls: 1,
+      cost: 0.75,
+      inputTokens: 123,
+      outputTokens: 45,
+    })
+    expect(refreshedHermesDay?.providers['codex']).toMatchObject({ calls: 2, cost: 0.4, inputTokens: 80 })
+    expect(hydrated.days.find(day => day.date === sourceGoneDate)).toMatchObject({
+      carried: true,
+      providers: { claude: { calls: 3, cost: 1.2, inputTokens: 300 } },
+    })
+  })
+
+  it('falls back to the Windows home AppData path when LOCALAPPDATA is blank', async () => {
+    await withProcessPlatform('win32', async () => {
+      delete process.env['HERMES_HOME']
+      process.env['HOME'] = tmpDir
+      process.env['USERPROFILE'] = tmpDir
+      process.env['LOCALAPPDATA'] = '  \t  '
+      const hermesHome = join(homedir(), 'AppData', 'Local', 'hermes')
+      await createHermesDbWithSession(hermesHome, 'windows-fallback')
+
+      const provider = createHermesProvider()
+      expect(await provider.probeRoots()).toEqual([{ path: hermesHome, label: 'home' }])
+      expect((await provider.discoverSessions()).map(session => session.project)).toEqual(['hermes'])
+    })
+  })
+
+  it('keeps Unix home discovery and explicit Hermes home overrides', async () => {
+    await withProcessPlatform('linux', async () => {
+      delete process.env['HERMES_HOME']
+      process.env['HOME'] = tmpDir
+      process.env['USERPROFILE'] = tmpDir
+      delete process.env['LOCALAPPDATA']
+      const unixHome = join(homedir(), '.hermes')
+      await createHermesDbWithSession(unixHome, 'unix-default')
+
+      const defaultProvider = createHermesProvider()
+      expect(await defaultProvider.probeRoots()).toEqual([{ path: unixHome, label: 'home' }])
+
+      const localAppData = join(tmpDir, 'local-app-data')
+      const legacyHome = join(tmpDir, 'legacy-hermes-home')
+      process.env['LOCALAPPDATA'] = localAppData
+      process.env['HERMES_HOME'] = legacyHome
+      const envOverrideDb = await createHermesDbWithSession(legacyHome, 'env-override')
+      const envProvider = createHermesProvider()
+      expect(await envProvider.probeRoots()).toEqual([{ path: legacyHome, label: 'home' }])
+      expect((await envProvider.discoverSessions()).map(session => session.path)).toEqual([
+        `${envOverrideDb}#hermes-session=env-override`,
+      ])
+
+      const constructorOverride = join(tmpDir, 'constructor-hermes-home')
+      const constructorDb = await createHermesDbWithSession(constructorOverride, 'constructor-override')
+      const constructorProvider = createHermesProvider(constructorOverride)
+      expect(await constructorProvider.probeRoots()).toEqual([{ path: constructorOverride, label: 'home' }])
+      expect((await constructorProvider.discoverSessions()).map(session => session.path)).toEqual([
+        `${constructorDb}#hermes-session=constructor-override`,
+      ])
+    })
+  })
+
   it('discovers state.db sessions with token usage', async () => {
     const dbPath = createHermesDb(tmpDir)
     withTestDb(dbPath, (db) => {

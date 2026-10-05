@@ -38,7 +38,8 @@ const FILE_PROVIDERS: Record<string, string[]> = {
   'dsh.ts': ['dsh'],
   'hermes.ts': ['hermes'],
   'lingtai-tui.ts': ['lingtai-tui'],
-  // Its only literal read is CODEBURN_CURSOR_MAX_BUBBLES (cursor.ts:692).
+  // Application-data roots are read by the shared editor-data-dir helper;
+  // cursor.ts also reads CODEBURN_CURSOR_MAX_BUBBLES directly.
   'cursor.ts': ['cursor'],
   // The ENV_DIR const (open-design.ts:10) resolves to CODEBURN_OPEN_DESIGN_DIR.
   'open-design.ts': ['open-design'],
@@ -106,7 +107,6 @@ const ALLOWLIST: Record<string, string> = {
   'copilot.ts:CODEBURN_COPILOT_GLOBAL_STORAGE_DIR': COPILOT_DEFERRED,
   'copilot.ts:CODEBURN_COPILOT_DISABLE_OTEL': COPILOT_DEFERRED,
   'copilot.ts:CODEBURN_COPILOT_SESSION_STORE_DB': COPILOT_STORE_DEFERRED,
-  'copilot.ts:APPDATA': COPILOT_DEFERRED,
   'copilot.ts:XDG_CONFIG_HOME': COPILOT_DEFERRED,
   'copilot.ts:LOCALAPPDATA': COPILOT_DEFERRED,
 }

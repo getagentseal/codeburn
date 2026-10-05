@@ -362,8 +362,9 @@ describe('provider env overrides invalidate the fingerprint (#920)', () => {
     ['goose', 'GOOSE_PATH_ROOT'],
     ['crush', 'CRUSH_GLOBAL_DATA'],
     ['codex', 'CODEX_HOME'],
+    ['hermes', 'LOCALAPPDATA'],
   ]
-  const VARS = CASES.map(([, varName]) => varName)
+  const VARS = [...CASES.map(([, varName]) => varName), 'HERMES_HOME']
 
   // Save and restore every var we touch (beforeEach/afterEach), so a leaked
   // env var never breaks unrelated tests in the same worker — and an ambient

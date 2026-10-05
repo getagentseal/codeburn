@@ -137,7 +137,7 @@ Three caches under `~/.cache/codeburn/` (override with `CODEBURN_CACHE_DIR`):
 | File | Owner | Invalidation |
 |---|---|---|
 | `codex-results.v<n>.json` | `src/codex-cache.ts` | `mtimeMs + sizeBytes` per Codex `.jsonl`. Unsuffixed `codex-results.json` is adopted when versions match and never overwritten. |
-| `cursor-results.v<n>.json` | `src/cursor-cache.ts` | `mtimeMs + sizeBytes` of the Cursor SQLite db. Unsuffixed `cursor-results.json` is adopted when versions match and never overwritten. |
+| `cursor-results.v<n>.json` | `src/cursor-cache.ts` | Resolved database path plus combined modification time and size of the Cursor SQLite db and its WAL, when present. Unsuffixed `cursor-results.json` is adopted when versions match and never overwritten. |
 | `daily-cache.json` | `src/daily-cache.ts` | Tracks `lastComputedDate`; new days are backfilled, old days are reused. |
 
 All three use atomic write (temp file + `rename`) and write with mode `0o600`. All three carry a numeric `version` field; bumping it forces a recompute next run.

@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'fs/promises'
+import { mkdir, mkdtemp, readFile, rm, stat, utimes, writeFile } from 'fs/promises'
 import { existsSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
@@ -173,6 +173,22 @@ describe('unsuffixed result caches coexist with mixed-version binaries', () => {
     expect(legacy.calls[0].model).toBe('old-binary')
   })
 
+  it('does not reuse Cursor results for another database with identical size and timestamps', async () => {
+    const first = join(root, 'first.vscdb')
+    const second = join(root, 'second.vscdb')
+    await writeFile(first, 'first-db')
+    await writeFile(second, 'other-db')
+    const time = new Date('2026-05-01T00:00:00Z')
+    await utimes(first, time, time)
+    await utimes(second, time, time)
+    expect((await stat(first)).mtimeMs).toBe((await stat(second)).mtimeMs)
+    expect((await stat(first)).size).toBe((await stat(second)).size)
+    const floor = '2026-01-01T00:00:00.000Z'
+    await writeCachedResults(first, [call('cursor', 'first-database')], floor)
+    expect((await readCachedResults(first, floor))?.map(entry => entry.model)).toEqual(['first-database'])
+    expect(await readCachedResults(second, floor)).toBeNull()
+  })
+
   it('adopts a matching-version unsuffixed Cursor cache and ignores a mismatched one', async () => {
     const dbPath = join(root, 'state.vscdb')
     await writeFile(dbPath, 'cursor-db')
@@ -182,6 +198,7 @@ describe('unsuffixed result caches coexist with mixed-version binaries', () => {
 
     await writeFile(join(root, CURSOR_LEGACY_CACHE_FILE), JSON.stringify({
       version: CURSOR_CACHE_VERSION,
+      dbPath,
       dbMtimeMs: fp.mtimeMs,
       dbSizeBytes: fp.size,
       lookbackFloor: floor,
