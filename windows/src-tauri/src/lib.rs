@@ -271,6 +271,7 @@ pub fn run() {
             commands::set_claude_config_dirs,
             commands::cursor_sync,
             commands::set_cursor_sync,
+            commands::cursor_sync_env_off,
             commands::pick_directory,
             commands::daily_budgets,
             commands::set_daily_budget,
@@ -1327,6 +1328,11 @@ mod commands {
     #[tauri::command]
     pub fn cursor_sync() -> bool {
         crate::settings::cursor_sync()
+    }
+
+    #[tauri::command]
+    pub fn cursor_sync_env_off() -> bool {
+        crate::settings::cursor_sync_env_off()
     }
 
     #[tauri::command]

@@ -188,10 +188,12 @@ function ClaudeConfigDirs() {
 /// The CLI's `cursorSync` config key. The status line lives in the popover's Cursor tab.
 function CursorSync() {
   const [enabled, setEnabled] = useState<boolean | null>(null)
+  const [envOff, setEnvOff] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     invoke<boolean>('cursor_sync').then(setEnabled).catch(() => {})
+    invoke<boolean>('cursor_sync_env_off').then(setEnvOff).catch(() => {})
   }, [])
 
   const toggle = async () => {
@@ -206,7 +208,11 @@ function CursorSync() {
   if (enabled === null) return null
   return (
     <Group title="Usage Sync" footer="CodeBurn downloads your own usage export with the Cursor app's login, at most once an hour.">
-      <Row label="Sync Cursor usage from cursor.com" control={<Switch on={enabled} onToggle={() => { void toggle() }} ariaLabel="Sync Cursor usage from cursor.com" />} />
+      <Row
+        label="Sync Cursor usage from cursor.com"
+        hint={enabled && envOff ? 'Turned off by CODEBURN_CURSOR_SYNC=0' : undefined}
+        control={<Switch on={enabled && !envOff} disabled={enabled && envOff} onToggle={() => { void toggle() }} ariaLabel="Sync Cursor usage from cursor.com" />}
+      />
       {error && <Note><span className="stg-error">{error}</span></Note>}
     </Group>
   )

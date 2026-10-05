@@ -52,6 +52,19 @@ struct CursorSyncStatusTests {
         #expect(try Self.status(#"{"enabled": true, "state": "error", "lastSuccessAt": null, "errorCode": "new-kind"}"#).line(now: Self.now)?.text == "Couldn't read the usage export from cursor.com, will retry")
     }
 
+    @Test("the Settings footer names the env override and otherwise shows the last sync")
+    func settingsFooter() throws {
+        let off = try Self.status(#"{"enabled": false, "state": "off", "lastSuccessAt": null}"#)
+        #expect(CursorSyncStatus.envOff(configEnabled: true, status: off))
+        #expect(CursorSyncStatus.settingsFooter(configEnabled: true, status: off) == "Turned off by CODEBURN_CURSOR_SYNC=0")
+        #expect(!CursorSyncStatus.envOff(configEnabled: false, status: off))
+        #expect(CursorSyncStatus.settingsFooter(configEnabled: false, status: off) == "Downloads your own usage export with the Cursor app's login, at most once an hour.")
+        let ok = try Self.status(#"{"enabled": true, "state": "ok", "lastSuccessAt": "2026-10-05T11:48:00.000Z"}"#)
+        #expect(!CursorSyncStatus.envOff(configEnabled: true, status: ok))
+        #expect(CursorSyncStatus.settingsFooter(configEnabled: true, status: ok, now: Self.now) == "Synced from cursor.com 12m ago")
+        #expect(CursorSyncStatus.settingsFooter(configEnabled: true, status: nil) == "Downloads your own usage export with the Cursor app's login, at most once an hour.")
+    }
+
     @Test("the toggle writes only the cursorSync key, clearing it when on")
     func configRoundTrip() throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("cursor-sync-\(UUID().uuidString)").path

@@ -595,6 +595,22 @@ describe('Settings', () => {
     expect(mocks.setCursorSync).toHaveBeenLastCalledWith(true)
   })
 
+  it('shows the env override and disables the Cursor sync switch', async () => {
+    mocks.getOverview.mockResolvedValue({
+      current: { providers: { cursor: 3.5 }, providerDetails: [{ id: 'cursor', label: 'Cursor', cost: 3.5 }] },
+      cursorSync: { enabled: false, state: 'off', lastSuccessAt: null },
+    } as unknown as MenubarPayload)
+    mocks.getCursorSync.mockResolvedValue(true)
+    const user = userEvent.setup()
+    render(<Settings period="week" />)
+    await user.click(screen.getByRole('button', { name: 'Providers' }))
+
+    const toggle = await screen.findByRole('switch', { name: 'Sync Cursor usage from cursor.com' })
+    expect(toggle).toBeDisabled()
+    expect(toggle).toHaveAttribute('aria-checked', 'false')
+    expect(screen.getByText('Turned off by CODEBURN_CURSOR_SYNC=0')).toBeInTheDocument()
+  })
+
   it('keys provider logos on the internal id from providerDetails', async () => {
     mocks.getOverview.mockResolvedValue({
       current: {

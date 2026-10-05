@@ -1886,20 +1886,26 @@ private struct GenericProviderSettingsTab: View {
 private struct CursorSyncSettingsSection: View {
     @Environment(AppStore.self) private var store
     @State private var enabled = CLICursorSyncConfig.load()
+    @State private var saveError: String?
+
+    private var envOff: Bool { CursorSyncStatus.envOff(configEnabled: enabled, status: store.payload.cursorSync) }
 
     var body: some View {
         Section {
             Toggle(L("Sync Cursor usage from cursor.com"), isOn: Binding(
-                get: { enabled },
+                get: { enabled && !envOff },
                 set: { next in
                     do {
                         try CLICursorSyncConfig.persist(enabled: next)
                         enabled = next
+                        saveError = nil
                     } catch {
                         NSLog("CodeBurn: failed to persist cursorSync config: \(error)")
+                        saveError = L("Couldn't save the setting: config.json is invalid or locked")
                     }
                 }
             ))
+            .disabled(envOff)
         } footer: {
             Text(footer)
                 .font(.system(size: 11))
@@ -1907,8 +1913,7 @@ private struct CursorSyncSettingsSection: View {
     }
 
     private var footer: String {
-        if enabled, let line = store.payload.cursorSync?.line() { return line.text }
-        return L("Downloads your own usage export with the Cursor app's login, at most once an hour.")
+        saveError ?? CursorSyncStatus.settingsFooter(configEnabled: enabled, status: store.payload.cursorSync)
     }
 }
 

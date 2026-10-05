@@ -311,6 +311,7 @@ function writeConfigKey(key: string, value: unknown): void {
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
   }
+  if (!config || typeof config !== 'object' || Array.isArray(config)) throw new Error('config.json is not a JSON object')
   if (value === undefined) delete config[key]
   else config[key] = value
   fs.mkdirSync(path.dirname(target), { recursive: true })

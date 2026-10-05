@@ -1173,6 +1173,11 @@ describe('codeburn:setCursorSync', () => {
       await handlers['codeburn:setCursorSync']!(true)
       expect(JSON.parse(fs.readFileSync(config, 'utf8'))).toEqual({ language: 'fr', currency: { code: 'EUR' } })
       expect(await handlers['codeburn:setCursorSync']!('off')).toMatchObject({ ok: false })
+      for (const body of ['null', '[1,2]', '{ not json']) {
+        writeFileSync(config, body)
+        expect(await handlers['codeburn:setCursorSync']!(false)).toMatchObject({ ok: false })
+        expect(fs.readFileSync(config, 'utf8')).toBe(body)
+      }
     } finally {
       process.env.HOME = previous
       rmSync(home, { recursive: true, force: true })

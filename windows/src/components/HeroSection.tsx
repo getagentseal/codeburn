@@ -7,6 +7,12 @@ import { ArrowDownRight, ArrowUpRight, LeafIcon, MonitorIcon, WarningIcon } from
 import type { DisplayMetric } from '../lib/appSettings'
 import { formatCombinedSessionCount, formatSessionCount, sessionCountIsExact, COMBINED_SESSION_COUNT_HELP, SESSION_COUNT_HELP } from '../lib/session-count-label'
 
+const CURSOR_SYNC_ERRORS: Record<string, string> = {
+  login: 'Cursor login expired, open Cursor to sign in again',
+  network: "Couldn't reach cursor.com, will retry",
+  export: "Couldn't read the usage export from cursor.com, will retry",
+}
+
 type Props = {
   payload: MenubarPayload | null
   currency: CurrencyState
@@ -112,9 +118,9 @@ export function HeroSection({ payload, currency, periodLabel, isToday, dailyBudg
       )}
       {cursorSync && cursorSync.state !== 'off' && (
         cursorSync.errorCode ? (
-          <div className="hero-note hero-note-warn">
+          <div className="hero-note hero-note-caution">
             <WarningIcon size={10} />
-            <span>{cursorSync.error ?? "Couldn't read the usage export from cursor.com, will retry"}</span>
+            <span>{CURSOR_SYNC_ERRORS[cursorSync.errorCode] ?? CURSOR_SYNC_ERRORS.export}</span>
           </div>
         ) : (
           <div className="hero-note hero-note-muted">

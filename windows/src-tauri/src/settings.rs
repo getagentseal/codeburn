@@ -539,6 +539,11 @@ pub fn cursor_sync() -> bool {
     crate::config::read().get("cursorSync").and_then(Value::as_bool) != Some(false)
 }
 
+/// The tray spawns the CLI with its own environment, so this is the override the CLI sees.
+pub fn cursor_sync_env_off() -> bool {
+    std::env::var("CODEBURN_CURSOR_SYNC").as_deref() == Ok("0")
+}
+
 pub fn set_cursor_sync(enabled: bool) -> Result<()> {
     crate::config::update(|obj| {
         if enabled {
@@ -939,6 +944,21 @@ pub fn take_pending_section() -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cursor_sync_env_override_is_only_zero() {
+        // Nothing else in this crate reads the variable, so setting it here races no test.
+        let previous = std::env::var_os("CODEBURN_CURSOR_SYNC");
+        std::env::set_var("CODEBURN_CURSOR_SYNC", "0");
+        assert!(cursor_sync_env_off());
+        std::env::set_var("CODEBURN_CURSOR_SYNC", "1");
+        assert!(!cursor_sync_env_off());
+        std::env::remove_var("CODEBURN_CURSOR_SYNC");
+        assert!(!cursor_sync_env_off());
+        if let Some(value) = previous {
+            std::env::set_var("CODEBURN_CURSOR_SYNC", value);
+        }
+    }
 
     #[test]
     fn only_providers_the_cli_reads_from_the_environment_accept_a_key() {

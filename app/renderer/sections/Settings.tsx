@@ -726,11 +726,14 @@ function CursorSyncRow({ status }: { status?: CursorSyncStatus }) {
     const next = !enabled
     codeburn.setCursorSync?.(next).then(() => setEnabled(next)).catch(err => showToast(normalizeCliError(err).message, 'error'))
   }
-  const line = enabled && status ? cursorSyncLine(status) : null
+  // The config says on, but the CLI reports off: CODEBURN_CURSOR_SYNC=0 wins.
+  const envOff = enabled && status?.enabled === false
+  const on = enabled && !envOff
+  const line = on && status ? cursorSyncLine(status) : null
   return <div className="about-sec"><SettingRow
     title={t('settings.providers.cursorSync.title')}
-    description={line ? <span className={line.warn ? 'cursor-sync-line warn' : 'cursor-sync-line'}>{line.text}</span> : t('settings.providers.cursorSync.detail')}
-    control={labelId => <button type="button" role="switch" aria-checked={enabled} aria-labelledby={labelId} className={enabled ? 'switch on' : 'switch'} onClick={toggle}><span className="switch-knob" /></button>}
+    description={envOff ? t('settings.providers.cursorSync.envOff') : line ? <span className={line.warn ? 'cursor-sync-line warn' : 'cursor-sync-line'}>{line.text}</span> : t('settings.providers.cursorSync.detail')}
+    control={labelId => <button type="button" role="switch" aria-checked={on} aria-labelledby={labelId} className={on ? 'switch on' : 'switch'} disabled={envOff} onClick={toggle}><span className="switch-knob" /></button>}
   /></div>
 }
 

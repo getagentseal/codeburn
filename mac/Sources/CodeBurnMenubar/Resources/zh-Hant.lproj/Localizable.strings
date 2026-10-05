@@ -723,3 +723,5 @@
 "Couldn't read the usage export from cursor.com, will retry" = "無法讀取 cursor.com 的用量匯出，將會重試";
 "Sync Cursor usage from cursor.com" = "從 cursor.com 同步 Cursor 用量";
 "Downloads your own usage export with the Cursor app's login, at most once an hour." = "使用 Cursor 應用的登入下載你自己的用量匯出，每小時最多一次。";
+"Turned off by CODEBURN_CURSOR_SYNC=0" = "已被 CODEBURN_CURSOR_SYNC=0 關閉";
+"Couldn't save the setting: config.json is invalid or locked" = "無法儲存設定：config.json 無效或已被鎖定";

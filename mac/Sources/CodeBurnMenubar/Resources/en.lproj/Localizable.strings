@@ -734,3 +734,5 @@
 "Couldn't read the usage export from cursor.com, will retry" = "Couldn't read the usage export from cursor.com, will retry";
 "Sync Cursor usage from cursor.com" = "Sync Cursor usage from cursor.com";
 "Downloads your own usage export with the Cursor app's login, at most once an hour." = "Downloads your own usage export with the Cursor app's login, at most once an hour.";
+"Turned off by CODEBURN_CURSOR_SYNC=0" = "Turned off by CODEBURN_CURSOR_SYNC=0";
+"Couldn't save the setting: config.json is invalid or locked" = "Couldn't save the setting: config.json is invalid or locked";

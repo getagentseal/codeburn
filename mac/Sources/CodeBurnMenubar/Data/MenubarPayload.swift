@@ -92,6 +92,18 @@ struct CursorSyncStatus: Codable, Sendable, Equatable {
         }
         return (L("Synced from cursor.com %@", CodexBankedResetPresentation.compactAge(of: date, now: now)), false)
     }
+
+    /// The config says on, but the CLI reports off: CODEBURN_CURSOR_SYNC=0 wins.
+    static func envOff(configEnabled: Bool, status: CursorSyncStatus?) -> Bool {
+        configEnabled && status?.enabled == false
+    }
+
+    /// What the Settings switch says under itself.
+    static func settingsFooter(configEnabled: Bool, status: CursorSyncStatus?, now: Date = Date()) -> String {
+        if envOff(configEnabled: configEnabled, status: status) { return L("Turned off by CODEBURN_CURSOR_SYNC=0") }
+        if configEnabled, let line = status?.line(now: now) { return line.text }
+        return L("Downloads your own usage export with the Cursor app's login, at most once an hour.")
+    }
 }
 
 struct LiveSessionsBlock: Codable, Sendable {
