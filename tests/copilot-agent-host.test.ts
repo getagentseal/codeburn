@@ -104,8 +104,8 @@ describe('copilot VS Code agent-host sessions', () => {
     expect(sum(calls, 'inputTokens')).toBe(TRUTH.input)
   })
 
-  it('serves 10 calls and exact credits for the closed session', async () => {
-    await writeSession(await fixtureLines())
+  async function serve(lines: string[]) {
+    await writeSession(lines)
     vi.stubEnv('HOME', tmp)
     vi.stubEnv('USERPROFILE', tmp)
     vi.stubEnv('CODEBURN_CACHE_DIR', join(tmp, 'cache'))
@@ -118,16 +118,29 @@ describe('copilot VS Code agent-host sessions', () => {
     clearLoadCacheMemo()
     try {
       const projects = await parseAllSessions(undefined, 'copilot')
-      expect(projects.map(p => p.project)).toEqual(['copilot-test'])
       const calls = projects.flatMap(p => p.sessions).flatMap(s => s.turns).flatMap(t => t.assistantCalls)
-      expect(behavioralCallCount(calls)).toBe(TRUTH.calls)
-      expect(calls.reduce((s, c) => s + c.usage.outputTokens, 0)).toBe(TRUTH.output)
-      expect(calls.reduce((s, c) => s + c.usage.inputTokens, 0)).toBe(TRUTH.input)
-      expect(calls.reduce((s, c) => s + c.usage.cacheReadInputTokens, 0)).toBe(TRUTH.cacheRead)
-      expect(copilotCreditSpend(projects).spentCredits).toBe(2.772045)
+      return { projects, calls }
     } finally {
       clearSessionCache()
       clearLoadCacheMemo()
     }
+  }
+
+  it('serves 10 calls and exact credits for the closed session', async () => {
+    const { projects, calls } = await serve(await fixtureLines())
+    expect(projects.map(p => p.project)).toEqual(['copilot-test'])
+    expect(behavioralCallCount(calls)).toBe(TRUTH.calls)
+    expect(calls.reduce((s, c) => s + c.usage.outputTokens, 0)).toBe(TRUTH.output)
+    expect(calls.reduce((s, c) => s + c.usage.inputTokens, 0)).toBe(TRUTH.input)
+    expect(calls.reduce((s, c) => s + c.usage.cacheReadInputTokens, 0)).toBe(TRUTH.cacheRead)
+    expect(copilotCreditSpend(projects).spentCredits).toBe(2.772045)
+  })
+
+  it('serves an open session as 10 calls with no tokens', async () => {
+    const lines = (await fixtureLines()).filter(l => JSON.parse(l).type !== 'session.shutdown')
+    const { projects, calls } = await serve(lines)
+    expect(projects.map(p => p.project)).toEqual(['copilot-test'])
+    expect(behavioralCallCount(calls)).toBe(TRUTH.calls)
+    expect(calls.reduce((s, c) => s + c.usage.inputTokens + c.usage.outputTokens + c.costUSD, 0)).toBe(0)
   })
 })
