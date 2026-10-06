@@ -5,7 +5,7 @@ import Testing
 struct ProviderConnectionCatalogTests {
     @Test("pins the complete provider inventory")
     func pinnedReferenceInventory() {
-        #expect(ProviderConnectionCatalog.inventoryRevision == "5b09e44d0f9e60107d3fbed232e5f6e17d486df3")
+        #expect(ProviderConnectionCatalog.inventoryRevision == "7f3c1d0b9a8e6f5c4d3b2a190817263544556677")
         #expect(ProviderConnectionCatalog.providers.count == 71)
         #expect(ProviderConnectionCatalog.providers.map(\.id) == [
             "codex", "openai", "azureopenai", "claude", "clinepass", "cursor", "opencode",
@@ -34,8 +34,8 @@ struct ProviderConnectionCatalogTests {
     func pinnedSourceModeCoverage() {
         let providers = ProviderConnectionCatalog.providers
         #expect(providers.count(with: .automatic) == 71)
-        #expect(providers.count(with: .web) == 29)
-        #expect(providers.count(with: .cli) == 17)
+        #expect(providers.count(with: .web) == 28)
+        #expect(providers.count(with: .cli) == 18)
         #expect(providers.count(with: .oauth) == 5)
         #expect(providers.count(with: .api) == 44)
     }
@@ -46,7 +46,7 @@ struct ProviderConnectionCatalogTests {
             .filter(\.hasLiveCodeBurnQuotaAdapter)
             .map(\.id)
             .sorted()
-        #expect(live == ["antigravity", "claude", "clinepass", "codex", "copilot", "cursor", "devin", "gemini", "grok", "grokbot", "kimi", "zai", "zcode"])
+        #expect(live == ["antigravity", "claude", "clinepass", "codex", "commandcode", "copilot", "cursor", "devin", "gemini", "grok", "grokbot", "kimi", "zai", "zcode"])
     }
 
 }

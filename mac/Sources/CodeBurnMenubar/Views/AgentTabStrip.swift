@@ -237,7 +237,7 @@ private struct AgentTab: View {
     /// actually implement live-quota fetching for in AppStore.quotaSummary.
     static func providerSupportsQuota(_ filter: ProviderFilter) -> Bool {
         switch filter {
-        case .claude, .codex: return true
+        case .claude, .codex, .commandCode: return true
         default: return false
         }
     }
@@ -495,6 +495,7 @@ extension ProviderFilter {
         case .claude: return Theme.categoricalClaude
         case .cline: return Color(red: 0x23/255.0, green: 0x8A/255.0, blue: 0x7E/255.0)
         case .codewhale: return Color(red: 0x38/255.0, green: 0xBD/255.0, blue: 0xF8/255.0)
+        case .commandCode: return Color(red: 0x10/255.0, green: 0xB9/255.0, blue: 0x81/255.0)
         case .codex: return Theme.categoricalCodex
         case .cursor: return Theme.categoricalCursor
         case .cursorAgent: return Color(red: 0x4E/255.0, green: 0xC9/255.0, blue: 0xB0/255.0)

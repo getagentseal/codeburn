@@ -32,6 +32,7 @@ const FILE_PROVIDERS: Record<string, string[]> = {
   'cline-cli.ts': ['cline-cli'],
   'codebuff.ts': ['codebuff'],
   'codewhale.ts': ['codewhale'],
+  'command-code.ts': ['command-code'],
   'codex.ts': ['codex'],
   'copilot.ts': ['copilot'],
   'droid.ts': ['droid'],

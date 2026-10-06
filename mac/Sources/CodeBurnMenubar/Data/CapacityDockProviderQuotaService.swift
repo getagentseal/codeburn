@@ -27,6 +27,7 @@ final class CapacityDockProviderQuotaService {
         var refreshGrokBot: @Sendable () async throws -> QuotaSummary
         var refreshZai: @Sendable (String?) async throws -> QuotaSummary
         var refreshZcode: @Sendable () async throws -> QuotaSummary
+        var refreshCommandCode: @Sendable () async throws -> QuotaSummary
 
         static let live = Dependencies(
             refreshClinePass: { apiKey in
@@ -49,6 +50,9 @@ final class CapacityDockProviderQuotaService {
             },
             refreshZcode: {
                 try await ZcodeSubscriptionService.refresh()
+            },
+            refreshCommandCode: {
+                try await CommandCodeSubscriptionService.refresh()
             }
         )
     }
@@ -123,6 +127,14 @@ final class CapacityDockProviderQuotaService {
         case "zcode":
             do {
                 return try await dependencies.refreshZcode()
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                throw CapacityDockProviderFetchFailure(error: error)
+            }
+        case "commandcode":
+            do {
+                return try await dependencies.refreshCommandCode()
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
@@ -214,6 +226,14 @@ struct CapacityDockProviderFetchFailure: LocalizedError, Equatable, Sendable {
             }
         }
         if let error = error as? ZcodeSubscriptionService.FetchError {
+            switch error.classification {
+            case .terminalAuth:
+                return .terminal
+            case .transient, .parseFailure:
+                return .transient
+            }
+        }
+        if let error = error as? CommandCodeSubscriptionService.FetchError {
             switch error.classification {
             case .terminalAuth:
                 return .terminal

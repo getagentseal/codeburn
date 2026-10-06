@@ -2247,6 +2247,11 @@ final class AppStore {
         case .gemini:  return geminiQuotaSummary(filter: filter)
         case .copilot: return copilotQuotaSummary(filter: filter)
         case .antigravity: return antigravityQuotaSummary(filter: filter)
+        case .commandCode:
+            // Command Code's live quota is owned by the dock's generic adapter,
+            // not one of the six native paths above.
+            guard let provider = CapacityDockProvider(rawValue: "commandcode") else { return nil }
+            return capacityDockQuotaSummary(for: provider)
         default:      return nil
         }
     }
@@ -3065,6 +3070,7 @@ enum ProviderFilter: String, CaseIterable, Identifiable {
     case claude = "Claude"
     case cline = "Cline"
     case codewhale = "CodeWhale"
+    case commandCode = "Command Code"
     case codex = "Codex"
     case cursor = "Cursor"
     case cursorAgent = "Cursor Agent"
@@ -3105,6 +3111,7 @@ enum ProviderFilter: String, CaseIterable, Identifiable {
         case .cursorAgent: ["cursor-agent", "cursor agent"]
         case .cline: ["cline"]
         case .codewhale: ["codewhale"]
+        case .commandCode: ["command-code", "command code"]
         case .kiloCode: ["kilo-code", "kilocode"]
         case .ibmBob: ["ibm-bob", "ibm bob"]
         case .openclaw: ["openclaw"]
@@ -3124,6 +3131,7 @@ enum ProviderFilter: String, CaseIterable, Identifiable {
         case .claude: "claude"
         case .cline: "cline"
         case .codewhale: "codewhale"
+        case .commandCode: "command-code"
         case .codex: "codex"
         case .cursor: "cursor"
         case .cursorAgent: "cursor-agent"

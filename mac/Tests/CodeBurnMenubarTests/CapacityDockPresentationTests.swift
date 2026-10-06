@@ -420,9 +420,9 @@ struct CapacityDockPresentationTests {
 
     @Test("Browser-session providers receive an actionable connection instruction")
     func browserSessionGuidance() {
-        let provider = CapacityDockProvider(rawValue: "commandcode")!
+        let provider = CapacityDockProvider(rawValue: "qoder")!
         #expect(ProviderConnectionGuidance.instruction(for: provider) ==
-            "Sign in to Command Code in a supported browser, then click Retry.")
+            "Sign in to Qoder in a supported browser, then click Retry.")
     }
 
     @Test("Grok Build offers direct one-click local login discovery")

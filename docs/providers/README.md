@@ -15,6 +15,7 @@ For the architectural picture, see `../architecture.md`.
 | [Cline](cline.md) | JSON | `src/providers/cline.ts` | `tests/providers/cline.test.ts` |
 | [Cline CLI](cline-cli.md) | JSON | `src/providers/cline-cli.ts` | `tests/providers/cline-cli.test.ts` |
 | [CodeWhale](codewhale.md) | JSON | `src/providers/codewhale.ts` | `tests/providers/codewhale.test.ts` |
+| [Command Code](command-code.md) | JSONL | `src/providers/command-code.ts` | `tests/providers/command-code.test.ts` |
 | [Codebuff](codebuff.md) | JSON | `src/providers/codebuff.ts` | `tests/providers/codebuff.test.ts` |
 | [Codex](codex.md) | JSONL | `src/providers/codex.ts` | `tests/providers/codex.test.ts` |
 | [Copilot](copilot.md) | JSONL + SQLite (OTel) + Nitrite .db (JetBrains) | `src/providers/copilot.ts` | `tests/providers/copilot.test.ts` |

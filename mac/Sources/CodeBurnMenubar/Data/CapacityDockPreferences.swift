@@ -73,6 +73,9 @@ struct CapacityDockProvider: RawRepresentable, CaseIterable, Identifiable, Hasha
         // The ClinePass plan pays for both Cline surfaces, and the CLI records
         // the extension and the command line tool as separate rows.
         case "clinepass": ["cline", "cline-cli"]
+        // The catalog id is "commandcode" but the CLI's provider id is
+        // "command-code"; the tile is the same product either way.
+        case "commandcode": ["command-code"]
         default: [payloadProviderID]
         }
     }

@@ -20,6 +20,9 @@ struct ProviderReconnectPresentation: Sendable, Equatable {
         case .gemini:
             defaultReason = L("Gemini credentials need to be refreshed.")
             instruction = L("Run the Gemini CLI once to refresh your login, then click Reconnect.")
+        case .commandCode:
+            defaultReason = L("Command Code credentials need to be refreshed.")
+            instruction = L("Run `cmd login` in your terminal, then click Reconnect.")
         case .copilot:
             defaultReason = L("Copilot credentials need to be refreshed.")
             instruction = L("Sign in with the Copilot CLI, an editor plugin, or `gh auth login`, then click Reconnect.")
