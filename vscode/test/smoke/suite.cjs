@@ -30,10 +30,11 @@ async function step(name, results, fn) {
 
 exports.run = async function run() {
   const results = []
+  let api = null
   await step('activates', results, async () => {
     const ext = vscode.extensions.getExtension('codeburn.codeburn')
     assert.ok(ext, 'extension codeburn.codeburn is installed')
-    await ext.activate()
+    api = await ext.activate()
     assert.ok(ext.isActive)
   })
   await step('registers every command', results, async () => {
@@ -57,6 +58,8 @@ exports.run = async function run() {
   await step('opens the dashboard and switches scope and section', results, async () => {
     await vscode.commands.executeCommand('codeburn.openDashboard')
     await waitFor(() => dashboardTabs().length === 1 && dashboardTabs()[0].label === 'CodeBurn · smoke-app', 'the workspace dashboard')
+    // The renderer only calls the host once React has booted inside the webview.
+    await waitFor(() => api.dashboardCalls() > 0, 'the dashboard renderer to call the host')
     await vscode.commands.executeCommand('codeburn.showAllProjects')
     await waitFor(() => dashboardTabs().length === 1 && dashboardTabs()[0].label === 'CodeBurn', 'the all-projects dashboard')
     await vscode.commands.executeCommand('codeburn.openOptimize')

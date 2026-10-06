@@ -26,9 +26,12 @@ type CliFailure = { kind: string; message: string }
 
 let controller: Controller | null = null
 
-export function activate(context: vscode.ExtensionContext): void {
-  controller = new Controller(context)
-  controller.start()
+/** The returned API is for the smoke test: it proves the dashboard's renderer booted and called the host. */
+export function activate(context: vscode.ExtensionContext): { dashboardCalls: () => number } {
+  const instance = new Controller(context)
+  controller = instance
+  instance.start()
+  return { dashboardCalls: () => instance.dashboardCalls }
 }
 
 export async function deactivate(): Promise<void> {
@@ -69,6 +72,7 @@ class Controller {
   private sidebar: vscode.WebviewView | null = null
   private timer: NodeJS.Timeout | undefined
   private inflight: Promise<void> | null = null
+  dashboardCalls = 0
   private readonly disposables: vscode.Disposable[] = []
 
   constructor(private readonly context: vscode.ExtensionContext) {
@@ -300,6 +304,7 @@ class Controller {
     const routers = { all: createRouter(this.handlersAll, editor), workspace: createRouter(this.handlersWorkspace, editor) }
     panel.webview.onDidReceiveMessage(async (message: WebviewMessage) => {
       if (!message || message.type !== 'invoke' || typeof message.id !== 'number') return
+      this.dashboardCalls++
       const envelope = await (this.dashboardWorkspace ? routers.workspace : routers.all)(message.channel, message.args)
       void panel.webview.postMessage({ type: 'result', id: message.id, envelope } satisfies HostMessage)
       if (envelope.ok && /^codeburn:(setCurrency|resetCurrency|setPlan|resetPlan|addAlias|removeAlias|setPriceOverride|removePriceOverride|setProjectFilter)$/.test(String(message.channel))) {

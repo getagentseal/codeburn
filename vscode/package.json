@@ -232,6 +232,7 @@
         "codeburn.currency": {
           "type": "string",
           "default": "",
+          "scope": "application",
           "pattern": "^([A-Z]{3})?$",
           "patternErrorMessage": "%config.currency.pattern%",
           "markdownDescription": "%config.currency%",
