@@ -280,6 +280,7 @@ MIT licensed. Development happens in this repo.
 | [How it works](docs/how-it-works.md) | Pricing, task categories, and where each tool keeps its data |
 | [Optimize](docs/optimize.md) | What is scanned, what `--apply` writes, how to read the grade |
 | [Menu bar and tray](docs/menubar.md) | macOS, Windows (including WSL), and the Linux GNOME extension |
+| [VS Code extension](docs/vscode.md) | Status bar, summary and dashboard in VS Code, Cursor, Windsurf, Antigravity and VSCodium |
 | [Plans and quota](docs/plans-and-quota.md) | Subscription tracking and live provider limits |
 | [Guard](docs/guard.md) | Budget caps for Claude Code |
 | [Web dashboard](docs/web.md) | The browser view, and combining usage across your devices |

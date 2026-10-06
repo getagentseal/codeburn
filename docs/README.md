@@ -17,6 +17,7 @@ One line per file in this directory, recursively.
 - [menubar.md](menubar.md) — The macOS menu bar app, Windows tray app (with WSL discovery), and Linux GNOME Shell extension.
 - [optimize.md](optimize.md) — `codeburn optimize` scans your Claude Code sessions and your `~/.claude/` setup, reports what is costing tokens without earning them, and grades the setup A to F.
 - [plans-and-quota.md](plans-and-quota.md) — Subscription plan tracking and live provider quota via `codeburn quota`.
+- [vscode.md](vscode.md) — The VS Code extension: how it reuses the CLI client and the desktop renderer, which Node it runs on, workspace scope, and how to build and test it.
 - [web.md](web.md) — The local browser dashboard and combining usage across your paired devices.
 - [yield.md](yield.md) — `codeburn yield` correlates AI sessions with git commits to show what actually shipped.
 
