@@ -1737,6 +1737,7 @@ button.pcmp-row-on { background: rgba(128, 128, 128, 0.18); }
 .sv-figure-sub b { color: var(--ink); font-weight: var(--fw-medium); }
 .sv-lead { max-width: 62ch; margin: 0; font-size: var(--fs-subhead); line-height: 1.55; }
 .sv-kpis { display: flex; flex-wrap: wrap; gap: var(--sp-1) var(--sp-6); color: var(--mut); font-size: var(--fs-meta); }
+.sv-kpi-note { margin-left: 6px; color: var(--mut2); font-size: var(--fs-label); }
 .sv-kpis b { margin-right: 3px; color: var(--ink); font-size: var(--fs-body); font-weight: var(--fw-subhead); }
 
 .sv-findings .pbody, .sv-prompts .pbody { padding: 0; overflow: hidden; }

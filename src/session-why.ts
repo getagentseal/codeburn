@@ -77,8 +77,8 @@ export type WhyFinding = Base & (
   | { kind: 'reread'; calls: number; avgTokens: number }
   | { kind: 'failed'; tool: string; label: string; description: string; error: WhyError; userStopped: boolean; afterCalls: number | null }
   | { kind: 'carry'; estimate: true; source: 'tool' | 'paste'; tool: string; label: string; chars: number; tokens: number; calls: number; writeUsd: number; readUsd: number }
-  | { kind: 'prefix'; estimate: true; tokens: number; uncached: number; writeUsd: number; readUsd: number; laterCalls: number; readCalls: number }
-  | { kind: 'idle'; timeMs: number; endedBy: 'prompt' | 'tool' | 'message' }
+  | { kind: 'prefix'; estimate: true; tokens: number; cached: number; uncached: number; writeUsd: number; readUsd: number; laterCalls: number; readCalls: number }
+  | { kind: 'idle'; timeMs: number; endedBy: 'prompt' | 'tool' | 'message' | 'helper' }
   | { kind: 'slowCall'; timeMs: number; model: string; outputTokens: number }
 )
 export type SessionWhy = {
@@ -108,6 +108,9 @@ const SECRET_PATTERNS: Array<[RegExp, string]> = [
   [/\b(ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}/g, '$1_••••'],
   [/\bgithub_pat_[A-Za-z0-9_]{20,}/g, 'github_pat_••••'],
   [/\bglpat-[A-Za-z0-9_-]{16,}/g, 'glpat-••••'],
+  [/\b([sr]k_(?:live|test)_)[A-Za-z0-9]{10,}/g, '$1••••'],
+  [/\b(aws_secret_access_key|aws_session_token)(["']?\s*[:=]\s*["']?)[^\s"',;]+/gi, '$1$2••••'],
+  [/(\b[a-z][a-z0-9+.-]*:\/\/[^\s:@/]+:)[^\s@/]+@/gi, '$1••••@'],
   [/\bxox[abposr]-[A-Za-z0-9-]{10,}/g, 'xox•-••••'],
   [/\b(AKIA|ASIA)[0-9A-Z]{16}\b/g, '$1••••'],
   [/\bAIza[0-9A-Za-z_-]{30,}/g, 'AIza••••'],
@@ -623,8 +626,9 @@ function buildFindings({ read, turns, helpers, turnOfHelper, allCalls, stepResul
   for (const x of toolSteps) {
     if (!x.s.isError) continue
     const userStopped = USER_STOP.test(stepResult.get(x.s)?.text ?? '')
-    const nextOk = userStopped ? undefined : toolSteps.find(y => y.s.name === 'Bash' && !y.s.isError && y.ts > x.endTs)
-    const after = nextOk ? allCalls.filter(c => c.ts >= x.endTs && c.ts <= nextOk.ts) : null
+    // Only within the same prompt: a later prompt is new work, not recovery.
+    const nextOk = userStopped ? undefined : toolSteps.find(y => y.t === x.t && y.s.name === 'Bash' && !y.s.isError && y.ts > x.endTs)
+    const after = nextOk ? allCalls.filter(c => c.turn === x.t.i && c.ts >= x.endTs && c.ts <= nextOk.ts) : null
     const usd = after ? after.reduce((s, c) => s + c.call.costUSD, 0) : null
     out.push({
       id: '', kind: 'failed', turn: x.t.i, step: x.k, usd, share: usd === null ? null : share(usd), tool: x.s.name, label: x.s.label,
@@ -664,10 +668,12 @@ function buildFindings({ read, turns, helpers, turnOfHelper, allCalls, stepResul
     const tokens = first.usage.inputTokens + first.usage.cacheReadInputTokens + first.usage.cacheCreationInputTokens
     if (tokens >= R.prefixTokens) {
       const later = allCalls.slice(1)
-      const readers = later.filter(c => c.call.usage.cacheReadInputTokens >= tokens)
+      // Uncached input is never re-read from the cache, so the re-read size is the cached part.
+      const cached = first.usage.cacheReadInputTokens + first.usage.cacheCreationInputTokens
+      const readers = later.filter(c => c.call.usage.cacheReadInputTokens >= cached)
       const writeUsd = partsOf(first).cacheWrite
-      const readUsd = readers.reduce((s, c) => s + calculateCost(c.call.model, 0, 0, 0, tokens, 0, c.call.speed), 0)
-      out.push({ id: '', kind: 'prefix', estimate: true, turn: 1, usd: writeUsd + readUsd, share: share(writeUsd + readUsd), tokens, uncached: first.usage.cacheCreationInputTokens, writeUsd, readUsd, laterCalls: later.length, readCalls: readers.length })
+      const readUsd = readers.reduce((s, c) => s + calculateCost(c.call.model, 0, 0, 0, cached, 0, c.call.speed), 0)
+      out.push({ id: '', kind: 'prefix', estimate: true, turn: 1, usd: writeUsd + readUsd, share: share(writeUsd + readUsd), tokens, cached, uncached: first.usage.cacheCreationInputTokens, writeUsd, readUsd, laterCalls: later.length, readCalls: readers.length })
     }
   }
 
@@ -675,7 +681,8 @@ function buildFindings({ read, turns, helpers, turnOfHelper, allCalls, stepResul
   for (const t of turns) {
     let cursor = 0
     t.steps.forEach((s, k) => {
-      if (s.start - cursor >= R.idleMs) out.push({ id: '', kind: 'idle', turn: t.i, step: k, usd: null, share: null, timeMs: s.start - cursor, endedBy: s.kind === 'model' ? s.startedBy : 'tool' })
+      const endedBy = s.kind !== 'model' ? 'tool' : s.startedBy === 'message' && t.helpers.length > 0 ? 'helper' : s.startedBy
+      if (s.start - cursor >= R.idleMs) out.push({ id: '', kind: 'idle', turn: t.i, step: k, usd: null, share: null, timeMs: s.start - cursor, endedBy })
       if (s.kind === 'model' && s.end - s.start >= R.slowCallMs) out.push({ id: '', kind: 'slowCall', turn: t.i, step: k, usd: null, share: null, timeMs: s.end - s.start, model: s.model, outputTokens: s.tokens.output })
       cursor = Math.max(cursor, s.end)
     })
@@ -727,10 +734,12 @@ function partsText(p: WhyParts, t: WhyTokens, calls: number): string {
   return items ? items.charAt(0).toUpperCase() + items.slice(1) + '.' : ''
 }
 
+// The saving is the difference of the two figures as printed, so they add up.
+const cents = (n: number) => Number(n.toFixed(2))
 const altText = (alt: WhyAlt | null, cost: number, what: string) =>
-  alt ? `If ${alt.model} can do ${what}, the same tokens cost ${usd(alt.cost)} (−${usd(cost - alt.cost)}).` : null
+  alt ? `If ${alt.model} can do ${what}, the same tokens cost ${usd(alt.cost)} (−${usd(cents(cost) - cents(alt.cost))}).` : null
 
-const ENDED_BY = { prompt: 'your prompt', tool: 'a tool result', message: 'a message (for example a helper reporting back)' }
+const ENDED_BY = { prompt: 'your prompt', tool: 'a tool result', message: 'a message sent to the agent', helper: 'a helper reporting back' }
 
 export function findingText(f: WhyFinding, why: SessionWhy): { title: string; lines: string[] } {
   const turnCalls = (i?: number) => why.turns[(i ?? 1) - 1]?.calls ?? 0
@@ -743,7 +752,7 @@ export function findingText(f: WhyFinding, why: SessionWhy): { title: string; li
       return {
         title: `${head}${more}: ${usd(f.usd ?? 0)} in total`,
         lines: [partsText(f.parts, f.tokens, f.calls),
-          `They made ${f.minCalls === f.maxCalls ? f.minCalls : `${f.minCalls}–${f.maxCalls}`} calls each and re-read an average of ${formatWhyTokens(f.tokens.cacheRead / Math.max(1, f.calls))} tokens per call.`,
+          `They made ${f.minCalls === f.maxCalls ? plural(f.minCalls, 'call') : `${f.minCalls}–${f.maxCalls} calls`} each and re-read an average of ${formatWhyTokens(f.tokens.cacheRead / Math.max(1, f.calls))} tokens per call.`,
           altText(f.alt, f.usd ?? 0, 'these tasks')].filter((l): l is string => !!l),
       }
     }
@@ -751,9 +760,9 @@ export function findingText(f: WhyFinding, why: SessionWhy): { title: string; li
       const mult = f.median > 0 ? (f.usd ?? 0) / f.median : 0
       return {
         title: mult >= 2
-          ? `Prompt ${f.turn}: ${f.calls} ${f.models.join('/')} calls, ${usd(f.usd ?? 0)}, ${Math.round(mult)}× the session's median prompt (${usd(f.median)})`
-          : `Prompt ${f.turn}: ${f.calls} ${f.models.join('/')} calls, ${usd(f.usd ?? 0)}, ${pct(f.share ?? 0)} of the session`,
-        lines: [partsText(f.parts, f.tokens, f.calls), f.toolCalls ? `${f.toolCalls} of the ${f.calls} calls ran tools.` : '', altText(f.alt, f.usd ?? 0, 'this prompt')].filter((l): l is string => !!l),
+          ? `Prompt ${f.turn}: ${f.calls} ${f.models.join('/')} ${f.calls === 1 ? 'call' : 'calls'}, ${usd(f.usd ?? 0)}, ${Math.round(mult)}× the session's median prompt (${usd(f.median)})`
+          : `Prompt ${f.turn}: ${f.calls} ${f.models.join('/')} ${f.calls === 1 ? 'call' : 'calls'}, ${usd(f.usd ?? 0)}, ${pct(f.share ?? 0)} of the session`,
+        lines: [partsText(f.parts, f.tokens, f.calls), f.toolCalls ? (f.calls === 1 ? 'The one call ran tools.' : `${f.toolCalls} of the ${f.calls} calls ran tools.`) : '', altText(f.alt, f.usd ?? 0, 'this prompt')].filter((l): l is string => !!l),
       }
     }
     case 'coordination':
@@ -784,17 +793,17 @@ export function findingText(f: WhyFinding, why: SessionWhy): { title: string; li
         title: f.source === 'paste'
           ? `Estimate: a pasted block of ${f.chars.toLocaleString('en-US')} characters (≈${formatWhyTokens(f.tokens)} tokens) stayed in context for ${plural(f.calls, 'call')}`
           : `Estimate: one ${f.tool} result of ${f.chars.toLocaleString('en-US')} characters (≈${formatWhyTokens(f.tokens)} tokens) stayed in context for ${plural(f.calls, 'call')}`,
-        lines: [`${f.label ? `“${f.label}”. ` : ''}One cache write (${usd(f.writeUsd)}) plus a cache read on each of the ${f.calls - 1} calls after it (${usd(f.readUsd)}): about ${usd(f.usd ?? 0)}.`,
+        lines: [`${f.label ? `“${f.label}”. ` : ''}One cache write (${usd(f.writeUsd)}) plus a cache read on each of the ${plural(f.calls - 1, 'call')} after it (${usd(f.readUsd)}): about ${usd(f.usd ?? 0)}.`,
           'Everything in context is re-read by every later call; a narrower read or a capped output keeps it smaller.'],
       }
     case 'prefix':
       return {
-        title: `Estimate: the first call already carried ${formatWhyTokens(f.tokens)} tokens (system prompt, tool definitions, memory and your first message)`,
-        lines: [`Writing the ${formatWhyTokens(f.uncached)} uncached part to the cache cost ${usd(f.writeUsd)} (measured). ${f.readCalls} of the ${f.laterCalls} later calls read at least ${formatWhyTokens(f.tokens)} cached tokens; re-reading that much on each of them is about ${usd(f.readUsd)}.`,
+        title: `Estimate: the first call already carried ${formatWhyTokens(f.tokens)} tokens`,
+        lines: [`Writing the ${formatWhyTokens(f.uncached)} uncached part to the cache cost ${usd(f.writeUsd)} (measured). ${f.readCalls} of the ${plural(f.laterCalls, 'later call')} read at least ${formatWhyTokens(f.cached)} cached tokens; re-reading that much on each of them is about ${usd(f.readUsd)}.`,
           'Fewer MCP tools, a shorter CLAUDE.md or smaller memory files shrink this prefix for every call.'],
       }
     case 'idle':
-      return { title: `Prompt ${f.turn}: ${formatWhyDuration(f.timeMs)} with nothing running`, lines: [`The gap ended with ${ENDED_BY[f.endedBy]}.`] }
+      return { title: `Prompt ${f.turn}: ${formatWhyDuration(f.timeMs)} ${f.endedBy === 'helper' ? 'waiting on helpers' : 'with nothing running'}`, lines: [`The gap ended with ${ENDED_BY[f.endedBy]}.`] }
     case 'slowCall':
       return { title: `Prompt ${f.turn}: one ${f.model} call took ${formatWhyDuration(f.timeMs)}`, lines: [`Measured from the input that started it to its last streamed block; it produced ${formatWhyTokens(f.outputTokens)} output tokens.`] }
   }
@@ -817,20 +826,20 @@ const RULE_TEXT = (r: typeof WHY_RULES) => [
   `Helpers: runs launched by one prompt (and the helpers they launched) costing ≥${r.helperShare * 100}% of the session plus its helpers. Each helper is priced like its own row in the Sessions list.`,
   `Tool-heavy prompt: a prompt on a top-tier model where ≥${r.coordinationToolShare * 100}% of ≥${r.coordinationMinCalls} calls ran tools.`,
   `Re-reading: cache reads ≥${r.rereadShare * 100}% of the session over ≥${r.rereadMinCalls} calls.`,
-  'Cost parts: uncached input, output, cache reads and cache writes priced separately with CodeBurn\'s pricing (1-hour cache writes at their own rate); they add up to the total.',
-  'Repricing: the same calls with the same tokens at the rates of one tier down. It does not predict how many tokens that model would use.',
-  'Failed step: the exit code and the line that ended the run (the exception of the last traceback, otherwise the last error line). After it: model calls up to the next Bash command that succeeded.',
+  'Cost parts: uncached input, output, cache reads, cache writes and web search priced separately with CodeBurn\'s pricing (1-hour cache writes at their own rate); they add up to the total.',
+  'Repricing: the same calls with the same tokens at the rates of one tier down (Fable → Opus 5.5, any Opus including 4.x → Sonnet 5, Sonnet → Haiku 4.5), shown only when cheaper. It does not predict how many tokens that model would use.',
+  'Failed step: the exit code and the line that ended the run (the exception of the last traceback, otherwise the last error line, otherwise the last non-empty line). After it: model calls up to the next Bash command that succeeded in the same prompt.',
   `Estimate, carried result: a tool result or paste ≥${r.carryTokens / 1000}K tokens (characters ÷ 4): one cache write on the next call plus a cache read on each later call, up to the next compaction.`,
-  `Estimate, starting context: the first call's prompt when ≥${r.prefixTokens / 1000}K tokens: its measured cache write plus a cache read of that size on each later call that read at least that many cached tokens.`,
+  `Estimate, starting context: the first call's prompt when ≥${r.prefixTokens / 1000}K tokens: its measured cache write plus a cache read of its cached part on each later call that read at least that many cached tokens.`,
   `Time only: ≥${r.idleMs / 1000}s inside a prompt with nothing running, or one model call ≥${r.slowCallMs / 1000}s.`,
 ]
 
 export function renderSessionWhyText(why: SessionWhy): string {
   const out: string[] = []
-  const day = (iso: string) => iso.slice(0, 10)
+  const day = (iso: string) => { const d = new Date(iso); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}` }
   const clock = (iso: string) => new Date(iso).toTimeString().slice(0, 5)
   out.push(why.title || why.sessionId)
-  out.push(`${why.project ? basename(why.project) + ' · ' : ''}${why.sessionId.slice(0, 8)} · ${day(why.startedAt)} ${clock(why.startedAt)}–${clock(why.endedAt)}`)
+  out.push(`${why.project ? basename(why.project) + ' · ' : ''}${why.sessionId.slice(0, 8)} · ${day(why.startedAt)} ${clock(why.startedAt)}–${day(why.endedAt) === day(why.startedAt) ? '' : day(why.endedAt) + ' '}${clock(why.endedAt)}`)
   out.push('')
   out.push(`${usd(why.cost)} this session${why.helperCount ? `  +${usd(why.helperCost)} in ${plural(why.helperCount, 'helper')}` : ''}  ·  ${plural(why.turns.length, 'prompt')} · ${plural(why.calls, 'call')} · ${formatWhyDuration(Date.parse(why.endedAt) - Date.parse(why.startedAt))}`)
   out.push(verdictText(why))
@@ -852,8 +861,8 @@ export function renderSessionWhyText(why: SessionWhy): string {
   out.push('')
   out.push('How we flag (≈ marks an estimate)')
   for (const r of RULE_TEXT(why.rules)) out.push(`  - ${r}`)
-  out.push(`  - Totals use the same parser and pricing as \`codeburn sessions\`: the session cost matches its row for the whole session (\`--period lifetime\`); a shorter period slices the row.`)
-  out.push('  - Prompts are the messages you typed; helper hand-backs and other injected messages count under the prompt they arrived in.')
+  out.push('  - Totals use the same parser and pricing as `codeburn sessions`, over every call in this transcript.')
+  out.push('  - Prompts are the messages sent to the agent (typed or injected); helper hand-backs, notifications and command output count under the prompt they arrived in.')
   return out.join('\n')
 }
 

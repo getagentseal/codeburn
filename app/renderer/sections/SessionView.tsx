@@ -9,7 +9,7 @@ import { Usd } from '../components/Usd'
 import { Icon } from '../components/icons'
 import { t } from '../i18n'
 import { formatAxisMoney, niceTicks } from '../lib/chartAxis'
-import { formatCompact, formatDayLong, formatUsd, shortenProjectPath } from '../lib/format'
+import { formatCompact, formatDayLong, formatUsd, formatUsdDifference, shortenProjectPath } from '../lib/format'
 import type { InvestigationFilters } from '../lib/investigation'
 import { codeburn, normalizeCliError } from '../lib/ipc'
 import type { CliError, SessionDrillRow, SessionWhy, WhyFinding, WhyParts, WhyStep, WhyTokens, WhyTurn } from '../lib/types'
@@ -28,6 +28,7 @@ const pct = (p: number) => (p > 0 && p < 0.01 ? '<1%' : `${Math.round(p * 100)}%
 const tok = (n: number) => formatCompact(Math.round(n))
 const usdFine = (n: number) => (n > 0 && n < 0.01 ? `<${formatUsd(0.01)}` : formatUsd(n))
 const plural = (key: string, count: number, vars: Record<string, string | number> = {}) => t(`${key}.${count === 1 ? 'one' : 'other'}`, { count, ...vars })
+const one = (key: string, count: number) => `${key}.${count === 1 ? 'one' : 'other'}`
 
 export function formatStepDuration(ms: number): string {
   if (ms < 1000) return `${Math.max(0, Math.round(ms))}ms`
@@ -58,7 +59,7 @@ function partsLine(p: WhyParts, tk: WhyTokens, calls: number): string {
   const text = PART_KEYS
     .filter(k => p[k] >= 0.005)
     .sort((a, b) => p[b] - p[a])
-    .map(k => t(`sessions.why.part.${k}`, { amount: formatUsd(p[k]), tokens: tok(tokensOf[k]), calls }))
+    .map(k => t(k === 'cacheRead' ? one('sessions.why.part.cacheRead', calls) : `sessions.why.part.${k}`, { amount: formatUsd(p[k]), tokens: tok(tokensOf[k]), calls }))
     .join(t('sessions.why.part.sep'))
   return text ? text.charAt(0).toUpperCase() + text.slice(1) + t('sessions.why.part.end') : ''
 }
@@ -68,7 +69,7 @@ type FindingCopy = { title: string; lines: Line[]; chip: string }
 
 function altLine(f: { alt: { model: string; cost: number } | null; usd: number | null }, what: 'helpers' | 'prompt' | 'steps'): Line[] {
   if (!f.alt) return []
-  return [{ text: t(`sessions.why.alt.${what}`, { model: f.alt.model, amount: formatUsd(f.alt.cost), saved: formatUsd((f.usd ?? 0) - f.alt.cost) }), save: true }]
+  return [{ text: t(`sessions.why.alt.${what}`, { model: f.alt.model, amount: formatUsd(f.alt.cost), saved: formatUsdDifference(f.usd ?? 0, f.alt.cost) }), save: true }]
 }
 
 function findingCopy(f: WhyFinding, why: SessionWhy): FindingCopy {
@@ -86,7 +87,7 @@ function findingCopy(f: WhyFinding, why: SessionWhy): FindingCopy {
         title: head + more + t('sessions.why.f.helpers.total', { amount }),
         lines: [
           { text: partsLine(f.parts, f.tokens, f.calls) },
-          { text: t('sessions.why.f.helpers.calls', { range, tokens: tok(f.tokens.cacheRead / Math.max(1, f.calls)) }) },
+          { text: t(one('sessions.why.f.helpers.calls', range === '1' ? 1 : 2), { range, tokens: tok(f.tokens.cacheRead / Math.max(1, f.calls)) }) },
           ...altLine(f, 'helpers'),
         ],
       }
@@ -97,11 +98,11 @@ function findingCopy(f: WhyFinding, why: SessionWhy): FindingCopy {
       return {
         chip,
         title: mult >= 2
-          ? t('sessions.why.f.hotspot.title', { ...vars, mult: Math.round(mult), median: formatUsd(f.median) })
-          : t('sessions.why.f.hotspot.titleShare', { ...vars, share: pct(f.share ?? 0) }),
+          ? t(one('sessions.why.f.hotspot.title', f.calls), { ...vars, mult: Math.round(mult), median: formatUsd(f.median) })
+          : t(one('sessions.why.f.hotspot.titleShare', f.calls), { ...vars, share: pct(f.share ?? 0) }),
         lines: [
           { text: partsLine(f.parts, f.tokens, f.calls) },
-          ...(f.toolCalls ? [{ text: t('sessions.why.f.hotspot.tools', { tools: f.toolCalls, calls: f.calls }) }] : []),
+          ...(f.toolCalls ? [{ text: t(one('sessions.why.f.hotspot.tools', f.calls), { tools: f.toolCalls, calls: f.calls }) }] : []),
           ...altLine(f, 'prompt'),
         ],
       }
@@ -140,10 +141,10 @@ function findingCopy(f: WhyFinding, why: SessionWhy): FindingCopy {
       return {
         chip,
         title: f.source === 'paste'
-          ? t('sessions.why.f.carry.paste', { chars: f.chars.toLocaleString(), tokens: tok(f.tokens), calls: f.calls })
-          : t('sessions.why.f.carry.tool', { tool: f.tool, chars: f.chars.toLocaleString(), tokens: tok(f.tokens), calls: f.calls }),
+          ? t(one('sessions.why.f.carry.paste', f.calls), { chars: f.chars.toLocaleString(), tokens: tok(f.tokens), calls: f.calls })
+          : t(one('sessions.why.f.carry.tool', f.calls), { tool: f.tool, chars: f.chars.toLocaleString(), tokens: tok(f.tokens), calls: f.calls }),
         lines: [
-          { text: (f.label ? `“${f.label}”. ` : '') + t('sessions.why.f.carry.line', { write: formatUsd(f.writeUsd), later: f.calls - 1, read: formatUsd(f.readUsd), amount }) },
+          { text: (f.label ? `“${f.label}”. ` : '') + t(one('sessions.why.f.carry.line', f.calls - 1), { write: formatUsd(f.writeUsd), later: f.calls - 1, read: formatUsd(f.readUsd), amount }) },
           { text: t('sessions.why.f.carry.lever') },
         ],
       }
@@ -152,12 +153,12 @@ function findingCopy(f: WhyFinding, why: SessionWhy): FindingCopy {
         chip,
         title: t('sessions.why.f.prefix.title', { tokens: tok(f.tokens) }),
         lines: [
-          { text: t('sessions.why.f.prefix.line', { uncached: tok(f.uncached), write: formatUsd(f.writeUsd), readCalls: f.readCalls, laterCalls: f.laterCalls, tokens: tok(f.tokens), read: formatUsd(f.readUsd) }) },
+          { text: t(one('sessions.why.f.prefix.line', f.laterCalls), { uncached: tok(f.uncached), write: formatUsd(f.writeUsd), readCalls: f.readCalls, laterCalls: f.laterCalls, tokens: tok(f.cached), read: formatUsd(f.readUsd) }) },
           { text: t('sessions.why.f.prefix.lever') },
         ],
       }
     case 'idle':
-      return { chip, title: t('sessions.why.f.idle.title', { turn: f.turn ?? 0, duration: formatStepDuration(f.timeMs) }), lines: [{ text: t(`sessions.why.f.idle.${f.endedBy}`) }] }
+      return { chip, title: t(f.endedBy === 'helper' ? 'sessions.why.f.idle.titleHelpers' : 'sessions.why.f.idle.title', { turn: f.turn ?? 0, duration: formatStepDuration(f.timeMs) }), lines: [{ text: t(`sessions.why.f.idle.${f.endedBy}`) }] }
     case 'slowCall':
       return { chip, title: t('sessions.why.f.slowCall.title', { turn: f.turn ?? 0, model: f.model, duration: formatStepDuration(f.timeMs) }), lines: [{ text: t('sessions.why.f.slowCall.line', { tokens: tok(f.outputTokens) }) }] }
   }
@@ -321,7 +322,7 @@ function StepDetail({ step }: { step: WhyStep }) {
     return (
       <div className="sv-sd">
         {head(t('sessions.why.step.helper'), d.helper.description)}
-        <p className="sv-sd-desc">{t('sessions.why.step.helperFacts', { type: d.helper.agentType || '—', models: d.helper.models.join(', ') || '—', calls: d.helper.calls, amount: formatUsd(d.helper.cost) })}</p>
+        <p className="sv-sd-desc">{t(one('sessions.why.step.helperFacts', d.helper.calls), { type: d.helper.agentType || '—', models: d.helper.models.join(', ') || '—', calls: d.helper.calls, amount: formatUsd(d.helper.cost) })}</p>
       </div>
     )
   }
@@ -491,7 +492,7 @@ export function SessionView({ row, filters, medianCost, onBack }: {
       <button type="button" className="sv-back" onClick={onBack}><Icon name="chevron-left" />{t('sessions.why.back')}</button>
       <h2 className="sv-title">{title}</h2>
       <div className="sv-meta">
-        {row.provider} · {shortenProjectPath(row.project)} · {formatDayLong(row.startedAt)}, {clock(row.startedAt)}–{clock(row.endedAt)} · <span className="mono">{row.sessionId.slice(0, 8)}</span>
+        {row.provider} · {shortenProjectPath(row.project)} · {formatDayLong(row.startedAt)}, {clock(row.startedAt)}–{formatDayLong(row.endedAt) === formatDayLong(row.startedAt) ? '' : `${formatDayLong(row.endedAt)}, `}{clock(row.endedAt)} · <span className="mono">{row.sessionId.slice(0, 8)}</span>
       </div>
     </div>
   )
@@ -538,7 +539,7 @@ export function SessionView({ row, filters, medianCost, onBack }: {
         {Math.abs(why.cost - row.cost) > 0.005 && <p className="sv-note">{t('sessions.why.periodNote', { amount: formatUsd(row.cost) })}</p>}
         <p className="sv-lead">{verdict(why)}</p>
         <div className="sv-kpis">
-          <span><b>{why.turns.length}</b> {t(`sessions.why.kpi.prompts.${why.turns.length === 1 ? 'one' : 'other'}`)}</span>
+          <span><b>{why.turns.length}</b> {t(`sessions.why.kpi.prompts.${why.turns.length === 1 ? 'one' : 'other'}`)}{why.turns.length !== row.turns && <small className="sv-kpi-note">{t('sessions.why.kpi.promptsNote', { turns: row.turns })}</small>}</span>
           <span><b>{why.calls}</b> {t(`sessions.why.kpi.calls.${why.calls === 1 ? 'one' : 'other'}`)}</span>
           {durationMs > 0 && <span><b>{formatStepDuration(durationMs)}</b> {t('sessions.why.kpi.wall')}</span>}
           <span><b>{why.findings.length}</b> {t('sessions.why.kpi.flags')}</span>

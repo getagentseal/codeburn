@@ -53,7 +53,7 @@ const payload: SessionWhy = {
   findings: [
     { id: 'f1', kind: 'helpers', turn: 2, usd: 3.09, share: 0.5, direct: 6, nested: 0, loose: 0, models: ['Sonnet 5'], descriptions: ['Review module 1', 'Review module 2', 'Review module 3', 'Review module 4', 'Review module 5', 'Review module 6'], parts: parts(3.09), tokens, calls: 71, minCalls: 9, maxCalls: 15, alt: { model: 'Haiku 4.5', cost: 1.55 } },
     { id: 'f2', kind: 'hotspot', turn: 1, usd: 1.39, share: 0.45, calls: 8, toolCalls: 7, models: ['Fable 5.1'], median: 0.8, parts: parts(1.39), tokens, alt: { model: 'Opus 5.5', cost: 0.6 } },
-    { id: 'f3', kind: 'prefix', estimate: true, turn: 1, usd: 0.83, share: 0.27, tokens: 53_200, uncached: 31_400, writeUsd: 0.63, readUsd: 0.2, laterCalls: 7, readCalls: 6 },
+    { id: 'f3', kind: 'prefix', estimate: true, turn: 1, usd: 0.83, share: 0.27, tokens: 53_200, cached: 53_190, uncached: 31_400, writeUsd: 0.63, readUsd: 0.2, laterCalls: 7, readCalls: 6 },
     { id: 'f4', kind: 'failed', turn: 3, step: 1, usd: 0.58, share: 0.19, tool: 'Bash', label: 'npm run build', description: 'Build the frontend', error: failingTurn.steps[1]!.kind === 'tool' ? failingTurn.steps[1]!.error! : { exitCode: null, cause: null, location: null, secondary: [] }, userStopped: false, afterCalls: 2 },
     { id: 'f5', kind: 'slowCall', turn: 3, step: 2, usd: null, share: null, timeMs: 181_000, model: 'Fable 5.1', outputTokens: 9_800 },
   ],
@@ -101,7 +101,24 @@ describe('SessionView', () => {
   it('says so when the list row covers only part of the session', async () => {
     getSessionWhy.mockResolvedValue(payload)
     render(<SessionView row={{ ...row, cost: 1.25 }} filters={EMPTY_FILTERS} onBack={() => {}} />)
-    expect(await screen.findByText('The list shows $1.25 for the selected period; this view covers the whole session.')).toBeInTheDocument()
+    expect(await screen.findByText('The Sessions list shows $1.25 for this row; this view prices every call in this transcript, including calls a forked or resumed session shares with another row.')).toBeInTheDocument()
+  })
+
+  it('explains a prompt count that differs from the row, and singular counts read as singular', async () => {
+    getSessionWhy.mockResolvedValue({ ...payload, findings: [...payload.findings, { id: 'f6', kind: 'carry', estimate: true, turn: 4, step: 0, usd: 0.01, share: 0.003, source: 'tool', tool: 'Read', label: 'a.log', chars: 48_000, tokens: 12_000, calls: 1, writeUsd: 0.01, readUsd: 0 }] })
+    const { container } = render(<SessionView row={{ ...row, turns: 9 }} filters={EMPTY_FILTERS} onBack={() => {}} />)
+    expect(await screen.findByText('(9 turns in the Sessions list: helper replies fold into the prompt they answer)')).toBeInTheDocument()
+    await userEvent.setup().click(screen.getByText('Show 1 more'))
+    expect(container.textContent).toContain('stayed in context for 1 call')
+    expect(container.textContent).not.toMatch(/(for|over|made) 1 calls/)
+  })
+
+  it('shows the saving as the difference of the two shown figures', async () => {
+    const hot = payload.findings[1]!
+    getSessionWhy.mockResolvedValue({ ...payload, findings: [{ ...hot, usd: 1.006, alt: { model: 'Opus 5.5', cost: 0.504 } } as typeof hot] })
+    const { container } = render(<SessionView row={row} filters={EMPTY_FILTERS} onBack={() => {}} />)
+    await screen.findByText('Worth a look')
+    expect(container.textContent).toContain('the same tokens cost $0.50 (−$0.51)')
   })
 
   it('lists flagged prompts by default and all on request', async () => {

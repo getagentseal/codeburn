@@ -761,8 +761,8 @@ export type WhyFinding = WhyBase & (
   | { kind: 'reread'; calls: number; avgTokens: number }
   | { kind: 'failed'; tool: string; label: string; description: string; error: WhyError; userStopped: boolean; afterCalls: number | null }
   | { kind: 'carry'; estimate: true; source: 'tool' | 'paste'; tool: string; label: string; chars: number; tokens: number; calls: number; writeUsd: number; readUsd: number }
-  | { kind: 'prefix'; estimate: true; tokens: number; uncached: number; writeUsd: number; readUsd: number; laterCalls: number; readCalls: number }
-  | { kind: 'idle'; timeMs: number; endedBy: 'prompt' | 'tool' | 'message' }
+  | { kind: 'prefix'; estimate: true; tokens: number; cached: number; uncached: number; writeUsd: number; readUsd: number; laterCalls: number; readCalls: number }
+  | { kind: 'idle'; timeMs: number; endedBy: 'prompt' | 'tool' | 'message' | 'helper' }
   | { kind: 'slowCall'; timeMs: number; model: string; outputTokens: number }
 )
 export type WhyRules = {

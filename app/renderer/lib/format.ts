@@ -23,6 +23,12 @@ export function formatUsdWithCurrency(n: number, currency: ActiveCurrency): stri
   return `${currency.symbol}${(n * currency.rate).toLocaleString(localeTag(), { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 }
 
+/** a − b as displayed: the difference of the two rounded figures, so shown numbers add up. */
+export function formatUsdDifference(a: number, b: number): string {
+  const shown = (n: number) => Number((n * activeCurrency.rate).toFixed(2))
+  return formatConverted(shown(a) - shown(b))
+}
+
 /**
  * Already-converted input (CLI-side convertCost values, e.g. plan budgets): only
  * prefixes the active symbol and formats the magnitude — never re-applies the rate.

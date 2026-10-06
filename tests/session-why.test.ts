@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 import { getModelCosts, loadPricing } from '../src/models.js'
-import { buildSessionWhy, errorCause, redact, renderSessionWhyText, type SessionWhy, type WhyFinding } from '../src/session-why.js'
+import { buildSessionWhy, errorCause, findingText, redact, renderSessionWhyText, type SessionWhy, type WhyFinding } from '../src/session-why.js'
 import { CLEARED, REDIRECTED } from './setup/env-isolation-vars.js'
 
 const SID = '0c4f6c1e-5a7b-4e43-9d0e-2b1f7a6c9e10'
@@ -238,6 +238,7 @@ describe('session cost diagnosis: rules', () => {
   it('keeps time-only findings without dollars', () => {
     const [idle] = find('idle')
     expect(idle).toMatchObject({ turn: 2, usd: null, share: null, endedBy: 'tool' })
+    expect(renderSessionWhyText(why)).toContain('with nothing running')
     expect(idle!.timeMs).toBe(90_000)
     const [slow] = find('slowCall')
     expect(slow).toMatchObject({ turn: 2, usd: null, model: 'Fable 5.1', outputTokens: 6_000 })
@@ -255,10 +256,12 @@ describe('session cost diagnosis: rules', () => {
   it('estimates the starting context from the first call and the later calls that read at least that much', () => {
     const [f] = find('prefix')
     const c = getModelCosts(FABLE)!
-    expect(f).toMatchObject({ tokens: 50_002, uncached: 30_000, laterCalls: why.calls - 1, estimate: true })
-    expect(f!.readCalls).toBe(8)
+    // Uncached input (2 tokens) is never re-read, so the threshold and re-read size are the cached 50,000.
+    expect(f).toMatchObject({ tokens: 50_002, cached: 50_000, uncached: 30_000, laterCalls: why.calls - 1, estimate: true })
+    const readers = why.turns.flatMap(t => t.steps).filter(s => s.kind === 'model' && s.tokens.cacheRead >= 50_000).length
+    expect(f!.readCalls).toBe(readers)
     expect(f!.writeUsd).toBeCloseTo(30_000 * c.cacheWriteCostPerToken * 1.6, 12)
-    expect(f!.readUsd).toBeCloseTo(8 * 50_002 * c.cacheReadCostPerToken, 12)
+    expect(f!.readUsd).toBeCloseTo(readers * 50_000 * c.cacheReadCostPerToken, 12)
   })
 
   it('flags re-reading when cache reads dominate', () => {
@@ -281,6 +284,12 @@ describe('session cost diagnosis: content', () => {
     expect(redact('export API_KEY=abc123def456ghi')).toBe('export API_KEY=••••')
     expect(redact('Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U')).not.toContain('eyJzdWIi')
     expect(redact('ghp_' + 'a'.repeat(36))).toBe('ghp_••••')
+    // Fake values assembled at runtime so secret scanners don't flag the fixture.
+    const fake = 'x'.repeat(24)
+    expect(redact(`key sk_${'live'}_${fake} and rk_${'test'}_${fake}`)).toBe('key sk_live_•••• and rk_test_••••')
+    expect(redact(`aws_secret_access_key = ${fake}/${fake}`)).toBe('aws_secret_access_key = ••••')
+    expect(redact('git clone https://deploy:hunter2secret@github.com/acme/app.git')).toBe('git clone https://deploy:••••@github.com/acme/app.git')
+    expect(redact('postgres://app:pa55w0rd@db.internal:5432/main')).toBe('postgres://app:••••@db.internal:5432/main')
   })
 
   it('keeps the edit diff and the command output for the steps', () => {
@@ -295,5 +304,61 @@ describe('session cost diagnosis: content', () => {
   it('errorCause skips trailing tallies and uses the last error line', () => {
     expect(errorCause('Exit code 2\nsrc/a.ts(1,2): error TS2339: nope\nFound 1 error.').cause).toBe('src/a.ts(1,2): error TS2339: nope')
     expect(errorCause('Exit code 1\nwarning: x\nfatal: not a git repository').exitCode).toBe(1)
+  })
+})
+
+describe('session cost diagnosis: prompt boundaries, helpers waiting, dates, rounding', () => {
+  const SID2 = '9a1d2c3b-0000-4e43-9d0e-2b1f7a6c9e11'
+  let why2: SessionWhy
+
+  beforeAll(async () => {
+    const dir = join(home, '.claude', 'projects', '-work-other')
+    await mkdir(join(dir, SID2, 'subagents'), { recursive: true })
+    const m = transcript('2026-09-10T10:00:00.000Z')
+    m.prompt('Run the build and review it.')
+    m.wait(1000)
+    m.call(FABLE, { out: 100, cr: 1_000, cw: 1_000 }, [{ id: 'f1', name: 'Bash', input: { command: 'npm run build' } }])
+    m.result('f1', 'Exit code 1\nerror TS2339: nope', 2000, { isError: true })
+    m.call(FABLE, { out: 100, cr: 2_000, cw: 100 }, [{ id: 'h1', name: 'Agent', input: { description: 'Review it' } }])
+    m.result('h1', 'started', 1000, { tur: { agentId: 'y1' } })
+    m.wait(90_000)
+    m.note('Another Claude session sent a message: review done')
+    m.call(FABLE, { out: 100, cr: 2_100, cw: 100 })
+    m.wait(26 * 3_600_000)
+    m.prompt('Try the build again tomorrow.')
+    m.wait(1000)
+    m.call(FABLE, { out: 100, cr: 2_200, cw: 100 }, [{ id: 'ok1', name: 'Bash', input: { command: 'npm run build' } }])
+    m.result('ok1', 'built', 2000)
+    m.call(FABLE, { out: 50, cr: 2_300, cw: 50 })
+    await writeFile(join(dir, `${SID2}.jsonl`), m.lines.join('\n') + '\n')
+    const h = transcript('2026-09-10T10:00:06.000Z')
+    h.call(SONNET, { out: 500, cr: 1_000, cw: 500 })
+    await writeFile(join(dir, SID2, 'subagents', 'agent-y1.jsonl'), h.lines.join('\n') + '\n')
+    await writeFile(join(dir, SID2, 'subagents', 'agent-y1.meta.json'), JSON.stringify({ agentType: 'general-purpose', description: 'Review it', toolUseId: 'h1' }))
+    why2 = await buildSessionWhy(join(dir, `${SID2}.jsonl`))
+  })
+
+  it('does not count calls in a later prompt as recovery from a failure', () => {
+    const f = why2.findings.find(x => x.kind === 'failed')
+    expect(f).toMatchObject({ turn: 1, usd: null, share: null, afterCalls: null })
+    expect(findingText(f!, why2).lines.join(' ')).not.toContain('After it')
+  })
+
+  it('calls a gap that ended with a helper reporting back waiting on helpers', () => {
+    const f = why2.findings.find(x => x.kind === 'idle')
+    expect(f).toMatchObject({ turn: 1, endedBy: 'helper' })
+    expect(findingText(f!, why2).title).toContain('waiting on helpers')
+  })
+
+  it('prints local dates and the end date when the session spans days', () => {
+    const local = (iso: string) => { const d = new Date(iso); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}` }
+    const header = renderSessionWhyText(why2).split('\n')[1]!
+    expect(header).toContain(local(why2.startedAt))
+    expect(header).toContain(local(why2.endedAt))
+  })
+
+  it('shows a saving that is the difference of the shown figures', () => {
+    const f = { id: 'x', kind: 'hotspot', turn: 1, usd: 1.006, share: 0.5, calls: 2, toolCalls: 0, models: ['Fable 5.1'], median: 0.4, parts: { input: 0, output: 1.006, cacheRead: 0, cacheWrite: 0, webSearch: 0 }, tokens: { input: 0, output: 1, cacheRead: 0, cacheWrite: 0 }, alt: { model: 'Opus 5.5', cost: 0.504 } } as WhyFinding
+    expect(findingText(f, why2).lines.join(' ')).toContain('the same tokens cost $0.50 (−$0.51)')
   })
 })
