@@ -170,24 +170,19 @@ describe('copilot VS Code agent-host sessions', () => {
     expect(calls.reduce((s, c) => s + c.usage.inputTokens + c.usage.outputTokens + c.costUSD, 0)).toBe(0)
   })
 
-  // CLI 1.0.82: tokenless messages plus session-store rows, which carry output
-  // only for compaction requests. The leg's output must serve via the residual.
-  it.skipIf(!isSqliteAvailable())('CLI store session: output comes from the rollup residual, once', async () => {
-    const dir = fileURLToPath(new URL('./fixtures/copilot/cli-store-session/', import.meta.url))
-    const sid = 'e61538c6-6e3e-4607-b468-b38972f2ba35'
-    const rows = JSON.parse(await readFile(join(dir, 'store-rows.json'), 'utf-8')) as Array<Record<string, string | number>>
+  function writeStore(sid: string, cwd: string, rows: Array<Record<string, string | number | null>>): string {
     const dbPath = join(tmp, 'session-store.db')
     const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite') as {
       DatabaseSync: new (path: string) => { exec(sql: string): void; prepare(sql: string): { run(...p: unknown[]): void }; close(): void }
     }
     const db = new DatabaseSync(dbPath)
     db.exec(`
-      CREATE TABLE sessions (id TEXT PRIMARY KEY, cwd TEXT, repository TEXT, created_at TEXT);
-      CREATE TABLE assistant_usage_events (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT, model TEXT,
+      CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, cwd TEXT, repository TEXT, created_at TEXT);
+      CREATE TABLE IF NOT EXISTS assistant_usage_events (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT, model TEXT,
         input_tokens INTEGER, output_tokens INTEGER, cache_read_tokens INTEGER, cache_write_tokens INTEGER,
         reasoning_tokens INTEGER, total_nano_aiu INTEGER, request_multiplier REAL, initiator TEXT, created_at TEXT);
     `)
-    db.prepare('INSERT INTO sessions (id, cwd) VALUES (?, ?)').run(sid, '/home/dev/codeburn/app')
+    db.prepare('INSERT INTO sessions (id, cwd) VALUES (?, ?)').run(sid, cwd)
     const insert = db.prepare(`INSERT INTO assistant_usage_events (session_id, model, input_tokens, output_tokens, cache_read_tokens,
       cache_write_tokens, reasoning_tokens, total_nano_aiu, request_multiplier, initiator, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`)
     for (const r of rows) {
@@ -195,19 +190,128 @@ describe('copilot VS Code agent-host sessions', () => {
         r['reasoning_tokens'], r['total_nano_aiu'], r['request_multiplier'], r['initiator'], r['created_at'])
     }
     db.close()
-
-    const lines = (await readFile(join(dir, 'events.jsonl'), 'utf-8')).split('\n').filter(l => l.trim())
     vi.stubEnv('CODEBURN_COPILOT_SESSION_STORE_DB', dbPath)
-    const { projects, calls } = await serve(lines, sid, '/home/dev/codeburn/app')
+    return dbPath
+  }
 
-    // Rollup ground truth: inputTokens 310,703 cache-inclusive, output 3,254.
-    const usage = (k: keyof (typeof calls)[number]['usage']) => calls.reduce((s, c) => s + c.usage[k], 0)
-    expect(behavioralCallCount(calls)).toBe(11)
+  type ServedCall = Awaited<ReturnType<typeof serve>>['calls'][number]
+
+  // GitHub's own per-request charge is total_nano_aiu / 1e11 USD at list
+  // rates, so a model whose tokens are all counted and correctly priced costs
+  // exactly its rows' nanoAiu.
+  function expectCostEqualsNanoAiu(calls: ServedCall[], rows: Array<Record<string, string | number | null>>): void {
+    const models = new Set(rows.map(r => r['model'] as string))
+    for (const model of models) {
+      const cost = calls.filter(c => c.model === model).reduce((s, c) => s + c.costUSD, 0)
+      const nano = rows.filter(r => r['model'] === model).reduce((s, r) => s + (r['total_nano_aiu'] as number), 0)
+      expect({ model, cost: Number(cost.toFixed(12)) }).toEqual({ model, cost: Number((nano / 1e11).toFixed(12)) })
+    }
+  }
+
+  // CLI 1.0.82: tokenless messages plus session-store rows. Rollup ground
+  // truth: inputTokens 310,703 cache-inclusive, output 3,254, 9.334625 credits.
+  const STORE_SID = 'e61538c6-6e3e-4607-b468-b38972f2ba35'
+  const STORE_CWD = '/home/dev/codeburn/app'
+  const storeDir = fileURLToPath(new URL('./fixtures/copilot/cli-store-session/', import.meta.url))
+  const storeRows = async () => JSON.parse(await readFile(join(storeDir, 'store-rows.json'), 'utf-8')) as Array<Record<string, string | number>>
+  const storeLines = async () => (await readFile(join(storeDir, 'events.jsonl'), 'utf-8')).split('\n').filter(l => l.trim())
+
+  async function serveStore(lines: string[]) {
+    const rows = await storeRows()
+    writeStore(STORE_SID, STORE_CWD, rows)
+    const served = await serve(lines, STORE_SID, STORE_CWD)
+    const usage = (k: keyof ServedCall['usage']) => served.calls.reduce((s, c) => s + c.usage[k], 0)
+    expect(behavioralCallCount(served.calls)).toBe(11)
     expect(usage('outputTokens')).toBe(3_254)
     expect(usage('inputTokens')).toBe(82)
     expect(usage('cacheReadInputTokens')).toBe(270_680)
     expect(usage('cacheCreationInputTokens')).toBe(39_941)
-    expect(calls.reduce((s, c) => s + c.costUSD, 0)).toBeCloseTo(calculateCost('claude-haiku-4.5', 82, 3_254, 39_941, 270_680, 0), 12)
-    expect(copilotCreditSpend(projects)).toMatchObject({ spentCredits: 9.334625, creditRatedCalls: 11, creditUnratedCalls: 0 })
+    expect(served.calls.reduce((s, c) => s + c.costUSD, 0)).toBeCloseTo(calculateCost('claude-haiku-4.5', 82, 3_254, 39_941, 270_680, 0), 12)
+    expectCostEqualsNanoAiu(served.calls, rows)
+    expect(copilotCreditSpend(served.projects)).toMatchObject({ spentCredits: 9.334625, creditRatedCalls: 11, creditUnratedCalls: 0 })
+    return served
+  }
+
+  it.skipIf(!isSqliteAvailable())('store rows + shutdown: rows carry the output, the residual carries none', async () => {
+    const { calls } = await serveStore(await storeLines())
+    expect(calls.filter(c => c.deduplicationKey.includes(':shutdown-residual:'))).toEqual([])
+  })
+
+  it.skipIf(!isSqliteAvailable())('store rows, no shutdown: exact from the rows alone', async () => {
+    await serveStore((await storeLines()).filter(l => JSON.parse(l).type !== 'session.shutdown'))
+  })
+
+  it.skipIf(!isSqliteAvailable())('older CLI with per-turn outputTokens and store rows: output counted once', async () => {
+    const out = (await storeRows()).map(r => r['output_tokens'] as number)
+    let n = 0
+    const lines = (await storeLines()).map(l => {
+      const e = JSON.parse(l)
+      if (e.type !== 'assistant.message') return l
+      e.data.outputTokens = out[n++]
+      return JSON.stringify(e)
+    })
+    expect(n).toBe(11)
+    const { calls } = await serveStore(lines)
+    expect(calls.filter(c => c.deduplicationKey.startsWith('copilot-store:')).every(c => c.usage.outputTokens === 0)).toBe(true)
+  })
+
+  // Synthetic split of the real session into two legs: a shutdown after the
+  // sixth request carries the cumulative totals of rows 1-6.
+  it.skipIf(!isSqliteAvailable())('resumed two-leg session: exact with or without the second leg\'s shutdown', async () => {
+    const rows = await storeRows()
+    const first = rows.slice(0, 6)
+    const total = (k: string) => first.reduce((s, r) => s + (r[k] as number), 0)
+    const legShutdown = JSON.stringify({
+      type: 'session.shutdown', timestamp: '2026-08-31T10:02:40.000Z',
+      data: { shutdownType: 'routine', modelMetrics: { 'claude-haiku-4.5': {
+        usage: { inputTokens: total('input_tokens'), outputTokens: total('output_tokens'), cacheReadTokens: total('cache_read_tokens'),
+          cacheWriteTokens: total('cache_write_tokens'), reasoningTokens: total('reasoning_tokens') },
+        totalNanoAiu: total('total_nano_aiu') } } },
+    })
+    const lines = await storeLines()
+    const resume = lines.findIndex(l => JSON.parse(l).timestamp > '2026-08-31T10:02:40.000Z')
+    const twoLegs = [...lines.slice(0, resume), legShutdown, ...lines.slice(resume)]
+    await serveStore(twoLegs)
+    await rm(join(tmp, 'session-store.db'), { force: true })
+    await rm(join(tmp, 'cache'), { recursive: true, force: true })
+    await serveStore(twoLegs.filter((l, i) => i <= resume || JSON.parse(l).type !== 'session.shutdown'))
+  })
+
+  // Real per-request rows (numbers only) from a PyCharm AI Chat session over
+  // ACP (`copilot --acp`, CLI 1.0.85) that never wrote session.shutdown,
+  // plus the three grok-4.6 rows of a JetBrains plugin session. Each model's
+  // cost must equal GitHub's charge for its rows.
+  it.skipIf(!isSqliteAvailable())('ACP session with no shutdown: every model costs exactly its nanoAiu', async () => {
+    const sid = '760f62f7-0000-4000-8000-000000000000'
+    const cols = ['model', 'input_tokens', 'output_tokens', 'cache_read_tokens', 'cache_write_tokens', 'reasoning_tokens', 'total_nano_aiu', 'initiator', 'created_at'] as const
+    const rows = ([
+      ['gpt-5.6-terra', 15109, 201, 0, 15106, 39, 4018300000, 'user', '2026-10-06T16:13:10.192Z'],
+      ['gpt-5.6-terra', 15594, 134, 15106, 485, 11, 584770000, 'agent', '2026-10-06T16:13:15.509Z'],
+      ['gpt-5.6-terra', 15967, 118, 15591, 373, 77, 547270000, 'agent', '2026-10-06T16:14:54.382Z'],
+      ['gpt-5.6-terra', 16125, 69, 15964, 158, 0, 442180000, 'agent', '2026-10-06T16:15:18.027Z'],
+      ['kimi-k3', 17124, 124, 0, 0, 19, 5323200000, 'user', '2026-10-06T16:15:32.820Z'],
+      ['kimi-k3', 27977, 257, 4096, 0, 0, 7672680000, 'agent', '2026-10-06T16:15:40.575Z'],
+      ['kimi-k3', 28324, 188, 27976, 0, 0, 1225680000, 'agent', '2026-10-06T16:16:02.145Z'],
+      ['kimi-k3', 28562, 102, 28323, 0, 0, 1074390000, 'agent', '2026-10-06T16:16:19.210Z'],
+      ['kimi-k3', 28722, 66, 28561, 0, 0, 1004130000, 'agent', '2026-10-06T16:16:49.485Z'],
+      ['grok-4.6', 28321, 876, 0, 0, 532, 6189800000, 'user', '2026-10-06T16:17:23.490Z'],
+      ['grok-4.6', 29292, 29, 28288, 0, 5, 1632600000, 'agent', '2026-10-06T16:17:25.372Z'],
+      ['grok-4.6', 29408, 41, 29184, 0, 0, 1528600000, 'agent', '2026-10-06T16:17:35.539Z'],
+    ] as const).map(r => ({ ...Object.fromEntries(cols.map((c, i) => [c, r[i]])), request_multiplier: 1 }))
+    const ev = (type: string, timestamp: string, data: Record<string, unknown>) => JSON.stringify({ type, timestamp, data })
+    const lines = [ev('session.start', '2026-10-06T16:13:02.845Z', { producer: 'copilot-agent', copilotVersion: '1.0.85' })]
+    rows.forEach((r, i) => {
+      const at = new Date(Date.parse(r.created_at) + 3).toISOString()
+      if (r.model !== rows[i - 1]?.model) lines.push(ev('session.model_change', r.created_at, { newModel: r.model }))
+      lines.push(ev('assistant.message', at, { messageId: `m${i}`, model: r.model, toolRequests: [] }))
+    })
+    lines.push(ev('session.usage_checkpoint', '2026-10-06T16:17:35.600Z', { totalNanoAiu: 31_243_600_000, totalPremiumRequests: 3 }))
+
+    writeStore(sid, '/home/dev/pycharm-demo', rows)
+    const { projects, calls } = await serve(lines, sid, '/home/dev/pycharm-demo')
+    expect(behavioralCallCount(calls)).toBe(12)
+    expect(calls.reduce((s, c) => s + c.usage.outputTokens, 0)).toBe(522 + 737 + 946)
+    expectCostEqualsNanoAiu(calls, rows)
+    expect(copilotCreditSpend(projects)).toMatchObject({ spentCredits: 31.2436, creditRatedCalls: 12, creditUnratedCalls: 0 })
   })
 })

@@ -52,9 +52,9 @@ export type LongContextTier = {
 /// total), and Anthropic folds thinking into output the same way, so summing
 /// the two double-counts both the cost and the displayed output tokens. Copilot
 /// is the same case: its per-request token_details_json prices input/cache/output
-/// and nothing else, and its supplementary store-row/shutdown calls carry
-/// reasoningTokens with outputTokens 0 while the per-turn assistant.message call
-/// bills the full output, so adding reasoning on top bills it twice.
+/// and nothing else, and its store-row/shutdown calls carry reasoningTokens
+/// beside an output count that already includes them, so adding reasoning on
+/// top bills it twice.
 /// DSH TokenUsage includes reasoning in output too; see the pinned contract:
 /// https://github.com/deepseek-ai/deepseek-harness/blob/c291e7961a515f6d7af9304e7fd1d257929aef26/docs/subsystems/llm-streaming.md#tokenusage
 const REASONING_INCLUDED_IN_OUTPUT = new Set(['claude', 'codex', 'copilot', 'dsh'])
@@ -120,6 +120,12 @@ const BUILTIN_PRICE_OVERRIDES: Record<string, SnapshotEntry> = {
   'composer-2': [0.5e-6, 2.5e-6, 0.5e-6, 0.2e-6],
   'composer-1.5': [3.5e-6, 17.5e-6, 3.5e-6, 0.35e-6],
   'composer-1': [1.25e-6, 10e-6, 1.25e-6, 0.125e-6],
+  // LiteLLM has no bare grok-4.6 row, so the stripped `azure_ai/grok-4.6` row
+  // (Azure Foundry, $1.25/M input) claims the bare id ahead of `xai/grok-4.6`
+  // in both the bundler and the live fetch. xAI's list price (docs.x.ai):
+  // $2/M input, $6/M output, $0.50/M cached; GitHub Copilot bills grok-4.6 at
+  // exactly these rates.
+  'grok-4.6': [2e-6, 6e-6, null, 0.5e-6, null, { threshold: 200000, input: 4e-6, output: 12e-6, cacheWrite: null, cacheRead: 1e-6 }],
 }
 
 // Assemble a ModelCosts, applying the cache-cost heuristics (write = 1.25x

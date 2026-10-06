@@ -422,9 +422,20 @@ describe('getModelCosts', () => {
 
   describe('grok-4.6 prompt tier', () => {
     it('uses the low tier below 200000 prompt tokens', () => {
-      // Base input is 1.25e-6 since LiteLLM's 2026-09 reprice (was 2e-6); the
-      // tier rates above 200k are unchanged, so only this literal moved.
-      expect(calculateCost('grok-4.6', 100_000, 10_000, 0, 99_999, 0)).toBeCloseTo(0.2349995, 12)
+      expect(calculateCost('grok-4.6', 100_000, 10_000, 0, 99_999, 0)).toBeCloseTo(0.3099995, 12)
+    })
+
+    // The snapshot's bare `grok-4.6` row is Azure Foundry's ($1.25/M input),
+    // stripped from `azure_ai/grok-4.6`; xAI lists $2/M, which is what GitHub
+    // Copilot bills (three real requests: 29,549 in, 946 out, 57,472 cached).
+    it('prices at xAI list rates, matching GitHub Copilot\'s charge', () => {
+      expect(calculateCost('grok-4.6', 29_549, 946, 0, 57_472, 0)).toBeCloseTo(9_351_000_000 / 1e11, 12)
+      const xai = getModelCosts('xai/grok-4.6')!
+      expect(getModelCosts('grok-4.6')).toMatchObject({
+        inputCostPerToken: xai.inputCostPerToken,
+        outputCostPerToken: xai.outputCostPerToken,
+        cacheReadCostPerToken: xai.cacheReadCostPerToken,
+      })
     })
 
     it('uses the high tier for every token at exactly 200000 prompt tokens', () => {

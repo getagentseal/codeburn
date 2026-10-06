@@ -2749,16 +2749,14 @@ function createOtelParser(
 // parseProviderSources replaces the covered (session, model) rollup calls
 // with the rows plus a residual for anything the rollup carried beyond them.
 //
-// The emitted calls mirror the shutdown-call contract exactly: input/cache/
-// reasoning only, output 0 — per-turn output (and its tools/userMessage
-// metadata) stays owned by the events.jsonl assistant.message calls, so
-// emitting output here would double-count it. The ONE exception is the
-// `initiator='compaction'` row: that request is the CLI summarizing its own
-// context, it has no assistant.message anywhere in events.jsonl, and nothing
-// else in the journal carries its output — so leaving it at 0 simply loses
-// those tokens (measured: a matched 30-session corpus reconciled to the
-// store's own row totals within -3,085 tokens, exactly one compaction row's
-// output). It is counted here because here is the only place it exists.
+// Each emitted call carries the row's own output_tokens. Older CLIs ALSO write
+// per-turn outputTokens on assistant.message, so where a row pairs with a
+// per-turn call that carries output, the serve-time reconciliation in
+// parseProviderSources serves the row with output 0 (decided there because
+// only the full serve set knows both sides). CLI 1.0.8x and ACP hosts write no
+// per-turn output, and an ACP session often never writes session.shutdown, so
+// the row is the only record of that output. The `initiator='compaction'` row
+// never pairs: it has no assistant.message anywhere in events.jsonl.
 // The per-request billing
 // metadata (total_nano_aiu, request_multiplier) is captured onto the cached
 // calls but not priced or displayed — that design is upstream #890; the
@@ -2799,10 +2797,9 @@ const SESSION_STORE_USAGE_SELECT = `SELECT ${SESSION_STORE_USAGE_COLUMNS}${SESSI
 // way back — the columns arrived in different CLI releases and a single
 // all-or-nothing enrichment would lose the older one.
 //
-// `output_tokens` rides on the SAME rung as `initiator` deliberately: it is
-// only ever read for a row the label identifies as a compaction, so a store
-// too old to have the label has no use for it either and must not be pushed
-// down another fallback rung for it.
+// `output_tokens` rides on the SAME rung as `initiator`: both arrived after the
+// billing columns, and a store without them serves rows with output 0, leaving
+// output to the per-turn calls and the rollup residual as before.
 const SESSION_STORE_USAGE_SELECTS = [
   `SELECT ${SESSION_STORE_USAGE_COLUMNS},
        e.total_nano_aiu, e.request_multiplier, e.initiator, e.output_tokens${SESSION_STORE_USAGE_FROM}`,
@@ -2963,10 +2960,7 @@ function createSessionStoreParser(
             numberOrZero(row.input_tokens) - cacheReadTokens - cacheWriteTokens
           )
 
-          // A compaction row's output has no assistant.message to own it, so
-          // this row is the only place it can be counted. Every other row's
-          // output IS owned by a per-turn call and stays excluded here.
-          const outputTokens = row.initiator === 'compaction' ? numberOrZero(row.output_tokens) : 0
+          const outputTokens = numberOrZero(row.output_tokens)
 
           // Nothing this call would add over the per-turn events, so skip it to
           // avoid an empty $0 row.
@@ -3006,10 +3000,8 @@ function createSessionStoreParser(
           // metadata only, never as a cost line: it is a SUBSET of the row's
           // output_tokens (the row's own token_details_json prices exactly
           // input/cache_read/cache_write/output, no reasoning entry), and
-          // output — reasoning included — is billed by the per-turn
-          // assistant.message call. Pricing reasoning here would double-count.
-          // `outputTokens` is non-zero only for the compaction row, whose
-          // output no per-turn call bills, so it is priced exactly once.
+          // output — reasoning included — is billed once, on whichever call
+          // owns it (see the header). Pricing reasoning here would double-count.
           const costUSD = calculateCost(model, inputTokens, outputTokens, cacheWriteTokens, cacheReadTokens, 0)
 
           yield {

@@ -279,7 +279,12 @@ import type { DateRange, ProjectSummary } from './types.js'
 // Settled days re-derive. Calls only rise, except a store row and its message
 // straddling midnight, which moves one call to the next day; copilot's
 // PENDING_REDERIVE contract moves to 56 so that day may shrink once.
-export const DAILY_CACHE_VERSION = 56
+// v57: Copilot session-store rows carry their own output where no per-turn call
+// does, so a session that never wrote session.shutdown (ACP hosts such as
+// JetBrains AI Chat) counts its output, and grok-4.6 prices at xAI's $2/M input
+// instead of Azure's $1.25/M. Output and cost only rise; call counts are
+// unchanged, so no PENDING_REDERIVE_PROVIDER_VERSIONS entry is needed.
+export const DAILY_CACHE_VERSION = 57
 const MIN_SUPPORTED_VERSION = 28
 
 /// Providers whose per-day CALL COUNT means something different at

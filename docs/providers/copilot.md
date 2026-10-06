@@ -56,11 +56,16 @@ names the project), and write no `assistant_usage_events` rows. Copilot CLI
   when the session ends. Until then the requests show as calls with no tokens
   and $0. `session.usage_checkpoint` events carry a running `totalNanoAiu` but
   no tokens; they are not read, so credits come from one place only.
-- **With session-store rows** (CLI 1.0.8x), the rows replace the rollup but
-  carry output only for compaction requests, so the leg's output serves through
-  its residual (rollup output minus compaction-row output). In a compacted
-  session the rollup's counters reset at the compaction, so output from before
-  it is recorded nowhere locally and cannot be counted. Credits stay exact.
+- **With session-store rows** (CLI 1.0.8x), the rows replace the rollup and
+  carry each request's own output, input, cache and `total_nano_aiu`, so the
+  session is exact request by request, compactions included, and the leg's
+  residual comes out at zero.
+- **ACP sessions often never shut down.** JetBrains AI Chat (and any other ACP
+  host) runs `copilot --acp`, and quitting the IDE kills the process, so
+  `events.jsonl` ends without a `session.shutdown`. Its store rows still make
+  the session exact: tokens, cost and credits come from the rows. Measured on
+  a real PyCharm session (CLI 1.0.85, gpt-5.6-terra and kimi-k3, 9 requests,
+  no shutdown): cost equals GitHub's `total_nano_aiu` to the digit.
 - **Not read.** VS Code's `agentSessionData/*/session.db`,
   `globalStorage/agent-host.db` and `globalStorage/github.copilot-chat/session-store.db`.
   `session.db` `turn_usage` does hold per-interaction totals
@@ -101,8 +106,10 @@ where the `session.shutdown` rollup in `events.jsonl` is written only on clean
 shutdown (a crash loses the leg's input/cache accounting), lumps each leg into
 one per-model total, and resets its counters at in-session compaction. Rows are
 therefore authoritative for input / cache-read / cache-write / reasoning
-tokens, with real per-request timestamps; per-turn output stays owned by the
-`events.jsonl` `assistant.message` calls. `input_tokens` is cache-INCLUSIVE
+tokens, with real per-request timestamps. Each row also carries its own
+`output_tokens`. Older CLIs write output on the `assistant.message` too, so a
+row that pairs with a per-turn call carrying output serves with output 0 (the
+per-turn call owns it); otherwise the row owns it. `input_tokens` is cache-INCLUSIVE
 (input + cache_read + cache_write), the same convention as the rollups; the
 parser emits the uncached remainder. Override the path with
 `CODEBURN_COPILOT_SESSION_STORE_DB` (deliberately NOT in the env fingerprint —
@@ -160,7 +167,9 @@ see the #927 ruling in `src/session-cache.ts`).
   and cost count, but never api-call / model-call / turn weight. A store row
   pairs with its per-turn call by timestamp adjacency (2-minute window,
   computed over the full serve set); only unpaired rows — crash-recovered,
-  store-only requests — count as calls.
+  store-only requests — count as calls. The same pairing decides output
+  ownership (above). A mis-pair can count one request's output twice, which
+  needs an older-CLI crash row inside another request's 2-minute window.
 - **Failure semantics.** True absence (ENOENT, no sqlite driver, `no such
   table/column` from pre-store CLI builds) reads as absent — no source, rollups
   rule. Every other failure (locked, EACCES, corrupt, mid-replace) emits the

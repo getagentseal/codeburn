@@ -4006,6 +4006,7 @@ export async function parseProviderSources(
     storeCalls: Map<string, CopilotStamped[]>
     rollupLegs: Map<string, Array<CopilotStamped & { rawTs: string; compactedAtMs: number }>>
     supplementaryStoreKeys: Set<string>
+    turnOwnedOutputKeys: Set<string>
     sessionProject: Map<string, string>
     storeProject: Map<string, string>
     nanRollupFallbackTs: Map<string, string>
@@ -4022,8 +4023,8 @@ export async function parseProviderSources(
     const storeKeys = new Set<string>()
     const storeCalls = new Map<string, CopilotStamped[]>()
     const rollupLegs = new Map<string, Array<CopilotStamped & { rawTs: string; compactedAtMs: number }>>()
-    const storeRowIds = new Map<string, Array<{ ts: number; dedupKey: string }>>()
-    const perTurnTs = new Map<string, number[]>()
+    const storeRowIds = new Map<string, Array<{ ts: number; dedupKey: string; stamped: CopilotStamped }>>()
+    const perTurnTs = new Map<string, Array<{ ts: number; hasOutput: boolean }>>()
     const sessionProject = new Map<string, string>()
     const storeProject = new Map<string, string>()
     // Stable timestamp fallbacks for rollup calls whose own stamp cannot
@@ -4064,7 +4065,7 @@ export async function parseProviderSources(
             if (project && !sessionProject.has(turn.sessionId)) sessionProject.set(turn.sessionId, project)
             if (!Number.isNaN(ts)) {
               const list = perTurnTs.get(aggKey) ?? []
-              list.push(ts)
+              list.push({ ts, hasOutput: c.usage.outputTokens > 0 })
               perTurnTs.set(aggKey, list)
             }
             continue
@@ -4073,9 +4074,9 @@ export async function parseProviderSources(
           const stamped: CopilotStamped = {
             ts,
             input: c.usage.inputTokens,
-            // Rollups carry output only for legs with no per-turn output, and
-            // store rows only for compaction requests, so this never meets the
-            // per-turn calls' output.
+            // Rollups carry output only for legs with no per-turn output. A
+            // store row's output is zeroed below when its per-turn partner
+            // carries output, so this never meets the per-turn calls' output.
             output: c.usage.outputTokens,
             cacheRead: c.usage.cacheReadInputTokens,
             cacheWrite: c.usage.cacheCreationInputTokens,
@@ -4092,11 +4093,12 @@ export async function parseProviderSources(
             // where it does not, this row is indistinguishable from a user
             // request and keeps the pre-label behaviour.
             const isCompaction = c.initiator === 'compaction'
-            list.push(isCompaction ? { ...stamped, isCompaction: true } : stamped)
+            if (isCompaction) stamped.isCompaction = true
+            list.push(stamped)
             storeCalls.set(aggKey, list)
             if (!isCompaction) {
               const ids = storeRowIds.get(aggKey) ?? []
-              ids.push({ ts, dedupKey: c.deduplicationKey })
+              ids.push({ ts, dedupKey: c.deduplicationKey, stamped })
               storeRowIds.set(aggKey, ids)
             }
             if (c.project && !storeProject.has(turn.sessionId)) storeProject.set(turn.sessionId, c.project)
@@ -4119,20 +4121,30 @@ export async function parseProviderSources(
     // against a neighbor whose own row is missing and hide the crash
     // request's call weight. The residual ambiguity (a crash row landing
     // within the window of an unrecorded-row request) is a double-failure
-    // conjunction and affects only call counts, never tokens.
+    // conjunction.
+    // Pairing also decides who owns a request's output: older CLIs write it on
+    // the per-turn call AND the row, so a row paired with a per-turn call that
+    // carries output serves with output 0. CLI 1.0.8x and ACP hosts write no
+    // per-turn output, so their rows keep it — the only record of it when the
+    // session never shut down.
     const PAIR_WINDOW_MS = 2 * 60 * 1000
     const supplementaryStoreKeys = new Set<string>()
+    const turnOwnedOutputKeys = new Set<string>()
     for (const [aggKey, ids] of storeRowIds) {
       const callTs = perTurnTs.get(aggKey)
       if (!callTs?.length) continue
       ids.sort((a, b) => a.ts - b.ts)
-      callTs.sort((a, b) => a - b)
+      callTs.sort((a, b) => a.ts - b.ts)
       let i = 0
       let j = 0
       while (i < ids.length && j < callTs.length) {
-        const d = ids[i]!.ts - callTs[j]!
+        const d = ids[i]!.ts - callTs[j]!.ts
         if (Math.abs(d) <= PAIR_WINDOW_MS) {
           supplementaryStoreKeys.add(ids[i]!.dedupKey)
+          if (callTs[j]!.hasOutput && ids[i]!.stamped.output > 0) {
+            ids[i]!.stamped.output = 0
+            turnOwnedOutputKeys.add(ids[i]!.dedupKey)
+          }
           i++
           j++
         } else if (d < 0) {
@@ -4142,7 +4154,7 @@ export async function parseProviderSources(
         }
       }
     }
-    copilotRecon = { storeKeys, storeCalls, rollupLegs, supplementaryStoreKeys, sessionProject, storeProject, nanRollupFallbackTs, sessionEarliestValidTs }
+    copilotRecon = { storeKeys, storeCalls, rollupLegs, supplementaryStoreKeys, turnOwnedOutputKeys, sessionProject, storeProject, nanRollupFallbackTs, sessionEarliestValidTs }
   }
   const copilotServeProject = (sessionId: string): string | undefined =>
     copilotRecon
@@ -4188,8 +4200,13 @@ export async function parseProviderSources(
       }
       if (c.deduplicationKey.startsWith('copilot-store:')) {
         const project = copilotRecon.sessionProject.get(turn.sessionId)
-        if (project && c.project !== project) {
-          kept.push({ ...c, project })
+        let served = c
+        if (project && c.project !== project) served = { ...served, project }
+        if (copilotRecon.turnOwnedOutputKeys.has(c.deduplicationKey)) {
+          served = { ...served, usage: { ...served.usage, outputTokens: 0 } }
+        }
+        if (served !== c) {
+          kept.push(served)
           changed = true
           continue
         }
