@@ -1230,7 +1230,20 @@ export type ProjectRow = { name: string; path: string; cost: number; sessions: n
 
 export type ProjectsReport = { projects: ProjectRow[] }
 
+export type IdeCommand = { section?: string; period?: string; refresh?: boolean }
+
 export interface CodeburnBridge {
+  /** Set by the VS Code extension's webview bridge; absent in the desktop app. */
+  readonly host?: 'vscode'
+  /** The IDE's project scope: the open workspace's projects, or every project.
+   *  `label` names the workspace; null when no folder is open. */
+  readonly ideScope?: { workspace: boolean; label: string | null }
+  /** Switch the IDE scope. The host reloads the view under the new scope. */
+  setIdeScope?(workspace: boolean): Promise<void>
+  /** Open the editor's own settings for CodeBurn. */
+  openIdeSettings?(): Promise<void>
+  /** Editor commands aimed at an open dashboard: go to a section/period, or refresh. */
+  onIdeCommand?(cb: (command: IdeCommand) => void): () => void
   /** The Electron app's own UI language tag (app.getLocale()), for the 'system'
    *  locale choice. Absent on preloads that predate desktop localization. */
   readonly appLocale?: string

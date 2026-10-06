@@ -37,7 +37,7 @@ import { clearOverviewHeadlines, readOverviewHeadline, writeOverviewHeadline } f
 import { codeburn } from './lib/ipc'
 import { effectiveLocale, isLocaleChoice, LocaleContext, setCurrentLocale, t, type Locale, type LocaleChoice } from './i18n'
 import { trackEvent } from './lib/track'
-import { isMacPlatform, isModifierChord, shortcutLabel } from './lib/platform'
+import { isIdeHost, isMacPlatform, isModifierChord, shortcutLabel } from './lib/platform'
 import { localDateKey, PERIOD_LABELS } from './lib/period'
 import { generationAt } from './lib/generation'
 import { detectedProviders as detectedProviderList, providerLabel, readDisabledProviders, type DetectedProvider } from './lib/providers'
@@ -56,6 +56,7 @@ import { SpendContent } from './sections/Spend'
 import { PluginsSection } from './sections/Plugins'
 import type { DateRange, MenubarPayload, ModelReportRow, Period, Scope } from './lib/types'
 import { Icon } from './components/icons'
+import { IdeScopePicker } from './components/IdeScopePicker'
 
 // Bucket raw dollar amounts before they leave the machine: telemetry carries
 // coarse ranges, never exact spend.
@@ -837,6 +838,17 @@ function AppMain() {
     return () => document.removeEventListener('keydown', onKeyDown)
   }, [refreshVisible, navigate, goBack, goForward])
 
+  useEffect(() => codeburn.onIdeCommand?.(command => {
+    if (command.refresh) refreshVisible()
+    const patch: Partial<NavState> = {}
+    if (command.section && NAV_SECTIONS.has(command.section)) patch.section = command.section as Section
+    if (command.period && isPeriod(command.period)) {
+      autoPeriod.current = false
+      Object.assign(patch, { period: command.period, range: null, visibleCount: INITIAL_VISIBLE })
+    }
+    if (Object.keys(patch).length > 0) commitNav(patch)
+  }), [commitNav, refreshVisible])
+
   const onPeriodChange = (value: string) => {
     if (isPeriod(value)) {
       autoPeriod.current = false
@@ -985,6 +997,7 @@ function AppMain() {
               claudeConfigs={claudeConfigs}
               configSource={claudeConfigSource}
               onConfigSelect={onConfigSelect}
+              projectScope={codeburn.ideScope ? <IdeScopePicker scope={codeburn.ideScope} /> : undefined}
             />
             <div className={motionClass('body', 'section-fade')}>
               {section === 'overview' ? (
@@ -1016,7 +1029,7 @@ function AppMain() {
         </ErrorBoundary>
         {section !== 'settings' && (
           <Hint
-            items={[
+            items={isIdeHost() ? [] : [
               { k: shortcutLabel('1-9'), label: t('shell.hint.navigate') },
               { k: shortcutLabel(','), label: t('shell.nav.settings') },
               { k: shortcutLabel('R'), label: t('shell.action.refresh') },

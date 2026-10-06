@@ -17,6 +17,13 @@ function userAgentPlatform(): string | undefined {
   return undefined
 }
 
+/** True inside the VS Code extension's webview, where the editor owns theme,
+ *  language, the chord shortcuts and the refresh cadence. */
+export function isIdeHost(): boolean {
+  if (typeof window === 'undefined') return false
+  return (window as unknown as { codeburn?: { host?: string } }).codeburn?.host === 'vscode'
+}
+
 /** True when the Electron preload reports darwin (or the UA matches a Mac). */
 export function isMacPlatform(): boolean {
   const platform = bridgePlatform()
@@ -49,6 +56,8 @@ export function shortcutLabel(key: string): string {
  * as Ctrl+Alt, and Ctrl+Alt+<key> must not hijack a typed character.
  */
 export function isModifierChord(event: { metaKey: boolean; ctrlKey: boolean; altKey: boolean; shiftKey: boolean }): boolean {
+  // Every chord the app binds (1-9, R, B, comma) is already an editor command.
+  if (isIdeHost()) return false
   if (event.altKey || event.shiftKey) return false
   return isMacPlatform() ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey
 }

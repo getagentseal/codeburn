@@ -10,7 +10,7 @@ import { StaleBanner } from '../components/StaleBanner'
 import { BarNav } from '../components/TopBar'
 import { usePolled } from '../hooks/usePolled'
 import { localeTag, t } from '../i18n'
-import { formatConverted } from '../lib/format'
+import { formatConverted, formatResetTime } from '../lib/format'
 import { codeburn } from '../lib/ipc'
 import { motionClass } from '../lib/motion'
 import { PROVIDER_NAMES, PROVIDER_OWNERS, readDisabledProviders } from '../lib/providers'
@@ -345,20 +345,6 @@ function QuotaMeter({ window }: { window: QuotaWindow }) {
       </div>
     </div>
   )
-}
-
-function formatResetTime(resetsAt: string | null): string | null {
-  if (!resetsAt) return null
-  const reset = Date.parse(resetsAt)
-  if (!Number.isFinite(reset)) return null
-  const remainingMinutes = Math.floor((reset - Date.now()) / 60_000)
-  if (remainingMinutes <= 0) return t('plans.reset.now')
-  const days = Math.floor(remainingMinutes / (24 * 60))
-  const hours = Math.floor((remainingMinutes % (24 * 60)) / 60)
-  const minutes = remainingMinutes % 60
-  if (days > 0) return hours > 0 ? t('plans.reset.daysHours', { days, hours }) : t('plans.reset.days', { days })
-  if (hours > 0) return minutes > 0 ? t('plans.reset.hoursMinutes', { hours, minutes }) : t('plans.reset.hours', { hours })
-  return t('plans.reset.minutes', { minutes })
 }
 
 function PlanPanel({ plan }: { plan: JsonPlanSummary }) {

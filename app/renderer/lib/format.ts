@@ -130,3 +130,18 @@ export function asOfLabel(at: number | string | null | undefined): string | null
     ? t('common.asOf', { time })
     : t('common.asOfDate', { date: when.toLocaleDateString(localeTag(), { month: 'short', day: 'numeric' }), time })
 }
+
+/** Time left until a quota window resets, or null when it is unknown. */
+export function formatResetTime(resetsAt: string | null): string | null {
+  if (!resetsAt) return null
+  const reset = Date.parse(resetsAt)
+  if (!Number.isFinite(reset)) return null
+  const remainingMinutes = Math.floor((reset - Date.now()) / 60_000)
+  if (remainingMinutes <= 0) return t('plans.reset.now')
+  const days = Math.floor(remainingMinutes / (24 * 60))
+  const hours = Math.floor((remainingMinutes % (24 * 60)) / 60)
+  const minutes = remainingMinutes % 60
+  if (days > 0) return hours > 0 ? t('plans.reset.daysHours', { days, hours }) : t('plans.reset.days', { days })
+  if (hours > 0) return minutes > 0 ? t('plans.reset.hoursMinutes', { hours, minutes }) : t('plans.reset.hours', { hours })
+  return t('plans.reset.minutes', { minutes })
+}

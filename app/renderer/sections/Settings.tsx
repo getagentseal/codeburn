@@ -17,7 +17,7 @@ import { formatConverted, formatCount, formatUsd, shortenProjectPath } from '../
 import { codeburn, normalizeCliError } from '../lib/ipc'
 import { t, useLocale, type LocaleChoice } from '../i18n'
 import { projectMatches, projectPattern } from '../lib/projectMatch'
-import { shortcutLabel } from '../lib/platform'
+import { isIdeHost, shortcutLabel } from '../lib/platform'
 import { motionClass } from '../lib/motion'
 import { clearOverviewHeadlines } from '../lib/overviewSnapshot'
 import { detectedProviders, PROVIDER_NAMES, QUOTA_PROVIDERS, readDisabledProviders, writeDisabledProviders } from '../lib/providers'
@@ -263,13 +263,20 @@ function GeneralPane({ period, refreshToken, claudeConfigs, claudeConfigSource, 
     <section className="set-p on">
       <div><h3 className="set-h">{t('settings.general.heading')}</h3><p className="set-sub">{t('settings.general.subtitle')}</p></div>
       <div className="card">
-        <div className="about-sec">
-          <div className="about-sec-h">{t('settings.section.appearance')}</div>
-          <div className="about-row"><span className="tx">{t('settings.theme.label')}<small>{t('settings.theme.hint')}</small></span><span className="r"><span className="seg">
-            {(['system', 'light', 'dark'] as Theme[]).map(value => <button key={value} className={theme === value ? 'on' : undefined} aria-pressed={theme === value} onClick={() => chooseTheme(value)}>{t(`settings.theme.option.${value}`)}</button>)}
-          </span></span></div>
-          <div className="about-row"><label className="tx" htmlFor="settings-language">{t('settings.language.label')}<small>{t('settings.language.hint')}</small></label><span className="r"><Dropdown id="settings-language" ariaLabel={t('settings.language.label')} value={languageChoice} options={languageOptions()} onChange={value => { setLanguageChoice(value as LocaleChoice); trackEvent('settings_change', { setting: 'language', value }) }} width={140} /></span></div>
-        </div>
+        {isIdeHost() ? (
+          <div className="about-sec">
+            <div className="about-sec-h">{t('settings.section.appearance')}</div>
+            <div className="about-row"><span className="tx">{t('ide.settings.followsEditor')}<small>{t('ide.settings.followsEditorHint')}</small></span><span className="r"><button className="set-text-button" onClick={() => { void codeburn.openIdeSettings?.() }}>{t('ide.settings.open')}</button></span></div>
+          </div>
+        ) : (
+          <div className="about-sec">
+            <div className="about-sec-h">{t('settings.section.appearance')}</div>
+            <div className="about-row"><span className="tx">{t('settings.theme.label')}<small>{t('settings.theme.hint')}</small></span><span className="r"><span className="seg">
+              {(['system', 'light', 'dark'] as Theme[]).map(value => <button key={value} className={theme === value ? 'on' : undefined} aria-pressed={theme === value} onClick={() => chooseTheme(value)}>{t(`settings.theme.option.${value}`)}</button>)}
+            </span></span></div>
+            <div className="about-row"><label className="tx" htmlFor="settings-language">{t('settings.language.label')}<small>{t('settings.language.hint')}</small></label><span className="r"><Dropdown id="settings-language" ariaLabel={t('settings.language.label')} value={languageChoice} options={languageOptions()} onChange={value => { setLanguageChoice(value as LocaleChoice); trackEvent('settings_change', { setting: 'language', value }) }} width={140} /></span></div>
+          </div>
+        )}
         {hasConfigs && (
           <div className="about-sec">
             <div className="about-sec-h">{t('settings.section.claudeConfig')}</div>
@@ -282,9 +289,9 @@ function GeneralPane({ period, refreshToken, claudeConfigs, claudeConfigSource, 
             <button className="set-text-button" onClick={() => { trackEvent('settings_change', { setting: 'currency', value: 'USD' }); void codeburn.resetCurrency().then(finishCurrency).catch(toastRejection(t('settings.toast.currencyError'))) }}>{t('settings.currency.reset')}</button>
             {plans.data ? <Dropdown id="settings-currency" ariaLabel={t('settings.currency.label')} value={plans.data.currency} options={currencies.map(code => ({ value: code, label: code }))} onChange={value => { trackEvent('settings_change', { setting: 'currency', value }); void codeburn.setCurrency(value).then(finishCurrency).catch(toastRejection(t('settings.toast.currencyError'))) }} width={92} /> : plans.error ? <SettingsErrorText error={plans.error} /> : <span className="set-cap">{t('settings.loading')}</span>}
           </span></div>
-          <div className="about-row"><label className="tx" htmlFor="settings-period">{t('settings.period.label')}<small>{t('settings.period.hint')}</small></label><span className="r"><Dropdown id="settings-period" ariaLabel={t('settings.period.label')} value={defaultPeriod} options={[{ value: 'today', label: t('settings.period.option.today') }, { value: 'week', label: '7d' }, { value: '30days', label: '30d' }, { value: 'month', label: t('settings.period.option.month') }, { value: 'all', label: t('settings.period.option.all') }]} onChange={value => { setDefaultPeriod(value); writeSetting('codeburn.defaultPeriod', value); trackEvent('settings_change', { setting: 'defaultPeriod', value }) }} width={92} /></span></div>
+          {!isIdeHost() && <div className="about-row"><label className="tx" htmlFor="settings-period">{t('settings.period.label')}<small>{t('settings.period.hint')}</small></label><span className="r"><Dropdown id="settings-period" ariaLabel={t('settings.period.label')} value={defaultPeriod} options={[{ value: 'today', label: t('settings.period.option.today') }, { value: 'week', label: '7d' }, { value: '30days', label: '30d' }, { value: 'month', label: t('settings.period.option.month') }, { value: 'all', label: t('settings.period.option.all') }]} onChange={value => { setDefaultPeriod(value); writeSetting('codeburn.defaultPeriod', value); trackEvent('settings_change', { setting: 'defaultPeriod', value }) }} width={92} /></span></div>}
           <div className="about-row"><label className="tx" htmlFor="settings-scope">{t('settings.scope.label')}<small>{projectFiltered ? t('settings.scope.hintFiltered') : t('settings.scope.hintDefault')}</small></label><span className="r"><Dropdown id="settings-scope" ariaLabel={t('settings.scope.label')} value={scope} options={projectFiltered ? [{ value: 'local', label: t('settings.scope.option.local') }] : [{ value: 'local', label: t('settings.scope.option.local') }, { value: 'combined', label: t('settings.scope.option.combined') }]} onChange={value => onScopeChange?.(value)} width={110} /></span></div>
-          <div className="about-row"><label className="tx" htmlFor="settings-refresh">{t('settings.refresh.label')}<small>{t('settings.refresh.hint', { key: shortcutLabel('R') })}</small></label><span className="r"><Dropdown id="settings-refresh" ariaLabel={t('settings.refresh.label')} value={cadence.value} options={REFRESH_OPTIONS.map(option => ({ value: option.value, label: option.label }))} onChange={cadence.setValue} width={124} /></span></div>
+          {!isIdeHost() && <div className="about-row"><label className="tx" htmlFor="settings-refresh">{t('settings.refresh.label')}<small>{t('settings.refresh.hint', { key: shortcutLabel('R') })}</small></label><span className="r"><Dropdown id="settings-refresh" ariaLabel={t('settings.refresh.label')} value={cadence.value} options={REFRESH_OPTIONS.map(option => ({ value: option.value, label: option.label }))} onChange={cadence.setValue} width={124} /></span></div>}
           <div className="about-row"><label className="tx" htmlFor="settings-budget">{t('settings.budget.label')}<small>{t('settings.budget.hint')}</small></label><span className="r"><Dropdown id="settings-budget" ariaLabel={t('settings.budget.label')} value={budgetKind} options={[{ value: 'off', label: t('settings.budget.option.off') }, { value: 'usd', label: t('settings.budget.option.usd') }, { value: 'tokens', label: t('settings.budget.option.tokens') }]} onChange={value => { const kind = value as 'off' | 'usd' | 'tokens'; setBudgetKind(kind); persistBudget(kind, budgetInput) }} width={120} />{budgetKind !== 'off' && <input className="set-input" type="text" inputMode="decimal" aria-label={t('settings.budget.amountAriaLabel')} placeholder={budgetKind === 'usd' ? 'USD' : t('settings.budget.placeholderTokens')} value={budgetInput} onChange={event => { setBudgetInput(event.target.value); persistBudget(budgetKind, event.target.value) }} style={{ width: 90 }} />}</span></div>
           {budgetError && <p className="set-action-msg error">{budgetError}</p>}
         </div>

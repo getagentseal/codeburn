@@ -82,6 +82,7 @@ export function TopBar({
   claudeConfigs,
   configSource,
   onConfigSelect,
+  projectScope,
 }: {
   title: ReactNode
   /** In-app Back/Forward history (drill-through restores filters, sort,
@@ -102,6 +103,8 @@ export function TopBar({
   claudeConfigs?: ClaudeConfigSelector
   configSource: string | null
   onConfigSelect: (id: string) => void
+  /** Host-supplied project scope control (the IDE's workspace switch). */
+  projectScope?: ReactNode
 }) {
   return (
     <div className="bar">
@@ -109,6 +112,7 @@ export function TopBar({
       <h1 className="t">{title}</h1>
       {scope !== undefined && <span className="scope">{scope}</span>}
       <div className="sp" />
+      {projectScope}
       <SegTabs options={periodOptions()} value={customRange ? '' : period} onChange={onPeriodChange} />
       <CalendarPop value={customRange} onSelect={onRangeSelect} />
       <ProviderPop value={provider} label={providerLabel} options={providerOptions} onSelect={onProviderSelect} />
