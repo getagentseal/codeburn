@@ -192,7 +192,8 @@ async function listeningPorts(deps: AntigravityDeps, pid: string): Promise<numbe
 
 function resetTimeOf(value: unknown): string | null {
   if (typeof value === 'number' && Number.isFinite(value)) {
-    return new Date(value > 1e12 ? value : value * 1000).toISOString()
+    const date = new Date(value > 1e12 ? value : value * 1000)
+    return Number.isNaN(date.getTime()) ? null : date.toISOString()
   }
   if (typeof value === 'string' && !Number.isNaN(Date.parse(value))) return new Date(value).toISOString()
   return null
@@ -207,14 +208,20 @@ function windowOf(label: string, remainingFraction: unknown, resetTime?: unknown
 /** Preferred payload: two named quota groups of model buckets. */
 export function decodeAntigravitySummary(body: unknown): QuotaWindow[] {
   const data = body && typeof body === 'object' ? body as Record<string, any> : {}
+  // 2.16+ wraps the groups in `response`; older local servers return them directly.
+  const groups = Array.isArray(data.response?.groups) ? data.response.groups : data.groups
   const windows: QuotaWindow[] = []
-  for (const group of Array.isArray(data.groups) ? data.groups : []) {
+  for (const group of Array.isArray(groups) ? groups : []) {
     const groupName = typeof group?.displayName === 'string' ? group.displayName : ''
     for (const bucket of Array.isArray(group?.buckets) ? group.buckets : []) {
       const name = [groupName, typeof bucket?.displayName === 'string' ? bucket.displayName : bucket?.bucketId]
         .filter(Boolean).join(' · ')
       if (!name) continue
-      const window = windowOf(name, bucket?.remaining?.remainingFraction)
+      const window = windowOf(
+        name,
+        bucket?.remainingFraction ?? bucket?.remaining?.remainingFraction,
+        bucket?.resetTime ?? bucket?.remaining?.resetTime,
+      )
       if (window) windows.push(window)
     }
   }
@@ -227,7 +234,9 @@ export function decodeAntigravityStatus(body: unknown): QuotaWindow[] {
   const configs = data.userStatus?.cascadeModelConfigData?.clientModelConfigs
   const windows: QuotaWindow[] = []
   for (const config of Array.isArray(configs) ? configs : []) {
-    const name = typeof config?.modelName === 'string' ? config.modelName : ''
+    // Current servers expose the display name as `label`, not `modelName`.
+    const name = typeof config?.label === 'string' && config.label.trim() ? config.label
+      : typeof config?.modelName === 'string' ? config.modelName : ''
     if (!name) continue
     const window = windowOf(name, config?.quotaInfo?.remainingFraction, config?.quotaInfo?.resetTime)
     if (window) windows.push(window)
