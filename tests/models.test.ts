@@ -103,6 +103,10 @@ describe('getModelCosts', () => {
     expect(getModelCosts('z-ai/glm-5.3')!.inputCostPerToken).toBe(zai[0])
   })
 
+  it('prices deepseek-v3.2 at DeepSeek\'s published $0.28 / $0.42 / $0.028 hit', () => {
+    expect(calculateCost('deepseek-v3.2', 1_000_000, 1_000_000, 0, 1_000_000, 0)).toBeCloseTo(0.28 + 0.42 + 0.028, 12)
+  })
+
   it('prices gpt-5.6-codex and gpt-5.6-codex-max, sourced directly from the snapshot (#1077)', () => {
     // Directly checks the bundled snapshot data (not just the resolved lookup),
     // so this fails if the litellm-snapshot.json entries are ever reverted even

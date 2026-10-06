@@ -117,7 +117,11 @@ const ONE_HOUR_CACHE_WRITE_MULTIPLIER_FROM_FIVE_MINUTE_RATE = 1.6
 // output, $0.20 cache read; composer-1.5: $3.50/$17.50/$0.35; composer-1:
 // $1.25/$10/$0.125. Cursor publishes no separate cache-write rate for these,
 // so cache write uses the input rate.
+// deepseek-v3.2: DeepSeek's last published price was $0.28 miss / $0.028 hit /
+// $0.42 output; LiteLLM's deepseek/deepseek-v3.2 row says $0.40 output while its
+// own deepseek-chat row says $0.42. Drop once upstream corrects it.
 const BUILTIN_PRICE_OVERRIDES: Record<string, SnapshotEntry> = {
+  'deepseek-v3.2': [0.28e-6, 0.42e-6, null, 0.028e-6],
   'composer-2.5': [0.5e-6, 2.5e-6, 0.5e-6, 0.2e-6],
   'composer-2': [0.5e-6, 2.5e-6, 0.5e-6, 0.2e-6],
   'composer-1.5': [3.5e-6, 17.5e-6, 3.5e-6, 0.35e-6],
