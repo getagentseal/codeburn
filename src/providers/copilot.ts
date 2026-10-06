@@ -834,7 +834,9 @@ type UserMessageData = {
 type AssistantMessageData = {
   messageId: string
   model?: string       // present in newer copilot-agent format
-  outputTokens: number
+  // Absent from CLI 1.0.8x and the VS Code agent host; their output only
+  // reaches the session.shutdown rollup.
+  outputTokens?: number
   interactionId?: string
   toolRequests?: ToolRequest[]
 }
@@ -859,7 +861,7 @@ type ShutdownModelUsage = {
 }
 
 type SessionShutdownData = {
-  modelMetrics?: Record<string, { usage?: ShutdownModelUsage }>
+  modelMetrics?: Record<string, { usage?: ShutdownModelUsage; totalNanoAiu?: number }>
   sessionStartTime?: number
 }
 
@@ -1441,8 +1443,11 @@ function createJsonlParser(
       // occurrence (`:n`): re-parses of a growing file append only the new
       // leg, and each leg lands on its own timestamp. Discovery only yields
       // `<sid>/events.jsonl`, so two journals cannot share a session id.
-      const prevShutdownUsage = new Map<string, ShutdownModelUsage>()
+      const prevShutdownUsage = new Map<string, Required<ShutdownModelUsage> & { nanoAiu: number }>()
       const shutdownCountByModel = new Map<string, number>()
+      // Whether this leg's assistant.message events carried outputTokens. When
+      // none did, the rollup is the only record of output and must carry it.
+      let legHasPerTurnOutput = false
 
       for (const line of lines) {
         let event: CopilotEvent
@@ -1536,6 +1541,8 @@ function createJsonlParser(
           // events lack; output is excluded so the assistant.message output
           // (and its cost) is not double-counted. Combined with the per-turn
           // output cost, this yields the full, CLI-measured session cost.
+          // CLI 1.0.8x and the VS Code agent host write no per-turn output,
+          // so for their legs the rollup carries output too.
           if (isTranscript) continue
           // When session-store.db holds per-request usage rows for this
           // session, those rows are authoritative for input/cache: written
@@ -1575,12 +1582,14 @@ function createJsonlParser(
             const usage = metrics['usage']
             if (!isRecord(usage)) continue
 
-            const cumulative: Required<ShutdownModelUsage> = {
+            const hasNanoAiu = typeof metrics['totalNanoAiu'] === 'number'
+            const cumulative = {
               inputTokens: numberOrZero(usage['inputTokens']),
               outputTokens: numberOrZero(usage['outputTokens']),
               cacheReadTokens: numberOrZero(usage['cacheReadTokens']),
               cacheWriteTokens: numberOrZero(usage['cacheWriteTokens']),
               reasoningTokens: numberOrZero(usage['reasoningTokens']),
+              nanoAiu: numberOrZero(metrics['totalNanoAiu']),
             }
             const prevRaw = prevShutdownUsage.get(model)
             prevShutdownUsage.set(model, cumulative)
@@ -1606,8 +1615,10 @@ function createJsonlParser(
 
             // This leg's contribution: cumulative minus the previous rollup.
             // The clamp guards any remaining non-monotonic field.
-            const delta = (k: keyof ShutdownModelUsage): number =>
+            const delta = (k: keyof typeof cumulative): number =>
               Math.max(0, cumulative[k] - numberOrZero(prev?.[k]))
+            const outputTokens = legHasPerTurnOutput ? 0 : delta('outputTokens')
+            const nanoAiu = hasNanoAiu ? delta('nanoAiu') : undefined
             const cacheReadTokens = delta('cacheReadTokens')
             const cacheWriteTokens = delta('cacheWriteTokens')
             const reasoningTokens = delta('reasoningTokens')
@@ -1621,8 +1632,8 @@ function createJsonlParser(
             )
 
             // Nothing this call would add over the per-turn events, so skip it
-            // to avoid an empty $0 row (output is intentionally excluded).
-            if (inputTokens === 0 && cacheReadTokens === 0 && cacheWriteTokens === 0 && reasoningTokens === 0) continue
+            // to avoid an empty $0 row.
+            if (inputTokens === 0 && outputTokens === 0 && cacheReadTokens === 0 && cacheWriteTokens === 0 && reasoningTokens === 0 && !nanoAiu) continue
 
             const dedupKey = `copilot:${sessionId}:shutdown:${model}:${n}`
             if (seenKeys.has(dedupKey)) continue
@@ -1630,14 +1641,14 @@ function createJsonlParser(
 
             // Tokens are real counts written by the CLI, so this cost is
             // measured, not char-estimated: costIsEstimated is false.
-            const costUSD = calculateCost(model, inputTokens, 0, cacheWriteTokens, cacheReadTokens, 0)
+            const costUSD = calculateCost(model, inputTokens, outputTokens, cacheWriteTokens, cacheReadTokens, 0)
 
             yield {
               provider: 'copilot',
               sessionId,
               model,
               inputTokens,
-              outputTokens: 0,
+              outputTokens,
               cacheCreationInputTokens: cacheWriteTokens,
               cacheReadInputTokens: cacheReadTokens,
               cachedInputTokens: 0,
@@ -1652,21 +1663,26 @@ function createJsonlParser(
               deduplicationKey: dedupKey,
               userMessage: '',
               ...(lastCompactionTs ? { compactedAt: lastCompactionTs } : {}),
+              ...(nanoAiu !== undefined ? { nanoAiu } : {}),
             }
           }
+          legHasPerTurnOutput = false
           continue
         }
 
         if (event.type === 'assistant.message') {
           const msgData = event.data as AssistantMessageData
           const { messageId, model: msgModel, outputTokens = 0 } = msgData
+          const hasOutputField = typeof msgData.outputTokens === 'number'
+          if (hasOutputField) legHasPerTurnOutput = true
           const rawRequests = (msgData as { toolRequests?: unknown }).toolRequests
           const toolRequests = coerceToolRequests(rawRequests)
 
           // model may be carried per-message in newer copilot-agent format
           if (msgModel) currentModel = msgModel
-          // Regular JSONL: skip zero-token messages; transcripts don't have tokens
-          if (!isTranscript && outputTokens === 0) continue
+          // Older CLIs: skip zero-token messages. A message with no outputTokens
+          // field still counts as a request; its tokens arrive with the rollup.
+          if (!isTranscript && hasOutputField && outputTokens === 0) continue
           if (!currentModel) continue
 
           const dedupKey = `copilot:${sessionId}:${messageId}`
@@ -1720,10 +1736,10 @@ function createJsonlParser(
             reasoningTokens: 0,
             webSearchRequests: 0,
             costUSD,
-            // Only transcripts reach here with no token count: their usage is
-            // unknown, not zero. A counted output is measured; the shutdown
-            // rollup or store rows carry the input.
-            ...(outputTokens === 0 ? { costIsEstimated: true } : {}),
+            // A transcript with no token count has unknown usage, not zero. A
+            // counted output is measured; the shutdown rollup or store rows
+            // carry the input (and, for tokenless CLI messages, the output).
+            ...(isTranscript && outputTokens === 0 ? { costIsEstimated: true } : {}),
             tools,
             bashCommands,
             skills: skills.length > 0 ? skills : undefined,

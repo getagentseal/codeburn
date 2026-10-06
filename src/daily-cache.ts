@@ -273,7 +273,11 @@ import type { DateRange, ProjectSummary } from './types.js'
 // standard, and `gpt-reserve` / `gpt-5.3-spark` price as GPT-5.6 Luna / GPT-5.3
 // Codex Spark instead of $0. Only cost moves; call counts are unchanged, so no
 // PENDING_REDERIVE_PROVIDER_VERSIONS entry is needed.
-export const DAILY_CACHE_VERSION = 55
+// v56: Copilot assistant.message events with no outputTokens (CLI 1.0.8x, the
+// VS Code agent host) count as calls, and their shutdown rollup carries the
+// output it previously dropped. Settled days re-derive; calls and cost only
+// rise, so no PENDING_REDERIVE_PROVIDER_VERSIONS entry is needed.
+export const DAILY_CACHE_VERSION = 56
 const MIN_SUPPORTED_VERSION = 28
 
 /// Providers whose per-day CALL COUNT means something different at
