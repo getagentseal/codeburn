@@ -14,6 +14,7 @@ import { common } from './catalogs/common'
 import { settings } from './catalogs/settings'
 import { overview } from './catalogs/overview'
 import { sessions } from './catalogs/sessions'
+import { sessionView } from './catalogs/sessionView'
 import { plans } from './catalogs/plans'
 import { plugins } from './catalogs/plugins'
 import { models } from './catalogs/models'
@@ -29,6 +30,7 @@ const SECTIONS: SectionCatalog[] = [
   settings,
   overview,
   sessions,
+  sessionView,
   plans,
   plugins,
   models,

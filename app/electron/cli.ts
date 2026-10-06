@@ -1141,7 +1141,8 @@ export function spawnCli(
   // first real query before its ready frame, making that request the single
   // cache warm-up. CODEBURN_PROGRESS is compatible because startServe sets it
   // on the resident child; any other per-call env needs an isolated one-shot.
-  if (SERVE_ROUTED.has(args[0] ?? '') && isServeCompatibleEnv(opts.extraEnv)) {
+  // `--why` returns transcript content, which must not land in serve's output memo.
+  if (SERVE_ROUTED.has(args[0] ?? '') && !args.includes('--why') && isServeCompatibleEnv(opts.extraEnv)) {
     const serve = serveClient
     // Recover lazily from an unexpected child death. start() is synchronous and
     // idempotent, and the client's consecutive-death budget prevents an endlessly

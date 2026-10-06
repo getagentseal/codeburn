@@ -768,6 +768,9 @@ export function createBridgeHandlers(deps: Deps = { spawnCli, spawnCliAction, re
       ...projectArgs(),
       ...rangeArgs(vRange(range)),
     ], 3),
+    // One session's cost diagnosis. Reads that transcript's content on demand;
+    // never routed through serve (its output memo would hold the text).
+    'codeburn:getSessionWhy': run((id: string) => ['sessions', '--id', vToken(id), '--why', '--format', 'json']),
     'codeburn:getCompareModels': run((period: string, provider: string) => [
       'compare', '--format', 'json', '--period', vPeriod(period),
       ...providerArgs(vProvider(provider)),

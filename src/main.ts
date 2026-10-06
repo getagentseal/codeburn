@@ -2924,6 +2924,8 @@ program
   .option('--by-pr', 'Group spend by the pull requests each session referenced')
   .option('--by-work-unit', 'Group sessions into provider-recorded work units: one row per orchestration root with its delegated children folded beneath')
   .option('--contributions', 'JSON only: attach per-session contribution segments (day, category, branch, model, PR) to each row')
+  .option('--id <id>', 'With --why: the Claude Code session to explain')
+  .option('--why', 'Explain why one session cost what it did: findings, spend by prompt, steps (needs --id; Claude Code only)')
   .option('--no-pager', 'Print the complete table directly instead of opening the interactive browser')
   .option('--project <name>', 'Show only projects matching name (repeatable)', collect, [])
   .option('--exclude <name>', 'Exclude projects matching name (repeatable)', collect, [])
@@ -2932,6 +2934,16 @@ program
     assertFormat(opts.format, ['table', 'json'], 'sessions')
     assertRoute(opts.route, 'sessions')
     assertBilling(opts.billing, 'sessions')
+    if (opts.why || opts.id) {
+      if (!opts.why || !opts.id) {
+        process.stderr.write('codeburn sessions: --why and --id go together (codeburn sessions --id <id> --why).\n')
+        process.exit(1)
+      }
+      const { runSessionWhy } = await import('./session-why.js')
+      await loadPricing()
+      process.exitCode = await runSessionWhy(opts.id, opts.format)
+      return
+    }
     if (opts.byWorkUnit && (opts.route || opts.billing)) {
       process.stderr.write('codeburn sessions: --by-work-unit cannot be combined with --route or --billing.\n')
       process.exit(1)

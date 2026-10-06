@@ -727,6 +727,69 @@ export type SessionDrillFields = {
 
 export type SessionDrillRow = SessionRow & SessionDrillFields
 
+// ————— src/session-why.ts (`sessions --id <id> --why --format json`) —————
+// Read on demand for one session; transcript text is never cached or synced.
+
+export type WhyParts = { input: number; output: number; cacheRead: number; cacheWrite: number; webSearch: number }
+export type WhyTokens = { input: number; output: number; cacheRead: number; cacheWrite: number }
+export type WhyAlt = { model: string; cost: number }
+export type WhyError = { exitCode: number | null; cause: string | null; location: string | null; secondary: string[] }
+export type WhyHelper = { id: string; description: string; agentType: string; models: string[]; calls: number; cost: number; nested: boolean; loose: boolean }
+export type WhyDetail = { command?: string; description?: string; output?: string; path?: string; diff?: string; lines?: number; input?: string; helper?: WhyHelper }
+export type WhyStep =
+  | { kind: 'model'; start: number; end: number; model: string; cost: number; parts: WhyParts; tokens: WhyTokens; startedBy: 'prompt' | 'tool' | 'message' }
+  | { kind: 'tool'; start: number; end: number; name: string; label: string; isError: boolean; error?: WhyError; helperCost?: number; detail: WhyDetail | null }
+export type WhyTurn = {
+  i: number
+  ts: string
+  prompt: { text: string; kind: 'text' | 'pasted' | 'system' }
+  cost: number
+  parts: WhyParts
+  tokens: WhyTokens
+  calls: number
+  models: string[]
+  helperCost: number
+  helpers: WhyHelper[]
+  wallMs: number
+  steps: WhyStep[]
+}
+type WhyBase = { id: string; turn?: number; step?: number; usd: number | null; share: number | null }
+export type WhyFinding = WhyBase & (
+  | { kind: 'helpers'; direct: number; nested: number; loose: number; models: string[]; descriptions: string[]; parts: WhyParts; tokens: WhyTokens; calls: number; minCalls: number; maxCalls: number; alt: WhyAlt | null }
+  | { kind: 'hotspot'; calls: number; toolCalls: number; models: string[]; median: number; parts: WhyParts; tokens: WhyTokens; alt: WhyAlt | null }
+  | { kind: 'coordination'; calls: number; toolCalls: number; model: string; parts: WhyParts; alt: WhyAlt | null }
+  | { kind: 'reread'; calls: number; avgTokens: number }
+  | { kind: 'failed'; tool: string; label: string; description: string; error: WhyError; userStopped: boolean; afterCalls: number | null }
+  | { kind: 'carry'; estimate: true; source: 'tool' | 'paste'; tool: string; label: string; chars: number; tokens: number; calls: number; writeUsd: number; readUsd: number }
+  | { kind: 'prefix'; estimate: true; tokens: number; uncached: number; writeUsd: number; readUsd: number; laterCalls: number; readCalls: number }
+  | { kind: 'idle'; timeMs: number; endedBy: 'prompt' | 'tool' | 'message' }
+  | { kind: 'slowCall'; timeMs: number; model: string; outputTokens: number }
+)
+export type WhyRules = {
+  hotspotTopShare: number; hotspotMedianX: number; hotspotMinShare: number; helperShare: number
+  coordinationMinCalls: number; coordinationToolShare: number; rereadShare: number; rereadMinCalls: number
+  carryTokens: number; prefixTokens: number; idleMs: number; slowCallMs: number
+}
+export type SessionWhy = {
+  sessionId: string
+  title: string
+  project: string
+  startedAt: string
+  endedAt: string
+  cost: number
+  calls: number
+  parts: WhyParts
+  tokens: WhyTokens
+  models: Array<{ model: string; cost: number }>
+  helperCost: number
+  helperCount: number
+  median: number
+  turns: WhyTurn[]
+  findings: WhyFinding[]
+  rules: WhyRules
+  detailsOmitted: boolean
+}
+
 // ————— src/compare-stats.ts —————
 export type ModelStats = {
   model: string
@@ -1192,6 +1255,8 @@ export interface CodeburnBridge {
   /** Session rows with per-turn contribution segments (`sessions --contributions`).
    *  Same population and filtering semantics as getSessions; additive fields only. */
   getSessionsContributions(period: Period, provider: string, range?: DateRange, background?: boolean): Promise<SessionDrillRow[]>
+  /** One Claude Code session's cost diagnosis, read on demand (`sessions --id <id> --why`). */
+  getSessionWhy(id: string): Promise<SessionWhy>
   getCompareModels(period: Period, provider: string, background?: boolean): Promise<ModelStats[]>
   getCompare(period: Period, provider: string, modelA: string, modelB: string): Promise<CompareJsonReport>
   /** Cohort mode facets: models, canonical projects, activity categories. */
