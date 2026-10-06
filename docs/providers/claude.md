@@ -16,6 +16,8 @@ Anthropic Claude Code CLI and Claude Desktop's local agent mode.
 | Claude Desktop (Windows, MSIX) | `%LOCALAPPDATA%/Packages/<Claude package>/LocalCache/Roaming/Claude/local-agent-mode-sessions/` |
 | Claude Desktop (Linux) | `~/.config/Claude/local-agent-mode-sessions/` |
 
+From October 6, 2026, new Claude Cowork tasks on Pro and Max plans run in Anthropic's cloud instead of on your computer, so they no longer write local session files and CodeBurn can't price them. Tasks started on your computer before then are still read. Plan limits are unaffected: the Claude quota windows come from Anthropic's own usage figures, which include cloud Cowork. Claude Code runs locally and is tracked as before.
+
 For Desktop, `findDesktopProjectDirs` walks up to 8 levels deep looking for `projects/` subdirectories, skipping `node_modules` and `.git`.
 
 Desktop session roots are resolved in this order:
@@ -39,6 +41,17 @@ JSONL, one event per line, per session file. Sessions live under `<project>/<ses
 ## Parser
 
 `createSessionParser` returns an empty async generator (`claude.ts:101-105`). Claude is a special case: `src/parser.ts` reads Claude JSONL files directly with full turn grouping, dedup of streaming message IDs, and MCP tool inventory extraction. The provider object exists only so `discoverSessions` can return Claude session sources alongside the others.
+
+Claude Code can record a message sent while it is working as an
+`attachment` entry with `attachment.type: "queued_command"` and
+`commandMode: "prompt"`. CodeBurn counts a timestamped, non-empty prompt as a
+new user turn and assigns later assistant API calls to it. Task notifications,
+IDE or system-reminder injections, slash commands, and other attachment types
+are ignored, as are peer and agent-message queued commands
+(`isMeta: true`/`origin.kind: "peer"`), which are queue plumbing rather than a
+prompt the user typed. Turns represent API usage, so a queued prompt with no following
+assistant API call is omitted, just like an ordinary user message with no
+assistant call.
 
 ## Pricing
 

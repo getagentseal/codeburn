@@ -4,9 +4,8 @@ import Testing
 
 @Suite("Capacity Dock preferences")
 struct CapacityDockPreferencesTests {
-    private func defaults() -> (UserDefaults, String) {
-        let suiteName = "CodeBurnMenubarTests.CapacityDock.\(UUID().uuidString)"
-        return (UserDefaults(suiteName: suiteName)!, suiteName)
+    private func defaults(_ testName: String = #function) -> (UserDefaults, String) {
+        TestDefaults.make("CodeBurnMenubarTests.CapacityDock.\(testName)")
     }
 
     @Test("fresh installs keep the dock off with Codex as the only resting provider")

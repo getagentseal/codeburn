@@ -23,6 +23,7 @@ import {
   type InvestigationFilters,
 } from '../lib/investigation'
 import { reportMemoKey } from '../lib/reportMemoKey'
+import { hasSessionView, SessionView } from './SessionView'
 import type { DateRange, Period, SessionDrillRow, SessionRow } from '../lib/types'
 import { t } from '../i18n'
 
@@ -363,6 +364,10 @@ export function Sessions({
   const remaining = included.length - renderedRows
   const openRow = effectiveOpenSessionId ? rows.find(row => sessionRowKey(row) === effectiveOpenSessionId) ?? null : null
 
+  if (openRow && hasSessionView(openRow)) {
+    return <SessionView key={sessionRowKey(openRow)} row={openRow} filters={filters} medianCost={medianCost} onBack={closeDrawer} />
+  }
+
   return (
     <div className="sessions-list-view">
       {report.error && <StaleBanner error={report.error} />}
@@ -487,7 +492,7 @@ export function Sessions({
           )}
         </>
       )}
-      {openRow && (
+      {openRow && !hasSessionView(openRow) && (
         <SessionDrawer
           row={openRow}
           openKey={sessionRowKey(openRow)}

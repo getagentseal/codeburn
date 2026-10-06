@@ -185,6 +185,7 @@ describe('cursor-agent provider', () => {
     expect(calls[0]!.outputTokens).toBe(estimateTokensFromChars(assistantText.length))
     expect(calls[0]!.reasoningTokens).toBe(0)
     expect(calls[0]!.deduplicationKey).toBe(`cursor-agent:${FIXED_UUID}:0`)
+    expect(calls[0]!.costIsEstimated).toBe(true)
   })
 
   it('parses without sqlite db and defaults model', async () => {
@@ -343,6 +344,27 @@ describe('cursor-agent provider', () => {
     ])
     expect(calls.every(c => c.userMessage === 'do it')).toBe(true)
     expect(calls.map(c => c.inputTokens)).toEqual([estimateTokensFromChars('do it'.length), 0, 0])
+  })
+
+  it('dates jsonl turns by their prompt timestamp, not the file write', async () => {
+    const baseDir = await makeBaseDir()
+    const sessionDir = join(baseDir, 'projects', 'p', 'agent-transcripts', FIXED_UUID)
+    await mkdir(sessionDir, { recursive: true })
+    const file = join(sessionDir, `${FIXED_UUID}.jsonl`)
+    const prompt = (stamp: string) => JSON.stringify({ role: 'user', message: { content: [{ type: 'text', text: `<timestamp>${stamp}</timestamp>\n<user_query>redacted</user_query>` }] } })
+    const step = JSON.stringify({ role: 'assistant', message: { content: [{ type: 'text', text: 'x' }] } })
+    await writeFile(file, [prompt('Tuesday, Oct 6, 2026, 8:58 AM (UTC-7)'), step, step, prompt('Tuesday, Oct 6, 2026, 9:04 AM (UTC-7)'), step].join('\n') + '\n')
+    const { utimes } = await import('fs/promises')
+    await utimes(file, new Date('2026-10-06T16:07:08Z'), new Date('2026-10-06T16:07:08Z'))
+
+    const provider = createCursorAgentProvider(baseDir)
+    const calls = await collectCalls(provider, (await provider.discoverSessions())[0]!)
+
+    expect(calls.map(c => c.timestamp)).toEqual([
+      '2026-10-06T15:58:00.000Z',
+      '2026-10-06T15:58:00.000Z',
+      '2026-10-06T16:04:00.000Z',
+    ])
   })
 
   it('counts tool_use inputs in output tokens (jsonl)', async () => {

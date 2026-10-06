@@ -187,6 +187,24 @@ fn claude_config_dirs() -> Vec<PathBuf> {
     vec![home().join(".claude")]
 }
 
+/// Splits AMP_DATA_DIR into its comma-separated roots (trimmed, empties dropped), matching
+/// the Mac guard (UsageDataChangeGuard.swift) and the CLI's own `ampDataDirs` (amp.ts).
+/// Falls back to `default` when the value is absent or has nothing usable left after that.
+fn amp_data_dirs(value: Option<&str>, default: &Path) -> Vec<PathBuf> {
+    let dirs: Vec<PathBuf> = value
+        .unwrap_or("")
+        .split(',')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .map(PathBuf::from)
+        .collect();
+    if dirs.is_empty() {
+        vec![default.to_path_buf()]
+    } else {
+        dirs
+    }
+}
+
 /// The roots the CLI discovers sessions under, provider by provider. Every one of them is
 /// either a directory whose entries change when a session is written, or the single file a
 /// provider keeps its history in.
@@ -333,6 +351,11 @@ fn roots() -> Vec<Root> {
     roots.push(leaf(
         env_path("CRUSH_GLOBAL_DATA").unwrap_or_else(|| xdg_data().join("crush")),
     ));
+    let amp_default = xdg_data().join("amp");
+    let amp_value = std::env::var_os("AMP_DATA_DIR").map(|v| v.to_string_lossy().into_owned());
+    for amp_dir in amp_data_dirs(amp_value.as_deref(), &amp_default) {
+        roots.push(dir(amp_dir));
+    }
     roots.push(leaf(
         env_path("ZS_DATA_DIR").unwrap_or_else(|| xdg_data().join("zerostack")),
     ));
@@ -360,6 +383,30 @@ mod tests {
                 .map(|(path, stamp)| ((*path).to_string(), *stamp))
                 .collect(),
         }
+    }
+
+    #[test]
+    fn amp_data_dir_single_path() {
+        let default = PathBuf::from("/default/amp");
+        assert_eq!(
+            amp_data_dirs(Some("/tmp/amp"), &default),
+            vec![PathBuf::from("/tmp/amp")]
+        );
+    }
+
+    #[test]
+    fn amp_data_dir_comma_separated_paths() {
+        let default = PathBuf::from("/default/amp");
+        assert_eq!(
+            amp_data_dirs(Some("/tmp/amp, /tmp/amp2"), &default),
+            vec![PathBuf::from("/tmp/amp"), PathBuf::from("/tmp/amp2")]
+        );
+    }
+
+    #[test]
+    fn amp_data_dir_only_commas_and_spaces_falls_back_to_default() {
+        let default = PathBuf::from("/default/amp");
+        assert_eq!(amp_data_dirs(Some(" , , "), &default), vec![default]);
     }
 
     #[test]

@@ -55,6 +55,7 @@ const ROUTES = {
   getOptimizeReport: (period, provider, r) => ['optimize', '--format', 'json', '--period', period, ...prov(provider), ...range(r)],
   getAudit: (period, provider, r) => ['audit', '--format', 'json', '--period', period, ...prov(provider), ...range(r)],
   getActReport: () => ['act', 'report', '--json'],
+  getSessionWhy: (id) => ['sessions', '--id', id, '--why', '--format', 'json'],
   getShareStatus: () => ['share', 'status', '--format', 'json'],
   getIdentity: () => ['identity', '--format', 'json'],
   getAliases: () => ['model-alias', '--list', '--format', 'json'],

@@ -24,7 +24,7 @@ Subagents (delegated runs) live in `subagents/` subdirectories under the parent 
 
 ## Caching
 
-None at the provider level. Conversation metadata is read from the same Cursor SQLite db (`state.vscdb`), specifically the `conversation_summaries` table (`cursor-agent.ts:46-50`). If the summary is missing, file mtime is used as the timestamp.
+None at the provider level. Conversation metadata is read from `~/.cursor/ai-tracking/ai-code-tracking.db`, table `conversation_summaries`. A transcript turn is dated by the latest prompt `<timestamp>` tag before it, like store turns. A transcript with no tag (about a fifth of them) falls back to the summary's `updatedAt`, then the file mtime, which is the session's end.
 
 ## Deduplication
 
@@ -36,6 +36,12 @@ Per `<provider>:<conversationId>:<turnIndex>` (`cursor-agent.ts:379`).
 - Token counts are estimated from char count (`CHARS_PER_TOKEN = 4`, `cursor-agent.ts:35`, `:81-84`). The legacy text format never reports real tokens.
 - Every assistant message counts as a turn: agentic loops emit dozens of assistant messages per user message, and each carries the last user message forward. Tool_use inputs are serialized into the output text; input tokens use the full user text, billed once on the first assistant message after it, while the displayed message stays truncated at 500 chars.
 - The text parser is regex-driven and brittle. It is easier to fix a Composer 2 (JSONL) bug than a legacy (text) bug.
+
+## Exact or estimated
+
+- **Exact (billed sync).** Cursor's usage export (see [cursor.md](cursor.md)) includes Agent CLI requests: the CLI signs in to the same account and bills it. The export has no field that tells CLI from IDE, so inside synced or imported coverage local `cursor-agent` calls are dropped and the billed rows show under `cursor` (project `Cursor (imported)`). Expect far fewer calls there: Cursor bills one row per request, while the transcript holds one turn per assistant message (3 billed rows against 101 local turns on a real run).
+- **Estimated (local).** Every local call is `costIsEstimated`: transcripts and `store.db` record no token counts, so tokens are characters / 4 priced at the Cursor (auto) rate. A prompt's turns all carry its minute, so once the prompt falls inside coverage they are all replaced, including steps that ran after the newest synced event, until the next sync brings those rows in. Untagged transcripts still date at the session's end and can sit past the coverage end until the next sync.
+- **How to get exact.** Keep the Cursor app signed in with the sync on, or run `codeburn import cursor --sync`.
 
 ## When fixing a bug here
 

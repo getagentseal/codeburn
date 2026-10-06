@@ -258,8 +258,9 @@ export function writeProjectFilter(value: unknown): ProjectFilter {
   return filter
 }
 
-// The shared CLI config. The desktop writes only its `language` key; the CLI
-// reads the same field. Path is fixed (os.homedir), matching src/config.ts.
+// The shared CLI config. The desktop writes only its `language` and
+// `cursorSync` keys; the CLI reads the same fields. Path is fixed
+// (os.homedir), matching src/config.ts.
 function configPath(): string {
   return path.join(os.homedir(), '.config', 'codeburn', 'config.json')
 }
@@ -267,22 +268,42 @@ function configPath(): string {
 /** The desktop's six locales; absent/other = follow the system. */
 const APP_LOCALES = new Set(['en', 'fr', 'ja', 'ko', 'zh-CN', 'zh-TW'])
 
-export function readConfigLanguage(): string | null {
+function readConfigKey(key: string): unknown {
   try {
-    const parsed = JSON.parse(fs.readFileSync(configPath(), 'utf8')) as { language?: unknown }
-    return typeof parsed.language === 'string' && APP_LOCALES.has(parsed.language) ? parsed.language : null
+    return (JSON.parse(fs.readFileSync(configPath(), 'utf8')) as Record<string, unknown>)[key]
   } catch {
-    return null
+    return undefined
   }
 }
 
+export function readConfigLanguage(): string | null {
+  const language = readConfigKey('language')
+  return typeof language === 'string' && APP_LOCALES.has(language) ? language : null
+}
+
+export function readConfigCursorSync(): boolean {
+  return readConfigKey('cursorSync') !== false
+}
+
 /**
- * Persist config `language` (null clears it), preserving every other key. Staged
+ * Persist config `language` (null clears it), preserving every other key.
+ */
+export function writeConfigLanguage(language: string | null): void {
+  writeConfigKey('language', language ?? undefined)
+}
+
+/** On is the CLI's default, so it clears the key rather than storing `true`. */
+export function writeConfigCursorSync(enabled: boolean): void {
+  writeConfigKey('cursorSync', enabled ? undefined : false)
+}
+
+/**
+ * Set one config key (undefined removes it), preserving every other key. Staged
  * and renamed like writeProjectFilter, so a torn write never corrupts the shared
  * config. A missing file starts fresh; any other read error aborts rather than
  * clobber a config that is merely unreadable this instant.
  */
-export function writeConfigLanguage(language: string | null): void {
+function writeConfigKey(key: string, value: unknown): void {
   const target = configPath()
   let config: Record<string, unknown> = {}
   try {
@@ -290,8 +311,9 @@ export function writeConfigLanguage(language: string | null): void {
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
   }
-  if (language === null) delete config.language
-  else config.language = language
+  if (!config || typeof config !== 'object' || Array.isArray(config)) throw new Error('config.json is not a JSON object')
+  if (value === undefined) delete config[key]
+  else config[key] = value
   fs.mkdirSync(path.dirname(target), { recursive: true })
   const tmpPath = `${target}.${randomBytes(8).toString('hex')}.tmp`
   try {
@@ -746,6 +768,9 @@ export function createBridgeHandlers(deps: Deps = { spawnCli, spawnCliAction, re
       ...projectArgs(),
       ...rangeArgs(vRange(range)),
     ], 3),
+    // One session's cost diagnosis. Reads that transcript's content on demand;
+    // never routed through serve (its output memo would hold the text).
+    'codeburn:getSessionWhy': run((id: string) => ['sessions', '--id', vToken(id), '--why', '--format', 'json']),
     'codeburn:getCompareModels': run((period: string, provider: string) => [
       'compare', '--format', 'json', '--period', vPeriod(period),
       ...providerArgs(vProvider(provider)),
@@ -855,6 +880,16 @@ export function createBridgeHandlers(deps: Deps = { spawnCli, spawnCliAction, re
         const lang = typeof language === 'string' && APP_LOCALES.has(language) ? language : null
         writeConfigLanguage(lang)
         if (deps.macMenubar) await deps.macMenubar.setLanguage(appleLanguageFor(lang))
+        return { ok: true, value: undefined }
+      } catch (err) {
+        return { ok: false, error: toEnvelopeError(err) }
+      }
+    },
+    'codeburn:getCursorSync': async () => ({ ok: true, value: readConfigCursorSync() }),
+    'codeburn:setCursorSync': async (enabled?: unknown) => {
+      try {
+        if (typeof enabled !== 'boolean') throw new CliError('bad-args', 'invalid cursorSync value')
+        writeConfigCursorSync(enabled)
         return { ok: true, value: undefined }
       } catch (err) {
         return { ok: false, error: toEnvelopeError(err) }

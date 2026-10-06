@@ -155,18 +155,18 @@ describe('devin provider', () => {
 
     expect(calls).toHaveLength(2)
     expect(calls.reduce((sum, call) => sum + call.costUSD, 0)).toBeCloseTo(
-      calculateCost('claude-opus-4-6', 95, 20, 10, 5, 0) + calculateCost('claude-sonnet-4-6', 1, 0, 0, 0, 0),
+      calculateCost('claude-opus-4-6', 100, 20, 10, 5, 0) + calculateCost('claude-sonnet-4-6', 1, 0, 0, 0, 0),
       15,
     )
     expect(calls[0]).toMatchObject({
       provider: 'devin',
       model: 'Opus 4.6',
-      inputTokens: 95,
+      inputTokens: 100,
       outputTokens: 20,
       cacheCreationInputTokens: 10,
       cacheReadInputTokens: 5,
       cachedInputTokens: 5,
-      costUSD: calculateCost('claude-opus-4-6', 95, 20, 10, 5, 0),
+      costUSD: calculateCost('claude-opus-4-6', 100, 20, 10, 5, 0),
       tools: ['read_file'],
       timestamp: '2027-01-15T08:00:01.000Z',
       deduplicationKey: 'devin:session-123:2',
@@ -464,11 +464,11 @@ describe('devin provider', () => {
     expect(calls[0]).toMatchObject({
       provider: 'devin',
       model: 'Sonnet 4.6',
-      inputTokens: 190,
+      inputTokens: 200,
       outputTokens: 50,
       cacheCreationInputTokens: 20,
       cacheReadInputTokens: 10,
-      costUSD: calculateCost('claude-sonnet-4-6', 190, 50, 20, 10, 0),
+      costUSD: calculateCost('claude-sonnet-4-6', 200, 50, 20, 10, 0),
       tools: ['read_file'],
       userMessage: 'fix the bug',
       sessionId: 'v17-session',
@@ -626,6 +626,8 @@ describe('devin provider', () => {
     })
   })
 
+  // Devin's metadata.metrics input_tokens already excludes cache reads, so
+  // nothing is carved out of it (unlike ATIF prompt_tokens).
   it('falls back to metadata.metrics when step.metrics is present but empty', async () => {
     const filePath = await writeTranscript('empty-step-metrics.json', {
       session_id: 'empty-metrics-session',
@@ -646,7 +648,7 @@ describe('devin provider', () => {
 
     expect(calls).toHaveLength(1)
     expect(calls[0]).toMatchObject({
-      inputTokens: 75,
+      inputTokens: 80,
       outputTokens: 20,
       cacheReadInputTokens: 5,
       costUSD: 0,

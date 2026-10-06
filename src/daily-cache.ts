@@ -231,7 +231,74 @@ import type { DateRange, ProjectSummary } from './types.js'
 // v43: Codex response-level token_usage_record repairs compacted/interrupted
 // responses and suppresses stale token_count twins. Counts can rise or fall,
 // so re-derive surviving days and allow the Codex slice to shrink once.
-export const DAILY_CACHE_VERSION = 43
+// v44: Claude queued_command human prompts split and reclassify turns. Calls
+// and tokens are unchanged, but settled category totals need re-derivation.
+// v45: #1581 ZCode user prompt text now reaches classification. Calls and
+// cost are unchanged, but settled zcode category totals need re-derivation.
+// v46: Devin usage comes from sessions.db instead of the transcript exports,
+// which held a few sessions and dated steps without metadata.created_at on the
+// session's last activity. Days finalized at v45 miss most Devin calls, and a
+// day can also lose calls that now land on their real date, so devin joins
+// PENDING_REDERIVE_PROVIDER_VERSIONS.
+// v47: Copilot chat-session journals read request-level promptTokens, repairing
+// missing input usage and input-only calls. Re-derive settled days from the
+// corrected session cache; calls and cost only rise.
+// v48: #1620 Antigravity manage_task/search_web/read_url_content/invoke_subagent
+// reclassify turns. Calls and cost are unchanged, but settled antigravity
+// category totals need re-derivation.
+// v49: Crush's recorded cumulative session cost now passes through the session
+// cache instead of being re-priced from its non-cumulative token counters. Days
+// finalized before v49 hold the re-priced figure with unchanged call counts, so the
+// read path's equal-call rule keeps them; the bump re-derives surviving days.
+// Call counts are unchanged, so no PENDING_REDERIVE_PROVIDER_VERSIONS entry is
+// needed.
+// v50: Hermes uses its native Windows LOCALAPPDATA root; finalized days can
+// miss sessions there and must be re-derived after the default path is fixed.
+// v51: honor redirected Copilot and Cursor editor data roots. Backfill settled
+// days that previously missed usage stored under APPDATA or XDG_CONFIG_HOME.
+// v52: DSH session format v4 (dsh 0.2.0-rc.2) is read; days finalized while
+// those sessions were skipped re-derive. Calls only rise, so no
+// PENDING_REDERIVE_PROVIDER_VERSIONS entry is needed.
+// v53: #1616 Codex priority-tier pricing. Turns run under Codex's Fast speed
+// setting bill at the published priority rates (2x on most gpt-5/6 rows, 2.5x
+// on gpt-5.5; per-row, derived from LiteLLM's priority keys), so settled days
+// under-price them; the bump re-derives surviving days off the warm session
+// cache. MIN_SUPPORTED_VERSION stays at 28 (#1478's convention: a version bump
+// alone re-derives warm caches, so raising the floor buys nothing).
+// v54: `codex-auto-review` prices as gpt-5.4 before 30 Jul 2026 and GPT-5.6
+// Luna from then on (OpenAI's auto-review move), not gpt-5.5, so settled days
+// over-price it. Only cost falls; call counts are unchanged, so no
+// PENDING_REDERIVE_PROVIDER_VERSIONS entry is needed.
+// v55: Codex service_tier "flex" bills at the published Flex rates instead of
+// standard, and `gpt-reserve` / `gpt-5.3-spark` price as GPT-5.6 Luna / GPT-5.3
+// Codex Spark instead of $0. Only cost moves; call counts are unchanged, so no
+// PENDING_REDERIVE_PROVIDER_VERSIONS entry is needed.
+// v56: Copilot assistant.message events with no outputTokens (CLI 1.0.8x, the
+// VS Code agent host) count as calls, and their shutdown rollup (or, under
+// session-store rows, its residual) carries the output it previously dropped.
+// Settled days re-derive. Calls only rise, except a store row and its message
+// straddling midnight, which moves one call to the next day; copilot's
+// PENDING_REDERIVE contract moves to 56 so that day may shrink once.
+// v57: Copilot session-store rows carry their own output where no per-turn call
+// does, so a session that never wrote session.shutdown (ACP hosts such as
+// JetBrains AI Chat) counts its output, and grok-4.6 prices at xAI's $2/M input
+// instead of Azure's $1.25/M. Output and cost only rise; call counts are
+// unchanged, so no PENDING_REDERIVE_PROVIDER_VERSIONS entry is needed.
+// v58: Cursor Agent transcript turns are dated by their prompt's <timestamp>
+// tag instead of the session's last write. Settled days re-derive; a session
+// that crossed midnight moves calls to an earlier day, so cursor-agent joins
+// PENDING_REDERIVE_PROVIDER_VERSIONS at 58.
+// v59: Antigravity reads cache-read tokens from gen_metadata and the RPC usage,
+// and the standalone app's placeholder-only model (MODEL_PLACEHOLDER_M16, stored
+// as "gemini-pro-default") prices as gemini-3.1-pro-high instead of $0, with
+// the above-200k tier. Cache read and cost only rise. Standalone rows without
+// created_at move from the file-mtime day to their first step's day, so a
+// session that crossed midnight moves calls to an earlier day, and antigravity
+// joins PENDING_REDERIVE_PROVIDER_VERSIONS at 59.
+// v60: Mistral Vibe 2.26 Unified Harness sessions (`unified/<id>/`) are read;
+// days finalized while they were skipped re-derive. Calls only rise, so no
+// PENDING_REDERIVE_PROVIDER_VERSIONS entry is needed.
+export const DAILY_CACHE_VERSION = 60
 const MIN_SUPPORTED_VERSION = 28
 
 /// Providers whose per-day CALL COUNT means something different at
@@ -255,7 +322,9 @@ const MIN_SUPPORTED_VERSION = 28
 /// fresh slice at all, so it still carries forward whole — the #1033 bar is
 /// untouched, in both directions, and every other provider keeps the guard.
 const PENDING_REDERIVE_PROVIDER_VERSIONS: Readonly<Record<string, number>> = {
-  copilot: 26,
+  // 56: a store row now pairs with its tokenless per-turn twin, which can
+  // move one call across midnight.
+  copilot: 56,
   // Codex response records replace stale/zero token_count twins and can
   // legitimately reduce counts as well as recover missing usage.
   codex: 43,
@@ -267,6 +336,14 @@ const PENDING_REDERIVE_PROVIDER_VERSIONS: Readonly<Record<string, number>> = {
   // DSH v0-only parsing and exclusive-reasoning display were both stale in
   // finalized days written before the multi-generation reader.
   dsh: 32,
+  // 46: transcript-era Devin days put every step lacking metadata.created_at
+  // on the session's last-activity day; sessions.db dates each request.
+  devin: 46,
+  // 58: transcript turns moved from the session's last write to prompt time.
+  'cursor-agent': 58,
+  // 59: standalone rows without created_at moved from the file mtime to the
+  // first step's time.
+  antigravity: 59,
 }
 
 function providersPendingRederiveFrom(fromVersion: number): string[] {

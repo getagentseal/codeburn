@@ -104,8 +104,7 @@ struct CapacityDockDragSettlingTests {
     @MainActor
     @Test("settling when no drag is in flight changes nothing")
     func settlingIdleDockIsANoOp() {
-        let name = "CodeBurnMenubarTests.DragSettle.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: name)!
+        let (defaults, name) = TestDefaults.make("CodeBurnMenubarTests.DragSettle.\(#function)")
         defer { TestDefaults.forget(name) }
 
         let controller = CapacityDockController(store: AppStore(), defaults: defaults)

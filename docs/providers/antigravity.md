@@ -12,7 +12,7 @@ CodeBurn discovers Antigravity sessions from local directories on disk, then que
 
 1. **Session Discovery:** It scans the following folders for `.pb` or `.db` files:
    - **Antigravity CLI:** `%USERPROFILE%\.gemini\antigravity-cli\conversations` (and `implicit`)
-   - **Antigravity App/older path:** `%USERPROFILE%\.gemini\antigravity\conversations`
+   - **Antigravity App/older path:** `%USERPROFILE%\.gemini\antigravity\conversations`. The standalone app (2.19+, `language_server --standalone --subclient_type hub --app_data_dir antigravity`) writes here too: new conversations as `.db`, older ones stay `.pb`.
    - **Antigravity IDE:** `%USERPROFILE%\.gemini\antigravity-ide\conversations` (and `implicit`). The IDE also maintains VSCode-style global state at `%APPDATA%\Antigravity IDE\User\globalStorage\state.vscdb`, but that DB stores trajectory metadata (titles, timestamps, workspace paths) — not token usage. Token usage data still comes from the `.db` conversation files.
 2. **Language Server RPC Query:** It locates the active language-server process via `ps` on POSIX or `Get-CimInstance Win32_Process` on Windows. It extracts the port and CSRF token from the process arguments, and queries the local HTTPS RPC endpoint `GetCascadeTrajectoryGeneratorMetadata` to parse the session.
 3. **Cache Fallback:** If the language server is not running, it falls back to the local results cache.
@@ -44,7 +44,7 @@ Native Antigravity Desktop, IDE, and CLI sessions store structured state in SQLi
 1. **`gen_metadata` (Model Generations)**:
    - Each row represents a completed LLM completion turn.
    - `data` BLOB Protobuf:
-     - **Field 1 (`ChatModel`)**: Token usage (`Field 4`: input, output, cached, thinking), canonical model ID (`Field 9`), display name (`Field 21`), and generation timestamp (`Field 9 -> Field 4`).
+     - **Field 1 (`ChatModel`)**: Token usage (`Field 4`, see Accuracy), model config id (`Field 19`, e.g. `gemini-pro-default`), key/value metadata including `model_enum` (`Field 20`), display name (`Field 21`, absent in the standalone app), and generation timestamp (`Field 9 -> Field 4`).
      - **Field 2 (`stepIndices`)**: Packed varints listing the exact `steps.idx` rows produced during that generation turn.
      - **Field 4**: Generation UUID used for deduplication (`<cascadeId>:<responseId>`).
 2. **`steps` (Execution Steps & Tools)**:
@@ -65,9 +65,51 @@ Native Antigravity Desktop, IDE, and CLI sessions store structured state in SQLi
 
 For older `.pb` files, cascade and response objects map to `ParsedProviderCall` directly via the language-server RPC.
 
+## Accuracy
+
+The usage message is `exa.codeium_common_pb.ModelUsageStats`; field numbers
+come from the descriptor embedded in the `language_server` binary and match the
+RPC JSON names:
+
+| Field | Name | CodeBurn |
+|---|---|---|
+| 1 | `model` (enum, e.g. 1016 = `MODEL_PLACEHOLDER_M16`) | not read; the same id comes from the `model_enum` key |
+| 2 | `input_tokens` (uncached) | `inputTokens` |
+| 3 | `output_tokens` (= 9 + 10) | fills `outputTokens` when 9 and 10 are missing or disagree |
+| 4 | `cache_write_tokens` | `cacheCreationInputTokens` |
+| 5 | `cache_read_tokens` | `cacheReadInputTokens` |
+| 6 | `api_provider` (24 = `API_PROVIDER_GOOGLE_GEMINI`) | ignored |
+| 9 | `thinking_output_tokens` | `reasoningTokens`, billed at the output rate |
+| 10 | `response_output_tokens` | `outputTokens` |
+| 11 | `response_id` | dedup key |
+
+- **Exact:** call count, input, output, thinking and cache-read tokens, from
+  both `.db` files and the RPC. Cache read is separate from input (it is often
+  larger), so it is priced at the cache-read rate on top of input.
+- **Estimated:** the model of `.db` calls that carry only a placeholder. The
+  standalone app writes `model_enum=MODEL_PLACEHOLDER_M16` and
+  `gemini-pro-default`, with no display name. CodeBurn maps the placeholder
+  through a small table taken from the app's own `GetAvailableModels` catalog
+  (6 Oct 2026, app 2.19.1): `M16` and `M37` are Gemini 3.1 Pro (High), `M36`
+  Gemini 3.1 Pro (Low), `M84` Gemini 3.5 Flash (High), `M18` Gemini 3 Flash,
+  `M35` Claude Sonnet 4.6, `M26` Claude Opus 4.6 (Thinking). These calls carry
+  `costIsEstimated`, because a later app build can repoint a placeholder.
+  `.pb` calls resolve the placeholder through the live catalog at parse time
+  and are not flagged. Gemini 3.1 Pro prices as `gemini-3.1-pro-preview`:
+  $2/M input, $12/M output, $0.20/M cache read, and $4/$18/$0.40 per request
+  whose prompt (input + cache read) reaches 200,000 tokens. Google's rule is
+  "over 200k", so a prompt of exactly 200,000 gets the higher rate one token
+  early; the shared threshold check uses `>=` for every tiered provider.
+- **Timestamps:** `ChatStartMetadata.created_at` when present. Standalone-app
+  rows leave it out; they take the time of the generation's first step
+  (`steps.metadata` #1), which equals `created_at` to the second wherever both
+  exist. The file mtime is the last resort.
+- A placeholder that is in neither the table nor the live catalog stays
+  unpriced and shows as `$0` under `codeburn models --unpriced`.
+
 ## Caching
 
-Custom file cache at `$CODEBURN_CACHE_DIR/antigravity-results.v<n>.json` (version 6, defaults to `~/.cache/codeburn/`). The unsuffixed `antigravity-results.json` is left for older binaries; a matching-version copy is adopted once and never overwritten. The cache is also used as the data source when the RPC endpoint is unavailable, not just as an optimization. Bumping the cache version forces a recompute.
+Custom file cache at `$CODEBURN_CACHE_DIR/antigravity-results.v<n>.json` (version 8, defaults to `~/.cache/codeburn/`). The unsuffixed `antigravity-results.json` is left for older binaries; a matching-version copy is adopted once and never overwritten. The cache is also used as the data source when the RPC endpoint is unavailable, not just as an optimization. Bumping the cache version forces a recompute.
 
 ## Deduplication
 
@@ -79,13 +121,13 @@ double-counted.
 
 ## Quirks
 
-- **Antigravity is the only provider that requires a live process.** A user who closes Antigravity loses the most-recent data until next launch (the cache covers older runs).
+- **`.pb` conversations need the live process.** `.db` conversations are read straight from SQLite; `.pb` ones only through the RPC, so with Antigravity closed they come from the results cache. After a cache-version bump, a `.pb` cascade missing from the new file is served from the previous version's file (stored with `mtimeMs: -1`) until a run with Antigravity open re-fetches it.
+- `~/.gemini/antigravity-backup` is not scanned. On the machine checked it held only a copy of a conversation also under `antigravity` and `antigravity-ide`, which the cascade-id dedup would drop anyway.
 - **Antigravity CLI has a shorter capture window than the desktop app.** `agy`
   exposes its language server only while the CLI session is active. The status
   line hook closes that gap for future sessions; older CLI `.pb` files still
   cannot be priced exactly unless an RPC snapshot was captured.
 - The 16 MB cap on RPC responses is necessary because individual cascades can balloon. Raising it risks OOM on the user's machine.
-- Token types are split across `inputTokens`, `responseOutputTokens`, and `thinkingOutputTokens`. Thinking is billed at output rate.
 
 ## When fixing a bug here
 

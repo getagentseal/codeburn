@@ -577,6 +577,45 @@ describe('ensureCacheHydrated: Codex usage-record accounting migration', () => {
   })
 })
 
+describe('ensureCacheHydrated: Claude queued prompt categories', () => {
+  it.each([39, 43])('re-derives a settled v%i day when turns are reclassified but calls stay equal', async sourceVersion => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-09-27T12:00:00.000Z'))
+
+    const { writeFile, mkdir } = await import('fs/promises')
+    await mkdir(TMP_CACHE_ROOT, { recursive: true })
+    const date = '2026-09-01'
+    const category = { turns: 1, cost: 1, savingsUSD: 0, editTurns: 0, oneShotTurns: 0 }
+    const oldDay = emptyDay(date, 1, 1)
+    oldDay.categories = { exploration: category }
+    oldDay.providers = { claude: { calls: 1, cost: 1, savingsUSD: 0, categories: oldDay.categories } }
+    const freshDay = emptyDay(date, 1, 1)
+    freshDay.categories = { feature: category }
+    freshDay.providers = { claude: { calls: 1, cost: 1, savingsUSD: 0, categories: freshDay.categories } }
+
+    await writeFile(join(TMP_CACHE_ROOT, `daily-cache.v${sourceVersion}.json`), JSON.stringify({
+      version: sourceVersion,
+      savingsConfigHash: '',
+      tzKey: currentTzKey(),
+      lastComputedDate: date,
+      days: [oldDay],
+      complete: true,
+      watermarkTrusted: true,
+    }), 'utf-8')
+
+    let parseCalls = 0
+    const hydrated = await ensureCacheHydrated(
+      async () => { parseCalls += 1; return [] },
+      () => [freshDay],
+    )
+
+    expect(parseCalls).toBe(1)
+    expect(hydrated.version).toBe(DAILY_CACHE_VERSION)
+    expect(hydrated.days.find(day => day.date === date)?.providers['claude']?.categories)
+      .toEqual({ feature: category })
+  })
+})
+
 describe('withDailyCacheLock', () => {
   it('serializes concurrent operations', async () => {
     const sequence: string[] = []

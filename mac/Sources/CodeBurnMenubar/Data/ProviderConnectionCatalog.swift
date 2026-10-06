@@ -72,7 +72,7 @@ enum ProviderConnectionCatalog {
               [.localAppOrCLI, .oauth, .localhost, .none], live: true),
         entry("copilot", "Copilot", [.automatic, .api],
               [.oauth, .apiTokenOrCloudCredentials, .cookieOrWebSession], live: true),
-        entry("devin", "Devin", [.automatic, .web], [.cookieOrWebSession]),
+        entry("devin", "Devin", [.automatic, .cli], [.localAppOrCLI], live: true),
         entry("zai", "Z.ai", [.automatic, .api],
               [.localAppOrCLI, .apiTokenOrCloudCredentials], live: true),
         entry("zcode", "ZCode", [.automatic, .cli],

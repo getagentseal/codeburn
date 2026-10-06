@@ -29,6 +29,7 @@ struct CredentialKeychainContinuityTests {
     }
 
     private func withHarness(
+        testName: String = #function,
         _ body: (Harness) throws -> Void
     ) throws {
         CredentialStoreTestIsolation.lock.lock()
@@ -38,9 +39,7 @@ struct CredentialKeychainContinuityTests {
             .appendingPathComponent("codeburn-0b-cont-\(UUID().uuidString)", isDirectory: true)
         let support = root.appendingPathComponent("Application Support", isDirectory: true)
         try FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
-        let suiteName = "codeburn.0b.cont.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suiteName)!
-        TestDefaults.forget(suiteName)
+        let (defaults, suiteName) = TestDefaults.make("codeburn.0b.cont.\(testName)")
         let fake = InMemoryKeychainCredentialCache()
 
         ClaudeCredentialStore.resetTestSeams()
@@ -166,10 +165,8 @@ struct CredentialKeychainContinuityTests {
 
     @Test("concurrent provider-presence updates do not lose identifiers")
     func providerPresenceUpdatesAreAtomic() async {
-        let suiteName = "codeburn.capacity-dock-presence.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suiteName)!
+        let (defaults, suiteName) = TestDefaults.make("codeburn.capacity-dock-presence.\(#function)")
         let defaultsBox = SendableUserDefaults(defaults)
-        TestDefaults.forget(suiteName)
         defer { TestDefaults.forget(suiteName) }
         let providerIDs = Array(CapacityDockPreferences.supportedProviders.prefix(24).map(\.id))
 

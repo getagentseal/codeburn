@@ -12,6 +12,7 @@ struct CredentialKeychainCacheRedTests {
     private let accountSentinel = "cb-red-account-sentinel"
 
     private func withIsolatedSeams(
+        testName: String = #function,
         _ body: (URL, InMemoryKeychainCredentialCache) throws -> Void
     ) throws {
         CredentialStoreTestIsolation.lock.lock()
@@ -21,9 +22,7 @@ struct CredentialKeychainCacheRedTests {
             .appendingPathComponent("codeburn-0b-red-\(UUID().uuidString)", isDirectory: true)
         let support = root.appendingPathComponent("Application Support", isDirectory: true)
         try FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
-        let suiteName = "codeburn.0b.red.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suiteName)!
-        TestDefaults.forget(suiteName)
+        let (defaults, suiteName) = TestDefaults.make("codeburn.0b.red.\(testName)")
 
         let fakeKeychain = InMemoryKeychainCredentialCache()
         ClaudeCredentialStore.resetTestSeams()

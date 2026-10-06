@@ -418,6 +418,7 @@ function usageCall(overrides: {
   timestamp: string
   nanoAiu?: number
   supplementaryAccounting?: boolean
+  deduplicationKey?: string
 }) {
   return {
     provider: overrides.provider,
@@ -441,7 +442,7 @@ function usageCall(overrides: {
     speed: 'standard' as const,
     timestamp: overrides.timestamp,
     bashCommands: [],
-    deduplicationKey: `${overrides.provider}-${overrides.timestamp}-${overrides.nanoAiu ?? 'none'}`,
+    deduplicationKey: overrides.deduplicationKey ?? `${overrides.provider}-${overrides.timestamp}-${overrides.nanoAiu ?? 'none'}`,
     ...(overrides.nanoAiu != null ? { nanoAiu: overrides.nanoAiu } : {}),
     ...(overrides.supplementaryAccounting ? { supplementaryAccounting: true } : {}),
   }
@@ -550,7 +551,9 @@ describe('copilot AI credit plan math', () => {
 
     expect(usage.spentCredits).toBe(1.5)
     expect(usage.percentUsed).toBeCloseTo(0.1, 10)
-    expect(usage.creditsIncomplete).toBe(true)
+    // One request (the JSONL call), billed exactly by its paired row.
+    expect(usage.creditsIncomplete).toBe(false)
+    expect(usage.creditRatedCalls).toBe(1)
   })
 
   it('does not double credits when a paired rollup also carries nanoAiu', () => {
@@ -574,6 +577,26 @@ describe('copilot AI credit plan math', () => {
 
     expect(usage.spentCredits).toBe(1.5)
     expect(usage.creditsIncomplete).toBe(false)
+  })
+
+  it('keeps paired store-row credits beside an unpaired compaction row', () => {
+    // CLI 1.0.8x: tokenless per-turn calls pair with their store rows, and the
+    // compaction row has no per-turn twin, so it stays behavioral.
+    const call = (ts: string, extra: { nanoAiu?: number; supplementaryAccounting?: boolean; deduplicationKey?: string } = {}) =>
+      usageCall({ provider: 'copilot', costUSD: 0, timestamp: `2026-08-05T12:00:${ts}.000Z`, ...extra })
+    const spend = copilotCreditSpend([
+      usageProject([
+        call('00'),
+        call('01', { nanoAiu: 250_000_000, supplementaryAccounting: true, deduplicationKey: 'copilot-store:s:1:a' }),
+        call('10'),
+        call('11', { nanoAiu: 250_000_000, supplementaryAccounting: true, deduplicationKey: 'copilot-store:s:2:b' }),
+        call('20', { nanoAiu: 200_000_000, deduplicationKey: 'copilot-store:s:3:c' }),
+      ]),
+    ])
+
+    expect(spend.spentCredits).toBeCloseTo(0.7, 12)
+    expect(spend.creditRatedCalls).toBe(3)
+    expect(spend.creditUnratedCalls).toBe(0)
   })
 
   it('does not double credits when nanoAiu twins sit in separate session turns', () => {
@@ -652,8 +675,9 @@ describe('copilot AI credit plan math', () => {
 
     expect(spend.spentCredits).toBe(1.5)
     expect(spend.estimatedCredits).toBe(1.5)
+    // Row and twin are one request.
     expect(spend.creditRatedCalls).toBe(1)
-    expect(spend.creditUnratedCalls).toBe(1)
+    expect(spend.creditUnratedCalls).toBe(0)
   })
 
   it('estimates only the sessions that carry no exact figure at all', () => {
@@ -665,7 +689,7 @@ describe('copilot AI credit plan math', () => {
           timestamp: '2026-08-05T12:00:00.000Z',
           nanoAiu: 1_500_000_000,
           supplementaryAccounting: true,
-        })],
+        }), usageCall({ provider: 'copilot', costUSD: 0, timestamp: '2026-08-05T12:00:01.000Z' })],
       ]),
       usageProject([
         usageCall({ provider: 'copilot', costUSD: 0.25, timestamp: '2026-08-06T12:00:00.000Z' }),

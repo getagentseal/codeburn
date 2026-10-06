@@ -293,6 +293,35 @@ const FORK_LINES = [
   ...richTask(12, { tokens: 'empty' }),
 ]
 
+// #1616: the service tier changes mid-file via thread_settings_applied, so a
+// resume boundary can fall on either side of a switch.
+const tierEvent = (tier: string, timestamp: string) => J({
+  type: 'event_msg', timestamp,
+  payload: { type: 'thread_settings_applied', thread_settings: { model: 'gpt-5.3-codex', service_tier: tier } },
+})
+
+const TIER_LINES = [
+  J({ type: 'session_meta', timestamp: ts(0, 0), payload: { cwd: '/Users/test/proj', originator: 'codex-cli', session_id: 'sess-1', model: 'gpt-5.3-codex' } }),
+  tierEvent('priority', ts(0, 1)),
+  ...richTask(1),
+  ...richTask(2, { tokens: 'empty' }),
+  tierEvent('default', ts(30, 0)),
+  ...richTask(3, { model: 'gpt-5.3-codex-mini' }),
+  ...richTask(4, { noComplete: true }),
+  tierEvent('priority', ts(45, 0)),
+  ...richTask(6),
+]
+
+const TIER_FORK_LINES = [
+  J({ type: 'session_meta', timestamp: ts(0, 0), payload: { cwd: '/Users/test/proj', originator: 'codex-cli', session_id: 'sess-2', forked_from_id: 'sess-1', model: 'gpt-5.3-codex' } }),
+  // The parent's tier setting is part of the replayed history: the fork's own
+  // first turn must inherit it, not fall back to standard.
+  tierEvent('priority', '2026-04-14T10:00:01Z'),
+  ...richTask(0).map(l => l.replace(/2026-04-14T10:00:0\d/g, '2026-04-14T10:00:01')),
+  ...richTask(11),
+  ...richTask(12, { tokens: 'empty' }),
+]
+
 describe('codex resume differential', () => {
   async function rollout(lines: string[]): Promise<{ codexDir: string; path: string }> {
     const codexDir = await mkdtemp(join(tmpdir(), 'codex-split-'))
@@ -325,4 +354,61 @@ describe('codex resume differential', () => {
   it('matches a full re-parse at every line boundary of a forked session', async () => {
     await assertEverySplitMatches(FORK_LINES)
   }, 60_000)
+
+  it('matches a full re-parse at every line boundary of a tier-switching session (#1616)', async () => {
+    await assertEverySplitMatches(TIER_LINES)
+    // The fixture really does straddle both tiers, so the differential above is
+    // about tier state and not about five identical standard calls.
+    const base = await rollout(TIER_LINES)
+    const full = await parse(await mkdtemp(join(tmpdir(), 'codex-c-')), base.codexDir)
+    expect(full.map(call => call.speed)).toEqual(['fast', 'fast', 'standard', 'standard', 'fast'])
+  }, 60_000)
+
+  it('a fork inherits the parent tier from the replayed settings, at every split (#1616)', async () => {
+    await assertEverySplitMatches(TIER_FORK_LINES)
+    // The fork's own two tasks must price as Fast: the replayed parent event
+    // set the tier, and the burst's end did not reset it.
+    const base = await rollout(TIER_FORK_LINES)
+    const full = await parse(await mkdtemp(join(tmpdir(), 'codex-c-')), base.codexDir)
+    expect(full.map(call => call.speed)).toEqual(['fast', 'fast'])
+  }, 60_000)
+})
+
+// #1616: the thread's service tier is state the decode reads from a PRIOR
+// line, so it has to ride CodexResumeState — otherwise an append that lands
+// after a priority switch silently re-prices the tail at standard rates.
+describe('codex incremental resume across a service-tier change (#1616)', () => {
+  it('keeps the priority tier across an append and matches a full re-parse', async () => {
+    const warmCache = join(tmpDir, 'cache-warm')
+    const coldCache = join(tmpDir, 'cache-cold')
+
+    sessionPath = await writeRollout([meta(), tierEvent('priority', '2026-04-14T10:00:01Z'), ...tasks(1, 2)])
+    const first = await parse(warmCache)
+    expect(first.map(call => call.speed)).toEqual(['fast', 'fast'])
+
+    // The switch back lands in the appended tail, after the resume boundary.
+    await appendFile(sessionPath, [tierEvent('default', '2026-04-14T10:30:00Z'), ...tasks(3, 4)].join('\n') + '\n')
+
+    readLineCalls.length = 0
+    const resumed = await parse(warmCache)
+    const resumeReads = readLineCalls.filter(c => c.filePath === sessionPath)
+    expect(resumeReads.some(c => (c.startByteOffset ?? 0) > 0)).toBe(true)
+    expect(resumed.map(call => call.speed)).toEqual(['fast', 'fast', 'standard', 'standard'])
+    expect(JSON.stringify(resumed)).toBe(JSON.stringify(await parse(coldCache)))
+  })
+
+  it('picks the tier up mid-file when the resume boundary predates the switch', async () => {
+    const warmCache = join(tmpDir, 'cache-warm')
+
+    sessionPath = await writeRollout([meta(), ...tasks(1, 2)])
+    await parse(warmCache)
+    // A tier switch followed by a tail with no task boundary of its own: the
+    // next resume restarts at the last boundary and re-reads the switch.
+    await appendFile(sessionPath, [tierEvent('priority', '2026-04-14T10:30:00Z'), ...tasks(3, 3).slice(1)].join('\n') + '\n')
+
+    const resumed = await parse(warmCache)
+    const full = await parse(join(tmpDir, 'cache-cold'))
+    expect(JSON.stringify(resumed)).toBe(JSON.stringify(full))
+    expect(resumed.map(call => call.speed)).toEqual(['standard', 'standard', 'fast'])
+  })
 })

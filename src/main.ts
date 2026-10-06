@@ -7,8 +7,8 @@ import { cachedProjectIdentitiesForRange } from './daily-cache.js'
 import { reportUnmatchedProjectPatterns } from './project-filter-warnings.js'
 import { getVercelGatewayApiKey } from './providers/vercel-gateway.js'
 import { BILLING_FILTER_VALUES, ROUTE_FILTER_VALUES, filterProjectsByBillingRoute } from './billing-filter.js'
-import { AGGREGATE_ONLY_PROVIDER, aggregateOnlyCostUSD, excludesAggregateOnlyProviders, parseAllSessions, filterProjectsByName, filterProjectsByDateRange, clearSessionCache, setInteractiveScanUI, computeCorpusFingerprint, isSessionHydrationComplete, withLoadWindow } from './parser.js'
-import { allProviderNames, getAllProviders } from './providers/index.js'
+import { AGGREGATE_ONLY_PROVIDER, aggregateOnlyCostUSD, excludesAggregateOnlyProviders, parseAllSessions, filterProjectsByName, filterProjectsByDateRange, clearSessionCache, setInteractiveScanUI, computeCorpusFingerprint, isSessionHydrationComplete, startProgressKeepalive, stopProgressKeepalive, withLoadWindow } from './parser.js'
+import { allProviderNames, getAllProviders, safeDiscoverSessions } from './providers/index.js'
 import { getProvider } from './providers/index.js'
 import { getClaudeConfigDirs, getDesktopSessionsDirs } from './providers/claude.js'
 import { convertCost, formatCost } from './currency.js'
@@ -521,6 +521,20 @@ async function runJsonReport(period: Period, provider: string, project: string[]
   console.log(JSON.stringify(report, null, 2))
 }
 
+// Only for commands that show Cursor dollars; never mcp, doctor or audit,
+// which promise to stay offline. The keepalive beats through the download for
+// the app watchdogs; it is reference-counted, so the stop never silences a
+// beat serve armed around the whole request.
+async function syncCursor(provider: string): Promise<void> {
+  const { maybeSyncCursor } = await import('./cursor-sync.js')
+  startProgressKeepalive()
+  try {
+    await maybeSyncCursor({ provider })
+  } finally {
+    stopProgressKeepalive()
+  }
+}
+
 const program = new Command()
   .name('codeburn')
   .description('See where your AI coding tokens go - by task, tool, model, and project')
@@ -869,6 +883,7 @@ program
     }
 
     const period = toPeriod(opts.period)
+    await syncCursor(opts.provider)
     if (opts.format === 'json') {
       await loadPricing()
       if (daySelection || customRange) {
@@ -1043,6 +1058,7 @@ program
   .option('--no-color', 'Disable ANSI colors')
   .action(async (opts) => {
     assertProvider(opts.provider, 'overview')
+    await syncCursor(opts.provider)
     await loadPricing()
     let customRange: DateRange | null = null
     try {
@@ -1209,6 +1225,7 @@ program
     const pf = opts.provider
     const fp = (p: ProjectSummary[]) => filterProjectsByName(p, opts.project, opts.exclude)
     if (opts.format === 'menubar-json') {
+      await syncCursor(pf)
       const daysSelection = parseDaysFlag(opts.days)
       const customRange = daysSelection ? null : parseDateRangeFlags(opts.from, opts.to)
       const daySelection = parseDayFlag(opts.day)
@@ -1372,7 +1389,11 @@ program
           // best-effort only: the local payload is still emitted below
         }
       }
-      console.log(JSON.stringify(payload))
+      // Attached last: the snapshot and the per-device payloads above must not
+      // carry this machine's sync status.
+      const { cursorSyncStatus } = await import('./cursor-sync.js')
+      const cursorSync = await cursorSyncStatus().catch(() => null)
+      console.log(JSON.stringify(cursorSync ? { ...payload, cursorSync } : payload))
       return
     }
 
@@ -1439,6 +1460,7 @@ program
   .action(async (opts) => {
     assertFormat(opts.format, ['tui', 'json'], 'today')
     assertProvider(opts.provider, 'today')
+    await syncCursor(opts.provider)
     if (opts.format === 'json') {
       await runJsonReport('today', opts.provider, opts.project, opts.exclude)
       return
@@ -1457,6 +1479,7 @@ program
   .action(async (opts) => {
     assertFormat(opts.format, ['tui', 'json'], 'month')
     assertProvider(opts.provider, 'month')
+    await syncCursor(opts.provider)
     if (opts.format === 'json') {
       await runJsonReport('month', opts.provider, opts.project, opts.exclude)
       return
@@ -1627,11 +1650,12 @@ program
 
 program
   .command('import <tool> [file]')
-  .description('Replace local estimates with usage a tool exported itself. Supported: cursor (Export CSV at cursor.com/dashboard/usage)')
-  .option('--from <date>', 'Start of the exported range (date, ISO time or epoch ms). Default: the first event\'s UTC day')
-  .option('--to <date>', 'End of the exported range (date, ISO time or epoch ms). Default: the last event\'s UTC day')
+  .description('Replace local estimates with usage a tool exported itself. Supported: cursor (Export CSV at cursor.com/dashboard/usage, or --sync)')
+  .option('--from <date>', 'Start of the exported range (date, ISO time or epoch ms). Default: the first event\'s local day')
+  .option('--to <date>', 'End of the exported range (date, ISO time or epoch ms). Default: the last event\'s local day')
   .option('--remove', 'Delete the imported usage and go back to local estimates')
-  .action(async (tool: string, file: string | undefined, opts: { from?: string; to?: string; remove?: boolean }) => {
+  .option('--sync', 'Download the usage export from cursor.com now, with the Cursor app\'s login')
+  .action(async (tool: string, file: string | undefined, opts: { from?: string; to?: string; remove?: boolean; sync?: boolean }) => {
     if (tool !== 'cursor') {
       console.error(`\n  Unknown import "${tool}". Supported: cursor\n`)
       process.exitCode = 1
@@ -1652,17 +1676,31 @@ program
           return
         }
         await invalidate(ranges)
-        console.log('\n  Removed the Cursor import. Local Cursor estimates are back for the days it covered.\n')
+        console.log('\n  Removed the Cursor import. Local Cursor estimates are back for the days it covered.')
+        const { cursorSyncEnabled } = await import('./cursor-sync.js')
+        if (await cursorSyncEnabled()) console.log('  Automatic Cursor sync downloads it again within the hour; set "cursorSync": false in config.json or CODEBURN_CURSOR_SYNC=0 to stop it.')
+        console.log()
         return
       }
-      if (!file) throw new Error('give the path of the CSV exported at cursor.com/dashboard/usage')
-      const summary = await importCursorCsv(file, {
-        ...(opts.from ? { from: parseBoundary(opts.from, 'from') } : {}),
-        ...(opts.to ? { to: parseBoundary(opts.to, 'to') } : {}),
-      })
-      if (summary.changed) await invalidate([summary.coverage])
+      let summary
+      if (opts.sync) {
+        if (file || opts.from || opts.to) throw new Error('--sync takes no file, --from or --to')
+        const { maybeSyncCursor } = await import('./cursor-sync.js')
+        summary = await maybeSyncCursor({ force: true })
+        if (!summary) {
+          console.log('\n  Cursor sync: cursor.com holds no usage events for the sync window.\n')
+          return
+        }
+      } else {
+        if (!file) throw new Error('give the path of the CSV exported at cursor.com/dashboard/usage, or pass --sync')
+        summary = await importCursorCsv(file, {
+          ...(opts.from ? { from: parseBoundary(opts.from, 'from') } : {}),
+          ...(opts.to ? { to: parseBoundary(opts.to, 'to') } : {}),
+        })
+        if (summary.changed) await invalidate([summary.coverage])
+      }
       const pct = summary.tokens > 0 ? ` (${(summary.grokBotTokens / summary.tokens * 100).toFixed(1)}%)` : ''
-      console.log(`\n  Imported Cursor usage from ${file}`)
+      console.log(`\n  Imported Cursor usage from ${opts.sync ? 'cursor.com' : file}`)
       console.log(`  Events:   ${summary.added.toLocaleString()} added, ${summary.skipped.toLocaleString()} already imported (${summary.total.toLocaleString()} stored)`)
       console.log(`  Covers:   ${summary.coverage.start} to ${summary.coverage.end} UTC`)
       if (summary.coverage.inferred) console.log('            (range taken from the events; pass --from/--to from the export to set it)')
@@ -2508,7 +2546,7 @@ program
       const providers = await getAllProviders()
       const dirs: string[] = []
       for (const provider of providers) {
-        const sessions = await provider.discoverSessions()
+        const sessions = await safeDiscoverSessions(provider)
         for (const session of sessions) dirs.push(session.path)
       }
       const scope = opts.project.length > 0 || opts.exclude.length > 0 ? projectSessionIds(projects) : undefined
@@ -2886,6 +2924,8 @@ program
   .option('--by-pr', 'Group spend by the pull requests each session referenced')
   .option('--by-work-unit', 'Group sessions into provider-recorded work units: one row per orchestration root with its delegated children folded beneath')
   .option('--contributions', 'JSON only: attach per-session contribution segments (day, category, branch, model, PR) to each row')
+  .option('--id <id>', 'With --why: the Claude Code session to explain')
+  .option('--why', 'Explain why one session cost what it did: findings, spend by prompt, steps (needs --id; Claude Code only)')
   .option('--no-pager', 'Print the complete table directly instead of opening the interactive browser')
   .option('--project <name>', 'Show only projects matching name (repeatable)', collect, [])
   .option('--exclude <name>', 'Exclude projects matching name (repeatable)', collect, [])
@@ -2894,6 +2934,16 @@ program
     assertFormat(opts.format, ['table', 'json'], 'sessions')
     assertRoute(opts.route, 'sessions')
     assertBilling(opts.billing, 'sessions')
+    if (opts.why || opts.id) {
+      if (!opts.why || !opts.id) {
+        process.stderr.write('codeburn sessions: --why and --id go together (codeburn sessions --id <id> --why).\n')
+        process.exit(1)
+      }
+      const { runSessionWhy } = await import('./session-why.js')
+      await loadPricing()
+      process.exitCode = await runSessionWhy(opts.id, opts.format)
+      return
+    }
     if (opts.byWorkUnit && (opts.route || opts.billing)) {
       process.stderr.write('codeburn sessions: --by-work-unit cannot be combined with --route or --billing.\n')
       process.exit(1)
@@ -3201,6 +3251,12 @@ if (process.argv[2] === 'serve') {
   // this child running as an orphan for as long as the machine is up.
   hardExit(0)
 } else {
+  // Beat for the app watchdogs from the first moment, not just inside a parse:
+  // a one-shot is also silent while it waits on another process's cold
+  // hydration lock or aggregates after the parse. Never stopped; the timer is
+  // unref'd and the process exits when the command does. Serve beats per
+  // request instead, so it must not take this.
+  startProgressKeepalive()
   const program = buildProgram()
   await registerLoadedPluginCommands(program)
   program.parse()

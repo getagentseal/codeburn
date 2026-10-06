@@ -115,8 +115,7 @@ struct ProviderSettingsEditorStateTests {
 
     @Test("presence writes allow a synchronous UserDefaults callback to read presence")
     func presenceWritesDoNotDeadlockSwiftUICallbacks() async throws {
-        let suiteName = "CodeBurnMenubarTests.PresenceReentry.\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        let (defaults, suiteName) = TestDefaults.make("CodeBurnMenubarTests.PresenceReentry")
         let defaultsBox = SendableUserDefaults(defaults)
         let callbackFinished = LockedCompletionFlag()
         let writeFinished = LockedCompletionFlag()

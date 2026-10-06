@@ -45,6 +45,7 @@ const CHANNELS = [
   'codeburn:getModels',
   'codeburn:getSessions',
   'codeburn:getSessionsContributions',
+  'codeburn:getSessionWhy',
   'codeburn:getCompareModels',
   'codeburn:getCompare',
   'codeburn:getPeriodCompare',
@@ -68,6 +69,8 @@ const CHANNELS = [
   'codeburn:getUnfilteredProjects',
   'codeburn:getLanguage',
   'codeburn:setLanguage',
+  'codeburn:getCursorSync',
+  'codeburn:setCursorSync',
   'codeburn:setCurrency',
   'codeburn:resetCurrency',
   'codeburn:addAlias',
@@ -122,6 +125,7 @@ const ARGV_CASES: Array<{ channel: string; args: unknown[]; argv: string[] }> = 
   { channel: 'codeburn:getSessions', args: ['30days', 'claude', { from: '2026-07-01', to: '2026-07-11' }], argv: ['sessions', '--format', 'json', '--period', '30days', '--provider', 'claude', '--from', '2026-07-01', '--to', '2026-07-11'] },
   { channel: 'codeburn:getSessionsContributions', args: ['week', 'all'], argv: ['sessions', '--format', 'json', '--contributions', '--period', 'week'] },
   { channel: 'codeburn:getSessionsContributions', args: ['30days', 'claude', { from: '2026-07-01', to: '2026-07-11' }], argv: ['sessions', '--format', 'json', '--contributions', '--period', '30days', '--provider', 'claude', '--from', '2026-07-01', '--to', '2026-07-11'] },
+  { channel: 'codeburn:getSessionWhy', args: ['7f3c2a91-4be0'], argv: ['sessions', '--id', '7f3c2a91-4be0', '--why', '--format', 'json'] },
   { channel: 'codeburn:getCompareModels', args: ['month', 'codex'], argv: ['compare', '--format', 'json', '--period', 'month', '--provider', 'codex'] },
   { channel: 'codeburn:getCompare', args: ['month', 'all', 'model-a', 'model-b'], argv: ['compare', '--format', 'json', '--period', 'month', '--model-a', 'model-a', '--model-b', 'model-b'] },
   { channel: 'codeburn:getPeriodCompare', args: [{ from: '2026-07-01', to: '2026-07-07' }, { from: '2026-07-08', to: '2026-07-14' }, 'claude'], argv: ['compare-periods', '--format', 'json', '--from-a', '2026-07-01', '--to-a', '2026-07-07', '--from-b', '2026-07-08', '--to-b', '2026-07-14', '--provider', 'claude'] },
@@ -1150,6 +1154,35 @@ describe('project filter', () => {
     } finally {
       if (previous === undefined) delete process.env.CODEBURN_APP_FILTER
       else process.env.CODEBURN_APP_FILTER = previous
+    }
+  })
+})
+
+describe('codeburn:setCursorSync', () => {
+  it('writes only the shared config cursorSync key, clearing it when on', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'cb-cursor-sync-'))
+    const previous = process.env.HOME
+    process.env.HOME = home
+    try {
+      const config = join(home, '.config', 'codeburn', 'config.json')
+      mkdirSync(dirname(config), { recursive: true })
+      writeFileSync(config, JSON.stringify({ language: 'fr', currency: { code: 'EUR' } }))
+      const handlers = createBridgeHandlers({ spawnCli: vi.fn(), spawnCliAction: vi.fn(), resolveCodeburnPath: () => null, getQuota: vi.fn(async () => []) })
+      expect(await handlers['codeburn:getCursorSync']!()).toEqual({ ok: true, value: true })
+      expect(await handlers['codeburn:setCursorSync']!(false)).toEqual({ ok: true, value: undefined })
+      expect(JSON.parse(fs.readFileSync(config, 'utf8'))).toEqual({ language: 'fr', currency: { code: 'EUR' }, cursorSync: false })
+      expect(await handlers['codeburn:getCursorSync']!()).toEqual({ ok: true, value: false })
+      await handlers['codeburn:setCursorSync']!(true)
+      expect(JSON.parse(fs.readFileSync(config, 'utf8'))).toEqual({ language: 'fr', currency: { code: 'EUR' } })
+      expect(await handlers['codeburn:setCursorSync']!('off')).toMatchObject({ ok: false })
+      for (const body of ['null', '[1,2]', '{ not json']) {
+        writeFileSync(config, body)
+        expect(await handlers['codeburn:setCursorSync']!(false)).toMatchObject({ ok: false })
+        expect(fs.readFileSync(config, 'utf8')).toBe(body)
+      }
+    } finally {
+      process.env.HOME = previous
+      rmSync(home, { recursive: true, force: true })
     }
   })
 })

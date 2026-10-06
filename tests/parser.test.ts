@@ -1971,9 +1971,9 @@ describe.skipIf(!isSqliteAvailable())('(c5) compaction-initiated store rows', ()
       .flatMap(t => t.assistantCalls).filter(c => c.deduplicationKey.startsWith('copilot-store:'))
     expect(storeCalls).toHaveLength(2)
     expect(new Set(storeCalls.map(c => c.deduplicationKey)).size).toBe(2)
-    // Both rows' prompt sides survive; only the labelled one contributes output.
+    // Both rows survive whole: neither has a per-turn call carrying output.
     expect(storeCalls.reduce((s, c) => s + c.usage.inputTokens, 0)).toBe((272139 - 267005) + 6272)
-    expect(totalOutput(projects)).toBe(3085)
+    expect(totalOutput(projects)).toBe(400 + 3085)
   })
 })
 

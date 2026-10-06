@@ -1,9 +1,10 @@
+import { existsSync } from "fs";
 import { readdir, stat } from "fs/promises";
 import { basename, join } from "path";
 import { homedir } from "os";
 
 import { calculateCost, getShortModelName } from "../models.js";
-import { openDatabase } from "../sqlite.js";
+import { isSqliteBusyError, openDatabase } from "../sqlite.js";
 import type {
   ProbeRoot,
   Provider,
@@ -215,8 +216,11 @@ function getMetricsFromStep(
 function getDevinMetricsFromMetadata(
   metadata: DevinMetadata,
 ): Metrics<DevinMetricsExtra> {
+  const input = metadata.metrics?.input_tokens;
   return {
-    prompt_tokens: metadata.metrics?.input_tokens,
+    // Devin's own metrics count input_tokens without the cache reads, unlike
+    // the OpenAI-style prompt_tokens getUsage carves them out of.
+    prompt_tokens: input == null ? input : input + safeNumber(metadata.metrics?.cache_read_tokens),
     completion_tokens: metadata.metrics?.output_tokens,
     cached_tokens: metadata.metrics?.cache_read_tokens,
     extra: {
@@ -356,7 +360,7 @@ function getDevinDisplayModelName(
 }
 
 function getModels(
-  transcript: DevinAgentTrajectory,
+  agentModel: string | undefined,
   step: DevinStep,
   session: DevinSessionMetadata | null,
 ): { pricingModel: string; displayModel: string } {
@@ -366,7 +370,7 @@ function getModels(
   );
   const modelName = firstPresentString(
     step.model_name,
-    transcript.agent?.model_name,
+    agentModel,
     session?.model,
   ) ?? DEFAULT_MODEL_NAME;
 
@@ -440,6 +444,34 @@ function loadFirstPrompts(db: ReturnType<typeof openDatabase>): Map<string, stri
   return prompts;
 }
 
+type SessionRow = {
+  id: string;
+  working_directory: string;
+  model: string;
+  title: string | null;
+  created_at: number;
+  last_activity_at: number;
+  hidden: number;
+};
+
+const SESSION_COLUMNS =
+  "id, working_directory, model, title, created_at, last_activity_at, hidden";
+
+function toSessionMetadata(
+  row: SessionRow,
+  firstPrompt: string | undefined,
+): DevinSessionMetadata {
+  return {
+    id: row.id,
+    workingDirectory: row.working_directory,
+    model: row.model,
+    title: row.title?.trim() || firstPrompt,
+    createdAt: parseNumericTimestamp(row.created_at),
+    lastActivityAt: parseNumericTimestamp(row.last_activity_at),
+    hidden: !!row.hidden,
+  };
+}
+
 function loadSessionMetadata(
   dbPath: string,
 ): Map<string, DevinSessionMetadata> {
@@ -447,30 +479,11 @@ function loadSessionMetadata(
   let db: ReturnType<typeof openDatabase> | null = null;
   try {
     db = openDatabase(dbPath);
-    const rows = db.query<{
-      id: string;
-      working_directory: string;
-      model: string;
-      title: string | null;
-      created_at: number;
-      last_activity_at: number;
-      hidden: number;
-    }>(
-      `SELECT id, working_directory, model, title, created_at, last_activity_at, hidden
-       FROM sessions`,
-    );
+    const rows = db.query<SessionRow>(`SELECT ${SESSION_COLUMNS} FROM sessions`);
     const firstPrompts = loadFirstPrompts(db);
     for (const row of rows) {
       if (!row.id) continue;
-      sessions.set(row.id, {
-        id: row.id,
-        workingDirectory: row.working_directory,
-        model: row.model,
-        title: row.title?.trim() || firstPrompts.get(row.id),
-        createdAt: parseNumericTimestamp(row.created_at),
-        lastActivityAt: parseNumericTimestamp(row.last_activity_at),
-        hidden: !!row.hidden,
-      });
+      sessions.set(row.id, toSessionMetadata(row, firstPrompts.get(row.id)));
     }
   } catch {
     return sessions;
@@ -515,42 +528,234 @@ class DevinSessionParser implements SessionParser {
       if (this.seenKeys.has(deduplicationKey)) continue;
       this.seenKeys.add(deduplicationKey);
 
-      const { pricingModel, displayModel } = getModels(transcript, step, session);
-      const tools = getToolNames(step);
-      const userMessage =
-        getFirstUserMessageBeforeStep(transcript.steps, index) ??
-        session?.title ??
-        "";
-
-      yield {
-        provider: DEVIN_PROVIDER_NAME,
-        model: displayModel,
-        inputTokens: usage.inputTokens,
-        outputTokens: usage.outputTokens,
-        cacheCreationInputTokens: usage.cacheCreationInputTokens,
-        cacheReadInputTokens: usage.cacheReadInputTokens,
-        cachedInputTokens: usage.cacheReadInputTokens,
-        reasoningTokens: 0,
-        webSearchRequests: 0,
-        costUSD: calculateCost(
-          pricingModel,
-          usage.inputTokens,
-          usage.outputTokens,
-          usage.cacheCreationInputTokens,
-          usage.cacheReadInputTokens,
-          0,
-        ),
-        tools,
-        bashCommands: [],
+      yield toParsedCall({
+        step,
+        usage,
+        agentModel: transcript.agent?.model_name,
+        session,
         timestamp,
-        speed: "standard",
         deduplicationKey,
-        userMessage,
+        userMessage:
+          getFirstUserMessageBeforeStep(transcript.steps, index) ??
+          session?.title ??
+          "",
         sessionId,
         project,
         projectPath,
-      };
+      });
     }
+  }
+}
+
+function toParsedCall(call: {
+  step: DevinStep;
+  usage: DevinUsage;
+  agentModel: string | undefined;
+  session: DevinSessionMetadata | null;
+  timestamp: string;
+  deduplicationKey: string;
+  userMessage: string;
+  sessionId: string;
+  project: string;
+  projectPath: string | undefined;
+}): ParsedProviderCall {
+  const { step, usage, session } = call;
+  const { pricingModel, displayModel } = getModels(call.agentModel, step, session);
+  return {
+    provider: DEVIN_PROVIDER_NAME,
+    model: displayModel,
+    inputTokens: usage.inputTokens,
+    outputTokens: usage.outputTokens,
+    cacheCreationInputTokens: usage.cacheCreationInputTokens,
+    cacheReadInputTokens: usage.cacheReadInputTokens,
+    cachedInputTokens: usage.cacheReadInputTokens,
+    reasoningTokens: 0,
+    webSearchRequests: 0,
+    costUSD: calculateCost(
+      pricingModel,
+      usage.inputTokens,
+      usage.outputTokens,
+      usage.cacheCreationInputTokens,
+      usage.cacheReadInputTokens,
+      0,
+    ),
+    tools: getToolNames(step),
+    bashCommands: [],
+    timestamp: call.timestamp,
+    speed: "standard",
+    deduplicationKey: call.deduplicationKey,
+    userMessage: call.userMessage,
+    sessionId: call.sessionId,
+    project: call.project,
+    projectPath: call.projectPath,
+  };
+}
+
+type MessageNodeRow = {
+  node_id: number;
+  parent_node_id: number | null;
+  role: string | null;
+  metadata: string | null;
+  tool_names: string | null;
+  content: unknown;
+};
+
+// Keyset batches keep one batch of rows in memory, not a whole session, and
+// the SQL pulls only the fields used so tool output never reaches JS.
+const MESSAGE_BATCH_ROWS = 2000;
+
+// Every sibling retry of a request is stored as its own node carrying the same
+// request_id and metrics, so the request id is the dedup key. Branches off the
+// main chain are real distinct requests and count too.
+class DevinDbSessionParser implements SessionParser {
+  constructor(
+    private source: SessionSource,
+    private seenKeys: Set<string>,
+  ) {}
+
+  async *parse(): AsyncGenerator<ParsedProviderCall> {
+    const idx = this.source.path.lastIndexOf(":");
+    const dbPath = this.source.path.slice(0, idx);
+    const sessionId = this.source.path.slice(idx + 1);
+
+    let db: ReturnType<typeof openDatabase>;
+    try {
+      db = openDatabase(dbPath);
+    } catch (err) {
+      if (isSqliteBusyError(err)) throw err;
+      return;
+    }
+
+    const calls: ParsedProviderCall[] = [];
+    try {
+      const row = db.query<SessionRow>(
+        `SELECT ${SESSION_COLUMNS} FROM sessions WHERE id = ?`,
+        [sessionId],
+      )[0];
+      if (!row || row.hidden) return;
+      const firstPrompt = db.query<{ content: string }>(
+        `SELECT content FROM prompt_history WHERE session_id = ? ORDER BY id LIMIT 1`,
+        [sessionId],
+      )[0]?.content?.trim();
+      const session = toSessionMetadata(row, firstPrompt);
+      const project = getProjectName(this.source, session);
+
+      // Parents always precede children, so one forward pass hands each node
+      // the prompt of its nearest user ancestor.
+      const promptByNode = new Map<number, string | undefined>();
+      let lastNodeId = -1;
+      for (;;) {
+        const rows = db.query<MessageNodeRow>(
+          `SELECT node_id, parent_node_id,
+                  json_extract(chat_message, '$.role') AS role,
+                  json_extract(chat_message, '$.metadata') AS metadata,
+                  (SELECT json_group_array(json_extract(value, '$.name'))
+                     FROM json_each(chat_message, '$.tool_calls')) AS tool_names,
+                  CASE WHEN json_extract(chat_message, '$.role') = 'user'
+                        AND json_type(chat_message, '$.content') = 'text'
+                       THEN json_extract(chat_message, '$.content') END AS content
+           FROM message_nodes
+           WHERE session_id = ? AND node_id > ?
+           ORDER BY node_id
+           LIMIT ?`,
+          [sessionId, lastNodeId, MESSAGE_BATCH_ROWS],
+        );
+        for (const node of rows) {
+          lastNodeId = Number(node.node_id);
+          const metadata = parseJson<DevinMetadata>(node.metadata);
+          const inherited =
+            node.parent_node_id == null
+              ? undefined
+              : promptByNode.get(Number(node.parent_node_id));
+          const ownPrompt =
+            node.role === "user" &&
+            metadata?.is_user_input === true &&
+            typeof node.content === "string"
+              ? node.content.trim() || undefined
+              : undefined;
+          promptByNode.set(lastNodeId, ownPrompt ?? inherited);
+
+          if (node.role !== "assistant" || !metadata) continue;
+          const step: DevinStep = {
+            step_id: lastNodeId,
+            source: "agent",
+            message: "",
+            metadata,
+            tool_calls: (parseJson<Array<string | null>>(node.tool_names) ?? [])
+              .filter((name): name is string => !!name)
+              .map((name) => ({ tool_call_id: "", function_name: name, arguments: null })),
+          };
+          const usage = getUsage(step);
+          if (!usage) continue;
+
+          const deduplicationKey = `devin:${sessionId}:${metadata.request_id ?? `node-${lastNodeId}`}`;
+          if (this.seenKeys.has(deduplicationKey)) continue;
+          this.seenKeys.add(deduplicationKey);
+
+          calls.push(
+            toParsedCall({
+              step,
+              usage,
+              agentModel: undefined,
+              session,
+              timestamp: getTimestamp(step, session) ?? "",
+              deduplicationKey,
+              userMessage: ownPrompt ?? inherited ?? session.title ?? "",
+              sessionId,
+              project,
+              projectPath: getProjectPath(session),
+            }),
+          );
+        }
+        if (rows.length < MESSAGE_BATCH_ROWS) break;
+      }
+    } finally {
+      db.close();
+    }
+    yield* calls;
+  }
+}
+
+function parseJson<T>(raw: string | null): T | null {
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return null;
+  }
+}
+
+// null when the database is missing or predates message_nodes, so the
+// caller falls back to transcripts. BUSY propagates so the refresh retries
+// instead of reading a locked store as empty.
+function discoverDbSessions(dbPath: string): SessionSource[] | null {
+  if (!existsSync(dbPath)) return null;
+  let db: ReturnType<typeof openDatabase>;
+  try {
+    db = openDatabase(dbPath);
+  } catch (err) {
+    if (isSqliteBusyError(err)) throw err;
+    return null;
+  }
+  try {
+    const rows = db.query<{ id: string; working_directory: string; title: string | null }>(
+      `SELECT id, working_directory, title FROM sessions
+       WHERE hidden = 0 AND id IN (SELECT DISTINCT session_id FROM message_nodes)
+       ORDER BY id`,
+    );
+    return rows.map((row) => ({
+      path: `${dbPath}:${row.id}`,
+      project:
+        (row.working_directory && projectNameFromPath(row.working_directory)) ||
+        row.title?.trim() ||
+        DEVIN_PROVIDER_NAME,
+      provider: DEVIN_PROVIDER_NAME,
+    }));
+  } catch (err) {
+    if (isSqliteBusyError(err)) throw err;
+    return null;
+  } finally {
+    db.close();
   }
 }
 
@@ -599,6 +804,11 @@ export function createDevinProvider(cliDir?: string): Provider {
     },
 
     async discoverSessions(): Promise<SessionSource[]> {
+      // Transcripts are export-only snapshots of what sessions.db holds, so
+      // they are read only when the database cannot be.
+      const dbSources = discoverDbSessions(sessionsDbPath);
+      if (dbSources) return dbSources;
+
       const entries = await readdir(transcriptsDir).catch(() => []);
       const metadata = getSessionMetadata();
       const sources: SessionSource[] = [];
@@ -636,7 +846,9 @@ export function createDevinProvider(cliDir?: string): Provider {
       source: SessionSource,
       seenKeys: Set<string>,
     ): SessionParser {
-      return new DevinSessionParser(source, seenKeys, getSessionMetadata());
+      return source.path.endsWith(".json")
+        ? new DevinSessionParser(source, seenKeys, getSessionMetadata())
+        : new DevinDbSessionParser(source, seenKeys);
     },
   };
 }

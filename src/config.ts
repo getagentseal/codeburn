@@ -80,6 +80,9 @@ export type CodeburnConfig = {
   // seals the gateway slice, so flipping this re-includes sealed days without
   // re-fetching anything.
   includeGatewayInTotals?: boolean
+  // false stops the automatic download of the Cursor account's own usage
+  // export (src/cursor-sync.ts). `codeburn import cursor --sync` still works.
+  cursorSync?: boolean
 }
 
 // Read synchronously by the aggregator on every period build, so it is set

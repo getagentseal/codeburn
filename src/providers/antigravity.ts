@@ -50,7 +50,7 @@ function conversationRoots(): readonly AntigravityConversationRoot[] {
     },
   ]
 }
-const CACHE_VERSION = 6
+const CACHE_VERSION = 8
 export const ANTIGRAVITY_CACHE_VERSION = CACHE_VERSION
 export const ANTIGRAVITY_LEGACY_CACHE_FILE = 'antigravity-results.json'
 export function antigravityCacheFileName(version = CACHE_VERSION): string {
@@ -77,6 +77,8 @@ type UsageEntry = {
   outputTokens: string
   thinkingOutputTokens?: string
   responseOutputTokens?: string
+  cacheReadTokens?: string
+  cacheWriteTokens?: string
   apiProvider: string
   responseId?: string
 }
@@ -190,6 +192,7 @@ const cachedServers = new Map<string, Cached<ServerInfo | null>>()
 const cachedModelMaps = new Map<string, Cached<ModelMap>>()
 type AntigravityCacheState = { cache: AntigravityCache; dirty: boolean }
 const cacheStates = new Map<string, AntigravityCacheState>()
+const previousVersionCascades = new Map<string, Record<string, CachedCascade>>()
 
 // Dropped by the resident RSS guard. A dirty state holds cascades not yet on
 // disk, so it stays resident until its own flush publishes it. The server and
@@ -198,6 +201,7 @@ const cacheStates = new Map<string, AntigravityCacheState>()
 export function clearAntigravityCacheStates(): void {
   cachedServers.clear()
   cachedModelMaps.clear()
+  previousVersionCascades.clear()
   for (const [dir, state] of cacheStates) {
     if (!state.dirty) cacheStates.delete(dir)
   }
@@ -416,6 +420,28 @@ async function loadCache(cacheDir: string): Promise<AntigravityCacheState> {
   }
   cacheStates.set(cacheDir, state)
   return state
+}
+
+// A cache-version bump drops every .pb cascade, and .pb files are readable
+// only through the RPC, so with Antigravity closed they would vanish until it
+// is next opened. Serve the previous version's entry meanwhile; mtimeMs -1
+// makes the next run with the server up re-fetch it.
+async function adoptPreviousVersionCascade(cacheDir: string, state: AntigravityCacheState, cascadeId: string): Promise<CachedCascade | undefined> {
+  let cascades = previousVersionCascades.get(cacheDir)
+  if (!cascades) {
+    cascades = {}
+    try {
+      const cache = JSON.parse(await readFile(join(cacheDir, antigravityCacheFileName(CACHE_VERSION - 1)), 'utf-8')) as AntigravityCache
+      if (cache.version === CACHE_VERSION - 1 && cache.cascades && typeof cache.cascades === 'object') cascades = cache.cascades
+    } catch { /* no previous cache */ }
+    previousVersionCascades.set(cacheDir, cascades)
+  }
+  const previous = cascades[cascadeId]
+  if (!previous?.calls?.length) return undefined
+  const adopted = { mtimeMs: -1, sizeBytes: previous.sizeBytes, calls: previous.calls }
+  state.cache.cascades[cascadeId] = adopted
+  state.dirty = true
+  return adopted
 }
 
 async function flushCache(liveCascadeIds?: Set<string>, cacheDir = currentCacheDir()): Promise<void> {
@@ -782,15 +808,32 @@ function antigravitySqliteMetadataAttributes(chatFields: readonly ProtoField[]):
   return attributes
 }
 
-function antigravitySqliteModel(chatFields: readonly ProtoField[]): string {
+// The standalone app (2.19) writes only the placeholder enum and a generic
+// "gemini-pro-default" into gen_metadata, no display name. These are the ids
+// its own GetAvailableModels catalog resolved those placeholders to on 6 Oct
+// 2026 (the same ids the RPC path derives). A later app build can repoint a
+// placeholder, so calls resolved here are flagged as estimated.
+const PLACEHOLDER_MODELS: Record<string, string> = {
+  MODEL_PLACEHOLDER_M16: 'gemini-3.1-pro-high',
+  MODEL_PLACEHOLDER_M37: 'gemini-3.1-pro-high',
+  MODEL_PLACEHOLDER_M36: 'gemini-3.1-pro-low',
+  MODEL_PLACEHOLDER_M84: 'gemini-3.5-flash-high',
+  MODEL_PLACEHOLDER_M18: 'gemini-3-flash',
+  MODEL_PLACEHOLDER_M35: 'claude-sonnet-4-6',
+  MODEL_PLACEHOLDER_M26: 'claude-opus-4-6-thinking',
+}
+
+function antigravitySqliteModel(chatFields: readonly ProtoField[]): { model: string; estimated: boolean } {
   const attributes = antigravitySqliteMetadataAttributes(chatFields)
   const displayName = protoFieldText(firstProtoField(chatFields, 21))
+  const placeholderModel = PLACEHOLDER_MODELS[attributes.get('model_enum') ?? '']
+  if (!displayName && placeholderModel) return { model: placeholderModel, estimated: true }
   const rawModel = protoFieldText(firstProtoField(chatFields, 19))
     ?? attributes.get('model_enum')
     ?? displayName
     ?? 'unknown'
 
-  return getCanonicalModelId(rawModel, displayName)
+  return { model: getCanonicalModelId(rawModel, displayName), estimated: false }
 }
 
 // Decode a proto field that carries a time into an ISO-8601 string. Antigravity
@@ -829,6 +872,56 @@ function antigravitySqliteCreatedAt(chatFields: readonly ProtoField[]): string {
 
 const SKILL_MD_PATTERN = /(?:^|[\\/])([^\\/]+)[\\/]SKILL\.md$/i
 
+const toolNameMap: Record<string, string> = {
+  invoke_subagent: 'Agent',
+  manage_task: 'TodoWrite',
+  search_web: 'WebSearch',
+  read_url_content: 'WebFetch',
+}
+
+/**
+ * Normalizes Antigravity tool calls to the canonical Codeburn format (`mcp__<server>__<tool>`).
+ *
+ * Antigravity emits MCP tool calls in two distinct shapes:
+ * 1. Eager: `mcp_<server>_<tool>` (single underscore delimiter between prefix, server, and tool).
+ * 2. Lazy: `call_mcp_tool` with JSON arguments `{ ServerName: "...", ToolName: "..." }`.
+ *
+ * Both are normalized to `mcp__<server>__<tool>` so they match `extractMcpTools`,
+ * attribute properly to MCP inventory, and deduplicate cleanly in dashboards.
+ */
+export function normalizeAntigravityToolCall(toolName: string, args?: Record<string, unknown> | null): string {
+  if (!toolName) return ''
+
+  if (toolName === 'call_mcp_tool') {
+    const rawServer = args?.['ServerName'] ?? args?.['server_name'] ?? args?.['serverName'] ?? args?.['server'] ?? args?.['Server']
+    const server = typeof rawServer === 'string' ? rawServer.trim() : ''
+    const rawTool = args?.['ToolName'] ?? args?.['tool_name'] ?? args?.['toolName'] ?? args?.['tool'] ?? args?.['Tool']
+    const tool = typeof rawTool === 'string' ? rawTool.trim() : ''
+    if (server && tool) {
+      return `mcp__${server}__${tool}`
+    }
+    return 'call_mcp_tool'
+  }
+
+  if (toolName.startsWith('mcp__')) {
+    return toolName
+  }
+
+  if (toolName.startsWith('mcp_')) {
+    const rest = toolName.slice(4)
+    // ponytail: first-underscore split misattributes servers whose names contain '_'; upgrade: longest-prefix match against mcp_config.json server keys
+    const sep = rest.indexOf('_')
+    if (sep > 0 && sep < rest.length - 1) {
+      const server = rest.slice(0, sep)
+      const tool = rest.slice(sep + 1)
+      return `mcp__${server}__${tool}`
+    }
+    return toolName
+  }
+
+  return toolName
+}
+
 function extractAntigravityToolFromStep(metadataBytes: Uint8Array, turn: TurnTools): void {
   const fields = parseProtoFields(metadataBytes)
   for (const field of fields) {
@@ -848,13 +941,7 @@ function extractAntigravityToolFromStep(metadataBytes: Uint8Array, turn: TurnToo
     }
 
     if (toolName === 'call_mcp_tool') {
-      const server = typeof args?.['ServerName'] === 'string' ? args['ServerName'].trim() : ''
-      const tool = typeof args?.['ToolName'] === 'string' ? args['ToolName'].trim() : ''
-      if (server && tool) {
-        turn.tools.push(`mcp__${server}__${tool}`)
-      } else {
-        turn.tools.push('call_mcp_tool')
-      }
+      turn.tools.push(normalizeAntigravityToolCall(toolName, args))
       continue
     }
 
@@ -881,7 +968,7 @@ function extractAntigravityToolFromStep(metadataBytes: Uint8Array, turn: TurnToo
     }
 
     if (toolName === 'invoke_subagent') {
-      turn.tools.push(toolName)
+      turn.tools.push(toolNameMap[toolName])
       if (Array.isArray(args?.['Subagents'])) {
         for (const sa of args['Subagents']) {
           if (sa && typeof sa === 'object') {
@@ -898,7 +985,7 @@ function extractAntigravityToolFromStep(metadataBytes: Uint8Array, turn: TurnToo
       continue
     }
 
-    turn.tools.push(toolName)
+    turn.tools.push(toolNameMap[toolName] ?? normalizeAntigravityToolCall(toolName, args))
   }
 }
 
@@ -919,16 +1006,21 @@ function buildCallFromSqliteGenMetadataRow(
   row: AntigravityGenMetadataRow,
   rootFields: readonly ProtoField[],
   turnTools?: TurnTools,
+  firstStepTimestamp = '',
 ): ParsedProviderCall | null {
   const chatFields = parseProtoFields(protoFieldBytes(firstProtoField(rootFields, 1)) ?? new Uint8Array())
   const usageFields = parseProtoFields(protoFieldBytes(firstProtoField(chatFields, 4)) ?? new Uint8Array())
   if (usageFields.length === 0) return null
 
+  // exa.codeium_common_pb.ModelUsageStats: 1 model enum, 2 input (uncached),
+  // 3 output (thinking + response), 4 cache write, 5 cache read,
+  // 9 thinking output, 10 response output, 11 response id.
   const inputTokens = protoFieldPositiveInteger(firstProtoField(usageFields, 2))
-    || protoFieldPositiveInteger(firstProtoField(usageFields, 1))
   const totalOutputTokens = protoFieldPositiveInteger(firstProtoField(usageFields, 3))
-  let responseTokens = protoFieldPositiveInteger(firstProtoField(usageFields, 9))
-  let thinkingTokens = protoFieldPositiveInteger(firstProtoField(usageFields, 10))
+  const cacheWriteTokens = protoFieldPositiveInteger(firstProtoField(usageFields, 4))
+  const cacheReadTokens = protoFieldPositiveInteger(firstProtoField(usageFields, 5))
+  let thinkingTokens = protoFieldPositiveInteger(firstProtoField(usageFields, 9))
+  let responseTokens = protoFieldPositiveInteger(firstProtoField(usageFields, 10))
 
   if (responseTokens === 0 && thinkingTokens === 0) {
     responseTokens = totalOutputTokens
@@ -940,26 +1032,27 @@ function buildCallFromSqliteGenMetadataRow(
   if (inputTokens === 0 && totalOutputTokens === 0) return null
 
   const responseId = antigravitySqliteResponseId(usageFields, String(row.idx))
-  const model = antigravitySqliteModel(chatFields)
+  const { model, estimated } = antigravitySqliteModel(chatFields)
   const pricingModel = normalizePricingModel(model)
-  const costUSD = calculateCost(pricingModel, inputTokens, responseTokens + thinkingTokens, 0, 0, 0)
+  const costUSD = calculateCost(pricingModel, inputTokens, responseTokens + thinkingTokens, cacheWriteTokens, cacheReadTokens, 0, 'standard', 0, 'antigravity')
 
   return {
     provider: 'antigravity',
     model,
     inputTokens,
     outputTokens: responseTokens,
-    cacheCreationInputTokens: 0,
-    cacheReadInputTokens: 0,
+    cacheCreationInputTokens: cacheWriteTokens,
+    cacheReadInputTokens: cacheReadTokens,
     cachedInputTokens: 0,
     reasoningTokens: thinkingTokens,
     webSearchRequests: 0,
     costUSD,
+    ...(estimated ? { costIsEstimated: true } : {}),
     tools: turnTools?.tools ?? [],
     bashCommands: turnTools?.bashCommands ?? [],
     ...(turnTools?.skills && turnTools.skills.length > 0 ? { skills: turnTools.skills } : {}),
     ...(turnTools?.subagentTypes && turnTools.subagentTypes.length > 0 ? { subagentTypes: turnTools.subagentTypes } : {}),
-    timestamp: antigravitySqliteCreatedAt(chatFields),
+    timestamp: antigravitySqliteCreatedAt(chatFields) || firstStepTimestamp,
     speed: 'standard',
     deduplicationKey: `antigravity:${cascadeId}:${responseId}`,
     userMessage: '',
@@ -995,7 +1088,15 @@ function buildCallsFromSqliteGenMetadata(
       }
     }
 
-    const call = buildCallFromSqliteGenMetadataRow(cascadeId, row, rootFields, turnTools)
+    // The standalone app leaves out ChatStartMetadata.created_at; the
+    // generation's first step carries the same time (steps.metadata #1, a
+    // Timestamp), which matches created_at to the second where both exist.
+    const firstStep = stepIndices.length > 0 ? stepMap.get(stepIndices[0]!) : undefined
+    const firstStepTimestamp = firstStep?.metadata
+      ? protoTimestampToIso(firstProtoField(parseProtoFields(genMetadataDataBytes(firstStep.metadata)), 1))
+      : ''
+
+    const call = buildCallFromSqliteGenMetadataRow(cascadeId, row, rootFields, turnTools, firstStepTimestamp)
     if (!call) continue
     if (seenResponseIds.has(call.deduplicationKey)) continue
     seenResponseIds.add(call.deduplicationKey)
@@ -1100,6 +1201,8 @@ function buildCallsFromGeneratorMetadata(
     const outputTokens = parseInt(usage.outputTokens ?? '0', 10)
     const thinkingTokens = parseInt(usage.thinkingOutputTokens ?? '0', 10)
     const responseTokens = parseInt(usage.responseOutputTokens ?? '0', 10)
+    const cacheReadTokens = parseInt(usage.cacheReadTokens ?? '0', 10)
+    const cacheWriteTokens = parseInt(usage.cacheWriteTokens ?? '0', 10)
 
     if (inputTokens === 0 && outputTokens === 0) continue
 
@@ -1109,15 +1212,15 @@ function buildCallsFromGeneratorMetadata(
     const model = dropPlaceholderModelId(modelMap[usage.model] ?? usage.model)
     const pricingModel = normalizePricingModel(model)
     const timestamp = entry.chatModel?.chatStartMetadata?.createdAt ?? ''
-    const costUSD = calculateCost(pricingModel, inputTokens, responseTokens + thinkingTokens, 0, 0, 0)
+    const costUSD = calculateCost(pricingModel, inputTokens, responseTokens + thinkingTokens, cacheWriteTokens, cacheReadTokens, 0, 'standard', 0, 'antigravity')
 
     results.push({
       provider: 'antigravity',
       model,
       inputTokens,
       outputTokens: responseTokens,
-      cacheCreationInputTokens: 0,
-      cacheReadInputTokens: 0,
+      cacheCreationInputTokens: cacheWriteTokens,
+      cacheReadInputTokens: cacheReadTokens,
       cachedInputTokens: 0,
       reasoningTokens: thinkingTokens,
       webSearchRequests: 0,
@@ -1364,7 +1467,14 @@ async function parseStatusLineCalls(source: SessionSource, seenKeys: Set<string>
 
 export function shouldReparseAntigravitySource(path: string, cachedTurnCount: number): boolean {
   if (cachedTurnCount === 0) return true
+  if (cacheStates.get(currentCacheDir())?.cache.cascades[antigravityCascadeIdFromPath(path)]?.mtimeMs === -1) return true
   return isAntigravityStatusLineEventsPath(path)
+}
+
+// Loads the results cache before the session cache decides which sources to
+// reparse, so a cascade served from the previous cache version is retried.
+export async function preloadAntigravityCache(cacheDir: string): Promise<void> {
+  await loadCache(resolve(cacheDir))
 }
 
 async function findCascadeSource(cascadeId: string): Promise<SessionSource | null> {
@@ -1560,8 +1670,11 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
 
       const server = await detectServer(antigravityAppDataDirFromSourcePath(source.path))
       if (!server) {
-        if (cached) {
-          for (const call of cached.calls) {
+        const fallback = cached ?? (source.path.toLowerCase().endsWith('.pb')
+          ? await adoptPreviousVersionCascade(currentCacheDir(), state, cascadeId)
+          : undefined)
+        if (fallback) {
+          for (const call of fallback.calls) {
             applyAntigravityProject(call, source, projectPath)
             if (seenKeys.has(call.deduplicationKey)) continue
             seenKeys.add(call.deduplicationKey)
@@ -1642,7 +1755,7 @@ export function createAntigravityProvider(): Provider {
     },
 
     toolDisplayName(rawTool: string): string {
-      return rawTool
+      return normalizeAntigravityToolCall(rawTool)
     },
 
     async probeRoots(): Promise<ProbeRoot[]> {

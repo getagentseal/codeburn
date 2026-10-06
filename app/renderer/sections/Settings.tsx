@@ -3,6 +3,7 @@ import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { Hint } from '../components/Hint'
 import { CliErrorText, cliErrorDisplay } from '../components/CliErrorPanel'
 import { ConnectAffordance } from '../components/ConnectAffordance'
+import { cursorSyncLine } from '../components/CursorSyncLine'
 import { Dropdown } from '../components/Dropdown'
 import { Panel } from '../components/Panel'
 import { ProviderLogo } from '../components/ProviderLogo'
@@ -28,7 +29,7 @@ import { ToastHost } from '../components/ToastHost'
 import { rateLimitedNote } from './Plans'
 import { SharingPane } from './SettingsSharing'
 import { CapacityDockPane, MenuBarPane } from './SettingsTray'
-import type { ActionResult, AliasRow, ClaudeConfigSelector, CompanionStatus, CliError, CombinedUsage, DeviceScanResult, Identity, JsonPlanSummary, MenubarPayload, Period, PlanId, PlanProvider, PriceOverrideList, PriceOverrideRow, PriceRates, ProjectFilter, ProjectRow, ProjectsReport, ProviderName, QuotaProvider, Scope, ShareStatus, StatusJson, TelemetryStatus } from '../lib/types'
+import type { ActionResult, AliasRow, ClaudeConfigSelector, CompanionStatus, CliError, CombinedUsage, CursorSyncStatus, DeviceScanResult, Identity, JsonPlanSummary, MenubarPayload, Period, PlanId, PlanProvider, PriceOverrideList, PriceOverrideRow, PriceRates, ProjectFilter, ProjectRow, ProjectsReport, ProviderName, QuotaProvider, Scope, ShareStatus, StatusJson, TelemetryStatus } from '../lib/types'
 import { Icon } from '../components/icons'
 
 export type SettingsPane = 'general' | 'providers' | 'projects' | 'aliases' | 'pricing' | 'plans' | 'devices' | 'export' | 'privacy' | 'sharing' | 'menubar'
@@ -304,7 +305,7 @@ function ProvidersPane({ refreshToken }: { refreshToken: number }) {
   const providers = detectedProviders(overview.data?.current)
   return <section className="set-p on">
     <div><h3 className="set-h">{t('settings.providers.heading')}</h3><p className="set-sub">{t('settings.providers.subtitle')}</p></div>
-    {overview.error ? <SettingsErrorText error={overview.error} /> : !overview.data ? <p className="set-cap">{t('settings.providers.loading')}</p> : providers.length === 0 ? <p className="set-cap">{t('settings.providers.empty')}</p> : providers.map(entry => <div className="card" key={entry.id}><div className="set-prov-head"><ProviderLogo provider={entry.id} /><span className="set-prov-name">{entry.label}</span><span className="set-status"><span className={entry.idle ? 'set-dot' : 'set-dot ok'} />{entry.idle ? t('settings.providers.idle') : t('settings.providers.detected', { cost: formatUsd(entry.cost) })}{entry.excludedFromTotal ? <span className="set-cap" title={t('settings.providers.notInTotalHint')}> · {t('settings.providers.notInTotal')}</span> : null}</span></div></div>)}
+    {overview.error ? <SettingsErrorText error={overview.error} /> : !overview.data ? <p className="set-cap">{t('settings.providers.loading')}</p> : providers.length === 0 ? <p className="set-cap">{t('settings.providers.empty')}</p> : providers.map(entry => <div className="card" key={entry.id}><div className="set-prov-head"><ProviderLogo provider={entry.id} /><span className="set-prov-name">{entry.label}</span><span className="set-status"><span className={entry.idle ? 'set-dot' : 'set-dot ok'} />{entry.idle ? t('settings.providers.idle') : t('settings.providers.detected', { cost: formatUsd(entry.cost) })}{entry.excludedFromTotal ? <span className="set-cap" title={t('settings.providers.notInTotalHint')}> · {t('settings.providers.notInTotal')}</span> : null}</span></div>{entry.id === 'cursor' && <CursorSyncRow status={overview.data?.cursorSync} />}</div>)}
   </section>
 }
 
@@ -712,6 +713,28 @@ function SettingRow({ title, description, control }: { title: string; descriptio
 function RowButton({ labelId, label, onClick }: { labelId: string; label: string; onClick: () => void }) {
   const id = `${labelId}action`
   return <button type="button" className="btnp" id={id} aria-labelledby={`${id} ${labelId}`} onClick={onClick}>{label}</button>
+}
+
+/** The config `cursorSync` switch, with the sync's last outcome as its description. */
+function CursorSyncRow({ status }: { status?: CursorSyncStatus }) {
+  const [enabled, setEnabled] = useState<boolean | null>(null)
+  useEffect(() => {
+    codeburn.getCursorSync?.().then(setEnabled).catch(() => {})
+  }, [])
+  if (enabled === null) return null
+  const toggle = () => {
+    const next = !enabled
+    codeburn.setCursorSync?.(next).then(() => setEnabled(next)).catch(err => showToast(normalizeCliError(err).message, 'error'))
+  }
+  // The config says on, but the CLI reports off: CODEBURN_CURSOR_SYNC=0 wins.
+  const envOff = enabled && status?.enabled === false
+  const on = enabled && !envOff
+  const line = on && status ? cursorSyncLine(status) : null
+  return <div className="about-sec"><SettingRow
+    title={t('settings.providers.cursorSync.title')}
+    description={envOff ? t('settings.providers.cursorSync.envOff') : line ? <span className={line.warn ? 'cursor-sync-line warn' : 'cursor-sync-line'}>{line.text}</span> : t('settings.providers.cursorSync.detail')}
+    control={labelId => <button type="button" role="switch" aria-checked={on} aria-labelledby={labelId} className={on ? 'switch on' : 'switch'} disabled={envOff} onClick={toggle}><span className="switch-knob" /></button>}
+  /></div>
 }
 
 /** The anonymous-telemetry consent toggle, mirroring the onboarding decision. */

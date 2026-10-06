@@ -42,6 +42,7 @@ import type {
 import type { OverviewHeadlineSnapshot } from '../lib/overviewSnapshot'
 import { formatCombinedSessionCount, formatSessionCount, sessionCountIsExact, combinedSessionCountHelp, sessionCountHelp } from '../lib/session-count-label'
 import { Icon } from '../components/icons'
+import { CursorSyncLine } from '../components/CursorSyncLine'
 import { localeTag, t } from '../i18n'
 
 export { localDateKey } from '../lib/period'
@@ -1195,6 +1196,7 @@ export function OverviewContent({
                   appear to collapse and recover; snap to the revalidated total. */}
               <CountUp value={heroCost} tokens={heroTokens} animateKey={animateKey} animate={!suppressHeroReplay} />
               <div className="ov-hero-sub" title={heroSessionHelp}>{formatCount(heroCalls, 'call')} · {heroSessionLabel}</div>
+              {(provider === 'cursor' || provider === 'cursor-agent') && <CursorSyncLine status={data.cursorSync} />}
               {combined
                 ? <CombinedDevices usage={combined} />
                 : (

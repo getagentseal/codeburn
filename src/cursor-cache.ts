@@ -1,5 +1,5 @@
 import { readFile, writeFile, mkdir, rename, stat, unlink } from 'fs/promises'
-import { join } from 'path'
+import { join, resolve } from 'path'
 import { randomBytes } from 'crypto'
 
 import { getCodeburnCacheDir, readExistingTextFile } from './cache-dir.js'
@@ -19,7 +19,9 @@ import type { ParsedProviderCall } from './providers/types.js'
 // (cursor:composer-input:<id>) with per-conversation source selection, the
 // agent stream regained tool/system context and stream-only sessions, and
 // tool names are canonicalized. v5 results mix crediting regimes.
-export const CURSOR_CACHE_VERSION = 6
+// Version 7: a redirected data root can select a different database whose
+// size and timestamps happen to match. Cache identity includes its path.
+export const CURSOR_CACHE_VERSION = 7
 export const CURSOR_LEGACY_CACHE_FILE = 'cursor-results.json'
 export function cursorCacheFileName(version = CURSOR_CACHE_VERSION): string {
   return `cursor-results.v${version}.json`
@@ -27,6 +29,7 @@ export function cursorCacheFileName(version = CURSOR_CACHE_VERSION): string {
 
 type ResultCache = {
   version?: number
+  dbPath: string
   dbMtimeMs: number
   dbSizeBytes: number
   lookbackFloor: string
@@ -41,9 +44,10 @@ function getLegacyCachePath(): string {
   return join(getCodeburnCacheDir(), CURSOR_LEGACY_CACHE_FILE)
 }
 
-function isCurrentHit(cache: ResultCache, fp: { mtimeMs: number; size: number }, requestedFloor: string): boolean {
+function isCurrentHit(cache: ResultCache, dbPath: string, fp: { mtimeMs: number; size: number }, requestedFloor: string): boolean {
   return (
     cache.version === CURSOR_CACHE_VERSION
+    && cache.dbPath === resolve(dbPath)
     && cache.dbMtimeMs === fp.mtimeMs
     && cache.dbSizeBytes === fp.size
     && typeof cache.lookbackFloor === 'string'
@@ -93,7 +97,7 @@ export async function readCachedResults(
     if (versioned.status === 'ok') {
       try {
         const cache = JSON.parse(versioned.text) as ResultCache
-        if (cache && typeof cache === 'object' && isCurrentHit(cache, fp, requestedFloor)) return cache.calls
+        if (cache && typeof cache === 'object' && isCurrentHit(cache, dbPath, fp, requestedFloor)) return cache.calls
       } catch {}
       return null
     }
@@ -102,7 +106,7 @@ export async function readCachedResults(
     // Versioned file is absent (ENOENT). Adopt the unsuffixed file only when its
     // version and fingerprint match — old binaries still own that path.
     const legacy = await readCacheFile(getLegacyCachePath())
-    if (legacy && isCurrentHit(legacy, fp, requestedFloor)) return legacy.calls
+    if (legacy && isCurrentHit(legacy, dbPath, fp, requestedFloor)) return legacy.calls
     return null
   } catch {
     return null
@@ -125,6 +129,7 @@ export async function writeCachedResults(
   await mkdir(dir, { recursive: true }).catch(() => {})
   const cache: ResultCache = {
     version: CURSOR_CACHE_VERSION,
+    dbPath: resolve(dbPath),
     dbMtimeMs: fp.mtimeMs,
     dbSizeBytes: fp.size,
     lookbackFloor,

@@ -34,7 +34,8 @@ const ZSTD_MAGIC = 0xfd2fb528
 // the caller skips the WHOLE file rather than counting the frames it got to.
 const MAX_FRAME_DECODED_BYTES = 64 * 1024 * 1024
 
-const SUPPORTED_SESSION_FORMAT_VERSIONS = new Set([0, 1, 2, 3])
+// v4 (dsh 0.2.0-rc.2) only lifts tool-result roles and adds metadata this parser ignores.
+const SUPPORTED_SESSION_FORMAT_VERSIONS = new Set([0, 1, 2, 3, 4])
 const SESSION_LOG_NAME = /^session(?:\.v(\d+))?\.jsonl(?:\.zstd)?$/u
 
 const MIN_REASONABLE_TIMESTAMP_MS = 1_000_000_000_000

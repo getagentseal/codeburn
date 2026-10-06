@@ -17,6 +17,7 @@ export const MENUBAR_QUOTA_PROVIDERS = [
   'Gemini',
   'Antigravity',
   'Copilot',
+  'Devin',
   'Z.ai',
   'ZCode',
   'Kimi Code',

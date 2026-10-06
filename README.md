@@ -156,7 +156,7 @@ That registers a local MCP server over stdio. Your agent can then answer "where 
 
 It reads the same files on disk that the CLI reads. The server answers from that local data and makes no network call of its own, and project names are pseudonymized unless the agent asks for them.
 
-## Works with 40 tools
+## Works with 41 tools
 
 CodeBurn detects the tools you already use. There is nothing to configure and no folder to point it at. If a tool is installed and has sessions on disk, it shows up. Each logo links to that tool's page.
 
@@ -198,11 +198,11 @@ CodeBurn detects the tools you already use. There is nothing to configure and no
 </p>
 
 <details>
-<summary><strong>All 40 tools</strong></summary>
+<summary><strong>All 41 tools</strong></summary>
 
 Each page lists where that tool keeps its data, the format it uses, and the quirks CodeBurn works around.
 
-[Antigravity](docs/providers/antigravity.md) &middot; [Claude Code](docs/providers/claude.md) &middot; [Cline](docs/providers/cline.md) &middot; [Cline CLI](docs/providers/cline-cli.md) &middot; [Codebuff](docs/providers/codebuff.md) &middot; [Codex](docs/providers/codex.md) &middot;
+[Amp](docs/providers/amp.md) &middot; [Antigravity](docs/providers/antigravity.md) &middot; [Claude Code](docs/providers/claude.md) &middot; [Cline](docs/providers/cline.md) &middot; [Cline CLI](docs/providers/cline-cli.md) &middot; [Codebuff](docs/providers/codebuff.md) &middot; [Codex](docs/providers/codex.md) &middot;
 [CodeWhale](docs/providers/codewhale.md) &middot; [Copilot](docs/providers/copilot.md) &middot; [Crush](docs/providers/crush.md) &middot; [Cursor](docs/providers/cursor.md) &middot; [Cursor Agent](docs/providers/cursor-agent.md) &middot; [DeepSeek Harness](docs/providers/dsh.md) &middot;
 [Devin](docs/providers/devin.md) &middot; [Droid](docs/providers/droid.md) &middot; [Forge](docs/providers/forge.md) &middot; [Gemini CLI](docs/providers/gemini.md) &middot; [Goose](docs/providers/goose.md) &middot; [Grok Bot](docs/providers/grokbot.md) &middot;
 [Grok Build](docs/providers/grok.md) &middot; [Hermes Agent](docs/providers/hermes.md) &middot; [IBM Bob](docs/providers/ibm-bob.md) &middot; [KiloCode](docs/providers/kilo-code.md) &middot; [Kimi](docs/providers/kimi.md) &middot; [Kimi Code](docs/providers/kimicode.md) &middot;
@@ -435,7 +435,7 @@ The daily numbers do not. CodeBurn keeps a durable daily history under `~/.cache
 <details>
 <summary><strong>What actually leaves my computer, and how can I check?</strong></summary>
 
-Model prices are fetched from LiteLLM and cached for 24 hours, so that call happens at most once a day. `codeburn quota` asks each provider you are signed in to how much of your plan is left, using the credential that tool already stores on your machine. If you set a non-USD currency, exchange rates come from Frankfurter, cached the same way. Commands that install something, such as `codeburn menubar`, reach GitHub releases, which is the point of them. Your prompts, your code, your file names and your project names are read on disk and never sent anywhere, and nothing else leaves unless you point CodeBurn at a destination yourself. It is not a proxy, so no traffic of yours passes through it. You can watch what does leave with a network monitor.
+Model prices are fetched from LiteLLM and cached for 24 hours, so that call happens at most once a day. `codeburn quota` asks each provider you are signed in to how much of your plan is left, using the credential that tool already stores on your machine. If you set a non-USD currency, exchange rates come from Frankfurter, cached the same way. If you use Cursor, CodeBurn downloads your own usage export from cursor.com with the Cursor app's login, at most about once an hour, so Cursor figures match your bill; nothing is uploaded, and `CODEBURN_CURSOR_SYNC=0` or `"cursorSync": false` in `~/.config/codeburn/config.json` turns it off. Commands that install something, such as `codeburn menubar`, reach GitHub releases, which is the point of them. Your prompts, your code, your file names and your project names are read on disk and never sent anywhere, and nothing else leaves unless you point CodeBurn at a destination yourself. It is not a proxy, so no traffic of yours passes through it. You can watch what does leave with a network monitor.
 
 </details>
 

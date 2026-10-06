@@ -62,7 +62,7 @@ struct LanguagePreferenceTests {
     func applyWritesAppleLanguages() {
         let domain = domain("apply")
         defer { TestDefaults.forget(domain) }
-        let scratch = UserDefaults(suiteName: domain)!
+        let scratch = TestDefaults.open(domain)
         LanguagePreference.apply(.chineseSimplified, defaults: scratch)
         #expect(read(domain) == .chineseSimplified)
         LanguagePreference.apply(.system, defaults: scratch)

@@ -19,6 +19,7 @@ import { fetchClinePassQuota } from './clinepass.js'
 import { fetchCodexQuota } from './codex.js'
 import { fetchCopilotQuota } from './copilot.js'
 import { fetchCursorQuota } from './cursor.js'
+import { fetchDevinQuota } from './devin.js'
 import { fetchGeminiQuota } from './gemini.js'
 import { fetchGrokQuota } from './grok.js'
 import { fetchGrokbotQuota, grokbotInstalled } from './grokbot.js'
@@ -88,6 +89,7 @@ const READERS: { id: ProviderName; name: string; read: ProviderReader }[] = [
   { id: 'grok', name: 'Grok', read: async signal => (await fetchGrokQuota({ signal })).quota },
   { id: 'grokbot', name: 'Grok Bot', read: async signal => (await fetchGrokbotQuota({ signal })).quota },
   { id: 'clinepass', name: 'ClinePass', read: async signal => (await fetchClinePassQuota({ signal })).quota },
+  { id: 'devin', name: 'Devin', read: async () => (await fetchDevinQuota()).quota },
 ]
 
 /** Grok Bot is an optional desktop app rather than a signed-in account. With

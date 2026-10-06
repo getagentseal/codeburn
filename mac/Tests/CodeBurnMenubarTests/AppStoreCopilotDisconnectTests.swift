@@ -145,11 +145,10 @@ struct AppStoreCopilotDisconnectTests {
 @MainActor
 private func withIsolatedCopilotStore(
     hasCredential: Bool,
+    testName: String = #function,
     _ body: @MainActor (AppStore, CopilotFetchStub, UserDefaults) async throws -> Void
 ) async throws {
-    let suiteName = "codeburn.copilot.disconnect.\(UUID().uuidString)"
-    let defaults = try #require(UserDefaults(suiteName: suiteName))
-    TestDefaults.forget(suiteName)
+    let (defaults, suiteName) = TestDefaults.make("codeburn.copilot.disconnect.\(testName)")
     defer { TestDefaults.forget(suiteName) }
 
     let fetch = CopilotFetchStub()

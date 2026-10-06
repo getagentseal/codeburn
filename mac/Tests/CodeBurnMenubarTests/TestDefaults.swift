@@ -11,6 +11,26 @@ import Foundation
 /// right after creating it -- so a full `swift test` run does not grow the
 /// file count under Preferences.
 enum TestDefaults {
+    /// A `UserDefaults` suite named `name`, paired with that name for
+    /// `forget(_:)`. `name` must be fixed, not a uuid: cfprefsd can still
+    /// write a cleared domain's plist back to disk after `forget(_:)`
+    /// deletes it, and a fixed name lands that write on the same file every
+    /// run instead of a new one. A shared helper, a loop, or a parameterized
+    /// test must fold something distinguishing -- the caller's `#function`,
+    /// an index, an argument -- into `name` so no two tests share one.
+    static func make(_ name: String) -> (UserDefaults, String) {
+        (open(name), name)
+    }
+
+    /// Opens a suite/domain name as `UserDefaults`, for call sites that
+    /// already have their own name instead of calling `make(_:)`. Forgets it
+    /// first, so a fixed name starts clean even after a run that got killed
+    /// before its own `forget(_:)` ran.
+    static func open(_ suiteName: String) -> UserDefaults {
+        forget(suiteName)
+        return UserDefaults(suiteName: suiteName)!
+    }
+
     static func forget(_ suiteName: String) {
         // A `UserDefaults` instance scoped to the suite -- not `.standard` --
         // so `synchronize()` below flushes *this* domain's own dirty state.

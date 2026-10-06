@@ -4,7 +4,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { ACCEPTS_KEY, refreshQuota, summaryFor, type Connection, type QuotaState } from '../lib/quota'
 import { QUOTA_CADENCES, subscribeSettings, writeSettings, type AppSettings } from '../lib/appSettings'
 import { homePath } from '../lib/platform'
-import { Field, Group, Note, Pane, Row, Select } from './controls'
+import { Field, Group, Note, Pane, Row, Select, Switch } from './controls'
 import { CheckCircleIcon, KeySlashIcon, RetryIcon, WarningIcon, XIcon } from '../components/Icons'
 
 /// One pane per provider the CLI has a live quota adapter for, from the mac's
@@ -28,6 +28,7 @@ const GUIDANCE: Record<string, string> = {
   zai: 'Sign in with the Pi CLI, or set ZAI_API_KEY, then click Retry.',
   grok: 'Sign in with the Grok CLI, then click Retry.',
   clinepass: 'Set CLINEPASS_API_KEY, then click Retry.',
+  devin: 'Run the Devin CLI once to sign in, then click Retry.',
 }
 
 /// The mac's "How it works" sections, with the Windows paths. Every one of these is
@@ -43,6 +44,7 @@ const HOW_IT_WORKS: Record<string, string> = {
   zai: 'Z.ai quota uses a supplied API key if there is one, and otherwise the Z.ai login the Pi CLI keeps in %USERPROFILE%\\.pi\\agent\\auth.json.',
   grok: 'Grok Build quota reads %USERPROFILE%\\.grok\\auth.json, preferring the current OIDC scope over an older sign-in entry.',
   clinepass: 'ClinePass has no local login file, so the only credential is an API key.',
+  devin: 'Devin quota reads the plan status the Devin CLI caches in %USERPROFILE%\\.cache\\devin\\cli, read-only. Nothing is sent anywhere and no API key is used, so the numbers are as fresh as the CLI\'s last run.',
 }
 
 type Props = {
@@ -111,6 +113,8 @@ export function ProviderPane({ id, name, quota }: Props) {
 
       {id === 'claude' && <ClaudeConfigDirs />}
 
+      {id === 'cursor' && <CursorSync />}
+
       {ACCEPTS_KEY.includes(id) && <ProviderKey id={id} name={name} />}
 
       <QuotaCadence />
@@ -177,6 +181,39 @@ function ClaudeConfigDirs() {
       )}
       {error && <Note><span className="stg-error">{error}</span></Note>}
       <Row control={<button type="button" className="btn" onClick={add}>Add Directory...</button>} />
+    </Group>
+  )
+}
+
+/// The CLI's `cursorSync` config key. The status line lives in the popover's Cursor tab.
+function CursorSync() {
+  const [enabled, setEnabled] = useState<boolean | null>(null)
+  const [envOff, setEnvOff] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    invoke<boolean>('cursor_sync').then(setEnabled).catch(() => {})
+    invoke<boolean>('cursor_sync_env_off').then(setEnvOff).catch(() => {})
+  }, [])
+
+  const toggle = async () => {
+    setError(null)
+    try {
+      setEnabled(await invoke<boolean>('set_cursor_sync', { enabled: !enabled }))
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  if (enabled === null) return null
+  return (
+    <Group title="Usage Sync" footer="CodeBurn downloads your own usage export with the Cursor app's login, at most once an hour.">
+      <Row
+        label="Sync Cursor usage from cursor.com"
+        hint={enabled && envOff ? 'Turned off by CODEBURN_CURSOR_SYNC=0' : undefined}
+        control={<Switch on={enabled && !envOff} disabled={enabled && envOff} onToggle={() => { void toggle() }} ariaLabel="Sync Cursor usage from cursor.com" />}
+      />
+      {error && <Note><span className="stg-error">{error}</span></Note>}
     </Group>
   )
 }

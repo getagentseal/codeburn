@@ -176,6 +176,19 @@ describe('aggregateModels', () => {
     expect(byKey['codex:gpt-5.5']!.creditsIncomplete).toBeFalsy()
   })
 
+  it('rates auto-review credits per call date: gpt-5.4 before 30 Jul 2026, unrated after', async () => {
+    const rows = await aggregateModels([makeProject([
+      makeTurn('feature', [
+        makeCall({ provider: 'codex', model: 'codex-auto-review', output: 1_000_000, costUSD: 15, timestamp: '2026-07-29T23:00:00Z' }),
+        makeCall({ provider: 'codex', model: 'codex-auto-review', output: 1_000_000, costUSD: 1.2, timestamp: '2026-07-30T01:00:00Z' }),
+      ]),
+    ])])
+    expect(rows).toHaveLength(1)
+    // gpt-5.4 output is 375 credits/M; Luna has no published credit rate.
+    expect(rows[0]!.credits).toBeCloseTo(375, 6)
+    expect(rows[0]!.creditsIncomplete).toBe(true)
+  })
+
   it('partial-sums Codex credits when a merge mixes rated and unrated ids', async () => {
     setModelAliases({ 'codex-house-sku': 'gpt-5.5' })
     try {

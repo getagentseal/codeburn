@@ -1239,6 +1239,33 @@ describe('resident serve single-flight', { timeout: 30_000 }, () => {
     expect(readMaybe(oneShotsFile)).toBe('oooo')
   })
 
+  it('keeps restarting a resident that answers between watchdog kills', async () => {
+    const startsFile = join(dir, 'serve-starts')
+    fakeBin(
+      'answers-then-hangs-resident.js',
+      `const fs = require('node:fs'); const readline = require('node:readline');
+       if (process.argv[2] === 'serve') {
+         fs.appendFileSync(${JSON.stringify(startsFile)}, 's');
+         const rl = readline.createInterface({ input: process.stdin });
+         rl.once('line', line => {
+           const request = JSON.parse(line);
+           process.stdout.write(JSON.stringify({ id: request.id, ok: true, output: JSON.stringify({ via: 'serve' }) }) + '\\n');
+         });
+         setInterval(() => {}, 1000);
+       } else {
+         process.stdout.write(JSON.stringify({ via: 'spawn' }));
+       }`,
+    )
+    startServe()
+
+    // Each generation answers once, then goes silent and is killed by the
+    // watchdog. Those kills must not add up across healthy answers.
+    for (let attempt = 0; attempt < 10 && readMaybe(startsFile).length < 4; attempt += 1) {
+      await spawnCli(['status', '--attempt', String(attempt)], { timeoutMs: 300 })
+    }
+    expect(readMaybe(startsFile).length).toBeGreaterThanOrEqual(4)
+  })
+
   it('does not spawn a one-shot fallback after killAll destroys serve', async () => {
     const requestSeenFile = join(dir, 'request-seen')
     const oneShotsFile = join(dir, 'one-shot-reads')

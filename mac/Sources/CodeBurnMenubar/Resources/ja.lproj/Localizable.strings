@@ -718,3 +718,14 @@
 "Anonymous usage statistics" = "匿名の利用統計";
 "Managed by the CodeBurn desktop app. Change it there under Settings → Privacy & data." = "CodeBurn デスクトップアプリで管理されています。設定 → プライバシーとデータで変更できます。";
 "Optional usage statistics: the names of the models, tools and providers you use, with bucketed counts of how often each one came up, plus when the app is opened. A random install id, the app version and your country code travel with them. Never your prompts, your code, your project and file names, or exact amounts." = "任意の利用統計です:使用したモデル、ツール、プロバイダーの名前と、それぞれの出現回数を区分けした集計、およびアプリを開いた回数。これらにはランダムなインストールID、アプリのバージョン、国コードが付随します。プロンプト、コード、プロジェクト名やファイル名、正確な金額は一切含まれません。";
+
+/* MARK: Cursor usage sync */
+"Synced from cursor.com %@" = "cursor.comから同期しました（%@）";
+"Not synced from cursor.com yet" = "cursor.comからはまだ同期していません";
+"Cursor login expired, open Cursor to sign in again" = "Cursorのサインインの有効期限が切れました。Cursorを開いてもう一度サインインしてください";
+"Couldn't reach cursor.com, will retry" = "cursor.comに接続できませんでした。再試行します";
+"Couldn't read the usage export from cursor.com, will retry" = "cursor.comの使用量エクスポートを読み取れませんでした。再試行します";
+"Sync Cursor usage from cursor.com" = "Cursorの使用量をcursor.comから同期";
+"Downloads your own usage export with the Cursor app's login, at most once an hour." = "Cursorアプリのサインインで自分の使用量エクスポートをダウンロードします（1時間に最大1回）。";
+"Turned off by CODEBURN_CURSOR_SYNC=0" = "CODEBURN_CURSOR_SYNC=0によりオフになっています";
+"Couldn't save the setting: config.json is invalid or locked" = "設定を保存できませんでした。config.jsonが無効か、ロックされています";

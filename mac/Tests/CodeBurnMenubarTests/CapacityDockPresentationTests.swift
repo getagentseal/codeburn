@@ -25,8 +25,7 @@ struct CapacityDockPresentationTests {
     @MainActor
     @Test("rail body length follows presentation progress instead of snapping to interaction state")
     func presentationLengthInterpolates() {
-        let suite = "CodeBurnMenubarTests.CapacityDock.Presentation.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
+        let (defaults, suite) = TestDefaults.make("CodeBurnMenubarTests.CapacityDock.Presentation")
         defer { TestDefaults.forget(suite) }
         CapacityDockPreferences.setSelectedProviders([.codex, .claude, .gemini], defaults: defaults)
         let model = CapacityDockViewModel(preferences: CapacityDockPreferences.load(defaults: defaults))
@@ -43,8 +42,7 @@ struct CapacityDockPresentationTests {
     @MainActor
     @Test("Resting provider stays at the reveal anchor")
     func restingProviderFollowsExpansionAnchor() {
-        let suite = "CodeBurnMenubarTests.CapacityDock.AnchorOrder.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
+        let (defaults, suite) = TestDefaults.make("CodeBurnMenubarTests.CapacityDock.AnchorOrder")
         defer { TestDefaults.forget(suite) }
         CapacityDockPreferences.setSelectedProviders([.codex, .claude, .gemini], defaults: defaults)
         let model = CapacityDockViewModel(preferences: CapacityDockPreferences.load(defaults: defaults))
@@ -59,8 +57,7 @@ struct CapacityDockPresentationTests {
     @MainActor
     @Test("Attachment morphs inside the body without changing the panel size")
     func attachmentKeepsPanelSizeStable() {
-        let suite = "CodeBurnMenubarTests.CapacityDock.EdgeSpread.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
+        let (defaults, suite) = TestDefaults.make("CodeBurnMenubarTests.CapacityDock.EdgeSpread")
         defer { TestDefaults.forget(suite) }
         CapacityDockPreferences.setScale(1.2, defaults: defaults)
         let model = CapacityDockViewModel(preferences: CapacityDockPreferences.load(defaults: defaults))
@@ -79,8 +76,7 @@ struct CapacityDockPresentationTests {
     @MainActor
     @Test("Supported settled scales and edges compose integral panel dimensions")
     func supportedSettledGeometryIsIntegral() {
-        let suite = "CodeBurnMenubarTests.CapacityDock.IntegralGeometry.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
+        let (defaults, suite) = TestDefaults.make("CodeBurnMenubarTests.CapacityDock.IntegralGeometry")
         defer { TestDefaults.forget(suite) }
         CapacityDockPreferences.setSelectedProviders([.codex, .claude, .gemini], defaults: defaults)
 
@@ -228,8 +224,7 @@ struct CapacityDockPresentationTests {
     @MainActor
     @Test("Selected provider identity remains stable throughout reveal and retraction")
     func selectedProviderIdentityStaysStable() {
-        let suite = "CodeBurnMenubarTests.CapacityDock.Identity.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
+        let (defaults, suite) = TestDefaults.make("CodeBurnMenubarTests.CapacityDock.Identity")
         defer { TestDefaults.forget(suite) }
         CapacityDockPreferences.setSelectedProviders([.codex, .claude, .gemini], defaults: defaults)
         CapacityDockPreferences.setPreferredProvider(.codex, defaults: defaults)
@@ -252,8 +247,7 @@ struct CapacityDockPresentationTests {
     @MainActor
     @Test("Resting provider stays visible when the rail expands toward its start edge")
     func restingProviderNeverFlashesToAnotherIcon() {
-        let suite = "CodeBurnMenubarTests.CapacityDock.NoIconFlash.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
+        let (defaults, suite) = TestDefaults.make("CodeBurnMenubarTests.CapacityDock.NoIconFlash")
         defer { TestDefaults.forget(suite) }
         CapacityDockPreferences.setSelectedProviders([.codex, .claude, .gemini], defaults: defaults)
         CapacityDockPreferences.setPreferredProvider(.codex, defaults: defaults)

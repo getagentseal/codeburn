@@ -119,7 +119,7 @@ async function writePlainSession(projectDirName: string, sessionDirName: string,
 }
 
 async function writeVersionedSession(
-  version: 1 | 2 | 3,
+  version: 1 | 2 | 3 | 4,
   projectDirName: string,
   sessionDirName: string,
   lines: string[],
@@ -147,7 +147,7 @@ async function writeVersionedSession(
 // packages/session/session-format-v1-to-v2/src/codec.ts (v2), and
 // packages/session/session-format-v2-to-v3/src/codec.ts (v3).
 // Embedded usage and retry settlements follow packages/llm/token-meter/src/usage-projection.ts.
-function versionedHeader(version: 1 | 2 | 3, opts: { id?: string; cwd?: string; isSeeded?: boolean } = {}) {
+function versionedHeader(version: 1 | 2 | 3 | 4, opts: { id?: string; cwd?: string; isSeeded?: boolean } = {}) {
   return JSON.stringify({
     type: 'session',
     version,
@@ -244,7 +244,7 @@ describe('dsh provider - session discovery', () => {
     await writeFile(join(corrupt, 'session.jsonl'), sessionHeader({ id: 'session-corrupt' }) + '\n')
     await writeFile(join(corrupt, 'session.v3.jsonl'), '{broken\n')
     await writeFile(join(unknown, 'session.jsonl'), sessionHeader({ id: 'session-unknown' }) + '\n')
-    await writeFile(join(unknown, 'session.v4.jsonl'), JSON.stringify({ type: 'session', version: 4 }) + '\n')
+    await writeFile(join(unknown, 'session.v5.jsonl'), JSON.stringify({ type: 'session', version: 5 }) + '\n')
 
     expect(await createDshProvider(tmpDir).discoverSessions()).toEqual([])
   })
@@ -377,9 +377,9 @@ describe('dsh provider - session discovery', () => {
 })
 
 describe('dsh provider - parsing', () => {
-  it('counts failed and successful attempts from the official-validated retry fixture', async () => {
-    const content = await readFile(join(import.meta.dirname, '../fixtures/dsh/v3-retry.jsonl'), 'utf8')
-    const path = await writeVersionedSession(3, '--fixture--', 'fixture-retry', content.trim().split('\n'))
+  it.each([3, 4] as const)('counts failed and successful attempts from the official-validated v%s retry fixture', async (version) => {
+    const content = await readFile(join(import.meta.dirname, `../fixtures/dsh/v${version}-retry.jsonl`), 'utf8')
+    const path = await writeVersionedSession(version, '--fixture--', 'fixture-retry', content.trim().split('\n'))
     const calls = await parseAll(createDshProvider(tmpDir), path)
     expect(calls.map(call => [call.inputTokens, call.outputTokens, call.reasoningTokens])).toEqual([[10, 4, 2], [100, 20, 8]])
     expect(calls.every(call => call.model === 'deepseek-v4-flash')).toBe(true)
@@ -387,7 +387,7 @@ describe('dsh provider - parsing', () => {
       + call.cacheReadInputTokens + call.cacheCreationInputTokens, 0)).toBe(174)
   })
 
-  it.each(([0, 1, 2, 3] as const).flatMap(version => [false, true].map(retry => ({ version, retry }))))(
+  it.each(([0, 1, 2, 3, 4] as const).flatMap(version => [false, true].map(retry => ({ version, retry }))))(
     'replaces non-adjacent settlements per step in v$version (retry=$retry)', async ({ version, retry }) => {
     const sample = (step: number, input: number) => version <= 1
       ? chunkUsage(1, step, { inputTokens: input, outputTokens: 10 }, 1786707340000)
@@ -416,7 +416,7 @@ describe('dsh provider - parsing', () => {
     expect((await parseAll(createDshProvider(tmpDir), path)).map(call => call.inputTokens)).toEqual([100, 100, 100, 100])
   })
 
-  it.each([0, 1, 2, 3] as const)('matches official DSH totals for the sanitized v%s fixture', async version => {
+  it.each([0, 1, 2, 3, 4] as const)('matches official DSH totals for the sanitized v%s fixture', async version => {
     const content = await readFile(join(import.meta.dirname, `../fixtures/dsh/v${version}.jsonl`), 'utf8')
     const lines = content.trim().split('\n')
     const path = version === 0
@@ -471,7 +471,7 @@ describe('dsh provider - parsing', () => {
     expect(calls[0]).toMatchObject({ inputTokens: 10, outputTokens: 'outputTokens' in usage ? usage.outputTokens : 0, costIsEstimated: true })
   })
 
-  it.each([1, 2, 3] as const)('uses only the usage layout belonging to format v%s', async (version) => {
+  it.each([1, 2, 3, 4] as const)('uses only the usage layout belonging to format v%s', async (version) => {
     // v1-to-v2 consumes top-level chunks and introduces settlement streams.
     // A row from the other physical layout must not become an extra call.
     const filePath = await writeVersionedSession(version, '--home-u-proj--', 'session-layout', [
@@ -498,7 +498,7 @@ describe('dsh provider - parsing', () => {
     expect(calls[0]).toMatchObject({ model: 'deepseek-v4-pro', inputTokens: 111, outputTokens: 22 })
   })
 
-  it.each([2, 3] as const)('reads v%s embedded streams and prefers message usage', async (version) => {
+  it.each([2, 3, 4] as const)('reads v%s embedded streams and prefers message usage', async (version) => {
     const filePath = await writeVersionedSession(version, '--home-u-proj--', `session-v${version}`, [
       versionedHeader(version, { id: `session-v${version}` }),
       JSON.stringify({
@@ -566,7 +566,7 @@ describe('dsh provider - parsing', () => {
     ])
   })
 
-  it.each([2, 3] as const)('excludes the inherited prefix using the last tagged v%s end-seed marker', async (version) => {
+  it.each([2, 3, 4] as const)('excludes the inherited prefix using the last tagged v%s end-seed marker', async (version) => {
     const filePath = await writeVersionedSession(version, '--home-u-proj--', `session-v${version}-fork`, [
       versionedHeader(version, { id: `session-v${version}-fork`, isSeeded: true }),
       JSON.stringify({

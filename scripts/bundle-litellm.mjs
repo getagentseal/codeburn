@@ -55,12 +55,12 @@ const MANUAL_ENTRIES = {
   // gpt-5.3-codex == gpt-5.3 (all four rates identical, verified against the
   // live model_prices_and_context_window.json). Mirroring that pattern onto
   // gpt-5.6 rather than inventing a number: both ids carry the exact gpt-5.6
-  // row, verbatim INCLUDING the >272k tier block, so the tests/models.test.ts
-  // codex-equals-base assertion can hold. These are full-row mirrors, not
+  // row, verbatim INCLUDING the >272k tier block and the Flex slot, so the
+  // tests/models.test.ts codex-equals-base assertion can hold. These are full-row mirrors, not
   // hand-picked rates: drop both entries entirely once LiteLLM ships the
   // codex SKUs, rather than editing them in place.
-  'gpt-5.6-codex':          [4e-6, 2e-5, 5e-6, 4e-7, null, { threshold: 272000, input: 8e-6, output: 3e-5, cacheWrite: 1e-5, cacheRead: 8e-7 }],
-  'gpt-5.6-codex-max':      [4e-6, 2e-5, 5e-6, 4e-7, null, { threshold: 272000, input: 8e-6, output: 3e-5, cacheWrite: 1e-5, cacheRead: 8e-7 }],
+  'gpt-5.6-codex':          [4e-6, 2e-5, 5e-6, 4e-7, 2, { threshold: 272000, input: 8e-6, output: 3e-5, cacheWrite: 1e-5, cacheRead: 8e-7 }, [2e-6, 1e-5, 2.5e-6, 2e-7, null, { threshold: 272000, input: 4e-6, output: 1.5e-5, cacheWrite: 5e-6, cacheRead: 4e-7 }]],
+  'gpt-5.6-codex-max':      [4e-6, 2e-5, 5e-6, 4e-7, 2, { threshold: 272000, input: 8e-6, output: 3e-5, cacheWrite: 1e-5, cacheRead: 8e-7 }, [2e-6, 1e-5, 2.5e-6, 2e-7, null, { threshold: 272000, input: 4e-6, output: 1.5e-5, cacheWrite: 5e-6, cacheRead: 4e-7 }]],
   // LiteLLM dropped `claude-opus-4` upstream (a refresh moves dropped ids to
   // the fallback tier), but the Cursor-style alias `claude-4-opus` resolves
   // against PRIMARY rows - without this pin the bare id falls to the
@@ -83,6 +83,39 @@ const entries = Object.entries(data).filter(([k]) => k !== 'sample_spec')
 // from the key suffix (272k -> 272000) because LiteLLM carries no numeric
 // threshold field (#1076). Mirrored in src/models.ts parseLiteLLMEntry.
 const TIER_KEY_RE = /^(input_cost_per_token|output_cost_per_token|cache_read_input_token_cost|cache_creation_input_token_cost)_above_(\d+)k_tokens$/
+
+// OpenAI's priority processing tier ships as explicit `<rate>_priority` keys
+// beside the standard ones (and `_above_<n>k_tokens_priority` for gpt-5.6's
+// long-context tier). Codex's Fast speed setting bills through it (#1616), so
+// slot 5 falls back to that ratio when the row carries no
+// `provider_specific_entry.fast`. Derived only where every bucket the row
+// prices agrees on one ratio — models without priority keys, or rows whose
+// ratios disagree (azure/gpt-5.5: 2.5x base, 2x above 272k), stay null (1x).
+// A tier without its own priority keys (gpt-5.4, gpt-5.5) gets `fast: 1` so it
+// stays at standard tier rates: OpenAI quotes no Fast long-context price there.
+// Never a hand-picked number. Mirrored in src/models.ts parseLiteLLMEntry.
+const PRIORITY_KEY_SUFFIX = '_priority'
+const MAX_DERIVED_FAST_MULTIPLIER = 100
+
+function priorityMultiplierOf(entry) {
+  const ratios = []
+  let inputRatio
+  let outputRatio
+  for (const [key, value] of Object.entries(entry)) {
+    if (!key.endsWith(PRIORITY_KEY_SUFFIX)) continue
+    const base = entry[key.slice(0, -PRIORITY_KEY_SUFFIX.length)]
+    if (typeof value !== 'number' || typeof base !== 'number') continue
+    if (!Number.isFinite(value) || !Number.isFinite(base) || value <= 0 || base <= 0) continue
+    const ratio = value / base
+    if (key === 'input_cost_per_token_priority') inputRatio = ratio
+    else if (key === 'output_cost_per_token_priority') outputRatio = ratio
+    ratios.push(ratio)
+  }
+  if (inputRatio === undefined || outputRatio === undefined) return null
+  const agreed = ratios.every((r) => Math.abs(r - inputRatio) <= 1e-9 * Math.max(r, inputRatio))
+  // Rounded to 4 decimals so division noise (1.7999999999999998) never ships.
+  return agreed && inputRatio <= MAX_DERIVED_FAST_MULTIPLIER ? Math.round(inputRatio * 1e4) / 1e4 : null
+}
 
 function tierOf(entry) {
   // Rates are read ONLY from the largest threshold a model carries, so a
@@ -108,11 +141,45 @@ function tierOf(entry) {
   return { threshold, input: rates.input, output: rates.output, cacheWrite: rates.cacheWrite ?? null, cacheRead: rates.cacheRead ?? null }
 }
 
+// OpenAI's Flex processing tier ships as explicit `<rate>_flex` keys
+// (`_above_<n>k_tokens_flex` for the long-context tier), carried as slot 6: a
+// full tuple of Flex rates, appended only where the row publishes input and
+// output flex rates so every other row stays byte-identical. Rates, not a
+// ratio (gpt-5.4's flex cache read is $0.13/M, not half of $0.25/M); a bucket
+// without a flex rate keeps its standard rate. Mirrored in src/models.ts flexOf.
+const FLEX_KEY_SUFFIX = '_flex'
+
+function flexOf(entry, cacheWrite, cacheRead, tier) {
+  const rate = (key) => {
+    const v = entry[key + FLEX_KEY_SUFFIX]
+    return typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : null
+  }
+  const input = rate('input_cost_per_token')
+  const output = rate('output_cost_per_token')
+  if (input === null || output === null) return null
+  const above = (key) => `${key}_above_${tier.threshold / 1000}k_tokens`
+  return [input, output, rate('cache_creation_input_token_cost') ?? cacheWrite, rate('cache_read_input_token_cost') ?? cacheRead, null, tier ? {
+    threshold: tier.threshold,
+    input: rate(above('input_cost_per_token')) ?? tier.input,
+    output: rate(above('output_cost_per_token')) ?? tier.output,
+    cacheWrite: rate(above('cache_creation_input_token_cost')) ?? tier.cacheWrite,
+    cacheRead: rate(above('cache_read_input_token_cost')) ?? tier.cacheRead,
+  } : null]
+}
+
 function toVal(entry) {
   const inp = entry.input_cost_per_token
   const out = entry.output_cost_per_token
   if (inp == null || out == null) return null
-  return [inp, out, entry.cache_creation_input_token_cost ?? null, entry.cache_read_input_token_cost ?? null, entry.provider_specific_entry?.fast ?? null, tierOf(entry)]
+  const explicitFast = entry.provider_specific_entry?.fast
+  const priorityFast = explicitFast == null ? priorityMultiplierOf(entry) : null
+  const tier = tierOf(entry)
+  if (tier && priorityFast !== null && !Object.keys(entry).some((k) => k.endsWith(`_above_${tier.threshold / 1000}k_tokens${PRIORITY_KEY_SUFFIX}`))) {
+    tier.fast = 1
+  }
+  const val = [inp, out, entry.cache_creation_input_token_cost ?? null, entry.cache_read_input_token_cost ?? null, explicitFast ?? priorityFast, tier]
+  const flex = flexOf(entry, val[2], val[3], tier)
+  return flex ? [...val, flex] : val
 }
 
 // Pass 1: direct entries (no prefix) get priority
@@ -140,6 +207,32 @@ const completeness = (val) => (val[2] != null ? 1 : 0) + (val[3] != null ? 1 : 0
 // purely by JSON key order (#1134: the openrouter row held the
 // `deepseek/deepseek-v4-pro` slot at ~40% under official peak pricing).
 const entryNames = new Set(Object.keys(data))
+// Which prefixed row claims an absent bare key: the model maker's own row
+// (`xai/grok-4.6`) over any reseller's (`azure_ai/grok-4.6`), whatever the JSON
+// order, even at $0 (Gemma is free on Google's own API). Among the other rows
+// a $0/$0 one yields to any priced one (the `codestral/` free-beta rows priced
+// `codestral-latest` at nothing); otherwise the first row claims, as before.
+// The key keeps the position its first claimant gave it. Mirrored in
+// src/models.ts.
+const MAKER_PREFIXES = new Set([
+  'xai', 'mistral', 'cohere', 'anthropic', 'openai', 'gemini', 'deepseek', 'moonshot',
+  'zai', 'minimax', 'ai21', 'perplexity', 'dashscope', 'meta_llama', 'xiaomi_mimo',
+])
+// Two segments only: `perplexity/openai/gpt-5.6-sol` is Perplexity reselling.
+const isMaker = (name) => name.split('/').length === 2 && MAKER_PREFIXES.has(name.split('/')[0])
+const isFree = (val) => val[0] === 0 && val[1] === 0
+const bareClaims = new Map()
+const makerClaimed = new Set()
+for (const [name, entry] of [...entries.filter(([n]) => isMaker(n)), ...entries.filter(([n]) => !isMaker(n))]) {
+  if (!name.includes('/')) continue
+  const stripped = name.replace(/^[^/]+\//, '')
+  if (entryNames.has(stripped)) continue
+  const val = toVal(entry)
+  if (!val) continue
+  const prev = bareClaims.get(stripped)
+  if (!prev || (!makerClaimed.has(stripped) && isFree(prev) && !isFree(val))) bareClaims.set(stripped, val)
+  if (isMaker(name)) makerClaimed.add(stripped)
+}
 for (const [name, entry] of entries) {
   if (!name.includes('/')) continue
   const val = toVal(entry)
@@ -155,8 +248,7 @@ for (const [name, entry] of entries) {
   // verbatim (val may add slots, never change them). Guarantees no rate ever
   // changes across a refresh; only missing slots fill. The completeness-wins
   // version re-priced 43 input/output and 34 cache rates by swapping in a
-  // different upstream row (grok-3 3/15 -> 1.25/2.5, mistral-large-latest
-  // 8/24 -> 0.5/1.5). Slot 5 (the tier object) stays out of the guard: it is
+  // different upstream row (grok-3 3/15 -> 1.25/2.5). Slot 5 (the tier object) stays out of the guard: it is
   // built fresh per row, so a reference compare is always false and would
   // veto fills main performs (it silently dropped the azure cache-read fill
   // for gpt-5.4-pro-class rows); and since the replacement only fires when
@@ -169,7 +261,7 @@ for (const [name, entry] of entries) {
     && (prev[2] == null || cand[2] === prev[2])
     && (prev[3] == null || cand[3] === prev[3])
   if (!existing) {
-    if (!entryNames.has(stripped)) snapshot[stripped] = val
+    if (bareClaims.has(stripped)) snapshot[stripped] = bareClaims.get(stripped)
     continue
   }
   if (completeness(val) > completeness(existing) && fillsOnly(val, existing)) snapshot[stripped] = val

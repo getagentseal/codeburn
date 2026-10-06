@@ -269,6 +269,9 @@ pub fn run() {
             commands::terminals,
             commands::claude_config_dirs,
             commands::set_claude_config_dirs,
+            commands::cursor_sync,
+            commands::set_cursor_sync,
+            commands::cursor_sync_env_off,
             commands::pick_directory,
             commands::daily_budgets,
             commands::set_daily_budget,
@@ -1320,6 +1323,22 @@ mod commands {
     #[tauri::command]
     pub fn claude_config_dirs() -> Vec<String> {
         crate::settings::claude_config_dirs()
+    }
+
+    #[tauri::command]
+    pub fn cursor_sync() -> bool {
+        crate::settings::cursor_sync()
+    }
+
+    #[tauri::command]
+    pub fn cursor_sync_env_off() -> bool {
+        crate::settings::cursor_sync_env_off()
+    }
+
+    #[tauri::command]
+    pub fn set_cursor_sync(enabled: bool) -> Result<bool, String> {
+        crate::settings::set_cursor_sync(enabled).map_err(|e| e.to_string())?;
+        Ok(crate::settings::cursor_sync())
     }
 
     /// The shell's folder browser, which is modal and has to run where the app's windows

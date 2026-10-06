@@ -1,7 +1,7 @@
 import { mkdtemp, mkdir, rm, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { describe, it, expect, beforeAll, afterEach } from 'vitest'
+import { describe, it, expect, beforeAll, afterEach, vi } from 'vitest'
 
 import {
   findUnpricedModels,
@@ -27,6 +27,9 @@ import {
   cacheWriteCostPerToken,
   tieredCostsFor,
   modelKeyMatches,
+  snapshotPricingState,
+  restorePricingState,
+  pricingModelAt,
 } from '../src/models.js'
 import { getDailyCacheConfigHash } from '../src/usage-aggregator.js'
 import snapshotData from '../src/data/litellm-snapshot.json' with { type: 'json' }
@@ -98,6 +101,10 @@ describe('getModelCosts', () => {
     expect(getModelCosts('unknown/deepseek-v4-flash')).toBeNull()
     expect(getModelCosts('z-ai/glm-5.2')).not.toBeNull()
     expect(getModelCosts('z-ai/glm-5.3')!.inputCostPerToken).toBe(zai[0])
+  })
+
+  it('prices deepseek-v3.2 at DeepSeek\'s published $0.28 / $0.42 / $0.028 hit', () => {
+    expect(calculateCost('deepseek-v3.2', 1_000_000, 1_000_000, 0, 1_000_000, 0)).toBeCloseTo(0.28 + 0.42 + 0.028, 12)
   })
 
   it('prices gpt-5.6-codex and gpt-5.6-codex-max, sourced directly from the snapshot (#1077)', () => {
@@ -240,11 +247,199 @@ describe('getModelCosts', () => {
     })
   })
 
+  // #1616: Codex's Fast speed setting bills through OpenAI's priority service
+  // tier, which LiteLLM publishes as `<rate>_priority` keys beside the standard
+  // ones (and `_above_<n>k_tokens_priority` for gpt-5.6's long-context tier)
+  // rather than as a `provider_specific_entry.fast`. The entries below are
+  // quoted from the live model_prices_and_context_window.json (2026-10-05
+  // refresh). The bundled snapshot carries the same derived slots; these pin the
+  // live path, and the bundled-rate cases below pin the snapshot.
+  describe('priority service-tier fast multipliers (#1616)', () => {
+    /// Install `entries` as the live pricing rows for the duration of `run`,
+    /// exactly as fetchAndCachePricing would, so calculateCost's full pipeline
+    /// (getModelCosts -> tieredCostsFor -> multiplier) prices off them.
+    function withLiveEntries(entries: Record<string, Record<string, number>>, run: () => void): void {
+      const snap = snapshotPricingState()
+      const pricing = new Map(snap.pricing)
+      for (const [name, entry] of Object.entries(entries)) {
+        const costs = parseLiteLLMEntry(entry as never)
+        if (costs) pricing.set(name, costs)
+      }
+      restorePricingState({ ...snap, pricing })
+      try {
+        run()
+      } finally {
+        restorePricingState(snap)
+      }
+    }
+
+    it('derives gpt-5.4\'s uniform 2x ratio as the fast multiplier', () => {
+      const costs = parseLiteLLMEntry({
+        input_cost_per_token: 2.5e-6,
+        output_cost_per_token: 15e-6,
+        cache_read_input_token_cost: 2.5e-7,
+        input_cost_per_token_priority: 5e-6,
+        output_cost_per_token_priority: 30e-6,
+        cache_read_input_token_cost_priority: 5e-7,
+      } as never)
+      expect(costs?.fastMultiplier).toBe(2)
+    })
+
+    it('derives gpt-5.5\'s uniform 2.5x ratio as the fast multiplier', () => {
+      const costs = parseLiteLLMEntry({
+        input_cost_per_token: 5e-6,
+        output_cost_per_token: 30e-6,
+        cache_read_input_token_cost: 5e-7,
+        input_cost_per_token_priority: 1.25e-5,
+        output_cost_per_token_priority: 7.5e-5,
+        cache_read_input_token_cost_priority: 1.25e-6,
+      } as never)
+      expect(costs?.fastMultiplier).toBe(2.5)
+    })
+
+    it('prices a gpt-5.6 fast call past 272k at the published priority tier rates', () => {
+      // gpt-5.6 quotes the priority long-context rates as exactly 2x its
+      // standard tier, so the single base multiplier carries the tier too.
+      withLiveEntries({
+        'gpt-5.6': {
+          input_cost_per_token: 4e-6,
+          output_cost_per_token: 20e-6,
+          cache_creation_input_token_cost: 5e-6,
+          cache_read_input_token_cost: 4e-7,
+          input_cost_per_token_above_272k_tokens: 8e-6,
+          output_cost_per_token_above_272k_tokens: 30e-6,
+          cache_creation_input_token_cost_above_272k_tokens: 1e-5,
+          cache_read_input_token_cost_above_272k_tokens: 8e-7,
+          input_cost_per_token_priority: 8e-6,
+          output_cost_per_token_priority: 40e-6,
+          cache_creation_input_token_cost_priority: 1e-5,
+          cache_read_input_token_cost_priority: 8e-7,
+          input_cost_per_token_above_272k_tokens_priority: 1.6e-5,
+          output_cost_per_token_above_272k_tokens_priority: 6e-5,
+          cache_creation_input_token_cost_above_272k_tokens_priority: 2e-5,
+          cache_read_input_token_cost_above_272k_tokens_priority: 1.6e-6,
+        },
+      }, () => {
+        const fast = calculateCost('gpt-5.6', 300_000, 1_000, 500, 2_000, 0, 'fast', 0, 'codex')
+        // The literal priority tier rates, not 2x-of-nothing: 300k input (past
+        // the 272k threshold), 1k output, 500 cache write, 2k cache read.
+        expect(fast).toBeCloseTo(300_000 * 1.6e-5 + 1_000 * 6e-5 + 500 * 2e-5 + 2_000 * 1.6e-6, 12)
+        const standard = calculateCost('gpt-5.6', 300_000, 1_000, 500, 2_000, 0, 'standard', 0, 'codex')
+        expect(standard).toBeCloseTo(300_000 * 8e-6 + 1_000 * 3e-5 + 500 * 1e-5 + 2_000 * 8e-7, 12)
+        expect(fast).toBeCloseTo(standard * 2, 12)
+      })
+    })
+
+    it('rounds a derived ratio to 4 decimals', () => {
+      // gemini-2.5-pro's published rates divide to 1.7999999999999998.
+      const costs = parseLiteLLMEntry({
+        input_cost_per_token: 1.25e-6,
+        output_cost_per_token: 1e-5,
+        input_cost_per_token_priority: 2.25e-6,
+        output_cost_per_token_priority: 1.8e-5,
+      } as never)
+      expect(costs?.fastMultiplier).toBe(1.8)
+    })
+
+    it('leaves a model without priority keys at 1x', () => {
+      // gpt-5-codex / gpt-5.1-codex publish no priority rates upstream; no
+      // multiplier may be invented for them.
+      const costs = parseLiteLLMEntry({
+        input_cost_per_token: 1.25e-6,
+        output_cost_per_token: 1e-5,
+        cache_read_input_token_cost: 1.25e-7,
+      } as never)
+      expect(costs?.fastMultiplier).toBe(1)
+    })
+
+    it('does not guess when the published ratios disagree', () => {
+      // azure/gpt-5.5 as quoted live: 2.5x on every base rate but 2x on the
+      // above-272k tier, so no single multiplier can price both regimes. The
+      // honest answer is 1x (standard rates), never an average.
+      const costs = parseLiteLLMEntry({
+        input_cost_per_token: 5e-6,
+        output_cost_per_token: 30e-6,
+        cache_read_input_token_cost: 5e-7,
+        cache_read_input_token_cost_above_272k_tokens: 1e-6,
+        input_cost_per_token_priority: 1.25e-5,
+        output_cost_per_token_priority: 7.5e-5,
+        cache_read_input_token_cost_priority: 1.25e-6,
+        input_cost_per_token_above_272k_tokens_priority: 2e-5,
+        output_cost_per_token_above_272k_tokens_priority: 6e-5,
+        cache_read_input_token_cost_above_272k_tokens_priority: 2e-6,
+      } as never)
+      expect(costs?.fastMultiplier).toBe(1)
+      // A row with only a stray priority cache-read rate (no input/output pair)
+      // is equally unusable.
+      const stray = parseLiteLLMEntry({
+        input_cost_per_token: 5e-8,
+        output_cost_per_token: 4e-7,
+        cache_read_input_token_cost: 5e-9,
+        input_cost_per_token_priority: 2.5e-6,
+      } as never)
+      expect(stray?.fastMultiplier).toBe(1)
+    })
+
+    it('keeps gpt-5.5\'s long-context tier at standard rates when no Fast tier price is published', () => {
+      const costs = parseLiteLLMEntry({
+        input_cost_per_token: 5e-6,
+        output_cost_per_token: 30e-6,
+        cache_read_input_token_cost: 5e-7,
+        input_cost_per_token_above_272k_tokens: 1e-5,
+        output_cost_per_token_above_272k_tokens: 4.5e-5,
+        cache_read_input_token_cost_above_272k_tokens: 1e-6,
+        input_cost_per_token_priority: 1.25e-5,
+        output_cost_per_token_priority: 7.5e-5,
+        cache_read_input_token_cost_priority: 1.25e-6,
+      } as never)
+      expect(costs?.fastMultiplier).toBe(2.5)
+      expect(costs?.longContextTier?.fastMultiplier).toBe(1)
+    })
+
+    it('prices bundled gpt-5.5 Fast past 272k at the standard long-context rate', () => {
+      const fast = calculateCost('gpt-5.5', 300_000, 1_000, 0, 2_000, 0, 'fast', 0, 'codex')
+      expect(fast).toBeCloseTo(300_000 * 1e-5 + 1_000 * 4.5e-5 + 2_000 * 1e-6, 12)
+      expect(fast).toBeCloseTo(calculateCost('gpt-5.5', 300_000, 1_000, 0, 2_000, 0, 'standard', 0, 'codex'), 12)
+      // Below the threshold Fast still bills at the 2.5x priority rate.
+      expect(calculateCost('gpt-5.5', 100_000, 1_000, 0, 0, 0, 'fast', 0, 'codex'))
+        .toBeCloseTo((100_000 * 5e-6 + 1_000 * 3e-5) * 2.5, 12)
+    })
+
+    it('prices bundled gpt-5.6-sol Fast past 272k at the published Fast tier', () => {
+      expect(calculateCost('gpt-5.6-sol', 300_000, 1_000, 0, 0, 0, 'fast', 0, 'codex'))
+        .toBeCloseTo(300_000 * 16e-6 + 1_000 * 60e-6, 12)
+    })
+
+    it('keeps provider_specific_entry.fast (Anthropic) winning over a derived ratio', () => {
+      const costs = parseLiteLLMEntry({
+        input_cost_per_token: 5e-6,
+        output_cost_per_token: 25e-6,
+        cache_read_input_token_cost: 5e-7,
+        input_cost_per_token_priority: 1e-5,
+        output_cost_per_token_priority: 5e-5,
+        cache_read_input_token_cost_priority: 1e-6,
+        provider_specific_entry: { fast: 1.4 },
+      } as never)
+      expect(costs?.fastMultiplier).toBe(1.4)
+    })
+  })
+
   describe('grok-4.6 prompt tier', () => {
     it('uses the low tier below 200000 prompt tokens', () => {
-      // Base input is 1.25e-6 since LiteLLM's 2026-09 reprice (was 2e-6); the
-      // tier rates above 200k are unchanged, so only this literal moved.
-      expect(calculateCost('grok-4.6', 100_000, 10_000, 0, 99_999, 0)).toBeCloseTo(0.2349995, 12)
+      expect(calculateCost('grok-4.6', 100_000, 10_000, 0, 99_999, 0)).toBeCloseTo(0.3099995, 12)
+    })
+
+    // The bare id takes `xai/grok-4.6` ($2/M input), not `azure_ai/grok-4.6`
+    // ($1.25/M); xAI's rate is what GitHub Copilot bills (three real
+    // requests: 29,549 in, 946 out, 57,472 cached).
+    it('prices at xAI list rates, matching GitHub Copilot\'s charge', () => {
+      expect(calculateCost('grok-4.6', 29_549, 946, 0, 57_472, 0)).toBeCloseTo(9_351_000_000 / 1e11, 12)
+      const xai = getModelCosts('xai/grok-4.6')!
+      expect(getModelCosts('grok-4.6')).toMatchObject({
+        inputCostPerToken: xai.inputCostPerToken,
+        outputCostPerToken: xai.outputCostPerToken,
+        cacheReadCostPerToken: xai.cacheReadCostPerToken,
+      })
     })
 
     it('uses the high tier for every token at exactly 200000 prompt tokens', () => {
@@ -957,8 +1152,8 @@ describe('Cursor model variants resolve to pricing', () => {
     ['claude-4.6-haiku', 'claude-haiku-4-5'],
     // Cursor auto proxy
     ['cursor-auto', 'claude-sonnet-4-5'],
-    // Codex activity surface (official rate card, observed raw id)
-    ['codex-auto-review', 'gpt-5.5'],
+    // Codex auto-review alias: forward default is GPT-5.6 Luna (30 Jul 2026)
+    ['codex-auto-review', 'gpt-5.6-luna'],
     // OpenAI variants Cursor emits
     ['gpt-5', 'gpt-5'],
     ['gpt-5-fast', 'gpt-5'],
@@ -999,12 +1194,41 @@ describe('Codex activity ids (#1047)', () => {
     expect(getShortModelName('codex-auto-review')).toBe('Codex Auto Review')
   })
 
-  it('prices as the exact bundled GPT-5.5 object, not an invented rate', () => {
-    expect(getModelCosts('codex-auto-review')).toBe(getModelCosts('gpt-5.5'))
+  it('prices as the exact bundled GPT-5.6 Luna object, not an invented rate', () => {
+    expect(getModelCosts('codex-auto-review')).toBe(getModelCosts('gpt-5.6-luna'))
     const auto = calculateCost('codex-auto-review', 1_000_000, 1_000_000, 0, 0, 0)
-    const gpt55 = calculateCost('gpt-5.5', 1_000_000, 1_000_000, 0, 0, 0)
     expect(auto).toBeGreaterThan(0)
-    expect(auto).toBe(gpt55)
+    expect(auto).toBe(calculateCost('gpt-5.6-luna', 1_000_000, 1_000_000, 0, 0, 0))
+  })
+
+  it('prices auto-review by date: gpt-5.4 before 30 Jul 2026, Luna from then on', () => {
+    expect(pricingModelAt('codex-auto-review', '2026-07-29T23:59:59.999Z')).toBe('gpt-5.4')
+    expect(pricingModelAt('codex-auto-review', '2026-05-06T16:53:28Z')).toBe('gpt-5.4')
+    expect(pricingModelAt('codex-auto-review', '2026-07-30T00:00:00.000Z')).toBe('codex-auto-review')
+    expect(pricingModelAt('codex-auto-review', '2026-07-30T01:30:00+02:00')).toBe('gpt-5.4')
+    expect(pricingModelAt('codex-auto-review', '')).toBe('codex-auto-review')
+    expect(pricingModelAt('codex-auto-review', undefined)).toBe('codex-auto-review')
+    expect(pricingModelAt('gpt-5.6-luna', '2026-05-06T16:53:28Z')).toBe('gpt-5.6-luna')
+    expect(pricingModelAt('gpt-5.5', '2026-05-06T16:53:28Z')).toBe('gpt-5.5')
+  })
+
+  it('lets a user alias for auto-review win over the date rule', () => {
+    setModelAliases({ 'codex-auto-review': 'gpt-5.5' })
+    try {
+      expect(pricingModelAt('codex-auto-review', '2026-05-06T16:53:28Z')).toBe('codex-auto-review')
+    } finally {
+      setModelAliases({})
+    }
+  })
+
+  it('lets a user price override for auto-review win over the date rule', () => {
+    setPriceOverrides({ 'codex-auto-review': { input: 1, output: 2 } })
+    try {
+      expect(pricingModelAt('codex-auto-review', '2026-05-06T16:53:28Z')).toBe('codex-auto-review')
+      expect(calculateCost(pricingModelAt('codex-auto-review', '2026-05-06T16:53:28Z'), 1_000_000, 1_000_000, 0, 0, 0)).toBeCloseTo(3)
+    } finally {
+      setPriceOverrides({})
+    }
   })
 
   it('does not invent a family or an unobserved sibling id', () => {
@@ -1014,6 +1238,63 @@ describe('Codex activity ids (#1047)', () => {
     expect(getModelCosts('code-review')).toBeNull()
     expect(getModelCosts('auto-review')).toBeNull()
     expect(calculateCost('codex-code-review', 1_000_000, 1_000_000, 0, 0, 0)).toBe(0)
+  })
+})
+
+describe('Codex model aliases without their own rate', () => {
+  it('prices gpt-reserve (Luna Reserve) as the bundled GPT-5.6 Luna object and keeps its own label', () => {
+    expect(getModelCosts('gpt-reserve')).toBe(getModelCosts('gpt-5.6-luna'))
+    expect(calculateCost('gpt-reserve', 1_000_000, 1_000_000, 0, 0, 0)).toBeCloseTo(0.2 + 1.2, 10)
+    expect(getShortModelName('gpt-reserve')).toBe('Luna Reserve')
+  })
+
+  it('prices gpt-5.3-spark as GPT-5.3 Codex Spark', () => {
+    const spark = getModelCosts('gpt-5.3-codex-spark')
+    expect(spark).not.toBeNull()
+    expect(getModelCosts('gpt-5.3-spark')).toBe(spark)
+    expect(calculateCost('gpt-5.3-spark', 1_000_000, 1_000_000, 0, 0, 0)).toBeCloseTo(1.75 + 14, 10)
+    expect(getShortModelName('gpt-5.3-spark')).toBe('GPT-5.3 Codex Spark')
+  })
+})
+
+describe('Flex service tier pricing', () => {
+  it('prices a flex call at the model\'s published flex rates (gpt-5.4: cached input $0.13/M, not half)', () => {
+    const flex = 800 * 1.25e-6 + 200 * 1.3e-7 + 500 * 7.5e-6
+    expect(calculateCost('gpt-5.4', 800, 500, 0, 200, 0, 'flex', 0, 'codex')).toBeCloseTo(flex, 15)
+    expect(calculateCost('gpt-5.4', 800, 500, 0, 200, 0, 'standard', 0, 'codex')).toBeCloseTo(800 * 2.5e-6 + 200 * 2.5e-7 + 500 * 15e-6, 15)
+  })
+
+  it('applies the flex long-context tier above 272k prompt tokens', () => {
+    expect(calculateCost('gpt-5.4', 300_000, 1000, 0, 0, 0, 'flex', 0, 'codex')).toBeCloseTo(300_000 * 2.5e-6 + 1000 * 11.25e-6, 12)
+  })
+
+  it('falls back to standard rates for a model with no flex rates', () => {
+    expect(getModelCosts('gpt-5.3-codex')?.flex).toBeUndefined()
+    expect(calculateCost('gpt-5.3-codex', 800, 500, 0, 200, 0, 'flex', 0, 'codex'))
+      .toBe(calculateCost('gpt-5.3-codex', 800, 500, 0, 200, 0, 'standard', 0, 'codex'))
+  })
+
+  it('leaves the priority tier unchanged', () => {
+    const standard = calculateCost('gpt-5.4', 800, 500, 0, 200, 0, 'standard', 0, 'codex')
+    expect(calculateCost('gpt-5.4', 800, 500, 0, 200, 0, 'fast', 0, 'codex')).toBeCloseTo(standard * 2, 15)
+  })
+
+  it('reads flex rates off a live LiteLLM row; buckets without one keep their standard rate', () => {
+    const costs = parseLiteLLMEntry({
+      input_cost_per_token: 2e-6,
+      output_cost_per_token: 1e-5,
+      cache_read_input_token_cost: 2e-7,
+      input_cost_per_token_above_272k_tokens: 4e-6,
+      output_cost_per_token_above_272k_tokens: 1.5e-5,
+      input_cost_per_token_flex: 1e-6,
+      output_cost_per_token_flex: 5e-6,
+      input_cost_per_token_above_272k_tokens_flex: 2e-6,
+    } as never)!
+    expect(costs.flex?.inputCostPerToken).toBe(1e-6)
+    expect(costs.flex?.outputCostPerToken).toBe(5e-6)
+    expect(costs.flex?.cacheReadCostPerToken).toBe(2e-7)
+    expect(costs.flex?.longContextTier).toMatchObject({ thresholdTokens: 272_000, inputCostPerToken: 2e-6, outputCostPerToken: 1.5e-5 })
+    expect(parseLiteLLMEntry({ input_cost_per_token: 2e-6, output_cost_per_token: 1e-5, input_cost_per_token_flex: 1e-6 } as never)!.flex).toBeUndefined()
   })
 })
 
@@ -1154,6 +1435,58 @@ describe('DeepSeek v4 models resolve to pricing', () => {
       expect(getModelCosts('deepseek-v4-pro')!.inputCostPerToken).toBe(1.32e-6)
       expect(getModelCosts('deepseek-v4-flash')!.inputCostPerToken).toBe(3e-7)
     } finally {
+      await rm(cacheRoot, { recursive: true, force: true })
+      await loadPricing()
+    }
+  })
+})
+
+describe('live fetch bare-id claims', () => {
+  it('gives a bare id the maker\'s price over a reseller\'s, and a priced reseller row over a $0 one', async () => {
+    const cacheRoot = await mkdtemp(join(tmpdir(), 'codeburn-pricing-live-'))
+    const prevDir = process.env['CODEBURN_CACHE_DIR']
+    const prevSnapshotOnly = process.env['CODEBURN_PRICING_SNAPSHOT_ONLY']
+    const row = (input: number, output: number) => ({ input_cost_per_token: input, output_cost_per_token: output })
+    const source = {
+      'azure_ai/grok-x-live': row(1.25e-6, 6e-6),
+      'xai/grok-x-live': row(2e-6, 6e-6),
+      'xai/grok-y-live': row(2e-6, 6e-6),
+      'azure_ai/grok-y-live': row(1.25e-6, 6e-6),
+      'codestral/codestral-x-live': row(0, 0),
+      'mistral/codestral-x-live': row(0.3e-6, 0.9e-6),
+      'ollama/free-only-live': row(0, 0),
+      'deepinfra/gemma-free-live': row(0.15e-6, 0.6e-6),
+      'gemini/gemma-free-live': row(0, 0),
+      'azure_ai/resold-live': row(1e-6, 3e-6),
+      'fireworks_ai/resold-live': row(2e-6, 4e-6),
+      'openrouter/openai/sol-live': row(2e-6, 10e-6),
+      'perplexity/openai/sol-live': row(4e-6, 20e-6),
+      'reseller/direct-live': row(9e-6, 9e-6),
+      'direct-live': row(1e-6, 2e-6),
+    }
+    try {
+      process.env['CODEBURN_CACHE_DIR'] = cacheRoot
+      delete process.env['CODEBURN_PRICING_SNAPSHOT_ONLY']
+      vi.stubGlobal('fetch', async () => new Response(JSON.stringify(source)))
+      await loadPricing()
+      const rates = (id: string) => {
+        const c = getModelCosts(id)!
+        return [c.inputCostPerToken, c.outputCostPerToken]
+      }
+      expect(rates('grok-x-live')).toEqual([2e-6, 6e-6])
+      expect(rates('grok-y-live')).toEqual([2e-6, 6e-6])
+      expect(rates('azure_ai/grok-x-live')).toEqual([1.25e-6, 6e-6])
+      expect(rates('codestral-x-live')).toEqual([0.3e-6, 0.9e-6])
+      expect(rates('free-only-live')).toEqual([0, 0])
+      expect(rates('gemma-free-live')).toEqual([0, 0])
+      expect(rates('resold-live')).toEqual([1e-6, 3e-6])
+      expect(rates('openai/sol-live')).toEqual([2e-6, 10e-6])
+      expect(rates('direct-live')).toEqual([1e-6, 2e-6])
+    } finally {
+      vi.unstubAllGlobals()
+      if (prevDir === undefined) delete process.env['CODEBURN_CACHE_DIR']
+      else process.env['CODEBURN_CACHE_DIR'] = prevDir
+      if (prevSnapshotOnly !== undefined) process.env['CODEBURN_PRICING_SNAPSHOT_ONLY'] = prevSnapshotOnly
       await rm(cacheRoot, { recursive: true, force: true })
       await loadPricing()
     }
@@ -1459,7 +1792,7 @@ describe('findUnpricedModels', () => {
     ]
     expect(findUnpricedModels(rows)).toEqual([
       { model: 'warp', calls: 449, tokens: 17_700_000 },
-      // Note: NOT 'codex-auto-review' — #1056 aliases it to gpt-5.5, so it
+      // Note: NOT 'codex-auto-review' — it aliases to gpt-5.6-luna, so it
       // now resolves a billable rate and is filtered out here (a $0 row for
       // it is stale data, not evidence of missing pricing). It still left
       // the flat-rate list, verified separately in the "Codex activity ids

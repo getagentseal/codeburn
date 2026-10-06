@@ -64,13 +64,16 @@ struct TelemetryTests {
 
     /// A defaults suite and a directory that exist only for one test.
     final class Scratch {
-        let suiteName = "CodeBurnMenubarTests.Telemetry.\(UUID().uuidString)"
+        let suiteName: String
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("codeburn-telemetry-tests-\(UUID().uuidString)")
         let defaults: UserDefaults
 
-        init() {
-            defaults = UserDefaults(suiteName: suiteName)!
+        /// `label` distinguishes several `Scratch`es created by one test
+        /// (a loop, or a few named cases); it must be unique per call site.
+        init(_ label: String = "", testName: String = #function) {
+            let name = label.isEmpty ? testName : "\(testName).\(label)"
+            (defaults, suiteName) = TestDefaults.make("CodeBurnMenubarTests.Telemetry.\(name)")
             try? FileManager.default.createDirectory(
                 at: directory, withIntermediateDirectories: true)
         }
@@ -206,17 +209,17 @@ struct TelemetryTests {
 
     @Test("standalone defaults on outside the default-off region, off inside it and off when unknown")
     func standaloneRegionDefaults() {
-        let us = Scratch()
+        let us = Scratch("us")
         #expect(Self.client(us, region: "US").status().enabled)
 
-        let de = Scratch()
+        let de = Scratch("de")
         #expect(Self.client(de, region: "DE").status().enabled == false)
 
-        let unknown = Scratch()
+        let unknown = Scratch("unknown")
         #expect(Self.client(unknown, region: nil).status().enabled == false)
 
         // A UN M.49 region is nobody's country code, so it reads as unknown.
-        let m49 = Scratch()
+        let m49 = Scratch("m49")
         #expect(Self.client(m49, region: "419").status().enabled == false)
     }
 
@@ -296,7 +299,7 @@ struct TelemetryTests {
     func toggleStateForEveryCombination() {
         for desktopEnabled in [true, false] {
             for vetoed in [true, false] {
-                let scratch = Scratch()
+                let scratch = Scratch("desktop\(desktopEnabled)-veto\(vetoed)")
                 scratch.defaults.set(vetoed, forKey: Telemetry.localOptOutKey)
                 let state = scratch.writeDesktopState(
                     """
@@ -312,7 +315,7 @@ struct TelemetryTests {
             }
         }
 
-        let scratch = Scratch()
+        let scratch = Scratch("standalone")
         let standalone = Self.client(scratch, region: "US")
         #expect(standalone.status().source == .app)
         #expect(standalone.status().isLocked == false, "standalone the toggle is never a readout")
@@ -376,12 +379,12 @@ struct TelemetryTests {
     func standaloneExplicitDecisionSwitch() {
         // Both settings of Telemetry.standaloneRequiresExplicitDecision, so the
         // product call is a one-line change with tests already standing.
-        let regionDecides = Scratch()
+        let regionDecides = Scratch("regionDecides")
         let deciding = Self.client(regionDecides, region: "US", requiresExplicitDecision: false)
         deciding.track("app_open")
         #expect(deciding.queuedEvents.count == 1, "the region default is itself the answer")
 
-        let mustBeAsked = Scratch()
+        let mustBeAsked = Scratch("mustBeAsked")
         let waiting = Self.client(mustBeAsked, region: "US", requiresExplicitDecision: true)
         waiting.track("app_open")
         #expect(waiting.queuedEvents.isEmpty, "nothing before the question has been answered")

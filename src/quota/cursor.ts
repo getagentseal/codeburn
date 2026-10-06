@@ -174,12 +174,7 @@ function decodeBase64Url(value: string): string | null {
   }
 }
 
-/**
- * Cursor's web session is the JWT plus the user id encoded inside it. Anything
- * that is not a live three-part token with a usable subject is an expired or
- * invalid session, never a request worth making.
- */
-export function cursorSessionCookie(token: string, now: number): string | null {
+export function cursorTokenClaims(token: string): { sub: string; exp: number | null } | null {
   const parts = token.split('.')
   if (parts.length !== 3) return null
   const payload = decodeBase64Url(parts[1]!)
@@ -191,9 +186,20 @@ export function cursorSessionCookie(token: string, now: number): string | null {
     return null
   }
   if (typeof claims.sub !== 'string') return null
+  return { sub: claims.sub, exp: num(claims.exp) }
+}
+
+/**
+ * Cursor's web session is the JWT plus the user id encoded inside it. Anything
+ * that is not a live three-part token with a usable subject is an expired or
+ * invalid session, never a request worth making.
+ */
+export function cursorSessionCookie(token: string, now: number): string | null {
+  const claims = cursorTokenClaims(token)
+  if (claims === null) return null
   const userId = claims.sub.split('|').filter(part => part.length > 0).pop()
   if (!userId || !/^[A-Za-z0-9._-]+$/.test(userId)) return null
-  const expiresAt = num(claims.exp)
+  const expiresAt = claims.exp
   // 60s skew, matching the menubar: a token about to die is already useless.
   if (expiresAt === null || expiresAt * 1000 - now <= 60_000) return null
   return `WorkosCursorSessionToken=${userId}%3A%3A${token}`

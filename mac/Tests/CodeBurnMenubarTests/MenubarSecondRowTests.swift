@@ -467,8 +467,7 @@ struct MenubarSecondRowTests {
 
     @Test("settings default to off and round-trip through UserDefaults")
     func preferencesRoundTrip() {
-        let suiteName = "CodeBurnMenubarTests.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suiteName)!
+        let (defaults, suiteName) = TestDefaults.make("CodeBurnMenubarTests.\(#function)")
         defer { TestDefaults.forget(suiteName) }
 
         #expect(MenubarRowPreferences.load(defaults: defaults) == MenubarRowSettings.default)

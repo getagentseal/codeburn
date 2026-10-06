@@ -562,6 +562,18 @@ describe('Overview', () => {
     expect(await screen.findByText(/Locate the codeburn CLI/i)).toBeInTheDocument()
   })
 
+  it('shows the Cursor sync line under the hero only for a Cursor filter', async () => {
+    const payload = makePayload(new Date())
+    payload.cursorSync = { enabled: true, state: 'error', lastSuccessAt: null, errorCode: 'login', error: 'Cursor login expired, open Cursor to sign in again' }
+    const { container, rerender } = render(<OverviewContent period="30days" provider="cursor" overview={polled(payload)} />)
+    const line = await screen.findByText('Cursor login expired, open Cursor to sign in again')
+    expect(line).toHaveClass('cursor-sync-line', 'warn')
+    expect(line.closest('.ov-hero-figures')).not.toBeNull()
+
+    rerender(<OverviewContent period="30days" provider="claude" overview={polled(payload)} />)
+    expect(container.querySelector('.cursor-sync-line')).toBeNull()
+  })
+
   it('sources Models this period from current.topModels when a provider filter is active', async () => {
     const now = new Date()
     const payload = makePayload(now)

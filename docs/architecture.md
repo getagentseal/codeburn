@@ -137,7 +137,7 @@ Three caches under `~/.cache/codeburn/` (override with `CODEBURN_CACHE_DIR`):
 | File | Owner | Invalidation |
 |---|---|---|
 | `codex-results.v<n>.json` | `src/codex-cache.ts` | `mtimeMs + sizeBytes` per Codex `.jsonl`. Unsuffixed `codex-results.json` is adopted when versions match and never overwritten. |
-| `cursor-results.v<n>.json` | `src/cursor-cache.ts` | `mtimeMs + sizeBytes` of the Cursor SQLite db. Unsuffixed `cursor-results.json` is adopted when versions match and never overwritten. |
+| `cursor-results.v<n>.json` | `src/cursor-cache.ts` | Resolved database path plus combined modification time and size of the Cursor SQLite db and its WAL, when present. Unsuffixed `cursor-results.json` is adopted when versions match and never overwritten. |
 | `daily-cache.json` | `src/daily-cache.ts` | Tracks `lastComputedDate`; new days are backfilled, old days are reused. |
 
 All three use atomic write (temp file + `rename`) and write with mode `0o600`. All three carry a numeric `version` field; bumping it forces a recompute next run.
@@ -193,7 +193,7 @@ type Provider = {
 
 `src/providers/index.ts` registers providers across two tiers:
 
-- **Eager**: `claude`, `cline`, `cline-cli`, `codewhale`, `codebuff`, `codex`, `copilot`, `devin`, `droid`, `dsh`, `gemini`, `hermes`, `ibm-bob`, `kilo-code`, `kiro`, `kimi`, `kimicode`, `lingtai-tui`, `mistral-vibe`, `mux`, `openclaw`, `openclaude`, `open-design`, `pi`, `omp`, `qwen`, `quickdesk`, `zerostack`, `grok`. Imported at module load.
+- **Eager**: `claude`, `cline`, `cline-cli`, `codewhale`, `codebuff`, `codex`, `copilot`, `devin`, `droid`, `dsh`, `gemini`, `hermes`, `ibm-bob`, `kilo-code`, `kiro`, `kimi`, `kimicode`, `lingtai-tui`, `mistral-vibe`, `mux`, `openclaw`, `openclaude`, `open-design`, `pi`, `omp`, `qwen`, `quickdesk`, `zerostack`, `grok`, `grokbot`, `amp`. Imported at module load.
 - **Lazy**: `antigravity`, `forge`, `goose`, `cursor`, `opencode`, `cursor-agent`, `crush`, `warp`, `vercel-gateway`, `zcode`, `zed`. Imported via dynamic `import()` so the heavy dependencies (SQLite, protobuf, network clients) do not touch users who do not have those tools installed.
 
 Both lists hit the same `getAllProviders()` aggregator. A failed lazy import is silent and excludes that provider from the run.

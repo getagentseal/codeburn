@@ -351,6 +351,7 @@ struct CodexBankedResetAnnouncerTests {
 
 @MainActor
 private func withAnnouncer(
+    testName: String = #function,
     _ body: @MainActor (
         CodexBankedResetAnnouncer,
         RecordingBankedResetNotifier,
@@ -358,9 +359,7 @@ private func withAnnouncer(
         MemoryBankedResetStore
     ) async throws -> Void
 ) async throws {
-    let suiteName = "codeburn.codex.bankedResets.\(UUID().uuidString)"
-    let defaults = try #require(UserDefaults(suiteName: suiteName))
-    TestDefaults.forget(suiteName)
+    let (defaults, suiteName) = TestDefaults.make("codeburn.codex.bankedResets.\(testName)")
     defer { TestDefaults.forget(suiteName) }
 
     let notifier = RecordingBankedResetNotifier()

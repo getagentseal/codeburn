@@ -33,7 +33,7 @@ export type CachedCall = {
   /// True when `costUSD` (or the tokens it is priced from) is estimated rather
   /// than metered. Persisted so the estimated-cost marker survives the cache.
   isEstimated?: boolean
-  speed: 'standard' | 'fast'
+  speed: 'standard' | 'fast' | 'flex'
   timestamp: string
   tools: string[]
   bashCommands: string[]
@@ -295,16 +295,17 @@ const UNREFERENCED_SHARD_MAX_AGE_MS = 60 * 60 * 1000
 // readable. Hashing the policy here would instead discard the rows that make a
 // shutdown/restart cycle lossless and force a full 9P re-parse after re-enable.
 export const PROVIDER_ENV_VARS: Record<string, string[]> = {
+  amp: ['AMP_DATA_DIR'],
   claude: ['CLAUDE_CONFIG_DIRS', 'CLAUDE_CONFIG_DIR', 'CODEBURN_DESKTOP_SESSIONS_DIR', 'APPDATA', 'LOCALAPPDATA'],
   'cline-cli': ['CLINE_SESSION_DATA_DIR', 'CLINE_DATA_DIR', 'CLINE_DIR'],
   codebuff: ['CODEBUFF_DATA_DIR'],
   codewhale: ['CODEWHALE_HOME'],
   codex: ['CODEX_HOME'],
-  hermes: ['HERMES_HOME'],
+  hermes: ['HERMES_HOME', 'LOCALAPPDATA'],
   'lingtai-tui': ['LINGTAI_HOME', 'LINGTAI_TUI_HOME', 'LINGTAI_TUI_GLOBAL_DIR'],
   droid: ['FACTORY_DIR'],
   dsh: ['DSH_HOME'],
-  cursor: ['CODEBURN_CURSOR_MAX_BUBBLES'],
+  cursor: ['CODEBURN_CURSOR_MAX_BUBBLES', 'APPDATA', 'XDG_CONFIG_HOME'],
   // XDG_DATA_HOME is stale here (cursor-agent never reads it) but deliberately
   // kept: removing it would force a re-parse to fix nothing.
   'cursor-agent': ['XDG_DATA_HOME'],
@@ -354,6 +355,9 @@ const FULL_LOAD_PROVIDER_NAMES: ReadonlySet<string> = new Set(['hermes', 'quickd
 // re-parse, which lands the flag too, and durable orphans now survive
 // fingerprint changes (the carry-forward in getOrCreateProviderSection).
 export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
+  // usage-ledger-v2: include positive ledger total remainders as output after
+  // subtracting input, output, and cache tokens joined through toMessageId.
+  amp: 'usage-ledger-v2',
   // rich-session-capture-v1: parse-time capture of per-turn gitBranch, per-call
   // LOC deltas / interruptions / userModified / toolErrors, and session-level
   // title / prLinks / isSidechain. Forces one re-parse so cached sessions gain
@@ -365,7 +369,9 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // re-parse is forced so cached sessions without the lineage field gain it.
   // The field is purely additive; every cost / token / call total is
   // byte-identical to a build that omits it (see parser-lineage-capture test).
-  claude: 'advisor-usage-v1-skills-rich-capture-v1-cross-provider-pr-v1-session-lineage-capture-v1',
+  // queued-human-prompts-v1: cached turns need to be regrouped around Claude's
+  // queued_command prompt attachments, including classification and PR links.
+  claude: 'advisor-usage-v1-skills-rich-capture-v1-cross-provider-pr-v1-session-lineage-capture-v1-queued-human-prompts-v1',
   cline: 'worktree-project-grouping-v1',
   // reported-cost-v1: the CLI reports its own per-message cost, so entries
   // cached before cline-cli joined the reported-cost allowlist in parser.ts
@@ -404,8 +410,21 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // rollouts and retain the legacy-to-record handover state. Cached turns must
   // reparse because session-cache otherwise bypasses the provider parser.
   // Compose both suffixes so cached sessions receive both accounting fixes.
-  codex: 'mcp-attribution-v5-est-cost-active-timing-mcp-wait-rich-capture-v1-cross-provider-pr-v1-session-meta-model-v1-session-meta-fields-v1-codex-pricing-v1-codex-tps-v1-codex-mcp-skills-v1-activity-price-v1-fork-replay-burst-v1-codex-token-usage-record-v1',
-  cursor: 'composer-anchored-crediting-v1-est-cost',
+  // codex-priority-tier-v1 (#1616): turns under Codex's Fast speed setting
+  // (service_tier "priority") now bill at the priority rates. Cached calls
+  // hold speed: 'standard' and are re-priced from that field on read, so the
+  // multiplier alone cannot reach them - they must re-parse to re-record it.
+  // codex-auto-review-date-v1: the cached cache-write split follows the
+  // auto-review model by date (gpt-5.4 before 30 Jul 2026, Luna after).
+  // codex-flex-reserve-v1: flex turns record speed 'flex' (cached calls hold
+  // 'standard'), and `gpt-reserve` now splits cache writes like GPT-5.6 Luna.
+  // Compose every suffix so cached sessions receive all accounting fixes.
+  codex: 'mcp-attribution-v5-est-cost-active-timing-mcp-wait-rich-capture-v1-cross-provider-pr-v1-session-meta-model-v1-session-meta-fields-v1-codex-pricing-v1-codex-tps-v1-codex-mcp-skills-v1-activity-price-v1-fork-replay-burst-v1-codex-token-usage-record-v1-codex-priority-tier-v1-codex-auto-review-date-v1-codex-flex-reserve-v1',
+  // reported-cost-v1: cached Crush calls stored costUSD: undefined and must
+  // re-parse to keep the recorded session cost.
+  crush: 'reported-cost-v1',
+  // import-guess-est-v1: synced Auto rows with no dollar amount are estimated.
+  cursor: 'composer-anchored-crediting-v1-est-cost-import-guess-est-v1',
   // full-turn-accounting: every assistant message counts as a turn
   // (previously only the first after each user message survived), tool_use
   // inputs join the output text, and input tokens use the full user text
@@ -414,7 +433,9 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // once per user message instead of once per assistant message.
   // store-db-v1 (#986): sessions with no exported transcript are read from
   // ~/.cursor/chats/*/*/store.db.
-  'cursor-agent': 'workspaceless-transcript-v1-full-turn-accounting-v2-store-db-v1',
+  // prompt-time-v1: transcript turns take their prompt's <timestamp> tag, not
+  // the session's last write.
+  'cursor-agent': 'workspaceless-transcript-v1-full-turn-accounting-v2-store-db-v1-est-cost-prompt-time-v1',
   // source-provenance-v1 (#944): CLI sessions were misread as VS Code
   // transcripts (both carry producer 'copilot-agent'), skipping the shutdown
   // input/cache rollup; this bump re-parses them so the missing tokens land.
@@ -447,16 +468,25 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // attribute take their VS Code workspace name instead of `copilot-chat`, and
   // multi-root workspaces are named after their .code-workspace file. Dedup
   // keys are unchanged, so the durable union replaces the cached calls in place.
-  copilot: 'cli-shutdown-cost-v1-skills-source-provenance-v1-session-store-v3-chatsession-otel-skills-v1-otel-trace-metadata-once-v1-transcript-unknown-usage-v1-otel-workspace-project-v1',
+  // journal-request-input-v1: journals also record promptTokens directly on
+  // each request. Re-parse unchanged sources to repair cached input totals.
+  // tokenless-turns-v1: assistant.message events with no outputTokens field
+  // (CLI 1.0.8x, VS Code agent host) count as calls, and their leg's shutdown
+  // rollup carries output and totalNanoAiu.
+  // store-row-output-v1: every session-store row carries its own
+  // output_tokens; serve time zeroes it where a per-turn call owns the output.
+  // Keys are unchanged, so the re-parse replaces cached output-0 rows in place.
+  copilot: 'cli-shutdown-cost-v1-skills-source-provenance-v1-session-store-v3-chatsession-otel-skills-v1-otel-trace-metadata-once-v1-transcript-unknown-usage-v1-otel-workspace-project-v1-journal-request-input-v1-tokenless-turns-v1-store-row-output-v1',
   // authoritative-usage-v4: persist one Grok session call from top-level
   // authoritative totals, use modelUsage only for priced attribution, clamp
   // reasoning per record, and label mixed sessions estimated.
   grok: 'authoritative-usage-v4',
   // Estimated from message text: Grok Bot's local mirror records no tokens.
-  grokbot: 'estimated-usage-v1',
-  // v0-v3 generations, embedded attempt streams, retry accounting, and the
+  // import-guess-est-v1: synced Grok Bot rows with no dollar amount are estimated.
+  grokbot: 'estimated-usage-v1-import-guess-est-v1',
+  // v0-v4 generations, embedded attempt streams, retry accounting, and the
   // version-specific inherited-prefix rules all change cached DSH calls.
-  dsh: 'session-formats-v0-v3-attempts-v5',
+  dsh: 'session-formats-v0-v4-attempts-v6',
   // cost-provenance-v3: preserve Hermes included/estimated/actual status and
   // rebuild the provider section alongside the v3 lifetime ledger. The parse
   // bump is required with the ledger bump: seeding a new ledger from a section
@@ -475,6 +505,12 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // (`h:<hash>:<n>`) instead of the bare payload hash; cached turns hold the
   // old keys, so without this bump they would suppress the re-parsed calls.
   openclaw: 'reported-cost-v1-sqlite-store-v1',
+  // sessions-db-v1: usage now comes from sessions.db message_nodes, one
+  // source per session keyed by request_id; transcripts are read only when the
+  // database is unusable. The legacy metadata.metrics path no longer carves
+  // cache reads out of an input count that never held them. Devin is not
+  // durable, so the bump rebuilds its section and old step_id keys go with it.
+  devin: 'sessions-db-v1',
   'lingtai-tui': 'token-ledger-registry-activity-v3',
   'ibm-bob': 'worktree-project-grouping-v1',
   // project-path-v1: the parser now records the session's full working
@@ -551,7 +587,17 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // token floor on every read, so they must re-parse once for the real dollars
   // to land.
   warp: 'worktree-project-grouping-v1-est-cost-billing-cost-v1',
-  antigravity: 'worktree-project-grouping-v6',
+  // cache-read-v1-est-cost: gen_metadata and RPC usage now carry cache-read
+  // tokens, fields 9/10 read as thinking/response (they were swapped), and
+  // placeholder-only models are priced and flagged costIsEstimated.
+  antigravity: 'worktree-project-grouping-v7-cache-read-v1-est-cost',
+  // pr-attribution-v1: the parser now reads the `message`/`part` tables for
+  // per-turn user prompt text and the GitHub PR URLs it references. Cached
+  // ZCode sessions hold empty userMessage turns and no session prLinks, so
+  // they never appeared under attributed pull requests; one re-parse gains
+  // userMessage / per-turn prRefs / session prLinks. Cost totals are
+  // unchanged.
+  zcode: 'pr-attribution-v1',
 }
 
 function getLegacyCachePath(): string {
@@ -1110,7 +1156,7 @@ function validateCall(c: unknown): c is CachedCall {
     && typeof o['model'] === 'string'
     && typeof o['deduplicationKey'] === 'string'
     && typeof o['timestamp'] === 'string'
-    && (o['speed'] === 'standard' || o['speed'] === 'fast')
+    && (o['speed'] === 'standard' || o['speed'] === 'fast' || o['speed'] === 'flex')
     && isOptionalNum(o['costUSD'])
     && isOptionalNum(o['fallbackCostUSD'])
     && isOptionalBool(o['isEstimated'])

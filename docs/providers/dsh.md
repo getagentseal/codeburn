@@ -23,10 +23,11 @@ sessions/--<slugified-cwd>--/<session-id>/
   session.v1.jsonl[.zstd]    format v1
   session.v2.jsonl[.zstd]    format v2
   session.v3.jsonl[.zstd]    format v3
+  session.v4.jsonl[.zstd]    format v4
 ```
 
 Separate sessions are all counted, including sessions with only legacy v0/v1
-logs alongside sessions using v2/v3. Generation selection applies only within
+logs alongside sessions using v2/v3/v4. Generation selection applies only within
 one session directory; a newer-format session never supersedes another session.
 
 Both compression variants are read. Migrated generations are immutable and may
@@ -44,7 +45,7 @@ older snapshot. The log is append-only JSONL whose first line is the session hea
 
 Every later line is one event `{ type, seq, time, data }`. Formats v0/v1 keep
 stream chunks as top-level events (with delta runs packed into storage rows).
-Formats v2/v3 embed the compact stream in each `assistant/message` or
+Formats v2/v3/v4 embed the compact stream in each `assistant/message` or
 `assistant/attempt`. The parser reads:
 
 | Event | Used for |
@@ -70,22 +71,22 @@ None at the provider level; the log file is the cached source path and the norma
 
 ## Quirks
 
-- **DSH is a developer preview.** The parser explicitly supports released formats v0-v3 and checks both the canonical generation filename and header. A future version is skipped with a notice; **a version bump upstream still requires a semantic reader update, not just relaxing the check.**
+- **DSH is a developer preview.** The parser explicitly supports released formats v0-v4 and checks both the canonical generation filename and header. A future version is skipped with a notice; **a version bump upstream still requires a semantic reader update, not just relaxing the check.** v4 (written by `@deepseek-ai/dsh` 0.2.0-rc.2) was admitted after verifying against DSH's official `sessionFormatCatalog` (`recovery: 'strict'`, `validation: 'current'`, `@deepseek-ai/dsh-session-format-catalog@0.2.0-rc.2`) that the parser's whole consumption surface is unchanged: dense `seq`, usage at `assistant/message`'s `data.usage` (which gains an informational `totalTokens` sum) or its embedded stream, the tagged end-seed inheritance rule, and `llm/retry-started` attempt slots. What v4 changes — tool-result messages lifted to role `tool`, unknown content tags namespaced `plugin:<name>`, surface `surfaceOp` append/replace metadata, new header fields (`agentPreset`, `origin`), and untagged `session/end-seed` markers that unseeded sessions now also write — is ignored by the reader or already handled by it.
 - **The JSONL backend only.** DSH also ships an opt-in SQLite persistence backend (`@deepseek-ai/dsh-session-persistence-sqlite`); it is not the default and is not read.
 - **DSH records tokens, never dollars.** `usage` is `{ inputTokens, outputTokens, cacheReadTokens?, cacheWriteTokens?, reasoningTokens? }` with no cost field, so every call is priced from the shared tables. The buckets are disjoint on input; `reasoningTokens` is informational detail already included in `outputTokens`, as documented in the [DSH TokenUsage contract](https://github.com/deepseek-ai/deepseek-harness/blob/c291e7961a515f6d7af9304e7fd1d257929aef26/docs/subsystems/llm-streaming.md#tokenusage). CodeBurn preserves raw output and applies the shared inclusive-output rule to pricing, cached reads, and display. pi-ai routes do not persist separate reasoning detail. Complete valid usage keeps `costIsEstimated` false; incomplete or inconsistent usage is reported with a notice and marked estimated. An attempt without usage is omitted with a notice rather than represented as an exact zero.
 - **`assistant/message` usage wins over the `assistant/chunk` sample** for the same `(turn, step)` — the two are adjacent reports of one API call, not two calls. A late chunk never overwrites a final report, so the two are never summed.
 - **The model comes from the message, not the request.** `data.message.source.model` is what actually served the step; the current `request/context` model is the fallback, followed by `request/header`. A changed header model clears the previous context fallback. The `provider` field there (`deepseek-official`) is the upstream LLM route, not the tool — the codeburn provider name is always `dsh`.
-- **A forked session's log replays its parent's events.** v0/v1 use header `seedLength` only when `parentSession` is present, preserving the legacy non-fork behavior; v2/v3 use the last `session/end-seed` marker carrying `{ inherited: true }`. CodeBurn excludes the inherited prefix to avoid billing the parent's calls twice.
+- **A forked session's log replays its parent's events.** v0/v1 use header `seedLength` only when `parentSession` is present, preserving the legacy non-fork behavior; v2/v3/v4 use the last `session/end-seed` marker carrying `{ inherited: true }` (v4 unseeded sessions also write untagged markers, which define no cut). CodeBurn excludes the inherited prefix to avoid billing the parent's calls twice.
 - **`user/message` also carries agent-injected context** (runtime snapshots, skill bodies, file-change notices) under `source.kind: 'plugin'`. Only `kind: 'user'` messages become the preview.
 - **Delta chunks are packed.** Runs of streamed deltas are stored as `text-chunks` / `reasoning-chunks` / `tool-call-chunks` storage rows rather than one event per line. They carry no usage and no tool identity the `tool/call` event lacks, so they are ignored — as is any event type the parser does not know.
 - **A torn final zstd frame is ignored.** A crashed writer leaves an incomplete trailing frame; the complete frames before it parse normally. A structurally corrupt file is skipped whole with a notice rather than throwing.
 
 ## When fixing a bug here
 
-`v3-retry.jsonl` also covers a failed `assistant/attempt`, scheduled retry, and successful settlement with exact `totalTokens`. The same official strict restore and reducer yield input 110, output 24, cache read 33, and cache write 7 (174 total tokens).
+`v3-retry.jsonl` also covers a failed `assistant/attempt`, scheduled retry, and successful settlement with exact `totalTokens`. The same official strict restore and reducer yield input 110, output 24, cache read 33, and cache write 7 (174 total tokens); `v4-retry.jsonl` is the v4-stamped equivalent.
 
 1. Reproduce with a minimal session dir: `sessions/--proj--/<id>/session.jsonl` (uncompressed is easiest to hand-write).
 2. `tests/fixtures/dsh/bash-tool-turn.jsonl` is the upstream `examples/acp-agent/tests/snapshots/bash-tool-turn/session.jsonl` snapshot with its template placeholders filled in — refresh it from the DSH repo when the format moves.
 3. Run `tests/providers/dsh.test.ts`.
 4. `.zstd` fixtures must compress **each batch separately**; one `zstdCompressSync` over the whole file is a single-frame layout DSH never writes.
-5. `tests/fixtures/dsh/v0.jsonl` through `v3.jsonl` are minimal synthetic, sanitized format fixtures. Each was restored with DSH's official `sessionFormatCatalog` (`recovery: 'strict', validation: 'current'`) and folded through `tokenUsageProjectionDefinition` at DSH commit `c291e7961a515f6d7af9304e7fd1d257929aef26`. All four yield uncached input 100, full output 20, cache read 30, and cache write 5; the provider tests assert those buckets, including inclusive output and informational reasoning detail. v0/v1 cite their top-level chunk via `sourceEventSeqs`; v2/v3 carry the embedded stream.
+5. `tests/fixtures/dsh/v0.jsonl` through `v3.jsonl` are minimal synthetic, sanitized format fixtures. Each was restored with DSH's official `sessionFormatCatalog` (`recovery: 'strict', validation: 'current'`) and folded through `tokenUsageProjectionDefinition` at DSH commit `c291e7961a515f6d7af9304e7fd1d257929aef26`. All four yield uncached input 100, full output 20, cache read 30, and cache write 5; the provider tests assert those buckets, including inclusive output and informational reasoning detail. v0/v1 cite their top-level chunk via `sourceEventSeqs`; v2/v3 carry the embedded stream. `v4.jsonl` and `v4-retry.jsonl` are the v4 companions, restored with `@deepseek-ai/dsh-session-format-catalog@0.2.0-rc.2` (same strict/current policy) and carrying the same buckets plus the informational `totalTokens` field every v4 usage records.

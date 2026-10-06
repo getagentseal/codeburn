@@ -11,6 +11,10 @@ struct CapacityDockProviderQuotaServiceTests {
         Issue.record("Wrong adapter dispatched")
         return Self.summary()
     }
+    nonisolated private static let unusedDevin: @Sendable () async throws -> QuotaSummary = {
+        Issue.record("Wrong adapter dispatched")
+        return Self.summary()
+    }
     nonisolated private static let unusedGrok: @Sendable () async throws -> QuotaSummary = {
         Issue.record("Wrong adapter dispatched")
         return Self.summary()
@@ -38,6 +42,7 @@ struct CapacityDockProviderQuotaServiceTests {
                 return expected
             },
             refreshCursor: Self.unusedCursor,
+            refreshDevin: Self.unusedDevin,
             refreshGrok: Self.unusedGrok,
             refreshGrokBot: Self.unusedGrokBot,
             refreshZai: Self.unusedZai,
@@ -66,6 +71,7 @@ struct CapacityDockProviderQuotaServiceTests {
                 return Self.summary()
             },
             refreshCursor: Self.unusedCursor,
+            refreshDevin: Self.unusedDevin,
             refreshGrok: Self.unusedGrok,
             refreshGrokBot: Self.unusedGrokBot,
             refreshZai: { apiKey in
@@ -95,6 +101,7 @@ struct CapacityDockProviderQuotaServiceTests {
                 return Self.summary()
             },
             refreshCursor: { expected },
+            refreshDevin: Self.unusedDevin,
             refreshGrok: Self.unusedGrok,
             refreshGrokBot: Self.unusedGrokBot,
             refreshZai: Self.unusedZai,
@@ -119,6 +126,7 @@ struct CapacityDockProviderQuotaServiceTests {
                 return Self.summary()
             },
             refreshCursor: Self.unusedCursor,
+            refreshDevin: Self.unusedDevin,
             refreshGrok: { expected },
             refreshGrokBot: Self.unusedGrokBot,
             refreshZai: Self.unusedZai,
@@ -143,6 +151,7 @@ struct CapacityDockProviderQuotaServiceTests {
                 return Self.summary()
             },
             refreshCursor: Self.unusedCursor,
+            refreshDevin: Self.unusedDevin,
             refreshGrok: Self.unusedGrok,
             refreshGrokBot: { expected },
             refreshZai: Self.unusedZai,
@@ -167,6 +176,7 @@ struct CapacityDockProviderQuotaServiceTests {
                 return Self.summary()
             },
             refreshCursor: Self.unusedCursor,
+            refreshDevin: Self.unusedDevin,
             refreshGrok: Self.unusedGrok,
             refreshGrokBot: Self.unusedGrokBot,
             refreshZai: Self.unusedZai,
@@ -182,6 +192,39 @@ struct CapacityDockProviderQuotaServiceTests {
         #expect(result == expected)
     }
 
+    @Test("Devin dispatches to the local CLI cache and a missing cache is terminal")
+    func dispatchesDevin() async throws {
+        let expected = Self.summary(percent: 0.04)
+        let provider = try #require(CapacityDockProvider(rawValue: "devin"))
+        let cases: [(@Sendable () async throws -> QuotaSummary, CapacityDockProviderFetchFailureDisposition?)] = [
+            ({ expected }, nil),
+            ({ throw DevinSubscriptionService.FetchError.noCache }, .terminal),
+            ({ throw DevinSubscriptionService.FetchError.outOfDate }, .transient),
+            ({ throw DevinSubscriptionService.FetchError.parseFailure }, .transient),
+        ]
+        for (refresh, expectedDisposition) in cases {
+            let service = CapacityDockProviderQuotaService(dependencies: .init(
+                refreshClinePass: { _ in
+                    Issue.record("Wrong adapter dispatched")
+                    return Self.summary()
+                },
+                refreshCursor: Self.unusedCursor,
+                refreshDevin: refresh,
+                refreshGrok: Self.unusedGrok,
+                refreshGrokBot: Self.unusedGrokBot,
+                refreshZai: Self.unusedZai,
+                refreshZcode: Self.unusedZcode
+            ))
+            do {
+                let result = try await service.fetch(provider: provider, credential: CapacityDockProviderCredential())
+                #expect(expectedDisposition == nil)
+                #expect(result == expected)
+            } catch let failure as CapacityDockProviderFetchFailure {
+                #expect(failure.disposition == expectedDisposition)
+            }
+        }
+    }
+
     @Test("ClinePass requires its own saved API key")
     func requiresClinePassKey() async throws {
         let service = CapacityDockProviderQuotaService(dependencies: .init(
@@ -190,6 +233,7 @@ struct CapacityDockProviderQuotaServiceTests {
                 return Self.summary()
             },
             refreshCursor: Self.unusedCursor,
+            refreshDevin: Self.unusedDevin,
             refreshGrok: Self.unusedGrok,
             refreshGrokBot: Self.unusedGrokBot,
             refreshZai: Self.unusedZai,
@@ -224,6 +268,7 @@ struct CapacityDockProviderQuotaServiceTests {
                 return Self.summary()
             },
             refreshCursor: Self.unusedCursor,
+            refreshDevin: Self.unusedDevin,
             refreshGrok: Self.unusedGrok,
             refreshGrokBot: Self.unusedGrokBot,
             refreshZai: Self.unusedZai,
@@ -249,6 +294,7 @@ struct CapacityDockProviderQuotaServiceTests {
         let service = CapacityDockProviderQuotaService(dependencies: .init(
             refreshClinePass: { _ in throw ClinePassSubscriptionService.FetchError.authenticationRejected },
             refreshCursor: Self.unusedCursor,
+            refreshDevin: Self.unusedDevin,
             refreshGrok: Self.unusedGrok,
             refreshGrokBot: Self.unusedGrokBot,
             refreshZai: Self.unusedZai,
@@ -277,6 +323,7 @@ struct CapacityDockProviderQuotaServiceTests {
             let service = CapacityDockProviderQuotaService(dependencies: .init(
                 refreshClinePass: { _ in throw error },
                 refreshCursor: Self.unusedCursor,
+                refreshDevin: Self.unusedDevin,
                 refreshGrok: Self.unusedGrok,
                 refreshGrokBot: Self.unusedGrokBot,
                 refreshZai: Self.unusedZai,
@@ -316,6 +363,7 @@ struct CapacityDockProviderQuotaServiceTests {
                     return Self.summary()
                 },
                 refreshCursor: Self.unusedCursor,
+                refreshDevin: Self.unusedDevin,
                 refreshGrok: { throw error },
                 refreshGrokBot: Self.unusedGrokBot,
                 refreshZai: Self.unusedZai,
@@ -352,6 +400,7 @@ struct CapacityDockProviderQuotaServiceTests {
                     return Self.summary()
                 },
                 refreshCursor: Self.unusedCursor,
+                refreshDevin: Self.unusedDevin,
                 refreshGrok: Self.unusedGrok,
                 refreshGrokBot: Self.unusedGrokBot,
                 refreshZai: Self.unusedZai,
@@ -386,6 +435,7 @@ struct CapacityDockProviderQuotaServiceTests {
                 return Self.summary(percent: 0.73)
             },
             refreshCursor: Self.unusedCursor,
+            refreshDevin: Self.unusedDevin,
             refreshGrok: Self.unusedGrok,
             refreshGrokBot: Self.unusedGrokBot,
             refreshZai: Self.unusedZai,
@@ -436,8 +486,7 @@ struct CapacityDockProviderQuotaServiceTests {
 
     @Test("removeProvider drops only the target and keeps manual selection unlatched")
     func removeProviderPersistence() throws {
-        let suiteName = "CodeBurnMenubarTests.CapacityDockRemove.\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        let (defaults, suiteName) = TestDefaults.make("CodeBurnMenubarTests.CapacityDockRemove")
         defer { TestDefaults.forget(suiteName) }
         let cursor = try #require(CapacityDockProvider(rawValue: "cursor"))
         defaults.set(["codex", "cursor"], forKey: CapacityDockPreferences.selectedProvidersKey)

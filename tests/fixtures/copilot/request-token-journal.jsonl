@@ -1,0 +1,3 @@
+{"kind":0,"v":{"version":3,"creationDate":1780157113020,"sessionId":"chat-root-usage","requests":[{"requestId":"snapshot","modelId":"copilot/gpt-4o","message":{"text":"Inspect the code"},"promptTokens":12345,"completionTokens":678,"result":{}}]}}
+{"kind":2,"k":["requests"],"v":[{"requestId":"input-only","modelId":"copilot/gpt-4o","message":{"text":"Continue the inspection"},"completionTokens":0}]}
+{"kind":1,"k":["requests",1,"promptTokens"],"v":1000}

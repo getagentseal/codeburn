@@ -14,7 +14,7 @@ import { aggregateModelTotals } from './model-breakdown.js'
 import { buildDurableOverviewFromNormalizedIndex, buildDurablePeriod, hydrateDailyCacheFromNormalizedProjects, type ExcludedGatewayTotals } from './usage-aggregator.js'
 import { loadDailyCache, type DailyCache } from './daily-cache.js'
 import { exitAfterCacheCleanup } from './session-cache.js'
-import { getAllProviders } from './providers/index.js'
+import { getAllProviders, safeDiscoverSessions } from './providers/index.js'
 import { classHeaderLine, classTotals, findingBasis, findingClass, scanAndDetect, type FindingClass, type WasteFinding, type WasteAction, type OptimizeResult } from './optimize.js'
 import { appliedFixGlyph, formatAppliedFix, type AppliedFix } from './act/types.js'
 import { aggregateFileChurn, buildCoachingNotes, computePricingCoverage, medianTimeToFirstEditMs, scanUserCorrections, worstOneShotCategory, type ReworkedFile } from './workflow-insights.js'
@@ -1707,7 +1707,7 @@ export function InteractiveDashboard({ initialProjects, initialDailyHistoryProje
     let cancelled = false
     async function detect() {
       const found: string[] = []
-      for (const p of await getAllProviders()) { const s = await p.discoverSessions(); if (s.length > 0) found.push(p.name) }
+      for (const p of await getAllProviders()) { const s = await safeDiscoverSessions(p); if (s.length > 0) found.push(p.name) }
       if (!cancelled) setDetectedProviders(found)
     }
     detect()

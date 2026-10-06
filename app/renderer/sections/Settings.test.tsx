@@ -39,6 +39,8 @@ const mocks = vi.hoisted(() => ({
   telemetryStatus: vi.fn<() => Promise<TelemetryStatus | null>>(),
   openExternal: vi.fn<(url: string) => Promise<void>>(),
   setTelemetryEnabled: vi.fn<(enabled: boolean) => Promise<TelemetryStatus | null>>(),
+  getCursorSync: vi.fn<() => Promise<boolean>>(),
+  setCursorSync: vi.fn<(enabled: boolean) => Promise<void>>(),
 }))
 vi.mock('../lib/ipc', async orig => {
   const actual = await orig<typeof import('../lib/ipc')>()
@@ -567,6 +569,46 @@ describe('Settings', () => {
     // The providers pane detects live providers over a cheap fixed 1-day window,
     // decoupled from the global period, so it never asks for 'week' here.
     expect(mocks.getOverview).toHaveBeenCalledWith('today', 'all')
+  })
+
+  it('toggles the Cursor sync config key and shows the last sync under it', async () => {
+    mocks.getOverview.mockResolvedValue({
+      current: { providers: { cursor: 3.5 }, providerDetails: [{ id: 'cursor', label: 'Cursor', cost: 3.5 }] },
+      cursorSync: { enabled: true, state: 'no-login', lastSuccessAt: null, errorCode: 'login', error: 'Cursor login expired, open Cursor to sign in again' },
+    } as unknown as MenubarPayload)
+    mocks.getCursorSync.mockResolvedValue(true)
+    mocks.setCursorSync.mockResolvedValue(undefined)
+    const user = userEvent.setup()
+    render(<Settings period="week" />)
+    await user.click(screen.getByRole('button', { name: 'Providers' }))
+
+    const toggle = await screen.findByRole('switch', { name: 'Sync Cursor usage from cursor.com' })
+    expect(toggle).toHaveAttribute('aria-checked', 'true')
+    expect(screen.getByText('Cursor login expired, open Cursor to sign in again')).toHaveClass('cursor-sync-line', 'warn')
+
+    await user.click(toggle)
+    expect(mocks.setCursorSync).toHaveBeenCalledWith(false)
+    await waitFor(() => expect(toggle).toHaveAttribute('aria-checked', 'false'))
+    expect(screen.getByText("Downloads your own usage export with the Cursor app's login, at most once an hour.")).toBeInTheDocument()
+
+    await user.click(toggle)
+    expect(mocks.setCursorSync).toHaveBeenLastCalledWith(true)
+  })
+
+  it('shows the env override and disables the Cursor sync switch', async () => {
+    mocks.getOverview.mockResolvedValue({
+      current: { providers: { cursor: 3.5 }, providerDetails: [{ id: 'cursor', label: 'Cursor', cost: 3.5 }] },
+      cursorSync: { enabled: false, state: 'off', lastSuccessAt: null },
+    } as unknown as MenubarPayload)
+    mocks.getCursorSync.mockResolvedValue(true)
+    const user = userEvent.setup()
+    render(<Settings period="week" />)
+    await user.click(screen.getByRole('button', { name: 'Providers' }))
+
+    const toggle = await screen.findByRole('switch', { name: 'Sync Cursor usage from cursor.com' })
+    expect(toggle).toBeDisabled()
+    expect(toggle).toHaveAttribute('aria-checked', 'false')
+    expect(screen.getByText('Turned off by CODEBURN_CURSOR_SYNC=0')).toBeInTheDocument()
   })
 
   it('keys provider logos on the internal id from providerDetails', async () => {

@@ -63,7 +63,7 @@ export type ParsedProviderCall = {
   // breakdown; optional since most providers don't expose it.
   skills?: string[]
   timestamp: string
-  speed: 'standard' | 'fast'
+  speed: 'standard' | 'fast' | 'flex'
   deduplicationKey: string
   // Lines added/removed by this call's edits, counted from the provider's diff
   // records (Codex: `patch_apply_end.changes[*].unified_diff`). Numbers only;

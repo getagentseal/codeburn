@@ -596,6 +596,7 @@ code { font-family: var(--font-mono); }
   font-weight: 500;
 }
 .hero-note-warn { color: var(--sev-critical-ink); }
+.hero-note-caution { color: var(--sev-warning-ink); }
 .hero-note-saved { color: var(--sev-normal-ink); }
 .hero-note-muted { color: var(--label-2); }
 .hero-calls { font-size: 11px; color: var(--label-2); }

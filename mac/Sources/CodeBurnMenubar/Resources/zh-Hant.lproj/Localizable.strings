@@ -714,3 +714,14 @@
 "Anonymous usage statistics" = "匿名使用統計";
 "Managed by the CodeBurn desktop app. Change it there under Settings → Privacy & data." = "由 CodeBurn 桌面應用程式管理。請在設定 → 隱私與資料中更改。";
 "Optional usage statistics: the names of the models, tools and providers you use, with bucketed counts of how often each one came up, plus when the app is opened. A random install id, the app version and your country code travel with them. Never your prompts, your code, your project and file names, or exact amounts." = "選填的使用統計資訊:您使用的模型、工具和服務商的名稱,以及每項出現頻率的分段計數,還有應用程式的開啟次數。隨附的還有隨機安裝 ID、應用程式版本和國家/地區代碼。絕不包含您的提示詞、程式碼、專案與檔案名稱或確切金額。";
+
+/* MARK: Cursor usage sync */
+"Synced from cursor.com %@" = "已從 cursor.com 同步（%@）";
+"Not synced from cursor.com yet" = "尚未從 cursor.com 同步";
+"Cursor login expired, open Cursor to sign in again" = "Cursor 登入已過期，請開啟 Cursor 重新登入";
+"Couldn't reach cursor.com, will retry" = "無法連線到 cursor.com，將會重試";
+"Couldn't read the usage export from cursor.com, will retry" = "無法讀取 cursor.com 的用量匯出，將會重試";
+"Sync Cursor usage from cursor.com" = "從 cursor.com 同步 Cursor 用量";
+"Downloads your own usage export with the Cursor app's login, at most once an hour." = "使用 Cursor 應用的登入下載你自己的用量匯出，每小時最多一次。";
+"Turned off by CODEBURN_CURSOR_SYNC=0" = "已被 CODEBURN_CURSOR_SYNC=0 關閉";
+"Couldn't save the setting: config.json is invalid or locked" = "無法儲存設定：config.json 無效或已被鎖定";

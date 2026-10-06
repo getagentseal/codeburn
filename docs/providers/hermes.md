@@ -10,8 +10,10 @@ Hermes Agent CLI profiles.
 
 | Source | Path |
 |---|---|
-| Default Hermes profile | `$HERMES_HOME/state.db` if set, otherwise `~/.hermes/state.db` |
-| Named Hermes profiles | `$HERMES_HOME/profiles/<profile>/state.db` |
+| Default Hermes profile | `$HERMES_HOME/state.db` if set; otherwise `%LOCALAPPDATA%/hermes/state.db` on Windows (falling back to `AppData/Local/hermes` under the home directory), or `~/.hermes/state.db` on macOS/Linux |
+| Named Hermes profiles | `<Hermes home>/profiles/<profile>/state.db` |
+
+`HERMES_HOME` takes precedence on every platform, so it can point CodeBurn to a legacy or custom Hermes installation. Windows uses the same home for its default database and named profiles.
 
 ## Storage format
 
@@ -55,7 +57,7 @@ Terminal command arguments are exposed as `bashCommands` for CodeBurn's command 
 
 ## Caching
 
-The shared session cache fingerprints Hermes state DB files. `HERMES_HOME` is included in the provider environment fingerprint so changing the runtime home invalidates stale cached results.
+The shared session cache fingerprints Hermes state DB files. `HERMES_HOME` and `LOCALAPPDATA` are included in the provider environment fingerprint so changing either configured home invalidates stale cached results.
 
 ## Quirks
 
