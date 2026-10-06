@@ -38,7 +38,7 @@ type Line = {
   cwd?: string
   timestamp?: string
   model?: string
-  message?: { role?: string; content?: string | Block[] }
+  message?: { role?: string; content?: string | Block[]; meta?: { messageId?: string } }
   usage?: {
     inputTokens?: number
     outputTokens?: number
@@ -102,8 +102,9 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
         const id = str(line.id)
         const timestamp = str(line.timestamp)
         if (!id || !timestamp) continue
-        // Forked sessions copy the parent's entries, ids included, into a new file.
-        const deduplicationKey = `command-code:${id}`
+        // `id` is 8 hex chars, unique only within one file. meta.messageId is a
+        // full uuid and survives forks, which copy the parent's entries verbatim.
+        const deduplicationKey = `command-code:${str(line.message.meta?.messageId) ?? id}`
         if (seenKeys.has(deduplicationKey)) continue
         seenKeys.add(deduplicationKey)
 

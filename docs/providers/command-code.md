@@ -17,7 +17,7 @@ Only `<id>.jsonl` files are sessions. The CLI writes sidecars next to each one (
 JSONL, session format v3:
 
 - First line: `{type: "session", version, id, timestamp, cwd, parentSession?}`.
-- Then `{type: "message", id, parentId, timestamp, message: {role, content, meta}, model?, usage?}`. `content` is a string or an array of `text`, `thinking`, `tool_use` and `tool_result` blocks.
+- Then `{type: "message", id, parentId, timestamp, message: {role, content, meta: {messageId}}, model?, usage?}`. `content` is a string or an array of `text`, `thinking`, `tool_use` and `tool_result` blocks.
 - Assistant lines carry `model` (e.g. `moonshotai/Kimi-K3`, `deepseek/deepseek-v4-pro`) and `usage: {inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, costUsd}`.
 
 ## Token model
@@ -34,7 +34,7 @@ One call per assistant `message` line with `usage`.
 
 ## Deduplication
 
-`command-code:<message id>`. Forking a session copies the parent's message lines, ids included, into a new session file, so the key is not scoped to a session.
+`command-code:<message.meta.messageId>`, a full uuid. The top-level `id` is only 8 hex characters and unique within one file, so sessions can collide on it; it is used only as a fallback and for `turnId`. Forking a session copies the parent's message lines verbatim into a new session file, so the key is not scoped to a session.
 
 ## Quirks
 

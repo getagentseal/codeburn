@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { cp, mkdtemp, readFile, rm, writeFile } from 'fs/promises'
+import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'fs/promises'
 import { join } from 'path'
 import { tmpdir } from 'os'
 
@@ -55,7 +55,7 @@ describe('command-code provider', () => {
 
   it('maps one call field by field', async () => {
     const line = (await sessionLines()).map(l => JSON.parse(l)).find(l => l.usage)
-    const call = (await parseAll()).find(c => c.deduplicationKey === `command-code:${line.id}`)!
+    const call = (await parseAll()).find(c => c.deduplicationKey === `command-code:${line.message.meta.messageId}`)!
     expect(call).toMatchObject({
       provider: 'command-code',
       model: line.model,
@@ -66,6 +66,7 @@ describe('command-code provider', () => {
       costUSD: line.usage.costUsd,
       timestamp: line.timestamp,
       sessionId: SESSION,
+      turnId: `${SESSION}:${line.id}`,
       project: 'project-1',
       projectPath: '/work/project-1',
     })
@@ -92,18 +93,46 @@ describe('command-code provider', () => {
     expect(sources.every(s => /\/[^./]+\.jsonl$/.test(s.path))).toBe(true)
   })
 
-  it('dedupes duplicate lines and forked sessions by message id', async () => {
+  it('dedupes duplicate lines and forked sessions by meta.messageId', async () => {
     const lines = await sessionLines()
     const assistant = lines.find(l => l.includes('"usage"'))!
     await writeFile(join(dir, PROJECT, `${SESSION}.jsonl`), [...lines, assistant].join('\n') + '\n')
     const fork = [
       JSON.stringify({ type: 'session', version: 3, id: 'fork-session', timestamp: '2026-10-05T00:00:00.000Z', cwd: '/work/project-1' }),
-      ...lines.slice(1),
+      // A fork keeps meta.messageId; new short ids prove the key does not rely on them.
+      ...lines.slice(1).map(l => {
+        const entry = JSON.parse(l)
+        entry.id = `f${entry.id.slice(1)}`
+        return JSON.stringify(entry)
+      }),
     ]
     await writeFile(join(dir, PROJECT, 'fork-session.jsonl'), fork.join('\n') + '\n')
     const calls = await parseAll()
     expect(calls).toHaveLength(64)
     expect(sum(calls, 'costUSD')).toBeCloseTo(1.743431, 6)
+  })
+
+  it('keeps calls from different sessions that share a short id', async () => {
+    const call = (session: string, messageId: string) => [
+      JSON.stringify({ type: 'session', version: 3, id: session, timestamp: '2026-10-05T00:00:00.000Z', cwd: `/work/${session}` }),
+      JSON.stringify({ type: 'message', id: 'abcd1234', parentId: null, timestamp: '2026-10-05T00:00:01.000Z', model: 'moonshotai/Kimi-K3', message: { role: 'assistant', content: [], meta: { messageId } }, usage: { inputTokens: 10, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0.01 } }),
+    ].join('\n') + '\n'
+    const empty = await mkdtemp(join(tmpdir(), 'command-code-collide-'))
+    try {
+      await mkdir(join(empty, 'a'))
+      await mkdir(join(empty, 'b'))
+      await writeFile(join(empty, 'a', 'sa.jsonl'), call('sa', '11111111-1111-4111-8111-111111111111'))
+      await writeFile(join(empty, 'b', 'sb.jsonl'), call('sb', '22222222-2222-4222-8222-222222222222'))
+      const provider = createCommandCodeProvider(empty)
+      const seen = new Set<string>()
+      const calls: ParsedProviderCall[] = []
+      for (const source of await provider.discoverSessions()) {
+        for await (const c of provider.createSessionParser(source, seen).parse()) calls.push(c)
+      }
+      expect(calls).toHaveLength(2)
+    } finally {
+      await rm(empty, { recursive: true, force: true })
+    }
   })
 
   it('prices a call without costUsd from its tokens', async () => {
