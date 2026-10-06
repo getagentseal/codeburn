@@ -53,9 +53,9 @@ names the project), and write no `assistant_usage_events` rows. Copilot CLI
   when the session ends. Until then the requests show as calls with no tokens
   and $0. `session.usage_checkpoint` events carry a running `totalNanoAiu` but
   no tokens; they are not read, so credits come from one place only.
-- **Known gap.** A session that has both tokenless messages and session-store
-  rows (CLI 1.0.8x) still loses its output: the rows replace the rollup, and
-  rows carry output only for compaction requests.
+- **With session-store rows** (CLI 1.0.8x), the rows replace the rollup but
+  carry output only for compaction requests, so the leg's output serves through
+  its residual (rollup output minus compaction-row output).
 - **Not read.** VS Code's `agentSessionData/*/session.db`,
   `globalStorage/agent-host.db` and `globalStorage/github.copilot-chat/session-store.db`.
   `session.db` `turn_usage` does hold per-interaction totals
@@ -183,9 +183,10 @@ see the #927 ruling in `src/session-cache.ts`).
   Copilot AI credits (`codeburn plan set copilot-pro`). Billing-grade cost
   rewrite of every report is still upstream #890.
 
-  These CLI session-store rows are the **only** local source that carries an
-  exact credit figure. VS Code chat sessions and transcripts, the OTel
-  `agent-traces.db`, JetBrains stores and the CLI session-state JSONL never do,
+  These CLI session-store rows and the `session.shutdown` rollup's
+  `totalNanoAiu` (CLI and VS Code agent host) are the only local sources that
+  carry an exact credit figure. VS Code chat sessions and transcripts, the OTel
+  `agent-traces.db` and JetBrains stores never do,
   so on a typical machine most requests have no exact figure at all (#1199).
   Everything unrated is estimated instead: the request's tokens priced at the
   model's listed API rate, converted at 1 credit = $0.01. That is exactly how
@@ -204,7 +205,9 @@ see the #927 ruling in `src/session-cache.ts`).
   (`~9800 / 20000 AI Credits (estimated; 4 of 473 requests carry GitHub's exact
   figure)`), and `codeburn status --format json | jq .plans.copilot` carries
   `spentCredits` (exact only), `estimatedCredits` (exact plus estimate),
-  `creditRatedCalls` / `creditUnratedCalls`, `creditsIncomplete` and a plain
+  `creditRatedCalls` / `creditUnratedCalls` (requests by behavioral weight; a
+  session with any exact figure counts all its requests as rated),
+  `creditsIncomplete` and a plain
   `creditsNote`. The bar and `percentUsed` follow `estimatedCredits` while any
   request is unrated, and the exact figure once every request carries one.
   For the live authoritative number, use the menubar's GitHub quota endpoint

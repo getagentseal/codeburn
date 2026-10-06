@@ -274,9 +274,10 @@ import type { DateRange, ProjectSummary } from './types.js'
 // Codex Spark instead of $0. Only cost moves; call counts are unchanged, so no
 // PENDING_REDERIVE_PROVIDER_VERSIONS entry is needed.
 // v56: Copilot assistant.message events with no outputTokens (CLI 1.0.8x, the
-// VS Code agent host) count as calls, and their shutdown rollup carries the
-// output it previously dropped. Settled days re-derive; calls and cost only
-// rise, so no PENDING_REDERIVE_PROVIDER_VERSIONS entry is needed.
+// VS Code agent host) count as calls, and their shutdown rollup (or, under
+// session-store rows, its residual) carries the output it previously dropped.
+// Settled days re-derive; calls and cost only rise, so no
+// PENDING_REDERIVE_PROVIDER_VERSIONS entry is needed.
 export const DAILY_CACHE_VERSION = 56
 const MIN_SUPPORTED_VERSION = 28
 

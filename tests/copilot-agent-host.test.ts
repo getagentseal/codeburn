@@ -7,6 +7,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { fileURLToPath } from 'node:url'
+import { createRequire } from 'node:module'
 
 import { copilot } from '../src/providers/copilot.js'
 import { calculateCost } from '../src/models.js'
@@ -14,6 +15,7 @@ import { clearSessionCache, parseAllSessions } from '../src/parser.js'
 import { clearLoadCacheMemo } from '../src/session-cache.js'
 import { behavioralCallCount } from '../src/behavioral-weight.js'
 import { copilotCreditSpend } from '../src/plan-usage.js'
+import { isSqliteAvailable } from '../src/sqlite.js'
 import type { ParsedProviderCall } from '../src/providers/types.js'
 
 const SID = 'd700c59c-59d8-4928-bdd6-142587956874'
@@ -37,10 +39,10 @@ async function fixtureLines(): Promise<string[]> {
   return (await readFile(FIXTURE, 'utf-8')).split('\n').filter(l => l.trim())
 }
 
-async function writeSession(lines: string[]): Promise<string> {
-  const dir = join(tmp, 'session-state', SID)
+async function writeSession(lines: string[], sid = SID, cwd = '/home/dev/cb-verify/copilot-test'): Promise<string> {
+  const dir = join(tmp, 'session-state', sid)
   await mkdir(dir, { recursive: true })
-  await writeFile(join(dir, 'workspace.yaml'), `id: ${SID}\ncwd: /home/dev/cb-verify/copilot-test\n`)
+  await writeFile(join(dir, 'workspace.yaml'), `id: ${sid}\ncwd: ${cwd}\n`)
   const path = join(dir, 'events.jsonl')
   await writeFile(path, lines.join('\n') + '\n')
   return path
@@ -104,8 +106,8 @@ describe('copilot VS Code agent-host sessions', () => {
     expect(sum(calls, 'inputTokens')).toBe(TRUTH.input)
   })
 
-  async function serve(lines: string[]) {
-    await writeSession(lines)
+  async function serve(lines: string[], sid = SID, cwd?: string) {
+    await writeSession(lines, sid, cwd)
     vi.stubEnv('HOME', tmp)
     vi.stubEnv('USERPROFILE', tmp)
     vi.stubEnv('CODEBURN_CACHE_DIR', join(tmp, 'cache'))
@@ -133,7 +135,7 @@ describe('copilot VS Code agent-host sessions', () => {
     expect(calls.reduce((s, c) => s + c.usage.outputTokens, 0)).toBe(TRUTH.output)
     expect(calls.reduce((s, c) => s + c.usage.inputTokens, 0)).toBe(TRUTH.input)
     expect(calls.reduce((s, c) => s + c.usage.cacheReadInputTokens, 0)).toBe(TRUTH.cacheRead)
-    expect(copilotCreditSpend(projects).spentCredits).toBe(2.772045)
+    expect(copilotCreditSpend(projects)).toMatchObject({ spentCredits: 2.772045, creditRatedCalls: 10, creditUnratedCalls: 0 })
   })
 
   it('serves an open session as 10 calls with no tokens', async () => {
@@ -142,5 +144,46 @@ describe('copilot VS Code agent-host sessions', () => {
     expect(projects.map(p => p.project)).toEqual(['copilot-test'])
     expect(behavioralCallCount(calls)).toBe(TRUTH.calls)
     expect(calls.reduce((s, c) => s + c.usage.inputTokens + c.usage.outputTokens + c.costUSD, 0)).toBe(0)
+  })
+
+  // CLI 1.0.82: tokenless messages plus session-store rows, which carry output
+  // only for compaction requests. The leg's output must serve via the residual.
+  it.skipIf(!isSqliteAvailable())('CLI store session: output comes from the rollup residual, once', async () => {
+    const dir = fileURLToPath(new URL('./fixtures/copilot/cli-store-session/', import.meta.url))
+    const sid = 'e61538c6-6e3e-4607-b468-b38972f2ba35'
+    const rows = JSON.parse(await readFile(join(dir, 'store-rows.json'), 'utf-8')) as Array<Record<string, string | number>>
+    const dbPath = join(tmp, 'session-store.db')
+    const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite') as {
+      DatabaseSync: new (path: string) => { exec(sql: string): void; prepare(sql: string): { run(...p: unknown[]): void }; close(): void }
+    }
+    const db = new DatabaseSync(dbPath)
+    db.exec(`
+      CREATE TABLE sessions (id TEXT PRIMARY KEY, cwd TEXT, repository TEXT, created_at TEXT);
+      CREATE TABLE assistant_usage_events (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT, model TEXT,
+        input_tokens INTEGER, output_tokens INTEGER, cache_read_tokens INTEGER, cache_write_tokens INTEGER,
+        reasoning_tokens INTEGER, total_nano_aiu INTEGER, request_multiplier REAL, initiator TEXT, created_at TEXT);
+    `)
+    db.prepare('INSERT INTO sessions (id, cwd) VALUES (?, ?)').run(sid, '/home/dev/codeburn/app')
+    const insert = db.prepare(`INSERT INTO assistant_usage_events (session_id, model, input_tokens, output_tokens, cache_read_tokens,
+      cache_write_tokens, reasoning_tokens, total_nano_aiu, request_multiplier, initiator, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`)
+    for (const r of rows) {
+      insert.run(sid, r['model'], r['input_tokens'], r['output_tokens'], r['cache_read_tokens'], r['cache_write_tokens'],
+        r['reasoning_tokens'], r['total_nano_aiu'], r['request_multiplier'], r['initiator'], r['created_at'])
+    }
+    db.close()
+
+    const lines = (await readFile(join(dir, 'events.jsonl'), 'utf-8')).split('\n').filter(l => l.trim())
+    vi.stubEnv('CODEBURN_COPILOT_SESSION_STORE_DB', dbPath)
+    const { projects, calls } = await serve(lines, sid, '/home/dev/codeburn/app')
+
+    // Rollup ground truth: inputTokens 310,703 cache-inclusive, output 3,254.
+    const usage = (k: keyof (typeof calls)[number]['usage']) => calls.reduce((s, c) => s + c.usage[k], 0)
+    expect(behavioralCallCount(calls)).toBe(11)
+    expect(usage('outputTokens')).toBe(3_254)
+    expect(usage('inputTokens')).toBe(82)
+    expect(usage('cacheReadInputTokens')).toBe(270_680)
+    expect(usage('cacheCreationInputTokens')).toBe(39_941)
+    expect(calls.reduce((s, c) => s + c.costUSD, 0)).toBeCloseTo(calculateCost('claude-haiku-4.5', 82, 3_254, 39_941, 270_680, 0), 12)
+    expect(copilotCreditSpend(projects)).toMatchObject({ spentCredits: 9.334625, creditRatedCalls: 11, creditUnratedCalls: 0 })
   })
 })

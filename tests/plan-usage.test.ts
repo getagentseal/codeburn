@@ -550,7 +550,9 @@ describe('copilot AI credit plan math', () => {
 
     expect(usage.spentCredits).toBe(1.5)
     expect(usage.percentUsed).toBeCloseTo(0.1, 10)
-    expect(usage.creditsIncomplete).toBe(true)
+    // One request (the JSONL call), billed exactly by its paired row.
+    expect(usage.creditsIncomplete).toBe(false)
+    expect(usage.creditRatedCalls).toBe(1)
   })
 
   it('does not double credits when a paired rollup also carries nanoAiu', () => {
@@ -652,8 +654,9 @@ describe('copilot AI credit plan math', () => {
 
     expect(spend.spentCredits).toBe(1.5)
     expect(spend.estimatedCredits).toBe(1.5)
+    // Row and twin are one request.
     expect(spend.creditRatedCalls).toBe(1)
-    expect(spend.creditUnratedCalls).toBe(1)
+    expect(spend.creditUnratedCalls).toBe(0)
   })
 
   it('estimates only the sessions that carry no exact figure at all', () => {
@@ -665,7 +668,7 @@ describe('copilot AI credit plan math', () => {
           timestamp: '2026-08-05T12:00:00.000Z',
           nanoAiu: 1_500_000_000,
           supplementaryAccounting: true,
-        })],
+        }), usageCall({ provider: 'copilot', costUSD: 0, timestamp: '2026-08-05T12:00:01.000Z' })],
       ]),
       usageProject([
         usageCall({ provider: 'copilot', costUSD: 0.25, timestamp: '2026-08-06T12:00:00.000Z' }),

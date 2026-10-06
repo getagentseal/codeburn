@@ -4000,7 +4000,7 @@ export async function parseProviderSources(
   //   rows' own label — so neither a store row cached before events.jsonl
   //   existed nor an events.jsonl orphaned after a prune can split the
   //   session across two grouping keys.
-  type CopilotStamped = { ts: number; input: number; cacheRead: number; cacheWrite: number; reasoning: number; isCompaction?: boolean }
+  type CopilotStamped = { ts: number; input: number; output: number; cacheRead: number; cacheWrite: number; reasoning: number; isCompaction?: boolean }
   let copilotRecon: {
     storeKeys: Set<string>
     storeCalls: Map<string, CopilotStamped[]>
@@ -4073,6 +4073,10 @@ export async function parseProviderSources(
           const stamped: CopilotStamped = {
             ts,
             input: c.usage.inputTokens,
+            // Rollups carry output only for legs with no per-turn output, and
+            // store rows only for compaction requests, so this never meets the
+            // per-turn calls' output.
+            output: c.usage.outputTokens,
             cacheRead: c.usage.cacheReadInputTokens,
             cacheWrite: c.usage.cacheCreationInputTokens,
             reasoning: c.usage.reasoningTokens,
@@ -4389,6 +4393,7 @@ export async function parseProviderSources(
         const last = coalesced[coalesced.length - 1]
         if (last && last.ts === leg.ts) {
           last.input += leg.input
+          last.output += leg.output
           last.cacheRead += leg.cacheRead
           last.cacheWrite += leg.cacheWrite
           last.reasoning += leg.reasoning
@@ -4402,7 +4407,7 @@ export async function parseProviderSources(
       let prevLegTs = -Infinity
       for (let legIdx = 0; legIdx < coalesced.length; legIdx++) {
         const leg = coalesced[legIdx]!
-        const covered = { input: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0 }
+        const covered = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0 }
         // An in-session compaction RESETS the CLI's rollup counters, so a leg
         // containing one describes only its post-compaction requests. Starting
         // its interval at the previous leg would subtract the whole
@@ -4424,6 +4429,7 @@ export async function parseProviderSources(
           // over-serve per compaction stands.
           if (row.ts > intervalStart || (row.isCompaction && row.ts > prevLegTs)) {
             covered.input += row.input
+            covered.output += row.output
             covered.cacheRead += row.cacheRead
             covered.cacheWrite += row.cacheWrite
             covered.reasoning += row.reasoning
@@ -4432,10 +4438,11 @@ export async function parseProviderSources(
         }
         prevLegTs = leg.ts
         const input = Math.max(0, leg.input - covered.input)
+        const output = Math.max(0, leg.output - covered.output)
         const cacheRead = Math.max(0, leg.cacheRead - covered.cacheRead)
         const cacheWrite = Math.max(0, leg.cacheWrite - covered.cacheWrite)
         const reasoning = Math.max(0, leg.reasoning - covered.reasoning)
-        if (input === 0 && cacheRead === 0 && cacheWrite === 0 && reasoning === 0) continue
+        if (input === 0 && output === 0 && cacheRead === 0 && cacheWrite === 0 && reasoning === 0) continue
         if (dateRange) {
           const ts = new Date(leg.rawTs)
           if (Number.isNaN(ts.getTime()) || ts < dateRange.start || ts > dateRange.end) continue
@@ -4444,8 +4451,8 @@ export async function parseProviderSources(
         calls.push({
           provider: 'copilot',
           model,
-          usage: { inputTokens: input, outputTokens: 0, cacheCreationInputTokens: cacheWrite, cacheReadInputTokens: cacheRead, cachedInputTokens: 0, reasoningTokens: reasoning, webSearchRequests: 0 },
-          costUSD: calculateCost(model, input, 0, cacheWrite, cacheRead, 0),
+          usage: { inputTokens: input, outputTokens: output, cacheCreationInputTokens: cacheWrite, cacheReadInputTokens: cacheRead, cachedInputTokens: 0, reasoningTokens: reasoning, webSearchRequests: 0 },
+          costUSD: calculateCost(model, input, output, cacheWrite, cacheRead, 0),
           tools: [], mcpTools: [], skills: [], subagentTypes: [],
           hasAgentSpawn: false, hasPlanMode: false,
           speed: 'standard', timestamp: leg.rawTs, bashCommands: [],
