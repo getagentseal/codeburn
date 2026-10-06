@@ -596,8 +596,8 @@ describe('antigravity provider helpers', () => {
         provider: 'antigravity',
         model: 'gemini-3.1-pro-high',
         inputTokens: 30265,
-        outputTokens: 659,
-        reasoningTokens: 71,
+        outputTokens: 71,
+        reasoningTokens: 659,
         sessionId: fixture.conversationId,
         project: 'antigravity-cli',
       })
@@ -644,6 +644,35 @@ describe('antigravity provider helpers', () => {
       else process.env['CODEBURN_CACHE_DIR'] = previousCacheDir
       await rm(tempHome, { recursive: true, force: true })
     }
+  })
+
+  it('reads cache reads, thinking split and the placeholder model from standalone app gen_metadata', async () => {
+    if (!isSqliteAvailable()) return
+
+    await withTempAntigravityHome('codeburn-antigravity-standalone-', async (tempHome) => {
+      const fixture = JSON.parse(await readFile(
+        new URL('../fixtures/antigravity-standalone/gen-metadata.json', import.meta.url),
+        'utf-8',
+      )) as CurrentCliFixture
+      const conversationsDir = join(tempHome, '.gemini', 'antigravity', 'conversations')
+      await mkdir(conversationsDir, { recursive: true })
+      const dbPath = join(conversationsDir, `${fixture.conversationId}.db`)
+      createCurrentAntigravityCliDb(dbPath, fixture)
+
+      const calls = await collectAntigravityCalls({ path: dbPath, project: 'antigravity', provider: 'antigravity' })
+      const sum = (pick: (call: ParsedProviderCall) => number) => calls.reduce((total, call) => total + pick(call), 0)
+
+      expect(calls).toHaveLength(11)
+      expect(new Set(calls.map(call => call.model))).toEqual(new Set(['gemini-3.1-pro-high']))
+      expect(calls.every(call => call.costIsEstimated === true)).toBe(true)
+      expect(sum(call => call.inputTokens)).toBe(56038)
+      expect(sum(call => call.cacheReadInputTokens)).toBe(117202)
+      expect(sum(call => call.reasoningTokens)).toBe(1106)
+      expect(sum(call => call.outputTokens)).toBe(1158)
+      expect(calls[0]!.cacheReadInputTokens).toBe(0)
+      // gemini-3.1-pro-preview: $2/M input, $12/M output (thinking included), $0.20/M cache read.
+      expect(sum(call => call.costUSD)).toBeCloseTo(56038 * 2e-6 + 2264 * 12e-6 + 117202 * 0.2e-6, 9)
+    })
   })
 
   async function withTempAntigravityHome(prefix: string, fn: (tempHome: string) => Promise<void>): Promise<void> {

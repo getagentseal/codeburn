@@ -288,7 +288,12 @@ import type { DateRange, ProjectSummary } from './types.js'
 // tag instead of the session's last write. Settled days re-derive; a session
 // that crossed midnight moves calls to an earlier day, so cursor-agent joins
 // PENDING_REDERIVE_PROVIDER_VERSIONS at 58.
-export const DAILY_CACHE_VERSION = 58
+// v59: Antigravity reads cache-read tokens from gen_metadata and the RPC usage,
+// and the standalone app's placeholder-only model (MODEL_PLACEHOLDER_M16, stored
+// as "gemini-pro-default") prices as gemini-3.1-pro-high instead of $0. Cache
+// read and cost only rise; call counts are unchanged, so no
+// PENDING_REDERIVE_PROVIDER_VERSIONS entry is needed.
+export const DAILY_CACHE_VERSION = 59
 const MIN_SUPPORTED_VERSION = 28
 
 /// Providers whose per-day CALL COUNT means something different at

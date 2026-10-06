@@ -50,7 +50,7 @@ function conversationRoots(): readonly AntigravityConversationRoot[] {
     },
   ]
 }
-const CACHE_VERSION = 7
+const CACHE_VERSION = 8
 export const ANTIGRAVITY_CACHE_VERSION = CACHE_VERSION
 export const ANTIGRAVITY_LEGACY_CACHE_FILE = 'antigravity-results.json'
 export function antigravityCacheFileName(version = CACHE_VERSION): string {
@@ -77,6 +77,8 @@ type UsageEntry = {
   outputTokens: string
   thinkingOutputTokens?: string
   responseOutputTokens?: string
+  cacheReadTokens?: string
+  cacheWriteTokens?: string
   apiProvider: string
   responseId?: string
 }
@@ -782,15 +784,32 @@ function antigravitySqliteMetadataAttributes(chatFields: readonly ProtoField[]):
   return attributes
 }
 
-function antigravitySqliteModel(chatFields: readonly ProtoField[]): string {
+// The standalone app (2.19) writes only the placeholder enum and a generic
+// "gemini-pro-default" into gen_metadata, no display name. These are the ids
+// its own GetAvailableModels catalog resolved those placeholders to on 6 Oct
+// 2026 (the same ids the RPC path derives). A later app build can repoint a
+// placeholder, so calls resolved here are flagged as estimated.
+const PLACEHOLDER_MODELS: Record<string, string> = {
+  MODEL_PLACEHOLDER_M16: 'gemini-3.1-pro-high',
+  MODEL_PLACEHOLDER_M37: 'gemini-3.1-pro-high',
+  MODEL_PLACEHOLDER_M36: 'gemini-3.1-pro-low',
+  MODEL_PLACEHOLDER_M84: 'gemini-3.5-flash-high',
+  MODEL_PLACEHOLDER_M18: 'gemini-3-flash',
+  MODEL_PLACEHOLDER_M35: 'claude-sonnet-4-6',
+  MODEL_PLACEHOLDER_M26: 'claude-opus-4-6-thinking',
+}
+
+function antigravitySqliteModel(chatFields: readonly ProtoField[]): { model: string; estimated: boolean } {
   const attributes = antigravitySqliteMetadataAttributes(chatFields)
   const displayName = protoFieldText(firstProtoField(chatFields, 21))
+  const placeholderModel = PLACEHOLDER_MODELS[attributes.get('model_enum') ?? '']
+  if (!displayName && placeholderModel) return { model: placeholderModel, estimated: true }
   const rawModel = protoFieldText(firstProtoField(chatFields, 19))
     ?? attributes.get('model_enum')
     ?? displayName
     ?? 'unknown'
 
-  return getCanonicalModelId(rawModel, displayName)
+  return { model: getCanonicalModelId(rawModel, displayName), estimated: false }
 }
 
 // Decode a proto field that carries a time into an ISO-8601 string. Antigravity
@@ -968,11 +987,15 @@ function buildCallFromSqliteGenMetadataRow(
   const usageFields = parseProtoFields(protoFieldBytes(firstProtoField(chatFields, 4)) ?? new Uint8Array())
   if (usageFields.length === 0) return null
 
+  // exa.codeium_common_pb.ModelUsageStats: 1 model enum, 2 input (uncached),
+  // 3 output (thinking + response), 4 cache write, 5 cache read,
+  // 9 thinking output, 10 response output, 11 response id.
   const inputTokens = protoFieldPositiveInteger(firstProtoField(usageFields, 2))
-    || protoFieldPositiveInteger(firstProtoField(usageFields, 1))
   const totalOutputTokens = protoFieldPositiveInteger(firstProtoField(usageFields, 3))
-  let responseTokens = protoFieldPositiveInteger(firstProtoField(usageFields, 9))
-  let thinkingTokens = protoFieldPositiveInteger(firstProtoField(usageFields, 10))
+  const cacheWriteTokens = protoFieldPositiveInteger(firstProtoField(usageFields, 4))
+  const cacheReadTokens = protoFieldPositiveInteger(firstProtoField(usageFields, 5))
+  let thinkingTokens = protoFieldPositiveInteger(firstProtoField(usageFields, 9))
+  let responseTokens = protoFieldPositiveInteger(firstProtoField(usageFields, 10))
 
   if (responseTokens === 0 && thinkingTokens === 0) {
     responseTokens = totalOutputTokens
@@ -984,21 +1007,22 @@ function buildCallFromSqliteGenMetadataRow(
   if (inputTokens === 0 && totalOutputTokens === 0) return null
 
   const responseId = antigravitySqliteResponseId(usageFields, String(row.idx))
-  const model = antigravitySqliteModel(chatFields)
+  const { model, estimated } = antigravitySqliteModel(chatFields)
   const pricingModel = normalizePricingModel(model)
-  const costUSD = calculateCost(pricingModel, inputTokens, responseTokens + thinkingTokens, 0, 0, 0)
+  const costUSD = calculateCost(pricingModel, inputTokens, responseTokens + thinkingTokens, cacheWriteTokens, cacheReadTokens, 0)
 
   return {
     provider: 'antigravity',
     model,
     inputTokens,
     outputTokens: responseTokens,
-    cacheCreationInputTokens: 0,
-    cacheReadInputTokens: 0,
+    cacheCreationInputTokens: cacheWriteTokens,
+    cacheReadInputTokens: cacheReadTokens,
     cachedInputTokens: 0,
     reasoningTokens: thinkingTokens,
     webSearchRequests: 0,
     costUSD,
+    ...(estimated ? { costIsEstimated: true } : {}),
     tools: turnTools?.tools ?? [],
     bashCommands: turnTools?.bashCommands ?? [],
     ...(turnTools?.skills && turnTools.skills.length > 0 ? { skills: turnTools.skills } : {}),
@@ -1144,6 +1168,8 @@ function buildCallsFromGeneratorMetadata(
     const outputTokens = parseInt(usage.outputTokens ?? '0', 10)
     const thinkingTokens = parseInt(usage.thinkingOutputTokens ?? '0', 10)
     const responseTokens = parseInt(usage.responseOutputTokens ?? '0', 10)
+    const cacheReadTokens = parseInt(usage.cacheReadTokens ?? '0', 10)
+    const cacheWriteTokens = parseInt(usage.cacheWriteTokens ?? '0', 10)
 
     if (inputTokens === 0 && outputTokens === 0) continue
 
@@ -1153,15 +1179,15 @@ function buildCallsFromGeneratorMetadata(
     const model = dropPlaceholderModelId(modelMap[usage.model] ?? usage.model)
     const pricingModel = normalizePricingModel(model)
     const timestamp = entry.chatModel?.chatStartMetadata?.createdAt ?? ''
-    const costUSD = calculateCost(pricingModel, inputTokens, responseTokens + thinkingTokens, 0, 0, 0)
+    const costUSD = calculateCost(pricingModel, inputTokens, responseTokens + thinkingTokens, cacheWriteTokens, cacheReadTokens, 0)
 
     results.push({
       provider: 'antigravity',
       model,
       inputTokens,
       outputTokens: responseTokens,
-      cacheCreationInputTokens: 0,
-      cacheReadInputTokens: 0,
+      cacheCreationInputTokens: cacheWriteTokens,
+      cacheReadInputTokens: cacheReadTokens,
       cachedInputTokens: 0,
       reasoningTokens: thinkingTokens,
       webSearchRequests: 0,
