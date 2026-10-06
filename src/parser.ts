@@ -10,7 +10,7 @@ import { resolveSubagentAttribution, sessionIdentity } from './sessions-report.j
 import { normalizeContentBlocks, flatSlice, flatString } from './content-utils.js'
 import { discoverAllSessions, discoverAllSessionsWithFailures, getProvider } from './providers/index.js'
 import { evictCachedCodexResults, flushCodexCache, readCachedCodexResults, withCodexCacheDirectory, writeCachedCodexResults } from './codex-cache.js'
-import { antigravityCascadeIdFromPath, flushAntigravityCache, shouldReparseAntigravitySource } from './providers/antigravity.js'
+import { antigravityCascadeIdFromPath, flushAntigravityCache, preloadAntigravityCache, shouldReparseAntigravitySource } from './providers/antigravity.js'
 import { getClaudeConfigDirs, getDesktopSessionsDirs } from './providers/claude.js'
 import { kimicodeLineageForSource } from './providers/kimicode.js'
 import { isSqliteBusyError } from './sqlite.js'
@@ -3483,6 +3483,7 @@ export async function parseProviderSources(
   // for this whole parse transaction so a host changing CODEBURN_CACHE_DIR
   // before the final flush cannot redirect A's dirty state into (or past) B.
   const antigravityCacheDir = providerName === 'antigravity' ? getCodeburnCacheDir() : undefined
+  if (antigravityCacheDir && !readOnly) await preloadAntigravityCache(antigravityCacheDir)
 
   const section = getOrCreateProviderSection(diskCache, providerName)
   if (providerName === 'hermes' && !readOnly) {

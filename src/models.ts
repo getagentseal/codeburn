@@ -179,7 +179,9 @@ const GROK_4_6_HIGH_PROMPT_COSTS = buildCosts(4e-6, 12e-6, null, 1e-6, null)
 // codex sites and the parser.ts central recompute pass it; the Claude journal
 // paths and the copilot residual path do not, so a newly added provider whose
 // calls flow through those sites would silently stay tierless).
-export const TIERED_PRICING_PROVIDERS: ReadonlySet<string> = new Set(['codex'])
+// antigravity has no per-token bill of its own; its cost is the Gemini API
+// equivalent, and the Gemini API bills the above-200k tier per request.
+export const TIERED_PRICING_PROVIDERS: ReadonlySet<string> = new Set(['codex', 'antigravity'])
 
 // Swap in the vendor's high tier when a request's prompt crosses the published
 // threshold. A user-set priceOverride wins over any tier: the override row

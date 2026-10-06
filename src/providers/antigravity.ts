@@ -192,6 +192,7 @@ const cachedServers = new Map<string, Cached<ServerInfo | null>>()
 const cachedModelMaps = new Map<string, Cached<ModelMap>>()
 type AntigravityCacheState = { cache: AntigravityCache; dirty: boolean }
 const cacheStates = new Map<string, AntigravityCacheState>()
+const previousVersionCascades = new Map<string, Record<string, CachedCascade>>()
 
 // Dropped by the resident RSS guard. A dirty state holds cascades not yet on
 // disk, so it stays resident until its own flush publishes it. The server and
@@ -200,6 +201,7 @@ const cacheStates = new Map<string, AntigravityCacheState>()
 export function clearAntigravityCacheStates(): void {
   cachedServers.clear()
   cachedModelMaps.clear()
+  previousVersionCascades.clear()
   for (const [dir, state] of cacheStates) {
     if (!state.dirty) cacheStates.delete(dir)
   }
@@ -418,6 +420,28 @@ async function loadCache(cacheDir: string): Promise<AntigravityCacheState> {
   }
   cacheStates.set(cacheDir, state)
   return state
+}
+
+// A cache-version bump drops every .pb cascade, and .pb files are readable
+// only through the RPC, so with Antigravity closed they would vanish until it
+// is next opened. Serve the previous version's entry meanwhile; mtimeMs -1
+// makes the next run with the server up re-fetch it.
+async function adoptPreviousVersionCascade(cacheDir: string, state: AntigravityCacheState, cascadeId: string): Promise<CachedCascade | undefined> {
+  let cascades = previousVersionCascades.get(cacheDir)
+  if (!cascades) {
+    cascades = {}
+    try {
+      const cache = JSON.parse(await readFile(join(cacheDir, antigravityCacheFileName(CACHE_VERSION - 1)), 'utf-8')) as AntigravityCache
+      if (cache.version === CACHE_VERSION - 1 && cache.cascades && typeof cache.cascades === 'object') cascades = cache.cascades
+    } catch { /* no previous cache */ }
+    previousVersionCascades.set(cacheDir, cascades)
+  }
+  const previous = cascades[cascadeId]
+  if (!previous?.calls?.length) return undefined
+  const adopted = { mtimeMs: -1, sizeBytes: previous.sizeBytes, calls: previous.calls }
+  state.cache.cascades[cascadeId] = adopted
+  state.dirty = true
+  return adopted
 }
 
 async function flushCache(liveCascadeIds?: Set<string>, cacheDir = currentCacheDir()): Promise<void> {
@@ -982,6 +1006,7 @@ function buildCallFromSqliteGenMetadataRow(
   row: AntigravityGenMetadataRow,
   rootFields: readonly ProtoField[],
   turnTools?: TurnTools,
+  firstStepTimestamp = '',
 ): ParsedProviderCall | null {
   const chatFields = parseProtoFields(protoFieldBytes(firstProtoField(rootFields, 1)) ?? new Uint8Array())
   const usageFields = parseProtoFields(protoFieldBytes(firstProtoField(chatFields, 4)) ?? new Uint8Array())
@@ -1009,7 +1034,7 @@ function buildCallFromSqliteGenMetadataRow(
   const responseId = antigravitySqliteResponseId(usageFields, String(row.idx))
   const { model, estimated } = antigravitySqliteModel(chatFields)
   const pricingModel = normalizePricingModel(model)
-  const costUSD = calculateCost(pricingModel, inputTokens, responseTokens + thinkingTokens, cacheWriteTokens, cacheReadTokens, 0)
+  const costUSD = calculateCost(pricingModel, inputTokens, responseTokens + thinkingTokens, cacheWriteTokens, cacheReadTokens, 0, 'standard', 0, 'antigravity')
 
   return {
     provider: 'antigravity',
@@ -1027,7 +1052,7 @@ function buildCallFromSqliteGenMetadataRow(
     bashCommands: turnTools?.bashCommands ?? [],
     ...(turnTools?.skills && turnTools.skills.length > 0 ? { skills: turnTools.skills } : {}),
     ...(turnTools?.subagentTypes && turnTools.subagentTypes.length > 0 ? { subagentTypes: turnTools.subagentTypes } : {}),
-    timestamp: antigravitySqliteCreatedAt(chatFields),
+    timestamp: antigravitySqliteCreatedAt(chatFields) || firstStepTimestamp,
     speed: 'standard',
     deduplicationKey: `antigravity:${cascadeId}:${responseId}`,
     userMessage: '',
@@ -1063,7 +1088,15 @@ function buildCallsFromSqliteGenMetadata(
       }
     }
 
-    const call = buildCallFromSqliteGenMetadataRow(cascadeId, row, rootFields, turnTools)
+    // The standalone app leaves out ChatStartMetadata.created_at; the
+    // generation's first step carries the same time (steps.metadata #1, a
+    // Timestamp), which matches created_at to the second where both exist.
+    const firstStep = stepIndices.length > 0 ? stepMap.get(stepIndices[0]!) : undefined
+    const firstStepTimestamp = firstStep?.metadata
+      ? protoTimestampToIso(firstProtoField(parseProtoFields(genMetadataDataBytes(firstStep.metadata)), 1))
+      : ''
+
+    const call = buildCallFromSqliteGenMetadataRow(cascadeId, row, rootFields, turnTools, firstStepTimestamp)
     if (!call) continue
     if (seenResponseIds.has(call.deduplicationKey)) continue
     seenResponseIds.add(call.deduplicationKey)
@@ -1179,7 +1212,7 @@ function buildCallsFromGeneratorMetadata(
     const model = dropPlaceholderModelId(modelMap[usage.model] ?? usage.model)
     const pricingModel = normalizePricingModel(model)
     const timestamp = entry.chatModel?.chatStartMetadata?.createdAt ?? ''
-    const costUSD = calculateCost(pricingModel, inputTokens, responseTokens + thinkingTokens, cacheWriteTokens, cacheReadTokens, 0)
+    const costUSD = calculateCost(pricingModel, inputTokens, responseTokens + thinkingTokens, cacheWriteTokens, cacheReadTokens, 0, 'standard', 0, 'antigravity')
 
     results.push({
       provider: 'antigravity',
@@ -1434,7 +1467,14 @@ async function parseStatusLineCalls(source: SessionSource, seenKeys: Set<string>
 
 export function shouldReparseAntigravitySource(path: string, cachedTurnCount: number): boolean {
   if (cachedTurnCount === 0) return true
+  if (cacheStates.get(currentCacheDir())?.cache.cascades[antigravityCascadeIdFromPath(path)]?.mtimeMs === -1) return true
   return isAntigravityStatusLineEventsPath(path)
+}
+
+// Loads the results cache before the session cache decides which sources to
+// reparse, so a cascade served from the previous cache version is retried.
+export async function preloadAntigravityCache(cacheDir: string): Promise<void> {
+  await loadCache(resolve(cacheDir))
 }
 
 async function findCascadeSource(cascadeId: string): Promise<SessionSource | null> {
@@ -1630,8 +1670,11 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
 
       const server = await detectServer(antigravityAppDataDirFromSourcePath(source.path))
       if (!server) {
-        if (cached) {
-          for (const call of cached.calls) {
+        const fallback = cached ?? (source.path.toLowerCase().endsWith('.pb')
+          ? await adoptPreviousVersionCascade(currentCacheDir(), state, cascadeId)
+          : undefined)
+        if (fallback) {
+          for (const call of fallback.calls) {
             applyAntigravityProject(call, source, projectPath)
             if (seenKeys.has(call.deduplicationKey)) continue
             seenKeys.add(call.deduplicationKey)

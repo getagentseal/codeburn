@@ -95,9 +95,15 @@ RPC JSON names:
   `M35` Claude Sonnet 4.6, `M26` Claude Opus 4.6 (Thinking). These calls carry
   `costIsEstimated`, because a later app build can repoint a placeholder.
   `.pb` calls resolve the placeholder through the live catalog at parse time
-  and are not flagged. Gemini 3.1 Pro prices as `gemini-3.1-pro-preview`
-  ($2/M input, $12/M output, $0.20/M cache read; $4/$18/$0.40 above 200k
-  prompt tokens).
+  and are not flagged. Gemini 3.1 Pro prices as `gemini-3.1-pro-preview`:
+  $2/M input, $12/M output, $0.20/M cache read, and $4/$18/$0.40 per request
+  whose prompt (input + cache read) reaches 200,000 tokens. Google's rule is
+  "over 200k", so a prompt of exactly 200,000 gets the higher rate one token
+  early; the shared threshold check uses `>=` for every tiered provider.
+- **Timestamps:** `ChatStartMetadata.created_at` when present. Standalone-app
+  rows leave it out; they take the time of the generation's first step
+  (`steps.metadata` #1), which equals `created_at` to the second wherever both
+  exist. The file mtime is the last resort.
 - A placeholder that is in neither the table nor the live catalog stays
   unpriced and shows as `$0` under `codeburn models --unpriced`.
 
@@ -115,7 +121,7 @@ double-counted.
 
 ## Quirks
 
-- **`.pb` conversations need the live process.** `.db` conversations are read straight from SQLite; `.pb` ones only through the RPC, so with Antigravity closed they come from the results cache. Bumping the cache version drops that cache, so `.pb` history repopulates on the next run with Antigravity open.
+- **`.pb` conversations need the live process.** `.db` conversations are read straight from SQLite; `.pb` ones only through the RPC, so with Antigravity closed they come from the results cache. After a cache-version bump, a `.pb` cascade missing from the new file is served from the previous version's file (stored with `mtimeMs: -1`) until a run with Antigravity open re-fetches it.
 - `~/.gemini/antigravity-backup` is not scanned. On the machine checked it held only a copy of a conversation also under `antigravity` and `antigravity-ide`, which the cascade-id dedup would drop anyway.
 - **Antigravity CLI has a shorter capture window than the desktop app.** `agy`
   exposes its language server only while the CLI session is active. The status
