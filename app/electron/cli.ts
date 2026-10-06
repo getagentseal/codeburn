@@ -339,6 +339,9 @@ export function spawnEnvFor(bin: string): NodeJS.ProcessEnv {
  */
 /** A script run by this process's own runtime: Electron's binary acting as Node. */
 function nodeSpec(entry: string, args: string[]): SpawnSpec {
+  // A host whose own runtime is too old for the CLI (an IDE's Electron) names a real Node.
+  const node = process.env.CODEBURN_NODE_BIN
+  if (node && isAbsolute(node)) return { bin: node, args: [entry, ...args], env: spawnEnvFor(entry) }
   return {
     bin: process.execPath,
     args: [entry, ...args],

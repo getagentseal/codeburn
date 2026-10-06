@@ -331,6 +331,22 @@ describe('spawnSpecFor (bundled CLI runs via Electron-as-node)', () => {
     expect((spec.env.PATH ?? '').split(delimiter)[0]).toBe('/res/cli/dist')
   })
 
+  it('runs the bundle with CODEBURN_NODE_BIN instead, as plain Node, when a host names one', () => {
+    const saved = process.env.CODEBURN_NODE_BIN
+    process.env.CODEBURN_NODE_BIN = '/usr/local/bin/node'
+    try {
+      const spec = spawnSpecFor({ kind: 'bundled', entry: '/res/cli/dist/launch.js' }, ['serve', '--stdio'])
+      expect(spec.bin).toBe('/usr/local/bin/node')
+      expect(spec.args).toEqual(['/res/cli/dist/launch.js', 'serve', '--stdio'])
+      expect(spec.env.ELECTRON_RUN_AS_NODE).toBeUndefined()
+      process.env.CODEBURN_NODE_BIN = 'node'
+      expect(spawnSpecFor({ kind: 'bundled', entry: '/res/cli/dist/launch.js' }, []).bin).toBe(process.execPath)
+    } finally {
+      if (saved === undefined) delete process.env.CODEBURN_NODE_BIN
+      else process.env.CODEBURN_NODE_BIN = saved
+    }
+  })
+
   it('spawns an external CLI directly, with no run-as-node flag', () => {
     const spec = spawnSpecFor({ kind: 'external', bin: '/some/bin/codeburn' }, ['status'])
     expect(spec.bin).toBe('/some/bin/codeburn')
