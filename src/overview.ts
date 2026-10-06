@@ -339,9 +339,9 @@ export function renderOverview(
     out.push(heading('Top models'))
     out.push(renderTable(c,
       [{ header: 'Model' }, { header: 'Cost', right: true }, { header: 'Calls', right: true }, { header: 'Tokens', right: true }],
-      modelRows.map(([m, v]) => [modelRowKey(m), markEstimated(formatCost(v.cost), isEstimatedCost(v.cost, v.estimatedCost)), formatCount(v.calls), formatTokens(v.tokens)]),
+      modelRows.map(([m, v]) => [modelRowKey(m), markEstimated(formatCost(v.cost), isEstimatedCost(v.cost, v.estimatedCost, formatCost(v.cost))), formatCount(v.calls), formatTokens(v.tokens)]),
     ))
-    if (modelRows.some(([, v]) => isEstimatedCost(v.cost, v.estimatedCost))) {
+    if (modelRows.some(([, v]) => isEstimatedCost(v.cost, v.estimatedCost, formatCost(v.cost)))) {
       out.push('  ' + c.dim(ESTIMATED_COST_LEGEND))
     }
     out.push('')

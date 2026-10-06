@@ -151,7 +151,7 @@ struct AgentTabStrip: View {
         let estimated = periodAll.current.providerDetails
             .filter { filter.providerKeys.contains($0.id.lowercased()) || filter.providerKeys.contains($0.label.lowercased()) }
             .reduce(0.0) { $0 + ($1.estimatedCostUSD ?? 0) }
-        return isEstimatedCost(cost, estimated)
+        return isEstimatedCost(cost, estimated, shown: cost.asCompactCurrency())
     }
 
     private func cost(for filter: ProviderFilter) -> Double? {

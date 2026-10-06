@@ -26,6 +26,11 @@ describe('isEstimatedCost', () => {
     expect(isEstimatedCost(1.4375, 0.0043)).toBe(false)
   })
 
+  it('leaves a fully estimated figure unmarked when it reads as zero', () => {
+    expect(isEstimatedCost(0.0003, 0.0003, '$0.00')).toBe(false)
+    expect(isEstimatedCost(0.0003, 0.0003, '$0.0003')).toBe(true)
+  })
+
   it('leaves an exact row unmarked', () => {
     expect(isEstimatedCost(12, 0)).toBe(false)
     expect(isEstimatedCost(12, undefined)).toBe(false)

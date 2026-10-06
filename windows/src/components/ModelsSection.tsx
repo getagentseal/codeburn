@@ -39,8 +39,8 @@ export function ModelsSection({ models, inputTokens, outputTokens, cacheHitPerce
               counterfactual saving is text in its own column and is never added in. */}
           <FixedBar fraction={m.cost / maxCost} />
           <span className="row-name">{m.name}</span>
-          <span className="row-cost" style={{ minWidth: COL_COST }} title={isEstimatedCost(m.cost, m.estimatedCostUSD) ? ESTIMATED_COST_LEGEND : undefined}>
-            {isEstimatedCost(m.cost, m.estimatedCostUSD) ? '~' : ''}{formatCompactCurrency(m.cost, currency)}
+          <span className="row-cost" style={{ minWidth: COL_COST }} title={isEstimatedCost(m.cost, m.estimatedCostUSD, formatCompactCurrency(m.cost, currency)) ? ESTIMATED_COST_LEGEND : undefined}>
+            {isEstimatedCost(m.cost, m.estimatedCostUSD, formatCompactCurrency(m.cost, currency)) ? '~' : ''}{formatCompactCurrency(m.cost, currency)}
           </span>
           {showSavings && (
             <span
@@ -63,7 +63,7 @@ export function ModelsSection({ models, inputTokens, outputTokens, cacheHitPerce
           <span className="tokens-value">{Math.round(cacheHitPercent)}% cache hit</span>
         </div>
       )}
-      {models.some(m => isEstimatedCost(m.cost, m.estimatedCostUSD)) && (
+      {models.some(m => isEstimatedCost(m.cost, m.estimatedCostUSD, formatCompactCurrency(m.cost, currency))) && (
         <div className="tokens-line">
           <span className="tokens-value">{ESTIMATED_COST_LEGEND}</span>
         </div>

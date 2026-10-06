@@ -32,6 +32,10 @@ export type SessionRow = {
   durationMs: number
 }
 
+function sessionCostLabel(cost: number): string {
+  return `$${cost.toFixed(2)}`
+}
+
 function durationMs(startedAt: string, endedAt: string): number {
   const duration = new Date(endedAt).getTime() - new Date(startedAt).getTime()
   return Number.isFinite(duration) ? duration : 0
@@ -56,7 +60,7 @@ export function aggregateSessions(projects: ProjectSummary[]): SessionRow[] {
     endedAt: session.lastTimestamp,
     durationMs: durationMs(session.firstTimestamp, session.lastTimestamp),
     estimatedCost: session.totalEstimatedCostUSD ?? 0,
-    isEstimated: isEstimatedCost(session.totalCostUSD, session.totalEstimatedCostUSD),
+    isEstimated: isEstimatedCost(session.totalCostUSD, session.totalEstimatedCostUSD, sessionCostLabel(session.totalCostUSD)),
   })))
 }
 
@@ -183,7 +187,7 @@ function cellValue(row: SessionRow, key: SessionColumnKey): string {
     case 'project': return cleanSessionProjectLabel(row.project)
     case 'provider': return row.provider
     case 'models': return sessionModelLabel(row.models)
-    case 'cost': return markEstimated(`$${row.cost.toFixed(2)}`, row.isEstimated)
+    case 'cost': return markEstimated(sessionCostLabel(row.cost), row.isEstimated)
     case 'saved': return `$${row.savingsUSD.toFixed(2)}`
     case 'calls': return row.calls.toLocaleString('en-US')
     case 'turns': return row.turns.toLocaleString('en-US')
@@ -311,7 +315,7 @@ export function renderWorkUnitTable(rows: SessionRow[], resolution: WorkUnitReso
       models,
       cost: sum(row => row.cost),
       estimatedCost: sum(row => row.estimatedCost),
-      isEstimated: isEstimatedCost(sum(row => row.cost), sum(row => row.estimatedCost)),
+      isEstimated: isEstimatedCost(sum(row => row.cost), sum(row => row.estimatedCost), sessionCostLabel(sum(row => row.cost))),
       savingsUSD: sum(row => row.savingsUSD),
       calls: sum(row => row.calls),
       turns: sum(row => row.turns),

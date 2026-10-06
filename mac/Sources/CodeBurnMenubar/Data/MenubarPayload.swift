@@ -508,10 +508,12 @@ struct ProviderDetail: Codable, Sendable {
 }
 
 /// Same rule as the CLI (src/format.ts isEstimatedCost): a figure carries the
-/// `~` marker once its estimated portion is at least 1% of it.
-func isEstimatedCost(_ cost: Double, _ estimatedCostUSD: Double?) -> Bool {
+/// `~` marker once its estimated portion is at least 1% of it, unless `shown`
+/// (the amount as printed) reads as zero.
+func isEstimatedCost(_ cost: Double, _ estimatedCostUSD: Double?, shown: String) -> Bool {
     let estimated = estimatedCostUSD ?? 0
     return estimated > 0 && estimated >= cost * 0.01
+        && shown.contains(where: { ("1"..."9").contains($0) })
 }
 
 enum ProviderVisibility {
@@ -592,7 +594,7 @@ struct ModelEntry: Codable, Sendable {
     /// Portion of `cost` priced from estimates. Nil on older CLIs.
     let estimatedCostUSD: Double?
 
-    var isEstimated: Bool { isEstimatedCost(cost, estimatedCostUSD) }
+    @MainActor var isEstimated: Bool { isEstimatedCost(cost, estimatedCostUSD, shown: cost.asCompactCurrency()) }
 
     /// Whether any per-model count arrived. A row with none (legacy payload)
     /// renders without the secondary token line rather than as a run of dashes.

@@ -17,10 +17,11 @@ export function formatUsd(n: number): string {
 }
 
 /** Same rule as the CLI (src/format.ts isEstimatedCost): a row is marked `~`
- *  once its estimated portion is at least 1% of its cost. */
+ *  once its estimated portion is at least 1% of its cost, unless the amount
+ *  reads as zero in the active currency. */
 export function isEstimatedCost(cost: number, estimatedCost: number | undefined): boolean {
   const estimated = estimatedCost ?? 0
-  return estimated > 0 && estimated >= cost * 0.01
+  return estimated > 0 && estimated >= cost * 0.01 && /[1-9]/.test(formatUsd(cost))
 }
 
 /** Raw-USD input formatted against an explicit payload currency. This keeps a
