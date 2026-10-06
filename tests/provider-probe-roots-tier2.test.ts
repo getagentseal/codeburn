@@ -18,6 +18,12 @@ import { createDevinProvider } from '../src/providers/devin.js'
 import { createGeminiProvider, getGeminiTmpDir } from '../src/providers/gemini.js'
 import { createKiroProvider, getKiroAgentDirCandidates } from '../src/providers/kiro.js'
 import { createMistralVibeProvider, getMistralVibeSessionsDir } from '../src/providers/mistral-vibe.js'
+import {
+  createWorkBuddyProvider,
+  getWorkBuddyProjectsDirs,
+  WORKBUDDY_CONFIG,
+  WORKBUDDYAI_CONFIG,
+} from '../src/providers/workbuddy.js'
 
 // #899 Tier 2, batch 1. probeRoots() must report the roots discovery actually
 // reads: a probe pointing somewhere discovery never looks is worse than none,
@@ -120,12 +126,15 @@ describe('probeRoots mirrors discovery resolution (Tier 2, batch 1)', () => {
 describe('probeRoots mirrors discovery resolution (Tier 2, batch 2)', () => {
   const originalCodebuffDataDir = process.env['CODEBUFF_DATA_DIR']
   const originalVibeHome = process.env['VIBE_HOME']
+  const originalWorkbuddyHome = process.env['WORKBUDDY_HOME']
 
   afterEach(() => {
     if (originalCodebuffDataDir === undefined) delete process.env['CODEBUFF_DATA_DIR']
     else process.env['CODEBUFF_DATA_DIR'] = originalCodebuffDataDir
     if (originalVibeHome === undefined) delete process.env['VIBE_HOME']
     else process.env['VIBE_HOME'] = originalVibeHome
+    if (originalWorkbuddyHome === undefined) delete process.env['WORKBUDDY_HOME']
+    else process.env['WORKBUDDY_HOME'] = originalWorkbuddyHome
   })
 
   it('codebuff reports all three CHANNELS on default, and empty factory is unset', async () => {
@@ -268,5 +277,37 @@ describe('probeRoots mirrors discovery resolution (Tier 2, batch 2)', () => {
       { path: join('/tmp/vibe-home', 'logs', 'session'), label: 'sessions' },
     ])
     expect(getMistralVibeSessionsDir()).toBe(join('/tmp/vibe-home', 'logs', 'session'))
+  })
+
+  it('workbuddy reports the override dir, or the default root plus the legacy .codebuddy fallback', async () => {
+    // The factory arg is the projects dir verbatim (see the parameter name):
+    // when set, discovery skips the default and the legacy dir, so the probe
+    // must not keep advertising them.
+    expect(await createWorkBuddyProvider(WORKBUDDY_CONFIG, '/tmp/wb-a').probeRoots!()).toEqual([
+      { path: '/tmp/wb-a', label: 'projects' },
+    ])
+
+    // Default: primary home plus the ~/.codebuddy legacy fallback, in scan
+    // order — the same list getWorkBuddyProjectsDirs hands discovery.
+    const defaults = await createWorkBuddyProvider(WORKBUDDY_CONFIG).probeRoots!()
+    expect(defaults).toEqual([
+      { path: join(homedir(), '.workbuddy', 'projects'), label: 'projects' },
+      { path: join(homedir(), '.codebuddy', 'projects'), label: 'legacy projects' },
+    ])
+    expect(defaults.map(r => r.path)).toEqual(getWorkBuddyProjectsDirs(WORKBUDDY_CONFIG))
+    for (const root of defaults) expect(isAbsolute(root.path)).toBe(true)
+
+    // WORKBUDDY_HOME replaces only the primary root — the legacy ~/.codebuddy
+    // fallback stays scanned, matching getWorkBuddyProjectsDirs.
+    process.env['WORKBUDDY_HOME'] = '/tmp/wb-env'
+    expect(await createWorkBuddyProvider(WORKBUDDY_CONFIG).probeRoots!()).toEqual([
+      { path: join('/tmp/wb-env', 'projects'), label: 'projects' },
+      { path: join(homedir(), '.codebuddy', 'projects'), label: 'legacy projects' },
+    ])
+
+    // WorkBuddy AI has no legacy dir.
+    expect(await createWorkBuddyProvider(WORKBUDDYAI_CONFIG).probeRoots!()).toEqual([
+      { path: join(homedir(), '.workbuddy-ai', 'projects'), label: 'projects' },
+    ])
   })
 })
