@@ -12,7 +12,7 @@ import { allProviderNames, getAllProviders, safeDiscoverSessions } from './provi
 import { getProvider } from './providers/index.js'
 import { getClaudeConfigDirs, getDesktopSessionsDirs } from './providers/claude.js'
 import { convertCost, formatCost } from './currency.js'
-import { excludedGatewayNote, formatTokens, renderStatusBar } from './format.js'
+import { ESTIMATED_COST_LEGEND, excludedGatewayNote, formatTokens, isEstimatedCost, renderStatusBar } from './format.js'
 import { toDateString } from './daily-cache.js'
 import { statusSnapshotSemanticKey } from './status-snapshot-semantic.js'
 import { dateKey } from './day-aggregator.js'
@@ -2898,6 +2898,7 @@ program
       process.stdout.write(renderMarkdown(renderRows, { byTask: !!opts.byTask, byAgent: !!opts.byAgent, showTotals: opts.totals !== false }) + '\n')
     } else if (fmt === 'table') {
       process.stdout.write(renderTable(renderRows, { byTask: !!opts.byTask, byAgent: !!opts.byAgent, showTotals: opts.totals !== false }) + '\n')
+      if (renderRows.some(r => isEstimatedCost(r.costUSD, r.estimatedCostUSD))) process.stdout.write(ESTIMATED_COST_LEGEND + '\n')
       if (renderRows.some(r => r.peakUSD != null || r.offPeakUSD != null)) {
         process.stdout.write('Peak / Off-peak: consumption shares of the list-rate cost — DeepSeek peak hours are Mon–Fri 01:00–04:00 and 06:00–10:00 UTC (excl. Chinese public holidays), GLM/Z.ai peak hours are Mon–Fri 14:00–18:00 Singapore time. The vendors discount off-peak usage on their own bills (DeepSeek USD at 0.5x, Z.ai plan credits at 0.5x); the split only shows where usage ran. First-party routes only (dsh, zcode).\n')
       }

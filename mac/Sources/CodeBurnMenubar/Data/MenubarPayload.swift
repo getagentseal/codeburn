@@ -452,6 +452,8 @@ struct ProviderDetail: Codable, Sendable {
     /// rate inside `cost`. Nil on CLIs that predate per-provider cache
     /// accounting: absent means unknown, never a fabricated zero.
     let cacheReadTokens: Int?
+    /// Portion of `cost` priced from estimates. Nil on older CLIs and when zero.
+    let estimatedCostUSD: Double?
 
     init(
         id: String,
@@ -463,7 +465,8 @@ struct ProviderDetail: Codable, Sendable {
         outputTokens: Int? = nil,
         sessions: Int? = nil,
         sessionCountBasis: String? = nil,
-        cacheReadTokens: Int? = nil
+        cacheReadTokens: Int? = nil,
+        estimatedCostUSD: Double? = nil
     ) {
         self.id = id
         self.label = label
@@ -475,10 +478,11 @@ struct ProviderDetail: Codable, Sendable {
         self.sessions = sessions
         self.sessionCountBasis = sessionCountBasis
         self.cacheReadTokens = cacheReadTokens
+        self.estimatedCostUSD = estimatedCostUSD
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, label, cost, calls, hasUsage, inputTokens, outputTokens, sessions, sessionCountBasis, cacheReadTokens
+        case id, label, cost, calls, hasUsage, inputTokens, outputTokens, sessions, sessionCountBasis, cacheReadTokens, estimatedCostUSD
     }
 
     init(from decoder: Decoder) throws {
@@ -499,7 +503,15 @@ struct ProviderDetail: Codable, Sendable {
         sessions = try c.decodeIfPresent(Int.self, forKey: .sessions)
         sessionCountBasis = try c.decodeIfPresent(String.self, forKey: .sessionCountBasis)
         cacheReadTokens = try c.decodeIfPresent(Int.self, forKey: .cacheReadTokens)
+        estimatedCostUSD = try c.decodeIfPresent(Double.self, forKey: .estimatedCostUSD)
     }
+}
+
+/// Same rule as the CLI (src/format.ts isEstimatedCost): a figure carries the
+/// `~` marker once its estimated portion is at least 1% of it.
+func isEstimatedCost(_ cost: Double, _ estimatedCostUSD: Double?) -> Bool {
+    let estimated = estimatedCostUSD ?? 0
+    return estimated > 0 && estimated >= cost * 0.01
 }
 
 enum ProviderVisibility {
@@ -577,6 +589,10 @@ struct ModelEntry: Codable, Sendable {
     let outputTokens: Int?
     let cacheReadTokens: Int?
     let cacheWriteTokens: Int?
+    /// Portion of `cost` priced from estimates. Nil on older CLIs.
+    let estimatedCostUSD: Double?
+
+    var isEstimated: Bool { isEstimatedCost(cost, estimatedCostUSD) }
 
     /// Whether any per-model count arrived. A row with none (legacy payload)
     /// renders without the secondary token line rather than as a run of dashes.
@@ -592,7 +608,8 @@ struct ModelEntry: Codable, Sendable {
          inputTokens: Int? = nil,
          outputTokens: Int? = nil,
          cacheReadTokens: Int? = nil,
-         cacheWriteTokens: Int? = nil) {
+         cacheWriteTokens: Int? = nil,
+         estimatedCostUSD: Double? = nil) {
         self.name = name
         self.cost = cost
         self.savingsUSD = savingsUSD
@@ -602,6 +619,7 @@ struct ModelEntry: Codable, Sendable {
         self.outputTokens = outputTokens
         self.cacheReadTokens = cacheReadTokens
         self.cacheWriteTokens = cacheWriteTokens
+        self.estimatedCostUSD = estimatedCostUSD
     }
 
     init(from decoder: Decoder) throws {
@@ -615,11 +633,12 @@ struct ModelEntry: Codable, Sendable {
         outputTokens = try c.decodeIfPresent(Int.self, forKey: .outputTokens)
         cacheReadTokens = try c.decodeIfPresent(Int.self, forKey: .cacheReadTokens)
         cacheWriteTokens = try c.decodeIfPresent(Int.self, forKey: .cacheWriteTokens)
+        estimatedCostUSD = try c.decodeIfPresent(Double.self, forKey: .estimatedCostUSD)
     }
 
     private enum CodingKeys: String, CodingKey {
         case name, cost, savingsUSD, savingsBaselineModel, calls
-        case inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens
+        case inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, estimatedCostUSD
     }
 }
 

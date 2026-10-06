@@ -271,6 +271,7 @@
 "%@%% cache hit" = "キャッシュヒット率 %@%%";
 "1 model unpriced, counted at $0 · %@ tokens" = "価格未設定のモデル1件、$0として計上 · %@トークン";
 "%1$lld models unpriced, counted at $0 · %2$@ tokens" = "価格未設定のモデル%1$lld件、$0として計上 · %2$@トークン";
+"~ estimated cost (priced from estimated tokens)" = "~ 推定コスト（推定トークン数から算出）";
 
 /* MARK: Pull requests section */
 "Pull requests" = "プルリクエスト";

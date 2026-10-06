@@ -113,6 +113,7 @@ export const shared: SectionCatalog = {
     'shared.usd.cacheRead': 'Cache read',
     'shared.usd.cacheWrite': 'Cache write',
     'shared.usd.calls': 'Calls',
+    'shared.usd.estimated': '~ estimated cost (priced from estimated tokens)',
 
     'shared.aboutModal.closeAria': 'Close About',
     'shared.aboutModal.tagline': 'Know where every token goes, across every AI coding tool.',
@@ -237,6 +238,7 @@ export const shared: SectionCatalog = {
     'shared.usd.cacheRead': 'Lecture cache',
     'shared.usd.cacheWrite': 'Écriture cache',
     'shared.usd.calls': 'Appels',
+    'shared.usd.estimated': '~ coût estimé (calculé à partir de jetons estimés)',
 
     'shared.aboutModal.closeAria': 'Fermer À propos',
     'shared.aboutModal.tagline': 'Sachez où va chaque token, sur tous vos outils de codage IA.',
@@ -361,6 +363,7 @@ export const shared: SectionCatalog = {
     'shared.usd.cacheRead': 'キャッシュ読み込み',
     'shared.usd.cacheWrite': 'キャッシュ書き込み',
     'shared.usd.calls': '呼び出し',
+    'shared.usd.estimated': '~ 推定コスト(推定トークン数から算出)',
 
     'shared.aboutModal.closeAria': '「概要」を閉じる',
     'shared.aboutModal.tagline': 'あらゆるAIコーディングツールで、トークンの行方をすべて把握。',
@@ -485,6 +488,7 @@ export const shared: SectionCatalog = {
     'shared.usd.cacheRead': '캐시 읽기',
     'shared.usd.cacheWrite': '캐시 쓰기',
     'shared.usd.calls': '호출',
+    'shared.usd.estimated': '~ 추정 비용(추정 토큰 수로 산출)',
 
     'shared.aboutModal.closeAria': '정보 닫기',
     'shared.aboutModal.tagline': '모든 AI 코딩 도구에서 모든 토큰의 사용처를 확인하세요.',
@@ -609,6 +613,7 @@ export const shared: SectionCatalog = {
     'shared.usd.cacheRead': '缓存读取',
     'shared.usd.cacheWrite': '缓存写入',
     'shared.usd.calls': '调用',
+    'shared.usd.estimated': '~ 估算成本(按估算的 token 数计价)',
 
     'shared.aboutModal.closeAria': '关闭关于',
     'shared.aboutModal.tagline': '掌握每个 Token 的去向，覆盖所有 AI 编程工具。',
@@ -733,6 +738,7 @@ export const shared: SectionCatalog = {
     'shared.usd.cacheRead': '快取讀取',
     'shared.usd.cacheWrite': '快取寫入',
     'shared.usd.calls': '呼叫',
+    'shared.usd.estimated': '~ 估算成本(依估算的 token 數計價)',
 
     'shared.aboutModal.closeAria': '關閉關於',
     'shared.aboutModal.tagline': '掌握每個 Token 的去向，涵蓋所有 AI 程式設計工具。',

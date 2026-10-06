@@ -48,6 +48,19 @@ struct ModelEntryTokenCountsTests {
         #expect(row.hasTokenCounts)
     }
 
+    @Test("marks fully and partly estimated rows, not exact ones or sub-1% slivers")
+    func estimatedMarker() throws {
+        let payload = try decode("""
+        [
+          { "name": "Cursor (auto)", "cost": 579.13, "savingsUSD": 0, "savingsBaselineModel": "", "calls": 9, "estimatedCostUSD": 579.13 },
+          { "name": "Kimi K3", "cost": 177.51, "savingsUSD": 0, "savingsBaselineModel": "", "calls": 9, "estimatedCostUSD": 20 },
+          { "name": "GPT-5.6 Terra", "cost": 1.44, "savingsUSD": 0, "savingsBaselineModel": "", "calls": 9, "estimatedCostUSD": 0.004 },
+          { "name": "Opus 5.5", "cost": 3771.39, "savingsUSD": 0, "savingsBaselineModel": "", "calls": 9 }
+        ]
+        """)
+        #expect(payload.current.topModels.map(\.isEstimated) == [true, true, false, false])
+    }
+
     @Test("counts stay nil on legacy rows that predate the fields")
     func legacyRowsStayNil() throws {
         let payload = try decode("""

@@ -11,7 +11,7 @@ import { StaleBanner } from '../components/StaleBanner'
 import { DUR, motionEnabled, useBarGrowIn } from '../lib/motion'
 import { useOptimizeSnapshot } from '../hooks/useOptimizeSnapshot'
 import { type Polled, usePolled } from '../hooks/usePolled'
-import { asOfLabel, formatCompact, formatCount, formatUsd, formatUsdWithCurrency } from '../lib/format'
+import { asOfLabel, formatCompact, formatCount, formatUsd, formatUsdWithCurrency, isEstimatedCost } from '../lib/format'
 import { Usd, sumTokens, tokensOf, useUsdPop } from '../components/Usd'
 import { codeburn } from '../lib/ipc'
 import {
@@ -650,6 +650,8 @@ type AggregatedModel = {
   cacheReadTokens?: number
   // No column of its own; the cost cell's token popover reads it.
   cacheWriteTokens?: number
+  // Absent on the history.daily fallback, which carries no estimated split.
+  estimatedCostUSD?: number
 }
 
 /** Provider-filtered source: `current.topModels` is already period/range/provider-scoped by the CLI. */
@@ -663,6 +665,7 @@ function topModelsToAggregated(models: MenubarPayload['current']['topModels']): 
       ...(model.outputTokens === undefined ? {} : { outputTokens: model.outputTokens }),
       ...(model.cacheReadTokens === undefined ? {} : { cacheReadTokens: model.cacheReadTokens }),
       ...(model.cacheWriteTokens === undefined ? {} : { cacheWriteTokens: model.cacheWriteTokens }),
+      ...(model.estimatedCostUSD === undefined ? {} : { estimatedCostUSD: model.estimatedCostUSD }),
     }))
     .sort((a, b) => b.cost - a.cost)
 }
@@ -716,7 +719,7 @@ function ModelsTable({ models, onSelectModel }: { models: AggregatedModel[]; onS
               <td className="num mono">{model.inputTokens === undefined ? '—' : formatCompact(model.inputTokens)}</td>
               <td className="num mono">{model.outputTokens === undefined ? '—' : formatCompact(model.outputTokens)}</td>
               <td className="num mono">{model.cacheReadTokens === undefined ? '—' : formatCompact(model.cacheReadTokens)}</td>
-              <td className="num mono"><Usd value={model.cost} tokens={tokensOf(model)} /></td>
+              <td className="num mono"><Usd value={model.cost} tokens={tokensOf(model)} estimated={isEstimatedCost(model.cost, model.estimatedCostUSD)} /></td>
               <td className="num">{model.calls.toLocaleString('en-US')}</td>
             </tr>
           ))}

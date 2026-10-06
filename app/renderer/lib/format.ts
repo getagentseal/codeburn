@@ -16,6 +16,13 @@ export function formatUsd(n: number): string {
   return formatUsdWithCurrency(n, activeCurrency)
 }
 
+/** Same rule as the CLI (src/format.ts isEstimatedCost): a row is marked `~`
+ *  once its estimated portion is at least 1% of its cost. */
+export function isEstimatedCost(cost: number, estimatedCost: number | undefined): boolean {
+  const estimated = estimatedCost ?? 0
+  return estimated > 0 && estimated >= cost * 0.01
+}
+
 /** Raw-USD input formatted against an explicit payload currency. This keeps a
  * persisted exact snapshot correct on its very first paint, before App's
  * global active-currency effect has had a chance to run. */

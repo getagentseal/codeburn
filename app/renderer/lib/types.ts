@@ -237,6 +237,8 @@ export type MenubarPayload = {
       outputTokens?: number
       cacheReadTokens?: number
       cacheWriteTokens?: number
+      // Portion of `cost` priced from estimates; optional on older CLIs.
+      estimatedCostUSD?: number
     }>
     unpricedModels?: Array<{ model: string; calls: number; tokens: number }>
     localModelSavings: LocalModelSavings
@@ -244,7 +246,7 @@ export type MenubarPayload = {
     // Optional: older CLIs omit it. `id` is the internal provider name (round-trips
     // as --provider), `label` the display name. `hasUsage` distinguishes active $0
     // providers from detected-but-idle providers when present.
-    providerDetails?: Array<{ id: string; label: string; cost: number; calls?: number; hasUsage?: boolean; excludedFromTotal?: boolean; sessions?: number; sessionCountBasis?: 'identity' | 'partial' }>
+    providerDetails?: Array<{ id: string; label: string; cost: number; calls?: number; hasUsage?: boolean; excludedFromTotal?: boolean; sessions?: number; sessionCountBasis?: 'identity' | 'partial'; estimatedCostUSD?: number }>
     topProjects: Array<{
       id?: string
       name: string
@@ -411,6 +413,10 @@ export type ModelReportRow = {
   cacheReadTokens: number
   totalTokens: number
   costUSD: number
+  // Portion of costUSD priced from estimates, and the CLI's marker decision
+  // (src/format.ts isEstimatedCost). Optional: older CLIs omit both.
+  estimatedCostUSD?: number
+  isEstimated?: boolean
   savingsUSD: number
   savingsBaselineModel: string
   calls: number
@@ -672,6 +678,10 @@ export type SessionRow = {
   provider: string
   models: string[]
   cost: number
+  // Portion of `cost` priced from estimates, and the CLI's marker decision.
+  // Optional: older CLIs omit both.
+  estimatedCost?: number
+  isEstimated?: boolean
   savingsUSD: number
   calls: number
   turns: number

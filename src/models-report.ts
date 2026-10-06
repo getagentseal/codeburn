@@ -3,7 +3,7 @@ import stripAnsi from 'strip-ansi'
 
 import { behavioralCallWeight } from './behavioral-weight.js'
 import { codexCredits } from './codex-credits.js'
-import { formatCost, formatTokens } from './format.js'
+import { ESTIMATED_COST_LEGEND, formatCost, formatTokens, isEstimatedCost, markEstimated } from './format.js'
 import { billableOutputTokens, fallbackRawModelDisplayName, getModelRoute, getRouteById, getShortModelName, modelRowKey, resolveCanonicalModelId, routeSuffix, sanitizeModelForDisplay } from './models.js'
 import { classifyPeak, peakBillingKind } from './peak-hours.js'
 import { getProvider } from './providers/index.js'
@@ -26,6 +26,9 @@ export type ModelReportRow = {
   cacheReadTokens: number
   totalTokens: number
   costUSD: number
+  /// Portion of `costUSD` from calls flagged `isEstimated`. Never subtracted
+  /// from `costUSD`; `isEstimatedCost` decides whether the row is marked.
+  estimatedCostUSD: number
   savingsUSD: number
   savingsBaselineModel: string
   calls: number
@@ -95,6 +98,7 @@ type Bucket = {
   cacheWriteTokens: number
   cacheReadTokens: number
   costUSD: number
+  estimatedCostUSD: number
   savingsUSD: number
   savingsBaselineModel: string
   calls: number
@@ -219,6 +223,7 @@ export async function aggregateModels(projects: ProjectSummary[], opts: Aggregat
               cacheWriteTokens: 0,
               cacheReadTokens: 0,
               costUSD: 0,
+              estimatedCostUSD: 0,
               savingsUSD: 0,
               savingsBaselineModel: '',
               calls: 0,
@@ -241,6 +246,7 @@ export async function aggregateModels(projects: ProjectSummary[], opts: Aggregat
           // provider that fills both fields.
           bucket.cacheReadTokens += Math.max(call.usage.cacheReadInputTokens, call.usage.cachedInputTokens)
           bucket.costUSD += call.costUSD
+          if (call.isEstimated) bucket.estimatedCostUSD += call.costUSD
           bucket.savingsUSD += call.savingsUSD ?? 0
           // outputTokens is the billable output (for Codex that includes
           // reasoning, so nothing is added on top), and inputTokens is
@@ -347,6 +353,7 @@ export async function aggregateModels(projects: ProjectSummary[], opts: Aggregat
       existing.cacheReadTokens += bucket.cacheReadTokens
       existing.totalTokens += total
       existing.costUSD += bucket.costUSD
+      existing.estimatedCostUSD += bucket.estimatedCostUSD
       existing.savingsUSD += bucket.savingsUSD
       existing.calls += bucket.calls
       mergePeakSplit(existing, bucket)
@@ -371,6 +378,7 @@ export async function aggregateModels(projects: ProjectSummary[], opts: Aggregat
         cacheReadTokens: bucket.cacheReadTokens,
         totalTokens: total,
         costUSD: bucket.costUSD,
+        estimatedCostUSD: bucket.estimatedCostUSD,
         savingsUSD: bucket.savingsUSD,
         savingsBaselineModel: resolvedBaseline,
         calls: bucket.calls,
@@ -690,7 +698,7 @@ export function renderTable(
       case 'cacheWrite': return formatTokens(row.cacheWriteTokens)
       case 'cacheRead':  return formatTokens(row.cacheReadTokens)
       case 'total':      return formatTokens(row.totalTokens)
-      case 'cost':       return formatCost(row.costUSD)
+      case 'cost':       return markEstimated(formatCost(row.costUSD), isEstimatedCost(row.costUSD, row.estimatedCostUSD))
       case 'saved':      return row.savingsUSD > 0 ? formatCost(row.savingsUSD) : chalk.dim('-')
       case 'peak':
         return (row.peakUSD != null || row.offPeakUSD != null) ? formatPeakSplit(row) : chalk.dim('-')
@@ -831,6 +839,8 @@ export function renderJson(rows: ModelReportRow[]): string {
       savingsBaselineModel: r.savingsBaselineModel,
       credits: r.credits,
       creditsIncomplete: r.creditsIncomplete === true,
+      estimatedCostUSD: r.estimatedCostUSD,
+      isEstimated: isEstimatedCost(r.costUSD, r.estimatedCostUSD),
       // Peak keys exist only on rows that carry a split: a report with no
       // DeepSeek/Z.ai first-party usage keeps its exact historical shape,
       // instead of five null keys on every row.
@@ -896,7 +906,7 @@ export function renderMarkdown(rows: ModelReportRow[], opts: { byTask?: boolean;
       formatTokens(row.cacheWriteTokens),
       formatTokens(row.cacheReadTokens),
       formatTokens(row.totalTokens),
-      formatCost(row.costUSD),
+      markEstimated(formatCost(row.costUSD), isEstimatedCost(row.costUSD, row.estimatedCostUSD)),
       row.savingsUSD > 0 ? formatCost(row.savingsUSD) : '-',
       ...(showPeak ? [formatPeakSplit(row)] : []),
     ]
@@ -934,6 +944,7 @@ export function renderMarkdown(rows: ModelReportRow[], opts: { byTask?: boolean;
     ]
     lines.push(`| ${totalCells.join(' | ')} |`)
   }
+  if (rows.some(r => isEstimatedCost(r.costUSD, r.estimatedCostUSD))) lines.push('', `_${ESTIMATED_COST_LEGEND}_`)
 
   return lines.join('\n')
 }

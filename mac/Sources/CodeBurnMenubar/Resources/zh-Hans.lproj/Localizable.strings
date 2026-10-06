@@ -272,6 +272,7 @@
 "%@%% cache hit" = "缓存命中 %@%%";
 "1 model unpriced, counted at $0 · %@ tokens" = "1 个模型无定价，按 $0 计入 · %@ Token";
 "%1$lld models unpriced, counted at $0 · %2$@ tokens" = "%1$lld 个模型无定价，按 $0 计入 · %2$@ Token";
+"~ estimated cost (priced from estimated tokens)" = "~ 估算成本（按估算的 Token 数计价）";
 
 /* MARK: Pull requests section */
 "Pull requests" = "拉取请求";

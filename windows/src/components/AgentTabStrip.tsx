@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type WheelEvent } from 'react'
 import type { MenubarPayload } from '../lib/payload'
 import type { CurrencyState } from '../lib/currency'
-import { formatCompactCurrency, formatCurrency, plural } from '../lib/currency'
+import { formatCompactCurrency, formatCurrency, isEstimatedCost, plural } from '../lib/currency'
 import { severity, summaryFor, type QuotaState, type QuotaSummary } from '../lib/quota'
 import { WATCHED_TOOLS, watchedSource } from '../lib/watched'
 import { ChevronRight } from './Icons'
@@ -23,6 +23,7 @@ export type ProviderTab = {
   /// False only for a known tool the payload never mentioned: it stays visible, dimmed,
   /// so a first-time reader can see what CodeBurn watches for.
   detected: boolean
+  estimated?: boolean
   /// Where CodeBurn would find this tool, shown in the hover preview when it is missing.
   source: string | null
 }
@@ -87,7 +88,7 @@ export function providerTabs(payload: MenubarPayload | null): ProviderTab[] {
     const total = sorted.reduce((sum, d) => sum + d.cost, 0)
     return [
       { id: ALL_PROVIDER, label: 'All', cost: total, detected: true, source: 'every detected tool' },
-      ...sorted.map(d => ({ id: d.id, label: d.label, cost: d.cost, detected: true, source: null })),
+      ...sorted.map(d => ({ id: d.id, label: d.label, cost: d.cost, detected: true, estimated: isEstimatedCost(d.cost, d.estimatedCostUSD), source: null })),
     ]
   }
   const legacy = payload?.current.providers ?? {}
@@ -235,7 +236,7 @@ export function AgentTabStrip({ selected, onSelect, payload, currency, quota }: 
                   <span className="tab-chip">
                     <span className="tab-label">{tab.label}</span>
                     {tab.detected && tab.cost > 0 && (
-                      <span className="tab-cost">{formatCompactCurrency(tab.cost, currency)}</span>
+                      <span className="tab-cost">{tab.estimated ? '~' : ''}{formatCompactCurrency(tab.cost, currency)}</span>
                     )}
                   </span>
                   {summary && <QuotaCapsule quota={summary} active={active} />}

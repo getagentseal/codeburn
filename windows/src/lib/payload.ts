@@ -49,6 +49,7 @@ export type MenubarPayload = {
       hasUsage?: boolean
       sessions?: number
       sessionCountBasis?: 'identity' | 'partial'
+      estimatedCostUSD?: number
     }>
   }
   optimize: {
@@ -117,6 +118,8 @@ export type Model = {
   /// What this model would have cost at its paid baseline. Zero for every paid model.
   savingsUSD?: number
   calls: number
+  /// Portion of `cost` priced from estimates. Absent on older CLI payloads.
+  estimatedCostUSD?: number
 }
 
 export type LocalModelSavings = {

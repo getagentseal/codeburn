@@ -1753,6 +1753,14 @@ export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: 
         && (cacheDaysForPeriod ?? []).some(dayLacksSessionIdentities),
     )
   }
+  // Day slices carry no estimated split, so it comes from the live parse, the
+  // same overlay the per-model rows get in buildDurablePeriod.
+  const estimatedByProvider = new Map<string, number>()
+  for (const r of modelRows) estimatedByProvider.set(r.provider, (estimatedByProvider.get(r.provider) ?? 0) + r.estimatedCostUSD)
+  for (const p of providers) {
+    const estimated = estimatedByProvider.get(p.name)
+    if (estimated) p.estimatedCostUSD = estimated
+  }
 
   // DAILY HISTORY (last 365 days)
   // Cache stores per-provider cost+calls per day in DailyEntry.providers, so we can derive

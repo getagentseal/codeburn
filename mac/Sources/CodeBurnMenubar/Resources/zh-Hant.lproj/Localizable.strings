@@ -271,6 +271,7 @@
 "%@%% cache hit" = "快取命中 %@%%";
 "1 model unpriced, counted at $0 · %@ tokens" = "1 個模型無定價，按 $0 計入 · %@ Token";
 "%1$lld models unpriced, counted at $0 · %2$@ tokens" = "%1$lld 個模型無定價，按 $0 計入 · %2$@ Token";
+"~ estimated cost (priced from estimated tokens)" = "~ 估算成本（依估算的 Token 數計價）";
 
 /* MARK: Pull requests section */
 "Pull requests" = "拉取請求";

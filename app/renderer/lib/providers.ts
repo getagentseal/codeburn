@@ -1,4 +1,5 @@
 import { t } from '../i18n'
+import { isEstimatedCost } from './format'
 import type { MenubarPayload, ProviderName } from './types'
 
 export const PROVIDER_NAMES: Record<ProviderName, string> = {
@@ -47,7 +48,7 @@ export function writeDisabledProviders(disabled: ProviderName[]): void {
   try { globalThis.localStorage?.setItem(DISABLED_KEY, JSON.stringify(disabled)) } catch { /* storage can be unavailable in hardened contexts */ }
 }
 
-export type DetectedProvider = { id: string; label: string; cost: number; idle: boolean; excludedFromTotal?: boolean }
+export type DetectedProvider = { id: string; label: string; cost: number; idle: boolean; excludedFromTotal?: boolean; estimated?: true }
 
 /**
  * Every provider the CLI found on this machine, whether or not it billed
@@ -74,6 +75,7 @@ export function detectedProviders(current: MenubarPayload['current'] | undefined
         // provider whose rows are daily aggregates the local tools already
         // report. Label it, never subtract or hide it.
         ...(entry.excludedFromTotal ? { excludedFromTotal: true as const } : {}),
+        ...(isEstimatedCost(entry.cost, entry.estimatedCostUSD) ? { estimated: true as const } : {}),
       }))
       .sort((a, b) => Number(a.idle) - Number(b.idle) || (a.idle ? a.label.localeCompare(b.label) : b.cost - a.cost))
   }

@@ -129,6 +129,8 @@ export type ProviderCost = {
    *  lacked the cache field, so `cacheReadTokens` is a partial sum that must
    *  be dropped rather than labelled complete. */
   cacheReadIncomplete?: boolean
+  /** Portion of `cost` priced from estimates (live parse only). Absent when zero. */
+  estimatedCostUSD?: number
 }
 import type { OptimizeResult } from './optimize.js'
 import { getCurrency } from './currency.js'
@@ -383,6 +385,9 @@ export type MenubarPayload = {
       sessions?: number
       sessionCountBasis?: SessionCountBasis
       cacheReadTokens?: number
+      /// Add-only: portion of `cost` priced from estimates, from surviving
+      /// sessions only. Absent when nothing was estimated.
+      estimatedCostUSD?: number
     }>
     topProjects: Array<{
       /// Stable identity (abs cwd when known). Optional so older PeriodData
@@ -686,6 +691,7 @@ function buildProviderDetails(providers: ProviderCost[]): MenubarPayload['curren
       ...(p.sessions === undefined ? {} : { sessions: p.sessions }),
       ...(p.sessionCountBasis ? { sessionCountBasis: p.sessionCountBasis } : {}),
       ...(p.cacheReadTokens === undefined || p.cacheReadIncomplete ? {} : { cacheReadTokens: p.cacheReadTokens }),
+      ...(p.estimatedCostUSD ? { estimatedCostUSD: p.estimatedCostUSD } : {}),
     }))
 }
 

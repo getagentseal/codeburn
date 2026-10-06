@@ -37,6 +37,11 @@ struct ModelsSection: View {
                 TokensLine()
                     .padding(.top, 5)
 
+                if store.payload.current.topModels.contains(where: \.isEstimated) {
+                    EstimatedLine()
+                        .padding(.top, 3)
+                }
+
                 // The $0-cost rows below the table's floor never render as
                 // rows; without this line "cheap" and "uncounted" read the
                 // same. Hidden entirely when the payload predates the block.
@@ -84,7 +89,7 @@ private struct ModelRow: View {
                     .lineLimit(1)
                     .frame(maxWidth: .infinity, alignment: .leading)
 
-                Text(model.cost.asCompactCurrency())
+                Text((model.isEstimated ? "~" : "") + model.cost.asCompactCurrency())
                     .font(.codeMono(size: 12, weight: .medium))
                     .tracking(-0.2)
                     .frame(minWidth: 54, alignment: .trailing)
@@ -188,6 +193,20 @@ private struct TokensLine: View {
 
     private func formatTokens(_ n: Int) -> String {
         compactTokenCount(n)
+    }
+}
+
+/// Legend for the `~` marker, worded like the CLI's legend line.
+struct EstimatedLine: View {
+    var body: some View {
+        HStack(spacing: 4) {
+            Text(L("~ estimated cost (priced from estimated tokens)"))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Spacer()
+        }
+        .font(.system(size: 10.5))
     }
 }
 

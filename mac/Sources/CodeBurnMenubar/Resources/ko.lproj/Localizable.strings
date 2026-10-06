@@ -271,6 +271,7 @@
 "%@%% cache hit" = "캐시 적중률 %@%%";
 "1 model unpriced, counted at $0 · %@ tokens" = "모델 1개 가격 미정, $0으로 계산 · %@ 토큰";
 "%1$lld models unpriced, counted at $0 · %2$@ tokens" = "모델 %1$lld개 가격 미정, $0으로 계산 · %2$@ 토큰";
+"~ estimated cost (priced from estimated tokens)" = "~ 추정 비용(추정 토큰 수로 산출)";
 
 /* MARK: Pull requests section */
 "Pull requests" = "풀 리퀘스트";

@@ -62,7 +62,7 @@ export function sumTokens(rows: readonly PartialBreakdown[], divideBy = 1): Toke
  * renders its own text. `Usd` is the ordinary case; the hero's count-up owns its
  * text node, so it takes the parts directly.
  */
-export function useUsdPop<T extends HTMLElement>(tokens: TokenBreakdown | null | undefined, nested = false): {
+export function useUsdPop<T extends HTMLElement>(tokens: TokenBreakdown | null | undefined, nested = false, estimated = false): {
   ref: RefObject<T | null>
   props: Record<string, unknown>
   pop: ReactElement | null
@@ -89,6 +89,7 @@ export function useUsdPop<T extends HTMLElement>(tokens: TokenBreakdown | null |
     },
     pop: open ? (
       <AnchoredSurface anchor={ref} surfaceRef={surfaceRef} id={id} className="pop-menu usd-pop" role="tooltip">
+        {estimated && <div className="usd-pop-row"><span>{t('shared.usd.estimated')}</span></div>}
         <TokenRows tokens={tokens} />
       </AnchoredSurface>
     ) : null,
@@ -109,12 +110,15 @@ export function TokenRows({ tokens }: { tokens: TokenBreakdown }): ReactElement 
 }
 
 /** A dollar amount that reveals its token breakdown on hover or focus. Without
- *  `tokens` it is the plain formatted amount and nothing else. */
-export function Usd({ value, tokens, className, nested }: { value: number; tokens?: TokenBreakdown | null; className?: string; nested?: boolean }): ReactElement {
-  const pop = useUsdPop<HTMLSpanElement>(tokens, nested)
+ *  `tokens` it is the plain formatted amount and nothing else. `estimated`
+ *  prefixes the `~` marker and names it on hover: in the token popover when
+ *  there is one, else as the native title. */
+export function Usd({ value, tokens, className, nested, estimated }: { value: number; tokens?: TokenBreakdown | null; className?: string; nested?: boolean; estimated?: boolean }): ReactElement {
+  const pop = useUsdPop<HTMLSpanElement>(tokens, nested, estimated)
+  const title = estimated && !tokens ? t('shared.usd.estimated') : undefined
   return (
     <>
-      <span ref={pop.ref} className={className} {...pop.props}>{formatUsd(value)}</span>
+      <span ref={pop.ref} className={className} title={title} {...pop.props}>{estimated ? '~' : ''}{formatUsd(value)}</span>
       {pop.pop}
     </>
   )

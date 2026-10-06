@@ -1,4 +1,5 @@
 import { behavioralCallCount, behavioralTurnCount } from './behavioral-weight.js'
+import { ESTIMATED_COST_LEGEND, isEstimatedCost, markEstimated } from './format.js'
 import { modelRowKey } from './models.js'
 import { maxOf } from './math-utils.js'
 import { inferSessionProvider, sessionBillableOutputTokens } from './session-output.js'
@@ -15,6 +16,10 @@ export type SessionRow = {
   provider: string
   models: string[]
   cost: number
+  /// Portion of `cost` from calls flagged `isEstimated`; `isEstimated` is
+  /// `isEstimatedCost(cost, estimatedCost)`, the marker rule every view shares.
+  estimatedCost: number
+  isEstimated: boolean
   savingsUSD: number
   calls: number
   turns: number
@@ -50,6 +55,8 @@ export function aggregateSessions(projects: ProjectSummary[]): SessionRow[] {
     startedAt: session.firstTimestamp,
     endedAt: session.lastTimestamp,
     durationMs: durationMs(session.firstTimestamp, session.lastTimestamp),
+    estimatedCost: session.totalEstimatedCostUSD ?? 0,
+    isEstimated: isEstimatedCost(session.totalCostUSD, session.totalEstimatedCostUSD),
   })))
 }
 
@@ -176,7 +183,7 @@ function cellValue(row: SessionRow, key: SessionColumnKey): string {
     case 'project': return cleanSessionProjectLabel(row.project)
     case 'provider': return row.provider
     case 'models': return sessionModelLabel(row.models)
-    case 'cost': return `$${row.cost.toFixed(2)}`
+    case 'cost': return markEstimated(`$${row.cost.toFixed(2)}`, row.isEstimated)
     case 'saved': return `$${row.savingsUSD.toFixed(2)}`
     case 'calls': return row.calls.toLocaleString('en-US')
     case 'turns': return row.turns.toLocaleString('en-US')
@@ -231,12 +238,16 @@ function sessionColumns(hasSavings: boolean, childrenColumn: boolean): SessionCo
   ]
 }
 
+function estimatedLegend(rows: SessionRow[]): string {
+  return rows.some(row => row.isEstimated) ? `\n${ESTIMATED_COST_LEGEND}` : ''
+}
+
 export function renderTable(rows: SessionRow[], opts: SessionTableOptions = {}): string {
   const sorted = [...rows].sort((a, b) => b.startedAt.localeCompare(a.startedAt))
   const hasSavings = sorted.some(row => row.savingsUSD > 0)
   const available = Math.max(60, opts.terminalWidth ?? defaultTerminalWidth())
   const totalCost = sorted.reduce((sum, row) => sum + row.cost, 0)
-  const footer = `${sorted.length.toLocaleString('en-US')} sessions  \u2022  $${totalCost.toFixed(2)} total  \u2022  newest first`
+  const footer = `${sorted.length.toLocaleString('en-US')} sessions  \u2022  $${totalCost.toFixed(2)} total  \u2022  newest first${estimatedLegend(sorted)}`
   return renderSessionGrid(sessionColumns(hasSavings, false), sorted, cellValue, footer, available)
 }
 
@@ -299,6 +310,8 @@ export function renderWorkUnitTable(rows: SessionRow[], resolution: WorkUnitReso
       ...rootRow,
       models,
       cost: sum(row => row.cost),
+      estimatedCost: sum(row => row.estimatedCost),
+      isEstimated: isEstimatedCost(sum(row => row.cost), sum(row => row.estimatedCost)),
       savingsUSD: sum(row => row.savingsUSD),
       calls: sum(row => row.calls),
       turns: sum(row => row.turns),
@@ -327,7 +340,7 @@ export function renderWorkUnitTable(rows: SessionRow[], resolution: WorkUnitReso
   // ungrouped views total the same spend.
   const totalCost = entries.reduce((total, entry) => total + entry.display.row.cost, 0)
   const unitCount = entries.filter(entry => entry.display.childCount > 0).length
-  const footer = `${rows.length.toLocaleString('en-US')} sessions  \u2022  ${unitCount.toLocaleString('en-US')} work unit${unitCount === 1 ? '' : 's'}  \u2022  $${totalCost.toFixed(2)} total  \u2022  newest first`
+  const footer = `${rows.length.toLocaleString('en-US')} sessions  \u2022  ${unitCount.toLocaleString('en-US')} work unit${unitCount === 1 ? '' : 's'}  \u2022  $${totalCost.toFixed(2)} total  \u2022  newest first${estimatedLegend(displays.map(d => d.row))}`
   return renderSessionGrid(sessionColumns(hasSavings, true), displays, workUnitCell, footer, available, ['children', 'turns', 'saved', 'provider', 'calls'])
 }
 

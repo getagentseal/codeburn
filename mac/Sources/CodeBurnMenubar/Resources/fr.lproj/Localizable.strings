@@ -271,6 +271,7 @@
 "%@%% cache hit" = "%@%% de cache";
 "1 model unpriced, counted at $0 · %@ tokens" = "1 modèle non tarifé, compté à 0 $ · %@ tokens";
 "%1$lld models unpriced, counted at $0 · %2$@ tokens" = "%1$lld modèles non tarifés, comptés à 0 $ · %2$@ tokens";
+"~ estimated cost (priced from estimated tokens)" = "~ coût estimé (calculé à partir de jetons estimés)";
 
 /* MARK: Pull requests section */
 "Pull requests" = "Pull requests";

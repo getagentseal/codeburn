@@ -6,7 +6,7 @@ import { CATEGORY_LABELS, type ProjectSummary, type TaskCategory } from './types
 import { formatCost as baseCost, getCurrency } from './currency.js'
 import { findUnpricedModels, modelRowKey, unpricedModelHint } from './models.js'
 import { callBillableOutputTokens, sessionBillableOutputTokens, sessionModelBillableOutputTokens } from './session-output.js'
-import { markEstimated, excludedGatewayNote } from './format.js'
+import { markEstimated, excludedGatewayNote, isEstimatedCost, ESTIMATED_COST_LEGEND } from './format.js'
 import { AGGREGATE_ONLY_PROVIDER } from './parser.js'
 import { maxOf } from './math-utils.js'
 import { formatSessionCount, SESSION_COUNT_HELP, type SessionCountBasis } from './session-count-label.js'
@@ -339,10 +339,10 @@ export function renderOverview(
     out.push(heading('Top models'))
     out.push(renderTable(c,
       [{ header: 'Model' }, { header: 'Cost', right: true }, { header: 'Calls', right: true }, { header: 'Tokens', right: true }],
-      modelRows.map(([m, v]) => [modelRowKey(m), markEstimated(formatCost(v.cost), v.estimatedCost > 0), formatCount(v.calls), formatTokens(v.tokens)]),
+      modelRows.map(([m, v]) => [modelRowKey(m), markEstimated(formatCost(v.cost), isEstimatedCost(v.cost, v.estimatedCost)), formatCount(v.calls), formatTokens(v.tokens)]),
     ))
-    if (modelRows.some(([, v]) => v.estimatedCost > 0)) {
-      out.push('  ' + c.dim('~ estimated cost (priced from estimated tokens)'))
+    if (modelRows.some(([, v]) => isEstimatedCost(v.cost, v.estimatedCost))) {
+      out.push('  ' + c.dim(ESTIMATED_COST_LEGEND))
     }
     out.push('')
   }

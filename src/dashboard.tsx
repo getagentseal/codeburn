@@ -4,7 +4,7 @@ import { EventEmitter } from 'node:events'
 import React, { Fragment, useState, useCallback, useEffect, useLayoutEffect, useMemo, useRef } from 'react'
 import { render, Box, Text, measureElement, useInput, useApp, useWindowSize, type DOMElement, type Instance, type RenderOptions } from 'ink'
 import { CATEGORY_LABELS, type DateRange, type ProjectSummary, type TaskCategory } from './types.js'
-import { formatCost, formatTokens, markEstimated, carriedCostNote, excludedGatewayNote } from './format.js'
+import { formatCost, formatTokens, markEstimated, carriedCostNote, excludedGatewayNote, isEstimatedCost, ESTIMATED_COST_LEGEND } from './format.js'
 import { maxOf } from './math-utils.js'
 import { formatSessionCount } from './session-count-label.js'
 import { aggregateModelEfficiency } from './model-efficiency.js'
@@ -778,7 +778,7 @@ export function getDashboardMaxWidth(projects: ProjectSummary[], budgets?: Map<s
     PANEL_CHROME + 10 + 1 + longest(labels) + metricCount * metricWidth
   const modelTotals = aggregateModelTotals(projects)
   const modelMetricWidth = maxOf(Object.values(modelTotals).map(model =>
-    markEstimated(formatCost(model.costUSD), model.estimatedCostUSD > 0).length
+    markEstimated(formatCost(model.costUSD), isEstimatedCost(model.costUSD, model.estimatedCostUSD)).length
   ), 7)
   const categoryLabels = sessions.flatMap(session => Object.keys(session.categoryBreakdown).map(category => CATEGORY_LABELS[category as TaskCategory] ?? category))
   const skillLabels = sessions.flatMap(session => Object.keys(session.skillBreakdown))
@@ -852,9 +852,9 @@ function ModelBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; pw: 
   // the same model merge into one row (see aggregateModelTotals).
   const modelTotals = aggregateModelTotals(projects)
   const modelEfficiency = aggregateModelEfficiency(projects)
-  const anyEstimated = Object.values(modelTotals).some(d => d.estimatedCostUSD > 0)
+  const anyEstimated = Object.values(modelTotals).some(d => isEstimatedCost(d.costUSD, d.estimatedCostUSD))
   const sorted = Object.entries(modelTotals).sort(([, a], [, b]) => b.costUSD - a.costUSD)
-  const costLabels = sorted.map(([, data]) => markEstimated(formatCost(data.costUSD), data.estimatedCostUSD > 0))
+  const costLabels = sorted.map(([, data]) => markEstimated(formatCost(data.costUSD), isEstimatedCost(data.costUSD, data.estimatedCostUSD)))
   // #1088: this column has zero width slack left at the standard 3-column
   // breakpoint (verified: widening the header even one character clips
   // 'cache'/'1-shot' and drops the value column entirely), so the header stays
@@ -918,7 +918,7 @@ function ModelBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; pw: 
         </Text>
       )}
       {anyEstimated && (
-        <Text dimColor wrap="truncate-end">~ estimated cost (priced from estimated tokens)</Text>
+        <Text dimColor wrap="truncate-end">{ESTIMATED_COST_LEGEND}</Text>
       )}
       <Text dimColor wrap="truncate-end">~ Effective Tok/s: generated tokens ÷ time the agent spent waiting on the model, tool execution excluded. Includes prefill, request assembly and reasoning. Not comparable to vendor decode-speed figures.</Text>
     </Panel>

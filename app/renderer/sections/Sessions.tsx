@@ -11,7 +11,7 @@ import { SessionDrawer } from '../components/SessionDrawer'
 import { StaleBanner } from '../components/StaleBanner'
 import { Icon } from '../components/icons'
 import { usePolled } from '../hooks/usePolled'
-import { formatCompact, formatCount, formatDayShort, formatUsd, shortenProjectPath } from '../lib/format'
+import { formatCompact, formatCount, formatDayShort, formatUsd, isEstimatedCost, shortenProjectPath } from '../lib/format'
 import { Usd, tokensOf } from '../components/Usd'
 import { codeburn } from '../lib/ipc'
 import {
@@ -470,11 +470,11 @@ export function Sessions({
                       <span className="session-cost-split">
                         <strong>{formatUsd(entry.entry.cost)}</strong>
                         {entry.entry.cost < entry.entry.row.cost - 1e-9 && (
-                          <small title={t('sessions.list.fullCostTooltip')}> {t('sessions.list.ofConnector')} <Usd value={entry.entry.row.cost} tokens={tokensOf(entry.entry.row)} nested /></small>
+                          <small title={t('sessions.list.fullCostTooltip')}> {t('sessions.list.ofConnector')} <Usd value={entry.entry.row.cost} tokens={tokensOf(entry.entry.row)} nested estimated={isEstimatedCost(entry.entry.row.cost, entry.entry.row.estimatedCost)} /></small>
                         )}
                       </span>
                     ) : (
-                      <span><Usd value={entry.entry.row.cost} tokens={tokensOf(entry.entry.row)} nested /></span>
+                      <span><Usd value={entry.entry.row.cost} tokens={tokensOf(entry.entry.row)} nested estimated={isEstimatedCost(entry.entry.row.cost, entry.entry.row.estimatedCost)} /></span>
                     )}
                     <span>{formatCompact(rowTokens(entry.entry.row))}</span>
                   </button>
