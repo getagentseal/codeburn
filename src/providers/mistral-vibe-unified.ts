@@ -54,6 +54,7 @@ function timestamp(value: unknown, fallback: string): string {
 export async function readUnifiedVibeCalls(
   currentPath: string,
   toolDisplayName: (name: string) => string,
+  defaultModel: string,
 ): Promise<ParsedProviderCall[]> {
   const dir = dirname(currentPath)
   const current = await json(currentPath)
@@ -71,8 +72,8 @@ export async function readUnifiedVibeCalls(
   const snapshot = object(projection.snapshot)
   const meta = await json(join(dir, 'meta.json'))
   const sessionMetadata = object(runtime.session_metadata)
-  const model = text(sessionMetadata.active_model) || text(object(meta?.config).active_model)
-  if (!model) return []
+  // active_model is a pin; an unpinned session runs the configured default.
+  const model = text(sessionMetadata.active_model) || text(object(meta?.config).active_model) || defaultModel
   const fallbackTime = text(meta?.end_time) || text(meta?.start_time)
   const projectPath = text(sessionMetadata.cwd) || text(object(meta?.environment).working_directory)
 
@@ -133,10 +134,10 @@ export async function readUnifiedVibeCalls(
   }
 
   const history = [...entries.values()].sort((a, b) => count(a.createdAt) - count(b.createdAt))
-  const calls: ParsedProviderCall[] = []
+  const steps: { point: UsagePoint; delta: Usage; first: boolean }[] = []
   let previous: Usage = { input: 0, output: 0, cached: 0 }
   for (const point of [...points.values()].sort((a, b) => a.sequence - b.sequence)) {
-    const { usage, state } = point
+    const { usage } = point
     // Projection counters are cumulative. Replayed/stale envelopes cannot add
     // usage again, and context-window shrinkage is not new billable usage.
     if (usage.input < previous.input || usage.output < previous.output || usage.cached < previous.cached) continue
@@ -147,38 +148,59 @@ export async function readUnifiedVibeCalls(
     }
     const first = previous.input === 0 && previous.output === 0
     previous = usage
-    if (!delta.input && !delta.output) continue
-    const session = object(state.session)
+    if (delta.input || delta.output) steps.push({ point, delta, first })
+  }
+  // Rotation drops the per-call usage of the prefix, but runtime state still
+  // lists every completion, so the prefix splits into that many calls.
+  const completions = array(runtime.actions).filter(value => {
+    const action = object(value)
+    return action.kind === 'completion' && action.state === 'succeeded'
+  }).length
+  const journalCalls = steps.filter(step => !step.first && step.point.sequence <= snapshotSequence).length
+  const prefixCalls = Math.max(1, completions - journalCalls)
+  const split = (total: number, index: number, parts: number) =>
+    Math.floor(total / parts) + (index < total % parts ? 1 : 0)
+
+  const calls: ParsedProviderCall[] = []
+  const turnsWithTools = new Set<string>()
+  for (const { point, delta, first } of steps) {
+    const session = object(point.state.session)
     const pointTime = count(session.updatedAt)
-    const turn = object(state.latestTurn)
-    const turnId = text(turn.id) || `${sessionId}:snapshot`
+    const turnId = text(object(point.state.latestTurn).id) || `${sessionId}:snapshot`
     // After rotation, older per-call usage is gone. Allocate that prefix across
     // its recorded turns, just as the legacy parser allocates cumulative stats.
     const olderTurns = first ? [...new Set(history
       .filter(entry => count(entry.createdAt) <= pointTime && (entry.role === 'assistant' || entry.type === 'effect'))
       .map(entry => text(entry.turnId)).filter(Boolean))] : []
     const turnIds = olderTurns.length ? olderTurns : [turnId]
-    const allocate = (total: number, index: number) => Math.floor(total / turnIds.length) + (index < total % turnIds.length ? 1 : 0)
-    for (const [index, id] of turnIds.entries()) {
+    const slots = first
+      ? turnIds.flatMap((id, index) => Array<string>(Math.max(1, split(prefixCalls, index, turnIds.length))).fill(id))
+      : turnIds
+    for (const [index, id] of slots.entries()) {
       const turnEntries = history.filter(entry => entry.turnId === id)
       const user = turnEntries.find(entry => entry.role === 'user')
       const assistant = turnEntries.find(entry => entry.role === 'assistant' || entry.type === 'effect')
       const tools: string[] = []
       const bashCommands: string[] = []
-      for (const entry of turnEntries) {
-        const detail = object(entry.detail)
-        const rawName = text(detail.toolName)
-        if (!rawName) continue
-        const name = toolDisplayName(rawName.replace(/^functions\./, ''))
-        tools.push(name)
-        if (name === 'Bash') {
-          const command = text(object(detail.input).command)
-          if (command) bashCommands.push(...extractBashCommands(command))
+      // A turn's tools ride on its first call only, so per-call tool counts stay real.
+      if (!turnsWithTools.has(id)) {
+        turnsWithTools.add(id)
+        for (const entry of turnEntries) {
+          const detail = object(entry.detail)
+          const rawName = text(detail.toolName)
+          if (!rawName) continue
+          // History names carry the tool group: `file_system.bash`, `ui.ask_user_question`.
+          const name = toolDisplayName(rawName.replace(/^.*\./, ''))
+          tools.push(name)
+          if (name === 'Bash') {
+            const command = text(object(detail.input).command)
+            if (command) bashCommands.push(...extractBashCommands(command))
+          }
         }
       }
-      const inputTokens = allocate(delta.input - delta.cached, index)
-      const outputTokens = allocate(delta.output, index)
-      const cacheReadInputTokens = allocate(delta.cached, index)
+      const inputTokens = split(delta.input - delta.cached, index, slots.length)
+      const outputTokens = split(delta.output, index, slots.length)
+      const cacheReadInputTokens = split(delta.cached, index, slots.length)
       calls.push({
         provider: 'mistral-vibe', model, inputTokens, outputTokens,
         cacheReadInputTokens, cachedInputTokens: cacheReadInputTokens,
@@ -188,7 +210,7 @@ export async function readUnifiedVibeCalls(
         tools: [...new Set(tools)], bashCommands: [...new Set(bashCommands)],
         timestamp: timestamp(first ? assistant?.createdAt ?? pointTime : pointTime, fallbackTime),
         speed: 'standard', sessionId, turnId: id,
-        deduplicationKey: `mistral-vibe:${sessionId}:unified:${point.sequence}:${id}`,
+        deduplicationKey: `mistral-vibe:${sessionId}:unified:${point.sequence}:${id}:${index}`,
         userMessage: (content(user?.content) || text(session.preview) || text(meta?.title)).slice(0, 500),
         ...(projectPath ? { projectPath, workingDirectory: projectPath } : {}),
       })

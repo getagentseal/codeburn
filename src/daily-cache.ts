@@ -284,7 +284,10 @@ import type { DateRange, ProjectSummary } from './types.js'
 // JetBrains AI Chat) counts its output, and grok-4.6 prices at xAI's $2/M input
 // instead of Azure's $1.25/M. Output and cost only rise; call counts are
 // unchanged, so no PENDING_REDERIVE_PROVIDER_VERSIONS entry is needed.
-export const DAILY_CACHE_VERSION = 57
+// v58: Mistral Vibe Unified Harness sessions (2.25+, `unified/<id>/`) are read;
+// days finalized while they were skipped re-derive. Calls only rise, so no
+// PENDING_REDERIVE_PROVIDER_VERSIONS entry is needed.
+export const DAILY_CACHE_VERSION = 58
 const MIN_SUPPORTED_VERSION = 28
 
 /// Providers whose per-day CALL COUNT means something different at
