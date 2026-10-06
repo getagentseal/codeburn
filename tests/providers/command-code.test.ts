@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'fs/promises'
-import { join } from 'path'
+import { join, basename } from 'path'
 import { tmpdir } from 'os'
 
 import { createCommandCodeProvider } from '../../src/providers/command-code.js'
@@ -90,7 +90,7 @@ describe('command-code provider', () => {
     }
     const sources = await createCommandCodeProvider(dir).discoverSessions()
     expect(sources).toHaveLength(7)
-    expect(sources.every(s => /\/[^./]+\.jsonl$/.test(s.path))).toBe(true)
+    expect(sources.every(s => /^[^.]+\.jsonl$/.test(basename(s.path)))).toBe(true)
   })
 
   it('dedupes duplicate lines and forked sessions by meta.messageId', async () => {
