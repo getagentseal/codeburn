@@ -423,7 +423,8 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // reported-cost-v1: cached Crush calls stored costUSD: undefined and must
   // re-parse to keep the recorded session cost.
   crush: 'reported-cost-v1',
-  cursor: 'composer-anchored-crediting-v1-est-cost',
+  // import-guess-est-v1: synced Auto rows with no dollar amount are estimated.
+  cursor: 'composer-anchored-crediting-v1-est-cost-import-guess-est-v1',
   // full-turn-accounting: every assistant message counts as a turn
   // (previously only the first after each user message survived), tool_use
   // inputs join the output text, and input tokens use the full user text
@@ -432,7 +433,9 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // once per user message instead of once per assistant message.
   // store-db-v1 (#986): sessions with no exported transcript are read from
   // ~/.cursor/chats/*/*/store.db.
-  'cursor-agent': 'workspaceless-transcript-v1-full-turn-accounting-v2-store-db-v1-est-cost',
+  // prompt-time-v1: transcript turns take their prompt's <timestamp> tag, not
+  // the session's last write.
+  'cursor-agent': 'workspaceless-transcript-v1-full-turn-accounting-v2-store-db-v1-est-cost-prompt-time-v1',
   // source-provenance-v1 (#944): CLI sessions were misread as VS Code
   // transcripts (both carry producer 'copilot-agent'), skipping the shutdown
   // input/cache rollup; this bump re-parses them so the missing tokens land.
@@ -479,7 +482,8 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // reasoning per record, and label mixed sessions estimated.
   grok: 'authoritative-usage-v4',
   // Estimated from message text: Grok Bot's local mirror records no tokens.
-  grokbot: 'estimated-usage-v1',
+  // import-guess-est-v1: synced Grok Bot rows with no dollar amount are estimated.
+  grokbot: 'estimated-usage-v1-import-guess-est-v1',
   // v0-v4 generations, embedded attempt streams, retry accounting, and the
   // version-specific inherited-prefix rules all change cached DSH calls.
   dsh: 'session-formats-v0-v4-attempts-v6',

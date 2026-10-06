@@ -397,6 +397,9 @@ function importedCalls(store: CursorImportStore, provider: 'cursor' | 'grokbot')
       webSearchRequests: 0,
       costUSD: billed ?? calculateCost(model, e.input, e.output, e.inputCacheWrite, e.cacheRead, 0),
       ...(billed !== null ? { costFromBilling: true } : {}),
+      // Plan rows carry no dollars, and Auto and Grok Bot never name the model
+      // that served them, so their list price is a stand-in.
+      ...(billed === null && (bot || model === 'cursor-auto') ? { costIsEstimated: true } : {}),
       billing: billed !== null ? 'metered' : 'subscription',
       tools: [],
       bashCommands: [],

@@ -267,6 +267,40 @@ describe('Cursor import through the report pipeline', () => {
     expect(await parse(whole)).toEqual(before)
   })
 
+  it('a synced export drops a CLI session it billed even when the transcript was written after its newest event', async () => {
+    // A `cursor-agent -p` run: one tagged prompt before the export's newest
+    // event, its transcript written after it.
+    const prompt = new Date(Date.parse(iso(2, 21)))
+    const tag = `${prompt.toLocaleString('en-US', { weekday: 'long', timeZone: 'UTC' })}, ${prompt.toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: 'UTC' })} (UTC)`
+    const dir = join(homedir(), '.cursor', 'projects', 'proj', 'agent-transcripts', 'aaaaaaaa-0000-4000-8000-000000000001')
+    await mkdir(dir, { recursive: true })
+    const path = join(dir, 'aaaaaaaa-0000-4000-8000-000000000001.jsonl')
+    const step = JSON.stringify({ role: 'assistant', message: { content: [{ type: 'text', text: 'x'.repeat(400) }] } })
+    await writeFile(path, [JSON.stringify({ role: 'user', message: { content: [{ type: 'text', text: `<timestamp>${tag}</timestamp>\n<user_query>redacted</user_query>` }] } }), step, step].join('\n') + '\n')
+    const written = Date.parse(iso(2, 23))
+    await utimes(path, written / 1000, written / 1000)
+    expect((await parse(whole))['cursor-agent']!.calls).toBe(2)
+
+    await importCursorCsvText(csv(ROWS), Date.now(), { from: base, source: 'sync', account: 'a' })
+    const after = await parse(whole)
+    expect(after['cursor-agent']).toBeUndefined()
+    expect(after['cursor']!.calls).toBe(4)
+  })
+
+  it('marks plan rows estimated only where the export names no real model', async () => {
+    await importCursorCsv(csvPath)
+    clearSessionCache()
+    const flags: Record<string, boolean> = {}
+    for (const p of await parseAllSessions(whole, 'all')) for (const s of p.sessions) for (const t of s.turns) for (const c of t.assistantCalls) flags[c.model] = c.isEstimated === true
+    expect(flags).toEqual({
+      'cursor-auto': true,
+      'claude-opus-5-thinking-high': false,
+      'grok-4.6-high': false,
+      'grok-bot-automation': true,
+      'composer-2.5-fast': false,
+    })
+  })
+
   it('the daily cache re-derives the covered days after an import and after removal', async () => {
     await writeAgentTranscript('inside', base + DAY + 5 * 3_600_000)
     await writeAgentTranscript('outside', base - 5 * DAY)

@@ -36,6 +36,8 @@ type ParsedTurn = {
   // same agentic loop; this turn only carries it for display.
   carried: boolean
   assistant: AssistantTurn
+  // The latest prompt `<timestamp>` tag at or before this turn, if any.
+  promptAt?: string
 }
 
 const CURSOR_AGENT_COST_MODEL = 'claude-sonnet-4-5'
@@ -265,6 +267,7 @@ function parseJsonlTranscript(raw: string): { turns: ParsedTurn[]; recognized: b
   let seenUser = false
   let userBilled = false
   let recognized = false
+  let promptAt: string | undefined
 
   for (const line of lines) {
     let entry: { role?: string; type?: string; message?: { content?: Array<{ type?: string; text?: string; name?: string; input?: unknown }> } }
@@ -286,6 +289,7 @@ function parseJsonlTranscript(raw: string): { turns: ParsedTurn[]; recognized: b
         .map(c => c.text ?? '')
       const combined = texts.join(' ')
       const full = extractUserQuery(combined, Number.POSITIVE_INFINITY) || combined
+      promptAt = parsePromptTimestamp(combined) ?? promptAt
       lastUserFull = full
       lastUserDisplay = full.slice(0, MAX_USER_TEXT_LENGTH)
       seenUser = true
@@ -322,6 +326,7 @@ function parseJsonlTranscript(raw: string): { turns: ParsedTurn[]; recognized: b
           reasoning: '',
           tools,
         },
+        ...(promptAt ? { promptAt } : {}),
       })
       userBilled = true
     }
@@ -821,7 +826,9 @@ function createParser(
             costIsEstimated: true,
             tools: turn.assistant.tools,
             bashCommands: [],
-            timestamp,
+            // Not the session's last write: that lands work Cursor already
+            // billed after a synced export's newest event, counting it twice.
+            timestamp: turn.promptAt ?? timestamp,
             speed: 'standard',
             deduplicationKey,
             userMessage: turn.userMessage,

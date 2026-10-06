@@ -284,7 +284,11 @@ import type { DateRange, ProjectSummary } from './types.js'
 // JetBrains AI Chat) counts its output, and grok-4.6 prices at xAI's $2/M input
 // instead of Azure's $1.25/M. Output and cost only rise; call counts are
 // unchanged, so no PENDING_REDERIVE_PROVIDER_VERSIONS entry is needed.
-export const DAILY_CACHE_VERSION = 57
+// v58: Cursor Agent transcript turns are dated by their prompt's <timestamp>
+// tag instead of the session's last write. Settled days re-derive; a session
+// that crossed midnight moves calls to an earlier day, so cursor-agent joins
+// PENDING_REDERIVE_PROVIDER_VERSIONS at 58.
+export const DAILY_CACHE_VERSION = 58
 const MIN_SUPPORTED_VERSION = 28
 
 /// Providers whose per-day CALL COUNT means something different at
@@ -325,6 +329,8 @@ const PENDING_REDERIVE_PROVIDER_VERSIONS: Readonly<Record<string, number>> = {
   // 46: transcript-era Devin days put every step lacking metadata.created_at
   // on the session's last-activity day; sessions.db dates each request.
   devin: 46,
+  // 58: transcript turns moved from the session's last write to prompt time.
+  'cursor-agent': 58,
 }
 
 function providersPendingRederiveFrom(fromVersion: number): string[] {
