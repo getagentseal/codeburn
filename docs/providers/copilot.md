@@ -44,9 +44,12 @@ names the project), and write no `assistant_usage_events` rows. Copilot CLI
   is per request; 10 messages = `requests.count` 10 on the real session).
 - **Exact after the session ends.** The `session.shutdown` rollup is the only
   token record. When no `assistant.message` in a leg carried `outputTokens`, the
-  rollup call carries that leg's output as well as input and cache, so every
-  token is counted once. It also carries `modelMetrics[model].totalNanoAiu`
-  (per-leg delta) as `nanoAiu`, which makes the session's Copilot credits exact.
+  rollup call carries that leg's output as well as input and cache. It also
+  carries `modelMetrics[model].totalNanoAiu` (per-leg delta) as `nanoAiu`, which
+  makes the session's Copilot credits exact. `totalNanoAiu` is a running bill
+  that does not reset at compaction, so its delta has its own sentinel.
+  Resumed and compacted sessions are covered by a synthetic test only; no real
+  one was available.
   On the real test session (gpt-5-mini) the token cost at list rates matched
   `totalNanoAiu` to the last digit.
 - **Live sessions.** Token counts and credits for VS Code Copilot sessions appear
@@ -55,7 +58,9 @@ names the project), and write no `assistant_usage_events` rows. Copilot CLI
   no tokens; they are not read, so credits come from one place only.
 - **With session-store rows** (CLI 1.0.8x), the rows replace the rollup but
   carry output only for compaction requests, so the leg's output serves through
-  its residual (rollup output minus compaction-row output).
+  its residual (rollup output minus compaction-row output). In a compacted
+  session the rollup's counters reset at the compaction, so output from before
+  it is recorded nowhere locally and cannot be counted. Credits stay exact.
 - **Not read.** VS Code's `agentSessionData/*/session.db`,
   `globalStorage/agent-host.db` and `globalStorage/github.copilot-chat/session-store.db`.
   `session.db` `turn_usage` does hold per-interaction totals
@@ -206,7 +211,8 @@ see the #927 ruling in `src/session-cache.ts`).
   figure)`), and `codeburn status --format json | jq .plans.copilot` carries
   `spentCredits` (exact only), `estimatedCredits` (exact plus estimate),
   `creditRatedCalls` / `creditUnratedCalls` (requests by behavioral weight; a
-  session with any exact figure counts all its requests as rated),
+  session with any exact figure counts all its requests as rated, so a
+  crash-tailed session's last requests may be unrated yet counted as rated),
   `creditsIncomplete` and a plain
   `creditsNote`. The bar and `percentUsed` follow `estimatedCredits` while any
   request is unrated, and the exact figure once every request carries one.

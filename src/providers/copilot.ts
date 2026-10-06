@@ -1618,7 +1618,9 @@ function createJsonlParser(
             const delta = (k: keyof typeof cumulative): number =>
               Math.max(0, cumulative[k] - numberOrZero(prev?.[k]))
             const outputTokens = legHasPerTurnOutput ? 0 : delta('outputTokens')
-            const nanoAiu = hasNanoAiu ? delta('nanoAiu') : undefined
+            const nanoAiu = hasNanoAiu
+              ? Math.max(0, cumulative.nanoAiu - (prevRaw && cumulative.nanoAiu >= prevRaw.nanoAiu ? prevRaw.nanoAiu : 0))
+              : undefined
             const cacheReadTokens = delta('cacheReadTokens')
             const cacheWriteTokens = delta('cacheWriteTokens')
             const reasoningTokens = delta('reasoningTokens')

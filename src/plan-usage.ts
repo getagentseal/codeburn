@@ -121,10 +121,12 @@ export function copilotCreditSpend(projects: ProjectSummary[]): CopilotCreditSpe
     if (copilot.length === 0) return
     const primaryNano = copilot.filter(call => !call.supplementaryAccounting && isFiniteNanoAiu(call.nanoAiu))
     const suppNano = copilot.filter(call => call.supplementaryAccounting && isFiniteNanoAiu(call.nanoAiu))
-    // Store rows are supplementary and are the bill when the JSONL twin has
-    // no nanoAiu. If both sides carry nanoAiu, count the behavioral row only
-    // so a paired rollup cannot double the credits.
-    const counted = primaryNano.length > 0 && suppNano.length > 0 ? primaryNano : [...primaryNano, ...suppNano]
+    // Store rows are the bill whether paired (supplementary) or not. A rollup
+    // is counted only when nothing behavioral carries nanoAiu, so a paired
+    // rollup cannot double the credits.
+    const counted = primaryNano.length > 0
+      ? [...primaryNano, ...suppNano.filter(call => call.deduplicationKey.startsWith('copilot-store:'))]
+      : suppNano
     for (const call of counted) nanoSum += call.nanoAiu!
     const unrated = copilot.filter(call => !isFiniteNanoAiu(call.nanoAiu))
     // Requests, not calls: a store row and its per-turn twin, or a rollup, are

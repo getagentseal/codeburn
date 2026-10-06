@@ -796,7 +796,7 @@ describe('#946: a migration re-derives copilot instead of carrying it', () => {
     expect(out.pendingRederive).toBeUndefined()
   })
 
-  it('does not re-open Copilot re-derivation for a cache already past its contract change', async () => {
+  it('re-opens Copilot re-derivation once its contract moves past the cache (v56)', async () => {
     await writeFile(
       join(TMP_CACHE_ROOT, `daily-cache.v${PRE_ROUTE_CONTRACT_VERSION}.json`),
       JSON.stringify({
@@ -812,9 +812,9 @@ describe('#946: a migration re-derives copilot instead of carrying it', () => {
     )
 
     const loaded = await loadDailyCache()
-    // From v32, Codex, Hermes, and Devin are owed re-derivation; dsh's v32
-    // contract is already satisfied.
-    expect(loaded.pendingRederive).toEqual(['codex', 'hermes', 'devin'])
+    // From v32, Copilot (v56), Codex, Hermes, and Devin are owed
+    // re-derivation; dsh's v32 contract is already satisfied.
+    expect(loaded.pendingRederive).toEqual(['copilot', 'codex', 'hermes', 'devin'])
   })
 
   it('preserves an older cache pending repair while adding a newer provider repair', async () => {

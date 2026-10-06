@@ -276,8 +276,9 @@ import type { DateRange, ProjectSummary } from './types.js'
 // v56: Copilot assistant.message events with no outputTokens (CLI 1.0.8x, the
 // VS Code agent host) count as calls, and their shutdown rollup (or, under
 // session-store rows, its residual) carries the output it previously dropped.
-// Settled days re-derive; calls and cost only rise, so no
-// PENDING_REDERIVE_PROVIDER_VERSIONS entry is needed.
+// Settled days re-derive. Calls only rise, except a store row and its message
+// straddling midnight, which moves one call to the next day; copilot's
+// PENDING_REDERIVE contract moves to 56 so that day may shrink once.
 export const DAILY_CACHE_VERSION = 56
 const MIN_SUPPORTED_VERSION = 28
 
@@ -302,7 +303,9 @@ const MIN_SUPPORTED_VERSION = 28
 /// fresh slice at all, so it still carries forward whole — the #1033 bar is
 /// untouched, in both directions, and every other provider keeps the guard.
 const PENDING_REDERIVE_PROVIDER_VERSIONS: Readonly<Record<string, number>> = {
-  copilot: 26,
+  // 56: a store row now pairs with its tokenless per-turn twin, which can
+  // move one call across midnight.
+  copilot: 56,
   // Codex response records replace stale/zero token_count twins and can
   // legitimately reduce counts as well as recover missing usage.
   codex: 43,

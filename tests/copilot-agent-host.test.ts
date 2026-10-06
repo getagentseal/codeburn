@@ -89,6 +89,30 @@ describe('copilot VS Code agent-host sessions', () => {
     expect(calls.some(c => c.nanoAiu !== undefined || c.costIsEstimated)).toBe(false)
   })
 
+  // Synthetic: no real resumed-and-compacted session was available. Token
+  // counters reset at compaction; totalNanoAiu keeps running like a bill.
+  it('resumed + compacted session: token deltas restart, nanoAiu stays a running total', async () => {
+    const ev = (type: string, timestamp: string, data: Record<string, unknown>) => JSON.stringify({ type, timestamp, data })
+    const msg = (id: string, ts: string) => ev('assistant.message', ts, { messageId: id, model: 'claude-haiku-4.5', toolRequests: [] })
+    const shutdown = (ts: string, input: number, output: number, nano: number) => ev('session.shutdown', ts, {
+      shutdownType: 'routine',
+      modelMetrics: { 'claude-haiku-4.5': { usage: { inputTokens: input, outputTokens: output, cacheReadTokens: 0, cacheWriteTokens: 0 }, totalNanoAiu: nano } },
+    })
+    const calls = await parse([
+      ev('session.start', '2026-08-31T10:00:00Z', { selectedModel: 'claude-haiku-4.5' }),
+      msg('m1', '2026-08-31T10:00:10Z'),
+      shutdown('2026-08-31T10:01:00Z', 1_000, 100, 1_000_000_000),
+      msg('m2', '2026-08-31T10:02:00Z'),
+      ev('session.compaction_complete', '2026-08-31T10:03:00Z', { success: true }),
+      msg('m3', '2026-08-31T10:04:00Z'),
+      shutdown('2026-08-31T10:05:00Z', 300, 40, 1_500_000_000),
+    ])
+    const legs = calls.filter(c => c.deduplicationKey.includes(':shutdown:'))
+
+    expect(calls.length - legs.length).toBe(3)
+    expect(legs.map(c => [c.inputTokens, c.outputTokens, c.nanoAiu])).toEqual([[1_000, 100, 1_000_000_000], [300, 40, 500_000_000]])
+  })
+
   it('older CLI with per-turn outputTokens: the rollup does not count output again', async () => {
     let n = 0
     const lines = (await fixtureLines()).map(l => {

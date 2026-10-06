@@ -418,6 +418,7 @@ function usageCall(overrides: {
   timestamp: string
   nanoAiu?: number
   supplementaryAccounting?: boolean
+  deduplicationKey?: string
 }) {
   return {
     provider: overrides.provider,
@@ -441,7 +442,7 @@ function usageCall(overrides: {
     speed: 'standard' as const,
     timestamp: overrides.timestamp,
     bashCommands: [],
-    deduplicationKey: `${overrides.provider}-${overrides.timestamp}-${overrides.nanoAiu ?? 'none'}`,
+    deduplicationKey: overrides.deduplicationKey ?? `${overrides.provider}-${overrides.timestamp}-${overrides.nanoAiu ?? 'none'}`,
     ...(overrides.nanoAiu != null ? { nanoAiu: overrides.nanoAiu } : {}),
     ...(overrides.supplementaryAccounting ? { supplementaryAccounting: true } : {}),
   }
@@ -576,6 +577,26 @@ describe('copilot AI credit plan math', () => {
 
     expect(usage.spentCredits).toBe(1.5)
     expect(usage.creditsIncomplete).toBe(false)
+  })
+
+  it('keeps paired store-row credits beside an unpaired compaction row', () => {
+    // CLI 1.0.8x: tokenless per-turn calls pair with their store rows, and the
+    // compaction row has no per-turn twin, so it stays behavioral.
+    const call = (ts: string, extra: { nanoAiu?: number; supplementaryAccounting?: boolean; deduplicationKey?: string } = {}) =>
+      usageCall({ provider: 'copilot', costUSD: 0, timestamp: `2026-08-05T12:00:${ts}.000Z`, ...extra })
+    const spend = copilotCreditSpend([
+      usageProject([
+        call('00'),
+        call('01', { nanoAiu: 250_000_000, supplementaryAccounting: true, deduplicationKey: 'copilot-store:s:1:a' }),
+        call('10'),
+        call('11', { nanoAiu: 250_000_000, supplementaryAccounting: true, deduplicationKey: 'copilot-store:s:2:b' }),
+        call('20', { nanoAiu: 200_000_000, deduplicationKey: 'copilot-store:s:3:c' }),
+      ]),
+    ])
+
+    expect(spend.spentCredits).toBeCloseTo(0.7, 12)
+    expect(spend.creditRatedCalls).toBe(3)
+    expect(spend.creditUnratedCalls).toBe(0)
   })
 
   it('does not double credits when nanoAiu twins sit in separate session turns', () => {
