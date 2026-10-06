@@ -300,6 +300,7 @@ export const PROVIDER_ENV_VARS: Record<string, string[]> = {
   'cline-cli': ['CLINE_SESSION_DATA_DIR', 'CLINE_DATA_DIR', 'CLINE_DIR'],
   codebuff: ['CODEBUFF_DATA_DIR'],
   codewhale: ['CODEWHALE_HOME'],
+  'command-code': ['CODEBURN_COMMANDCODE_DIR'],
   codex: ['CODEX_HOME'],
   hermes: ['HERMES_HOME', 'LOCALAPPDATA'],
   'lingtai-tui': ['LINGTAI_HOME', 'LINGTAI_TUI_HOME', 'LINGTAI_TUI_GLOBAL_DIR'],
@@ -378,6 +379,7 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // hold costUSD: undefined and get re-priced from tokens on every read.
   'cline-cli': 'reported-cost-v1-est-reprice-v1',
   codewhale: 'aggregate-session-v1-est-cost',
+  'command-code': 'cache-inclusive-input-v1',
   // Bump when the Codex parser changes attribution so unchanged, already-cached
   // session files re-parse (session-cache.json serves them without invoking the
   // provider parser otherwise). Covers native mcp_tool_call_end (#513) and

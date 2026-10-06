@@ -25,7 +25,7 @@
     <a href="https://github.com/sponsors/iamtoruk"><img src="https://img.shields.io/badge/sponsor-♥-F97316?logo=github" alt="Sponsor" /></a>
 </p>
 
-<p align="center">If CodeBurn shows you something your bill never did, <a href="https://github.com/getagentseal/codeburn/stargazers">star the repo</a> so other developers find it, and consider <a href="https://github.com/sponsors/iamtoruk">sponsoring</a> to keep 41 integrations honest.</p>
+<p align="center">If CodeBurn shows you something your bill never did, <a href="https://github.com/getagentseal/codeburn/stargazers">star the repo</a> so other developers find it, and consider <a href="https://github.com/sponsors/iamtoruk">sponsoring</a> to keep 42 integrations honest.</p>
 
 <p align="center"><code>npx codeburn</code></p>
 
@@ -156,7 +156,7 @@ That registers a local MCP server over stdio. Your agent can then answer "where 
 
 It reads the same files on disk that the CLI reads. The server answers from that local data and makes no network call of its own, and project names are pseudonymized unless the agent asks for them.
 
-## Works with 41 tools
+## Works with 42 tools
 
 CodeBurn detects the tools you already use. There is nothing to configure and no folder to point it at. If a tool is installed and has sessions on disk, it shows up. Each logo links to that tool's page.
 
@@ -198,12 +198,12 @@ CodeBurn detects the tools you already use. There is nothing to configure and no
 </p>
 
 <details>
-<summary><strong>All 41 tools</strong></summary>
+<summary><strong>All 42 tools</strong></summary>
 
 Each page lists where that tool keeps its data, the format it uses, and the quirks CodeBurn works around.
 
 [Amp](docs/providers/amp.md) &middot; [Antigravity](docs/providers/antigravity.md) &middot; [Claude Code](docs/providers/claude.md) &middot; [Cline](docs/providers/cline.md) &middot; [Cline CLI](docs/providers/cline-cli.md) &middot; [Codebuff](docs/providers/codebuff.md) &middot; [Codex](docs/providers/codex.md) &middot;
-[CodeWhale](docs/providers/codewhale.md) &middot; [Copilot](docs/providers/copilot.md) &middot; [Crush](docs/providers/crush.md) &middot; [Cursor](docs/providers/cursor.md) &middot; [Cursor Agent](docs/providers/cursor-agent.md) &middot; [DeepSeek Harness](docs/providers/dsh.md) &middot;
+[CodeWhale](docs/providers/codewhale.md) &middot; [Command Code](docs/providers/command-code.md) &middot; [Copilot](docs/providers/copilot.md) &middot; [Crush](docs/providers/crush.md) &middot; [Cursor](docs/providers/cursor.md) &middot; [Cursor Agent](docs/providers/cursor-agent.md) &middot; [DeepSeek Harness](docs/providers/dsh.md) &middot;
 [Devin](docs/providers/devin.md) &middot; [Droid](docs/providers/droid.md) &middot; [Forge](docs/providers/forge.md) &middot; [Gemini CLI](docs/providers/gemini.md) &middot; [Goose](docs/providers/goose.md) &middot; [Grok Bot](docs/providers/grokbot.md) &middot;
 [Grok Build](docs/providers/grok.md) &middot; [Hermes Agent](docs/providers/hermes.md) &middot; [IBM Bob](docs/providers/ibm-bob.md) &middot; [KiloCode](docs/providers/kilo-code.md) &middot; [Kimi](docs/providers/kimi.md) &middot; [Kimi Code](docs/providers/kimicode.md) &middot;
 [Kiro](docs/providers/kiro.md) &middot; [LingTai TUI](docs/providers/lingtai-tui.md) &middot; [Mistral Vibe](docs/providers/mistral-vibe.md) &middot; [Mux](docs/providers/mux.md) &middot; [OMP](docs/providers/omp.md) &middot; [Open Design](docs/providers/open-design.md) &middot;
@@ -257,7 +257,7 @@ MIT licensed. Development happens in this repo.
   <img src="https://img.shields.io/badge/Salesforce-1f1f1f?style=flat" alt="Salesforce" />
 </p>
 
-<p align="center"><sub>Keeping 41 integrations working takes constant time. The tools underneath change often, and each change means a config path to follow or a stored format to relearn. Sponsorship pays for that work.</sub></p>
+<p align="center"><sub>Keeping 42 integrations working takes constant time. The tools underneath change often, and each change means a config path to follow or a stored format to relearn. Sponsorship pays for that work.</sub></p>
 
 <p align="center">
   <a href="https://github.com/sponsors/iamtoruk"><img src="https://img.shields.io/badge/Sponsor_CodeBurn-%E2%99%A5-F97316?style=for-the-badge&logo=github&labelColor=1a1a1a" alt="Sponsor CodeBurn" /></a>
@@ -458,7 +458,7 @@ Register the local MCP server with `claude mcp add codeburn -- npx -y codeburn m
 <details>
 <summary><strong>Why is this free, and what is going to cost money later?</strong></summary>
 
-CodeBurn is MIT licensed and all of it is in this repository: the CLI, the desktop app, the menu bar and tray apps, the GNOME extension. There is no account, no paid tier and no feature held back for one. It is free because it reads files you already have, which costs nothing to run. What it does cost is time, because 41 integrations sit on top of tools that change their config paths and data formats without warning. [Sponsorship](https://github.com/sponsors/iamtoruk) is what pays for keeping up with them.
+CodeBurn is MIT licensed and all of it is in this repository: the CLI, the desktop app, the menu bar and tray apps, the GNOME extension. There is no account, no paid tier and no feature held back for one. It is free because it reads files you already have, which costs nothing to run. What it does cost is time, because 42 integrations sit on top of tools that change their config paths and data formats without warning. [Sponsorship](https://github.com/sponsors/iamtoruk) is what pays for keeping up with them.
 
 </details>
 

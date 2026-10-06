@@ -206,6 +206,7 @@
               "$HOME/.cline/data/tasks",
               "$HOME/.cline/data/sessions",
               "$HOME/.codewhale/sessions",
+              "$HOME/.commandcode/projects",
               "$HOME/.copilot/session-state",
               "$HOME/.copilot/session-store.db",
               "$HOME/.cursor/projects",

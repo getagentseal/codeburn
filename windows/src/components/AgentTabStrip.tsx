@@ -45,6 +45,7 @@ const PROVIDER_COLORS: Record<string, string> = {
   claude: '#C9521D',
   cline: '#238A7E',
   codewhale: '#38BDF8',
+  'command-code': '#10B981',
   codex: '#4A7D5C',
   cursor: '#3F6B8C',
   'cursor-agent': '#4EC9B0',
