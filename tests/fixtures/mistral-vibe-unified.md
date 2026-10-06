@@ -23,3 +23,15 @@ runtime state and metadata were removed, and the working directory was replaced
 with `/tmp/vibe-repro`. Embedded hashes are original provenance values, not
 checksums of these minimized documents. No credentials or private conversation
 content are included.
+
+## Vibe 2.26.0 fixture
+
+`mistral-vibe-unified-2.26.json` is a real Vibe **2.26.0** session against the
+Mistral API: two prompts, 11 completions, no model pin (default
+`mistral-medium-3.5`). The first prompt's journal segment had already rotated
+away, so only the second prompt's 5 calls keep per-call usage. Totals:
+142,427 input tokens of which 131,200 cached, 1,216 output. All prompt, file,
+tool-output and title text is replaced with `redacted`, bash commands with
+`python3 -m unittest`, and the working directory with `/tmp/vibe-test`.
+Runtime state keeps only session metadata and action kinds and states; the
+journal keeps cumulative envelopes and the usage of each completion.

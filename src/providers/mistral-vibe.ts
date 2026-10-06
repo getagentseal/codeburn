@@ -164,6 +164,13 @@ async function discoverSessionDirs(root: string): Promise<string[]> {
   return sessionDirs
 }
 
+// Vibe resolves an unpinned session to config.toml's top-level active_model.
+async function configuredModel(sessionsDir: string): Promise<string> {
+  const raw = await readSessionFile(join(sessionsDir, '..', '..', 'config.toml'))
+  const topLevel = raw?.split(/^\s*\[/m)[0] ?? ''
+  return topLevel.match(/^\s*active_model\s*=\s*["']([^"']+)["']/m)?.[1] ?? DEFAULT_MODEL
+}
+
 function activeModelConfig(metadata: VibeMetadata): VibeModelConfig | null {
   const activeModel = metadata.config?.active_model
   const models = metadata.config?.models
@@ -445,7 +452,8 @@ export function createMistralVibeProvider(sessionsDir?: string): Provider {
     createSessionParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
       if (basename(source.path) === 'CURRENT') {
         return { async *parse() {
-          for (const call of await readUnifiedVibeCalls(source.path, name => toolNameMap[name] ?? name)) {
+          const defaultModel = await configuredModel(dir)
+          for (const call of await readUnifiedVibeCalls(source.path, name => toolNameMap[name] ?? name, defaultModel)) {
             if (seenKeys.has(call.deduplicationKey)) continue
             seenKeys.add(call.deduplicationKey)
             yield call
