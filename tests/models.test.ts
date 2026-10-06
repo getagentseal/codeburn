@@ -103,6 +103,13 @@ describe('getModelCosts', () => {
     expect(getModelCosts('z-ai/glm-5.3')!.inputCostPerToken).toBe(zai[0])
   })
 
+  it('prices Mistral Large 4 at the preview rate, not the 2024 bare mistral-large row', () => {
+    for (const id of ['mistral-large-4-0', 'mistral-large-2610', 'mistral-large-4']) {
+      expect(calculateCost(id, 1_000_000, 1_000_000, 0, 1_000_000, 0)).toBeCloseTo(0.68 + 2.09 + 0.07, 12)
+    }
+    expect(calculateCost('mistral-large', 1_000_000, 1_000_000, 0, 0, 0)).toBeCloseTo(16, 12)
+  })
+
   it('prices deepseek-v3.2 at DeepSeek\'s published $0.28 / $0.42 / $0.028 hit', () => {
     expect(calculateCost('deepseek-v3.2', 1_000_000, 1_000_000, 0, 1_000_000, 0)).toBeCloseTo(0.28 + 0.42 + 0.028, 12)
   })

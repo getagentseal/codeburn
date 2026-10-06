@@ -37,6 +37,14 @@ const MODELS_DEV_FIRST_PARTY = new Set([
 ])
 
 const MANUAL_ENTRIES = {
+  // Mistral Large 4 ("Le Chonk"), public preview from 2026-10-06. Mistral's
+  // pricing page lists $1.36 / $4.18 (cached $0.14) struck through for the
+  // preview rate below, which is what Mistral and OpenRouter bill today. Without
+  // these rows the ids prefix-match the 2024 bare `mistral-large` ($4 / $12).
+  // Remove once LiteLLM carries them; reprice if the preview discount ends.
+  'mistral-large-4-0':      [0.68e-6, 2.09e-6, null, 0.07e-6],
+  'mistral-large-2610':     [0.68e-6, 2.09e-6, null, 0.07e-6],
+  'mistral-large-4':        [0.68e-6, 2.09e-6, null, 0.07e-6],
   'MiniMax-M2.7':           [0.3e-6, 1.2e-6, 0.375e-6, 0.06e-6],
   'MiniMax-M2.7-highspeed': [0.6e-6, 2.4e-6, 0.375e-6, 0.06e-6],
   // deepseek-v4-flash / deepseek-v4-pro were hand-pinned here while LiteLLM PR
