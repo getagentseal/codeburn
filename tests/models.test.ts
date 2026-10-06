@@ -1,7 +1,7 @@
 import { mkdtemp, mkdir, rm, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { describe, it, expect, beforeAll, afterEach } from 'vitest'
+import { describe, it, expect, beforeAll, afterEach, vi } from 'vitest'
 
 import {
   findUnpricedModels,
@@ -425,9 +425,9 @@ describe('getModelCosts', () => {
       expect(calculateCost('grok-4.6', 100_000, 10_000, 0, 99_999, 0)).toBeCloseTo(0.3099995, 12)
     })
 
-    // The snapshot's bare `grok-4.6` row is Azure Foundry's ($1.25/M input),
-    // stripped from `azure_ai/grok-4.6`; xAI lists $2/M, which is what GitHub
-    // Copilot bills (three real requests: 29,549 in, 946 out, 57,472 cached).
+    // The bare id takes `xai/grok-4.6` ($2/M input), not `azure_ai/grok-4.6`
+    // ($1.25/M); xAI's rate is what GitHub Copilot bills (three real
+    // requests: 29,549 in, 946 out, 57,472 cached).
     it('prices at xAI list rates, matching GitHub Copilot\'s charge', () => {
       expect(calculateCost('grok-4.6', 29_549, 946, 0, 57_472, 0)).toBeCloseTo(9_351_000_000 / 1e11, 12)
       const xai = getModelCosts('xai/grok-4.6')!
@@ -1431,6 +1431,55 @@ describe('DeepSeek v4 models resolve to pricing', () => {
       expect(getModelCosts('deepseek-v4-pro')!.inputCostPerToken).toBe(1.32e-6)
       expect(getModelCosts('deepseek-v4-flash')!.inputCostPerToken).toBe(3e-7)
     } finally {
+      await rm(cacheRoot, { recursive: true, force: true })
+      await loadPricing()
+    }
+  })
+})
+
+describe('live fetch bare-id claims', () => {
+  it('gives a bare id the maker\'s price over a reseller\'s and a priced row over a $0 one', async () => {
+    const cacheRoot = await mkdtemp(join(tmpdir(), 'codeburn-pricing-live-'))
+    const prevDir = process.env['CODEBURN_CACHE_DIR']
+    const prevSnapshotOnly = process.env['CODEBURN_PRICING_SNAPSHOT_ONLY']
+    const row = (input: number, output: number) => ({ input_cost_per_token: input, output_cost_per_token: output })
+    const source = {
+      'azure_ai/grok-x-live': row(1.25e-6, 6e-6),
+      'xai/grok-x-live': row(2e-6, 6e-6),
+      'xai/grok-y-live': row(2e-6, 6e-6),
+      'azure_ai/grok-y-live': row(1.25e-6, 6e-6),
+      'codestral/codestral-x-live': row(0, 0),
+      'mistral/codestral-x-live': row(0.3e-6, 0.9e-6),
+      'ollama/free-only-live': row(0, 0),
+      'azure_ai/resold-live': row(1e-6, 3e-6),
+      'fireworks_ai/resold-live': row(2e-6, 4e-6),
+      'openrouter/openai/sol-live': row(2e-6, 10e-6),
+      'perplexity/openai/sol-live': row(4e-6, 20e-6),
+      'reseller/direct-live': row(9e-6, 9e-6),
+      'direct-live': row(1e-6, 2e-6),
+    }
+    try {
+      process.env['CODEBURN_CACHE_DIR'] = cacheRoot
+      delete process.env['CODEBURN_PRICING_SNAPSHOT_ONLY']
+      vi.stubGlobal('fetch', async () => new Response(JSON.stringify(source)))
+      await loadPricing()
+      const rates = (id: string) => {
+        const c = getModelCosts(id)!
+        return [c.inputCostPerToken, c.outputCostPerToken]
+      }
+      expect(rates('grok-x-live')).toEqual([2e-6, 6e-6])
+      expect(rates('grok-y-live')).toEqual([2e-6, 6e-6])
+      expect(rates('azure_ai/grok-x-live')).toEqual([1.25e-6, 6e-6])
+      expect(rates('codestral-x-live')).toEqual([0.3e-6, 0.9e-6])
+      expect(rates('free-only-live')).toEqual([0, 0])
+      expect(rates('resold-live')).toEqual([1e-6, 3e-6])
+      expect(rates('openai/sol-live')).toEqual([2e-6, 10e-6])
+      expect(rates('direct-live')).toEqual([1e-6, 2e-6])
+    } finally {
+      vi.unstubAllGlobals()
+      if (prevDir === undefined) delete process.env['CODEBURN_CACHE_DIR']
+      else process.env['CODEBURN_CACHE_DIR'] = prevDir
+      if (prevSnapshotOnly !== undefined) process.env['CODEBURN_PRICING_SNAPSHOT_ONLY'] = prevSnapshotOnly
       await rm(cacheRoot, { recursive: true, force: true })
       await loadPricing()
     }

@@ -207,6 +207,29 @@ const completeness = (val) => (val[2] != null ? 1 : 0) + (val[3] != null ? 1 : 0
 // purely by JSON key order (#1134: the openrouter row held the
 // `deepseek/deepseek-v4-pro` slot at ~40% under official peak pricing).
 const entryNames = new Set(Object.keys(data))
+// Which prefixed row claims an absent bare key: the model maker's own row
+// (`xai/grok-4.6`) over any reseller's (`azure_ai/grok-4.6`), whatever the JSON
+// order; otherwise the first row as before. A $0/$0 row yields to any priced
+// row (the `codestral/` free-beta rows priced `codestral-latest` at nothing)
+// and claims only when no priced row exists. The key
+// keeps the position its first claimant gave it. Mirrored in src/models.ts.
+const MAKER_PREFIXES = new Set([
+  'xai', 'mistral', 'cohere', 'anthropic', 'openai', 'gemini', 'deepseek', 'moonshot',
+  'zai', 'minimax', 'ai21', 'perplexity', 'dashscope', 'meta_llama', 'xiaomi_mimo',
+])
+// Two segments only: `perplexity/openai/gpt-5.6-sol` is Perplexity reselling.
+const isMaker = (name) => name.split('/').length === 2 && MAKER_PREFIXES.has(name.split('/')[0])
+const isFree = (val) => val[0] === 0 && val[1] === 0
+const bareClaims = new Map()
+for (const [name, entry] of [...entries.filter(([n]) => isMaker(n)), ...entries.filter(([n]) => !isMaker(n))]) {
+  if (!name.includes('/')) continue
+  const stripped = name.replace(/^[^/]+\//, '')
+  if (entryNames.has(stripped)) continue
+  const val = toVal(entry)
+  if (!val) continue
+  const prev = bareClaims.get(stripped)
+  if (!prev || (isFree(prev) && !isFree(val))) bareClaims.set(stripped, val)
+}
 for (const [name, entry] of entries) {
   if (!name.includes('/')) continue
   const val = toVal(entry)
@@ -236,7 +259,7 @@ for (const [name, entry] of entries) {
     && (prev[2] == null || cand[2] === prev[2])
     && (prev[3] == null || cand[3] === prev[3])
   if (!existing) {
-    if (!entryNames.has(stripped)) snapshot[stripped] = val
+    if (bareClaims.has(stripped)) snapshot[stripped] = bareClaims.get(stripped)
     continue
   }
   if (completeness(val) > completeness(existing) && fillsOnly(val, existing)) snapshot[stripped] = val

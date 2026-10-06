@@ -105,7 +105,9 @@ const CACHE_TTL_MS = 24 * 60 * 60 * 1000
 // source publishes no `provider_specific_entry.fast` (#1616), so a cached costs
 // object can carry a multiplier the pre-fix fetch left at 1.
 // 7: ModelCosts carries the Flex tier's rates (`flex`), read from `<rate>_flex`.
-export const CACHE_SCHEMA_VERSION = 7
+// 8: a bare id takes the maker's row over a reseller's and a priced row over a
+// $0 one, so a cached map can still hold azure_ai's rate under `grok-4.6`.
+export const CACHE_SCHEMA_VERSION = 8
 const WEB_SEARCH_COST = 0.01
 const ONE_HOUR_CACHE_WRITE_MULTIPLIER_FROM_FIVE_MINUTE_RATE = 1.6
 
@@ -120,12 +122,6 @@ const BUILTIN_PRICE_OVERRIDES: Record<string, SnapshotEntry> = {
   'composer-2': [0.5e-6, 2.5e-6, 0.5e-6, 0.2e-6],
   'composer-1.5': [3.5e-6, 17.5e-6, 3.5e-6, 0.35e-6],
   'composer-1': [1.25e-6, 10e-6, 1.25e-6, 0.125e-6],
-  // LiteLLM has no bare grok-4.6 row, so the stripped `azure_ai/grok-4.6` row
-  // (Azure Foundry, $1.25/M input) claims the bare id ahead of `xai/grok-4.6`
-  // in both the bundler and the live fetch. xAI's list price (docs.x.ai):
-  // $2/M input, $6/M output, $0.50/M cached; GitHub Copilot bills grok-4.6 at
-  // exactly these rates.
-  'grok-4.6': [2e-6, 6e-6, null, 0.5e-6, null, { threshold: 200000, input: 4e-6, output: 12e-6, cacheWrite: null, cacheRead: 1e-6 }],
 }
 
 // Assemble a ModelCosts, applying the cache-cost heuristics (write = 1.25x
@@ -439,6 +435,14 @@ export function parseLiteLLMEntry(entry: LiteLLMEntry): ModelCosts | null {
 // this module has no other way to signal that across a fresh CLI process.
 let livePricingTimestamp: number | null = null
 
+const MAKER_PREFIXES: ReadonlySet<string> = new Set([
+  'xai', 'mistral', 'cohere', 'anthropic', 'openai', 'gemini', 'deepseek', 'moonshot',
+  'zai', 'minimax', 'ai21', 'perplexity', 'dashscope', 'meta_llama', 'xiaomi_mimo',
+])
+// Two segments only: `perplexity/openai/gpt-5.6-sol` is Perplexity reselling.
+const isMakerRow = (name: string) => name.split('/').length === 2 && MAKER_PREFIXES.has(name.split('/')[0]!)
+const isFreeRow = (c: ModelCosts) => c.inputCostPerToken === 0 && c.outputCostPerToken === 0
+
 async function fetchAndCachePricing(): Promise<Map<string, ModelCosts>> {
   // Bounded: runs on every CLI invocation (the menubar shells out and blocks on
   // it). Without a timeout a half-open network after wake-from-sleep makes
@@ -449,15 +453,27 @@ async function fetchAndCachePricing(): Promise<Map<string, ModelCosts>> {
   const data = await response.json() as Record<string, LiteLLMEntry>
   const pricing = new Map<string, ModelCosts>()
 
+  const parsed: [string, ModelCosts][] = []
   for (const [name, entry] of Object.entries(data)) {
     const costs = parseLiteLLMEntry(entry)
-    if (!costs) continue
-    pricing.set(name, costs)
-    // Also index by stripped name so lookups work without provider prefix:
-    // 'anthropic/claude-opus-4-6' is also queryable as 'claude-opus-4-6'.
-    // First write wins so direct-provider entries take precedence over re-hosters.
+    if (costs) parsed.push([name, costs])
+  }
+  // Also index by stripped name so lookups work without provider prefix:
+  // 'anthropic/claude-opus-4-6' is also queryable as 'claude-opus-4-6'. A
+  // direct entry of that name always wins; otherwise the maker's own row beats
+  // a reseller's whatever the JSON order, and a $0/$0 row yields to any priced
+  // one. Mirrors scripts/bundle-litellm.mjs.
+  const bareClaims = new Map<string, ModelCosts>()
+  for (const [name, costs] of [...parsed.filter(([n]) => isMakerRow(n)), ...parsed.filter(([n]) => !isMakerRow(n))]) {
     const stripped = name.replace(/^[^/]+\//, '')
-    if (stripped !== name && !pricing.has(stripped)) pricing.set(stripped, costs)
+    if (stripped === name) continue
+    const prev = bareClaims.get(stripped)
+    if (!prev || (isFreeRow(prev) && !isFreeRow(costs))) bareClaims.set(stripped, costs)
+  }
+  for (const [name, costs] of parsed) {
+    pricing.set(name, costs)
+    const stripped = name.replace(/^[^/]+\//, '')
+    if (stripped !== name && !pricing.has(stripped)) pricing.set(stripped, bareClaims.get(stripped)!)
   }
 
   const timestamp = Date.now()

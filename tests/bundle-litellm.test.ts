@@ -240,3 +240,51 @@ it('derives the fast multiplier from priority rates without inventing one (#1616
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+it('gives a bare id the maker\'s price over a reseller\'s and a priced row over a $0 one', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'codeburn-bundle-maker-'))
+  try {
+    mkdirSync(join(dir, 'scripts'))
+    mkdirSync(join(dir, 'src/data'), { recursive: true })
+    copyFileSync(fileURLToPath(new URL('../scripts/bundle-litellm.mjs', import.meta.url)), join(dir, 'scripts/bundle-litellm.mjs'))
+    writeFileSync(join(dir, 'src/data/litellm-snapshot.json'), '{}')
+    writeFileSync(join(dir, 'src/data/pricing-fallback.json'), '{}')
+    const row = (input: number, output: number) => ({ input_cost_per_token: input, output_cost_per_token: output })
+    const source = {
+      'azure_ai/grok-x': row(1.25e-6, 6e-6),
+      'xai/grok-x': row(2e-6, 6e-6),
+      'xai/grok-y': row(2e-6, 6e-6),
+      'azure_ai/grok-y': row(1.25e-6, 6e-6),
+      'codestral/codestral-x': row(0, 0),
+      'mistral/codestral-x': row(0.3e-6, 0.9e-6),
+      'ollama/free-only': row(0, 0),
+      'azure_ai/resold': row(1e-6, 3e-6),
+      'fireworks_ai/resold': row(2e-6, 4e-6),
+      'openrouter/openai/sol': row(2e-6, 10e-6),
+      'perplexity/openai/sol': row(4e-6, 20e-6),
+    }
+    writeFileSync(join(dir, 'source.json'), JSON.stringify(source))
+    const run = spawnSync(process.execPath, ['--input-type=module', '-e', `
+      import { readFileSync } from 'node:fs';
+      const source = JSON.parse(readFileSync('source.json', 'utf8'));
+      globalThis.fetch = async (url) => ({ ok: true, json: async () =>
+        url.includes('raw.githubusercontent.com') ? source : url.includes('models.dev') ? {} : { data: [] }
+      });
+      await import('./scripts/bundle-litellm.mjs');
+    `], { cwd: dir, encoding: 'utf8', timeout: 10_000 })
+    expect(run.status, run.stderr).toBe(0)
+    const snapshot = JSON.parse(readFileSync(join(dir, 'src/data/litellm-snapshot.json'), 'utf8'))
+    expect(snapshot['grok-x']).toEqual([2e-6, 6e-6, null, null, null, null])
+    expect(snapshot['grok-y']).toEqual([2e-6, 6e-6, null, null, null, null])
+    expect(snapshot['azure_ai/grok-x']).toEqual([1.25e-6, 6e-6, null, null, null, null])
+    expect(snapshot['codestral-x']).toEqual([0.3e-6, 0.9e-6, null, null, null, null])
+    expect(snapshot['free-only']).toEqual([0, 0, null, null, null, null])
+    expect(snapshot['resold']).toEqual([1e-6, 3e-6, null, null, null, null])
+    // A maker prefix in front of another vendor's path is a reseller row.
+    expect(snapshot['openai/sol']).toEqual([2e-6, 10e-6, null, null, null, null])
+    // The bare key keeps the position its first claimant gave it.
+    expect(Object.keys(snapshot).indexOf('grok-x')).toBe(Object.keys(snapshot).indexOf('azure_ai/grok-x') + 1)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
