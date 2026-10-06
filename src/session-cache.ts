@@ -328,6 +328,8 @@ export const PROVIDER_ENV_VARS: Record<string, string[]> = {
   quickdesk: ['QUICKWORK_HOME'],
   kimicode: ['KIMI_CODE_HOME'],
   zerostack: ['ZS_DATA_DIR', 'XDG_DATA_HOME'],
+  workbuddy: ['WORKBUDDY_HOME', 'WORKBUDDY_AI_HOME'],
+  workbuddyai: ['WORKBUDDY_HOME', 'WORKBUDDY_AI_HOME'],
   // The gateway credential is a deliberate user override and MUST move the
   // fingerprint: a read-only refresh (the refresh-lock fallback) serves the
   // cached report straight from the section (parser.ts:2875 seeds servedSources

@@ -61,6 +61,7 @@ const FILE_PROVIDERS: Record<string, string[]> = {
   'quickdesk.ts': ['quickdesk'],
   'kimicode.ts': ['kimicode'],
   'zerostack.ts': ['zerostack'],
+  'workbuddy.ts': ['workbuddy', 'workbuddyai'],
   // Shared sqlite parser; its only importers in src/ are kilo-code.ts and
   // opencode.ts. Its single read (CODEBURN_VERBOSE) is allowlisted, so this
   // entry is informational — but required, because the file has reads.

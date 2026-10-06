@@ -28,6 +28,7 @@ import { quickdesk } from './quickdesk.js'
 import { zerostack } from './zerostack.js'
 import { grok } from './grok.js'
 import { grokbot } from './grokbot.js'
+import { workbuddy, workbuddyai } from './workbuddy.js'
 import { isBlockedDatabaseError } from '../sqlite.js'
 import type { Provider, SessionSource } from './types.js'
 
@@ -195,7 +196,7 @@ async function loadZed(): Promise<Provider | null> {
   }
 }
 
-const coreProviders: Provider[] = [claude, cline, clineCli, codewhale, codebuff, codex, copilot, devin, droid, dsh, gemini, hermes, ibmBob, kiloCode, kiro, kimi, kimicode, lingtaiTui, mistralVibe, mux, openclaw, openclaude, openDesign, pi, omp, qwen, quickdesk, zerostack, grok, grokbot, amp]
+const coreProviders: Provider[] = [claude, cline, clineCli, codewhale, codebuff, codex, copilot, devin, droid, dsh, gemini, hermes, ibmBob, kiloCode, kiro, kimi, kimicode, lingtaiTui, mistralVibe, mux, openclaw, openclaude, openDesign, pi, omp, qwen, quickdesk, zerostack, grok, grokbot, amp, workbuddy, workbuddyai]
 
 // Lazily loaded providers, listed by name so --provider validation works even
 // when an optional module fails to load. Must stay in sync with getAllProviders.

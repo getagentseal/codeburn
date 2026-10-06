@@ -51,6 +51,8 @@ export const CLEARED = [
   'QWEN_DATA_DIR',
   'VIBE_HOME',
   'WARP_DB_PATH',
+  'WORKBUDDY_HOME',
+  'WORKBUDDY_AI_HOME',
   'ZS_DATA_DIR',
   // codeburn override dirs / paths
   'CODEBURN_CACHE_DIR',
