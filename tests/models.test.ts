@@ -1438,7 +1438,7 @@ describe('DeepSeek v4 models resolve to pricing', () => {
 })
 
 describe('live fetch bare-id claims', () => {
-  it('gives a bare id the maker\'s price over a reseller\'s and a priced row over a $0 one', async () => {
+  it('gives a bare id the maker\'s price over a reseller\'s, and a priced reseller row over a $0 one', async () => {
     const cacheRoot = await mkdtemp(join(tmpdir(), 'codeburn-pricing-live-'))
     const prevDir = process.env['CODEBURN_CACHE_DIR']
     const prevSnapshotOnly = process.env['CODEBURN_PRICING_SNAPSHOT_ONLY']
@@ -1451,6 +1451,8 @@ describe('live fetch bare-id claims', () => {
       'codestral/codestral-x-live': row(0, 0),
       'mistral/codestral-x-live': row(0.3e-6, 0.9e-6),
       'ollama/free-only-live': row(0, 0),
+      'deepinfra/gemma-free-live': row(0.15e-6, 0.6e-6),
+      'gemini/gemma-free-live': row(0, 0),
       'azure_ai/resold-live': row(1e-6, 3e-6),
       'fireworks_ai/resold-live': row(2e-6, 4e-6),
       'openrouter/openai/sol-live': row(2e-6, 10e-6),
@@ -1472,6 +1474,7 @@ describe('live fetch bare-id claims', () => {
       expect(rates('azure_ai/grok-x-live')).toEqual([1.25e-6, 6e-6])
       expect(rates('codestral-x-live')).toEqual([0.3e-6, 0.9e-6])
       expect(rates('free-only-live')).toEqual([0, 0])
+      expect(rates('gemma-free-live')).toEqual([0, 0])
       expect(rates('resold-live')).toEqual([1e-6, 3e-6])
       expect(rates('openai/sol-live')).toEqual([2e-6, 10e-6])
       expect(rates('direct-live')).toEqual([1e-6, 2e-6])

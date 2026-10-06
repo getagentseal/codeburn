@@ -241,7 +241,7 @@ it('derives the fast multiplier from priority rates without inventing one (#1616
   }
 })
 
-it('gives a bare id the maker\'s price over a reseller\'s and a priced row over a $0 one', () => {
+it('gives a bare id the maker\'s price over a reseller\'s, and a priced reseller row over a $0 one', () => {
   const dir = mkdtempSync(join(tmpdir(), 'codeburn-bundle-maker-'))
   try {
     mkdirSync(join(dir, 'scripts'))
@@ -258,6 +258,8 @@ it('gives a bare id the maker\'s price over a reseller\'s and a priced row over 
       'codestral/codestral-x': row(0, 0),
       'mistral/codestral-x': row(0.3e-6, 0.9e-6),
       'ollama/free-only': row(0, 0),
+      'deepinfra/gemma-free': row(0.15e-6, 0.6e-6),
+      'gemini/gemma-free': row(0, 0),
       'azure_ai/resold': row(1e-6, 3e-6),
       'fireworks_ai/resold': row(2e-6, 4e-6),
       'openrouter/openai/sol': row(2e-6, 10e-6),
@@ -279,6 +281,8 @@ it('gives a bare id the maker\'s price over a reseller\'s and a priced row over 
     expect(snapshot['azure_ai/grok-x']).toEqual([1.25e-6, 6e-6, null, null, null, null])
     expect(snapshot['codestral-x']).toEqual([0.3e-6, 0.9e-6, null, null, null, null])
     expect(snapshot['free-only']).toEqual([0, 0, null, null, null, null])
+    // The maker's own $0 is a real price (Gemma is free on Google's API).
+    expect(snapshot['gemma-free']).toEqual([0, 0, null, null, null, null])
     expect(snapshot['resold']).toEqual([1e-6, 3e-6, null, null, null, null])
     // A maker prefix in front of another vendor's path is a reseller row.
     expect(snapshot['openai/sol']).toEqual([2e-6, 10e-6, null, null, null, null])

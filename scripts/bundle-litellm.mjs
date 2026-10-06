@@ -209,10 +209,11 @@ const completeness = (val) => (val[2] != null ? 1 : 0) + (val[3] != null ? 1 : 0
 const entryNames = new Set(Object.keys(data))
 // Which prefixed row claims an absent bare key: the model maker's own row
 // (`xai/grok-4.6`) over any reseller's (`azure_ai/grok-4.6`), whatever the JSON
-// order; otherwise the first row as before. A $0/$0 row yields to any priced
-// row (the `codestral/` free-beta rows priced `codestral-latest` at nothing)
-// and claims only when no priced row exists. The key
-// keeps the position its first claimant gave it. Mirrored in src/models.ts.
+// order, even at $0 (Gemma is free on Google's own API). Among the other rows
+// a $0/$0 one yields to any priced one (the `codestral/` free-beta rows priced
+// `codestral-latest` at nothing); otherwise the first row claims, as before.
+// The key keeps the position its first claimant gave it. Mirrored in
+// src/models.ts.
 const MAKER_PREFIXES = new Set([
   'xai', 'mistral', 'cohere', 'anthropic', 'openai', 'gemini', 'deepseek', 'moonshot',
   'zai', 'minimax', 'ai21', 'perplexity', 'dashscope', 'meta_llama', 'xiaomi_mimo',
@@ -221,6 +222,7 @@ const MAKER_PREFIXES = new Set([
 const isMaker = (name) => name.split('/').length === 2 && MAKER_PREFIXES.has(name.split('/')[0])
 const isFree = (val) => val[0] === 0 && val[1] === 0
 const bareClaims = new Map()
+const makerClaimed = new Set()
 for (const [name, entry] of [...entries.filter(([n]) => isMaker(n)), ...entries.filter(([n]) => !isMaker(n))]) {
   if (!name.includes('/')) continue
   const stripped = name.replace(/^[^/]+\//, '')
@@ -228,7 +230,8 @@ for (const [name, entry] of [...entries.filter(([n]) => isMaker(n)), ...entries.
   const val = toVal(entry)
   if (!val) continue
   const prev = bareClaims.get(stripped)
-  if (!prev || (isFree(prev) && !isFree(val))) bareClaims.set(stripped, val)
+  if (!prev || (!makerClaimed.has(stripped) && isFree(prev) && !isFree(val))) bareClaims.set(stripped, val)
+  if (isMaker(name)) makerClaimed.add(stripped)
 }
 for (const [name, entry] of entries) {
   if (!name.includes('/')) continue
@@ -245,8 +248,7 @@ for (const [name, entry] of entries) {
   // verbatim (val may add slots, never change them). Guarantees no rate ever
   // changes across a refresh; only missing slots fill. The completeness-wins
   // version re-priced 43 input/output and 34 cache rates by swapping in a
-  // different upstream row (grok-3 3/15 -> 1.25/2.5, mistral-large-latest
-  // 8/24 -> 0.5/1.5). Slot 5 (the tier object) stays out of the guard: it is
+  // different upstream row (grok-3 3/15 -> 1.25/2.5). Slot 5 (the tier object) stays out of the guard: it is
   // built fresh per row, so a reference compare is always false and would
   // veto fills main performs (it silently dropped the azure cache-read fill
   // for gpt-5.4-pro-class rows); and since the replacement only fires when

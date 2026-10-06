@@ -105,8 +105,8 @@ const CACHE_TTL_MS = 24 * 60 * 60 * 1000
 // source publishes no `provider_specific_entry.fast` (#1616), so a cached costs
 // object can carry a multiplier the pre-fix fetch left at 1.
 // 7: ModelCosts carries the Flex tier's rates (`flex`), read from `<rate>_flex`.
-// 8: a bare id takes the maker's row over a reseller's and a priced row over a
-// $0 one, so a cached map can still hold azure_ai's rate under `grok-4.6`.
+// 8: a bare id takes the maker's row over a reseller's, and a reseller's priced
+// row over a reseller's $0 one, so a cached map can still hold azure_ai's rate under `grok-4.6`.
 export const CACHE_SCHEMA_VERSION = 8
 const WEB_SEARCH_COST = 0.01
 const ONE_HOUR_CACHE_WRITE_MULTIPLIER_FROM_FIVE_MINUTE_RATE = 1.6
@@ -461,14 +461,16 @@ async function fetchAndCachePricing(): Promise<Map<string, ModelCosts>> {
   // Also index by stripped name so lookups work without provider prefix:
   // 'anthropic/claude-opus-4-6' is also queryable as 'claude-opus-4-6'. A
   // direct entry of that name always wins; otherwise the maker's own row beats
-  // a reseller's whatever the JSON order, and a $0/$0 row yields to any priced
-  // one. Mirrors scripts/bundle-litellm.mjs.
+  // a reseller's whatever the JSON order, even at $0, and among resellers a
+  // $0/$0 row yields to any priced one. Mirrors scripts/bundle-litellm.mjs.
   const bareClaims = new Map<string, ModelCosts>()
+  const makerClaimed = new Set<string>()
   for (const [name, costs] of [...parsed.filter(([n]) => isMakerRow(n)), ...parsed.filter(([n]) => !isMakerRow(n))]) {
     const stripped = name.replace(/^[^/]+\//, '')
     if (stripped === name) continue
     const prev = bareClaims.get(stripped)
-    if (!prev || (isFreeRow(prev) && !isFreeRow(costs))) bareClaims.set(stripped, costs)
+    if (!prev || (!makerClaimed.has(stripped) && isFreeRow(prev) && !isFreeRow(costs))) bareClaims.set(stripped, costs)
+    if (isMakerRow(name)) makerClaimed.add(stripped)
   }
   for (const [name, costs] of parsed) {
     pricing.set(name, costs)
