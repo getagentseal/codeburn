@@ -301,7 +301,10 @@ import type { DateRange, ProjectSummary } from './types.js'
 // v61: #1579 Claude Desktop usage-ledger records (Claude-3p Cowork and Code)
 // are read and de-duplicated against matching transcript calls. Calls only
 // rise, so no PENDING_REDERIVE_PROVIDER_VERSIONS entry is needed.
-export const DAILY_CACHE_VERSION = 61
+// v62: Devin's SWE-2 prices at Cognition's list rate and swe-1-7-lightning as
+// swe-1.7-lightning instead of $0. Only cost rises; call counts are unchanged,
+// so no PENDING_REDERIVE_PROVIDER_VERSIONS entry is needed.
+export const DAILY_CACHE_VERSION = 62
 const MIN_SUPPORTED_VERSION = 28
 
 /// Providers whose per-day CALL COUNT means something different at

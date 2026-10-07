@@ -330,11 +330,12 @@ function getFriendlyGptName(model: string): string {
   return reconstructed;
 }
 
-// Devin minor versions are always a single digit (gpt-5-3-codex). Restrict the
-// dash-to-dot rewrite to a single-digit minor at a token boundary so a dated
-// snapshot like gpt-4-1106-preview is not misread as version 4.1106.
+// Devin minor versions are always a single digit (gpt-5-3-codex,
+// swe-1-7-lightning). Restrict the dash-to-dot rewrite to a single-digit minor
+// at a token boundary so a dated snapshot like gpt-4-1106-preview is not
+// misread as version 4.1106.
 function normalizeDevinGptId(model: string): string {
-  return model.replace(/^gpt-(\d+)-(\d)(?=-|$)/, "gpt-$1.$2");
+  return model.replace(/^(gpt|swe)-(\d+)-(\d)(?=-|$)/, "$1-$2.$3");
 }
 
 function getDevinDisplayModelName(

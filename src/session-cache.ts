@@ -512,7 +512,9 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // database is unusable. The legacy metadata.metrics path no longer carves
   // cache reads out of an input count that never held them. Devin is not
   // durable, so the bump rebuilds its section and old step_id keys go with it.
-  devin: 'sessions-db-v1',
+  // swe-pricing-v1: cached Devin calls carry their parse-time cost, so SWE-2
+  // calls cached at $0 must re-parse to pick up its price.
+  devin: 'sessions-db-v1-swe-pricing-v1',
   'lingtai-tui': 'token-ledger-registry-activity-v3',
   'ibm-bob': 'worktree-project-grouping-v1',
   // project-path-v1: the parser now records the session's full working
