@@ -41,3 +41,9 @@ export function projectPattern(project: MatchTarget): string {
   const rooted = raw.startsWith('/') || /^[a-zA-Z]:[\\/]/.test(raw) || !raw.includes('/')
   return rooted ? raw : `/${raw}`
 }
+
+/** Excludes win; an empty include list means every project. */
+export function projectVisible(project: MatchTarget, filter: { project: string[]; exclude: string[] }): boolean {
+  if (filter.exclude.some(pattern => projectMatches(project, pattern))) return false
+  return filter.project.length === 0 || filter.project.some(pattern => projectMatches(project, pattern))
+}

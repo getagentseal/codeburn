@@ -67,6 +67,7 @@ const CHANNELS = [
   'codeburn:getProjectFilter',
   'codeburn:setProjectFilter',
   'codeburn:getUnfilteredProjects',
+  'codeburn:setTransientProject',
   'codeburn:getLanguage',
   'codeburn:setLanguage',
   'codeburn:getCursorSync',
@@ -931,6 +932,43 @@ describe('project filter', () => {
       await handlers['codeburn:getOverview']!('30days', 'all', undefined, undefined, undefined, 'combined')
       expect(calls[0]).toEqual(['status', '--format', 'menubar-json', '--period', '30days', '--no-timeline', '--no-optimize', '--scope', 'combined'])
     })
+  })
+
+  it('narrows every report to the top bar project without touching the saved filter', async () => {
+    await withFilterFile(async () => {
+      writeProjectFilter({ project: ['work'], exclude: ['scratch'] })
+      const { spawnCli, spawnCliAction, calls } = fakeSpawn()
+      const handlers = createBridgeHandlers(deps({ spawnCli, spawnCliAction, resolveCodeburnPath: () => '/bin/codeburn' }))
+      expect(await handlers['codeburn:setTransientProject']!('/Users/me/work/-app')).toEqual({ ok: true, value: undefined })
+      await handlers['codeburn:getSessions']!('week', 'all')
+      // The pick replaces the saved includes; the saved excludes still apply.
+      expect(calls[0]).toEqual(['sessions', '--format', 'json', '--period', 'week', '--project=/Users/me/work/-app', '--exclude=scratch'])
+      // A project pick is local data: combined is dropped like with any filter.
+      await handlers['codeburn:getOverview']!('30days', 'all', undefined, undefined, undefined, 'combined')
+      expect(calls[1]).toEqual(['status', '--format', 'menubar-json', '--period', '30days', '--no-timeline', '--no-optimize', '--project=/Users/me/work/-app', '--exclude=scratch'])
+      // Not project-scoped: plans, the Projects pane list, and exports.
+      await handlers['codeburn:getPlans']!('week')
+      expect(calls[2]).toEqual(['status', '--format', 'json', '--period', 'week'])
+      await handlers['codeburn:getUnfilteredProjects']!()
+      expect(calls[3]).toEqual(['report', '--format', 'json', '--period', 'lifetime'])
+      await handlers['codeburn:exportData']!('json', 'all', '/tmp/out')
+      expect(calls[4]).toEqual(['export', '-f', 'json', '-o', '/tmp/out', '--provider', 'all', '--project=work', '--exclude=scratch'])
+      expect(readProjectFilter()).toEqual({ project: ['work'], exclude: ['scratch'] })
+
+      await handlers['codeburn:setTransientProject']!(null)
+      await handlers['codeburn:getSessions']!('week', 'all')
+      expect(calls[5]).toEqual(['sessions', '--format', 'json', '--period', 'week', '--project=work', '--exclude=scratch'])
+    })
+  })
+
+  it('accepts only an absolute project path for the top bar pick', async () => {
+    const { spawnCli, spawnCliAction, calls } = fakeSpawn()
+    const handlers = createBridgeHandlers(deps({ spawnCli, spawnCliAction, resolveCodeburnPath: () => '/bin/codeburn' }))
+    for (const bad of ['app', '', '--all', '/a\0b', 42, undefined]) {
+      expect(await handlers['codeburn:setTransientProject']!(bad)).toMatchObject({ ok: false, error: { kind: 'bad-args' } })
+    }
+    await handlers['codeburn:getSessions']!('week', 'all')
+    expect(calls[0]).toEqual(['sessions', '--format', 'json', '--period', 'week'])
   })
 
   it('drops blanks and duplicates on write, but keeps encoded names starting with "-"', async () => {
