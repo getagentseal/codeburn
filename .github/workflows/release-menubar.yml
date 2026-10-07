@@ -145,7 +145,7 @@ jobs:
           zip_name="CodeBurnMenubar-${VERSION}.zip"
           url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/${zip_name}"
           built=$(cut -d' ' -f1 "mac/.build/dist/${zip_name}.sha256")
-          published=$(curl -fsSL --retry 3 "$url" | shasum -a 256 | cut -d' ' -f1)
+          published=$(curl -fsSL --retry 5 --retry-all-errors --retry-delay 5 "$url" | shasum -a 256 | cut -d' ' -f1)
           if [[ "$published" != "$built" ]]; then
             echo "::error::Published ${zip_name} (${published}) does not match the verified build (${built})."
             exit 1
