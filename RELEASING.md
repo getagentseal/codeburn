@@ -199,7 +199,7 @@ The desktop app (electron-updater) and the Windows tray (tauri-plugin-updater) r
 | `TAURI_SIGNING_PRIVATE_KEY` | `release-menubar-windows.yml` | Tray updater private key |
 | `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | `release-menubar-windows.yml` | Its password |
 
-The macOS names match the menubar release workflow. Generate the tray key pair once with `npx @tauri-apps/cli signer generate -w ~/.tauri/codeburn-tray.key`, store the private key and password as the two secrets, and replace `REPLACE_WITH_TAURI_UPDATER_PUBKEY` in `windows/src-tauri/tauri.conf.json` (`plugins.updater.pubkey`) with the public key. Until that commit ships, the tray keeps its release-page link. Losing the private key means every installed tray needs a manual update to a build with a new key.
+The macOS names match the menubar release workflow. Generate the tray key pair once with `npx @tauri-apps/cli signer generate -w ~/.tauri/codeburn-tray.key`, store the private key and password as the two secrets, and replace `REPLACE_WITH_TAURI_UPDATER_PUBKEY` in `windows/src-tauri/tauri.conf.json` (`plugins.updater.pubkey`) with the public key. Add the secrets and the pubkey in one go: a private key without its matching pubkey fails the tray build. Without the secret the workflow builds the MSI without an updater signature and leaves `windows-latest.json` alone, and trays keep their release-page link. Losing the private key means every installed tray needs a manual update to a build with a new key. Without the macOS secrets `Build macOS desktop` fails; the manual signed build in `app/DISTRIBUTION.md` still works, but it must build both arches in one `electron-builder --mac` run so one `latest-mac.yml` lists both zips.
 
 ### Feed upload order
 
