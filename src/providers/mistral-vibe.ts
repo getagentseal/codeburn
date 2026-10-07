@@ -405,7 +405,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
 
 export function createMistralVibeProvider(sessionsDir?: string): Provider {
   const dir = getMistralVibeSessionsDir(sessionsDir)
-  // Extra WSL homes' ~/.vibe/logs/session (#1630); empty off-win32 and when a
+  // Extra WSL homes' ~/.vibe/logs/session; empty off-win32 and when a
   // caller passes an explicit sessionsDir. Resolved lazily: probing spawns wsl.exe.
   const wslDirs = (): string[] =>
     sessionsDir ? [] : wslHomes().map(home => join(home, '.vibe', 'logs', 'session'))
@@ -449,31 +449,31 @@ export function createMistralVibeProvider(sessionsDir?: string): Provider {
 }
 
 async function discoverRoot(dir: string): Promise<SessionSource[]> {
-      const dirs = await discoverSessionDirs(dir)
-      const sources: SessionSource[] = []
+  const dirs = await discoverSessionDirs(dir)
+  const sources: SessionSource[] = []
 
-      for (const sessionDir of dirs) {
-        const metadata = await readJsonFile<VibeMetadata>(join(sessionDir, METADATA_FILENAME))
-        if (!metadata) continue
-        const cwd = metadata.environment?.working_directory
-        sources.push({
-          path: sessionDir,
-          project: cwd ? basename(cwd) : basename(sessionDir),
-          provider: 'mistral-vibe',
-        })
-      }
+  for (const sessionDir of dirs) {
+    const metadata = await readJsonFile<VibeMetadata>(join(sessionDir, METADATA_FILENAME))
+    if (!metadata) continue
+    const cwd = metadata.environment?.working_directory
+    sources.push({
+      path: sessionDir,
+      project: cwd ? basename(cwd) : basename(sessionDir),
+      provider: 'mistral-vibe',
+    })
+  }
 
-      const unifiedDir = join(dir, 'unified')
-      for (const entry of (await readdir(unifiedDir).catch(() => [])).sort()) {
-        const sessionDir = join(unifiedDir, entry)
-        const currentPath = join(sessionDir, 'CURRENT')
-        if (!await isFile(currentPath)) continue
-        const metadata = await readJsonFile<VibeMetadata>(join(sessionDir, METADATA_FILENAME))
-        const cwd = metadata?.environment?.working_directory
-        sources.push({ path: currentPath, project: cwd ? basename(cwd) : entry, provider: 'mistral-vibe' })
-      }
+  const unifiedDir = join(dir, 'unified')
+  for (const entry of (await readdir(unifiedDir).catch(() => [])).sort()) {
+    const sessionDir = join(unifiedDir, entry)
+    const currentPath = join(sessionDir, 'CURRENT')
+    if (!await isFile(currentPath)) continue
+    const metadata = await readJsonFile<VibeMetadata>(join(sessionDir, METADATA_FILENAME))
+    const cwd = metadata?.environment?.working_directory
+    sources.push({ path: currentPath, project: cwd ? basename(cwd) : entry, provider: 'mistral-vibe' })
+  }
 
-      return sources
+  return sources
 }
 
 export const mistralVibe = createMistralVibeProvider()
