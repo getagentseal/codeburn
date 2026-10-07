@@ -14,6 +14,8 @@ type Glyph = {
   d: string | string[]
   transform?: string
   fillRule?: 'evenodd' | 'nonzero'
+  /** Stroke width for a mark drawn as an outline rather than a fill. */
+  stroke?: number
 }
 
 const GLYPHS: Record<string, Glyph> = {
@@ -61,6 +63,11 @@ const GLYPHS: Record<string, Glyph> = {
   clinepass: {
     viewBox: '0 0 466.73 487.04',
     d: 'M463.6,275.08l-29.26-58.75v-33.83c0-56.08-45.01-101.5-100.53-101.5h-50.01c3.62-7.43,5.61-15.79,5.61-24.61,0-31.17-25.08-56.39-56.07-56.39s-56.07,25.22-56.07,56.39c0,8.82,1.99,17.17,5.61,24.61h-50.01c-55.51,0-100.52,45.42-100.52,101.5v33.83l-29.87,58.59c-3.01,5.9-3.01,12.92,0,18.81l29.87,57.93v33.83c0,56.08,45.01,101.5,100.52,101.5h200.95c55.51,0,100.53-45.42,100.53-101.5v-33.83l29.21-58.13c2.9-5.79,2.9-12.61.05-18.46ZM202.75,322.96c0,25.48-20.54,46.14-45.88,46.14s-45.88-20.66-45.88-46.14v-82.02c0-25.48,20.54-46.14,45.88-46.14s45.88,20.66,45.88,46.14v82.02ZM350.58,322.96c0,25.48-20.54,46.14-45.88,46.14s-45.88-20.66-45.88-46.14v-82.02c0-25.48,20.54-46.14,45.88-46.14s45.88,20.66,45.88,46.14v82.02Z',
+  },
+  commandcode: {
+    viewBox: '0 0 100 100',
+    d: 'M38 38H27C20.925 38 16 33.075 16 27C16 20.925 20.925 16 27 16C33.075 16 38 20.925 38 27V73C38 79.075 33.075 84 27 84C20.925 84 16 79.075 16 73C16 66.925 20.925 62 27 62H73C79.075 62 84 66.925 84 73C84 79.075 79.075 84 73 84C66.925 84 62 79.075 62 73V27C62 20.925 66.925 16 73 16C79.075 16 84 20.925 84 27C84 33.075 79.075 38 73 38H38V62',
+    stroke: 9,
   },
   devin: {
     viewBox: "0 0 24 24",
@@ -110,6 +117,7 @@ const ALIASES: Record<string, string> = {
 
   'kilo-code': 'kilo',
   'ibm-bob': 'ibmbob',
+  'command-code': 'commandcode',
 
   kimicode: 'kimi',
   'cursor-agent': 'cursor',
@@ -197,8 +205,9 @@ export function ProviderGlyph({ id, size }: { id: string; size: number }) {
           key={d.slice(0, 24)}
           d={d}
           transform={glyph.transform}
-          fill="currentColor"
-          fillRule={glyph.fillRule ?? 'evenodd'}
+          {...(glyph.stroke
+            ? { fill: 'none', stroke: 'currentColor', strokeWidth: glyph.stroke, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const }
+            : { fill: 'currentColor', fillRule: glyph.fillRule ?? 'evenodd' })}
         />
       ))}
     </svg>
