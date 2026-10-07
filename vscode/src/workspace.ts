@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { lstatSync, readFileSync } from 'node:fs'
 import { dirname, isAbsolute, resolve } from 'node:path'
 
-import type { ProjectFilter } from '../../app/electron/bridge-handlers'
+export { scopeFilter } from '../../app/electron/bridge-handlers'
 
 /**
  * The project path the CLI files a session under when it was started in `dir`:
@@ -46,12 +46,4 @@ export function workspaceScope(folders: ReadonlyArray<{ fsPath: string; name: st
   if (paths.length === 0) return { paths, label: null, id: 'none' }
   const label = folders.length > 1 && workspaceName ? workspaceName : folders[0]!.name
   return { paths, label, id: createHash('sha256').update(paths.join('\0')).digest('hex').slice(0, 12) }
-}
-
-/**
- * The saved project filter narrowed to the workspace. Its excludes still apply;
- * its includes give way, since the workspace already names the projects shown.
- */
-export function scopeFilter(paths: readonly string[]): (filter: ProjectFilter) => ProjectFilter {
-  return filter => paths.length === 0 ? filter : { project: [...paths], exclude: filter.exclude }
 }
