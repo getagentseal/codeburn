@@ -92,7 +92,7 @@ describe('post-hoist resolution stability', () => {
 
   it('kimi managed aliases resolve to priced Kimi models', () => {
     expect(getShortModelName('kimi-auto')).toBe('Kimi (auto)')
-    expect(getShortModelName('kimi-for-coding')).toBe('Kimi K2 Thinking')
+    expect(getShortModelName('kimi-for-coding')).toBe('Kimi for Coding')
     expect(getShortModelName('kimi-k2-thinking-turbo')).toBe('Kimi K2 Thinking Turbo')
     expect(getShortModelName('kimi-k2.6')).toBe('Kimi K2.6')
     expect(getModelCosts('kimi-auto')?.inputCostPerToken).toBeGreaterThan(0)

@@ -107,9 +107,26 @@ describe.each([['CLI', cli], ['Electron', desktop]] as const)('%s Antigravity 2.
     // The command rounds percentages to one decimal; the decoder test above
     // separately pins the unrounded provider fraction.
     expect(provider.windows[0]!.usedPct).toBe(0)
-    expect(request).toHaveBeenCalledExactlyOnceWith(
-      54321, true, '/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary', '{}', 'fixture-token',
-    )
+    expect(request.mock.calls.map(call => call.slice(0, 3))).toEqual([
+      [54321, true, '/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary'],
+      [54321, true, '/exa.language_server_pb.LanguageServerService/GetUserStatus'],
+    ])
+  })
+
+  it.each([
+    ['the Google tier', { name: 'Google AI Ultra' }, 'Google AI Ultra'],
+    ['the free tier, not the planInfo name', { id: 'free-tier', name: 'Antigravity Starter Quota' }, 'Antigravity Starter Quota'],
+    ['nothing for a blank tier', { name: ' ' }, null],
+  ])('labels the summary windows with %s', async (_case, userTier, label) => {
+    const request = vi.fn<cli.LocalRequestFn>(async (_port, _tls, pathName) => ({
+      status: 200,
+      text: JSON.stringify(pathName.endsWith('/GetUserStatus')
+        ? { userStatus: { userTier, planStatus: { planInfo: { planName: 'Pro' } } } }
+        : summary),
+    }))
+    const quota = await reader.fetchAntigravityQuota({ execFile, request, platform: 'darwin' })
+    expect(quota.details).toHaveLength(4)
+    expect(quota.planLabel).toBe(label)
   })
 
   it('falls back to the captured label-based status when the summary has no quota', async () => {

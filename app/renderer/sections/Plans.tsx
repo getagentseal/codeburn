@@ -18,7 +18,7 @@ import { reportMemoKey } from '../lib/reportMemoKey'
 import type { JsonPlanSummary, Period, PlanId, PlanProvider, QuotaProvider, QuotaWindow, StatusJson } from '../lib/types'
 import type { SettingsPane } from './Settings'
 
-const PROVIDER_ORDER: PlanProvider[] = ['all', 'claude', 'codex', 'cursor', 'grok']
+const PROVIDER_ORDER: PlanProvider[] = ['all', 'claude', 'codex', 'cursor', 'grok', 'antigravity']
 
 const PLAN_NAMES: Record<PlanId, string> = {
   'claude-pro': 'Claude Pro',
@@ -27,6 +27,9 @@ const PLAN_NAMES: Record<PlanId, string> = {
   'cursor-pro': 'Cursor Pro',
   supergrok: 'SuperGrok',
   'supergrok-heavy': 'SuperGrok Heavy',
+  'google-ai-pro': 'Google AI Pro',
+  'google-ai-ultra-5x': 'Google AI Ultra 5x',
+  'google-ai-ultra-20x': 'Google AI Ultra 20x',
   custom: 'Custom plan',
   none: 'API usage',
 }

@@ -255,6 +255,24 @@ final class AntigravityQuotaTests: XCTestCase {
         XCTAssertNil(recorder.calls.first?.csrf)
     }
 
+    func testLabelsSummaryWindowsWithUserTierNotPlanInfo() async throws {
+        let recorder = CallRecorder()
+        let deps = Self.makeDeps(
+            ps: Self.cliLine,
+            lsof: "agy 1237 user 5u IPv4 0x1 0t0 TCP *:60555 (LISTEN)\n",
+            recorder: recorder
+        ) { _, tls, path in
+            guard tls else { return nil }
+            if path.contains("RetrieveUserQuotaSummary") {
+                return (200, #"{"response":{"groups":[{"displayName":"Gemini Models","buckets":[{"bucketId":"gemini-weekly","remainingFraction":0.4}]}]}}"#)
+            }
+            return (200, #"{"userStatus":{"userTier":{"id":"free-tier","name":"Antigravity Starter Quota"},"planStatus":{"planInfo":{"planName":"Pro"}}}}"#)
+        }
+        let usage = try await AntigravitySubscriptionService.refresh(deps: deps)
+        XCTAssertEqual(usage.plan, "Antigravity Starter Quota")
+        XCTAssertEqual(usage.primary?.usedPercent ?? -1, 60, accuracy: 0.001)
+    }
+
     func testFallsBackToGetUserStatusAndLiftsPlanNameWhenSummaryHasNoWindows() async throws {
         let recorder = CallRecorder()
         let deps = Self.makeDeps(

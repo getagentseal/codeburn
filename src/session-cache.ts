@@ -377,7 +377,9 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // reported-cost-v1: the CLI reports its own per-message cost, so entries
   // cached before cline-cli joined the reported-cost allowlist in parser.ts
   // hold costUSD: undefined and get re-priced from tokens on every read.
-  'cline-cli': 'reported-cost-v1-est-reprice-v1',
+  // cache-inclusive-input-v1: cached calls hold inputTokens with cache reads
+  // and writes still inside it, so they must re-parse.
+  'cline-cli': 'reported-cost-v1-est-reprice-v1-cache-inclusive-input-v1',
   codewhale: 'aggregate-session-v1-est-cost',
   'command-code': 'cache-inclusive-input-v1',
   // Bump when the Codex parser changes attribution so unchanged, already-cached
@@ -514,7 +516,9 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // database is unusable. The legacy metadata.metrics path no longer carves
   // cache reads out of an input count that never held them. Devin is not
   // durable, so the bump rebuilds its section and old step_id keys go with it.
-  devin: 'sessions-db-v1',
+  // swe-pricing-v1: cached Devin calls carry their parse-time cost, so SWE-2
+  // calls cached at $0 must re-parse to pick up its price.
+  devin: 'sessions-db-v1-swe-pricing-v1',
   'lingtai-tui': 'token-ledger-registry-activity-v3',
   'ibm-bob': 'worktree-project-grouping-v1',
   // project-path-v1: the parser now records the session's full working

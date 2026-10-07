@@ -301,6 +301,19 @@ import type { DateRange, ProjectSummary } from './types.js'
 // v61: #1579 Claude Desktop usage-ledger records (Claude-3p Cowork and Code)
 // are read and de-duplicated against matching transcript calls. Calls only
 // rise, so no PENDING_REDERIVE_PROVIDER_VERSIONS entry is needed.
+// v62: Devin's SWE-2 prices at Cognition's list rate and swe-1-7-lightning as
+// swe-1.7-lightning instead of $0. Only cost rises; call counts are unchanged,
+// so no PENDING_REDERIVE_PROVIDER_VERSIONS entry is needed.
+// v63: Cline CLI input tokens include cache reads and writes, which were then
+// billed again at the cache rates. Only input tokens and estimated cost fall;
+// call counts are unchanged, so no PENDING_REDERIVE_PROVIDER_VERSIONS entry is
+// needed.
+// v64: Kimi Code's `kimi-for-coding` prices by the model it served on the call's
+// date (K2.5, K2.6, K2.7 Code) instead of retired K2 Thinking, and
+// `kimi-for-coding-highspeed` prices at K2.7 Code HighSpeed instead of $0.
+// From 11 Sep 2026 the alias served K2.8 Preview, which has no published rate;
+// those calls price as K2.7 Code and are marked estimated.
+// Calls are unchanged, so no PENDING_REDERIVE_PROVIDER_VERSIONS entry is needed.
 // v65: Grok Build reads per-request usage from logs/unified.jsonl and uses it
 // in place of a session dir's one-call rollup for every session the log holds;
 // days finalized without it re-derive. A logged session's single rollup call,

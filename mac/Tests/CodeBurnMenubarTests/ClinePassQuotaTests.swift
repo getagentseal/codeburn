@@ -39,14 +39,107 @@ final class ClinePassQuotaTests: XCTestCase {
 
     private static func makeDeps(
         recorder: RequestRecorder,
+        ambient: ClinePassSubscriptionService.Credential? = nil,
         respond: @escaping @Sendable (URLRequest) async throws -> (Data, HTTPURLResponse)
     ) -> ClinePassSubscriptionService.Deps {
         ClinePassSubscriptionService.Deps(
             fetch: { request in
                 recorder.record(request)
                 return try await respond(request)
-            }
+            },
+            loadAmbientCredential: { ambient },
+            now: { Date(timeIntervalSince1970: 1_800_000_000) }
         )
+    }
+
+    private static func providersFile(_ settings: String) -> Data {
+        #"{"providers":{"cline":{"settings":\#(settings)},"anthropic":{"settings":{"apiKey":"other"}}}}"#
+            .data(using: .utf8)!
+    }
+
+    func testCredentialFilePrefersAccessTokenThenApiKeyThenAuthApiKey() {
+        let oauth = ClinePassSubscriptionService.fileCredential(Self.providersFile(
+            #"{"apiKey":"k1","auth":{"accessToken":"workos:tok","apiKey":"k2","expiresAt":1800000060000}}"#))
+        XCTAssertEqual(oauth, .init(token: "workos:tok", isOAuth: true, expiresAt: Date(timeIntervalSince1970: 1_800_000_060)))
+        XCTAssertEqual(
+            ClinePassSubscriptionService.fileCredential(Self.providersFile(#"{"auth":{"accessToken":"bare"}}"#))?.token,
+            "workos:bare")
+        XCTAssertEqual(
+            ClinePassSubscriptionService.fileCredential(Self.providersFile(#"{"apiKey":"k1","auth":{"apiKey":"k2"}}"#)),
+            .init(token: "k1", isOAuth: false, expiresAt: nil))
+        XCTAssertEqual(
+            ClinePassSubscriptionService.fileCredential(Self.providersFile(#"{"auth":{"apiKey":"k2"}}"#))?.token, "k2")
+        XCTAssertNil(ClinePassSubscriptionService.fileCredential(Self.providersFile(#"{"provider":"cline"}"#)))
+    }
+
+    func testProvidersFileFollowsClineOverrides() {
+        let home = URL(fileURLWithPath: "/home/u")
+        let path = { (env: [String: String]) in
+            ClinePassSubscriptionService.providersFileURL(environment: env, home: home).path
+        }
+        XCTAssertEqual(path([:]), "/home/u/.cline/data/settings/providers.json")
+        XCTAssertEqual(path(["CLINE_DIR": "~/c"]), "/home/u/c/data/settings/providers.json")
+        XCTAssertEqual(path(["CLINE_DIR": "/c", "CLINE_DATA_DIR": "/d"]), "/d/settings/providers.json")
+        XCTAssertEqual(path(["CLINE_DATA_DIR": "/d", "CLINE_PROVIDER_SETTINGS_PATH": "/f.json"]), "/f.json")
+    }
+
+    func testWithoutSavedKeyUsesTheClineSession() async throws {
+        let recorder = RequestRecorder()
+        let deps = Self.makeDeps(
+            recorder: recorder,
+            ambient: .init(token: "workos:session", isOAuth: true, expiresAt: Date(timeIntervalSince1970: 1_800_000_060))
+        ) { request in
+            (Self.successBody.data(using: .utf8)!, Self.httpResponse(request, status: 200))
+        }
+        _ = try await ClinePassSubscriptionService.refresh(apiKey: "  ", deps: deps)
+        _ = try await ClinePassSubscriptionService.refresh(apiKey: Self.syntheticKey, deps: deps)
+        XCTAssertEqual(
+            recorder.requests.map { $0.value(forHTTPHeaderField: "Authorization") },
+            ["Bearer workos:session", "Bearer \(Self.syntheticKey)"])
+    }
+
+    func testExpiredClineSessionStopsBeforeTheNetwork() async {
+        let recorder = RequestRecorder()
+        let deps = Self.makeDeps(
+            recorder: recorder,
+            ambient: .init(token: "workos:old", isOAuth: true, expiresAt: Date(timeIntervalSince1970: 1_799_999_999))
+        ) { request in
+            (Self.successBody.data(using: .utf8)!, Self.httpResponse(request, status: 200))
+        }
+        do {
+            _ = try await ClinePassSubscriptionService.refresh(apiKey: nil, deps: deps)
+            XCTFail("Expected an expired sign-in")
+        } catch {
+            XCTAssertEqual(error as? ClinePassSubscriptionService.FetchError, .signInExpired)
+            XCTAssertEqual(error.localizedDescription, "Cline sign-in expired. Run cline to refresh it.")
+            XCTAssertEqual((error as? ClinePassSubscriptionService.FetchError)?.classification, .transient)
+        }
+        XCTAssertTrue(recorder.requests.isEmpty)
+    }
+
+    func testRejectedClineSessionReadsAsExpiredAndMissingCredentialIsTerminal() async {
+        let recorder = RequestRecorder()
+        let rejected = Self.makeDeps(
+            recorder: recorder,
+            ambient: .init(token: "workos:revoked", isOAuth: true, expiresAt: nil)
+        ) { request in
+            (Data("{}".utf8), Self.httpResponse(request, status: 401))
+        }
+        do {
+            _ = try await ClinePassSubscriptionService.refresh(apiKey: nil, deps: rejected)
+            XCTFail("Expected an expired sign-in")
+        } catch {
+            XCTAssertEqual(error as? ClinePassSubscriptionService.FetchError, .signInExpired)
+        }
+        let none = Self.makeDeps(recorder: recorder) { request in
+            (Data("{}".utf8), Self.httpResponse(request, status: 200))
+        }
+        do {
+            _ = try await ClinePassSubscriptionService.refresh(apiKey: nil, deps: none)
+            XCTFail("Expected missing credentials")
+        } catch {
+            XCTAssertEqual(error as? ClinePassSubscriptionService.FetchError, .noCredentials)
+        }
     }
 
     func testSuccessfulPayloadMapsFiveHourWeeklyAndMonthlyWindows() async throws {
