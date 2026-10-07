@@ -9,6 +9,8 @@ import react from '@vitejs/plugin-react'
 export default defineConfig({
   root: 'renderer',
   base: './',
+  // renderer/public holds only the browser demo shim, which the extension never loads.
+  publicDir: false,
   plugins: [react()],
   define: {
     __BUILD_SHA__: JSON.stringify('vscode'),

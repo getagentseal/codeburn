@@ -3,7 +3,7 @@
 //
 //   npm run test:smoke                     downloads VS Code stable (CI: under xvfb-run)
 //   CODEBURN_SMOKE_APP=/Applications/Visual\ Studio\ Code.app npm run test:smoke
-//                                          macOS: an installed editor, launched hidden
+//                                          macOS: an installed editor (or Cursor.app), launched hidden
 //
 // Needs `npm run build` first (dist/ and cli/).
 
@@ -77,6 +77,8 @@ const launchArgs = [
   '--disable-extensions', '--locale', 'en', '--skip-welcome', '--skip-release-notes', '--disable-workspace-trust',
   `--user-data-dir=${join(tmp, 'user-data')}`, `--extensions-dir=${join(tmp, 'extensions')}`,
 ]
+// Cursor 3 opens its Agents window on a fresh profile, which starts no extension host.
+if (/cursor/i.test(process.env.CODEBURN_SMOKE_APP ?? '')) launchArgs.unshift('--classic')
 const suite = join(here, 'suite.cjs')
 // No quota checks: they would reach provider APIs, and Claude's can ask for the macOS keychain.
 mkdirSync(join(tmp, 'user-data', 'User'), { recursive: true })
