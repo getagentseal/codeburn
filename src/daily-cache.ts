@@ -301,7 +301,12 @@ import type { DateRange, ProjectSummary } from './types.js'
 // v61: #1579 Claude Desktop usage-ledger records (Claude-3p Cowork and Code)
 // are read and de-duplicated against matching transcript calls. Calls only
 // rise, so no PENDING_REDERIVE_PROVIDER_VERSIONS entry is needed.
-export const DAILY_CACHE_VERSION = 61
+// v67: a day's project split is keyed per (label, path) instead of per label,
+// which kept only the first path a label showed that day and handed the whole
+// label (e.g. every home-folder Claude session) to whichever project owned it.
+// Day and provider totals are unchanged, only the split inside them moves, so
+// no PENDING_REDERIVE_PROVIDER_VERSIONS entry is needed.
+export const DAILY_CACHE_VERSION = 67
 const MIN_SUPPORTED_VERSION = 28
 
 /// Providers whose per-day CALL COUNT means something different at
@@ -377,6 +382,22 @@ export type CategoryDayStats = { turns: number; cost: number; savingsUSD: number
 /// layers derive a friendly name from once the sessions that carried the
 /// mapping are gone.
 export type ProjectDayStats = { cost: number; calls: number; savingsUSD: number; sessions: number; path?: string }
+
+/// One project label can span several real paths (every Claude session started
+/// from the home folder shares `-Users-<name>`), so since v67 a day's project
+/// split is keyed per (label, path). Days written earlier key by label alone
+/// and keep one path for the whole label; they stay readable through
+/// projectDayIdentity.
+const PROJECT_KEY_SEP = '\u0000'
+
+export function projectDayKey(project: string, path?: string): string {
+  return path ? `${project}${PROJECT_KEY_SEP}${path}` : project
+}
+
+export function projectDayIdentity(key: string, stats: ProjectDayStats): ProjectFilterTarget & { projectPath: string } {
+  const sep = key.indexOf(PROJECT_KEY_SEP)
+  return { project: sep === -1 ? key : key.slice(0, sep), projectPath: stats.path ?? '' }
+}
 
 export type ProviderDaySlice = {
   calls: number
@@ -1754,8 +1775,8 @@ export function cachedProjectIdentities(cache: DailyCache, startStr: string, end
   const identities: ProjectFilterTarget[] = []
   for (const day of cache.days) {
     if (day.date < startStr || day.date > endStr || !day.projects) continue
-    for (const [name, stats] of Object.entries(day.projects)) {
-      identities.push({ project: name, projectPath: stats.path ?? '' })
+    for (const [key, stats] of Object.entries(day.projects)) {
+      identities.push(projectDayIdentity(key, stats))
     }
   }
   return identities

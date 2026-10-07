@@ -22,7 +22,7 @@ import { scanAndDetect } from './optimize.js'
 import { callBillableOutputTokens, sessionBillableOutput, sessionBillableOutputTokens, inferSessionProvider } from './session-output.js'
 import { getDateRange } from './cli-date.js'
 import { activityStreak } from './streak.js'
-import { getDaysInRange, ensureCacheHydrated, loadDailyCache, cachedProjectIdentities, emptyCache, mergeDayEntries, BACKFILL_DAYS, toDateString, type DailyCache, type DailyEntry, type ProjectDayStats, type ProviderDaySlice } from './daily-cache.js'
+import { getDaysInRange, ensureCacheHydrated, loadDailyCache, cachedProjectIdentities, projectDayIdentity, emptyCache, mergeDayEntries, BACKFILL_DAYS, toDateString, type DailyCache, type DailyEntry, type ProjectDayStats, type ProviderDaySlice } from './daily-cache.js'
 import { buildGranularHistory } from './granular-history.js'
 import { spendProjectIdentity } from './spend-flow.js'
 import { AGGREGATE_ONLY_PROVIDER, excludeAggregateOnlyProjects, excludesAggregateOnlyProviders } from './parser.js'
@@ -602,7 +602,7 @@ function sumMatchingProjects(
 ): { cost: number; calls: number; savingsUSD: number; sessions: number; projects: Record<string, ProjectDayStats>; matched: number } {
   const out = { cost: 0, calls: 0, savingsUSD: 0, sessions: 0, projects: {} as Record<string, ProjectDayStats>, matched: 0 }
   for (const [name, p] of Object.entries(projects)) {
-    if (!matches({ project: name, projectPath: p.path ?? '' })) continue
+    if (!matches(projectDayIdentity(name, p))) continue
     out.cost += p.cost
     out.calls += p.calls
     out.savingsUSD += p.savingsUSD ?? 0
@@ -1419,7 +1419,8 @@ export function buildPayloadProjects(
   }
   if (cacheDays) {
     for (const d of cacheDays) {
-      for (const [name, p] of Object.entries(d.projects ?? {})) {
+      for (const [key, p] of Object.entries(d.projects ?? {})) {
+        const name = projectDayIdentity(key, p).project
         if (p.path) {
           const id = spendProjectIdentity({ project: name, projectPath: p.path }).id
           let byId = knownBySlug.get(name)
