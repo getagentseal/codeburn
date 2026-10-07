@@ -69,6 +69,7 @@ const bridge = {
   getProjectFilter: () => invoke('codeburn:getProjectFilter'),
   setProjectFilter: (filter: { project: string[]; exclude: string[] }) => invoke('codeburn:setProjectFilter', filter),
   getUnfilteredProjects: () => invoke('codeburn:getUnfilteredProjects'),
+  setTransientProject: (projectPath: string | null) => invoke('codeburn:setTransientProject', projectPath),
   setPriceOverride: (model: string, rates: PriceRates) => invoke('codeburn:setPriceOverride', model, rates),
   removePriceOverride: (model: string) => invoke('codeburn:removePriceOverride', model),
   setCurrency: (code: string) => invoke('codeburn:setCurrency', code),
