@@ -174,6 +174,8 @@
 "CodeBurn CLI %@ available" = "CodeBurn 命令行工具 %@ 可用";
 "Could not find the package manager for %1$@. Run “%2$@” manually, then try again." = "找不到 %1$@ 对应的包管理器。请手动运行“%2$@”，然后重试。";
 "the CLI" = "命令行工具";
+"This codeburn CLI comes with the CodeBurn desktop app. Update the desktop app, then try again." = "此 codeburn 命令行工具随 CodeBurn 桌面应用提供。请更新桌面应用，然后重试。";
+"npm does not have permission to update the global codeburn install. Run “%@” in Terminal, then try again." = "npm 没有更新全局 codeburn 安装的权限。请在终端中运行“%@”，然后重试。";
 "CLI update failed (exit %lld)" = "命令行工具更新失败（退出码 %lld）";
 "Your codeburn CLI (%1$@) is too old to update the menubar. Run “%2$@” first, then try again." = "你的 codeburn 命令行工具（%1$@）版本过旧，无法更新菜单栏应用。请先运行“%2$@”，然后重试。";
 "Update failed (exit %lld)" = "更新失败（退出码 %lld）";
