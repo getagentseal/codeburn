@@ -30,6 +30,7 @@ import {
   snapshotPricingState,
   restorePricingState,
   pricingModelAt,
+  isStandInPricedAt,
 } from '../src/models.js'
 import { getDailyCacheConfigHash } from '../src/usage-aggregator.js'
 import snapshotData from '../src/data/litellm-snapshot.json' with { type: 'json' }
@@ -1229,6 +1230,23 @@ describe('Kimi Code moving alias', () => {
   it('treats highspeed as priced, not a flat-rate SKU', () => {
     expect(isFlatRateModel('kimi-for-coding-highspeed')).toBe(false)
     expect(calculateCost('kimi-for-coding-highspeed', 1_000_000, 1_000_000, 0, 1_000_000, 0)).toBeCloseTo(10.28)
+  })
+
+  it('marks only the K2.8 Preview period (from 11 Sep 2026) as stand-in priced', () => {
+    expect(isStandInPricedAt('kimi-for-coding', '2026-09-10T23:59:59.999Z')).toBe(false)
+    expect(isStandInPricedAt('kimi-for-coding', '2026-09-11T00:00:00.000Z')).toBe(true)
+    expect(isStandInPricedAt('kimi-code', '2026-09-27T10:00:00Z')).toBe(true)
+    expect(isStandInPricedAt('kimi-for-coding', '2026-07-01T00:00:00Z')).toBe(false)
+    expect(isStandInPricedAt('kimi-for-coding', '2026-03-01T00:00:00Z')).toBe(false)
+    expect(isStandInPricedAt('kimi-for-coding', undefined)).toBe(true)
+    expect(isStandInPricedAt('kimi-for-coding-highspeed', '2026-09-27T10:00:00Z')).toBe(false)
+    expect(isStandInPricedAt('k3', '2026-09-27T10:00:00Z')).toBe(false)
+    setModelAliases({ 'kimi-for-coding': 'kimi-k3' })
+    try {
+      expect(isStandInPricedAt('kimi-for-coding', '2026-09-27T10:00:00Z')).toBe(false)
+    } finally {
+      setModelAliases({})
+    }
   })
 
   it('keeps the alias name for display', () => {

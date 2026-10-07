@@ -304,6 +304,8 @@ import type { DateRange, ProjectSummary } from './types.js'
 // v64: Kimi Code's `kimi-for-coding` prices by the model it served on the call's
 // date (K2.5, K2.6, K2.7 Code) instead of retired K2 Thinking, and
 // `kimi-for-coding-highspeed` prices at K2.7 Code HighSpeed instead of $0.
+// From 11 Sep 2026 the alias served K2.8 Preview, which has no published rate;
+// those calls price as K2.7 Code and are marked estimated.
 // Calls are unchanged, so no PENDING_REDERIVE_PROVIDER_VERSIONS entry is needed.
 export const DAILY_CACHE_VERSION = 64
 const MIN_SUPPORTED_VERSION = 28

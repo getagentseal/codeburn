@@ -1254,6 +1254,7 @@ const AUTO_REVIEW_LUNA_FROM = Date.parse('2026-07-30T00:00:00Z')
 const KIMI_CODING_K2_5_FROM = Date.parse('2026-01-27T00:00:00Z')
 const KIMI_CODING_K2_6_FROM = Date.parse('2026-04-13T00:00:00Z')
 const KIMI_CODING_K2_7_FROM = Date.parse('2026-06-12T00:00:00Z')
+const KIMI_CODING_K2_8_FROM = Date.parse('2026-09-11T00:00:00Z')
 
 /// The model a call is priced by. Only `codex-auto-review` and the Kimi Code
 /// alias depend on the call's date (see BUILTIN_ALIASES); a user alias for
@@ -1268,6 +1269,17 @@ export function pricingModelAt(model: string, timestamp: string | undefined): st
   if (at < KIMI_CODING_K2_5_FROM) return 'kimi-k2-thinking'
   if (at < KIMI_CODING_K2_6_FROM) return 'kimi-k2.5'
   return at < KIMI_CODING_K2_7_FROM ? 'kimi-k2.6' : model
+}
+
+/// True when pricingModelAt stands in for a model with no published rate:
+/// Kimi Code's alias served K2.8 Preview from 11 Sep 2026, priced as K2.7 Code.
+/// A missing or unparseable timestamp gets the forward default, so it counts.
+export function isStandInPricedAt(model: string, timestamp: string | undefined): boolean {
+  const id = model.toLowerCase()
+  if (id !== 'kimi-for-coding' && id !== 'kimi-code') return false
+  if (Object.hasOwn(userAliases, model) || userPriceOverrides.has(model)) return false
+  const at = Date.parse(timestamp ?? '')
+  return !(at < KIMI_CODING_K2_8_FROM)
 }
 
 export function getModelCosts(model: string): ModelCosts | null {
