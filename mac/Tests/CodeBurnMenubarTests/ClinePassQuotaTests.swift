@@ -112,6 +112,7 @@ final class ClinePassQuotaTests: XCTestCase {
         } catch {
             XCTAssertEqual(error as? ClinePassSubscriptionService.FetchError, .signInExpired)
             XCTAssertEqual(error.localizedDescription, "Cline sign-in expired. Run cline to refresh it.")
+            XCTAssertEqual((error as? ClinePassSubscriptionService.FetchError)?.classification, .transient)
         }
         XCTAssertTrue(recorder.requests.isEmpty)
     }

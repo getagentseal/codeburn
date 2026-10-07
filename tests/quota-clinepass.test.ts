@@ -74,10 +74,10 @@ describe('ClinePass credential discovery', () => {
     expect(seen).toEqual(['Bearer workos:session-token', `Bearer ${SYNTHETIC_KEY}`])
   })
 
-  it('stops at an expired Cline session without fetching', async () => {
+  it('stops at an expired Cline session without fetching, as a retryable failure', async () => {
     const file = providersFile({ auth: { accessToken: 'workos:old', expiresAt: NOW - 1 } })
     const result = await fetchClinePassQuota({ env: {}, fetch: neverFetch, readFile: async () => file, now: () => NOW })
-    expect(result.quota.connection).toBe('terminalFailure')
+    expect(result.quota.connection).toBe('transientFailure')
     expect(result.quota.footerLines).toEqual(['Cline sign-in expired. Run cline to refresh it.'])
   })
 
@@ -87,6 +87,7 @@ describe('ClinePass credential discovery', () => {
       env: {}, readFile: async () => file, now: () => NOW,
       fetch: (async () => jsonResponse({}, 401)) as unknown as typeof fetch,
     })
+    expect(result.quota.connection).toBe('transientFailure')
     expect(result.quota.footerLines).toEqual(['Cline sign-in expired. Run cline to refresh it.'])
   })
 })

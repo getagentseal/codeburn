@@ -267,6 +267,35 @@ struct CapacityDockProviderQuotaServiceTests {
         #expect(await capture.values == ["<none>"])
     }
 
+    @Test("An expired Cline sign-in is retried with its guidance; a rejected key is terminal")
+    func clinePassExpiredSignInIsTransient() async throws {
+        let provider = try #require(CapacityDockProvider(rawValue: "clinepass"))
+        let cases: [(ClinePassSubscriptionService.FetchError, CapacityDockProviderFetchFailureDisposition)] = [
+            (.signInExpired, .transient),
+            (.authenticationRejected, .terminal),
+            (.noCredentials, .terminal),
+        ]
+        for (error, expectedDisposition) in cases {
+            let service = CapacityDockProviderQuotaService(dependencies: .init(
+                refreshClinePass: { _ in throw error },
+                refreshCommandCode: Self.unusedCommandCode,
+                refreshCursor: Self.unusedCursor,
+                refreshDevin: Self.unusedDevin,
+                refreshGrok: Self.unusedGrok,
+                refreshGrokBot: Self.unusedGrokBot,
+                refreshZai: Self.unusedZai,
+                refreshZcode: Self.unusedZcode
+            ))
+            do {
+                _ = try await service.fetch(provider: provider, credential: CapacityDockProviderCredential())
+                Issue.record("Expected \(error) to fail")
+            } catch let failure as CapacityDockProviderFetchFailure {
+                #expect(failure.disposition == expectedDisposition)
+                #expect(failure.message == error.localizedDescription)
+            }
+        }
+    }
+
     @Test("Command Code dispatches to the CLI key and an expired session is terminal")
     func dispatchesCommandCode() async throws {
         let expected = Self.summary(percent: 0.5)

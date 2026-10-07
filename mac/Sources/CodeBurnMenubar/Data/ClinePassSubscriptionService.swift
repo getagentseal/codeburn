@@ -26,9 +26,11 @@ enum ClinePassSubscriptionService {
 
         var classification: Classification {
             switch self {
-            case .noCredentials, .authenticationRejected, .signInExpired:
+            case .noCredentials, .authenticationRejected:
                 return .terminalAuth
-            case .rateLimited, .providerUnavailable, .network:
+            // Running cline refreshes the session file this only reads, so the
+            // next scheduled read picks it up; keep the last quota until then.
+            case .signInExpired, .rateLimited, .providerUnavailable, .network:
                 return .transient
             case .parseFailure:
                 return .parseFailure

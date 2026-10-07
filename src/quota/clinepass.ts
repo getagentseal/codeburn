@@ -144,15 +144,17 @@ export async function fetchClinePassQuota(options: Partial<ClinePassDeps> & { si
     const file = envKey ? null : await deps.readFile(clineProvidersPath(deps.env, deps.homeDir), 1024 * 1024)
     const credential = envKey ? { token: envKey, oauth: false, expiresAt: null } : file ? parseClineProviders(file) : null
     if (!credential) return { quota: empty('disconnected') }
+    // Not terminal: running cline refreshes the session file this only reads,
+    // so the next scheduled read recovers on its own.
     if (credential.oauth && credential.expiresAt !== null && credential.expiresAt <= deps.now()) {
-      return { quota: empty('terminalFailure', EXPIRED_FOOTER) }
+      return { quota: empty('transientFailure', EXPIRED_FOOTER) }
     }
     const response = await deps.fetch(USAGE_ENDPOINT, {
       method: 'GET', signal: quotaRequestSignal(options.signal),
       headers: { Accept: 'application/json', Authorization: `Bearer ${credential.token}`, 'User-Agent': 'CodeBurn' },
     })
     if (response.status === 401 || response.status === 403) {
-      return { quota: empty('terminalFailure', credential.oauth ? EXPIRED_FOOTER : REJECTED_FOOTER) }
+      return { quota: credential.oauth ? empty('transientFailure', EXPIRED_FOOTER) : empty('terminalFailure', REJECTED_FOOTER) }
     }
     if (response.status === 429) {
       const raw = response.headers.get('Retry-After')
