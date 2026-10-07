@@ -1,4 +1,5 @@
 import { existsSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { dirname, isAbsolute, join } from 'node:path'
 
 import { getCodeburnCacheDir } from './cache-dir.js'
@@ -155,14 +156,44 @@ export function gitOriginKey(path: string): string | null {
   return key
 }
 
-/** The origin of a recorded project path. Codex strips the leading slash from
- *  its cwds, so a slash-bearing relative path is read as rooted. */
-export function projectOriginKey(projectPath: string | undefined): string | null {
+/** A recorded project path as a native absolute path, or null. Codex strips
+ *  the leading slash from its cwds, so a slash-bearing relative path is rooted. */
+function nativeProjectPath(projectPath: string | undefined): string | null {
   const raw = (projectPath ?? '').trim().replace(/[\\/]+$/, '')
   if (!raw) return null
-  if (isAbsolute(raw)) return gitOriginKey(raw)
+  if (isAbsolute(raw)) return raw
   if (process.platform === 'win32' || !raw.includes('/') || raw.startsWith('-')) return null
-  return gitOriginKey(`/${raw}`)
+  return `/${raw}`
+}
+
+/** The origin of a recorded project path. */
+export function projectOriginKey(projectPath: string | undefined): string | null {
+  const path = nativeProjectPath(projectPath)
+  return path ? gitOriginKey(path) : null
+}
+
+/** The one list row (and filter pattern) for every folder under a temp root
+ *  that is not a checkout of a known repository: agents' scratch folders,
+ *  thousands of them, mostly deleted. */
+export const TEMPORARY_PROJECTS = '@temp'
+
+// macOS reaches /tmp and /var through /private, so both spellings fold to one.
+function foldTempKey(path: string): string {
+  const s = path.replace(/\\/g, '/').replace(/\/+$/, '').replace(/^\/private(?=\/(?:tmp|var)(?:\/|$))/, '')
+  return process.platform === 'win32' ? s.toLowerCase() : s
+}
+
+let roots: string[] | null = null
+function tempRoots(): string[] {
+  roots ??= [...new Set([tmpdir(), '/tmp', '/var/folders'].map(foldTempKey))]
+  return roots
+}
+
+export function isTemporaryProjectPath(projectPath: string | undefined): boolean {
+  const path = nativeProjectPath(projectPath)
+  if (!path) return false
+  const key = foldTempKey(path)
+  return tempRoots().some(root => key === root || key.startsWith(`${root}/`))
 }
 
 /** "github.com/org/repo" -> "repo". */
@@ -188,6 +219,10 @@ export function saveGitOrigins(): void {
   } catch {
     // A missed save only means a later run learns it again while the folder exists.
   }
+}
+
+export function __setTempRoots(paths: string[] | null): void {
+  roots = paths
 }
 
 export function __resetGitOriginCache(): void {

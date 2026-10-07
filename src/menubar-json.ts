@@ -57,7 +57,7 @@ export type PeriodData = {
   unpricedModels?: Array<{ model: string; calls: number; tokens: number }>
   /// `path` and `calls` are set by the durable builder; `checkouts` lists the
   /// clones and worktrees folded into a repository row, when there are several.
-  projects?: Array<{ id?: string; name: string; path?: string; calls?: number; checkouts?: ProjectCheckout[]; cost: number; savingsUSD: number; sessions: number; sessionCountBasis?: SessionCountBasis; sessionDetails?: Array<{ cost: number; savingsUSD: number; calls: number; inputTokens: number; outputTokens: number; date: string; models: Array<{ name: string; cost: number; savingsUSD: number }>; sessionId?: string; provider?: string }> }>
+  projects?: Array<{ id?: string; name: string; path?: string; calls?: number; temporary?: boolean; checkouts?: ProjectCheckout[]; checkoutCount?: number; cost: number; savingsUSD: number; sessions: number; sessionCountBasis?: SessionCountBasis; sessionDetails?: Array<{ cost: number; savingsUSD: number; calls: number; inputTokens: number; outputTokens: number; date: string; models: Array<{ name: string; cost: number; savingsUSD: number }>; sessionId?: string; provider?: string }> }>
   modelEfficiency?: Array<{ name: string; costPerEdit: number | null; oneShotRate: number | null }>
   topSessions?: Array<{ project: string; cost: number; savingsUSD: number; calls: number; date: string; sessionId?: string; provider?: string; projectKey?: string }>
   /// Workflow-intelligence rollups (issue: workflow intelligence). Optional so
@@ -411,6 +411,10 @@ export type MenubarPayload = {
       /// The checkouts (clones, worktrees) folded into this repository row, when
       /// there is more than one.
       checkouts?: ProjectCheckout[]
+      /// All checkouts folded in; `checkouts` lists the costliest 50.
+      checkoutCount?: number
+      /// The row for every temp-root folder outside a known repository.
+      temporary?: boolean
       sessionDetails: Array<{
         cost: number
         savingsUSD: number
@@ -722,7 +726,8 @@ function buildTopProjects(projects: PeriodData['projects']): MenubarPayload['cur
       sessions: p.sessions,
       avgCostPerSession: p.sessions > 0 ? p.cost / p.sessions : 0,
       ...(p.sessionCountBasis ? { sessionCountBasis: p.sessionCountBasis } : {}),
-      ...(p.checkouts ? { checkouts: p.checkouts } : {}),
+      ...(p.checkouts ? { checkouts: p.checkouts, checkoutCount: p.checkoutCount } : {}),
+      ...(p.temporary ? { temporary: true } : {}),
       sessionDetails: (p.sessionDetails ?? []).map(s => ({
         cost: s.cost,
         savingsUSD: s.savingsUSD,

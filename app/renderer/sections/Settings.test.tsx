@@ -201,6 +201,32 @@ describe('Settings', () => {
 
   // A lifetime list runs to thousands of rows on a real machine, so the pane
   // leads with the costliest and narrows on a substring of the name or path.
+  it('leaves out $0.00 rows unless a saved pattern names them, and unhides a repository by any checkout', async () => {
+    mocks.getUnfilteredProjects.mockResolvedValue({
+      projects: [
+        { name: 'codeburn', path: '/Users/x/codeburn', cost: 9, sessions: 3, checkouts: [{ path: '/Users/x/codeburn', cost: 6 }, { path: '/tmp/clone-3', cost: 3 }] },
+        { name: 'Temporary folders', path: '@temp', cost: 4, sessions: 9, temporary: true },
+        { name: 'zero', path: '/Users/x/zero', cost: 0.004, sessions: 1 },
+        { name: 'kept', path: '/Users/x/kept', cost: 0, sessions: 1 },
+      ],
+    })
+    mocks.getProjectFilter.mockResolvedValue({ project: [], exclude: ['/Users/x/kept', '/tmp/clone-3'] })
+    const user = userEvent.setup()
+    render(<Settings period="month" />)
+    await user.click(screen.getByRole('button', { name: 'Projects' }))
+    await screen.findByRole('switch', { name: 'Show /Users/x/codeburn' })
+    expect(screen.getAllByRole('switch').map(node => node.getAttribute('aria-label'))).toEqual([
+      'Show /Users/x/codeburn',
+      'Show @temp',
+      'Show /Users/x/kept',
+    ])
+    expect(screen.getByText('Temporary folders')).toBeInTheDocument()
+    const repo = screen.getByRole('switch', { name: 'Show /Users/x/codeburn' })
+    expect(repo).toHaveAttribute('aria-checked', 'false')
+    await user.click(repo)
+    expect(mocks.setProjectFilter).toHaveBeenCalledWith({ project: [], exclude: ['/Users/x/kept'] })
+  })
+
   it('sorts projects by lifetime cost and narrows them by a substring search', async () => {
     mocks.getUnfilteredProjects.mockResolvedValue({
       projects: [

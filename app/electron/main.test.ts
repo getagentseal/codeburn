@@ -961,6 +961,14 @@ describe('project filter', () => {
     })
   })
 
+  it('accepts the temporary-folders row for the top bar pick', async () => {
+    const { spawnCli, spawnCliAction, calls } = fakeSpawn()
+    const handlers = createBridgeHandlers(deps({ spawnCli, spawnCliAction, resolveCodeburnPath: () => '/bin/codeburn' }))
+    expect(await handlers['codeburn:setTransientProject']!('@temp')).toEqual({ ok: true, value: undefined })
+    await handlers['codeburn:getSessions']!('week', 'all')
+    expect(calls[0]).toEqual(['sessions', '--format', 'json', '--period', 'week', '--project==@temp'])
+  })
+
   it('accepts only an absolute project path for the top bar pick', async () => {
     const { spawnCli, spawnCliAction, calls } = fakeSpawn()
     const handlers = createBridgeHandlers(deps({ spawnCli, spawnCliAction, resolveCodeburnPath: () => '/bin/codeburn' }))

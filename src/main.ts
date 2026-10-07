@@ -643,7 +643,8 @@ function buildJsonReport(projects: ProjectSummary[], period: string, periodKey: 
     calls: p.calls ?? 0,
     sessions: p.sessions,
     ...(p.sessionCountBasis ? { sessionCountBasis: p.sessionCountBasis } : {}),
-    ...(p.checkouts ? { checkouts: p.checkouts.map(c => ({ path: c.id, cost: convertCost(c.cost) })) } : {}),
+    ...(p.temporary ? { temporary: true } : {}),
+    ...(p.checkouts ? { checkouts: p.checkouts.map(c => ({ path: c.id, cost: convertCost(c.cost) })), checkoutCount: p.checkoutCount } : {}),
   }))
 
   const modelMap: Record<string, { calls: number; cost: number; savings: number; estimatedCost: number; inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; baselineModel: string }> = {}

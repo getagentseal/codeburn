@@ -16,7 +16,7 @@ import { readDailyBudget } from '../lib/budget'
 import { formatConverted, formatCount, formatUsd, shortenProjectPath } from '../lib/format'
 import { codeburn, normalizeCliError } from '../lib/ipc'
 import { t, useLocale, type LocaleChoice } from '../i18n'
-import { projectMatches, projectPattern, projectVisible } from '../lib/projectMatch'
+import { projectMatches, projectNamedBy, projectPattern, projectVisible } from '../lib/projectMatch'
 import { displayVersion, isIdeHost, shortcutLabel } from '../lib/platform'
 import { motionClass } from '../lib/motion'
 import { clearOverviewHeadlines } from '../lib/overviewSnapshot'
@@ -344,10 +344,14 @@ function ProjectsPane({ refreshToken, onConfigMutated }: { refreshToken: number;
     () => [...(report.data?.projects ?? [])].sort((a, b) => (b.cost ?? 0) - (a.cost ?? 0)),
     [report.data],
   )
+  // A row that rounds to $0.00 shows nothing, unless a saved pattern names it:
+  // then it stays, so the switch can undo it.
+  const listed = projects.filter(project => Math.round((project.cost ?? 0) * 100) > 0
+    || [...filter.project, ...filter.exclude].some(pattern => projectNamedBy(project, pattern)))
   const needle = search.trim().toLowerCase()
   const shown = needle
-    ? projects.filter(project => project.name.toLowerCase().includes(needle) || project.path.toLowerCase().includes(needle))
-    : projects
+    ? listed.filter(project => project.name.toLowerCase().includes(needle) || project.path.toLowerCase().includes(needle))
+    : listed
 
   // One write at a time, or a second click drops the first.
   const apply = (next: ProjectFilter, clearInput = false): void => {
@@ -366,8 +370,8 @@ function ProjectsPane({ refreshToken, onConfigMutated }: { refreshToken: number;
   const toggle = (project: ProjectRow, visible: boolean): void => {
     if (visible) {
       // Widen the include list too, or it would keep hiding what was just shown.
-      const exclude = filter.exclude.filter(entry => !projectMatches(project, entry))
-      const include = filter.project.length > 0 && !filter.project.some(entry => projectMatches(project, entry))
+      const exclude = filter.exclude.filter(entry => !projectNamedBy(project, entry))
+      const include = filter.project.length > 0 && !filter.project.some(entry => projectNamedBy(project, entry))
         ? [...filter.project, projectPattern(project)]
         : filter.project
       apply({ project: include, exclude })
@@ -387,20 +391,20 @@ function ProjectsPane({ refreshToken, onConfigMutated }: { refreshToken: number;
       <button className="btnp r" disabled={busy} onClick={() => apply({ ...filter, project: [] })}>{t('settings.projects.showAll')}</button>
     </div></div>}
     <div className="card"><div className="about-sec set-last-sec">
-      {projects.length > 0 && <div className="set-filter-form set-search-form">
+      {listed.length > 0 && <div className="set-filter-form set-search-form">
         <input aria-label={t('settings.projects.searchAriaLabel')} className="set-input set-mono" placeholder={t('settings.projects.searchPlaceholder')} value={search} onChange={event => setSearch(event.target.value)} />
-        {needle && <span className="set-cap">{t('settings.projects.countOf', { shown: shown.length.toLocaleString(), total: projects.length.toLocaleString() })}</span>}
+        {needle && <span className="set-cap">{t('settings.projects.countOf', { shown: shown.length.toLocaleString(), total: listed.length.toLocaleString() })}</span>}
       </div>}
       {report.error ? <SettingsErrorText error={report.error} />
         : saved.error ? <SettingsErrorText error={saved.error} />
         : !report.data || !saved.data ? <p className="set-cap">{t('settings.projects.loading')}</p>
-        : projects.length === 0 ? <p className="set-cap">{t('settings.projects.emptyNone')}</p>
+        : listed.length === 0 ? <p className="set-cap">{t('settings.projects.emptyNone')}</p>
         : shown.length === 0 ? <p className="set-cap">{t('settings.projects.emptySearch')}</p>
         : shown.map(project => {
           const visible = projectVisible(project, filter)
           const pattern_ = projectPattern(project)
           return <div className="about-row" key={pattern_}>
-            <span className="tx set-mono">{shortenProjectPath(project.path || project.name, 2)}<small>{pattern_}</small></span>
+            <span className="tx set-mono">{project.temporary ? t('shell.project.temporary') : project.checkouts ? project.name : shortenProjectPath(project.path || project.name, 2)}<small>{pattern_}</small></span>
             <span className="r set-status"><span className="set-cap">{formatConverted(project.cost)} · {formatCount(project.sessions, 'session')}</span></span>
             <button type="button" role="switch" aria-checked={visible} aria-label={t('settings.projects.showAriaLabel', { pattern: pattern_ })} className={visible ? 'switch on' : 'switch'} disabled={busy} onClick={() => toggle(project, !visible)}><span className="switch-knob" /></button>
           </div>

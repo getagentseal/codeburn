@@ -255,8 +255,12 @@ export type MenubarPayload = {
       sessions: number
       avgCostPerSession?: number
       sessionCountBasis?: 'identity' | 'partial'
-      /** Clones and worktrees folded into this repository row, when several. */
+      /** Clones and worktrees folded into this repository row, when several;
+       *  the costliest 50 of `checkoutCount`. */
       checkouts?: Array<{ id: string; cost: number }>
+      checkoutCount?: number
+      /** The one row for every temp-root folder outside a known repository. */
+      temporary?: boolean
       sessionDetails: Array<{
         cost: number
         savingsUSD: number
@@ -1228,7 +1232,7 @@ export type TrayPrefs = {
 
 export type ProjectFilter = { project: string[]; exclude: string[] }
 
-export type ProjectRow = { name: string; path: string; cost: number; sessions: number; checkouts?: Array<{ path: string; cost: number }> }
+export type ProjectRow = { name: string; path: string; cost: number; sessions: number; checkouts?: Array<{ path: string; cost: number }>; checkoutCount?: number; temporary?: boolean }
 
 export type ProjectsReport = { projects: ProjectRow[] }
 

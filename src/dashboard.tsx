@@ -27,7 +27,7 @@ import { planDisplayName } from './plans.js'
 import { formatDayRangeLabel, getDateRange, parseDayFlag, PERIODS, PERIOD_LABELS, shiftDay, type Period } from './cli-date.js'
 import { BSU, patchStdoutForWindows } from './ink-win.js'
 import { startUserTimingGuard } from './user-timing-guard.js'
-import { originRepoName, projectOriginKey } from './git-origin.js'
+import { isTemporaryProjectPath, originRepoName, projectOriginKey, TEMPORARY_PROJECTS } from './git-origin.js'
 
 type View = 'dashboard' | 'optimize' | 'compare'
 
@@ -802,15 +802,17 @@ function getProjectBreakdownRowLimit(period: Period, dayMode = false): number {
 }
 
 /// One row per repository: clones and worktrees sharing an `origin` fold into
-/// the costliest of them; a checkout without one stays its own row.
+/// the costliest of them, and every other temp-root folder into one row; any
+/// other checkout stays its own row.
 export function foldProjectsByRepository(projects: ProjectSummary[]): Array<ProjectSummary & { repo?: string }> {
   const rows = new Map<string, ProjectSummary & { repo?: string }>()
   projects.forEach((p, i) => {
     const origin = projectOriginKey(p.projectPath)
-    const key = origin ?? `\0${i}`
+    const temporary = !origin && isTemporaryProjectPath(p.projectPath)
+    const key = origin ?? (temporary ? TEMPORARY_PROJECTS : `\0${i}`)
     const held = rows.get(key)
     if (!held) {
-      rows.set(key, origin ? { ...p, repo: originRepoName(origin) } : p)
+      rows.set(key, origin ? { ...p, repo: originRepoName(origin) } : temporary ? { ...p, repo: 'Temporary folders' } : p)
       return
     }
     if (p.totalCostUSD > held.totalCostUSD) held.projectPath = p.projectPath

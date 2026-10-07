@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { loadDailyCache, projectDayIdentity, type DailyEntry } from '../src/daily-cache.js'
 import { aggregateProjectsIntoDays } from '../src/day-aggregator.js'
-import { __resetGitOriginCache, projectOriginKey, saveGitOrigins } from '../src/git-origin.js'
+import { __resetGitOriginCache, __setTempRoots, projectOriginKey, saveGitOrigins } from '../src/git-origin.js'
 import { filterProjectsByName, makeProjectFilter, setExactProjectPaths } from '../src/parser.js'
 import type { ProjectSummary, SessionSummary } from '../src/types.js'
 import { buildPayloadProjects } from '../src/usage-aggregator.js'
@@ -73,6 +73,8 @@ beforeEach(() => {
   mkdirSync(join(root, 'cache'))
   __resetGitOriginCache()
   setExactProjectPaths(false)
+  // The fixtures live under the OS temp dir; only root/tmp counts as temporary here.
+  __setTempRoots([join(root, 'tmp')])
 })
 
 afterEach(() => {
@@ -81,6 +83,7 @@ afterEach(() => {
   else process.env['CODEBURN_CACHE_DIR'] = savedCacheDir
   __resetGitOriginCache()
   setExactProjectPaths(false)
+  __setTempRoots(null)
 })
 
 function fixtures() {
@@ -154,6 +157,24 @@ describe('projects grouped by git repository', () => {
     expect(filterProjectsByName(projects, [`=${a2}`]).map(p => p.projectPath).sort()).toEqual([a1, a2, awt].sort())
     expect(filterProjectsByName(projects, [`=${plain}`]).map(p => p.projectPath)).toEqual([plain])
     expect(filterProjectsByName(projects, [plain]).map(p => p.projectPath)).toEqual([plain, join(plain, 'site')])
+  })
+
+  it('collapses temp-root folders outside a repository into one row, and scopes to all of them', () => {
+    const { a1, plain } = fixtures()
+    const tmpClone = repo(join(root, 'tmp', 'agent-1', 'codeburn'), 'git@github.com:getagentseal/codeburn.git')
+    const s1 = join(root, 'tmp', 'agent-2', 'scratch')
+    const s2 = join(root, 'tmp', 'agent-3')
+    mkdirSync(s1, { recursive: true })
+    const gone = join(root, 'tmp', 'agent-4')
+    const projects = [live(a1, 5), live(tmpClone, 1), live(s1, 2), live(s2, 3), live(gone, 0.5), live(plain, 1)]
+
+    const rows = buildPayloadProjects(projects, null, homedir())
+    expect(rows.map(r => [r.name, r.cost, r.path])).toEqual([['codeburn', 6, a1], ['Temporary folders', 5.5, '@temp'], ['codeburn-marketing', 1, plain]])
+    expect(rows[1]!.temporary).toBe(true)
+    expect(rows[1]!.checkoutCount).toBe(3)
+
+    expect(filterProjectsByName(projects, ['=@temp']).map(p => p.projectPath).sort()).toEqual([s1, s2, gone].sort())
+    expect(filterProjectsByName(projects, [], ['@temp']).map(p => p.projectPath).sort()).toEqual([a1, tmpClone, plain].sort())
   })
 
   it('stamps the repository on days adopted from an older cache while the folder exists', async () => {

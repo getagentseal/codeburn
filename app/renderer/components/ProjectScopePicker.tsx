@@ -14,13 +14,13 @@ const ALL = ''
 const MAX_SHOWN = 100
 
 /** Projects the saved filter shows, costliest first. Only rows with an
- *  absolute path: a bucket with no session cwd (an import, a provider's label
+ *  absolute path, and the temporary-folders row: a bucket with no session cwd (an import, a provider's label
  *  fallback) reports its label as the path, and no rooted filter selects it.
  *  Rows that round to $0.00 are left out too, they would show nothing. */
 export function projectScopeOptions(projects: ProjectRow[], filter: ProjectFilter): Array<DropdownOption & { name: string }> {
   const byPath = new Map<string, ProjectRow>()
   for (const project of projects) {
-    if (!isRooted(project.path) || !projectVisible(project, filter)) continue
+    if ((!isRooted(project.path) && !project.temporary) || !projectVisible(project, filter)) continue
     const path = project.path.trim()
     const held = byPath.get(path)
     if (!held || (held.cost ?? 0) < (project.cost ?? 0)) byPath.set(path, project)
@@ -33,7 +33,7 @@ export function projectScopeOptions(projects: ProjectRow[], filter: ProjectFilte
   }
   return rows.map(([path, project]) => {
     const label = shortenProjectPath(path, 2)
-    return { value: path, label: project.checkouts ? project.name : labels.get(label)! > 1 ? path : label, name: project.name }
+    return { value: path, label: project.temporary ? t('shell.project.temporary') : project.checkouts ? project.name : labels.get(label)! > 1 ? path : label, name: project.name }
   })
 }
 

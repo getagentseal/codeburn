@@ -25,7 +25,7 @@ import { activityStreak } from './streak.js'
 import { getDaysInRange, ensureCacheHydrated, loadDailyCache, cachedProjectIdentities, projectDayIdentity, emptyCache, mergeDayEntries, BACKFILL_DAYS, toDateString, type DailyCache, type DailyEntry, type ProjectDayStats, type ProviderDaySlice } from './daily-cache.js'
 import { buildGranularHistory } from './granular-history.js'
 import { spendProjectIdentity } from './spend-flow.js'
-import { originRepoName, projectOriginKey } from './git-origin.js'
+import { isTemporaryProjectPath, originRepoName, projectOriginKey, TEMPORARY_PROJECTS } from './git-origin.js'
 import { AGGREGATE_ONLY_PROVIDER, excludeAggregateOnlyProjects, excludesAggregateOnlyProviders } from './parser.js'
 
 // Row caps for the by-PR / by-branch payload aggregations, ranked by cost.
@@ -1260,6 +1260,10 @@ function sessionDetailsOf(sessions: SessionSummary[]): PayloadSessionDetail[] {
     }))
 }
 
+const TEMPORARY_KEY = '\0temporary'
+const TEMPORARY_NAME = 'Temporary folders'
+const MAX_CHECKOUTS = 50
+
 function displayBasename(path: string | undefined, fallback: string, home: string): string {
   if (!path) return fallback
   if (path === home || path === home + '/') return 'Home'
@@ -1566,7 +1570,7 @@ export function buildPayloadProjects(
   // cache row hide another clone's live-only spend under the same slug.
   const groups = new Map<string, typeof rows>()
   for (const row of rows) {
-    const key = row.acc.originKey ?? projectOriginKey(row.path) ?? `\0${row.acc.id}`
+    const key = row.acc.originKey ?? projectOriginKey(row.path) ?? (isTemporaryProjectPath(row.path) ? TEMPORARY_KEY : `\0${row.acc.id}`)
     const held = groups.get(key)
     if (held) held.push(row)
     else groups.set(key, [row])
@@ -1578,23 +1582,27 @@ export function buildPayloadProjects(
     members.sort((a, b) => b.cost - a.cost)
     const lead = members[0]!
     const repo = key.startsWith('\0') ? null : key
+    const temporary = key === TEMPORARY_KEY
     const sessions = members.reduce((sum, m) => sum + m.sessions, 0)
     const sessionCountBasis = members.some(m => m.sessionCountBasis === 'partial') ? 'partial' as const : lead.sessionCountBasis
     const details = sessionDetailsOf(members.flatMap(m => m.acc.sessions))
     return {
       id: lead.acc.id,
-      name: repo
-        ? (repoNames.get(originRepoName(repo))! > 1 ? repo.split('/').slice(-2).join('/') : originRepoName(repo))
+      name: temporary ? TEMPORARY_NAME
+        : repo ? (repoNames.get(originRepoName(repo))! > 1 ? repo.split('/').slice(-2).join('/') : originRepoName(repo))
         : disambiguatedProjectName(lead.path, lead.basename, lead.acc.fallbackName, basenameCounts),
+      ...(temporary ? { temporary: true } : {}),
       // A rooted path that still resolves to the repository, so selecting the
       // row scopes to all of it (Codex records cwds without the leading slash).
-      path: ((repo && members.find(m => m.path && /^(\/|[a-zA-Z]:[\\/])/.test(m.path) && projectOriginKey(m.path) === repo)) || lead).path ?? lead.acc.id,
+      path: temporary ? TEMPORARY_PROJECTS
+        : ((repo && members.find(m => m.path && /^(\/|[a-zA-Z]:[\\/])/.test(m.path) && projectOriginKey(m.path) === repo)) || lead).path ?? lead.acc.id,
       cost: members.reduce((sum, m) => sum + m.cost, 0),
       savingsUSD: members.reduce((sum, m) => sum + m.savingsUSD, 0),
       calls: members.reduce((sum, m) => sum + m.calls, 0),
       sessions,
       sessionCountBasis,
-      ...(members.length > 1 ? { checkouts: members.map(m => ({ id: m.acc.id, cost: m.cost })) } : {}),
+      // Capped: the temporary row can hold thousands, and this rides every poll.
+      ...(members.length > 1 ? { checkouts: members.slice(0, MAX_CHECKOUTS).map(m => ({ id: m.acc.id, cost: m.cost })), checkoutCount: members.length } : {}),
       ...(details.length ? { sessionDetails: details } : {}),
     }
   }).sort((a, b) => b.cost - a.cost)

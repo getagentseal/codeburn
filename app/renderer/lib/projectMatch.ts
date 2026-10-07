@@ -4,7 +4,11 @@
  *  CLI lies. It sits in the CLI suite because it needs both halves, and the
  *  desktop CI job installs only app/ dependencies. */
 
-type MatchTarget = { name: string; path?: string }
+type MatchTarget = { name: string; path?: string; checkouts?: Array<{ path: string }>; temporary?: boolean }
+
+/** The CLI's pattern (and the path of its row) for every temp-root folder
+ *  outside a known repository. */
+export const TEMPORARY_PROJECTS = '@temp'
 
 export function isRooted(pattern: string): boolean {
   const raw = pattern.trim().replace(/\\/g, '/')
@@ -42,8 +46,14 @@ export function projectPattern(project: MatchTarget): string {
   return rooted ? raw : `/${raw}`
 }
 
-/** Excludes win; an empty include list means every project. */
+/** A pattern naming any checkout of a repository row names the whole
+ *  repository, as in the CLI. */
+export function projectNamedBy(project: MatchTarget, pattern: string): boolean {
+  if (projectMatches(project, pattern)) return true
+  return !project.temporary && (project.checkouts ?? []).some(c => projectMatches({ name: project.name, path: c.path }, pattern))
+}
+
 export function projectVisible(project: MatchTarget, filter: { project: string[]; exclude: string[] }): boolean {
-  if (filter.exclude.some(pattern => projectMatches(project, pattern))) return false
-  return filter.project.length === 0 || filter.project.some(pattern => projectMatches(project, pattern))
+  if (filter.exclude.some(pattern => projectNamedBy(project, pattern))) return false
+  return filter.project.length === 0 || filter.project.some(pattern => projectNamedBy(project, pattern))
 }

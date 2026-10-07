@@ -59,7 +59,7 @@ async function writeSession(name: string, ageDays: number, outputTokens = 50): P
     type: 'assistant',
     sessionId: name,
     timestamp: at.toISOString(),
-    cwd: '/tmp/proj',
+    cwd: '/work/proj',
     message: {
       id: `msg-${name}`,
       type: 'message',
@@ -78,7 +78,7 @@ async function appendSessionCall(name: string, outputTokens: number): Promise<vo
     type: 'assistant',
     sessionId: name,
     timestamp,
-    cwd: '/tmp/proj',
+    cwd: '/work/proj',
     message: {
       id: `msg-${name}-appended`,
       type: 'message',

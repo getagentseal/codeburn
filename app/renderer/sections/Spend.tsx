@@ -225,21 +225,24 @@ function ProjectBreakdown({ projects, onInvestigate }: { projects: Project[]; on
         projects.map((project, i) => {
           const rowKey = projectRowKey(project, i)
           const open = expanded === rowKey
+          const name = project.temporary ? t('shell.project.temporary') : project.name
+          // Sessions filter by exact checkout ids, so only a complete list drills.
+          const drillable = (project.checkoutCount ?? 0) <= (project.checkouts?.length ?? 0)
           return (
             <Fragment key={rowKey}>
               <ListRow
                 no={String(i + 1).padStart(2, '0')}
-                title={project.name}
+                title={name}
                 sub={<span title={project.sessionCountBasis === 'identity' ? undefined : sessionCountHelp()}>{formatSessionCount(project.sessions, project.sessionCountBasis)}</span>}
                 value={formatUsd(project.cost)}
                 expanded={open}
                 onClick={() => setExpanded(current => current === rowKey ? null : rowKey)}
               />
               {open && (
-                <div className="spend-proj-detail" role="region" aria-label={t('spend.project.sessionsAria', { name: project.name })}>
+                <div className="spend-proj-detail" role="region" aria-label={t('spend.project.sessionsAria', { name })}>
                   {/* Drill-through entry: canonical project id (the same one the
                       session rows carry), so the destination matches exactly. */}
-                  {onInvestigate && (
+                  {onInvestigate && drillable && (
                     <button
                       className="ov-link spend-proj-drill"
                       type="button"

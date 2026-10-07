@@ -58,7 +58,7 @@ import { classifyWslCachePath, isWslUncPath, refreshWslHomes, wslMode } from './
 import { decideParseWorkers, parseFilesInOrder, ParseWorkerPool, type ClaudeWorkerParse, type ParseJob } from './parse-workers.js'
 import type { CodexFullParse } from './providers/codex.js'
 import { dateKey } from './day-aggregator.js'
-import { projectOriginKey, saveGitOrigins } from './git-origin.js'
+import { isTemporaryProjectPath, projectOriginKey, saveGitOrigins, TEMPORARY_PROJECTS } from './git-origin.js'
 import { behavioralCallWeight, isBehavioralTurn } from './behavioral-weight.js'
 import { gatewayIncludedInTotals } from './config.js'
 import { coverageFor, cursorImportPath, dropImportCoveredCalls, loadCursorImport, replacedProviders } from './cursor-import.js'
@@ -4886,7 +4886,7 @@ function expandTilde(pattern: string): string {
 
 /// A pattern is normalized once and matched many times: the day cache runs the
 /// filter for every project of every day, and again per provider slice.
-type CompiledPattern = { rooted: true; anchor: string | null; origin: string | null; exact: boolean } | { rooted: false; needle: string }
+type CompiledPattern = { rooted: true; anchor: string | null; origin: string | null; exact: boolean } | { rooted: false; needle: string; temporary?: true }
 
 /// `originKey` is the repository a day entry recorded for its path; absent, it
 /// is looked up from the path.
@@ -4903,6 +4903,7 @@ export function setExactProjectPaths(exact: boolean): void {
 /// under it, which are rows of their own.
 function compile(patterns: readonly string[]): CompiledPattern[] {
   return patterns.map(pattern => {
+    if (pattern === TEMPORARY_PROJECTS || pattern === `=${TEMPORARY_PROJECTS}`) return { rooted: false as const, needle: '', temporary: true as const }
     const exact = pattern.startsWith('=') && isRootedProjectPattern(pattern.slice(1))
     if (!exact && !isRootedProjectPattern(pattern)) return { rooted: false as const, needle: pattern.toLowerCase() }
     const path = expandTilde(exact ? pattern.slice(1) : pattern)
@@ -4923,6 +4924,7 @@ function hit(entry: ProjectFilterTarget, pattern: CompiledPattern, key: string |
     const anchor = pattern.anchor
     return anchor !== null && key !== null && (key === anchor || (!pattern.exact && key.startsWith(anchor + '/')))
   }
+  if (pattern.temporary) return isTemporaryProjectPath(entry.projectPath) && !(entry.originKey ?? projectOriginKey(entry.projectPath))
   return entry.project.toLowerCase().includes(pattern.needle)
     || (entry.projectPath ?? '').toLowerCase().includes(pattern.needle)
 }
