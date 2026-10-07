@@ -415,7 +415,7 @@ From the tools the session used and the words in your own messages, with no mode
 <details>
 <summary><strong>On a subscription the dollars are an estimate. What is estimated and what is measured?</strong></summary>
 
-The tokens are measured for most tools. Claude Code, Codex, Gemini, Zed, OpenCode and others write real per-call input, output and cache counts into their own session files, and CodeBurn reads those rather than guessing. The price applied to them is published API pricing, so the dollar figure is arithmetic on measured tokens, not a guess about your bill. A few tools record no counts at all, so Cursor, Kiro and some Copilot sessions are estimated from content length, and those are marked estimated in the tables. `codeburn audit` prints a row per provider and model saying where every number came from.
+The tokens are measured for most tools. Claude Code, Codex, Gemini, Zed, OpenCode and others write real per-call input, output and cache counts into their own session files, and CodeBurn reads those rather than guessing. The price applied to them is published API pricing, so the dollar figure is arithmetic on measured tokens, not a guess about your bill. A few tools record no counts at all, so Cursor, Kiro and some Copilot sessions are estimated from content length, and those are marked estimated in the tables. Claude Code also bills some calls it does not write to its transcripts: some advisor calls, and subagent replies that keep only part of their usage. For those, CodeBurn can show less than Claude Code's own cost counter. `codeburn audit` prints a row per provider and model saying where every number came from.
 
 </details>
 
