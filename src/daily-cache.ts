@@ -301,7 +301,11 @@ import type { DateRange, ProjectSummary } from './types.js'
 // v61: #1579 Claude Desktop usage-ledger records (Claude-3p Cowork and Code)
 // are read and de-duplicated against matching transcript calls. Calls only
 // rise, so no PENDING_REDERIVE_PROVIDER_VERSIONS entry is needed.
-export const DAILY_CACHE_VERSION = 61
+// v64: Kimi Code's `kimi-for-coding` prices by the model it served on the call's
+// date (K2.5, K2.6, K2.7 Code) instead of retired K2 Thinking, and
+// `kimi-for-coding-highspeed` prices at K2.7 Code HighSpeed instead of $0.
+// Calls are unchanged, so no PENDING_REDERIVE_PROVIDER_VERSIONS entry is needed.
+export const DAILY_CACHE_VERSION = 64
 const MIN_SUPPORTED_VERSION = 28
 
 /// Providers whose per-day CALL COUNT means something different at
