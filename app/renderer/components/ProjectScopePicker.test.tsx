@@ -38,6 +38,7 @@ describe('projectScopeOptions', () => {
       row('Grok Bot (imported)', 480, 'Grok Bot (imported)'),
       row('eywa/lab', 100, 'eywa-lab'),
       row('Users/me/api/server', 12, 'Users-me-api-server'),
+      row('-Users-me-app', 7, '-Users-me-app'),
       row('/w/a', 1),
       row('C:\\work\\b', 1),
     ]
