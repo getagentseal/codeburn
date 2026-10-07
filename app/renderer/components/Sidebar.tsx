@@ -1,8 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react'
 
-import { version } from '../../package.json'
 import { t } from '../i18n'
-import { isIdeHost, isModifierChord, shortcutLabel } from '../lib/platform'
+import { displayVersion, isIdeHost, isModifierChord, shortcutLabel } from '../lib/platform'
 import { AboutModal } from './AboutModal'
 import { Icon } from './icons'
 
@@ -120,7 +119,7 @@ export function Sidebar({
           <a className="about" href="#about" data-tip={t('shell.sidebar.about')} onClick={event => { event.preventDefault(); setAboutOpens(opens => opens + 1) }}>
             <Icon name="info" />
             <span className="ni-label">{t('shell.sidebar.about')}</span>
-            <span className="ver">v{version}</span>
+            <span className="ver">v{displayVersion()}</span>
           </a>
         </div>
       </nav>

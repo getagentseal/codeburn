@@ -6,7 +6,7 @@ import { ProviderLogo } from './ProviderLogo'
 import { motionClass, motionEnabled, reducedMotion } from '../lib/motion'
 import { codeburn } from '../lib/ipc'
 import type { ScanProgressEvent } from '../lib/types'
-import { version } from '../../package.json'
+import { displayVersion } from '../lib/platform'
 import loaderVideo from '../assets/splash-loader.webm'
 import { t } from '../i18n'
 
@@ -186,7 +186,7 @@ export function Splash({ hasData, hasError }: { hasData: boolean; hasError: bool
         </div>
       )}
       <div className="splash-word">CodeBurn</div>
-      <div className="splash-version">v{version}</div>
+      <div className="splash-version">v{displayVersion()}</div>
       {showDetail && <SplashStatus progress={progress} />}
     </div>,
     document.body,

@@ -1,6 +1,6 @@
 import { useState, type MouseEvent, type ReactNode } from 'react'
 
-import { version } from '../../package.json'
+import { displayVersion } from '../lib/platform'
 import { FlameMark } from './FlameMark'
 import { Icon } from './icons'
 import { BUILD_STAMP } from '../lib/build'
@@ -53,7 +53,7 @@ export function AboutModal({ socials = SOCIALS, openKey, onClose }: { socials?: 
           <div className="about-modal-hero">
             <span className="about-modal-logo" aria-hidden="true"><FlameMark size={52} /></span>
             <div className="about-modal-name" id="about-modal-title">CodeBurn</div>
-            <div className="about-modal-version">v{version}</div>
+            <div className="about-modal-version">v{displayVersion()}</div>
             <div className="about-modal-build">{BUILD_STAMP}</div>
             <div className="about-modal-tagline">{t('shared.aboutModal.tagline')}</div>
           </div>

@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.9.25
+## 1.0.0
 
 First release of the CodeBurn extension for VS Code and its forks.
 
@@ -10,4 +10,4 @@ First release of the CodeBurn extension for VS Code and its forks.
 - Commands: Open Dashboard, Refresh, Show Today, Show This Workspace, Show All Projects, Open Optimize, Copy Summary, Open Settings.
 - Settings for the default period, refresh interval, status bar format, currency, provider, quota providers and Node.js path.
 - Follows the editor's theme (light, dark, high contrast) and display language (six languages).
-- Bundles the CodeBurn CLI; no telemetry.
+- Bundles CodeBurn CLI 0.9.25; no telemetry. The extension keeps its own version, and Settings shows the CLI version next to it.

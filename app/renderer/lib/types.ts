@@ -1235,6 +1235,8 @@ export type IdeCommand = { section?: string; period?: string; refresh?: boolean 
 export interface CodeburnBridge {
   /** Set by the VS Code extension's webview bridge; absent in the desktop app. */
   readonly host?: 'vscode'
+  /** The extension's own version, set beside `host`. */
+  readonly hostVersion?: string
   /** The IDE's project scope: the open workspace's projects, or every project.
    *  `label` names the workspace; null when no folder is open. */
   readonly ideScope?: { workspace: boolean; label: string | null }

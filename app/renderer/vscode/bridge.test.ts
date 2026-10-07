@@ -5,6 +5,7 @@ import { createBridge, scopedStorage, themeFromBody, type Boot } from './bridge'
 
 const boot: Boot = {
   view: 'dashboard',
+  version: '1.0.0',
   platform: 'darwin',
   arch: 'arm64',
   locale: 'ja',
@@ -49,6 +50,7 @@ describe('createBridge', () => {
   it('exposes the host, platform, locale and scope', () => {
     const { bridge } = setup()
     expect(bridge.host).toBe('vscode')
+    expect(bridge.hostVersion).toBe('1.0.0')
     expect(bridge.platform).toBe('darwin')
     expect(bridge.appLocale).toBe('ja')
     expect(bridge.ideScope).toEqual({ workspace: true, label: 'codeburn' })

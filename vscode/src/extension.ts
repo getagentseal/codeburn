@@ -335,6 +335,7 @@ class Controller {
     const root = this.webviewRoot()
     const boot: Boot = {
       view,
+      version: String(this.context.extension.packageJSON.version ?? ''),
       platform: process.platform,
       arch: process.arch,
       locale: vscode.env.language,

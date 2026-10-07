@@ -4,6 +4,8 @@
 // All functions read platform state at call time, never at module load, so
 // the preload bridge may appear after this module is imported.
 
+import { version } from '../../package.json'
+
 function bridgePlatform(): string | undefined {
   if (typeof window === 'undefined') return undefined
   return (window as unknown as { codeburn?: { platform?: string } }).codeburn?.platform
@@ -22,6 +24,13 @@ function userAgentPlatform(): string | undefined {
 export function isIdeHost(): boolean {
   if (typeof window === 'undefined') return false
   return (window as unknown as { codeburn?: { host?: string } }).codeburn?.host === 'vscode'
+}
+
+/** The version shown to people: the extension's own inside an editor, where
+ *  package.json's is the bundled CLI's, and the app's everywhere else. */
+export function displayVersion(): string {
+  if (typeof window === 'undefined') return version
+  return (window as unknown as { codeburn?: { hostVersion?: string } }).codeburn?.hostVersion || version
 }
 
 /** True when the Electron preload reports darwin (or the UA matches a Mac). */

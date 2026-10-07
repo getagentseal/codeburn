@@ -17,7 +17,7 @@ import { formatConverted, formatCount, formatUsd, shortenProjectPath } from '../
 import { codeburn, normalizeCliError } from '../lib/ipc'
 import { t, useLocale, type LocaleChoice } from '../i18n'
 import { projectMatches, projectPattern } from '../lib/projectMatch'
-import { isIdeHost, shortcutLabel } from '../lib/platform'
+import { displayVersion, isIdeHost, shortcutLabel } from '../lib/platform'
 import { motionClass } from '../lib/motion'
 import { clearOverviewHeadlines } from '../lib/overviewSnapshot'
 import { detectedProviders, PROVIDER_NAMES, QUOTA_PROVIDERS, readDisabledProviders, writeDisabledProviders } from '../lib/providers'
@@ -220,7 +220,7 @@ function GeneralPane({ period, refreshToken, claudeConfigs, claudeConfigSource, 
   const [budgetInput, setBudgetInput] = useState(() => { const budget = readDailyBudget(); return budget ? String(budget.value) : '' })
   const [budgetError, setBudgetError] = useState('')
   const update = useUpdateStatus()
-  const version = update?.currentVersion || appVersion
+  const version = update?.currentVersion || displayVersion()
   const updateNote = update?.updateAvailable && update.latestVersion
     ? t('settings.update.available', { version: update.latestVersion })
     : update?.latestVersion
@@ -297,7 +297,7 @@ function GeneralPane({ period, refreshToken, claudeConfigs, claudeConfigSource, 
         </div>
         <div className="about-sec set-last-sec">
           <div className="about-sec-h">{t('settings.section.about')}</div>
-          <div className="about-row"><span className="tx">{t('settings.about.version', { version })}{updateNote && <small>{updateNote}</small>}</span><span className="r">{update?.updateAvailable && update.tag ? <button className="set-text-button" onClick={() => { void codeburn.openExternal(updateDownloadUrl(update.tag!)) }}>{t('settings.about.download')}</button> : null}</span></div>
+          <div className="about-row"><span className="tx">{t('settings.about.version', { version })}{isIdeHost() ? <small>{t('ide.settings.cliVersion', { version: appVersion })}</small> : updateNote && <small>{updateNote}</small>}</span><span className="r">{update?.updateAvailable && update.tag ? <button className="set-text-button" onClick={() => { void codeburn.openExternal(updateDownloadUrl(update.tag!)) }}>{t('settings.about.download')}</button> : null}</span></div>
         </div>
       </div>
     </section>

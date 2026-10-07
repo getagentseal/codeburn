@@ -6,6 +6,8 @@ export type VsCodeApi = { postMessage(message: WebviewMessage): void }
 /** What the extension host writes into the page before any script runs. */
 export type Boot = {
   view: 'dashboard' | 'sidebar'
+  /** The extension's own version, not the bundled CLI's. */
+  version: string
   platform: string
   arch: string
   locale: string
@@ -112,6 +114,7 @@ export function createBridge(api: VsCodeApi, boot: Boot, win: Window): CodeburnB
   return {
     ...forwarded,
     host: 'vscode',
+    hostVersion: boot.version,
     platform: boot.platform,
     arch: boot.arch,
     appLocale: boot.locale,
