@@ -5,7 +5,7 @@ import { homedir } from 'os'
 
 import { extractBashCommands } from '../bash-utils.js'
 import { readSessionLines } from '../fs-utils.js'
-import { calculateCost, getShortModelName, isStandInPricedAt, pricingModelAt } from '../models.js'
+import { calculateCost, getShortModelName, pricingModelAt } from '../models.js'
 import type { ProbeRoot, ParsedProviderCall, Provider, SessionParser, SessionSource } from './types.js'
 
 type JsonObject = Record<string, unknown>
@@ -317,7 +317,6 @@ function createParser(source: SessionSource, shareDir: string, seenKeys: Set<str
           reasoningTokens: 0,
           webSearchRequests: 0,
           costUSD,
-          ...(isStandInPricedAt(model, envelope.timestamp) ? { costIsEstimated: true } : {}),
           tools: [...tools],
           bashCommands: [...bashCommands],
           timestamp: envelope.timestamp,

@@ -486,9 +486,6 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // Estimated from message text: Grok Bot's local mirror records no tokens.
   // import-guess-est-v1: synced Grok Bot rows with no dollar amount are estimated.
   grokbot: 'estimated-usage-v1-import-guess-est-v1',
-  // k28-est-v1: kimi-for-coding calls from 11 Sep 2026 (K2.8 Preview, priced
-  // as K2.7 Code) are marked estimated; cached calls hold no flag.
-  kimi: 'k28-est-v1',
   // v0-v4 generations, embedded attempt streams, retry accounting, and the
   // version-specific inherited-prefix rules all change cached DSH calls.
   dsh: 'session-formats-v0-v4-attempts-v6',

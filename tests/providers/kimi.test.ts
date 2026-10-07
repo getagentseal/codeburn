@@ -125,7 +125,7 @@ describe('Kimi provider', () => {
     expect(calls[0]!.costUSD).toBeGreaterThan(0)
   })
 
-  it('prices kimi-for-coding by call date and marks the K2.8 Preview period estimated', async () => {
+  it('prices kimi-for-coding by call date', async () => {
     const wirePath = await writeSession('/Users/test/work/app', 'sess-k28', [
       record(1789084799, 'StatusUpdate', {
         message_id: 'before',
@@ -146,7 +146,6 @@ describe('Kimi provider', () => {
 
     const calls = await collect(createKimiProvider(tmpDir), wirePath)
 
-    expect(calls.map(c => c.costIsEstimated)).toEqual([undefined, true, undefined])
     expect(calls[0]!.costUSD).toBeCloseTo(4.95)
     expect(calls[1]!.costUSD).toBeCloseTo(4.95)
     expect(calls[2]!.costUSD).toBeCloseTo(0.95)
