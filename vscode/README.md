@@ -28,6 +28,7 @@ All under **CodeBurn** in the Command Palette:
 | Open Optimize | Opens the Optimize findings |
 | Copy Summary | Copies a plain-text summary for a chat or a standup note |
 | Open Settings | Opens CodeBurn's settings |
+| Star on GitHub | Opens CodeBurn's GitHub page |
 
 ## Settings
 

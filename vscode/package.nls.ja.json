@@ -8,6 +8,7 @@
   "command.openOptimize": "最適化を開く",
   "command.copySummary": "概要をコピー",
   "command.openSettings": "設定を開く",
+  "command.starOnGitHub": "GitHubでスターをつける",
   "view.summary": "概要",
   "config.workspaceOnly": "ダッシュボードをこのワークスペースのプロジェクトに絞って開きます。ダッシュボードの範囲メニューまたはエディターのタイトルバーから、すべてのプロジェクトに切り替えられます。",
   "config.period.today": "今日",

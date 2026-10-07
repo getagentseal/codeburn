@@ -22,7 +22,7 @@ export type ForwardedMethod = typeof FORWARDED_METHODS[number]
 /** Webview → host. */
 export type WebviewMessage =
   | { type: 'invoke'; id: number; channel: string; args: unknown[] }
-  | { type: 'action'; name: 'openDashboard' | 'openSection' | 'refresh' | 'openSettings' | 'setScope'; arg?: string }
+  | { type: 'action'; name: 'openDashboard' | 'openSection' | 'refresh' | 'openSettings' | 'setScope' | 'star' | 'dismissStar'; arg?: string }
 
 /** Host → webview. */
 export type HostMessage =

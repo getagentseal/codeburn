@@ -8,6 +8,7 @@
   "command.openOptimize": "Open Optimize",
   "command.copySummary": "Copy Summary",
   "command.openSettings": "Open Settings",
+  "command.starOnGitHub": "Star on GitHub",
   "view.summary": "Summary",
   "config.workspaceOnly": "Open the dashboard scoped to this workspace's projects. Switch to all projects from the dashboard's scope menu or the editor title bar.",
   "config.period.today": "Today",

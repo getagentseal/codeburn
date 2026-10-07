@@ -14,6 +14,7 @@ import { buildSummary, statusText, summaryText, tooltipMarkdown, type SidebarSta
 import { call, createRouter, type EditorActions } from './host'
 import { chooseRuntime, hostProbe, nodeCandidates, probeNode, type Runtime } from './runtime'
 import { QUOTA_PROVIDERS, readSettings, refreshIntervalMs, webviewSeed, type Settings } from './settings'
+import { STAR_URL, finishStar, recordFirstSeen, showStar } from './star'
 import { webviewHtml } from './webviewHtml'
 import { scopeFilter, workspaceScope, type WorkspaceScope } from './workspace'
 
@@ -113,6 +114,7 @@ class Controller {
     // polling, so let its child go sooner than the desktop's 15 minutes.
     process.env.CODEBURN_SERVE_IDLE_MS = '300000'
     this.applyRuntime()
+    recordFirstSeen(context.globalState)
     const stateDir = context.globalStorageUri.fsPath
     reapOrphans(stateDir)
     startServe(join(stateDir, `serve-${process.pid}.pid`))
@@ -263,6 +265,7 @@ class Controller {
       summary: this.summary,
       workspaceLabel: this.scope.label,
       runtimeNote: this.runtimeNote(),
+      star: showStar(this.context.globalState),
     }
     void this.sidebar.webview.postMessage({ type: 'summary', state } satisfies HostMessage)
   }
@@ -275,6 +278,8 @@ class Controller {
     } else if (message.name === 'openDashboard') this.openDashboard()
     else if (message.name === 'openSection' && message.arg === 'optimize') this.openDashboard({ section: 'optimize' })
     else if (message.name === 'openSettings') void this.openSettings()
+    else if (message.name === 'star') void this.starOnGitHub()
+    else if (message.name === 'dismissStar') void finishStar(this.context.globalState).then(() => this.renderSidebar())
   }
 
   // ── Dashboard ───────────────────────────────────────────────────────────
@@ -353,6 +358,12 @@ class Controller {
     })
   }
 
+  private async starOnGitHub(): Promise<void> {
+    await vscode.env.openExternal(vscode.Uri.parse(STAR_URL))
+    await finishStar(this.context.globalState)
+    this.renderSidebar()
+  }
+
   // ── Settings and folders ────────────────────────────────────────────────
 
   private openSettings(setting = ''): Promise<void> {
@@ -401,6 +412,7 @@ class Controller {
     register('codeburn.showAllProjects', () => this.openDashboard(undefined, false))
     register('codeburn.openOptimize', () => this.openDashboard({ section: 'optimize' }))
     register('codeburn.openSettings', () => this.openSettings())
+    register('codeburn.starOnGitHub', () => this.starOnGitHub())
     register('codeburn.copySummary', async () => {
       if (!this.summary) { void vscode.window.showInformationMessage(t('ide.copy.empty')); return }
       await vscode.env.clipboard.writeText(summaryText(this.summary))

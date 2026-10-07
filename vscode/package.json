@@ -98,6 +98,12 @@
         "title": "%command.openSettings%",
         "category": "CodeBurn",
         "icon": "$(settings-gear)"
+      },
+      {
+        "command": "codeburn.starOnGitHub",
+        "title": "%command.starOnGitHub%",
+        "category": "CodeBurn",
+        "icon": "$(star-empty)"
       }
     ],
     "viewsContainers": {

@@ -6,7 +6,7 @@ const vscode = require('vscode')
 
 const COMMANDS = [
   'codeburn.openDashboard', 'codeburn.refresh', 'codeburn.showToday', 'codeburn.showWorkspace',
-  'codeburn.showAllProjects', 'codeburn.openOptimize', 'codeburn.copySummary', 'codeburn.openSettings',
+  'codeburn.showAllProjects', 'codeburn.openOptimize', 'codeburn.copySummary', 'codeburn.openSettings', 'codeburn.starOnGitHub',
 ]
 
 function dashboardTabs() {

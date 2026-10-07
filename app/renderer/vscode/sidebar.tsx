@@ -28,7 +28,7 @@ function useSidebarState(): SidebarState {
   return state
 }
 
-function act(name: 'openDashboard' | 'openSection' | 'refresh' | 'openSettings', arg?: string) {
+function act(name: 'openDashboard' | 'openSection' | 'refresh' | 'openSettings' | 'star' | 'dismissStar', arg?: string) {
   api.postMessage({ type: 'action', name, arg })
 }
 
@@ -137,6 +137,12 @@ function SidebarApp() {
         <button type="button" className="cbs-btn" onClick={() => act('refresh')} disabled={busy}>{t('shell.action.refresh')}</button>
         {summary && <span className="cbs-asof" aria-live="polite">{busy ? t('ide.status.loading') : asOfLabel(summary.at)}</span>}
       </footer>
+      {state.star && (
+        <p className="cbs-star">
+          <span>{t('ide.star.prompt')} <button type="button" className="cbs-link" onClick={() => act('star')}>{t('ide.star.cta')}</button></span>
+          <button type="button" className="cbs-x" onClick={() => act('dismissStar')} title={t('ide.star.hide')} aria-label={t('ide.star.hide')}>×</button>
+        </p>
+      )}
     </main>
   )
 }

@@ -8,6 +8,7 @@
   "command.openOptimize": "開啟最佳化",
   "command.copySummary": "複製摘要",
   "command.openSettings": "開啟設定",
+  "command.starOnGitHub": "在 GitHub 上點個 Star",
   "view.summary": "摘要",
   "config.workspaceOnly": "開啟儀表板時只顯示此工作區的專案。可在儀表板的範圍選單或編輯器標題列切換到所有專案。",
   "config.period.today": "今日",

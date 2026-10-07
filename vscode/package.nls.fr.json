@@ -8,6 +8,7 @@
   "command.openOptimize": "Ouvrir Optimiser",
   "command.copySummary": "Copier le résumé",
   "command.openSettings": "Ouvrir les paramètres",
+  "command.starOnGitHub": "Mettre une étoile sur GitHub",
   "view.summary": "Résumé",
   "config.workspaceOnly": "Ouvrir le tableau de bord limité aux projets de cet espace de travail. Passez à tous les projets depuis le menu de périmètre du tableau de bord ou la barre de titre de l'éditeur.",
   "config.period.today": "Aujourd'hui",

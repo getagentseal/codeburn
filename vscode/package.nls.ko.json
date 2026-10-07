@@ -8,6 +8,7 @@
   "command.openOptimize": "최적화 열기",
   "command.copySummary": "요약 복사",
   "command.openSettings": "설정 열기",
+  "command.starOnGitHub": "GitHub에서 스타 누르기",
   "view.summary": "요약",
   "config.workspaceOnly": "대시보드를 이 워크스페이스의 프로젝트로 범위를 좁혀 엽니다. 대시보드의 범위 메뉴나 편집기 제목 표시줄에서 모든 프로젝트로 전환할 수 있습니다.",
   "config.period.today": "오늘",

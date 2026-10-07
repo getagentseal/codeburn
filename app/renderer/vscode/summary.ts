@@ -169,4 +169,6 @@ export type SidebarState = {
   workspaceLabel: string | null
   /** Set when the CLI runs on the editor's own, too-old Node. */
   runtimeNote: string | null
+  /** The star line at the bottom, once the extension has seen real use. */
+  star?: boolean
 }
