@@ -110,6 +110,7 @@
 "Enter an API key or token below, then press Save & Connect." = "Entrez une clé API ou un jeton ci-dessous, puis appuyez sur Enregistrer et connecter.";
 "Sign in to %@ in a supported browser, then click Retry." = "Connectez-vous à %@ dans un navigateur pris en charge, puis cliquez sur Réessayer.";
 "Sign in with the %@ app or CLI, then click Retry." = "Connectez-vous via l'app ou la CLI %@, puis cliquez sur Réessayer.";
+"Sign in with Cline, or enter a ClinePass API key below, then click Retry." = "Connectez-vous avec Cline, ou entrez une clé API ClinePass ci-dessous, puis cliquez sur Réessayer.";
 "Complete %@ OAuth, then click Retry." = "Terminez l'authentification OAuth %@, puis cliquez sur Réessayer.";
 "Start the local %@ service, then click Retry." = "Démarrez le service local %@, puis cliquez sur Réessayer.";
 "Enter the required API or cloud credentials below, then press Save & Connect." = "Entrez les identifiants API ou cloud requis ci-dessous, puis appuyez sur Enregistrer et connecter.";

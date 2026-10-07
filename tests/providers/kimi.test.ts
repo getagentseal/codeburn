@@ -125,6 +125,32 @@ describe('Kimi provider', () => {
     expect(calls[0]!.costUSD).toBeGreaterThan(0)
   })
 
+  it('prices kimi-for-coding by call date', async () => {
+    const wirePath = await writeSession('/Users/test/work/app', 'sess-k28', [
+      record(1789084799, 'StatusUpdate', {
+        message_id: 'before',
+        model_name: 'kimi-for-coding',
+        token_usage: { input_other: 1_000_000, output: 1_000_000 },
+      }),
+      record(1789084800, 'StatusUpdate', {
+        message_id: 'from',
+        model_name: 'kimi-for-coding',
+        token_usage: { input_other: 1_000_000, output: 1_000_000 },
+      }),
+      record(1777593600, 'StatusUpdate', {
+        message_id: 'k26',
+        model_name: 'kimi-for-coding',
+        token_usage: { input_other: 1_000_000, output: 0 },
+      }),
+    ])
+
+    const calls = await collect(createKimiProvider(tmpDir), wirePath)
+
+    expect(calls[0]!.costUSD).toBeCloseTo(4.95)
+    expect(calls[1]!.costUSD).toBeCloseTo(4.95)
+    expect(calls[2]!.costUSD).toBeCloseTo(0.95)
+  })
+
   it('uses content parts, model payload overrides, and message-id deduplication', async () => {
     process.env.KIMI_MODEL_NAME = 'kimi-k2-thinking'
     const wirePath = await writeSession('/Users/test/work/app', 'sess-2', [

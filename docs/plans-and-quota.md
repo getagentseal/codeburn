@@ -7,6 +7,7 @@ codeburn plan set claude-max                                  # $200/month
 codeburn plan set claude-pro                                  # $20/month
 codeburn plan set cursor-pro                                  # $20/month
 codeburn plan set copilot-pro                                 # 1500 AI Credits ($15 equivalent)
+codeburn plan set google-ai-pro                               # $19.99/month, Antigravity usage
 codeburn plan set custom --monthly-usd 200 --provider codex   # ChatGPT Pro-style custom plan
 codeburn plan set custom --credits 20000 --provider copilot   # org Copilot allotment
 codeburn plan reset --provider codex                          # remove one provider plan
@@ -15,7 +16,7 @@ codeburn plan                                                 # show configured 
 codeburn plan reset                                           # remove plan config
 ```
 
-Subscription tracking for Claude Pro, Claude Max, Cursor Pro, Copilot (AI credits), and custom provider plans. Plans are stored per provider, so you can track Claude and Codex/Cursor subscriptions at the same time; the dashboard shows one overage line per active provider plan. A legacy/custom `all` plan remains a single aggregate plan and is replaced when you add a provider-specific plan, avoiding double-counted overage rows. Existing single-plan config is still read as a fallback. USD presets use publicly stated plan prices (as of April 2026). Copilot presets use official individual AI-credit allotments (Pro 1,500 / Pro+ 7,000 / Max 20,000; fetched 2026-08-23) — not the $10 / $39 / $100 sticker prices — and spend is `total_nano_aiu / 1e9`, never token-priced USD.
+Subscription tracking for Claude Pro, Claude Max, Cursor Pro, Copilot (AI credits), and custom provider plans. Plans are stored per provider, so you can track Claude and Codex/Cursor subscriptions at the same time; the dashboard shows one overage line per active provider plan. A legacy/custom `all` plan remains a single aggregate plan and is replaced when you add a provider-specific plan, avoiding double-counted overage rows. Existing single-plan config is still read as a fallback. USD presets use publicly stated plan prices (as of April 2026). Copilot presets use official individual AI-credit allotments (Pro 1,500 / Pro+ 7,000 / Max 20,000; fetched 2026-08-23) — not the $10 / $39 / $100 sticker prices — and spend is `total_nano_aiu / 1e9`, never token-priced USD. Google presets (`google-ai-pro` $19.99, `google-ai-ultra-5x` $99.99, `google-ai-ultra-20x` $199.99; US prices fetched 2026-10-07) count Antigravity usage only, since Gemini CLI no longer signs in with these plans.
 
 ## Provider quota
 

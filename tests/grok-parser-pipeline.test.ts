@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdir, rm, writeFile } from 'fs/promises'
+import { appendFile, mkdir, rm, writeFile } from 'fs/promises'
 import { join } from 'path'
 
 import { calculateCost } from '../src/models.js'
@@ -275,5 +275,36 @@ describe('Grok parser through the session-cache pipeline', () => {
     clearSessionCache()
     const warmCall = (await parseGrokSessions())[0]!.turns[0]!.assistantCalls[0]!
     expect(warmCall.costUSD).toBeCloseTo(expected, 12)
+  })
+
+  it('reads a logged session from the log, then from its dir once the log no longer holds it', async () => {
+    const uuid = '019edf9c-0000-7000-8000-000000000107'
+    await writeSession(usage({ input: 1000, output: 100 }), uuid)
+    const dir = join(GROK_HOME, 'sessions', '%2FUsers%2Ftest%2Fgrok-pipeline', uuid)
+    await appendFile(join(dir, 'updates.jsonl'), JSON.stringify({
+      method: 'session/update',
+      params: { sessionId: uuid, update: { sessionUpdate: 'tool_call', title: 'run_terminal_command', rawInput: { command: 'git status' } } },
+    }) + '\n')
+    const logPath = join(GROK_HOME, 'logs', 'unified.jsonl')
+    await mkdir(join(GROK_HOME, 'logs'), { recursive: true })
+    const inference = (ts: string) => JSON.stringify({
+      ts, pid: 1, msg: 'shell.turn.inference_done', sid: uuid,
+      ctx: { loop_index: 1, prompt_tokens: 500, cached_prompt_tokens: 0, completion_tokens: 50, reasoning_tokens: 0 },
+    })
+    await writeFile(logPath, [inference('2026-08-17T09:01:00.000Z'), inference('2026-08-17T09:02:00.000Z')].join('\n') + '\n')
+
+    const logged = (await parseGrokSessions())[0]!
+    const calls = logged.turns.flatMap(turn => turn.assistantCalls)
+    expect(calls.map(call => call.deduplicationKey.startsWith('grok:unified:'))).toEqual([true, true])
+    expect(logged.turns[0]!.userMessage).toBe('pipeline regression')
+    expect(calls[0]!.bashCommands).toEqual(['git'])
+    expect(calls[1]!.tools).toEqual([])
+    expect(calls[0]!.isEstimated).toBeFalsy()
+
+    await writeFile(logPath, JSON.stringify({ ts: '2026-08-18T00:00:00.000Z', pid: 2, msg: 'AuthManager::new' }) + '\n')
+    clearSessionCache()
+    const rotated = (await parseGrokSessions())[0]!
+    expect(rotated.apiCalls).toBe(1)
+    expect(rotated.turns[0]!.assistantCalls[0]!.deduplicationKey).not.toContain('unified')
   })
 })

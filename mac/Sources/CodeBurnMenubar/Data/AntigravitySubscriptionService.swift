@@ -17,8 +17,7 @@ struct AntigravityUsage: Sendable, Equatable {
     /// Per-group/per-model windows, most-constrained first.
     let details: [Window]
     var primary: Window? { details.first }
-    /// Plan label from the legacy GetUserStatus payload (summary payloads
-    /// carry none).
+    /// Plan label from GetUserStatus (summary payloads carry none).
     let plan: String?
     let fetchedAt: Date
 }
@@ -31,7 +30,7 @@ struct AntigravityUsage: Sendable, Equatable {
 ///
 /// Endpoints (loopback only, Connect-RPC JSON):
 /// - POST https://127.0.0.1:<port>/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary
-///     (preferred; falls back to)
+///     (preferred windows; the tier and fallback windows come from)
 /// - POST https://127.0.0.1:<port>/exa.language_server_pb.LanguageServerService/GetUserStatus
 ///
 /// Discovery uses `ps` to find candidate processes (app language
@@ -274,26 +273,21 @@ enum AntigravitySubscriptionService {
         return windows
     }
 
-    /// planName may sit at the top level, under userStatus, or (legacy) as
-    /// account_plan; the first non-blank string wins.
+    /// userTier.name is the Google subscription; older servers put planName at
+    /// the top level, under userStatus, or as account_plan. The first non-blank
+    /// string wins. planStatus.planInfo is skipped: it says "Pro" even on the
+    /// free tier.
     static func planFromStatus(_ body: Any?) -> String? {
         guard let data = body as? [String: Any] else { return nil }
         let response = data["response"] as? [String: Any]
         let userStatus = (data["userStatus"] as? [String: Any])
             ?? (response?["userStatus"] as? [String: Any])
-        let planStatus = userStatus?["planStatus"] as? [String: Any]
-        let planInfo = planStatus?["planInfo"] as? [String: Any]
         let userTier = userStatus?["userTier"] as? [String: Any]
         let candidates = [
+            userTier?["name"],
             data["planName"],
             response?["planName"],
             userStatus?["planName"],
-            userTier?["name"],
-            planInfo?["planDisplayName"],
-            planInfo?["displayName"],
-            planInfo?["planName"],
-            planInfo?["productName"],
-            planInfo?["planShortName"],
             data["account_plan"],
         ]
         return firstNonBlankString(candidates)
@@ -365,15 +359,17 @@ enum AntigravitySubscriptionService {
     ) async -> (windows: [AntigravityUsage.Window], plan: String?)? {
         let body = "{}"
         for tls in [true, false] {
+            var summaryWindows: [AntigravityUsage.Window] = []
             if let summary = await deps.request(port, tls, summaryPath, body, csrf), summary.status == 200 {
-                let windows = decodeSummary(parseJson(summary.text))
-                if !windows.isEmpty { return (windows, nil) }
+                summaryWindows = decodeSummary(parseJson(summary.text))
             }
+            // The summary payload carries no tier, so GetUserStatus is asked either way.
+            var parsed: Any?
             if let status = await deps.request(port, tls, statusPath, body, csrf), status.status == 200 {
-                let parsed = parseJson(status.text)
-                let windows = decodeStatus(parsed)
-                if !windows.isEmpty { return (windows, planFromStatus(parsed)) }
+                parsed = parseJson(status.text)
             }
+            let windows = summaryWindows.isEmpty ? decodeStatus(parsed) : summaryWindows
+            if !windows.isEmpty { return (windows, planFromStatus(parsed)) }
         }
         return nil
     }

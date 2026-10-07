@@ -3,7 +3,7 @@ import { homedir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
 
 import { extractBashCommands } from '../bash-utils.js'
-import { calculateCost } from '../models.js'
+import { calculateCost, pricingModelAt } from '../models.js'
 import { FS_SCAN_CONCURRENCY, mapWithConcurrency } from '../fs-utils.js'
 import type { ParsedProviderCall, ProbeRoot, Provider, SessionParser, SessionSource } from './types.js'
 
@@ -377,7 +377,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
           reasoningTokens: 0,
           webSearchRequests: 0,
           costUSD: calculateCost(
-            realModel,
+            pricingModelAt(realModel, timestamp),
             inputTokens,
             outputTokens,
             cacheCreationInputTokens,

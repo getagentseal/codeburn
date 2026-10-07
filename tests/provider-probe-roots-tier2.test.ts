@@ -79,9 +79,11 @@ describe('probeRoots mirrors discovery resolution (Tier 2, batch 1)', () => {
   it('grok reports exactly its resolved sessions dir', async () => {
     expect(await createGrokProvider('/tmp/grok-a').probeRoots!()).toEqual([
       { path: '/tmp/grok-a', label: 'sessions' },
+      { path: join('/tmp', 'logs', 'unified.jsonl'), label: 'unified log' },
     ])
     expect(await createGrokProvider().probeRoots!()).toEqual([
       { path: join(homedir(), '.grok', 'sessions'), label: 'sessions' },
+      { path: join(homedir(), '.grok', 'logs', 'unified.jsonl'), label: 'unified log' },
     ])
   })
 

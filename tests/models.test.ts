@@ -30,6 +30,7 @@ import {
   snapshotPricingState,
   restorePricingState,
   pricingModelAt,
+  isStandInPricedAt,
 } from '../src/models.js'
 import { getDailyCacheConfigHash } from '../src/usage-aggregator.js'
 import snapshotData from '../src/data/litellm-snapshot.json' with { type: 'json' }
@@ -572,7 +573,7 @@ describe('resolveCanonicalModelId', () => {
     expect(resolveCanonicalModelId('gpt-5-fast')).toBe('gpt-5')
     expect(resolveCanonicalModelId('gpt-5-untracked-xyz')).toBe('gpt-5-untracked-xyz')
     expect(resolveCanonicalModelId('claude-opus-4.6')).toBe('claude-opus-4-6')
-    expect(resolveCanonicalModelId('kimi-code')).toBe('kimi-k2-thinking')
+    expect(resolveCanonicalModelId('kimi-code')).toBe('kimi-k2.7-code')
     expect(resolveCanonicalModelId('cline-pass/kimi-k3')).toBe('kimi-k3')
     expect(resolveCanonicalModelId('orcarouter/auto')).not.toBe(resolveCanonicalModelId('claude-sonnet-4-5'))
     expect(resolveCanonicalModelId('orcarouter/fusion')).toBe(resolveCanonicalModelId('openai/gpt-oss-120b'))
@@ -1196,6 +1197,79 @@ describe('Cursor model variants resolve to pricing', () => {
   })
 })
 
+describe('Kimi Code moving alias', () => {
+  const rates = (model: string) => {
+    const c = getModelCosts(model)!
+    return [c.inputCostPerToken * 1e6, c.cacheReadCostPerToken * 1e6, c.outputCostPerToken * 1e6].map(v => +v.toFixed(4))
+  }
+
+  it('prices kimi-for-coding by the model it served on the call date', () => {
+    expect(pricingModelAt('kimi-for-coding', '2026-01-26T23:59:59.999Z')).toBe('kimi-k2-thinking')
+    expect(pricingModelAt('kimi-for-coding', '2026-01-27T00:00:00.000Z')).toBe('kimi-k2.5')
+    expect(pricingModelAt('kimi-for-coding', '2026-04-12T23:59:59.999Z')).toBe('kimi-k2.5')
+    expect(pricingModelAt('kimi-for-coding', '2026-04-13T00:00:00.000Z')).toBe('kimi-k2.6')
+    expect(pricingModelAt('kimi-for-coding', '2026-06-11T23:59:59.999Z')).toBe('kimi-k2.6')
+    expect(pricingModelAt('kimi-for-coding', '2026-06-12T00:00:00.000Z')).toBe('kimi-for-coding')
+    expect(pricingModelAt('kimi-for-coding', '2026-09-27T10:00:00Z')).toBe('kimi-for-coding')
+    expect(pricingModelAt('kimi-code', '2026-03-01T00:00:00Z')).toBe('kimi-k2.5')
+    expect(pricingModelAt('kimi-for-coding', undefined)).toBe('kimi-for-coding')
+    expect(pricingModelAt('kimi-for-coding', 'not a date')).toBe('kimi-for-coding')
+    expect(pricingModelAt('kimi-for-coding-highspeed', '2026-03-01T00:00:00Z')).toBe('kimi-for-coding-highspeed')
+    expect(pricingModelAt('k3', '2026-03-01T00:00:00Z')).toBe('k3')
+  })
+
+  it('resolves each period to Moonshot list prices ($/M input, cache hit, output)', () => {
+    expect(rates('kimi-k2.5')).toEqual([0.6, 0.1, 3])
+    expect(rates('kimi-k2.6')).toEqual([0.95, 0.16, 4])
+    expect(rates('kimi-for-coding')).toEqual([0.95, 0.19, 4])
+    expect(rates('kimi-code')).toEqual([0.95, 0.19, 4])
+    expect(rates('kimi-for-coding-highspeed')).toEqual([1.9, 0.38, 8])
+    expect(rates('k3')).toEqual([3, 0.3, 15])
+  })
+
+  it('treats highspeed as priced, not a flat-rate SKU', () => {
+    expect(isFlatRateModel('kimi-for-coding-highspeed')).toBe(false)
+    expect(calculateCost('kimi-for-coding-highspeed', 1_000_000, 1_000_000, 0, 1_000_000, 0)).toBeCloseTo(10.28)
+  })
+
+  it('marks only the K2.8 Preview period (from 11 Sep 2026) as stand-in priced', () => {
+    expect(isStandInPricedAt('kimi-for-coding', '2026-09-10T23:59:59.999Z')).toBe(false)
+    expect(isStandInPricedAt('kimi-for-coding', '2026-09-11T00:00:00.000Z')).toBe(true)
+    expect(isStandInPricedAt('kimi-code', '2026-09-27T10:00:00Z')).toBe(true)
+    expect(isStandInPricedAt('kimi-for-coding', '2026-07-01T00:00:00Z')).toBe(false)
+    expect(isStandInPricedAt('kimi-for-coding', '2026-03-01T00:00:00Z')).toBe(false)
+    expect(isStandInPricedAt('kimi-for-coding', undefined)).toBe(true)
+    expect(isStandInPricedAt('kimi-for-coding-highspeed', '2026-09-27T10:00:00Z')).toBe(false)
+    expect(isStandInPricedAt('k3', '2026-09-27T10:00:00Z')).toBe(false)
+    setModelAliases({ 'kimi-for-coding': 'kimi-k3' })
+    try {
+      expect(isStandInPricedAt('kimi-for-coding', '2026-09-27T10:00:00Z')).toBe(false)
+    } finally {
+      setModelAliases({})
+    }
+  })
+
+  it('keeps the alias name for display', () => {
+    expect(getShortModelName('kimi-for-coding')).toBe('Kimi for Coding')
+    expect(getShortModelName('kimi-for-coding-highspeed')).toBe('Kimi for Coding HighSpeed')
+  })
+
+  it('lets a user alias or price override win over the date rule', () => {
+    setModelAliases({ 'kimi-for-coding': 'kimi-k3' })
+    try {
+      expect(pricingModelAt('kimi-for-coding', '2026-03-01T00:00:00Z')).toBe('kimi-for-coding')
+    } finally {
+      setModelAliases({})
+    }
+    setPriceOverrides({ 'kimi-for-coding': { input: 1, output: 2 } })
+    try {
+      expect(pricingModelAt('kimi-for-coding', '2026-03-01T00:00:00Z')).toBe('kimi-for-coding')
+    } finally {
+      setPriceOverrides({})
+    }
+  })
+})
+
 describe('Codex activity ids (#1047)', () => {
   it('keeps the activity label instead of collapsing to the underlying model name', () => {
     expect(getShortModelName('codex-auto-review')).toBe('Codex Auto Review')
@@ -1786,8 +1860,6 @@ describe('findUnpricedModels', () => {
       { model: 'auto-genius', calls: 898, cost: 0, tokens: 35_300_000 },
       { model: 'cline-pass/auto-genius', calls: 4, cost: 0, tokens: 33_900 },
       { model: 'auto', calls: 449, cost: 0, tokens: 17_700_000 },
-      { model: 'kimi-for-coding-highspeed', calls: 12, cost: 0, tokens: 3_400_000 },
-      { model: 'moonshot/kimi-for-coding-highspeed', calls: 2, cost: 0, tokens: 80_000 },
       { model: 'grok-composer-2.5-fast', calls: 10, cost: 0, tokens: 1_900_000 },
       { model: 'Grok Composer 2.5 Fast', calls: 10, cost: 0, tokens: 1_900_000 },
       { model: 'Warp Auto (efficient)', calls: 3, cost: 0, tokens: 50_000 },
@@ -1827,7 +1899,7 @@ describe('findUnpricedModels', () => {
     expect(isExpectedFreeModel('warp-auto-efficient')).toBe(false)
     expect(isExpectedFreeModel('auto-genius')).toBe(true)
     expect(isExpectedFreeModel('auto')).toBe(true)
-    expect(isExpectedFreeModel('kimi-for-coding-highspeed')).toBe(true)
+    expect(isExpectedFreeModel('kimi-for-coding-highspeed')).toBe(false)
     expect(isExpectedFreeModel('warp')).toBe(false)
     expect(isExpectedFreeModel('codex-auto-review')).toBe(false)
     expect(isExpectedFreeModel('zz-mystery-paid-model-999')).toBe(false)

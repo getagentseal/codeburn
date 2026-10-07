@@ -4,6 +4,7 @@ import { join } from 'path'
 import { tmpdir } from 'os'
 
 import { clineCli, createClineCliProvider, getClineCliSessionsDir } from '../../src/providers/cline-cli.js'
+import { calculateCost } from '../../src/models.js'
 import type { ParsedProviderCall } from '../../src/providers/types.js'
 
 let tmpDir: string
@@ -211,7 +212,7 @@ describe('cline-cli provider - parsing', () => {
     const calls = await collect(tmpDir)
 
     expect(calls).toHaveLength(2)
-    expect(calls.map(c => c.inputTokens)).toEqual([100, 200])
+    expect(calls.map(c => c.inputTokens)).toEqual([93, 200])
     expect(calls.map(c => c.outputTokens)).toEqual([10, 20])
     expect(calls[0]?.cacheReadInputTokens).toBe(5)
     expect(calls[0]?.cacheCreationInputTokens).toBe(2)
@@ -328,6 +329,22 @@ describe('cline-cli provider - parsing', () => {
     expect(call?.costUSD).toBeGreaterThan(0)
   })
 
+  it('takes cache reads out of the cache-inclusive input before estimating', async () => {
+    await writeSession(tmpDir, 'sess-a', {
+      messages: [{
+        role: 'assistant', text: 'a', model: 'cline-pass/deepseek-v4.1-flash',
+        metrics: { inputTokens: 14689, outputTokens: 220, cacheReadTokens: 11136, cacheWriteTokens: 0 },
+      }],
+    })
+
+    const [call] = await collect(tmpDir)
+
+    expect(call?.inputTokens).toBe(3553)
+    expect(call?.cacheReadInputTokens).toBe(11136)
+    expect(call?.costUSD).toBeCloseTo(calculateCost('cline-pass/deepseek-v4.1-flash', 3553, 220, 0, 11136, 0), 12)
+    expect(call?.costUSD).toBeGreaterThan(0)
+  })
+
   it('keeps a metered $0 cost reported instead of re-estimating it', async () => {
     await writeSession(tmpDir, 'sess-a', {
       messages: [{ role: 'assistant', text: 'a', metrics: { inputTokens: 1000, outputTokens: 100, cost: 0 } }],
@@ -428,7 +445,7 @@ describe('cline-cli provider - rollup fallback', () => {
     const calls = await collect(tmpDir)
 
     expect(calls).toHaveLength(1)
-    expect(calls[0]?.inputTokens).toBe(5483)
+    expect(calls[0]?.inputTokens).toBe(5433)
     expect(calls[0]?.outputTokens).toBe(133)
     expect(calls[0]?.cacheReadInputTokens).toBe(50)
     expect(calls[0]?.costUSD).toBeCloseTo(0.0081984, 7)
