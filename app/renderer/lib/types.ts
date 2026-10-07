@@ -255,6 +255,8 @@ export type MenubarPayload = {
       sessions: number
       avgCostPerSession?: number
       sessionCountBasis?: 'identity' | 'partial'
+      /** Clones and worktrees folded into this repository row, when several. */
+      checkouts?: Array<{ id: string; cost: number }>
       sessionDetails: Array<{
         cost: number
         savingsUSD: number
@@ -1226,7 +1228,7 @@ export type TrayPrefs = {
 
 export type ProjectFilter = { project: string[]; exclude: string[] }
 
-export type ProjectRow = { name: string; path: string; cost: number; sessions: number }
+export type ProjectRow = { name: string; path: string; cost: number; sessions: number; checkouts?: Array<{ path: string; cost: number }> }
 
 export type ProjectsReport = { projects: ProjectRow[] }
 

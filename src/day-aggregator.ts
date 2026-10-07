@@ -2,6 +2,7 @@ import { projectDayKey, type DailyEntry, type ProjectDayStats, type ProviderDayS
 import type { PeriodData } from './menubar-json.js'
 import { CATEGORY_LABELS, type ProjectSummary, type TaskCategory } from './types.js'
 import { behavioralCallWeight, isBehavioralTurn } from './behavioral-weight.js'
+import { projectOriginKey } from './git-origin.js'
 import { billableOutputTokens, modelRowKey } from './models.js'
 
 function emptyEntry(date: string): DailyEntry {
@@ -72,7 +73,8 @@ export function aggregateProjectsIntoDays(projects: ProjectSummary[], dateKeyFn:
     // key instead of mutating the prototype link.
     let p = Object.hasOwn(projects, key) ? projects[key] : undefined
     if (!p) {
-      p = { cost: 0, calls: 0, savingsUSD: 0, sessions: 0, ...(path ? { path } : {}) }
+      const originKey = projectOriginKey(path)
+      p = { cost: 0, calls: 0, savingsUSD: 0, sessions: 0, ...(path ? { path } : {}), ...(originKey ? { originKey } : {}) }
       Object.defineProperty(projects, key, { value: p, enumerable: true, writable: true, configurable: true })
     }
     return p

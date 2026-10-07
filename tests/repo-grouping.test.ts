@@ -1,0 +1,148 @@
+import { mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
+import { homedir, tmpdir } from 'node:os'
+import { join } from 'node:path'
+
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+
+import { projectDayIdentity, type DailyEntry } from '../src/daily-cache.js'
+import { aggregateProjectsIntoDays } from '../src/day-aggregator.js'
+import { __resetGitOriginCache, projectOriginKey, saveGitOrigins } from '../src/git-origin.js'
+import { filterProjectsByName, makeProjectFilter, setExactProjectPaths } from '../src/parser.js'
+import type { ProjectSummary, SessionSummary } from '../src/types.js'
+import { buildPayloadProjects } from '../src/usage-aggregator.js'
+
+let root: string
+const savedCacheDir = process.env['CODEBURN_CACHE_DIR']
+
+function repo(dir: string, origin: string): string {
+  mkdirSync(join(dir, '.git'), { recursive: true })
+  writeFileSync(join(dir, '.git', 'config'), `[core]\n\tbare = false\n[remote "origin"]\n\turl = ${origin}\n`)
+  return dir
+}
+
+function worktree(main: string, dir: string): string {
+  const admin = join(main, '.git', 'worktrees', 'wt')
+  mkdirSync(admin, { recursive: true })
+  writeFileSync(join(admin, 'commondir'), '../..\n')
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(join(dir, '.git'), `gitdir: ${admin}\n`)
+  return dir
+}
+
+function session(id: string, project: string, cost: number): SessionSummary {
+  return {
+    sessionId: id,
+    project,
+    firstTimestamp: '2026-09-07T12:00:00.000Z',
+    lastTimestamp: '2026-09-07T12:01:00.000Z',
+    totalCostUSD: cost,
+    totalSavingsUSD: 0,
+    totalInputTokens: 0,
+    totalOutputTokens: 0,
+    totalReasoningTokens: 0,
+    totalCacheReadTokens: 0,
+    totalCacheWriteTokens: 0,
+    apiCalls: 1,
+    turns: [],
+    modelBreakdown: {},
+    toolBreakdown: {},
+    mcpBreakdown: {},
+    bashBreakdown: {},
+    categoryBreakdown: {},
+    skillBreakdown: {},
+    subagentBreakdown: {},
+  } as SessionSummary
+}
+
+function live(projectPath: string, cost: number): ProjectSummary {
+  const name = projectPath.split('/').pop()!
+  return {
+    project: name,
+    projectPath,
+    sessions: [session(`s-${name}`, name, cost)],
+    totalCostUSD: cost,
+    totalSavingsUSD: 0,
+    totalApiCalls: 1,
+    totalProxiedCostUSD: 0,
+  }
+}
+
+beforeEach(() => {
+  root = mkdtempSync(join(tmpdir(), 'repo-grouping-'))
+  process.env['CODEBURN_CACHE_DIR'] = join(root, 'cache')
+  mkdirSync(join(root, 'cache'))
+  __resetGitOriginCache()
+  setExactProjectPaths(false)
+})
+
+afterEach(() => {
+  rmSync(root, { recursive: true, force: true })
+  if (savedCacheDir === undefined) delete process.env['CODEBURN_CACHE_DIR']
+  else process.env['CODEBURN_CACHE_DIR'] = savedCacheDir
+  __resetGitOriginCache()
+  setExactProjectPaths(false)
+})
+
+function fixtures() {
+  const a1 = repo(join(root, 'work', 'codeburn'), 'git@github.com:getagentseal/codeburn.git')
+  const a2 = repo(join(root, 'scratch', 'clone-7'), 'https://github.com/getagentseal/codeburn')
+  const awt = worktree(a1, join(root, 'scratch', 'review-wt'))
+  const other = repo(join(root, 'work', 'codeburn-app'), 'git@github.com:getagentseal/codeburn-app.git')
+  const plain = join(root, 'work', 'codeburn-marketing')
+  mkdirSync(plain, { recursive: true })
+  return { a1, a2, awt, other, plain }
+}
+
+describe('projects grouped by git repository', () => {
+  it('folds two clones and a worktree into one row and keeps everything else apart', () => {
+    const { a1, a2, awt, other, plain } = fixtures()
+    const rows = buildPayloadProjects([live(a1, 5), live(a2, 3), live(awt, 2), live(other, 4), live(plain, 1)], null, homedir())
+
+    expect(rows.map(r => [r.name, r.cost])).toEqual([['codeburn', 10], ['codeburn-app', 4], ['codeburn-marketing', 1]])
+    const group = rows[0]!
+    expect(group.path).toBe(a1)
+    expect(group.sessions).toBe(3)
+    expect(group.checkouts?.map(c => c.id).sort()).toEqual([a1, a2, awt].sort())
+    expect(rows[1]!.checkouts).toBeUndefined()
+    expect(rows[2]!.path).toBe(plain)
+    // Folding never moves money.
+    expect(rows.reduce((s, r) => s + r.cost, 0)).toBe(15)
+  })
+
+  it('keeps a deleted clone in its repository', () => {
+    const { a1, a2 } = fixtures()
+    const days = aggregateProjectsIntoDays([live(a2, 3)])
+    expect(Object.values(days[0]!.projects!)[0]!.originKey).toBe('github.com/getagentseal/codeburn')
+    saveGitOrigins()
+
+    __resetGitOriginCache()
+    rmSync(a2, { recursive: true, force: true })
+    expect(projectOriginKey(a2)).toBe('github.com/getagentseal/codeburn')
+
+    // The day entry carries the origin itself, so losing the record changes nothing.
+    unlinkSync(join(root, 'cache', 'git-origins.json'))
+    __resetGitOriginCache()
+    expect(projectOriginKey(a2)).toBeNull()
+    const cached: DailyEntry = days[0]!
+    // Fixture sessions have no turns, so give the day its spend by hand.
+    Object.values(cached.projects!)[0]!.cost = 3
+    const rows = buildPayloadProjects([live(a1, 5)], [cached], homedir())
+    expect(rows.map(r => [r.name, r.cost])).toEqual([['codeburn', 8]])
+
+    const [key, stats] = Object.entries(cached.projects!)[0]!
+    expect(makeProjectFilter([a1])(projectDayIdentity(key, stats))).toBe(true)
+  })
+
+  it('scopes a path inside one clone to the whole repository', () => {
+    const { a1, a2, awt, other, plain } = fixtures()
+    mkdirSync(join(a2, 'src'))
+    const projects = [live(a1, 5), live(a2, 3), live(awt, 2), live(other, 4), live(plain, 1)]
+
+    expect(filterProjectsByName(projects, [join(a2, 'src')]).map(p => p.projectPath).sort()).toEqual([a1, a2, awt].sort())
+    expect(filterProjectsByName(projects, [], [a1]).map(p => p.projectPath).sort()).toEqual([other, plain].sort())
+    expect(filterProjectsByName(projects, [plain]).map(p => p.projectPath)).toEqual([plain])
+
+    setExactProjectPaths(true)
+    expect(filterProjectsByName(projects, [a2]).map(p => p.projectPath)).toEqual([a2])
+  })
+})

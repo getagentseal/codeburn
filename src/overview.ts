@@ -15,6 +15,7 @@ import { normalizeAbsProjectPathKey } from './parser.js'
 import { dateKey } from './day-aggregator.js'
 import type { DailyEntry } from './daily-cache.js'
 import type { BudgetStatus, BudgetTier } from './budget.js'
+import { originRepoName, projectOriginKey } from './git-origin.js'
 
 // Display-only helpers. The shared formatters omit thousands separators and
 // abbreviate; here we show full, comma-grouped numbers so the tables read like
@@ -161,15 +162,16 @@ export function renderOverview(
   const byCat = new Map<string, { cost: number; turns: number }>()
   const byTool = new Map<string, number>()
   const byDay = new Map<string, { cost: number; tokens: number; providers: Set<string> }>()
-  const byProject = new Map<string, { cost: number; sessions: number; sample: ProjectSummary }>()
+  const byProject = new Map<string, { cost: number; sessions: number; sample: ProjectSummary; repo?: string }>()
 
   for (const p of projects) {
     cost += p.totalCostUSD
     savings += p.totalSavingsUSD
     calls += p.totalApiCalls
     sessions += p.sessions.length
-    const pkey = projectAggKey(p)
-    const pe = byProject.get(pkey) ?? { cost: 0, sessions: 0, sample: p }
+    const origin = projectOriginKey(p.projectPath)
+    const pkey = origin ? `origin:${origin}` : projectAggKey(p)
+    const pe = byProject.get(pkey) ?? { cost: 0, sessions: 0, sample: p, ...(origin ? { repo: originRepoName(origin) } : {}) }
     pe.cost += p.totalCostUSD
     pe.sessions += p.sessions.length
     byProject.set(pkey, pe)
@@ -369,7 +371,7 @@ export function renderOverview(
     out.push(heading('Top projects'))
     out.push(renderTable(c,
       [{ header: 'Project' }, { header: 'Cost', right: true }, { header: 'Sessions', right: true }],
-      projRows.map(([key, v]) => [disambiguatedProjectLabel(key, v.sample, basenameCounts), formatCost(v.cost), formatCount(v.sessions)]),
+      projRows.map(([key, v]) => [v.repo ?? disambiguatedProjectLabel(key, v.sample, basenameCounts), formatCost(v.cost), formatCount(v.sessions)]),
     ))
     out.push('')
   }

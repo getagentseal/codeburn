@@ -108,8 +108,8 @@ export function dayFilters(date: string, ...more: string[]): InvestigationFilter
 export function providerFilters(provider: string): InvestigationFilters {
   return { ...EMPTY_FILTERS, providers: [provider] }
 }
-export function projectFilters(project: string): InvestigationFilters {
-  return { ...EMPTY_FILTERS, projects: [project] }
+export function projectFilters(...projects: string[]): InvestigationFilters {
+  return { ...EMPTY_FILTERS, projects }
 }
 export function modelFilters(models: string[]): InvestigationFilters {
   return { ...EMPTY_FILTERS, models }

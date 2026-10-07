@@ -58,6 +58,7 @@ import { classifyWslCachePath, isWslUncPath, refreshWslHomes, wslMode } from './
 import { decideParseWorkers, parseFilesInOrder, ParseWorkerPool, type ClaudeWorkerParse, type ParseJob } from './parse-workers.js'
 import type { CodexFullParse } from './providers/codex.js'
 import { dateKey } from './day-aggregator.js'
+import { projectOriginKey, saveGitOrigins } from './git-origin.js'
 import { behavioralCallWeight, isBehavioralTurn } from './behavioral-weight.js'
 import { gatewayIncludedInTotals } from './config.js'
 import { coverageFor, cursorImportPath, dropImportCoveredCalls, loadCursorImport, replacedProviders } from './cursor-import.js'
@@ -4885,22 +4886,37 @@ function expandTilde(pattern: string): string {
 
 /// A pattern is normalized once and matched many times: the day cache runs the
 /// filter for every project of every day, and again per provider slice.
-type CompiledPattern = { rooted: true; anchor: string | null } | { rooted: false; needle: string }
+type CompiledPattern = { rooted: true; anchor: string | null; origin: string | null } | { rooted: false; needle: string }
 
-export type ProjectFilterTarget = { project: string; projectPath?: string }
+/// `originKey` is the repository a day entry recorded for its path; absent, it
+/// is looked up from the path.
+export type ProjectFilterTarget = { project: string; projectPath?: string; originKey?: string }
 
-function compile(patterns: readonly string[]): CompiledPattern[] {
-  return patterns.map(pattern => isRootedProjectPattern(pattern)
-    ? { rooted: true as const, anchor: normalizeAbsProjectPathKey(expandTilde(pattern)) }
-    : { rooted: false as const, needle: pattern.toLowerCase() })
+let exactProjectPaths = false
+
+/** `--exact-project`: a rooted pattern names its folder alone, not its repository. */
+export function setExactProjectPaths(exact: boolean): void {
+  exactProjectPaths = exact
 }
 
-/// An absolute path names ONE project, so it anchors on a segment boundary (the
-/// isProxiedPath rule): "/a/proj" takes "/a/proj/sub" but not "/a/proj-ui-kit".
+function compile(patterns: readonly string[]): CompiledPattern[] {
+  return patterns.map(pattern => {
+    if (!isRootedProjectPattern(pattern)) return { rooted: false as const, needle: pattern.toLowerCase() }
+    const path = expandTilde(pattern)
+    return { rooted: true as const, anchor: normalizeAbsProjectPathKey(path), origin: exactProjectPaths ? null : projectOriginKey(path) }
+  })
+}
+
+/// A path inside a git checkout names its whole repository: every clone and
+/// worktree sharing the `origin` remote, and nothing else, so the picker row and
+/// the headline it selects are the same set. Any other absolute path names ONE
+/// project, so it anchors on a segment boundary (the isProxiedPath rule):
+/// "/a/proj" takes "/a/proj/sub" but not "/a/proj-ui-kit".
 /// Both sides key through normalizeAbsProjectPathKey (Windows casefolds, POSIX
 /// does not, #1260), and rootedness alone picks the branch, so "/" names none.
 function hit(entry: ProjectFilterTarget, pattern: CompiledPattern, key: string | null): boolean {
   if (pattern.rooted) {
+    if (pattern.origin) return (entry.originKey ?? projectOriginKey(entry.projectPath)) === pattern.origin
     const anchor = pattern.anchor
     return anchor !== null && key !== null && (key === anchor || key.startsWith(anchor + '/'))
   }
@@ -6533,6 +6549,9 @@ async function runParseInner(
 
   const result = Array.from(mergedMap.values()).sort((a, b) => b.totalCostUSD - a.totalCostUSD)
   correlateCrossProviderPrSessions(result)
+  // Learn each checkout's repository while its folder still exists.
+  for (const p of result) projectOriginKey(p.projectPath)
+  if (!readOnly) saveGitOrigins()
   // A snapshot is an explicitly stale, source-unvalidated view. Publishing it
   // into either exact-key or burst reuse can suppress the reconciliation that
   // the mounted dashboard starts immediately afterward for the full TTL.

@@ -306,7 +306,11 @@ import type { DateRange, ProjectSummary } from './types.js'
 // label (e.g. every home-folder Claude session) to whichever project owned it.
 // Day and provider totals are unchanged, only the split inside them moves, so
 // no PENDING_REDERIVE_PROVIDER_VERSIONS entry is needed.
-export const DAILY_CACHE_VERSION = 68
+// v69: a day's project entry records the `origin` remote of its checkout, so
+// clones and worktrees of one repository still group once the folder is
+// deleted. Totals and the split are unchanged; surviving days re-derive to
+// pick it up, carried days stay as they were. (Number to be renumbered at merge.)
+export const DAILY_CACHE_VERSION = 69
 const MIN_SUPPORTED_VERSION = 28
 
 /// Providers whose per-day CALL COUNT means something different at
@@ -381,7 +385,7 @@ export type CategoryDayStats = { turns: number; cost: number; savingsUSD: number
 /// `path` is the project's filesystem path when known — it is what display
 /// layers derive a friendly name from once the sessions that carried the
 /// mapping are gone.
-export type ProjectDayStats = { cost: number; calls: number; savingsUSD: number; sessions: number; path?: string }
+export type ProjectDayStats = { cost: number; calls: number; savingsUSD: number; sessions: number; path?: string; originKey?: string }
 
 /// One project label can span several real paths (every Claude session started
 /// from the home folder shares `-Users-<name>`), so since v68 a day's project
@@ -396,7 +400,7 @@ export function projectDayKey(project: string, path?: string): string {
 
 export function projectDayIdentity(key: string, stats: ProjectDayStats): ProjectFilterTarget & { projectPath: string } {
   const sep = key.indexOf(PROJECT_KEY_SEP)
-  return { project: sep === -1 ? key : key.slice(0, sep), projectPath: stats.path ?? '' }
+  return { project: sep === -1 ? key : key.slice(0, sep), projectPath: stats.path ?? '', ...(stats.originKey ? { originKey: stats.originKey } : {}) }
 }
 
 export type ProviderDaySlice = {
@@ -596,6 +600,7 @@ function sanitizeProjects(raw: unknown): { projects?: DailyEntry['projects'] } {
       savingsUSD: num(p.savingsUSD),
       sessions: num(p.sessions),
       ...(typeof p.path === 'string' && p.path.length > 0 ? { path: p.path } : {}),
+      ...(typeof p.originKey === 'string' && p.originKey.length > 0 ? { originKey: p.originKey } : {}),
     })
   }
   return Object.keys(out).length > 0 ? { projects: out } : {}
@@ -975,6 +980,7 @@ function addSliceIntoDay(day: DailyEntry, provider: string, slice: ProviderDaySl
     acc.calls += num(p.calls)
     acc.savingsUSD += num(p.savingsUSD)
     if (!acc.path && typeof p.path === 'string') acc.path = p.path
+    if (!acc.originKey && typeof p.originKey === 'string') acc.originKey = p.originKey
     // Same session dedup as the slice-level sessions above: a placeholder's
     // project sessions were already counted into the day when the fresh day
     // was built, so only the excess is added.
@@ -1107,7 +1113,7 @@ function subtractProjectStats(base: ProjectDayStats, sub: ProjectDayStats): Proj
   const savingsUSD = Math.max(0, (base.savingsUSD ?? 0) - (sub.savingsUSD ?? 0))
   const sessions = Math.max(0, (base.sessions ?? 0) - (sub.sessions ?? 0))
   if (cost === 0 && calls === 0 && savingsUSD === 0 && sessions === 0) return null
-  return { cost, calls, savingsUSD, sessions, ...(base.path ? { path: base.path } : {}) }
+  return { cost, calls, savingsUSD, sessions, ...(base.path ? { path: base.path } : {}), ...(base.originKey ? { originKey: base.originKey } : {}) }
 }
 
 function subtractProjects(base: DailyEntry['projects'] | undefined, sub: DailyEntry['projects'] | undefined): DailyEntry['projects'] | undefined {

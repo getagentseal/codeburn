@@ -1,5 +1,7 @@
-import { existsSync, readFileSync, statSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { existsSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
+import { dirname, isAbsolute, join } from 'node:path'
+
+import { getCodeburnCacheDir } from './cache-dir.js'
 
 /// The `origin` remote of a checkout, read straight from .git/config. Two clones
 /// or worktrees of the same repository share it, which is what lets surfaces
@@ -107,12 +109,86 @@ function originAt(repoRoot: string): string | null {
   }
 }
 
-/** `readGitOriginUrl` normalized, or null when the checkout has no origin. */
-export function gitOriginKey(repoRoot: string): string | null {
-  const url = readGitOriginUrl(repoRoot)
-  return url ? normalizeOriginUrl(url) : null
+// Agents delete their scratch clones, so the origin a folder had is kept in the
+// cache dir: while the folder exists the filesystem answers (and overwrites the
+// record, since scratch names get reused for other repos), once it is gone the
+// record does.
+const ORIGINS_FILE = 'git-origins.json'
+const keyByPath = new Map<string, string | null>()
+let recorded: Record<string, string> | null = null
+const pending = new Map<string, string | null>()
+
+function readRecorded(): Record<string, string> {
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(join(getCodeburnCacheDir(), ORIGINS_FILE), 'utf8'))
+    const paths = (parsed as { paths?: unknown } | null)?.paths
+    if (!paths || typeof paths !== 'object') return {}
+    return Object.fromEntries(Object.entries(paths).filter((e): e is [string, string] => typeof e[1] === 'string'))
+  } catch {
+    return {}
+  }
+}
+
+/** Normalized `origin` of the checkout containing `path`, or null when it has
+ *  none. A path that no longer exists answers from what an earlier run saw. */
+export function gitOriginKey(path: string): string | null {
+  const memo = keyByPath.get(path)
+  if (memo !== undefined) return memo
+  recorded ??= readRecorded()
+  let key: string | null
+  if (existsSync(path)) {
+    const url = readGitOriginUrl(path)
+    key = url ? normalizeOriginUrl(url) : null
+    if ((Object.hasOwn(recorded, path) ? recorded[path] : null) !== key) {
+      if (key) recorded[path] = key
+      else delete recorded[path]
+      pending.set(path, key)
+    }
+  } else {
+    key = Object.hasOwn(recorded, path) ? recorded[path]! : null
+  }
+  keyByPath.set(path, key)
+  return key
+}
+
+/** The origin of a recorded project path. Codex strips the leading slash from
+ *  its cwds, so a slash-bearing relative path is read as rooted. */
+export function projectOriginKey(projectPath: string | undefined): string | null {
+  const raw = (projectPath ?? '').trim().replace(/[\\/]+$/, '')
+  if (!raw) return null
+  if (isAbsolute(raw)) return gitOriginKey(raw)
+  if (process.platform === 'win32' || !raw.includes('/') || raw.startsWith('-')) return null
+  return gitOriginKey(`/${raw}`)
+}
+
+/** "github.com/org/repo" -> "repo". */
+export function originRepoName(originKey: string): string {
+  return originKey.split('/').filter(Boolean).pop() ?? originKey
+}
+
+/** Writes what this process learned, merged over what another one may have
+ *  written meanwhile. Never fails the caller. */
+export function saveGitOrigins(): void {
+  if (pending.size === 0) return
+  try {
+    const merged = readRecorded()
+    for (const [path, key] of pending) {
+      if (key) merged[path] = key
+      else delete merged[path]
+    }
+    const target = join(getCodeburnCacheDir(), ORIGINS_FILE)
+    const tmp = `${target}.${process.pid}.tmp`
+    writeFileSync(tmp, JSON.stringify({ version: 1, paths: merged }), { mode: 0o600 })
+    renameSync(tmp, target)
+    pending.clear()
+  } catch {
+    // A missed save only means a later run learns it again while the folder exists.
+  }
 }
 
 export function __resetGitOriginCache(): void {
   originByRoot.clear()
+  keyByPath.clear()
+  pending.clear()
+  recorded = null
 }

@@ -11,7 +11,7 @@ import { SectionSkeleton } from '../components/Skeleton'
 import { StackedBars } from '../components/StackedBars'
 import { StaleBanner } from '../components/StaleBanner'
 import { type Polled, usePolled } from '../hooks/usePolled'
-import { formatCount, formatUsd } from '../lib/format'
+import { formatCount, formatUsd, shortenProjectPath } from '../lib/format'
 import { codeburn } from '../lib/ipc'
 import { contiguousDailyWindow, dataStartKey, localDateKey } from '../lib/period'
 import { reportMemoKey } from '../lib/reportMemoKey'
@@ -243,11 +243,19 @@ function ProjectBreakdown({ projects, onInvestigate }: { projects: Project[]; on
                     <button
                       className="ov-link spend-proj-drill"
                       type="button"
-                      onClick={() => onInvestigate({ filters: projectFilters(project.id || project.name) })}
+                      onClick={() => onInvestigate({ filters: projectFilters(...(project.checkouts?.map(c => c.id) ?? [project.id || project.name])) })}
                     >
                       {t('spend.project.viewSessions')}
                     </button>
                   )}
+                  {project.checkouts?.map(checkout => (
+                    <div className="spend-proj-session" key={checkout.id}>
+                      <span className="sps-date" />
+                      <span className="sps-model" title={checkout.id}>{shortenProjectPath(checkout.id, 2)}</span>
+                      <span className="sps-calls" />
+                      <span className="sps-cost">{formatUsd(checkout.cost)}</span>
+                    </div>
+                  ))}
                   {project.sessionDetails.length ? (
                     project.sessionDetails.map((session, j) => (
                       <div className="spend-proj-session" key={`${session.date}-${j}`}>

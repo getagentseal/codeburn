@@ -45,6 +45,11 @@ describe('projectScopeOptions', () => {
     expect(projectScopeOptions(projects, NO_FILTER).map(option => option.value)).toEqual(['/w/a', 'C:\\work\\b'])
   })
 
+  it('names a repository row after the repository', () => {
+    const repo = { ...row('/w/codeburn', 9, 'codeburn'), checkouts: [{ path: '/w/codeburn', cost: 6 }, { path: '/tmp/clone-3', cost: 3 }] }
+    expect(projectScopeOptions([repo, row('/w/site', 1)], NO_FILTER).map(option => option.label)).toEqual(['codeburn', 'w/site'])
+  })
+
   it('hides projects whose lifetime cost rounds to $0.00', () => {
     const projects = [row('/w/zero', 0), row('/w/tiny', 0.004), row('/w/half', 0.005), row('/w/cent', 0.01)]
     expect(projectScopeOptions(projects, NO_FILTER).map(option => option.value)).toEqual(['/w/cent', '/w/half'])

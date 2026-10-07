@@ -25,6 +25,7 @@ import { activityStreak } from './streak.js'
 import { getDaysInRange, ensureCacheHydrated, loadDailyCache, cachedProjectIdentities, projectDayIdentity, emptyCache, mergeDayEntries, BACKFILL_DAYS, toDateString, type DailyCache, type DailyEntry, type ProjectDayStats, type ProviderDaySlice } from './daily-cache.js'
 import { buildGranularHistory } from './granular-history.js'
 import { spendProjectIdentity } from './spend-flow.js'
+import { originRepoName, projectOriginKey } from './git-origin.js'
 import { AGGREGATE_ONLY_PROVIDER, excludeAggregateOnlyProjects, excludesAggregateOnlyProviders } from './parser.js'
 
 // Row caps for the by-PR / by-branch payload aggregations, ranked by cost.
@@ -500,7 +501,7 @@ export function excludeProviderFromDay(day: DailyEntry, provider: string): Daily
       }
       if (Object.values(left).some(v => v > 0)) {
         Object.defineProperty(projects, key, {
-          value: { ...left, ...(p.path ? { path: p.path } : {}) },
+          value: { ...left, ...(p.path ? { path: p.path } : {}), ...(p.originKey ? { originKey: p.originKey } : {}) },
           enumerable: true, writable: true, configurable: true,
         })
       }
@@ -1314,10 +1315,12 @@ export function buildPayloadProjects(
     liveCost: number
     liveSavings: number
     liveSessions: number
+    liveCalls: number
   }
   type Acc = {
     id: string
     path?: string
+    originKey?: string
     fallbackName: string
     contribs: Map<string, Contrib>
     sessions: SessionSummary[]
@@ -1358,6 +1361,7 @@ export function buildPayloadProjects(
         liveCost: 0,
         liveSavings: 0,
         liveSessions: 0,
+        liveCalls: 0,
       }
       acc.contribs.set(slug, c)
     }
@@ -1373,9 +1377,10 @@ export function buildPayloadProjects(
     path: string | undefined,
     cost: number,
     savingsUSD: number,
-    occupancy: { sessions: number, sessionDays: number, maxDaySessions: number, calls: number },
+    occupancy: { sessions: number, sessionDays: number, maxDaySessions: number, calls: number, originKey?: string },
   ): Acc => {
     const acc = take(slug, path, slug)
+    acc.originKey ??= occupancy.originKey
     const c = contribOf(acc, slug)
     c.hasCache = true
     c.cacheCost += cost
@@ -1403,7 +1408,7 @@ export function buildPayloadProjects(
     for (const s of p.sessions) rememberLiveSlug(s.project, p.projectPath)
   }
 
-  type Totals = { cost: number; savingsUSD: number; sessions: number; sessionDays: number; maxDaySessions: number; calls: number }
+  type Totals = { cost: number; savingsUSD: number; sessions: number; sessionDays: number; maxDaySessions: number; calls: number; originKey?: string }
   const knownBySlug = new Map<string, Map<string, Totals>>()
   const pathlessBySlug = new Map<string, Totals>()
   const emptyTotals = (): Totals => ({ cost: 0, savingsUSD: 0, sessions: 0, sessionDays: 0, maxDaySessions: 0, calls: 0 })
@@ -1430,6 +1435,7 @@ export function buildPayloadProjects(
           }
           const acc = byId.get(id) ?? emptyTotals()
           addTotals(acc, p.cost, p.savingsUSD, p.sessions, p.calls)
+          acc.originKey ??= p.originKey
           byId.set(id, acc)
         } else {
           const acc = pathlessBySlug.get(name) ?? emptyTotals()
@@ -1487,6 +1493,7 @@ export function buildPayloadProjects(
         const c = contribOf(acc, p.project)
         c.liveCost += p.totalCostUSD
         c.liveSavings += p.totalSavingsUSD
+        c.liveCalls += p.totalApiCalls
       }
       continue
     }
@@ -1504,6 +1511,7 @@ export function buildPayloadProjects(
         c.liveCost += s.totalCostUSD
         c.liveSavings += s.totalSavingsUSD
         c.liveSessions += 1
+        c.liveCalls += s.apiCalls
       } else {
         c.liveSessions += 1
       }
@@ -1514,9 +1522,11 @@ export function buildPayloadProjects(
     const path = acc.path
     let cost = 0
     let savingsUSD = 0
+    let calls = 0
     for (const c of acc.contribs.values()) {
       cost += c.hasCache ? c.cacheCost : c.liveCost
       savingsUSD += c.hasCache ? c.cacheSavings : c.liveSavings
+      calls += c.hasCache ? c.cacheCalls : c.liveCalls
     }
     const liveUnique = uniqueCanonicalSessionCount(acc.sessions, acc.path)
     let cacheDayBound = 0
@@ -1543,6 +1553,7 @@ export function buildPayloadProjects(
       basename: displayBasename(path, acc.fallbackName, home),
       cost,
       savingsUSD,
+      calls,
       sessions,
       sessionCountBasis,
     }
@@ -1550,20 +1561,43 @@ export function buildPayloadProjects(
   const basenameCounts = new Map<string, number>()
   for (const row of rows) basenameCounts.set(row.basename, (basenameCounts.get(row.basename) ?? 0) + 1)
 
-  return rows
-    .map(({ acc, path, basename, cost, savingsUSD, sessions, sessionCountBasis }) => {
-      const details = sessionDetailsOf(acc.sessions)
-      return {
-        id: acc.id,
-        name: disambiguatedProjectName(path, basename, acc.fallbackName, basenameCounts),
-        cost,
-        savingsUSD,
-        sessions,
-        sessionCountBasis,
-        ...(details.length ? { sessionDetails: details } : {}),
-      }
-    })
-    .sort((a, b) => b.cost - a.cost)
+  // Every checkout of one repository is one row, folded only after each
+  // checkout's cache-or-live choice is made: folding first would let one clone's
+  // cache row hide another clone's live-only spend under the same slug.
+  const groups = new Map<string, typeof rows>()
+  for (const row of rows) {
+    const key = row.acc.originKey ?? projectOriginKey(row.path) ?? `\0${row.acc.id}`
+    const held = groups.get(key)
+    if (held) held.push(row)
+    else groups.set(key, [row])
+  }
+  const repoNames = new Map<string, number>()
+  for (const key of groups.keys()) if (!key.startsWith('\0')) repoNames.set(originRepoName(key), (repoNames.get(originRepoName(key)) ?? 0) + 1)
+
+  return [...groups].map(([key, members]) => {
+    members.sort((a, b) => b.cost - a.cost)
+    const lead = members[0]!
+    const repo = key.startsWith('\0') ? null : key
+    const sessions = members.reduce((sum, m) => sum + m.sessions, 0)
+    const sessionCountBasis = members.some(m => m.sessionCountBasis === 'partial') ? 'partial' as const : lead.sessionCountBasis
+    const details = sessionDetailsOf(members.flatMap(m => m.acc.sessions))
+    return {
+      id: lead.acc.id,
+      name: repo
+        ? (repoNames.get(originRepoName(repo))! > 1 ? repo.split('/').slice(-2).join('/') : originRepoName(repo))
+        : disambiguatedProjectName(lead.path, lead.basename, lead.acc.fallbackName, basenameCounts),
+      // A rooted path that still resolves to the repository, so selecting the
+      // row scopes to all of it (Codex records cwds without the leading slash).
+      path: ((repo && members.find(m => m.path && /^(\/|[a-zA-Z]:[\\/])/.test(m.path) && projectOriginKey(m.path) === repo)) || lead).path ?? lead.acc.id,
+      cost: members.reduce((sum, m) => sum + m.cost, 0),
+      savingsUSD: members.reduce((sum, m) => sum + m.savingsUSD, 0),
+      calls: members.reduce((sum, m) => sum + m.calls, 0),
+      sessions,
+      sessionCountBasis,
+      ...(members.length > 1 ? { checkouts: members.map(m => ({ id: m.acc.id, cost: m.cost })) } : {}),
+      ...(details.length ? { sessionDetails: details } : {}),
+    }
+  }).sort((a, b) => b.cost - a.cost)
 }
 
 /**

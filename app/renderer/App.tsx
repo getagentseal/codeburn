@@ -958,7 +958,7 @@ function AppMain({ transientProject, onTransientProject }: { transientProject: T
   // "Combined" in place of the (forced-'all') provider label.
   const scopeCaption = scope === 'combined'
     ? `${customRange ? rangeLabel(customRange) : PERIOD_LABELS[period]} · ${t('shell.scope.combined')}`
-    : `${customRange ? rangeLabel(customRange) : PERIOD_LABELS[period]} · ${activeProviderLabel}${activeConfigLabel ? ` · ${activeConfigLabel}` : ''}${transientProject ? ` · ${shortenProjectPath(transientProject.path, 2)}` : ''}`
+    : `${customRange ? rangeLabel(customRange) : PERIOD_LABELS[period]} · ${activeProviderLabel}${activeConfigLabel ? ` · ${activeConfigLabel}` : ''}${transientProject ? ` · ${transientProject.label ?? shortenProjectPath(transientProject.path, 2)}` : ''}`
   const refreshing = usePolledInFlight() || overview.switching || (!!headlineSnapshot && overview.loading)
   const selectedReportKeys = selectedReportMemoKeys(section, period, provider, customRange, activeOverviewKey)
   const selectedReportTimestamps = selectedReportKeys.map(polledMemoTimestamp)

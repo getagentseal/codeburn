@@ -27,6 +27,7 @@ import { planDisplayName } from './plans.js'
 import { formatDayRangeLabel, getDateRange, parseDayFlag, PERIODS, PERIOD_LABELS, shiftDay, type Period } from './cli-date.js'
 import { BSU, patchStdoutForWindows } from './ink-win.js'
 import { startUserTimingGuard } from './user-timing-guard.js'
+import { originRepoName, projectOriginKey } from './git-origin.js'
 
 type View = 'dashboard' | 'optimize' | 'compare'
 
@@ -800,7 +801,27 @@ function getProjectBreakdownRowLimit(period: Period, dayMode = false): number {
   return dayMode ? 8 : period === 'all' || period === 'lifetime' || period === 'month' || period === '30days' ? 14 : 8
 }
 
-function ProjectBreakdown({ projects, pw, bw, budgets, rows = 14 }: { projects: ProjectSummary[]; pw: number; bw: number; budgets?: Map<string, ContextBudget>; rows?: number }) {
+/// One row per repository: clones and worktrees sharing an `origin` fold into
+/// the costliest of them; a checkout without one stays its own row.
+export function foldProjectsByRepository(projects: ProjectSummary[]): Array<ProjectSummary & { repo?: string }> {
+  const rows = new Map<string, ProjectSummary & { repo?: string }>()
+  projects.forEach((p, i) => {
+    const origin = projectOriginKey(p.projectPath)
+    const key = origin ?? `\0${i}`
+    const held = rows.get(key)
+    if (!held) {
+      rows.set(key, origin ? { ...p, repo: originRepoName(origin) } : p)
+      return
+    }
+    if (p.totalCostUSD > held.totalCostUSD) held.projectPath = p.projectPath
+    held.totalCostUSD += p.totalCostUSD
+    held.sessions = [...held.sessions, ...p.sessions]
+  })
+  return [...rows.values()].sort((a, b) => b.totalCostUSD - a.totalCostUSD)
+}
+
+function ProjectBreakdown({ projects: checkouts, pw, bw, budgets, rows = 14 }: { projects: ProjectSummary[]; pw: number; bw: number; budgets?: Map<string, ContextBudget>; rows?: number }) {
+  const projects = foldProjectsByRepository(checkouts)
   const maxCost = maxOf(projects.map(p => p.totalCostUSD), -Infinity)
   const hasBudgets = budgets && budgets.size > 0
   const headers = ['cost', 'avg/s', 'session', ...(hasBudgets ? ['overhead'] : [])]
@@ -828,7 +849,7 @@ function ProjectBreakdown({ projects, pw, bw, budgets, rows = 14 }: { projects: 
             key={`${project.project}-${i}`}
             panelWidth={pw}
             barWidth={projectBarWidth}
-            label={shortProject(project.projectPath, labelWidth)}
+            label={project.repo ? project.repo.slice(0, labelWidth) : shortProject(project.projectPath, labelWidth)}
             labelColor={DIM}
             bar={{ value: project.totalCostUSD, max: maxCost }}
             metrics={[

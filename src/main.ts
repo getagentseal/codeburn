@@ -7,7 +7,7 @@ import { cachedProjectIdentitiesForRange } from './daily-cache.js'
 import { reportUnmatchedProjectPatterns } from './project-filter-warnings.js'
 import { getVercelGatewayApiKey } from './providers/vercel-gateway.js'
 import { BILLING_FILTER_VALUES, ROUTE_FILTER_VALUES, filterProjectsByBillingRoute } from './billing-filter.js'
-import { AGGREGATE_ONLY_PROVIDER, aggregateOnlyCostUSD, excludesAggregateOnlyProviders, parseAllSessions, filterProjectsByName, filterProjectsByDateRange, clearSessionCache, setInteractiveScanUI, computeCorpusFingerprint, isSessionHydrationComplete, startProgressKeepalive, stopProgressKeepalive, withLoadWindow } from './parser.js'
+import { AGGREGATE_ONLY_PROVIDER, aggregateOnlyCostUSD, excludesAggregateOnlyProviders, parseAllSessions, filterProjectsByName, filterProjectsByDateRange, clearSessionCache, setInteractiveScanUI, computeCorpusFingerprint, isSessionHydrationComplete, startProgressKeepalive, stopProgressKeepalive, withLoadWindow, setExactProjectPaths } from './parser.js'
 import { allProviderNames, getAllProviders, safeDiscoverSessions } from './providers/index.js'
 import { getProvider } from './providers/index.js'
 import { getClaudeConfigDirs, getDesktopSessionsDirs } from './providers/claude.js'
@@ -21,14 +21,14 @@ import { behavioralCallWeight } from './behavioral-weight.js'
 import { CATEGORY_LABELS, type DateRange, type ProjectSummary, type TaskCategory } from './types.js'
 import type { AppliedFix } from './act/types.js'
 import { aggregateModelEfficiency } from './model-efficiency.js'
-import { buildPeriodData, buildMenubarPayloadForRange, buildDurablePeriod, getDailyCacheConfigHash, SERVE_HYDRATION_ENV, type DurablePeriod } from './usage-aggregator.js'
+import { buildPayloadProjects, buildPeriodData, buildMenubarPayloadForRange, buildDurablePeriod, getDailyCacheConfigHash, SERVE_HYDRATION_ENV, type DurablePeriod } from './usage-aggregator.js'
 import { aggregateProjectsIntoDays } from './day-aggregator.js'
 import { buildPeriodDiffReport, defaultSevenDayRanges, diffSessions, dayKeyToRange, historyBasis, localRangeInfo } from './period-diff.js'
 import { loadStatusSnapshot, saveStatusSnapshot } from './session-cache.js'
 import { renderDashboard } from './dashboard.js'
 import { renderOverview } from './overview.js'
 import { runWebDashboard } from './web-dashboard.js'
-import { hostname } from 'os'
+import { homedir, hostname } from 'os'
 import { runShareServer } from './sharing/share-run.js'
 import { addRemote, linkRemote, pullDevices, renderDevices, summarizeDeviceUsage } from './sharing/host.js'
 import { browse } from './sharing/discovery.js'
@@ -541,8 +541,10 @@ const program = new Command()
   .version(version)
   .option('--verbose', 'print warnings to stderr on read failures and skipped files')
   .option('--timezone <zone>', 'IANA timezone for date grouping (e.g. Asia/Tokyo, America/New_York)')
+  .option('--exact-project', 'A --project/--exclude path matches that folder only, not every checkout of its repository')
 
 program.hook('preAction', async (thisCommand) => {
+  setExactProjectPaths(thisCommand.opts<{ exactProject?: boolean }>().exactProject === true)
   const tz = thisCommand.opts<{ timezone?: string }>().timezone ?? process.env['CODEBURN_TZ']
   if (tz) {
     try {
@@ -628,17 +630,20 @@ function buildJsonReport(projects: ProjectSummary[], period: string, periodKey: 
       })
 
   const sessionCountBasis = durable.data.sessionCountBasis
-  const projectList = projects.map(p => ({
-    name: p.project,
-    path: p.projectPath,
-    cost: convertCost(p.totalCostUSD),
-    savings: convertCost(p.totalSavingsUSD),
-    ...(sessionCountIsExact(sessionCountBasis) && p.sessions.length > 0
-      ? { avgCostPerSession: convertCost(p.totalCostUSD / p.sessions.length) }
+  // Same durable day set as the headline, so a project's row is what selecting
+  // it reports (expired transcripts included), one row per repository.
+  const projectList = buildPayloadProjects(projects, durable.days, homedir()).map(p => ({
+    name: p.name,
+    path: p.path ?? p.id ?? p.name,
+    cost: convertCost(p.cost),
+    savings: convertCost(p.savingsUSD),
+    ...(sessionCountIsExact(p.sessionCountBasis) && p.sessions > 0
+      ? { avgCostPerSession: convertCost(p.cost / p.sessions) }
       : {}),
-    calls: p.totalApiCalls,
-    sessions: p.sessions.length,
-    ...(sessionCountBasis ? { sessionCountBasis } : {}),
+    calls: p.calls ?? 0,
+    sessions: p.sessions,
+    ...(p.sessionCountBasis ? { sessionCountBasis: p.sessionCountBasis } : {}),
+    ...(p.checkouts ? { checkouts: p.checkouts.map(c => ({ path: c.id, cost: convertCost(c.cost) })) } : {}),
   }))
 
   const modelMap: Record<string, { calls: number; cost: number; savings: number; estimatedCost: number; inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; baselineModel: string }> = {}
