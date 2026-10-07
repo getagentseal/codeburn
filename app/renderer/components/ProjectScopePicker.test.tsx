@@ -31,12 +31,22 @@ describe('projectScopeOptions', () => {
     expect(projectScopeOptions(projects, { project: ['/w/app'], exclude: [] }).map(option => option.value)).toEqual(['/w/app'])
   })
 
-  it('drops pathless rows, whose name would only be a substring pattern', () => {
-    expect(projectScopeOptions([row('', 9, 'my-chat'), row('/w/a', 1)], NO_FILTER).map(option => option.value)).toEqual(['/w/a'])
+  it('drops rows without an absolute path: imports and label fallbacks have no cwd', () => {
+    const projects = [
+      row('', 9, 'my-chat'),
+      row('Cursor (imported)', 900, 'Cursor (imported)'),
+      row('Grok Bot (imported)', 480, 'Grok Bot (imported)'),
+      row('eywa/lab', 100, 'eywa-lab'),
+      row('Users/me/api/server', 12, 'Users-me-api-server'),
+      row('/w/a', 1),
+      row('C:\\work\\b', 1),
+    ]
+    expect(projectScopeOptions(projects, NO_FILTER).map(option => option.value)).toEqual(['/w/a', 'C:\\work\\b'])
   })
 
-  it('roots a Codex path recorded without its leading slash', () => {
-    expect(projectScopeOptions([row('Users/me/app', 1)], NO_FILTER)[0]!.value).toBe('/Users/me/app')
+  it('hides projects whose lifetime cost rounds to $0.00', () => {
+    const projects = [row('/w/zero', 0), row('/w/tiny', 0.004), row('/w/half', 0.005), row('/w/cent', 0.01)]
+    expect(projectScopeOptions(projects, NO_FILTER).map(option => option.value)).toEqual(['/w/cent', '/w/half'])
   })
 
   it('shows the full path when two projects share a short name', () => {

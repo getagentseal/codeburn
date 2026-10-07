@@ -6,7 +6,7 @@
 
 type MatchTarget = { name: string; path?: string }
 
-function isRooted(pattern: string): boolean {
+export function isRooted(pattern: string): boolean {
   const raw = pattern.trim().replace(/\\/g, '/')
   return raw.startsWith('/') || /^[a-zA-Z]:\//.test(raw)
 }
