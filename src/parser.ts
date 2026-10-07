@@ -3221,6 +3221,11 @@ function cachedFileNeedsProviderReparse(providerName: string, sourcePath: string
   // reparses. A sessions.db source's fingerprint folds in the WAL already.
   if (providerName === 'devin') return sourcePath.endsWith('.json')
 
+  // A Grok session dir parses to nothing while logs/unified.jsonl holds its
+  // session, which its fingerprint does not track. Once the log rotates or is
+  // truncated past it, the dir has to count again.
+  if (providerName === 'grok') return cached.turns.length === 0
+
   if (providerName !== 'gemini') return false
 
   return cached.turns.some(turn =>

@@ -507,12 +507,30 @@ async function loggedSessionIds(path: string): Promise<Set<string>> {
   return loggedSessions.sids
 }
 
-function createUnifiedLogParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
+// createParser skips a session dir the log holds; its summary, tools and
+// commands ride on that session's first logged call instead.
+async function readSessionDirInfo(dir: string | undefined) {
+  const summary = dir ? await readJson<GrokSummary>(join(dir, 'summary.json')) : null
+  const updates = dir ? await readSessionFile(join(dir, 'updates.jsonl')) : null
+  const parsed = updates === null ? null : parseUpdates(updates)
+  return {
+    model: summary?.current_model_id,
+    cwd: summary?.info?.cwd,
+    userMessage: summary?.session_summary ?? summary?.generated_title ?? '',
+    tools: parsed?.tools ?? [],
+    bashCommands: parsed?.bashCommands ?? [],
+    subagentTypes: parsed?.subagentTypes ?? [],
+  }
+}
+
+function createUnifiedLogParser(source: SessionSource, seenKeys: Set<string>, sessionsDir: string): SessionParser {
   return {
     async *parse(): AsyncGenerator<ParsedProviderCall> {
       const models = new Map<string, string>()
       const pidModels = new Map<unknown, string>()
       const cwds = new Map<string, string>()
+      const sessionDirs = new Map((await discoverSessions(sessionsDir)).map(s => [basename(dirname(s.path)), dirname(s.path)]))
+      const dirInfo = new Map<string, Awaited<ReturnType<typeof readSessionDirInfo>>>()
 
       for await (const line of readSessionLines(source.path)) {
         let record: UnifiedLogLine
@@ -548,8 +566,15 @@ function createUnifiedLogParser(source: SessionSource, seenKeys: Set<string>): S
         if (seenKeys.has(deduplicationKey)) continue
         seenKeys.add(deduplicationKey)
 
-        const model = models.get(sid) ?? pidModels.get(record.pid) ?? 'grok-build'
-        const cwd = cwds.get(sid)
+        let info = dirInfo.get(sid)
+        const first = !info
+        if (!info) {
+          info = await readSessionDirInfo(sessionDirs.get(sid))
+          dirInfo.set(sid, info)
+        }
+        const namedModel = models.get(sid) ?? pidModels.get(record.pid) ?? info.model
+        const model = namedModel ?? 'grok-build'
+        const cwd = cwds.get(sid) ?? info.cwd
         yield {
           provider: source.provider,
           model,
@@ -561,13 +586,14 @@ function createUnifiedLogParser(source: SessionSource, seenKeys: Set<string>): S
           reasoningTokens: reasoning,
           webSearchRequests: 0,
           costUSD: calculateCost(model, prompt - cached, completion, 0, cached, 0),
-          costIsEstimated: false,
-          tools: [],
-          bashCommands: [],
+          costIsEstimated: namedModel === undefined,
+          tools: first ? info.tools : [],
+          bashCommands: first ? info.bashCommands : [],
+          subagentTypes: first ? info.subagentTypes : [],
           timestamp: usage.ts,
           speed: 'standard',
           deduplicationKey,
-          userMessage: '',
+          userMessage: first ? info.userMessage : '',
           sessionId: sid,
           project: cwd ? basename(cwd) : source.project,
           projectPath: cwd,
@@ -643,7 +669,7 @@ export function createGrokProvider(sessionsDir?: string): Provider {
     },
 
     createSessionParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
-      if (source.path === unifiedLogPath) return createUnifiedLogParser(source, seenKeys)
+      if (source.path === unifiedLogPath) return createUnifiedLogParser(source, seenKeys, dir)
       return createParser(source, seenKeys, unifiedLogPath)
     },
   }

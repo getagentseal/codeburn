@@ -585,10 +585,11 @@ describe('grok provider - unified log', () => {
     expect(call!.model).toBe('grok-4.5')
   })
 
-  it('falls back to grok-build when the log never names the model', async () => {
+  it('falls back to grok-build, marked estimated, when nothing names the model', async () => {
     await writeLog([inferenceDone(SID_B, '2026-07-28T11:00:18.000Z', 1, 2000, 0, 200, 0)])
     const [call] = await parseAll()
     expect(call!.model).toBe('grok-build')
+    expect(call!.costIsEstimated).toBe(true)
   })
 
   it('discovers nothing extra when there is no unified log', async () => {
