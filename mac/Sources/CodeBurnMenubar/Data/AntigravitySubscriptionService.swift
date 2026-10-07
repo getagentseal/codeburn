@@ -30,7 +30,7 @@ struct AntigravityUsage: Sendable, Equatable {
 ///
 /// Endpoints (loopback only, Connect-RPC JSON):
 /// - POST https://127.0.0.1:<port>/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary
-///     (preferred; falls back to)
+///     (preferred windows; the tier and fallback windows come from)
 /// - POST https://127.0.0.1:<port>/exa.language_server_pb.LanguageServerService/GetUserStatus
 ///
 /// Discovery uses `ps` to find candidate processes (app language
