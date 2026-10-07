@@ -67,7 +67,7 @@ jobs:
             npm run tauri build
           else
             echo "::warning::TAURI_SIGNING_PRIVATE_KEY is not set; building without an updater signature"
-            npm run tauri build -- --config src-tauri/tauri.no-updater.conf.json
+            TAURI_CONFIG='{"bundle":{"createUpdaterArtifacts":false}}' npm run tauri build
           fi
 
       - name: Collect artifacts

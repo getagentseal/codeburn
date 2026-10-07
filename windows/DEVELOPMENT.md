@@ -142,10 +142,10 @@ never runs.
 ```bash
 # Windows (.msi): run from a Windows host. Without TAURI_SIGNING_PRIVATE_KEY the
 # updater signature cannot be written, so turn updater artifacts off for a local package.
-npm run tauri build -- --config src-tauri/tauri.no-updater.conf.json
+TAURI_CONFIG='{"bundle":{"createUpdaterArtifacts":false}}' npm run tauri build
 
 # Linux (experimental): produces .deb, .rpm, .AppImage under src-tauri/target/release/bundle/
-npm run tauri build -- --config src-tauri/tauri.no-updater.conf.json
+TAURI_CONFIG='{"bundle":{"createUpdaterArtifacts":false}}' npm run tauri build
 ```
 
 ## Security model

@@ -57,7 +57,9 @@ jobs:
 
       - name: Build tray app
         working-directory: windows
-        run: npm run tauri build -- --no-bundle --config src-tauri/tauri.no-updater.conf.json
+        env:
+          TAURI_CONFIG: '{"bundle":{"createUpdaterArtifacts":false}}'
+        run: npm run tauri build -- --no-bundle
 
       - name: Build Microsoft Store package
         run: npm --prefix app run package:store
