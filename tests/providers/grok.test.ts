@@ -541,19 +541,39 @@ describe('grok provider - unified log', () => {
     expect(new Set(calls.map(c => c.deduplicationKey)).size).toBe(2)
   })
 
-  it('skips sessions that still have a session dir and keeps the rest', async () => {
-    await writeSession({ cwdEncoded: join('sessions', '%2FUsers%2Ftest'), uuid: SID_A, completedTurns: [{ promptId: 'p1', usage: authoritativeUsage() }] })
+  it('reads a logged session from the log instead of its session dir, and keeps session-only sessions', async () => {
+    const SID_C = '019f0000-0000-7000-8000-00000000000c'
+    const sessionsCwd = join('sessions', '%2FUsers%2Ftest')
+    await writeSession({ cwdEncoded: sessionsCwd, uuid: SID_A, completedTurns: [{ promptId: 'p1', usage: authoritativeUsage() }] })
+    await writeSession({ cwdEncoded: sessionsCwd, uuid: SID_C, completedTurns: [{ promptId: 'p1', usage: authoritativeUsage() }] })
     await writeLog([
       logLine('model changed', SID_A, '2026-07-28T10:00:00.000Z', { model: 'grok-4.5' }),
       inferenceDone(SID_A, '2026-07-28T10:00:18.000Z', 1, 1000, 0, 100, 0),
+      inferenceDone(SID_A, '2026-07-28T10:00:30.000Z', 2, 1200, 1000, 50, 0),
       logLine('model changed', SID_B, '2026-07-28T11:00:00.000Z', { model: 'grok-4.5' }),
       inferenceDone(SID_B, '2026-07-28T11:00:18.000Z', 1, 2000, 500, 200, 50),
     ])
     const calls = await parseAll()
-    expect(calls.filter(c => c.sessionId === SID_A)).toHaveLength(1)
-    expect(calls.find(c => c.sessionId === SID_A)!.deduplicationKey).not.toContain('unified')
+    const a = calls.filter(c => c.sessionId === SID_A)
+    expect(a).toHaveLength(2)
+    expect(a.every(c => c.deduplicationKey.startsWith('grok:unified:'))).toBe(true)
+    const c = calls.filter(c => c.sessionId === SID_C)
+    expect(c).toHaveLength(1)
+    expect(c[0]!.deduplicationKey).not.toContain('unified')
     expect(calls.filter(c => c.sessionId === SID_B)).toHaveLength(1)
     expect(calls.find(c => c.sessionId === SID_B)!.project).toBe('grok')
+  })
+
+  it('prices the long-context tier per request, not on the session total', async () => {
+    await writeLog([
+      logLine('model changed', SID_B, '2026-07-28T11:00:00.000Z', { model: 'grok-4.6' }),
+      inferenceDone(SID_B, '2026-07-28T11:00:18.000Z', 1, 150000, 0, 1000, 0),
+      inferenceDone(SID_B, '2026-07-28T11:01:18.000Z', 1, 150000, 0, 1000, 0),
+    ])
+    const calls = await parseAll()
+    const total = calls.reduce((sum, c) => sum + c.costUSD, 0)
+    expect(total).toBeCloseTo(2 * calculateCost('grok-4.6', 150000, 1000, 0, 0, 0), 10)
+    expect(total).toBeLessThan(calculateCost('grok-4.6', 300000, 2000, 0, 0, 0))
   })
 
   it('takes the model from the process when the session never names one', async () => {

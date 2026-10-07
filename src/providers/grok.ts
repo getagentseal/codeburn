@@ -24,8 +24,10 @@ import type { ProbeRoot, Provider, SessionSource, SessionParser, ParsedProviderC
 //
 // <grok-home>/logs/unified.jsonl outlives the session dirs and logs every
 // inference as `shell.turn.inference_done` (prompt_tokens includes
-// cached_prompt_tokens, completion_tokens includes reasoning_tokens). It is read
-// only for sessions whose dir is gone, so a session is never counted twice.
+// cached_prompt_tokens, completion_tokens includes reasoning_tokens). A session
+// with records there is read from the log, one call per request so the
+// long-context tier applies per request; its session dir is then skipped. Session
+// dirs only count for sessions the log no longer holds (rotated or truncated).
 
 const toolNameMap: Record<string, string> = {
   bash: 'Bash',
@@ -375,13 +377,16 @@ function hasPositiveTotals(totals: GrokTokenTotals): boolean {
     || totals.reasoning > 0
 }
 
-function createParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
+function createParser(source: SessionSource, seenKeys: Set<string>, unifiedLogPath: string): SessionParser {
   return {
     async *parse(): AsyncGenerator<ParsedProviderCall> {
       const dir = dirname(source.path)
       const summary = await readJson<GrokSummary>(join(dir, 'summary.json'))
+      if (!summary) return
+      const logged = await loggedSessionIds(unifiedLogPath)
+      if (logged.has(summary.info?.id ?? basename(dir)) || logged.has(basename(dir))) return
       const updates = await readSessionFile(source.path)
-      if (!summary || updates === null) return
+      if (updates === null) return
 
       const signals = await readJson<GrokSignals>(join(dir, 'signals.json'))
       const existingModel =
@@ -461,10 +466,50 @@ type UnifiedLogLine = {
   ctx?: Record<string, unknown>
 }
 
-function createUnifiedLogParser(source: SessionSource, sessionsDir: string, seenKeys: Set<string>): SessionParser {
+function inferenceUsage(record: UnifiedLogLine): { sid: string; ts: string; prompt: number; cached: number; completion: number; reasoning: number } | null {
+  const { sid, ts, ctx } = record
+  if (record.msg !== 'shell.turn.inference_done' || typeof sid !== 'string' || !sid || typeof ts !== 'string' || !isRecord(ctx)) return null
+  const prompt = finiteNonNegative(ctx['prompt_tokens'])
+  const completion = finiteNonNegative(ctx['completion_tokens'])
+  if (prompt === undefined || completion === undefined || (prompt === 0 && completion === 0)) return null
+  return {
+    sid,
+    ts,
+    prompt,
+    cached: Math.min(finiteNonNegative(ctx['cached_prompt_tokens']) ?? 0, prompt),
+    completion,
+    reasoning: Math.min(finiteNonNegative(ctx['reasoning_tokens']) ?? 0, completion),
+  }
+}
+
+let loggedSessions: { key: string; sids: Promise<Set<string>> } | undefined
+
+async function readLoggedSessionIds(path: string): Promise<Set<string>> {
+  const sids = new Set<string>()
+  for await (const line of readSessionLines(path)) {
+    if (!line.includes('shell.turn.inference_done')) continue
+    try {
+      const usage = inferenceUsage(JSON.parse(line) as UnifiedLogLine)
+      if (usage) sids.add(usage.sid)
+    } catch {
+      continue
+    }
+  }
+  return sids
+}
+
+// Every session dir asks; read the log once per version of it.
+async function loggedSessionIds(path: string): Promise<Set<string>> {
+  const st = await stat(path).catch(() => null)
+  if (!st) return new Set()
+  const key = `${path}:${st.size}:${st.mtimeMs}`
+  if (loggedSessions?.key !== key) loggedSessions = { key, sids: readLoggedSessionIds(path) }
+  return loggedSessions.sids
+}
+
+function createUnifiedLogParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
   return {
     async *parse(): AsyncGenerator<ParsedProviderCall> {
-      const sessionDirIds = new Set((await discoverSessions(sessionsDir)).map(s => basename(dirname(s.path))))
       const models = new Map<string, string>()
       const pidModels = new Map<unknown, string>()
       const cwds = new Map<string, string>()
@@ -495,16 +540,11 @@ function createUnifiedLogParser(source: SessionSource, sessionsDir: string, seen
           cwds.set(sid, ctx['cwd'])
           continue
         }
-        if (record.msg !== 'shell.turn.inference_done' || sessionDirIds.has(sid)) continue
+        const usage = inferenceUsage(record)
+        if (!usage) continue
+        const { prompt, cached, completion, reasoning } = usage
 
-        const prompt = finiteNonNegative(ctx['prompt_tokens'])
-        const completion = finiteNonNegative(ctx['completion_tokens'])
-        if (prompt === undefined || completion === undefined || typeof record.ts !== 'string') continue
-        const cached = Math.min(finiteNonNegative(ctx['cached_prompt_tokens']) ?? 0, prompt)
-        const reasoning = Math.min(finiteNonNegative(ctx['reasoning_tokens']) ?? 0, completion)
-        if (prompt === 0 && completion === 0) continue
-
-        const deduplicationKey = `grok:unified:${sid}:${record.ts}:${String(ctx['loop_index'] ?? 1)}`
+        const deduplicationKey = `grok:unified:${sid}:${usage.ts}:${String(ctx['loop_index'] ?? 1)}`
         if (seenKeys.has(deduplicationKey)) continue
         seenKeys.add(deduplicationKey)
 
@@ -524,7 +564,7 @@ function createUnifiedLogParser(source: SessionSource, sessionsDir: string, seen
           costIsEstimated: false,
           tools: [],
           bashCommands: [],
-          timestamp: record.ts,
+          timestamp: usage.ts,
           speed: 'standard',
           deduplicationKey,
           userMessage: '',
@@ -603,8 +643,8 @@ export function createGrokProvider(sessionsDir?: string): Provider {
     },
 
     createSessionParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
-      if (source.path === unifiedLogPath) return createUnifiedLogParser(source, dir, seenKeys)
-      return createParser(source, seenKeys)
+      if (source.path === unifiedLogPath) return createUnifiedLogParser(source, seenKeys)
+      return createParser(source, seenKeys, unifiedLogPath)
     },
   }
 }
