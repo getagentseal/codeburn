@@ -38,6 +38,7 @@
   },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "category": "Utility",
     "shortDescription": "AI coding cost tracker",
     "longDescription": "Shows today's AI coding spend in your system tray. Popover breaks down cost by activity, model, and provider across Claude Code, Cursor, Codex, and more.",
@@ -63,6 +64,13 @@
       "deb": {
         "depends": ["libwebkit2gtk-4.1-0", "libayatana-appindicator3-1"]
       }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "REPLACE_WITH_TAURI_UPDATER_PUBKEY",
+      "endpoints": ["https://github.com/getagentseal/codeburn/releases/download/update-feeds/windows-latest.json"],
+      "windows": { "installMode": "passive" }
     }
   }
 }

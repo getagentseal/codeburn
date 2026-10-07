@@ -2,9 +2,9 @@
 
 This document describes the actual steps a maintainer takes to cut CLI, macOS menubar, and Electron desktop releases. CLI releases are run by hand with `npm publish`; macOS menubar releases are automated by `.github/workflows/release-menubar.yml` when a `mac-v*` tag is pushed.
 
-The Electron desktop app (`app/`) is released manually under `desktop-v<version>` tags. Build macOS and Linux artifacts as described in `app/DISTRIBUTION.md`; the tag also runs the read-only `Build Windows installer` workflow on `windows-latest`. Download its `CodeBurn-Windows-Installer` artifact and upload both the `.exe` and `.exe.blockmap` with the other platform assets. The workflow never publishes release assets.
+The Electron desktop app (`app/`) is released manually under `desktop-v<version>` tags. The tag runs two read-only workflows: `Build macOS desktop` (signed, notarized dmgs and zips plus `latest-mac.yml`, artifact `CodeBurn-macOS`) and `Build Windows installer` on `windows-latest` (artifact `CodeBurn-Windows-Installer`). Build Linux artifacts as described in `app/DISTRIBUTION.md`. Upload the artifacts' files, the Linux files and `latest-linux.yml` to the release. Neither workflow publishes release assets.
 
-Before announcing a desktop release, the release owner must confirm the live GitHub Release contains all four macOS `.dmg`/`.zip` files, the Linux `.AppImage`, `.deb`, and `.rpm`, and both Windows installer files. Publishing the Release runs the workflow's read-only live-asset verification job. If assets are uploaded after publication, rerun `Build Windows installer` with the `release_tag` input and require that verification job to pass. A failed or missing verification is a release blocker.
+Before announcing a desktop release, the release owner must confirm the live GitHub Release contains all four macOS `.dmg`/`.zip` files, the Linux `.AppImage`, `.deb`, and `.rpm`, both Windows installer files, `latest-mac.yml` and `latest-linux.yml`. Publishing the Release runs the workflow's read-only live-asset verification job. If assets are uploaded after publication, rerun `Build Windows installer` with the `release_tag` input and require that verification job to pass. A failed or missing verification is a release blocker. Only after it passes does the `publish-update-feeds` job point the desktop update feed at the release (see "Desktop and tray auto-update").
 
 ## Versioning
 
@@ -178,9 +178,52 @@ brew bump-formula-pr codeburn --url "https://registry.npmjs.org/codeburn/-/codeb
 
 Users install with `brew install codeburn` and upgrade with `brew upgrade codeburn`.
 
+## Desktop and tray auto-update
+
+The desktop app (electron-updater) and the Windows tray (tauri-plugin-updater) read their update metadata from one rolling prerelease, `update-feeds`, at fixed URLs:
+
+- `https://github.com/getagentseal/codeburn/releases/download/update-feeds/latest-mac.yml`, `latest-linux.yml` and `latest.yml` (desktop)
+- `https://github.com/getagentseal/codeburn/releases/download/update-feeds/windows-latest.json` (tray)
+
+`update-feeds` is never marked Latest, holds only metadata, and is the one release whose assets are replaced (`gh release upload --clobber`). The metadata points at the versioned `desktop-v*` / `windows-v*` releases, which hold the installers.
+
+### Secrets
+
+| Secret | Used by | What it is |
+| --- | --- | --- |
+| `MACOS_CERT_P12_BASE64` | `build-desktop-mac.yml` | Developer ID Application certificate + key, `.p12`, base64 |
+| `MACOS_CERT_PASSWORD` | `build-desktop-mac.yml` | Password of that `.p12` |
+| `APPSTORE_API_KEY_P8_BASE64` | `build-desktop-mac.yml` | App Store Connect API key (`.p8`), base64, for notarization |
+| `APPSTORE_API_KEY_ID` | `build-desktop-mac.yml` | Key ID of that API key |
+| `APPSTORE_API_ISSUER_ID` | `build-desktop-mac.yml` | Issuer ID of that API key |
+| `TAURI_SIGNING_PRIVATE_KEY` | `release-menubar-windows.yml` | Tray updater private key |
+| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | `release-menubar-windows.yml` | Its password |
+
+The macOS names match the menubar release workflow. Generate the tray key pair once with `npx @tauri-apps/cli signer generate -w ~/.tauri/codeburn-tray.key`, store the private key and password as the two secrets, and replace `REPLACE_WITH_TAURI_UPDATER_PUBKEY` in `windows/src-tauri/tauri.conf.json` (`plugins.updater.pubkey`) with the public key. Until that commit ships, the tray keeps its release-page link. Losing the private key means every installed tray needs a manual update to a build with a new key.
+
+### Feed upload order
+
+Feeds go up last, only after every asset they reference is live:
+
+1. Desktop: upload all assets to the `desktop-v<version>` release and publish it. `verify-release-assets` checks the asset list; then `publish-update-feeds` downloads the release's `latest*.yml`, rewrites their file names to absolute `desktop-v<version>` URLs (`app/scripts/update-feed.mjs`, which fails on any file the release lacks), refuses to move the feed to an older version, and uploads them to `update-feeds`.
+2. Tray: `release-menubar-windows.yml` signs the MSI, creates the `windows-v<version>` release, confirms the MSI is on it, then writes `windows-latest.json` (version, minisign signature, MSI URL) and uploads it to `update-feeds`.
+
+To hold an update back, do not publish the release (desktop) or do not push the tag (tray).
+
+### Windows NSIS auto-update
+
+Off. The switch is `WINDOWS_AUTO_UPDATE` in `app/electron/auto-update.ts`; with it `false`, Windows keeps the link banner and `latest.yml` on the feed is ignored. Before turning it on, pick one:
+
+- **A, Authenticode.** Buy a code-signing certificate, sign the NSIS installer in `build-windows-installer.yml` (`WIN_CSC_LINK` / `WIN_CSC_KEY_PASSWORD`), and set `build.win.signtoolOptions.publisherName` in `app/package.json`. electron-updater then refuses any installer not signed by that publisher. SmartScreen stops warning too.
+- **B, hash only.** No certificate. electron-updater checks the installer against the sha512 in `latest.yml`, which proves the download is intact, not who built it: anyone who can write to the release and the feed can ship code. SmartScreen keeps warning on first install.
+
+Then set the constant to `true`, rebuild, and add `latest.yml` to the required list in `app/scripts/verify-windows-installer.mjs`.
+
 ## Replacing Assets on an Existing Release
 
-If a release is published with broken assets (e.g., a menubar zip with a build error), re-run the build and upload the fixed assets without creating a new tag.
+Never replace assets on a `desktop-v*` or `windows-v*` release. The feeds on `update-feeds` carry each file's sha512 (desktop) or signature (tray), so a replaced installer fails verification on every client. Cut a new patch version instead. `--clobber` is for `update-feeds` only.
+
+For the macOS menubar (`mac-v*`), if a release is published with broken assets (e.g., a menubar zip with a build error), re-run the build and upload the fixed assets without creating a new tag.
 
 Use `gh release upload` with the `--clobber` flag to overwrite existing files:
 
