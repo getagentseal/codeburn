@@ -68,9 +68,8 @@ jobs:
       # The staged tray MSI needs no updater signature: the tray updates from its own windows-v* line.
       - name: Build tray app
         working-directory: windows
-        env:
-          TAURI_CONFIG: '{"bundle":{"createUpdaterArtifacts":false}}'
-        run: npm run tauri build
+        shell: bash
+        run: npm run tauri build -- --no-sign
 
       - name: Build NSIS installer
         run: npm --prefix app run package:win

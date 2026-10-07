@@ -89,6 +89,5 @@ jobs:
       - name: Release build smoke
         if: runner.os == 'Windows'
         working-directory: windows
-        env:
-          TAURI_CONFIG: '{"bundle":{"createUpdaterArtifacts":false}}'
-        run: npm run tauri build -- --no-bundle
+        shell: bash
+        run: npm run tauri build -- --no-bundle --no-sign
