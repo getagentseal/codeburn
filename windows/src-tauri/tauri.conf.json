@@ -68,7 +68,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "REPLACE_WITH_TAURI_UPDATER_PUBKEY",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEUwRDUxOTVEMzE0QjM2MEIKUldRTE5rc3hYUm5WNEhVZFpEbEZZR0k2bGtrWDdTZXg5Q3RsYk5ZdzRMeEMzTWlEM0JoWnJOZnMK",
       "endpoints": ["https://github.com/getagentseal/codeburn/releases/download/update-feeds/windows-latest.json"],
       "windows": { "installMode": "passive" }
     }
