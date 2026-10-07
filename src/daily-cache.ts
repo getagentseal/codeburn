@@ -302,8 +302,8 @@ import type { DateRange, ProjectSummary } from './types.js'
 // are read and de-duplicated against matching transcript calls. Calls only
 // rise, so no PENDING_REDERIVE_PROVIDER_VERSIONS entry is needed.
 // v66: Codex fork replay bursts drop only records found in the parent rollout;
-// fork-only usage inside the burst now counts. Calls only rise, so no
-// PENDING_REDERIVE_PROVIDER_VERSIONS entry is needed.
+// burst records the parent kept only inside a running total now count. Calls
+// only rise, so no PENDING_REDERIVE_PROVIDER_VERSIONS entry is needed.
 export const DAILY_CACHE_VERSION = 66
 const MIN_SUPPORTED_VERSION = 28
 

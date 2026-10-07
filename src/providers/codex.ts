@@ -802,8 +802,9 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
       let forkedFromId = resume?.state.forkedFromId ?? ''
       let forkReplayState = resume?.state.forkReplayState ? { ...resume.state.forkReplayState } : undefined
       // What the parent rollout recorded before the fork: a burst record found
-      // there is a copy, anything else is the fork's own usage. Loaded on the
-      // first burst usage record; null drops the whole burst.
+      // there is a copy and is dropped. The rest is the parent's work that its
+      // rollout kept only inside a running total, so it counts here. Loaded on
+      // the first burst usage record; null drops the whole burst.
       let parentReplay: Set<string> | null | undefined
       let parentReplayAnchored = false
       const isParentReplay = async (identity: string | undefined): Promise<boolean> => {
