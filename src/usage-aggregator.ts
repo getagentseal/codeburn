@@ -2033,11 +2033,12 @@ export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: 
   // tab. Emitted only from the all-provider path, whose cache and today set are
   // already the whole machine's: a provider-scoped render must not scan
   // unrelated providers just to count days, so it omits the field and consumers
-  // keep the last one they were given.
+  // keep the last one they were given. A --project/--exclude scope does narrow
+  // it, through the same project slice as the headline.
   if (durablePeriodTotals) payload.periodTotals = durablePeriodTotals
   if (isAllProviders) {
     payload.streak = activityStreak(
-      [...getDaysInRange(cache, historyStartStr, yesterdayStr), ...(await getTodayAllDays()).filter(d => d.date === todayStr)],
+      [...allCacheDays, ...(await getTodayAllDays()).filter(d => d.date === todayStr)],
       now,
     )
   }

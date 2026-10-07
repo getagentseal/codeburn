@@ -117,4 +117,13 @@ describe('history.daily under a project filter', () => {
     expect(payload.current.cost).toBe(150)
     expect(payload.history.daily.find(d => d.date === day)?.cost).toBe(150)
   })
+
+  it('scopes the streak to the filtered projects', async () => {
+    await seedCache(daysAgoStr(1))
+    const base = { provider: 'all', optimize: false, timeline: false }
+
+    expect((await buildMenubarPayloadForRange(getDateRange('all'), base)).streak).toBe(1)
+    expect((await buildMenubarPayloadForRange(getDateRange('all'), { ...base, project: ['/Users/gone/proj-keep'] })).streak).toBe(1)
+    expect((await buildMenubarPayloadForRange(getDateRange('all'), { ...base, project: ['/Users/gone/elsewhere'] })).streak).toBe(0)
+  })
 })
