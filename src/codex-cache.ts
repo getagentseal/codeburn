@@ -66,7 +66,9 @@ import { isWslUncPath } from './wsl.js'
 // v21: service_tier "flex" bills at the published Flex rates (it billed at
 // standard), and `gpt-reserve` / `gpt-5.3-spark` price as GPT-5.6 Luna /
 // GPT-5.3 Codex Spark instead of $0. Stored costUSD and speed are the old ones.
-export const CODEX_CACHE_VERSION = 21
+// v22: a fork's replay burst drops only records found in the parent rollout
+// and counts the rest. v21 entries dropped the whole burst.
+export const CODEX_CACHE_VERSION = 22
 export const CODEX_LEGACY_CACHE_FILE = 'codex-results.json'
 export function codexCacheFileName(version = CODEX_CACHE_VERSION): string {
   return `codex-results.v${version}.json`

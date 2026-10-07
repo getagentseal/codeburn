@@ -301,7 +301,10 @@ import type { DateRange, ProjectSummary } from './types.js'
 // v61: #1579 Claude Desktop usage-ledger records (Claude-3p Cowork and Code)
 // are read and de-duplicated against matching transcript calls. Calls only
 // rise, so no PENDING_REDERIVE_PROVIDER_VERSIONS entry is needed.
-export const DAILY_CACHE_VERSION = 61
+// v66: Codex fork replay bursts drop only records found in the parent rollout;
+// fork-only usage inside the burst now counts. Calls only rise, so no
+// PENDING_REDERIVE_PROVIDER_VERSIONS entry is needed.
+export const DAILY_CACHE_VERSION = 66
 const MIN_SUPPORTED_VERSION = 28
 
 /// Providers whose per-day CALL COUNT means something different at
