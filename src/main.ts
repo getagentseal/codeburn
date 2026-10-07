@@ -7,7 +7,7 @@ import { cachedProjectIdentitiesForRange } from './daily-cache.js'
 import { reportUnmatchedProjectPatterns } from './project-filter-warnings.js'
 import { getVercelGatewayApiKey } from './providers/vercel-gateway.js'
 import { BILLING_FILTER_VALUES, ROUTE_FILTER_VALUES, filterProjectsByBillingRoute } from './billing-filter.js'
-import { AGGREGATE_ONLY_PROVIDER, aggregateOnlyCostUSD, excludesAggregateOnlyProviders, parseAllSessions, filterProjectsByName, filterProjectsByDateRange, clearSessionCache, setInteractiveScanUI, computeCorpusFingerprint, isSessionHydrationComplete, startProgressKeepalive, stopProgressKeepalive, withLoadWindow } from './parser.js'
+import { AGGREGATE_ONLY_PROVIDER, aggregateOnlyCostUSD, excludesAggregateOnlyProviders, parseAllSessions, filterProjectsByName, filterProjectsByDateRange, mergeProjectSplits, clearSessionCache, setInteractiveScanUI, computeCorpusFingerprint, isSessionHydrationComplete, startProgressKeepalive, stopProgressKeepalive, withLoadWindow } from './parser.js'
 import { allProviderNames, getAllProviders, safeDiscoverSessions } from './providers/index.js'
 import { getProvider } from './providers/index.js'
 import { getClaudeConfigDirs, getDesktopSessionsDirs } from './providers/claude.js'
@@ -770,7 +770,7 @@ function buildJsonReport(projects: ProjectSummary[], period: string, periodKey: 
   const sortedMap = (m: Record<string, number>) =>
     Object.entries(m).sort(([, a], [, b]) => b - a).map(([name, calls]) => ({ name, calls }))
 
-  const topSessions = projects
+  const topSessions = mergeProjectSplits(projects)
     .flatMap(p => p.sessions.map(s => ({
       project: p.project,
       sessionId: s.sessionId,
@@ -2973,10 +2973,10 @@ program
     const parsed = await parseAllSessions(range, opts.provider)
     await reportUnmatchedProjectPatterns(parsed, opts.project, opts.exclude, () => cachedProjectIdentitiesForRange(range))
     await reportExcludedGatewayCost(range, opts.provider)
-    const projects = filterProjectsByBillingRoute(
+    const projects = mergeProjectSplits(filterProjectsByBillingRoute(
       filterProjectsByName(parsed, opts.project, opts.exclude),
       { route: opts.route, billing: opts.billing },
-    )
+    ))
     if (opts.byPr) {
       const { rows: prRows, totals } = buildPrAttribution(projects)
       if (opts.format === 'json') {

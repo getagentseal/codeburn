@@ -314,7 +314,13 @@ import type { DateRange, ProjectSummary } from './types.js'
 // From 11 Sep 2026 the alias served K2.8 Preview, which has no published rate;
 // those calls price as K2.7 Code and are marked estimated.
 // Calls are unchanged, so no PENDING_REDERIVE_PROVIDER_VERSIONS entry is needed.
-export const DAILY_CACHE_VERSION = 64
+// v68: Claude calls go to the project of their own cwd, so a session that
+// moved folders splits across projects per call. Settled days re-derive their
+// project rows; provider call counts and cost are unchanged, so no
+// PENDING_REDERIVE_PROVIDER_VERSIONS entry is needed. Days whose transcripts
+// are gone keep their old single-project attribution. (65-67 are held by
+// in-flight #1677-#1679.)
+export const DAILY_CACHE_VERSION = 68
 const MIN_SUPPORTED_VERSION = 28
 
 /// Providers whose per-day CALL COUNT means something different at

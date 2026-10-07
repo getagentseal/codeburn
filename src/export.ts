@@ -6,7 +6,7 @@ import { getCurrency, convertCost, roundForActiveCurrency } from './currency.js'
 import { dateKey } from './day-aggregator.js'
 import { behavioralCallWeight, behavioralTurnCount } from './behavioral-weight.js'
 import { aggregateModelEfficiency } from './model-efficiency.js'
-import { callBillableOutputTokens, sessionModelBillableOutputTokens } from './session-output.js'
+import { callBillableOutputTokens, countSessions, sessionModelBillableOutputTokens } from './session-output.js'
 import { findUnpricedModels } from './models.js'
 
 function escCsv(s: string): string {
@@ -330,7 +330,7 @@ function buildSummaryRows(periods: PeriodExport[]): Row[] {
     const cost = p.projects.reduce((s, proj) => s + proj.totalCostUSD, 0)
     const savings = p.projects.reduce((s, proj) => s + proj.totalSavingsUSD, 0)
     const calls = p.projects.reduce((s, proj) => s + proj.totalApiCalls, 0)
-    const sessions = p.projects.reduce((s, proj) => s + proj.sessions.length, 0)
+    const sessions = countSessions(p.projects)
     const projectCount = p.projects.filter(proj => proj.totalCostUSD > 0 || proj.totalSavingsUSD > 0).length
     return {
       Period: p.label,

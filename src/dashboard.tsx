@@ -27,6 +27,7 @@ import { planDisplayName } from './plans.js'
 import { formatDayRangeLabel, getDateRange, parseDayFlag, PERIODS, PERIOD_LABELS, shiftDay, type Period } from './cli-date.js'
 import { BSU, patchStdoutForWindows } from './ink-win.js'
 import { startUserTimingGuard } from './user-timing-guard.js'
+import { countSessions } from './session-output.js'
 
 type View = 'dashboard' | 'optimize' | 'compare'
 
@@ -604,7 +605,7 @@ function Overview({ projects, label, width, planUsages, durable }: { projects: P
   const totalCost = durable ? durable.cost : projects.reduce((s, p) => s + p.totalCostUSD, 0)
   const totalSavings = durable ? durable.savingsUSD : projects.reduce((s, p) => s + p.totalSavingsUSD, 0)
   const totalCalls = durable ? durable.calls : projects.reduce((s, p) => s + p.totalApiCalls, 0)
-  const totalSessions = durable ? durable.sessions : projects.reduce((s, p) => s + p.sessions.length, 0)
+  const totalSessions = durable ? durable.sessions : countSessions(projects)
   const allSessions = projects.flatMap(p => p.sessions)
   const totalInput = durable ? durable.inputTokens : allSessions.reduce((s, sess) => s + sess.totalInputTokens, 0)
   const totalOutput = durable ? durable.outputTokens : allSessions.reduce((s, sess) => s + sess.totalOutputTokens, 0)
