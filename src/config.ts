@@ -4,8 +4,8 @@ import { homedir } from 'os'
 import { randomBytes } from 'crypto'
 import { PLAN_PROVIDERS } from './plans.js'
 
-export type PlanId = 'claude-pro' | 'claude-max' | 'claude-max-5x' | 'cursor-pro' | 'supergrok' | 'supergrok-heavy' | 'copilot-pro' | 'copilot-pro-plus' | 'copilot-max' | 'custom' | 'none'
-export type PlanProvider = 'claude' | 'codex' | 'cursor' | 'grok' | 'copilot' | 'all'
+export type PlanId = 'claude-pro' | 'claude-max' | 'claude-max-5x' | 'cursor-pro' | 'supergrok' | 'supergrok-heavy' | 'copilot-pro' | 'copilot-pro-plus' | 'copilot-max' | 'google-ai-pro' | 'google-ai-ultra-5x' | 'google-ai-ultra-20x' | 'custom' | 'none'
+export type PlanProvider = 'claude' | 'codex' | 'cursor' | 'grok' | 'copilot' | 'antigravity' | 'all'
 
 export type Plan = {
   id: PlanId

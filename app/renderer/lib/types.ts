@@ -470,9 +470,12 @@ export type PlanId =
   | 'cursor-pro'
   | 'supergrok'
   | 'supergrok-heavy'
+  | 'google-ai-pro'
+  | 'google-ai-ultra-5x'
+  | 'google-ai-ultra-20x'
   | 'custom'
   | 'none'
-export type PlanProvider = 'claude' | 'codex' | 'cursor' | 'grok' | 'all'
+export type PlanProvider = 'claude' | 'codex' | 'cursor' | 'grok' | 'antigravity' | 'all'
 export type PlanStatus = 'under' | 'near' | 'over'
 
 /** Serialized plan summary from `attachPlanSummaries` (src/main.ts:90). */

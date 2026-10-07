@@ -73,7 +73,7 @@ export function rolloutFileSessionId(filePath: string): string | undefined {
   }
 }
 
-function walkRolloutFiles(codexDir: string, visit: (filePath: string) => void): void {
+export function walkRolloutFiles(codexDir: string, visit: (filePath: string) => void): void {
   const take = (dir: string, file: string) => {
     if (file.startsWith('rollout-') && file.endsWith('.jsonl')) visit(join(dir, file))
   }

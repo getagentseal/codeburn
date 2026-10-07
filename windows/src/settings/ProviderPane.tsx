@@ -27,8 +27,9 @@ const GUIDANCE: Record<string, string> = {
   cursor: 'Sign in to the Cursor app, then click Retry.',
   zai: 'Sign in with the Pi CLI, or set ZAI_API_KEY, then click Retry.',
   grok: 'Sign in with the Grok CLI, then click Retry.',
-  clinepass: 'Set CLINEPASS_API_KEY, then click Retry.',
+  clinepass: 'Sign in with Cline (run `cline auth`), or set CLINEPASS_API_KEY, then click Retry.',
   devin: 'Run the Devin CLI once to sign in, then click Retry.',
+  commandcode: 'Sign in with the Command Code CLI, then click Retry.',
 }
 
 /// The mac's "How it works" sections, with the Windows paths. Every one of these is
@@ -43,8 +44,9 @@ const HOW_IT_WORKS: Record<string, string> = {
   cursor: 'Cursor quota opens the Cursor editor state database read-only for its access token, then asks cursor.com. Nothing is written back, so an expired token can only be refreshed by signing in to Cursor again.',
   zai: 'Z.ai quota uses a supplied API key if there is one, and otherwise the Z.ai login the Pi CLI keeps in %USERPROFILE%\\.pi\\agent\\auth.json.',
   grok: 'Grok Build quota reads %USERPROFILE%\\.grok\\auth.json, preferring the current OIDC scope over an older sign-in entry.',
-  clinepass: 'ClinePass has no local login file, so the only credential is an API key.',
+  clinepass: 'ClinePass quota uses CLINEPASS_API_KEY or CLINE_API_KEY if set, and otherwise the Cline sign-in in %USERPROFILE%\\.cline\\data\\settings\\providers.json, read-only. Only Cline refreshes that sign-in, so if it shows as expired, run cline once and click Retry.',
   devin: 'Devin quota reads the plan status the Devin CLI caches in %USERPROFILE%\\.cache\\devin\\cli, read-only. Nothing is sent anywhere and no API key is used, so the numbers are as fresh as the CLI\'s last run.',
+  commandcode: 'Command Code quota reads the API key the Command Code CLI keeps in %USERPROFILE%\\.commandcode\\auth.json, read-only, and asks Command Code for the 5-hour and weekly windows and the credits left.',
 }
 
 type Props = {

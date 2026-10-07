@@ -111,6 +111,7 @@
 "Enter an API key or token below, then press Save & Connect." = "在下方输入 API 密钥或令牌，然后点按“存储并连接”。";
 "Sign in to %@ in a supported browser, then click Retry." = "在受支持的浏览器中登录 %@，然后点按“重试”。";
 "Sign in with the %@ app or CLI, then click Retry." = "通过 %@ 应用或命令行工具登录，然后点按“重试”。";
+"Sign in with Cline, or enter a ClinePass API key below, then click Retry." = "通过 Cline 登录，或在下方输入 ClinePass API 密钥，然后点按“重试”。";
 "Complete %@ OAuth, then click Retry." = "完成 %@ 的 OAuth 授权，然后点按“重试”。";
 "Start the local %@ service, then click Retry." = "启动本地 %@ 服务，然后点按“重试”。";
 "Enter the required API or cloud credentials below, then press Save & Connect." = "在下方填入所需的 API 或云凭证，然后点按“存储并连接”。";
