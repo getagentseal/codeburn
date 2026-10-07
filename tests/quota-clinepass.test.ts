@@ -1,6 +1,8 @@
 // Fixture-driven coverage for the ClinePass quota adapter, ported from the
 // menubar's ClinePassQuotaTests. The key is synthetic and every request goes
 // through the injected fetch.
+import { join } from 'node:path'
+
 import { describe, expect, it } from 'vitest'
 
 import {
@@ -45,9 +47,9 @@ describe('ClinePass credential discovery', () => {
   })
 
   it('follows Cline\'s settings path overrides', () => {
-    expect(clineProvidersPath({}, '/home/u')).toBe('/home/u/.cline/data/settings/providers.json')
-    expect(clineProvidersPath({ CLINE_DIR: '~/c' }, '/home/u')).toBe('/home/u/c/data/settings/providers.json')
-    expect(clineProvidersPath({ CLINE_DIR: '/c', CLINE_DATA_DIR: '/d' }, '/home/u')).toBe('/d/settings/providers.json')
+    expect(clineProvidersPath({}, '/home/u')).toBe(join('/home/u', '.cline', 'data', 'settings', 'providers.json'))
+    expect(clineProvidersPath({ CLINE_DIR: '~/c' }, '/home/u')).toBe(join('/home/u', 'c', 'data', 'settings', 'providers.json'))
+    expect(clineProvidersPath({ CLINE_DIR: '/c', CLINE_DATA_DIR: '/d' }, '/home/u')).toBe(join('/d', 'settings', 'providers.json'))
     expect(clineProvidersPath({ CLINE_DATA_DIR: '/d', CLINE_PROVIDER_SETTINGS_PATH: '/f.json' }, '/home/u')).toBe('/f.json')
   })
 
