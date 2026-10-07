@@ -8,6 +8,7 @@ import { discoverClaudeConfigSources, getClaudeConfigDirs, claude } from '../src
 import { createCodexProvider } from '../src/providers/codex.js'
 import { reconcileFile } from '../src/session-cache.js'
 import { parseAllSessions } from '../src/parser.js'
+import { createMistralVibeProvider } from '../src/providers/mistral-vibe.js'
 import type { DateRange } from '../src/types.js'
 
 /** wsl.exe --list --quiet writes UTF-16LE with CRLF ends. */
@@ -15,7 +16,7 @@ function wslOutput(lines: string[], withBom = false): Buffer {
   return Buffer.from((withBom ? '\uFEFF' : '') + lines.join('\r\n') + '\r\n', 'utf16le')
 }
 
-const ENV_KEYS = ['HOME', 'CLAUDE_CONFIG_DIR', 'CLAUDE_CONFIG_DIRS', 'CODEBURN_DESKTOP_SESSIONS_DIR', 'CODEX_HOME', 'CODEBURN_CACHE_DIR', 'CODEBURN_WSL'] as const
+const ENV_KEYS = ['HOME', 'CLAUDE_CONFIG_DIR', 'CLAUDE_CONFIG_DIRS', 'CODEBURN_DESKTOP_SESSIONS_DIR', 'CODEX_HOME', 'VIBE_HOME', 'CODEBURN_CACHE_DIR', 'CODEBURN_WSL'] as const
 let saved: Record<string, string | undefined>
 let tmpDir: string
 
@@ -210,6 +211,32 @@ describe('WSL homes as extra provider roots', () => {
       .toContain(join(dayDir, 'rollout-2099-05-01T10-00-00-abc.jsonl'))
     expect((await provider.probeRoots!()).map(r => r.path))
       .toEqual(expect.arrayContaining([join(winCodex, 'sessions'), join(wslHome, '.codex', 'sessions')]))
+  })
+
+  it('discovers Vibe sessions in both layouts under a WSL home and reads its config.toml', async () => {
+    const wslHome = join(tmpDir, 'wsl', 'ubuntu-me')
+    process.env['VIBE_HOME'] = join(tmpDir, 'win', '.vibe')
+    const root = join(wslHome, '.vibe', 'logs', 'session')
+    const legacy = join(root, 'session_20990501_100000_abc')
+    const unified = join(root, 'unified', 'sess-wsl')
+    await mkdir(legacy, { recursive: true })
+    await mkdir(unified, { recursive: true })
+    await writeFile(join(legacy, 'meta.json'), JSON.stringify({ environment: { working_directory: '/home/me/legacy' } }))
+    await writeFile(join(legacy, 'messages.jsonl'), '')
+    await writeFile(join(unified, 'CURRENT'), '')
+    setWslHomes([wslHome])
+
+    const provider = createMistralVibeProvider()
+    expect((await provider.discoverSessions()).map(s => s.path))
+      .toEqual(expect.arrayContaining([legacy, join(unified, 'CURRENT')]))
+    expect((await provider.probeRoots!()).map(r => r.path))
+      .toEqual([join(tmpDir, 'win', '.vibe', 'logs', 'session'), root])
+  })
+
+  it('leaves an explicitly constructed Vibe provider scanning exactly its dir', async () => {
+    setWslHomes([join(tmpDir, 'wsl', 'ubuntu-me')])
+    const roots = await createMistralVibeProvider(join(tmpDir, 'fixture')).probeRoots!()
+    expect(roots.map(r => r.path)).toEqual([join(tmpDir, 'fixture')])
   })
 
   it('leaves an explicitly constructed Codex provider scanning exactly its dir', async () => {

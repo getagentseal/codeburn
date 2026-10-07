@@ -362,7 +362,7 @@ The dollar figure is what your tokens would have cost at API rates. It is not an
 <details>
 <summary><strong>Is my plan the right size, or am I paying for capacity I never use?</strong></summary>
 
-Set what you pay for with `codeburn plan set claude-max`, or `claude-pro`, `cursor-pro`, `copilot-pro`, or `custom --monthly-usd 200 --provider codex`. The Plans page then shows spend this cycle against that budget with a pacing line, either On track or on pace to exceed with the projected figure and the date. After two or three cycles the pattern is clear. Consistently under a quarter of the plan means you are buying capacity you do not use, and consistently over means the cheaper plan is costing you. CodeBurn shows the share and the pace, and leaves the choice of plan to you.
+Set what you pay for with `codeburn plan set claude-max`, or `claude-pro`, `cursor-pro`, `copilot-pro`, `google-ai-pro`, or `custom --monthly-usd 200 --provider codex`. The Plans page then shows spend this cycle against that budget with a pacing line, either On track or on pace to exceed with the projected figure and the date. After two or three cycles the pattern is clear. Consistently under a quarter of the plan means you are buying capacity you do not use, and consistently over means the cheaper plan is costing you. CodeBurn shows the share and the pace, and leaves the choice of plan to you.
 
 </details>
 
