@@ -141,11 +141,11 @@ never runs.
 
 ```bash
 # Windows (.msi): run from a Windows host. Without TAURI_SIGNING_PRIVATE_KEY the
-# updater signature cannot be written, so add --no-sign for a local package.
-npm run tauri build -- --no-sign
+# updater signature cannot be written, so turn updater artifacts off for a local package.
+npm run tauri build -- --config src-tauri/tauri.no-updater.conf.json
 
 # Linux (experimental): produces .deb, .rpm, .AppImage under src-tauri/target/release/bundle/
-npm run tauri build -- --no-sign
+npm run tauri build -- --config src-tauri/tauri.no-updater.conf.json
 ```
 
 ## Security model
