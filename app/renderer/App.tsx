@@ -34,7 +34,8 @@ import {
 } from './lib/navHistory'
 import { motionClass } from './lib/motion'
 import { clearOverviewHeadlines, readOverviewHeadline, writeOverviewHeadline } from './lib/overviewSnapshot'
-import { codeburn } from './lib/ipc'
+import { codeburn, normalizeCliError } from './lib/ipc'
+import { showToast } from './lib/toast'
 import { effectiveLocale, isLocaleChoice, LocaleContext, setCurrentLocale, t, type Locale, type LocaleChoice } from './i18n'
 import { trackEvent } from './lib/track'
 import { isIdeHost, isMacPlatform, isModifierChord, shortcutLabel } from './lib/platform'
@@ -785,7 +786,7 @@ function AppMain({ transientProject, onTransientProject }: { transientProject: T
       pausePolledPersistence(next !== null)
       onTransientProject(next)
       onConfigMutated()
-    }).catch(() => {})
+    }).catch(err => showToast(normalizeCliError(err).message, 'error'))
   }, [onConfigMutated, onTransientProject])
 
   const navigate = useCallback((next: Section, pane: SettingsPane = 'general') => {

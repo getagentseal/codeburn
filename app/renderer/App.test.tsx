@@ -583,6 +583,15 @@ describe('App shortcuts', () => {
     await waitFor(() => expect(mocks.getOverview).toHaveBeenLastCalledWith('30days', 'all', undefined, undefined, undefined, 'combined'))
   })
 
+  it('says so when the main process refuses a project pick', async () => {
+    render(<App />)
+    await waitFor(() => expect(mocks.setTransientProject).toHaveBeenCalledWith(null))
+    mocks.setTransientProject.mockRejectedValueOnce({ kind: 'bad-args', message: 'invalid project path' })
+    fireEvent.click(screen.getByRole('button', { name: 'Project' }))
+    fireEvent.click(await screen.findByRole('option', { name: 'w/site' }))
+    expect(await screen.findByText('invalid project path')).toBeInTheDocument()
+  })
+
   it('records the filter for the next boot when the pane is empty', async () => {
     render(<App />)
     await waitFor(() => expect(localStorage.getItem('codeburn.projectFiltered')).toBe('0'))
