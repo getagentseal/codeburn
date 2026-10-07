@@ -117,6 +117,7 @@ const ORIGINS_FILE = 'git-origins.json'
 const keyByPath = new Map<string, string | null>()
 let recorded: Record<string, string> | null = null
 const pending = new Map<string, string | null>()
+let exitHooked = false
 
 function readRecorded(): Record<string, string> {
   try {
@@ -142,6 +143,9 @@ export function gitOriginKey(path: string): string | null {
     if ((Object.hasOwn(recorded, path) ? recorded[path] : null) !== key) {
       if (key) recorded[path] = key
       else delete recorded[path]
+      // Lookups outside a parse (a filter over carried days) are kept too.
+      if (!exitHooked) process.once('exit', saveGitOrigins)
+      exitHooked = true
       pending.set(path, key)
     }
   } else {

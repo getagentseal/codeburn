@@ -485,7 +485,8 @@ export function createBridgeHandlers(deps: Deps): Record<string, Handler> {
   let transientProject: string | null = null
   const projectArgs = (): string[] => {
     const filter = savedFilter()
-    return filterArgs(transientProject ? scopeFilter([transientProject])(filter) : filter)
+    // "=": the picked row alone, not the folders under it that are rows of their own.
+    return filterArgs(transientProject ? scopeFilter([`=${transientProject}`])(filter) : filter)
   }
   const telemetry = deps.telemetry ?? null
   // Flips true after the first overview fetch succeeds. Until then, every

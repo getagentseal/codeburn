@@ -4,7 +4,7 @@ import { join } from 'node:path'
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import { projectDayIdentity, type DailyEntry } from '../src/daily-cache.js'
+import { loadDailyCache, projectDayIdentity, type DailyEntry } from '../src/daily-cache.js'
 import { aggregateProjectsIntoDays } from '../src/day-aggregator.js'
 import { __resetGitOriginCache, projectOriginKey, saveGitOrigins } from '../src/git-origin.js'
 import { filterProjectsByName, makeProjectFilter, setExactProjectPaths } from '../src/parser.js'
@@ -144,5 +144,24 @@ describe('projects grouped by git repository', () => {
 
     setExactProjectPaths(true)
     expect(filterProjectsByName(projects, [a2]).map(p => p.projectPath)).toEqual([a2])
+  })
+
+  it('takes one list row for a "=" path: the repository, or the folder without its sub-folders', () => {
+    const { a1, a2, awt, plain } = fixtures()
+    mkdirSync(join(plain, 'site'))
+    const projects = [live(a1, 5), live(a2, 3), live(awt, 2), live(plain, 1), live(join(plain, 'site'), 1)]
+
+    expect(filterProjectsByName(projects, [`=${a2}`]).map(p => p.projectPath).sort()).toEqual([a1, a2, awt].sort())
+    expect(filterProjectsByName(projects, [`=${plain}`]).map(p => p.projectPath)).toEqual([plain])
+    expect(filterProjectsByName(projects, [plain]).map(p => p.projectPath)).toEqual([plain, join(plain, 'site')])
+  })
+
+  it('stamps the repository on days adopted from an older cache while the folder exists', async () => {
+    const { a2 } = fixtures()
+    const day = { date: '2026-09-07', cost: 3, savingsUSD: 0, calls: 1, sessions: 1, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, editTurns: 0, oneShotTurns: 0, models: {}, categories: {}, providers: {}, projects: { [`clone-7\u0000${a2}`]: { cost: 3, calls: 1, savingsUSD: 0, sessions: 1, path: a2 } } }
+    writeFileSync(join(root, 'cache', 'daily-cache.v68.json'), JSON.stringify({ version: 68, savingsConfigHash: '', lastComputedDate: '2026-09-07', days: [day], complete: true }))
+
+    const cache = await loadDailyCache()
+    expect(Object.values(cache.days[0]!.projects!)[0]!.originKey).toBe('github.com/getagentseal/codeburn')
   })
 })

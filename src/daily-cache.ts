@@ -5,6 +5,7 @@ import { join } from 'path'
 
 import { getCodeburnCacheDir, RETIRED_PROVIDER_NAMES } from './cache-dir.js'
 import { sweepSupersededCacheFiles } from './cache-sweep.js'
+import { projectOriginKey } from './git-origin.js'
 import type { ProjectFilterTarget } from './parser.js'
 import type { DateRange, ProjectSummary } from './types.js'
 
@@ -803,7 +804,7 @@ async function adoptOlderDailyCaches(): Promise<DailyCache> {
   const now = new Date()
   const todayStr = toDateString(now)
   const yesterdayStr = toDateString(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1))
-  days = applyRetention(days.filter(d => d.date < todayStr), yesterdayStr)
+  days = stampOrigins(applyRetention(days.filter(d => d.date < todayStr), yesterdayStr))
   // A trusted base can carry lastComputedDate >= today (clock skew wrote a
   // frozen today entry that the purge above just removed). Left as-is it would
   // make hydration skip the gap parse forever and the purged day would never
@@ -837,6 +838,22 @@ async function adoptOlderDailyCaches(): Promise<DailyCache> {
   }
   await saveDailyCache(adopted).catch(() => {})
   return adopted
+}
+
+/// Adopted days written before v69 learn the repository of each checkout that
+/// still exists, so the record outlives the folder. Days whose folder is gone
+/// keep their path alone.
+function stampOrigins(days: DailyEntry[]): DailyEntry[] {
+  for (const day of days) {
+    for (const holder of [day, ...Object.values(day.providers)]) {
+      for (const p of Object.values(holder.projects ?? {})) {
+        if (p.originKey || !p.path) continue
+        const originKey = projectOriginKey(p.path)
+        if (originKey) p.originKey = originKey
+      }
+    }
+  }
+  return days
 }
 
 export async function saveDailyCache(cache: DailyCache): Promise<void> {

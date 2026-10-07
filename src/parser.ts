@@ -4886,7 +4886,7 @@ function expandTilde(pattern: string): string {
 
 /// A pattern is normalized once and matched many times: the day cache runs the
 /// filter for every project of every day, and again per provider slice.
-type CompiledPattern = { rooted: true; anchor: string | null; origin: string | null } | { rooted: false; needle: string }
+type CompiledPattern = { rooted: true; anchor: string | null; origin: string | null; exact: boolean } | { rooted: false; needle: string }
 
 /// `originKey` is the repository a day entry recorded for its path; absent, it
 /// is looked up from the path.
@@ -4899,11 +4899,14 @@ export function setExactProjectPaths(exact: boolean): void {
   exactProjectPaths = exact
 }
 
+/// "=/path" is one list row: its repository, or that folder without the folders
+/// under it, which are rows of their own.
 function compile(patterns: readonly string[]): CompiledPattern[] {
   return patterns.map(pattern => {
-    if (!isRootedProjectPattern(pattern)) return { rooted: false as const, needle: pattern.toLowerCase() }
-    const path = expandTilde(pattern)
-    return { rooted: true as const, anchor: normalizeAbsProjectPathKey(path), origin: exactProjectPaths ? null : projectOriginKey(path) }
+    const exact = pattern.startsWith('=') && isRootedProjectPattern(pattern.slice(1))
+    if (!exact && !isRootedProjectPattern(pattern)) return { rooted: false as const, needle: pattern.toLowerCase() }
+    const path = expandTilde(exact ? pattern.slice(1) : pattern)
+    return { rooted: true as const, anchor: normalizeAbsProjectPathKey(path), origin: exactProjectPaths ? null : projectOriginKey(path), exact }
   })
 }
 
@@ -4918,7 +4921,7 @@ function hit(entry: ProjectFilterTarget, pattern: CompiledPattern, key: string |
   if (pattern.rooted) {
     if (pattern.origin) return (entry.originKey ?? projectOriginKey(entry.projectPath)) === pattern.origin
     const anchor = pattern.anchor
-    return anchor !== null && key !== null && (key === anchor || key.startsWith(anchor + '/'))
+    return anchor !== null && key !== null && (key === anchor || (!pattern.exact && key.startsWith(anchor + '/')))
   }
   return entry.project.toLowerCase().includes(pattern.needle)
     || (entry.projectPath ?? '').toLowerCase().includes(pattern.needle)
