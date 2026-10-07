@@ -128,7 +128,8 @@ skipUnlessSqlite('devin provider sessions.db usage', () => {
       userMessage: 'fix the ledger tests',
     })
     expect(calls[1]!.costUSD).toBeGreaterThan(0)
-    expect(calls[2]).toMatchObject({ model: 'swe-2-high', costUSD: 0, inputTokens: 10 })
+    expect(calls[2]).toMatchObject({ model: 'swe-2-high', inputTokens: 10 })
+    expect(calls[2]!.costUSD).toBeCloseTo(10 * 3e-6 + 1 * 15e-6, 12)
     expect(calls[3]).toMatchObject({ model: 'compactor', costUSD: 0, inputTokens: 7 })
   })
 

@@ -110,6 +110,7 @@
 "Enter an API key or token below, then press Save & Connect." = "下にAPIキーまたはトークンを入力し、「保存して接続」を押してください。";
 "Sign in to %@ in a supported browser, then click Retry." = "対応ブラウザで%@にサインインし、「再試行」をクリックしてください。";
 "Sign in with the %@ app or CLI, then click Retry." = "%@のアプリまたはCLIでサインインし、「再試行」をクリックしてください。";
+"Sign in with Cline, or enter a ClinePass API key below, then click Retry." = "Clineでサインインするか、下にClinePassのAPIキーを入力して、「再試行」をクリックしてください。";
 "Complete %@ OAuth, then click Retry." = "%@のOAuth認証を完了し、「再試行」をクリックしてください。";
 "Start the local %@ service, then click Retry." = "ローカルの%@サービスを起動し、「再試行」をクリックしてください。";
 "Enter the required API or cloud credentials below, then press Save & Connect." = "下に必要なAPIまたはクラウド認証情報を入力し、「保存して接続」を押してください。";

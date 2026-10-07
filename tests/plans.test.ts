@@ -16,6 +16,9 @@ describe('plan presets', () => {
     expect(getPresetPlan('copilot-pro')).toMatchObject({ id: 'copilot-pro', monthlyCredits: 1500, monthlyUsd: 15, provider: 'copilot' })
     expect(getPresetPlan('copilot-pro-plus')).toMatchObject({ id: 'copilot-pro-plus', monthlyCredits: 7000, monthlyUsd: 70, provider: 'copilot' })
     expect(getPresetPlan('copilot-max')).toMatchObject({ id: 'copilot-max', monthlyCredits: 20000, monthlyUsd: 200, provider: 'copilot' })
+    expect(getPresetPlan('google-ai-pro')).toMatchObject({ id: 'google-ai-pro', monthlyUsd: 19.99, provider: 'antigravity' })
+    expect(getPresetPlan('google-ai-ultra-5x')).toMatchObject({ id: 'google-ai-ultra-5x', monthlyUsd: 99.99, provider: 'antigravity' })
+    expect(getPresetPlan('google-ai-ultra-20x')).toMatchObject({ id: 'google-ai-ultra-20x', monthlyUsd: 199.99, provider: 'antigravity' })
     expect(getPresetPlan('custom')).toBeNull()
   })
 
@@ -27,6 +30,7 @@ describe('plan presets', () => {
     expect(isPlanProvider('all')).toBe(true)
     expect(isPlanProvider('claude')).toBe(true)
     expect(isPlanProvider('copilot')).toBe(true)
+    expect(isPlanProvider('antigravity')).toBe(true)
     expect(isPlanProvider('invalid')).toBe(false)
     expect(isPlanId('copilot-pro')).toBe(true)
   })

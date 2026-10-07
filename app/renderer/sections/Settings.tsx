@@ -59,6 +59,9 @@ const PLAN_PRESETS: PlanPreset[] = [
   { id: 'cursor-pro', label: 'Cursor Pro', provider: 'cursor' },
   { id: 'supergrok', label: 'SuperGrok', provider: 'grok' },
   { id: 'supergrok-heavy', label: 'SuperGrok Heavy', provider: 'grok' },
+  { id: 'google-ai-pro', label: 'Google AI Pro', provider: 'antigravity' },
+  { id: 'google-ai-ultra-5x', label: 'Google AI Ultra 5x', provider: 'antigravity' },
+  { id: 'google-ai-ultra-20x', label: 'Google AI Ultra 20x', provider: 'antigravity' },
 ]
 
 // Claude and Codex subscriptions are detected from the CLI login (see the

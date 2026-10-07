@@ -8,7 +8,7 @@ import { FS_SCAN_CONCURRENCY, mapWithConcurrency, readSessionLines } from '../fs
 import { billableOutputTokens, calculateCost, getModelCosts, pricingModelAt } from '../models.js'
 import { readCachedCodexResults, writeCachedCodexResults, getCachedCodexProject, fingerprintFile, type CodexFileFingerprint } from '../codex-cache.js'
 import { mergeToolIntervals } from '../codex-throughput.js'
-import { isCodexForkReplay, isCodexForkReplayState, startCodexForkReplay, type CodexForkReplayState } from '../codex-fork-replay.js'
+import { codexReplayResponseIdentity, codexReplayUsageIdentity, isCodexForkReplay, isCodexForkReplayState, loadCodexParentReplay, startCodexForkReplay, type CodexForkReplayState } from '../codex-fork-replay.js'
 import { normalizeContentBlocks } from '../content-utils.js'
 import { estimateTokensFromChars } from '../token-estimate.js'
 import { wslHomes } from '../wsl.js'
@@ -801,6 +801,23 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
       let sessionCwd: string | undefined = resume?.state.sessionCwd
       let forkedFromId = resume?.state.forkedFromId ?? ''
       let forkReplayState = resume?.state.forkReplayState ? { ...resume.state.forkReplayState } : undefined
+      // What the parent rollout recorded before the fork: a burst record found
+      // there is a copy and is dropped. The rest is the parent's work that its
+      // rollout kept only inside a running total, so it counts here. Loaded on
+      // the first burst usage record; null drops the whole burst.
+      let parentReplay: Set<string> | null | undefined
+      let parentReplayAnchored = false
+      const isParentReplay = async (identity: string | undefined): Promise<boolean> => {
+        if (parentReplay === undefined) {
+          parentReplay = forkedFromId && forkReplayState ? await loadCodexParentReplay(source.path, forkedFromId, forkReplayState.startedAtMs) : null
+        }
+        if (!parentReplay || identity === undefined) return true
+        if (parentReplay.has(identity)) { parentReplayAnchored = true; return true }
+        // A burst that opens with a record the parent lacks was not copied from
+        // this parent file; fall back to dropping the burst.
+        if (!parentReplayAnchored) { parentReplay = null; return true }
+        return false
+      }
       // Null sentinel rather than `0` so the FIRST event is never confused
       // with a duplicate. A session that only emits last_token_usage (no
       // total_token_usage) reports cumulativeTotal=0 on every event; with a
@@ -1018,6 +1035,8 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
             || entry.payload?.parent_thread_id
             || entry.payload?.source?.subagent?.thread_spawn?.parent_thread_id
             || ''
+          parentReplay = undefined
+          parentReplayAnchored = false
           if (forkedFromId) {
             forkReplayState = startCodexForkReplay(entry.timestamp)
             // Byte identity only collapses consecutive records inside one
@@ -1079,7 +1098,8 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
         )) continue
 
         if (isForkReplay && entry.type === 'response_item' && entry.payload?.type === 'message') continue
-        if (isForkReplay && entry.type === 'event_msg' && entry.payload?.type === 'token_count') {
+        if (isForkReplay && entry.type === 'event_msg' && entry.payload?.type === 'token_count'
+          && await isParentReplay(entry.payload.info ? codexReplayUsageIdentity(entry.payload.info) : undefined)) {
           const info = entry.payload.info
           if (info) {
             const total = info.total_token_usage
@@ -1320,10 +1340,10 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
           // turns, so it becomes the source for this rollout once seen.
           const usage: unknown = entry.payload?.usage
           if (!isValidCodexTokenUsage(usage)) continue
-          if (isForkReplay) continue
+          const responseId = entry.payload?.response_id
+          if (isForkReplay && await isParentReplay(typeof responseId === 'string' && responseId ? codexReplayResponseIdentity(responseId) : undefined)) continue
           hasTokenUsageRecord = true
 
-          const responseId = entry.payload?.response_id
           const dedupKey = typeof responseId === 'string' && responseId
             ? `codex:${forkedFromId || sessionId}:response:${responseId}`
             : `codex:usage-record:${JSON.stringify([source.path, tracker.lastCompleteLineOffset])}`

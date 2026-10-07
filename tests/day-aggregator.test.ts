@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 
 import { aggregateProjectsIntoDays, buildPeriodDataFromDays, dateKey } from '../src/day-aggregator.js'
-import { isTurnResidueOnly } from '../src/daily-cache.js'
+import { cachedProjectIdentities, isTurnResidueOnly, projectDayIdentity, projectDayKey, type DailyEntry } from '../src/daily-cache.js'
+import { makeProjectFilter } from '../src/parser.js'
 import type { ProjectSummary } from '../src/types.js'
 
 function makeProject(overrides: Partial<ProjectSummary> & { sessions: ProjectSummary['sessions'] }): ProjectSummary {
@@ -369,9 +370,55 @@ describe('aggregateProjectsIntoDays', () => {
     expect(day.categories['coding']).toMatchObject({ turns: 1, cost: 10 })
     // Per-project rollup at day level and inside each provider slice; path is
     // stored so display layers can derive a friendly name once sessions expire.
-    expect(day.projects!['p']).toEqual({ cost: 10, calls: 2, savingsUSD: 0, sessions: 1, path: '/p' })
-    expect(day.providers['claude']!.projects!['p']).toMatchObject({ cost: 7, calls: 1 })
-    expect(day.providers['codex']!.projects!['p']).toMatchObject({ cost: 3, calls: 1 })
+    const key = projectDayKey('p', '/p')
+    expect(day.projects![key]).toEqual({ cost: 10, calls: 2, savingsUSD: 0, sessions: 1, path: '/p' })
+    expect(day.providers['claude']!.projects![key]).toMatchObject({ cost: 7, calls: 1 })
+    expect(day.providers['codex']!.projects![key]).toMatchObject({ cost: 3, calls: 1 })
+  })
+
+  it('splits one project label across the real paths its sessions ran in', () => {
+    // Every Claude session started from the home folder shares one label; the
+    // canonical cwd groups them into different projects. Keying the day split
+    // by label alone kept the first path and billed the whole label to it.
+    const timestamp = '2026-04-10T10:00:00'
+    const home = '-home-u'
+    const withPath = (projectPath: string, cost: number, sessionId: string): ProjectSummary => {
+      const p = makeSingleTurnProject([makeCall(timestamp, cost)])
+      p.project = home
+      p.projectPath = projectPath
+      p.sessions[0]!.project = home
+      p.sessions[0]!.sessionId = sessionId
+      p.sessions[0]!.turns[0]!.assistantCalls[0]!.deduplicationKey = `dk-${sessionId}`
+      return p
+    }
+    const days = aggregateProjectsIntoDays([withPath('/home/u', 2, 'a'), withPath('/home/u/app', 5, 'b'), withPath('/home/u/web', 11, 'c')])
+    const day = days[0]!
+    const unscoped = aggregateProjectsIntoDays([withPath('/home/u', 2, 'a'), withPath('/home/u/app', 5, 'b'), withPath('/home/u/web', 11, 'c')].map(p => ({ ...p, projectPath: '/home/u' })))[0]!
+    expect(day.cost).toBe(18)
+    expect(day.cost).toBe(unscoped.cost)
+    expect(day.calls).toBe(unscoped.calls)
+    expect(day.sessions).toBe(unscoped.sessions)
+
+    const totalFor = (holder: { projects?: DailyEntry['projects'] }, pattern: string) => {
+      const matches = makeProjectFilter([pattern])
+      return Object.entries(holder.projects ?? {})
+        .filter(([key, stats]) => matches(projectDayIdentity(key, stats)))
+        .reduce((sum, [, stats]) => sum + stats.cost, 0)
+    }
+    expect(totalFor(day, '/home/u/app')).toBe(5)
+    expect(totalFor(day, '/home/u/web')).toBe(11)
+    expect(totalFor(day.providers['claude']!, '/home/u/app')).toBe(5)
+    expect(Object.values(day.projects!).reduce((s, p) => s + p.cost, 0)).toBe(day.cost)
+    expect(Object.values(day.projects!).reduce((s, p) => s + p.sessions, 0)).toBe(day.sessions)
+    expect(cachedProjectIdentities({ version: 0, savingsConfigHash: '', lastComputedDate: null, days }, day.date, day.date))
+      .toEqual(expect.arrayContaining([{ project: home, projectPath: '/home/u/app' }, { project: home, projectPath: '/home/u/web' }]))
+  })
+
+  it('still reads a day split written before v67 (label key, one path)', () => {
+    const legacy = { cost: 4, calls: 1, savingsUSD: 0, sessions: 1, path: '/home/u/app' }
+    expect(projectDayIdentity('-home-u', legacy)).toEqual({ project: '-home-u', projectPath: '/home/u/app' })
+    expect(makeProjectFilter(['/home/u/app'])(projectDayIdentity('-home-u', legacy))).toBe(true)
+    expect(projectDayIdentity('pathless', { cost: 1, calls: 1, savingsUSD: 0, sessions: 0 })).toEqual({ project: 'pathless', projectPath: '' })
   })
 
   it('attributes a multi-provider turn to the majority provider exactly once', () => {
