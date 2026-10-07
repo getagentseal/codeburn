@@ -592,7 +592,9 @@ function PlansPane({ period, refreshToken, onNavigate, onConfigMutated }: { peri
     <div className="card">
       <div className="about-sec set-last-sec">
         <div className="about-sec-h">{t('settings.plans.detectedHeading')}</div>
-        {quota.error && !quota.data ? <SettingsErrorText error={quota.error} /> : QUOTA_PROVIDERS.map(provider => {
+        {isIdeHost() ? (
+          <div className="about-row"><span className="tx">{t('ide.settings.quotaProviders')}<small>{t('ide.settings.followsEditorHint')}</small></span><span className="r"><button className="set-text-button" onClick={() => { void codeburn.openIdeSettings?.() }}>{t('ide.settings.open')}</button></span></div>
+        ) : quota.error && !quota.data ? <SettingsErrorText error={quota.error} /> : QUOTA_PROVIDERS.map(provider => {
           const row = quota.data?.find(item => item.provider === provider)
           if (!row && !disabledProviders.includes(provider)) return null
           return <DetectedRow

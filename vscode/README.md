@@ -72,6 +72,7 @@ On an older editor whose Node is below 22.13, CodeBurn looks for a Node.js 22.13
 - Session logs are read locally by the bundled CLI. Your prompts, code, file names and project names never leave your machine.
 - The extension has no telemetry.
 - The bundled CLI makes the same few requests it makes anywhere: model prices from LiteLLM and exchange rates (for a non-USD currency), each at most once a day, and, if you use Cursor, your own usage export from cursor.com with the Cursor app's login. `"cursorSync": false` in `~/.config/codeburn/config.json` turns that off.
+- Some dashboard actions reach the network only when you run them: scanning your local network for other devices, sharing a report, pushing usage to your own OTLP endpoint (sync, off until you set it up) and adding a plugin.
 - Plan quotas are read from each provider's own API with the login already on your machine, the same requests the CodeBurn desktop app makes. Remove a provider from `codeburn.quotaProviders` to stop them.
 
 ## Works in

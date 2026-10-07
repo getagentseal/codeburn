@@ -59,7 +59,8 @@ for (const pkg of topLevel) {
   cpSync(src, join(stage, 'node_modules', pkg), {
     recursive: true,
     dereference: true,
-    filter: path => !/\.(map|md|d\.ts|d\.mts|d\.cts)$/i.test(path),
+    // Packages' own tests and TypeScript sources never run; matched below the package root only.
+    filter: path => !/\.(map|md|ts|mts|cts)$/i.test(path) && !/[\\/](test|tests|__tests__)([\\/]|$)/i.test(path.slice(src.length)),
   })
 }
 const required = ['chalk', 'react', 'ink', 'strip-ansi', 'zod', 'undici', 'selfsigned', 'commander', 'bonjour-service', '@modelcontextprotocol/sdk']

@@ -87,6 +87,17 @@ describe('statusText', () => {
     expect(md).toContain('(command:codeburn.openDashboard)')
   })
 
+  it('keeps workspace and model names literal in the tooltip', () => {
+    const hostile = buildSummary({
+      today: payload(1, { models: [{ name: '[x](command:evil) *m*', cost: 1 }] }), week: null, month: null,
+      workspace: { label: 'repo|[a](https://e.x)`$(zap)`', today: payload(1), week: null }, quota: null, optimize: null,
+    })
+    const md = tooltipMarkdown(hostile)
+    expect(md).toContain('repo\\|\\[a\\]\\(https://e.x\\)\\`\\$\\(zap\\)\\` today')
+    expect(md).toContain('\\[x\\]\\(command:evil\\) \\*m\\*')
+    expect(md.match(/\]\(command:/g)).toHaveLength(1)
+  })
+
   it('copies a plain summary', () => {
     const text = summaryText(summary)
     expect(text).toContain('Today: ~$12.40')

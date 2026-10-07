@@ -115,8 +115,9 @@ export function quotaText(line: QuotaLine): string {
   return `${providerName(line)} · ${line.label} · ${used}`
 }
 
+/** Names reach the tooltip from repositories and logs: keep them literal text. */
 function cell(text: string): string {
-  return text.replace(/\|/g, '\\|')
+  return text.replace(/[\\`*_[\]()|<>!$#~]/g, '\\$&')
 }
 
 /** The status bar tooltip: plain markdown, one command link, no HTML. */
@@ -126,7 +127,7 @@ export function tooltipMarkdown(summary: Summary): string {
   if (summary.week) rows.push([t('common.period.week'), money(summary.week)])
   if (summary.month) rows.push([t('common.period.month'), money(summary.month)])
   if (summary.workspace) rows.push([t('ide.status.workspaceToday', { name: summary.workspace.label }), money(summary.workspace.today)])
-  const out = ['**CodeBurn**', '', '| | |', '|:--|--:|', ...rows.map(([label, value]) => `| ${cell(label)} | ${cell(value)} |`), '']
+  const out = ['**CodeBurn**', '', '| | |', '|:--|--:|', ...rows.map(([label, value]) => `| ${cell(label)} | ${value} |`), '']
   const top = summary.topModels[0]
   if (top) out.push(`${t('ide.status.topModel')}: ${cell(top.name)} · ${money(top)}`, '')
   if (summary.quota.length > 0) {

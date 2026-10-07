@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+
 import { describe, expect, it } from 'vitest'
 
 import { readSettings, refreshIntervalMs, webviewSeed } from '../src/settings'
@@ -60,5 +62,14 @@ describe('webviewSeed', () => {
     expect(seed['codeburn.defaultPeriod']).toBe('week')
     expect(seed['codeburn.refreshInterval']).toBe('5m')
     expect(JSON.parse(seed['codeburn.quotaDisabled']!)).toEqual(['codex', 'gemini', 'copilot', 'antigravity', 'kimi', 'zcode', 'grokbot'])
+  })
+})
+
+describe('setting scopes', () => {
+  const properties = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).contributes.configuration.properties
+
+  it('keeps credentialed and shared settings out of a workspace', () => {
+    for (const key of ['codeburn.currency', 'codeburn.provider', 'codeburn.quotaProviders']) expect(properties[key].scope).toBe('application')
+    expect(properties['codeburn.nodePath'].scope).toBe('machine')
   })
 })

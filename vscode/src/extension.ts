@@ -1,10 +1,10 @@
-import { mkdirSync, readdirSync } from 'node:fs'
+import { mkdirSync, readdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 
 import * as vscode from 'vscode'
 
 import { createBridgeHandlers, type Handler } from '../../app/electron/bridge-handlers'
-import { reapOrphanServe, resolveCodeburnPath, shutdownAll, spawnCli, spawnCliAction, startServe } from '../../app/electron/cli'
+import { reapOrphanServe, resolveCodeburnPath, restartServe, shutdownAll, spawnCli, spawnCliAction, startServe } from '../../app/electron/cli'
 import { getQuota } from '../../app/electron/quota'
 import { resolveSystemLocale, setCurrentLocale, t } from '../../app/renderer/i18n'
 import type { MenubarPayload, QuotaProvider } from '../../app/renderer/lib/types'
@@ -26,6 +26,7 @@ type IdeCommand = { section?: string; period?: string; refresh?: boolean }
 type CliFailure = { kind: string; message: string }
 
 let controller: Controller | null = null
+let servePidFile: string | null = null
 
 /** The returned API is for the smoke test: it proves the dashboard's renderer booted and called the host. */
 export function activate(context: vscode.ExtensionContext): { dashboardCalls: () => number } {
@@ -39,6 +40,8 @@ export async function deactivate(): Promise<void> {
   controller?.dispose()
   controller = null
   await shutdownAll()
+  if (servePidFile) rmSync(servePidFile, { force: true })
+  servePidFile = null
 }
 
 /** A serve pid file per extension host, so two windows never reap each other's
@@ -117,7 +120,8 @@ class Controller {
     recordFirstSeen(context.globalState)
     const stateDir = context.globalStorageUri.fsPath
     reapOrphans(stateDir)
-    startServe(join(stateDir, `serve-${process.pid}.pid`))
+    servePidFile = join(stateDir, `serve-${process.pid}.pid`)
+    startServe(servePidFile)
 
     this.renderStatus()
     this.registerCommands()
@@ -129,7 +133,8 @@ class Controller {
     )
     void vscode.commands.executeCommand('setContext', 'codeburn.workspaceScope', this.dashboardWorkspace)
     this.schedule()
-    void this.refresh()
+    // The editor setting wins over the CLI's shared currency, at startup too.
+    void this.refresh().then(() => this.applyCurrency())
   }
 
   dispose(): void {
@@ -358,6 +363,19 @@ class Controller {
     })
   }
 
+  /** Sets the CLI's own currency, shared with every CodeBurn surface. */
+  private async setCliCurrency(code: string): Promise<boolean> {
+    const result = await call<{ ok: boolean; stderr: string }>(this.handlersAll['codeburn:setCurrency'], code).catch(error => ({ ok: false, stderr: toFailure(error).message }))
+    if (!result.ok) void vscode.window.showErrorMessage(result.stderr || `CodeBurn: ${code}`)
+    return result.ok
+  }
+
+  private async applyCurrency(): Promise<void> {
+    const wanted = this.settings.currency
+    if (!wanted || !this.summary || this.summary.currency.code === wanted) return
+    if (await this.setCliCurrency(wanted)) await this.refresh()
+  }
+
   private async starOnGitHub(): Promise<void> {
     await vscode.env.openExternal(vscode.Uri.parse(STAR_URL))
     await finishStar(this.context.globalState)
@@ -373,12 +391,13 @@ class Controller {
   private async onSettingsChanged(event: vscode.ConfigurationChangeEvent): Promise<void> {
     const before = this.settings
     this.settings = this.readSettings()
-    if (event.affectsConfiguration('codeburn.nodePath')) this.applyRuntime()
+    if (event.affectsConfiguration('codeburn.nodePath')) {
+      this.applyRuntime()
+      if (servePidFile) restartServe(servePidFile)
+    }
     if (event.affectsConfiguration('codeburn.refreshInterval')) this.schedule()
     if (event.affectsConfiguration('codeburn.currency') && this.settings.currency && this.settings.currency !== before.currency) {
-      // The CLI's own currency setting, shared with every CodeBurn surface.
-      const result = await call<{ ok: boolean; stderr: string }>(this.handlersAll['codeburn:setCurrency'], this.settings.currency).catch(error => ({ ok: false, stderr: toFailure(error).message }))
-      if (!result.ok) void vscode.window.showErrorMessage(result.stderr || `CodeBurn: ${this.settings.currency}`)
+      await this.setCliCurrency(this.settings.currency)
     }
     if (event.affectsConfiguration('codeburn.workspaceOnly') && !this.dashboard) {
       this.dashboardWorkspace = this.settings.workspaceOnly && this.scope.paths.length > 0

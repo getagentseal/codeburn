@@ -1033,6 +1033,15 @@ export function startServe(pidFile?: string): void {
   serveClient.start()
 }
 
+/** Replace the resident child with one spawned for the current target, e.g.
+ *  after the Node.js it runs on changed. */
+export function restartServe(pidFile?: string): void {
+  const child = serveClient?.destroy()
+  serveClient = null
+  if (child) retireWithFlush(child)
+  startServe(pidFile)
+}
+
 /**
  * Best-effort reap of a serve child orphaned by a previous run (an app crash
  * leaves no one to close its stdin). Reads the pid recorded by

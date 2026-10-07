@@ -245,6 +245,7 @@
           "order": 5
         },
         "codeburn.provider": {
+          "scope": "application",
           "type": "string",
           "default": "all",
           "pattern": "^[a-z0-9-]+$",
@@ -252,6 +253,7 @@
           "order": 6
         },
         "codeburn.quotaProviders": {
+          "scope": "application",
           "type": "array",
           "items": {
             "type": "string",

@@ -8,7 +8,7 @@
 // Needs `npm run build` first (dist/ and cli/).
 
 import { execFileSync, spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -96,6 +96,10 @@ try {
     await runTests({ extensionDevelopmentPath: extensionPath, extensionTestsPath: suite, launchArgs, extensionTestsEnv: testEnv })
   }
   const results = JSON.parse(readFileSync(out, 'utf8'))
+  // deactivate() stops the serve child and removes its pid file once the editor closes.
+  const storage = join(tmp, 'user-data', 'User', 'globalStorage', 'codeburn.codeburn')
+  const leftover = existsSync(storage) ? readdirSync(storage).filter(name => /^serve-\d+\.pid$/.test(name)) : []
+  results.push({ name: 'removes its serve pid file on exit', ok: leftover.length === 0, ...(leftover.length ? { error: leftover.join(', ') } : {}) })
   for (const result of results) console.log(`${result.ok ? 'ok  ' : 'FAIL'} ${result.name}${result.text ? `\n${result.text.replace(/^/gm, '     ')}` : ''}${result.error ? `\n     ${result.error}` : ''}`)
   code = results.every(result => result.ok) ? 0 : 1
 } catch (error) {
