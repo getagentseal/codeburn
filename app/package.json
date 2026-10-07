@@ -28,6 +28,7 @@
     "@fontsource-variable/inter": "^5.3.0",
     "@fontsource-variable/jetbrains-mono": "^5.3.0",
     "@gsap/react": "^2.1.2",
+    "electron-updater": "^6.8.9",
     "gsap": "^3.15.0",
     "lz-string": "^1.5.0",
     "react": "^19.3.0",
@@ -64,6 +65,12 @@
       "package.json"
     ],
     "afterPack": "./scripts/after-pack.cjs",
+    "publish": [
+      {
+        "provider": "generic",
+        "url": "https://github.com/getagentseal/codeburn/releases/download/update-feeds"
+      }
+    ],
     "mac": {
       "target": [
         {
@@ -85,6 +92,8 @@
       "icon": "build/icon.icns",
       "identity": "-",
       "hardenedRuntime": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
       "gatekeeperAssess": false,
       "extendInfo": {
         "NSDocumentsFolderUsageDescription": "CodeBurn reads your local AI coding tool session logs (Claude Code, Codex, Cursor, and others) to calculate your token usage and cost. Your data never leaves your machine.",

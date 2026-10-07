@@ -1150,6 +1150,8 @@ export type UpdateStatus = {
   tag: string | null
   /** A Microsoft Store install, which the Store updates; nothing is checked or offered. */
   storeManaged?: boolean
+  /** One-click update state; absent where the banner links to a download instead. */
+  install?: 'available' | 'downloading' | 'ready'
 }
 
 /** The tray app and the Capacity Dock the Windows desktop app bundles (app/electron/menubar.ts).
@@ -1265,6 +1267,10 @@ export interface CodeburnBridge {
   getUpdateStatus(): Promise<UpdateStatus>
   /** Subscribe to pushed update-availability status; returns an unsubscribe fn. */
   onUpdateStatus(cb: (status: UpdateStatus) => void): () => void
+  /** Start the one-click download; absent on bridges without auto-update. */
+  downloadUpdate?(): Promise<UpdateStatus>
+  /** Quit and install a downloaded update. */
+  installUpdate?(): Promise<void>
   getQuota(force?: boolean, disabled?: ProviderName[]): Promise<QuotaProvider[]>
   // `background` (prefetch only) requests background CLI-spawn priority; optional
   // so an older preload that ignores it degrades to interactive priority.
