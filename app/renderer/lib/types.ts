@@ -695,6 +695,9 @@ export type SessionRow = {
   startedAt: string
   endedAt: string
   durationMs: number
+  // Subagent sessions folded into this parent row; their spend is already in
+  // the row's totals. Absent when none (and from older CLIs).
+  subagents?: SessionRow[]
 }
 
 // ————— src/session-contributions.ts (drill-through, `sessions --contributions`) —————

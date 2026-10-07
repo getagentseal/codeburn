@@ -6,7 +6,7 @@ import { inferSessionProvider, sessionBillableOutputTokens } from './session-out
 import { CATEGORY_LABELS } from './types.js'
 import type { ProjectSummary, SessionSummary, TaskCategory } from './types.js'
 import { workUnitSessionKey } from './work-units.js'
-import type { WorkUnitResolution } from './work-units.js'
+import type { WorkUnit, WorkUnitResolution } from './work-units.js'
 
 export type SessionRow = {
   sessionId: string
@@ -30,6 +30,9 @@ export type SessionRow = {
   startedAt: string
   endedAt: string
   durationMs: number
+  /// Subagent sessions folded into this parent row (already included in its
+  /// cost, calls, turns and tokens). Absent on rows with none.
+  subagents?: SessionRow[]
 }
 
 function sessionCostLabel(cost: number): string {
@@ -269,6 +272,85 @@ function workUnitCell(display: WorkUnitDisplay, key: SessionColumnKey): string {
   return cellValue(display.row, key)
 }
 
+/// One top-level entry of a grouped sessions view: a work-unit root whose
+/// provider-recorded children are summed into `row` (`children` non-empty), or a
+/// standalone row (`row === root`, no children). Entries keep the input order of
+/// their root row; a child whose root is missing from `rows` stays standalone.
+type WorkUnitEntry<T extends SessionRow> = { row: T; root: T; children: T[] }
+
+function groupWorkUnitRows<T extends SessionRow>(rows: T[], resolution: WorkUnitResolution): WorkUnitEntry<T>[] {
+  const unitById = new Map(resolution.units.map(unit => [unit.workUnitId, unit]))
+  const unitOf = (row: T): WorkUnit | undefined => {
+    const unitId = resolution.bySession.get(workUnitSessionKey(row.provider, row.sessionId))
+    const unit = unitId !== undefined ? unitById.get(unitId) : undefined
+    return unit && unit.childSessionIds.length > 0 ? unit : undefined
+  }
+  const membersByUnit = new Map<WorkUnit, T[]>()
+  for (const row of rows) {
+    const unit = unitOf(row)
+    if (!unit) continue
+    const list = membersByUnit.get(unit)
+    if (list) list.push(row)
+    else membersByUnit.set(unit, [row])
+  }
+  const rootByUnit = new Map<WorkUnit, T>()
+  for (const [unit, members] of membersByUnit) {
+    const root = members.find(row => row.sessionId === unit.rootSessionId)
+    if (root && members.length >= 2) rootByUnit.set(unit, root)
+  }
+
+  const entries: WorkUnitEntry<T>[] = []
+  for (const row of rows) {
+    const unit = unitOf(row)
+    const root = unit ? rootByUnit.get(unit) : undefined
+    if (!unit || !root) { entries.push({ row, root: row, children: [] }); continue }
+    if (row !== root) continue
+    const members = membersByUnit.get(unit)!
+    const children = members
+      .filter(member => member !== root)
+      .sort((a, b) => b.startedAt.localeCompare(a.startedAt) || a.sessionId.localeCompare(b.sessionId))
+    const sum = (pick: (member: T) => number): number => members.reduce((total, member) => total + pick(member), 0)
+    const startedAt = members.reduce((min, member) => (member.startedAt < min ? member.startedAt : min), root.startedAt)
+    const endedAt = members.reduce((max, member) => (member.endedAt > max ? member.endedAt : max), root.endedAt)
+    const models: string[] = []
+    for (const member of [root, ...children]) {
+      for (const model of member.models) if (!models.includes(model)) models.push(model)
+    }
+    const cost = sum(member => member.cost)
+    const estimatedCost = sum(member => member.estimatedCost)
+    entries.push({
+      row: {
+        ...root,
+        models,
+        cost,
+        estimatedCost,
+        isEstimated: isEstimatedCost(cost, estimatedCost, sessionCostLabel(cost)),
+        savingsUSD: sum(member => member.savingsUSD),
+        calls: sum(member => member.calls),
+        turns: sum(member => member.turns),
+        inputTokens: sum(member => member.inputTokens),
+        outputTokens: sum(member => member.outputTokens),
+        cacheReadTokens: sum(member => member.cacheReadTokens),
+        cacheWriteTokens: sum(member => member.cacheWriteTokens),
+        startedAt,
+        endedAt,
+        durationMs: durationMs(startedAt, endedAt),
+      },
+      root,
+      children,
+    })
+  }
+  return entries
+}
+
+/// The default sessions list: one row per parent session with its
+/// provider-recorded subagent sessions (work-unit children) folded in, so the
+/// parent's cost/calls/tokens include them and `subagents` lists them. Only
+/// grouping changes: the rows still sum to exactly the ungrouped total.
+export function foldSubagentRows<T extends SessionRow>(rows: T[], resolution: WorkUnitResolution): T[] {
+  return groupWorkUnitRows(rows, resolution).map(({ row, children }) => (children.length ? { ...row, subagents: children } : row))
+}
+
 /// The `sessions --by-work-unit` table: one row per multi-session work unit
 /// (root's title/project, cost/calls/savings/turns summed over root+children,
 /// child count in the Children column), its children indented beneath, and
@@ -277,63 +359,12 @@ function workUnitCell(display: WorkUnitDisplay, key: SessionColumnKey): string {
 /// top-level entries only, so the grouped view reconciles exactly with the
 /// ungrouped table (no double count, no dropped spend).
 export function renderWorkUnitTable(rows: SessionRow[], resolution: WorkUnitResolution, opts: SessionTableOptions = {}): string {
-  const unitById = new Map(resolution.units.map(unit => [unit.workUnitId, unit]))
-  const membersByUnit = new Map<string, SessionRow[]>()
-  const singles: SessionRow[] = []
-  for (const row of rows) {
-    const unitId = resolution.bySession.get(workUnitSessionKey(row.provider, row.sessionId))
-    const unit = unitId !== undefined ? unitById.get(unitId) : undefined
-    // Group only units that actually have a root and at least one child in
-    // this view; everything else renders exactly as in the default table.
-    if (unitId === undefined || !unit || unit.childSessionIds.length === 0) { singles.push(row); continue }
-    const list = membersByUnit.get(unitId)
-    if (list) list.push(row)
-    else membersByUnit.set(unitId, [row])
-  }
-
   type Entry = { display: WorkUnitDisplay; children: WorkUnitDisplay[]; sortKey: string }
-  const entries: Entry[] = singles.map(row => ({ display: { row, depth: 0 as const, childCount: 0 }, children: [], sortKey: row.startedAt }))
-  for (const [unitId, members] of membersByUnit) {
-    const unit = unitById.get(unitId)!
-    const rootRow = members.find(row => row.sessionId === unit.rootSessionId)
-    if (!rootRow || members.length < 2) {
-      for (const row of members) entries.push({ display: { row, depth: 0, childCount: 0 }, children: [], sortKey: row.startedAt })
-      continue
-    }
-    const childRows = members
-      .filter(row => row !== rootRow)
-      .sort((a, b) => b.startedAt.localeCompare(a.startedAt) || a.sessionId.localeCompare(b.sessionId))
-    const sum = (pick: (row: SessionRow) => number): number => members.reduce((total, row) => total + pick(row), 0)
-    const startedAt = members.reduce((min, row) => (row.startedAt < min ? row.startedAt : min), rootRow.startedAt)
-    const endedAt = members.reduce((max, row) => (row.endedAt > max ? row.endedAt : max), rootRow.endedAt)
-    const models: string[] = []
-    for (const member of [rootRow, ...childRows]) {
-      for (const model of member.models) if (!models.includes(model)) models.push(model)
-    }
-    const aggregate: SessionRow = {
-      ...rootRow,
-      models,
-      cost: sum(row => row.cost),
-      estimatedCost: sum(row => row.estimatedCost),
-      isEstimated: isEstimatedCost(sum(row => row.cost), sum(row => row.estimatedCost), sessionCostLabel(sum(row => row.cost))),
-      savingsUSD: sum(row => row.savingsUSD),
-      calls: sum(row => row.calls),
-      turns: sum(row => row.turns),
-      inputTokens: sum(row => row.inputTokens),
-      outputTokens: sum(row => row.outputTokens),
-      cacheReadTokens: sum(row => row.cacheReadTokens),
-      cacheWriteTokens: sum(row => row.cacheWriteTokens),
-      startedAt,
-      endedAt,
-      durationMs: durationMs(startedAt, endedAt),
-    }
-    const sortKey = members.reduce((max, row) => (row.startedAt > max ? row.startedAt : max), '')
-    entries.push({
-      display: { row: aggregate, depth: 0, childCount: childRows.length },
-      children: childRows.map(row => ({ row, depth: 1 as const, childCount: 0 })),
-      sortKey,
-    })
-  }
+  const entries: Entry[] = groupWorkUnitRows(rows, resolution).map(({ row, root, children }) => ({
+    display: { row, depth: 0 as const, childCount: children.length },
+    children: children.map(child => ({ row: child, depth: 1 as const, childCount: 0 })),
+    sortKey: children.reduce((max, child) => (child.startedAt > max ? child.startedAt : max), root.startedAt),
+  }))
   entries.sort((a, b) => b.sortKey.localeCompare(a.sortKey))
 
   const displays = entries.flatMap(entry => [entry.display, ...entry.children])
@@ -349,7 +380,7 @@ export function renderWorkUnitTable(rows: SessionRow[], resolution: WorkUnitReso
 }
 
 /// `sessions --by-work-unit --format json`: an add-only envelope. `sessions`
-/// is the exact row array the default json output emits today; `workUnits` is
+/// is the flat per-session row array (subagents not folded); `workUnits` is
 /// the resolver's full partition (standalone sessions included, so consumers
 /// can reconcile counts and totals).
 export function renderWorkUnitJson(rows: SessionRow[], resolution: WorkUnitResolution): string {

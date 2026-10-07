@@ -2953,7 +2953,7 @@ program
       process.stderr.write('codeburn: --contributions requires plain --format json (no --by-pr/--by-work-unit)\n')
       process.exit(1)
     }
-    const { aggregateSessions, buildPrAttribution, renderJson, renderTable, renderWorkUnitJson, renderWorkUnitTable } = await import('./sessions-report.js')
+    const { aggregateSessions, buildPrAttribution, foldSubagentRows, renderJson, renderTable, renderWorkUnitJson, renderWorkUnitTable } = await import('./sessions-report.js')
     const wantsInteractive = opts.format === 'table' && !opts.byPr && !opts.byWorkUnit && opts.pager !== false && process.stdin.isTTY === true && process.stdout.isTTY === true
     if (wantsInteractive) setInteractiveScanUI()
     await loadPricing()
@@ -3026,19 +3026,19 @@ program
       return
     }
     const rows = aggregateSessions(projects)
+    const { resolveWorkUnits } = await import('./work-units.js')
+    const { inferSessionProvider } = await import('./session-output.js')
+    const resolution = resolveWorkUnits(projects.flatMap(project => project.sessions.map(session => ({
+      sessionId: session.sessionId,
+      provider: inferSessionProvider(session),
+      lineage: session.lineage,
+    }))))
     if (opts.contributions) {
-      const { withContributions } = await import('./session-contributions.js')
-      process.stdout.write(JSON.stringify(withContributions(rows, projects), null, 2) + '\n')
+      const { foldContributionRows, withContributions } = await import('./session-contributions.js')
+      process.stdout.write(JSON.stringify(foldContributionRows(withContributions(rows, projects), resolution), null, 2) + '\n')
       return
     }
     if (opts.byWorkUnit) {
-      const { resolveWorkUnits } = await import('./work-units.js')
-      const { inferSessionProvider } = await import('./session-output.js')
-      const resolution = resolveWorkUnits(projects.flatMap(project => project.sessions.map(session => ({
-        sessionId: session.sessionId,
-        provider: inferSessionProvider(session),
-        lineage: session.lineage,
-      }))))
       if (opts.format === 'json') {
         process.stdout.write(renderWorkUnitJson(rows, resolution) + '\n')
         return
@@ -3046,17 +3046,18 @@ program
       process.stdout.write(renderWorkUnitTable(rows, resolution) + '\n')
       return
     }
+    const grouped = foldSubagentRows(rows, resolution)
     if (opts.format === 'json') {
-      process.stdout.write(renderJson(rows) + '\n')
+      process.stdout.write(renderJson(grouped) + '\n')
       return
     }
 
     if (wantsInteractive) {
       const { runSessionsTui } = await import('./sessions-tui.js')
-      await runSessionsTui(rows, { period: opts.from || opts.to ? formatDateRangeLabel(opts.from, opts.to) : opts.period, provider: opts.provider })
+      await runSessionsTui(grouped, { period: opts.from || opts.to ? formatDateRangeLabel(opts.from, opts.to) : opts.period, provider: opts.provider })
       return
     }
-    process.stdout.write(renderTable(rows) + '\n')
+    process.stdout.write(renderTable(grouped) + '\n')
   })
 
 program

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
-import { aggregateSessions, renderJson, renderTable, renderWorkUnitJson, renderWorkUnitTable } from '../src/sessions-report.js'
+import { aggregateSessions, foldSubagentRows, renderJson, renderTable, renderWorkUnitJson, renderWorkUnitTable } from '../src/sessions-report.js'
+import { foldContributionRows, withContributions } from '../src/session-contributions.js'
 import { inferSessionProvider } from '../src/session-output.js'
 import { deriveTraceId } from '../src/sync/otlp.js'
 import { resolveWorkUnits, workUnitSessionKey } from '../src/work-units.js'
@@ -302,5 +303,46 @@ describe('sessions --by-work-unit presentation', () => {
     expect(family.roles).toEqual({ root: 'root', 'child-1': 'child', 'child-2': 'child' })
     const solo = parsed.workUnits.find((unit: { rootSessionId: string }) => unit.rootSessionId === 'solo')
     expect(solo.roles).toEqual({ solo: 'unknown' })
+  })
+})
+
+describe('default sessions list folds subagents under their parent', () => {
+  it('returns one row per parent with its subagents summed in and listed', () => {
+    const projects = familyFixture()
+    const rows = aggregateSessions(projects)
+    const folded = foldSubagentRows(rows, resolveProjects(projects))
+
+    expect(folded.map(row => row.sessionId)).toEqual(['root', 'solo'])
+    const root = folded[0]!
+    expect(root.cost).toBeCloseTo(1.75)
+    expect(root.calls).toBe(7)
+    expect(root.startedAt).toBe('2026-08-20T10:00:00.000Z')
+    expect(root.subagents!.map(row => row.sessionId)).toEqual(['child-2', 'child-1'])
+    expect(folded[1]!.subagents).toBeUndefined()
+
+    const sum = (list: typeof rows, pick: (row: (typeof rows)[number]) => number) => list.reduce((total, row) => total + pick(row), 0)
+    expect(sum(folded, row => row.cost)).toBeCloseTo(sum(rows, row => row.cost))
+    expect(sum(folded, row => row.calls)).toBe(sum(rows, row => row.calls))
+    expect(totalOf(renderTable(folded, { terminalWidth: 200 }))).toBe(totalOf(renderTable(rows, { terminalWidth: 200 })))
+  })
+
+  it('leaves a subagent whose parent is not in view as its own row', () => {
+    const projects = familyFixture()
+    projects[0]!.sessions = projects[0]!.sessions.filter(session => session.sessionId !== 'root')
+    const folded = foldSubagentRows(aggregateSessions(projects), resolveProjects(projects))
+    expect(folded.map(row => row.sessionId).sort()).toEqual(['child-1', 'child-2', 'solo'])
+    expect(folded.every(row => row.subagents === undefined)).toBe(true)
+  })
+
+  it('folds the contributions report the same way, keeping segments a partition of the row', () => {
+    const projects = familyFixture()
+    const rows = aggregateSessions(projects)
+    const folded = foldContributionRows(withContributions(rows, projects), resolveProjects(projects))
+
+    expect(folded.map(row => row.sessionId)).toEqual(['root', 'solo'])
+    const root = folded[0]!
+    const segmentCost = root.contributions!.segments.reduce((total, segment) => total + segment.cost, 0)
+    expect(segmentCost).toBeCloseTo(root.cost)
+    expect(root.subagents!.every(child => !('contributions' in child))).toBe(true)
   })
 })

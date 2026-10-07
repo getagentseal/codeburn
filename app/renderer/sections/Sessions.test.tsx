@@ -287,6 +287,26 @@ describe('Sessions', () => {
     }
   })
 
+  it('lists folded subagents on the parent row and breaks them down in the drawer', async () => {
+    const user = userEvent.setup()
+    const parent = {
+      ...rows[0]!,
+      subagents: [
+        session({ sessionId: 'agent-small', project: rows[0]!.project, provider: 'claude', cost: 0.4 }),
+        session({ sessionId: 'agent-big', project: rows[0]!.project, provider: 'claude', cost: 2.1 }),
+      ],
+    }
+    getSessions.mockResolvedValue([parent, ...rows.slice(1)])
+    const { container } = render(<Sessions period="30days" provider="all" openSessionId={sessionRowKey(parent)} />)
+    const drawer = await screen.findByRole('dialog', { name: /session details/i })
+
+    expect([...container.querySelectorAll('.session-row .session-project')].map(node => node.textContent)).toContain('claude-session-123 · 2 subagents')
+    const fold = [...drawer.querySelectorAll('details')].find(node => node.textContent?.includes('2 subagents, $2.50'))!
+    expect(fold).toBeDefined()
+    const labels = [...fold.querySelectorAll('.drawer-breakdown-label')].map(node => node.textContent)
+    expect(labels).toEqual(['agent-big', 'agent-small'])
+  })
+
   it('drops the median comparison under five loaded sessions and dims an empty saving', async () => {
     const small = [{ ...rows[0]!, savingsUSD: 0 }, rows[1]!, rows[2]!]
     getSessions.mockResolvedValue(small)

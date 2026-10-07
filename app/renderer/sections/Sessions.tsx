@@ -460,7 +460,10 @@ export function Sessions({
                       <span className="session-chevron" aria-hidden="true"><Icon name="chevron-right" /></span>
                       <span className="session-project-copy">
                         <span className="session-title" title={entry.entry.row.title || undefined}>{entry.entry.row.title || shortenProjectPath(entry.entry.row.project)}</span>
-                        <span className="session-project">{entry.entry.row.sessionId.slice(0, 18)}</span>
+                        <span className="session-project">
+                          {entry.entry.row.sessionId.slice(0, 18)}
+                          {entry.entry.row.subagents?.length ? ` · ${t(`sessions.list.subagents.${entry.entry.row.subagents.length === 1 ? 'one' : 'other'}`, { count: entry.entry.row.subagents.length })}` : null}
+                        </span>
                       </span>
                     </span>
                     <span className="session-when">{formatDayShort(entry.entry.row.endedAt)}</span>
