@@ -4,7 +4,25 @@ See where your AI coding spend goes without leaving the editor: by project, mode
 
 CodeBurn reads the session logs these tools already write on your machine. Nothing is uploaded, and the extension sends no telemetry.
 
-<!-- Screenshots: dashboard (dark), dashboard (light), activity bar summary, status bar tooltip. -->
+![The CodeBurn dashboard Overview in a dark VS Code window](media/screenshots/overview-dark.png)
+
+The Overview for this workspace: spend, activity, efficiency and the month so far.
+
+![The why it cost view for one session](media/screenshots/session-why-it-cost.png)
+
+Why a session cost what it did, with the prompts worth a look ranked by cost.
+
+![The status bar item with its hover open](media/screenshots/status-bar.png)
+
+Today's spend in the status bar. Hover for the week, the month and this workspace.
+
+![The CodeBurn summary in the activity bar](media/screenshots/summary.png)
+
+The activity bar summary: this workspace, all projects, top projects and models, and Optimize.
+
+![The CodeBurn dashboard Overview in a light VS Code window](media/screenshots/overview-light.png)
+
+It follows your editor's theme: light, dark or high contrast.
 
 ## What you get
 

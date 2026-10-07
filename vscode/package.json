@@ -298,7 +298,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
     "test:smoke": "node test/smoke/run.mjs",
-    "package": "npm run build && vsce package --no-dependencies"
+    "package": "npm run build && vsce package --no-dependencies --baseImagesUrl https://raw.githubusercontent.com/getagentseal/codeburn/main/vscode"
   },
   "devDependencies": {
     "@types/node": "^22.19.17",
