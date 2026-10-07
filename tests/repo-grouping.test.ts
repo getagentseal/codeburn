@@ -214,16 +214,28 @@ describe('projects grouped by git repository', () => {
       expect(rows.map(r => [r.name, r.cost])).toEqual([['codeburn', 5], ['codeburn-notes', 1]])
     })
 
-    it('skips a name two repositories could claim', () => {
+    it('picks the longest checkout name when several fit', () => {
       const { a1, other } = fixtures()
       const gone = join(root, 'work', 'codeburn-app-old')
       projectOriginKey(a1)
       projectOriginKey(other)
 
-      expect(folderNameOriginKey(gone)).toBeNull()
+      expect(folderNameOriginKey(gone)).toBe('github.com/getagentseal/codeburn-app')
       const rows = buildPayloadProjects([live(a1, 5), live(other, 4), live(gone, 1)], null, homedir())
-      expect(rows.map(r => r.cost)).toEqual([5, 4, 1])
-      expect(rows.some(r => r.checkouts)).toBe(false)
+      expect(rows.map(r => [r.name, r.cost])).toEqual([['codeburn', 5], ['codeburn-app', 5]])
+      expect(rows[1]!.checkouts!.find(c => c.id === gone)!.matchedByFolderName).toBe(true)
+    })
+
+    it('skips a name whose longest fits belong to two repositories', () => {
+      const work = join(root, 'work')
+      writeFileSync(join(root, 'cache', 'git-origins.json'), JSON.stringify({ version: 1, paths: {
+        [join(work, 'shared')]: 'github.com/org/one',
+        [`${join(work, 'shared')}/`]: 'github.com/org/two',
+        [join(work, 'sha')]: 'github.com/org/three',
+      } }))
+      __resetGitOriginCache()
+
+      expect(folderNameOriginKey(join(work, 'shared-copy'))).toBeNull()
     })
 
     it('leaves unrelated names alone', () => {

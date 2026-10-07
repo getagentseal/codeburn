@@ -178,10 +178,11 @@ let checkoutsByParent: Map<string, string[]> | null = null
 const folderNameMatch = new Map<string, string | null>()
 
 /** Fallback for a DELETED folder that never had its origin recorded: when it is
- *  a sibling of exactly one repository's checkout, named `<checkout>-<suffix>`
+ *  a sibling of a repository's checkout, named `<checkout>-<suffix>`
  *  or `<checkout>_<suffix>` in the same parent folder, it joins that
- *  repository. Null while the folder exists (its own git data answers), when
- *  it has a real origin, and when checkouts of two repositories could match. */
+ *  repository; when several checkout names fit, the longest wins. Null while
+ *  the folder exists (its own git data answers), when it has a real origin,
+ *  and when the longest fitting names belong to two repositories. */
 export function folderNameOriginKey(projectPath: string | undefined): string | null {
   const path = nativeProjectPath(projectPath)
   if (!path) return null
@@ -198,12 +199,15 @@ export function folderNameOriginKey(projectPath: string | undefined): string | n
       }
     }
     const name = basename(path)
-    const origins = new Set<string>()
+    let longest = 0
+    let origins = new Set<string>()
     for (const checkout of checkoutsByParent.get(dirname(path)) ?? []) {
       const base = basename(checkout)
-      if (name.length <= base.length + 1 || !name.startsWith(base) || !'-_'.includes(name[base.length]!)) continue
+      if (base.length < longest || name.length <= base.length + 1 || !name.startsWith(base) || !'-_'.includes(name[base.length]!)) continue
       const origin = gitOriginKey(checkout)
-      if (origin) origins.add(origin)
+      if (!origin) continue
+      if (base.length > longest) { longest = base.length; origins = new Set() }
+      origins.add(origin)
     }
     if (origins.size === 1) match = [...origins][0]!
   }

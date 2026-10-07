@@ -1232,7 +1232,7 @@ export type TrayPrefs = {
 
 export type ProjectFilter = { project: string[]; exclude: string[] }
 
-export type ProjectRow = { name: string; path: string; cost: number; sessions: number; checkouts?: Array<{ path: string; cost: number }>; checkoutCount?: number; temporary?: boolean }
+export type ProjectRow = { name: string; path: string; cost: number; sessions: number; checkouts?: Array<{ path: string; cost: number; matchedByFolderName?: boolean }>; checkoutCount?: number; temporary?: boolean }
 
 export type ProjectsReport = { projects: ProjectRow[] }
 
