@@ -217,9 +217,6 @@
 "%1$@ over limit (%2$lld%%)" = "%1$@ au-delà de la limite (%2$lld%%)";
 "resets in %@" = "réinitialisation dans %@";
 "Change accent color" = "Changer la couleur d'accent";
-"CLI %@ available" = "CLI %@ disponible";
-"Update now" = "Mettre à jour";
-"Update the CLI (and the menubar if one is available) automatically" = "Mettre à jour automatiquement la CLI (et l'app menu bar si disponible)";
 "Copy update command to clipboard" = "Copier la commande de mise à jour";
 "Enjoying CodeBurn?" = "Vous aimez CodeBurn ?";
 "Star us on GitHub" = "Mettez-nous une étoile sur GitHub";

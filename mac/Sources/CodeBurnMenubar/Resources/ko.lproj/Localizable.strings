@@ -217,9 +217,6 @@
 "%1$@ over limit (%2$lld%%)" = "%1$@ 한도 초과 (%2$lld%%)";
 "resets in %@" = "%@ 후 초기화";
 "Change accent color" = "강조 색상 변경";
-"CLI %@ available" = "CLI %@ 사용 가능";
-"Update now" = "지금 업데이트";
-"Update the CLI (and the menubar if one is available) automatically" = "CLI(및 사용 가능한 경우 메뉴바)를 자동으로 업데이트";
 "Copy update command to clipboard" = "업데이트 명령어를 클립보드에 복사";
 "Enjoying CodeBurn?" = "CodeBurn이 마음에 드시나요?";
 "Star us on GitHub" = "GitHub에서 스타를 눌러주세요";

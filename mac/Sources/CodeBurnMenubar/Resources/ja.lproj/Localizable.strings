@@ -217,9 +217,6 @@
 "%1$@ over limit (%2$lld%%)" = "%1$@が上限超過（%2$lld%%）";
 "resets in %@" = "%@後にリセット";
 "Change accent color" = "アクセントカラーを変更";
-"CLI %@ available" = "CLI %@ が利用可能";
-"Update now" = "今すぐ更新";
-"Update the CLI (and the menubar if one is available) automatically" = "CLI（および利用可能であればメニューバーアプリ）を自動的に更新";
 "Copy update command to clipboard" = "更新コマンドをクリップボードにコピー";
 "Enjoying CodeBurn?" = "CodeBurnを楽しんでいますか？";
 "Star us on GitHub" = "GitHubでスターをつける";

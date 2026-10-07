@@ -224,9 +224,6 @@
 "%1$@ over limit (%2$lld%%)" = "%1$@ over limit (%2$lld%%)";
 "resets in %@" = "resets in %@";
 "Change accent color" = "Change accent color";
-"CLI %@ available" = "CLI %@ available";
-"Update now" = "Update now";
-"Update the CLI (and the menubar if one is available) automatically" = "Update the CLI (and the menubar if one is available) automatically";
 "Copy update command to clipboard" = "Copy update command to clipboard";
 "Enjoying CodeBurn?" = "Enjoying CodeBurn?";
 "Star us on GitHub" = "Star us on GitHub";

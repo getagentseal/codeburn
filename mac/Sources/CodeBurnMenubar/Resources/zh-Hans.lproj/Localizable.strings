@@ -218,9 +218,6 @@
 "%1$@ over limit (%2$lld%%)" = "%1$@ 已超限（%2$lld%%）";
 "resets in %@" = "%@后重置";
 "Change accent color" = "更改主题色";
-"CLI %@ available" = "命令行工具 %@ 可用";
-"Update now" = "立即更新";
-"Update the CLI (and the menubar if one is available) automatically" = "自动更新命令行工具（以及可用的菜单栏应用）";
 "Copy update command to clipboard" = "将更新命令复制到剪贴板";
 "Enjoying CodeBurn?" = "喜欢 CodeBurn 吗？";
 "Star us on GitHub" = "在 GitHub 上点个 Star";
