@@ -1275,6 +1275,8 @@ program
         ...queryScope,
         days: daysSelection ? [...daysSelection.days].sort() : undefined,
         claudeSourceTopology,
+        // Changes what a --project path selects.
+        exactProject: program.opts<{ exactProject?: boolean }>().exactProject === true,
         // Mirrors parser.ts's cacheKey: pricing-affecting config must
         // invalidate this snapshot the same way it invalidates the
         // parse-level memo, or an edited alias/override/savings config keeps
