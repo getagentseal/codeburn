@@ -117,6 +117,7 @@
 "Enter an API key or token below, then press Save & Connect." = "Enter an API key or token below, then press Save & Connect.";
 "Sign in to %@ in a supported browser, then click Retry." = "Sign in to %@ in a supported browser, then click Retry.";
 "Sign in with the %@ app or CLI, then click Retry." = "Sign in with the %@ app or CLI, then click Retry.";
+"Sign in with Cline, or enter a ClinePass API key below, then click Retry." = "Sign in with Cline, or enter a ClinePass API key below, then click Retry.";
 "Complete %@ OAuth, then click Retry." = "Complete %@ OAuth, then click Retry.";
 "Start the local %@ service, then click Retry." = "Start the local %@ service, then click Retry.";
 "Enter the required API or cloud credentials below, then press Save & Connect." = "Enter the required API or cloud credentials below, then press Save & Connect.";

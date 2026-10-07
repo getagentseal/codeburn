@@ -120,8 +120,13 @@ const ONE_HOUR_CACHE_WRITE_MULTIPLIER_FROM_FIVE_MINUTE_RATE = 1.6
 // deepseek-v3.2: DeepSeek's last published price was $0.28 miss / $0.028 hit /
 // $0.42 output; LiteLLM's deepseek/deepseek-v3.2 row says $0.40 output while its
 // own deepseek-chat row says $0.42. Drop once upstream corrects it.
+// swe-2: Cognition's list price at docs.devin.ai/desktop/models, $3 input, $15
+// output, $0.30 cache read per 1M, no cache-write rate. Plan promotions (free on
+// self-serve until 15 Oct 2026, 75% off for enterprise until 31 Dec 2026) are
+// left out, as they depend on the plan.
 const BUILTIN_PRICE_OVERRIDES: Record<string, SnapshotEntry> = {
   'deepseek-v3.2': [0.28e-6, 0.42e-6, null, 0.028e-6],
+  'swe-2': [3e-6, 15e-6, null, 0.3e-6],
   'composer-2.5': [0.5e-6, 2.5e-6, 0.5e-6, 0.2e-6],
   'composer-2': [0.5e-6, 2.5e-6, 0.5e-6, 0.2e-6],
   'composer-1.5': [3.5e-6, 17.5e-6, 3.5e-6, 0.35e-6],

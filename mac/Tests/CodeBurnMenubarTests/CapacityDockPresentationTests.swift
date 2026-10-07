@@ -413,16 +413,24 @@ struct CapacityDockPresentationTests {
 
     @Test("Credential-only providers receive an actionable connection instruction")
     func apiCredentialGuidance() {
-        let provider = CapacityDockProvider(rawValue: "clinepass")!
+        let provider = CapacityDockProvider(rawValue: "openrouter")!
         #expect(ProviderConnectionGuidance.instruction(for: provider) ==
             "Enter an API key or token below, then press Save & Connect.")
     }
 
     @Test("Browser-session providers receive an actionable connection instruction")
     func browserSessionGuidance() {
+        let provider = CapacityDockProvider(rawValue: "qoder")!
+        #expect(ProviderConnectionGuidance.instruction(for: provider) ==
+            "Sign in to Qoder in a supported browser, then click Retry.")
+    }
+
+    @Test("Command Code connects from its CLI sign-in")
+    func commandCodeGuidance() {
         let provider = CapacityDockProvider(rawValue: "commandcode")!
         #expect(ProviderConnectionGuidance.instruction(for: provider) ==
-            "Sign in to Command Code in a supported browser, then click Retry.")
+            "Sign in with the Command Code app or CLI, then click Retry.")
+        #expect(provider.payloadProviderIDs == ["command-code"])
     }
 
     @Test("Grok Build offers direct one-click local login discovery")
