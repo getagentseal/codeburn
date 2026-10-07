@@ -58,7 +58,7 @@ import { classifyWslCachePath, isWslUncPath, refreshWslHomes, wslMode } from './
 import { decideParseWorkers, parseFilesInOrder, ParseWorkerPool, type ClaudeWorkerParse, type ParseJob } from './parse-workers.js'
 import type { CodexFullParse } from './providers/codex.js'
 import { dateKey } from './day-aggregator.js'
-import { isTemporaryProjectPath, projectOriginKey, saveGitOrigins, TEMPORARY_PROJECTS } from './git-origin.js'
+import { folderNameOriginKey, isTemporaryProjectPath, projectOriginKey, saveGitOrigins, TEMPORARY_PROJECTS } from './git-origin.js'
 import { behavioralCallWeight, isBehavioralTurn } from './behavioral-weight.js'
 import { gatewayIncludedInTotals } from './config.js'
 import { coverageFor, cursorImportPath, dropImportCoveredCalls, loadCursorImport, replacedProviders } from './cursor-import.js'
@@ -4920,11 +4920,11 @@ function compile(patterns: readonly string[]): CompiledPattern[] {
 /// does not, #1260), and rootedness alone picks the branch, so "/" names none.
 function hit(entry: ProjectFilterTarget, pattern: CompiledPattern, key: string | null): boolean {
   if (pattern.rooted) {
-    if (pattern.origin) return (entry.originKey ?? projectOriginKey(entry.projectPath)) === pattern.origin
+    if (pattern.origin) return (entry.originKey ?? projectOriginKey(entry.projectPath) ?? folderNameOriginKey(entry.projectPath)) === pattern.origin
     const anchor = pattern.anchor
     return anchor !== null && key !== null && (key === anchor || (!pattern.exact && key.startsWith(anchor + '/')))
   }
-  if (pattern.temporary) return isTemporaryProjectPath(entry.projectPath) && !(entry.originKey ?? projectOriginKey(entry.projectPath))
+  if (pattern.temporary) return isTemporaryProjectPath(entry.projectPath) && !(entry.originKey ?? projectOriginKey(entry.projectPath) ?? folderNameOriginKey(entry.projectPath))
   return entry.project.toLowerCase().includes(pattern.needle)
     || (entry.projectPath ?? '').toLowerCase().includes(pattern.needle)
 }

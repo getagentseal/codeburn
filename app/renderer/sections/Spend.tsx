@@ -255,7 +255,9 @@ function ProjectBreakdown({ projects, onInvestigate }: { projects: Project[]; on
                     <div className="spend-proj-session" key={checkout.id}>
                       <span className="sps-date" />
                       <span className="sps-model" title={checkout.id}>{shortenProjectPath(checkout.id, 2)}</span>
-                      <span className="sps-calls" />
+                      <span className="sps-calls" title={checkout.matchedByFolderName ? t('spend.project.matchedByFolderNameTip') : undefined}>
+                        {checkout.matchedByFolderName ? t('spend.project.matchedByFolderName') : null}
+                      </span>
                       <span className="sps-cost">{formatUsd(checkout.cost)}</span>
                     </div>
                   ))}

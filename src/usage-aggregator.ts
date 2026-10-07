@@ -25,7 +25,7 @@ import { activityStreak } from './streak.js'
 import { getDaysInRange, ensureCacheHydrated, loadDailyCache, cachedProjectIdentities, projectDayIdentity, emptyCache, mergeDayEntries, BACKFILL_DAYS, toDateString, type DailyCache, type DailyEntry, type ProjectDayStats, type ProviderDaySlice } from './daily-cache.js'
 import { buildGranularHistory } from './granular-history.js'
 import { spendProjectIdentity } from './spend-flow.js'
-import { isTemporaryProjectPath, originRepoName, projectOriginKey, TEMPORARY_PROJECTS } from './git-origin.js'
+import { folderNameOriginKey, isTemporaryProjectPath, originRepoName, projectOriginKey, TEMPORARY_PROJECTS } from './git-origin.js'
 import { AGGREGATE_ONLY_PROVIDER, excludeAggregateOnlyProjects, excludesAggregateOnlyProviders } from './parser.js'
 
 // Row caps for the by-PR / by-branch payload aggregations, ranked by cost.
@@ -1569,8 +1569,12 @@ export function buildPayloadProjects(
   // checkout's cache-or-live choice is made: folding first would let one clone's
   // cache row hide another clone's live-only spend under the same slug.
   const groups = new Map<string, typeof rows>()
+  const byFolderName = new Set<(typeof rows)[number]>()
   for (const row of rows) {
-    const key = row.acc.originKey ?? projectOriginKey(row.path) ?? (isTemporaryProjectPath(row.path) ? TEMPORARY_KEY : `\0${row.acc.id}`)
+    const realOrigin = row.acc.originKey ?? projectOriginKey(row.path)
+    const nameOrigin = realOrigin ? null : folderNameOriginKey(row.path)
+    if (nameOrigin) byFolderName.add(row)
+    const key = realOrigin ?? nameOrigin ?? (isTemporaryProjectPath(row.path) ? TEMPORARY_KEY : `\0${row.acc.id}`)
     const held = groups.get(key)
     if (held) held.push(row)
     else groups.set(key, [row])
@@ -1602,7 +1606,7 @@ export function buildPayloadProjects(
       sessions,
       sessionCountBasis,
       // Capped: the temporary row can hold thousands, and this rides every poll.
-      ...(members.length > 1 ? { checkouts: members.slice(0, MAX_CHECKOUTS).map(m => ({ id: m.acc.id, cost: m.cost })), checkoutCount: members.length } : {}),
+      ...(members.length > 1 ? { checkouts: members.slice(0, MAX_CHECKOUTS).map(m => ({ id: m.acc.id, cost: m.cost, ...(byFolderName.has(m) ? { matchedByFolderName: true } : {}) })), checkoutCount: members.length } : {}),
       ...(details.length ? { sessionDetails: details } : {}),
     }
   }).sort((a, b) => b.cost - a.cost)

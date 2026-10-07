@@ -1,4 +1,6 @@
-export type ProjectCheckout = { id: string; cost: number }
+/// `matchedByFolderName`: a deleted folder joined to this repository by its name
+/// alone (see folderNameOriginKey), not by git data.
+export type ProjectCheckout = { id: string; cost: number; matchedByFolderName?: boolean }
 
 /// Rollup of one time window (today / 7 days / 30 days / month / all) used as the canonical
 /// input to the menubar payload. Built inside the CLI and also consumed by the day-aggregator

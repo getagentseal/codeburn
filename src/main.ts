@@ -644,7 +644,7 @@ function buildJsonReport(projects: ProjectSummary[], period: string, periodKey: 
     sessions: p.sessions,
     ...(p.sessionCountBasis ? { sessionCountBasis: p.sessionCountBasis } : {}),
     ...(p.temporary ? { temporary: true } : {}),
-    ...(p.checkouts ? { checkouts: p.checkouts.map(c => ({ path: c.id, cost: convertCost(c.cost) })), checkoutCount: p.checkoutCount } : {}),
+    ...(p.checkouts ? { checkouts: p.checkouts.map(c => ({ path: c.id, cost: convertCost(c.cost), ...(c.matchedByFolderName ? { matchedByFolderName: true } : {}) })), checkoutCount: p.checkoutCount } : {}),
   }))
 
   const modelMap: Record<string, { calls: number; cost: number; savings: number; estimatedCost: number; inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; baselineModel: string }> = {}

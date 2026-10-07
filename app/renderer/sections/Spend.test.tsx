@@ -555,7 +555,7 @@ describe('Spend', () => {
       savingsUSD: 0,
       sessions: 2,
       sessionCountBasis: 'identity',
-      checkouts: [{ id: '/w/codeburn', cost: 6 }, { id: '/tmp/scratch/clone-3', cost: 3 }],
+      checkouts: [{ id: '/w/codeburn', cost: 6 }, { id: '/w/codeburn-fix', cost: 2, matchedByFolderName: true }, { id: '/tmp/scratch/clone-3', cost: 1 }],
       sessionDetails: [],
     }]
     getSpendFlow.mockResolvedValue(makeFlow())
@@ -565,8 +565,9 @@ describe('Spend', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: /codeburn/ }))
     expect(screen.getByTitle('/tmp/scratch/clone-3')).toBeInTheDocument()
+    expect(screen.getAllByText('matched by folder name')).toHaveLength(1)
     fireEvent.click(screen.getByRole('button', { name: /View sessions/ }))
-    expect(onInvestigate).toHaveBeenCalledWith({ filters: expect.objectContaining({ projects: ['/w/codeburn', '/tmp/scratch/clone-3'] }) })
+    expect(onInvestigate).toHaveBeenCalledWith({ filters: expect.objectContaining({ projects: ['/w/codeburn', '/w/codeburn-fix', '/tmp/scratch/clone-3'] }) })
   })
 
   it('keeps an exact source-only count unqualified', async () => {

@@ -257,7 +257,7 @@ export type MenubarPayload = {
       sessionCountBasis?: 'identity' | 'partial'
       /** Clones and worktrees folded into this repository row, when several;
        *  the costliest 50 of `checkoutCount`. */
-      checkouts?: Array<{ id: string; cost: number }>
+      checkouts?: Array<{ id: string; cost: number; matchedByFolderName?: boolean }>
       checkoutCount?: number
       /** The one row for every temp-root folder outside a known repository. */
       temporary?: boolean

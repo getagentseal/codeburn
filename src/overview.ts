@@ -15,7 +15,7 @@ import { normalizeAbsProjectPathKey } from './parser.js'
 import { dateKey } from './day-aggregator.js'
 import type { DailyEntry } from './daily-cache.js'
 import type { BudgetStatus, BudgetTier } from './budget.js'
-import { isTemporaryProjectPath, originRepoName, projectOriginKey, TEMPORARY_PROJECTS } from './git-origin.js'
+import { folderNameOriginKey, isTemporaryProjectPath, originRepoName, projectOriginKey, TEMPORARY_PROJECTS } from './git-origin.js'
 
 // Display-only helpers. The shared formatters omit thousands separators and
 // abbreviate; here we show full, comma-grouped numbers so the tables read like
@@ -169,7 +169,7 @@ export function renderOverview(
     savings += p.totalSavingsUSD
     calls += p.totalApiCalls
     sessions += p.sessions.length
-    const origin = projectOriginKey(p.projectPath)
+    const origin = projectOriginKey(p.projectPath) ?? folderNameOriginKey(p.projectPath)
     const temporary = !origin && isTemporaryProjectPath(p.projectPath)
     const pkey = origin ? `origin:${origin}` : temporary ? TEMPORARY_PROJECTS : projectAggKey(p)
     const pe = byProject.get(pkey) ?? { cost: 0, sessions: 0, sample: p, ...(origin ? { repo: originRepoName(origin) } : temporary ? { repo: 'Temporary folders' } : {}) }
