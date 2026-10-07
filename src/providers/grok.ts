@@ -2,7 +2,7 @@ import { readdir, stat } from 'fs/promises'
 import { basename, dirname, join } from 'path'
 import { homedir } from 'os'
 
-import { FS_SCAN_CONCURRENCY, mapWithConcurrency, readSessionFile } from '../fs-utils.js'
+import { FS_SCAN_CONCURRENCY, mapWithConcurrency, readSessionFile, readSessionLines } from '../fs-utils.js'
 import { calculateCost, getModelCosts, getShortModelName } from '../models.js'
 import { extractBashCommands } from '../bash-utils.js'
 import type { ProbeRoot, Provider, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
@@ -21,6 +21,11 @@ import type { ProbeRoot, Provider, SessionSource, SessionParser, ParsedProviderC
 // `signals.json.contextTokensUsed` and the running `_meta.totalTokens` curve; for
 // those we retain the old compaction-aware estimate and mark its cost estimated.
 // `costUsdTicks` is deliberately ignored because its scale is not documented.
+//
+// <grok-home>/logs/unified.jsonl outlives the session dirs and logs every
+// inference as `shell.turn.inference_done` (prompt_tokens includes
+// cached_prompt_tokens, completion_tokens includes reasoning_tokens). It is read
+// only for sessions whose dir is gone, so a session is never counted twice.
 
 const toolNameMap: Record<string, string> = {
   bash: 'Bash',
@@ -448,6 +453,90 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
   }
 }
 
+type UnifiedLogLine = {
+  msg?: unknown
+  sid?: unknown
+  pid?: unknown
+  ts?: unknown
+  ctx?: Record<string, unknown>
+}
+
+function createUnifiedLogParser(source: SessionSource, sessionsDir: string, seenKeys: Set<string>): SessionParser {
+  return {
+    async *parse(): AsyncGenerator<ParsedProviderCall> {
+      const sessionDirIds = new Set((await discoverSessions(sessionsDir)).map(s => basename(dirname(s.path))))
+      const models = new Map<string, string>()
+      const pidModels = new Map<unknown, string>()
+      const cwds = new Map<string, string>()
+
+      for await (const line of readSessionLines(source.path)) {
+        let record: UnifiedLogLine
+        try {
+          record = JSON.parse(line) as UnifiedLogLine
+        } catch {
+          continue
+        }
+        const sid = record.sid
+        const ctx = record.ctx
+        if (!isRecord(ctx)) continue
+        // A process announces its model before a session that predates the log
+        // file's first line can name one.
+        if (record.msg === 'model catalog: notifying clients' && typeof ctx['current_model_id'] === 'string') {
+          pidModels.set(record.pid, ctx['current_model_id'])
+          continue
+        }
+        if (typeof sid !== 'string' || !sid) continue
+
+        if (record.msg === 'model changed' && typeof ctx['model'] === 'string') {
+          models.set(sid, ctx['model'])
+          continue
+        }
+        if (record.msg === 'session created' && typeof ctx['cwd'] === 'string') {
+          cwds.set(sid, ctx['cwd'])
+          continue
+        }
+        if (record.msg !== 'shell.turn.inference_done' || sessionDirIds.has(sid)) continue
+
+        const prompt = finiteNonNegative(ctx['prompt_tokens'])
+        const completion = finiteNonNegative(ctx['completion_tokens'])
+        if (prompt === undefined || completion === undefined || typeof record.ts !== 'string') continue
+        const cached = Math.min(finiteNonNegative(ctx['cached_prompt_tokens']) ?? 0, prompt)
+        const reasoning = Math.min(finiteNonNegative(ctx['reasoning_tokens']) ?? 0, completion)
+        if (prompt === 0 && completion === 0) continue
+
+        const deduplicationKey = `grok:unified:${sid}:${record.ts}:${String(ctx['loop_index'] ?? 1)}`
+        if (seenKeys.has(deduplicationKey)) continue
+        seenKeys.add(deduplicationKey)
+
+        const model = models.get(sid) ?? pidModels.get(record.pid) ?? 'grok-build'
+        const cwd = cwds.get(sid)
+        yield {
+          provider: source.provider,
+          model,
+          inputTokens: prompt - cached,
+          outputTokens: completion - reasoning,
+          cacheCreationInputTokens: 0,
+          cacheReadInputTokens: cached,
+          cachedInputTokens: cached,
+          reasoningTokens: reasoning,
+          webSearchRequests: 0,
+          costUSD: calculateCost(model, prompt - cached, completion, 0, cached, 0),
+          costIsEstimated: false,
+          tools: [],
+          bashCommands: [],
+          timestamp: record.ts,
+          speed: 'standard',
+          deduplicationKey,
+          userMessage: '',
+          sessionId: sid,
+          project: cwd ? basename(cwd) : source.project,
+          projectPath: cwd,
+        }
+      }
+    },
+  }
+}
+
 async function discoverSessions(sessionsDir: string): Promise<SessionSource[]> {
   const sources: SessionSource[] = []
 
@@ -486,13 +575,14 @@ async function discoverSessions(sessionsDir: string): Promise<SessionSource[]> {
 
 export function createGrokProvider(sessionsDir?: string): Provider {
   const dir = sessionsDir ?? defaultSessionsDir()
+  const unifiedLogPath = join(dirname(dir), 'logs', 'unified.jsonl')
 
   return {
     name: 'grok',
     displayName: 'Grok Build',
 
     async probeRoots(): Promise<ProbeRoot[]> {
-      return [{ path: dir, label: 'sessions' }]
+      return [{ path: dir, label: 'sessions' }, { path: unifiedLogPath, label: 'unified log' }]
     },
 
     modelDisplayName(model: string): string {
@@ -505,10 +595,15 @@ export function createGrokProvider(sessionsDir?: string): Provider {
     },
 
     async discoverSessions(): Promise<SessionSource[]> {
-      return discoverSessions(dir)
+      const sources = await discoverSessions(dir)
+      if (await stat(unifiedLogPath).catch(() => null)) {
+        sources.push({ path: unifiedLogPath, project: 'grok', provider: 'grok' })
+      }
+      return sources
     },
 
     createSessionParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
+      if (source.path === unifiedLogPath) return createUnifiedLogParser(source, dir, seenKeys)
       return createParser(source, seenKeys)
     },
   }

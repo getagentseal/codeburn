@@ -301,7 +301,10 @@ import type { DateRange, ProjectSummary } from './types.js'
 // v61: #1579 Claude Desktop usage-ledger records (Claude-3p Cowork and Code)
 // are read and de-duplicated against matching transcript calls. Calls only
 // rise, so no PENDING_REDERIVE_PROVIDER_VERSIONS entry is needed.
-export const DAILY_CACHE_VERSION = 61
+// v65: Grok Build per-inference usage from logs/unified.jsonl is read for
+// sessions whose session dir is gone; days finalized without it re-derive.
+// Calls only rise, so no PENDING_REDERIVE_PROVIDER_VERSIONS entry is needed.
+export const DAILY_CACHE_VERSION = 65
 const MIN_SUPPORTED_VERSION = 28
 
 /// Providers whose per-day CALL COUNT means something different at
