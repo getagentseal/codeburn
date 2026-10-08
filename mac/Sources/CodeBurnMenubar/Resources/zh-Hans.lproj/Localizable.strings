@@ -174,6 +174,8 @@
 "CodeBurn CLI %@ available" = "CodeBurn 命令行工具 %@ 可用";
 "Could not find the package manager for %1$@. Run “%2$@” manually, then try again." = "找不到 %1$@ 对应的包管理器。请手动运行“%2$@”，然后重试。";
 "the CLI" = "命令行工具";
+"This codeburn CLI comes with the CodeBurn desktop app. Update the desktop app, then try again." = "此 codeburn 命令行工具随 CodeBurn 桌面应用提供。请更新桌面应用，然后重试。";
+"npm does not have permission to update the global codeburn install. Run “%@” in Terminal, then try again." = "npm 没有更新全局 codeburn 安装的权限。请在终端中运行“%@”，然后重试。";
 "CLI update failed (exit %lld)" = "命令行工具更新失败（退出码 %lld）";
 "Your codeburn CLI (%1$@) is too old to update the menubar. Run “%2$@” first, then try again." = "你的 codeburn 命令行工具（%1$@）版本过旧，无法更新菜单栏应用。请先运行“%2$@”，然后重试。";
 "Update failed (exit %lld)" = "更新失败（退出码 %lld）";
@@ -216,9 +218,6 @@
 "%1$@ over limit (%2$lld%%)" = "%1$@ 已超限（%2$lld%%）";
 "resets in %@" = "%@后重置";
 "Change accent color" = "更改主题色";
-"CLI %@ available" = "命令行工具 %@ 可用";
-"Update now" = "立即更新";
-"Update the CLI (and the menubar if one is available) automatically" = "自动更新命令行工具（以及可用的菜单栏应用）";
 "Copy update command to clipboard" = "将更新命令复制到剪贴板";
 "Enjoying CodeBurn?" = "喜欢 CodeBurn 吗？";
 "Star us on GitHub" = "在 GitHub 上点个 Star";

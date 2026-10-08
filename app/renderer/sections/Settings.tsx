@@ -16,7 +16,7 @@ import { readDailyBudget } from '../lib/budget'
 import { formatConverted, formatCount, formatUsd, shortenProjectPath } from '../lib/format'
 import { codeburn, normalizeCliError } from '../lib/ipc'
 import { t, useLocale, type LocaleChoice } from '../i18n'
-import { projectMatches, projectPattern } from '../lib/projectMatch'
+import { projectMatches, projectPattern, projectVisible } from '../lib/projectMatch'
 import { displayVersion, isIdeHost, shortcutLabel } from '../lib/platform'
 import { motionClass } from '../lib/motion'
 import { clearOverviewHeadlines } from '../lib/overviewSnapshot'
@@ -320,11 +320,6 @@ function ProvidersPane({ refreshToken }: { refreshToken: number }) {
 }
 
 const NO_PROJECT_FILTER: ProjectFilter = { project: [], exclude: [] }
-
-function projectVisible(project: ProjectRow, filter: ProjectFilter): boolean {
-  if (filter.exclude.some(pattern => projectMatches(project, pattern))) return false
-  return filter.project.length === 0 || filter.project.some(pattern => projectMatches(project, pattern))
-}
 
 function ProjectsPane({ refreshToken, onConfigMutated }: { refreshToken: number; onConfigMutated?: () => void }) {
   const [actionNonce, setActionNonce] = useState(0)
