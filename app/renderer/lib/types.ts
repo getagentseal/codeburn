@@ -23,6 +23,8 @@ export interface CliError {
    *  broken install, so the UI keeps its splash/progress state. Optional so an
    *  older preload simply never sets it. */
   cold?: true
+  /** For `not-found` only: the resolution stage enum from the main process. */
+  stage?: string
 }
 
 export type AliasRow = { from: string; to: string }

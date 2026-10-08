@@ -12,11 +12,22 @@ export function isColdHydrating(error: CliError | null): boolean {
   return error?.cold === true
 }
 
+function isBundledNotFound(error: CliError): boolean {
+  return error.kind === 'not-found' && error.stage?.startsWith('bundled-') === true
+}
+
 export function cliErrorDisplay(error: CliError): { title: string; message: string; tone: 'amber' | 'red' | 'muted' } {
   if (isColdHydrating(error)) {
     return {
       title: t('shell.error.stillIndexing.title'),
       message: t('shell.error.stillIndexing.message'),
+      tone: 'muted',
+    }
+  }
+  if (isBundledNotFound(error)) {
+    return {
+      title: t('shell.error.notFound.bundledTitle'),
+      message: t(error.stage === 'bundled-denied' ? 'shell.error.notFound.bundledDenied' : 'shell.error.notFound.bundledMessage'),
       tone: 'muted',
     }
   }
@@ -50,6 +61,13 @@ export function CliErrorText({ error }: { error: CliError }) {
 
 export function CliErrorPanel({ error, subject = 'usage' }: { error: CliError; subject?: string }) {
   const display = cliErrorDisplay(error)
+  if (isBundledNotFound(error)) {
+    return (
+      <Panel title={display.title}>
+        <p style={{ color: 'var(--mut)', margin: 0, fontSize: 'var(--fs-body)' }}>{display.message}</p>
+      </Panel>
+    )
+  }
   if (error.kind === 'not-found') {
     return (
       <Panel title={display.title}>

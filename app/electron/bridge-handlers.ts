@@ -30,7 +30,7 @@ export const NO_UPDATE_STATUS: UpdateStatus = { currentVersion: '', latestVersio
 
 // Result envelope: handlers never throw across IPC so the structured error
 // `kind` survives contextBridge serialization. preload.ts unwraps it.
-export type Envelope<T = unknown> = { ok: true; value: T } | { ok: false; error: { kind: string; message: string; cold?: true } }
+export type Envelope<T = unknown> = { ok: true; value: T } | { ok: false; error: { kind: string; message: string; cold?: true; stage?: string } }
 
 // The first overview fetch after boot hydrates a cold cache from scratch (a full
 // history parse). That can far exceed the 45s read timeout, and killing it means
@@ -388,8 +388,8 @@ function priceOverrideArgs(model: string, rates: PriceRates | undefined): string
   ]
 }
 
-function toEnvelopeError(err: unknown): { kind: string; message: string } {
-  if (err instanceof CliError) return { kind: err.kind, message: sanitizeError(err.message) }
+function toEnvelopeError(err: unknown): { kind: string; message: string; stage?: string } {
+  if (err instanceof CliError) return { kind: err.kind, message: sanitizeError(err.message), ...(err.kind === 'not-found' && err.detail ? { stage: err.detail } : {}) }
   return { kind: 'nonzero', message: sanitizeError(err instanceof Error ? err.message : String(err)) }
 }
 
@@ -526,7 +526,7 @@ export function createBridgeHandlers(deps: Deps): Record<string, Handler> {
   const bootedAt = Date.now()
   const stillCold = (): boolean =>
     !overviewWarmed && Date.now() - (coldStartBegan ?? bootedAt) < WARMUP_TIMEOUT_MS
-  const coldError = (err: unknown): { kind: string; message: string; cold?: true } => {
+  const coldError = (err: unknown): { kind: string; message: string; cold?: true; stage?: string } => {
     const error = toEnvelopeError(err)
     return stillCold() && error.kind === 'timeout' ? { ...error, cold: true } : error
   }

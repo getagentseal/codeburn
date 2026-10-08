@@ -16,7 +16,7 @@ export const codeburn: CodeburnBridge = window.codeburn
 export function normalizeCliError(err: unknown): CliError {
   if (err && typeof err === 'object' && 'kind' in err && typeof (err as CliError).kind === 'string') {
     const e = err as CliError
-    return { kind: e.kind, message: e.message ?? 'codeburn CLI error', ...(e.cold ? { cold: true as const } : {}) }
+    return { kind: e.kind, message: e.message ?? 'codeburn CLI error', ...(e.cold ? { cold: true as const } : {}), ...(e.stage ? { stage: e.stage } : {}) }
   }
   const message = err instanceof Error ? err.message : String(err)
   return { kind: 'nonzero', message }
