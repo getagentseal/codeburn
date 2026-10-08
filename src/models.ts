@@ -131,6 +131,9 @@ const BUILTIN_PRICE_OVERRIDES: Record<string, SnapshotEntry> = {
   'composer-2': [0.5e-6, 2.5e-6, 0.5e-6, 0.2e-6],
   'composer-1.5': [3.5e-6, 17.5e-6, 3.5e-6, 0.35e-6],
   'composer-1': [1.25e-6, 10e-6, 1.25e-6, 0.125e-6],
+  // Moonshot's published rate (platform.kimi.ai/docs/pricing/chat): $1.90 miss,
+  // $0.38 hit, $8.00 output. LiteLLM only carries a reseller row for it.
+  'kimi-k2.7-code-highspeed': [1.9e-6, 8e-6, null, 0.38e-6],
 }
 
 // Assemble a ModelCosts, applying the cache-cost heuristics (write = 1.25x
@@ -676,8 +679,14 @@ const BUILTIN_ALIASES: Record<string, string> = {
   'orcarouter/fusion-flash':       'openai/gpt-oss-120b',
   'orcarouter/fusion-mini':        'openai/gpt-oss-120b',
   'kimi-auto':                     'kimi-k2-thinking',
-  'kimi-code':                     'kimi-k2-thinking',
-  'kimi-for-coding':               'kimi-k2-thinking',
+  // `kimi-for-coding` is Kimi Code's moving alias; `kimi-code` is kimi-cli's
+  // spelling of the same SKU. pricingModelAt prices older calls by the model
+  // the alias served then. K2.8 Preview (11 Sep 2026 on) has no Open Platform
+  // price, so it stays on K2.7 Code's.
+  'kimi-code':                     'kimi-k2.7-code',
+  'kimi-for-coding':               'kimi-k2.7-code',
+  // HighSpeed has been K2.7 Code HighSpeed since it launched on 9 Jul 2026.
+  'kimi-for-coding-highspeed':     'kimi-k2.7-code-highspeed',
   // Kimi Code wires report the bare `k3` id in llm.request.model; without an
   // alias those calls priced at $0 and the provider looked absent in the UI.
   'k3':                            'kimi-k3',
@@ -989,7 +998,6 @@ export function isBuiltInFlatRateModel(model: string): boolean {
   if (
     leaf === 'auto'
     || leaf === 'auto-genius'
-    || leaf === 'kimi-for-coding-highspeed'
   ) return true
   if (leaf.startsWith('grok-composer-')) return true
   if (leaf.startsWith('warp-auto-')) return true
@@ -1244,13 +1252,39 @@ function stripKnownPricingVariantSuffix(model: string): string | null {
 }
 
 const AUTO_REVIEW_LUNA_FROM = Date.parse('2026-07-30T00:00:00Z')
+// kimi-cli labelled the alias "powered by kimi-k2.5" from 27 Jan 2026 (1.2) and
+// dropped that on 13 Apr 2026 (#1860) as K2.6 rolled out; Kimi Code's What's
+// New dates K2.7 Code to 12 Jun 2026. What it served before K2.5 is unsourced,
+// so those calls keep the K2 Thinking rate they always had.
+const KIMI_CODING_K2_5_FROM = Date.parse('2026-01-27T00:00:00Z')
+const KIMI_CODING_K2_6_FROM = Date.parse('2026-04-13T00:00:00Z')
+const KIMI_CODING_K2_7_FROM = Date.parse('2026-06-12T00:00:00Z')
+const KIMI_CODING_K2_8_FROM = Date.parse('2026-09-11T00:00:00Z')
 
-/// The model a call is priced by. Only `codex-auto-review` depends on the
-/// call's date (see BUILTIN_ALIASES); a user alias for it still wins, and a
-/// missing or unparseable timestamp keeps the forward default.
+/// The model a call is priced by. Only `codex-auto-review` and the Kimi Code
+/// alias depend on the call's date (see BUILTIN_ALIASES); a user alias for
+/// them still wins, and a missing or unparseable timestamp keeps the forward
+/// default.
 export function pricingModelAt(model: string, timestamp: string | undefined): string {
-  if (model.toLowerCase() !== 'codex-auto-review' || Object.hasOwn(userAliases, model) || userPriceOverrides.has(model)) return model
-  return Date.parse(timestamp ?? '') < AUTO_REVIEW_LUNA_FROM ? 'gpt-5.4' : model
+  const id = model.toLowerCase()
+  if (id !== 'codex-auto-review' && id !== 'kimi-for-coding' && id !== 'kimi-code') return model
+  if (Object.hasOwn(userAliases, model) || userPriceOverrides.has(model)) return model
+  const at = Date.parse(timestamp ?? '')
+  if (id === 'codex-auto-review') return at < AUTO_REVIEW_LUNA_FROM ? 'gpt-5.4' : model
+  if (at < KIMI_CODING_K2_5_FROM) return 'kimi-k2-thinking'
+  if (at < KIMI_CODING_K2_6_FROM) return 'kimi-k2.5'
+  return at < KIMI_CODING_K2_7_FROM ? 'kimi-k2.6' : model
+}
+
+/// True when pricingModelAt stands in for a model with no published rate:
+/// Kimi Code's alias served K2.8 Preview from 11 Sep 2026, priced as K2.7 Code.
+/// A missing or unparseable timestamp gets the forward default, so it counts.
+export function isStandInPricedAt(model: string, timestamp: string | undefined): boolean {
+  const id = model.toLowerCase()
+  if (id !== 'kimi-for-coding' && id !== 'kimi-code') return false
+  if (Object.hasOwn(userAliases, model) || userPriceOverrides.has(model)) return false
+  const at = Date.parse(timestamp ?? '')
+  return !(at < KIMI_CODING_K2_8_FROM)
 }
 
 export function getModelCosts(model: string): ModelCosts | null {
@@ -1548,6 +1582,8 @@ const autoModelNames: Record<string, string> = {
   'openclaw-auto': 'OpenClaw (auto)',
   'qwen-auto': 'Qwen (auto)',
   'kimi-auto': 'Kimi (auto)',
+  'kimi-for-coding': 'Kimi for Coding',
+  'kimi-for-coding-highspeed': 'Kimi for Coding HighSpeed',
   'codex-auto-review': 'Codex Auto Review',
   'gpt-reserve': 'Luna Reserve',
 }

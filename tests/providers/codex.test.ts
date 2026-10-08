@@ -1405,6 +1405,123 @@ describe('codex provider - forked session dedupe', () => {
   })
 })
 
+describe('codex provider - fork replay masking against the parent rollout', () => {
+  const PARENT = '019e0000-0000-7000-8000-000000000001'
+  const CHILD = '019e0000-0000-7000-8000-000000000002'
+  const GRANDCHILD = '019e0000-0000-7000-8000-000000000003'
+  const rollout = (id: string, lines: string[]) =>
+    writeSession(tmpDir, '2026-04-14', `rollout-2026-04-14T10-00-00-${id}.jsonl`, lines)
+  const at = (s: string) => `2026-04-14T10:${s}Z`
+  type U = { input?: number; output?: number }
+  const cumulative: Record<string, U> = {}
+  // Each call advances that rollout's running total by its own usage.
+  const call = (rolloutId: string, ts: string, last: U) => {
+    const t = (cumulative[rolloutId] ??= { input: 0, output: 0 })
+    t.input! += last.input ?? 0
+    t.output! += last.output ?? 0
+    return tokenCount({ timestamp: at(ts), model: 'gpt-5.5', last, total: { input: t.input, output: t.output } })
+  }
+  const cost = (u: U) => calculateCost('gpt-5.5', u.input ?? 0, u.output ?? 0, 0, 0, 0, 'standard', 0, 'codex')
+
+  async function parseFile(path: string, seenKeys = new Set<string>()): Promise<ParsedProviderCall[]> {
+    const provider = createCodexProvider(tmpDir)
+    const calls: ParsedProviderCall[] = []
+    for await (const c of provider.createSessionParser({ path, project: 'test', provider: 'codex' }, seenKeys).parse()) calls.push(c)
+    return calls
+  }
+
+  beforeEach(() => {
+    for (const k of Object.keys(cumulative)) delete cumulative[k]
+  })
+
+  it('counts fork-only burst calls one by one through a parent -> child -> grandchild chain', async () => {
+    const p = [call(PARENT, '00:01', { input: 1_000 }), call(PARENT, '00:02', { input: 2_000 })]
+    cumulative[CHILD] = { ...cumulative[PARENT] }
+    const longContext: U = { input: 300_000, output: 100 }
+    const c = [
+      call(CHILD, '01:00.020', longContext),
+      call(CHILD, '01:00.030', { input: 500, output: 50 }),
+      call(CHILD, '01:30', { input: 700 }),
+    ]
+    cumulative[GRANDCHILD] = { ...cumulative[CHILD] }
+    const g = call(GRANDCHILD, '02:30', { input: 900 })
+    const retime = (line: string, ts: string) => line.replace(/"timestamp":"[^"]*"/, `"timestamp":"${at(ts)}"`)
+
+    const parentPath = await rollout(PARENT, [sessionMeta({ session_id: PARENT, model: 'gpt-5.5' }), ...p])
+    const childPath = await rollout(CHILD, [
+      sessionMeta({ session_id: CHILD, forked_from_id: PARENT, model: 'gpt-5.5', timestamp: at('01:00') }),
+      retime(p[0]!, '01:00.005'), retime(p[1]!, '01:00.010'),
+      ...c,
+    ])
+    const grandchildPath = await rollout(GRANDCHILD, [
+      sessionMeta({ session_id: GRANDCHILD, forked_from_id: CHILD, model: 'gpt-5.5', timestamp: at('02:00') }),
+      ...[...p, ...c].map((line, i) => retime(line, `02:00.${String(i + 1).padStart(3, '0')}`)),
+      g,
+    ])
+
+    const seen = new Set<string>()
+    const parent = await parseFile(parentPath, seen)
+    const child = await parseFile(childPath, seen)
+    const grandchild = await parseFile(grandchildPath, seen)
+
+    expect(parent.map(x => x.costUSD)).toEqual([cost({ input: 1_000 }), cost({ input: 2_000 })])
+    expect(child.map(x => x.costUSD)).toEqual([cost(longContext), cost({ input: 500, output: 50 }), cost({ input: 700 })])
+    expect(grandchild.map(x => x.costUSD)).toEqual([cost({ input: 900 })])
+    // The long-context tier applies to the one call that crossed it.
+    expect(child[0]!.costUSD).toBeGreaterThan(calculateCost('gpt-5.5', 300_000, 100, 0, 0, 0))
+  })
+
+  it('drops the whole burst when the parent rollout is not on disk', async () => {
+    const p = [call(PARENT, '00:01', { input: 1_000 })]
+    cumulative[CHILD] = { ...cumulative[PARENT] }
+    const childPath = await rollout(CHILD, [
+      sessionMeta({ session_id: CHILD, forked_from_id: PARENT, timestamp: at('01:00') }),
+      p[0]!.replace(at('00:01'), at('01:00.005')),
+      call(CHILD, '01:00.010', { input: 500 }),
+      call(CHILD, '01:30', { input: 700 }),
+    ])
+    expect((await parseFile(childPath)).map(x => x.inputTokens)).toEqual([700])
+  })
+
+  it('drops the whole burst when its first record is not in the parent', async () => {
+    await rollout(PARENT, [sessionMeta({ session_id: PARENT }), call(PARENT, '00:01', { input: 1_000 })])
+    cumulative[CHILD] = { input: 5, output: 0 }
+    const childPath = await rollout(CHILD, [
+      sessionMeta({ session_id: CHILD, forked_from_id: PARENT, timestamp: at('01:00') }),
+      call(CHILD, '01:00.005', { input: 500 }),
+      call(CHILD, '01:30', { input: 700 }),
+    ])
+    expect((await parseFile(childPath)).map(x => x.inputTokens)).toEqual([700])
+  })
+
+  it('does not mask with parent records written after the fork', async () => {
+    const p1 = call(PARENT, '00:01', { input: 1_000 })
+    cumulative[CHILD] = { ...cumulative[PARENT] }
+    const forkOnly = call(CHILD, '01:00.010', { input: 500 })
+    await rollout(PARENT, [sessionMeta({ session_id: PARENT }), p1, forkOnly.replace(at('01:00.010'), at('05:00'))])
+    const childPath = await rollout(CHILD, [
+      sessionMeta({ session_id: CHILD, forked_from_id: PARENT, timestamp: at('01:00') }),
+      p1.replace(at('00:01'), at('01:00.005')),
+      forkOnly,
+    ])
+    expect((await parseFile(childPath)).map(x => x.inputTokens)).toEqual([500])
+  })
+
+  it('masks replayed response records and counts a fork-only one once', async () => {
+    const record = (ts: string, responseId: string, input: number) =>
+      tokenUsageRecord({ timestamp: at(ts), responseId, usage: { input } })
+    const p = [record('00:01', 'resp-1', 1_000), tokenCount({ timestamp: at('00:01'), last: { input: 1_000 }, total: { input: 1_000 } })]
+    await rollout(PARENT, [sessionMeta({ session_id: PARENT }), ...p])
+    const childPath = await rollout(CHILD, [
+      sessionMeta({ session_id: CHILD, forked_from_id: PARENT, timestamp: at('01:00') }),
+      ...p.map(line => line.replace(at('00:01'), at('01:00.005'))),
+      record('01:00.010', 'resp-2', 500),
+      tokenCount({ timestamp: at('01:00.010'), last: { input: 500 }, total: { input: 1_500 } }),
+    ])
+    expect((await parseFile(childPath)).map(x => x.inputTokens)).toEqual([500])
+  })
+})
+
 describe('codex provider - token_usage_record accounting', () => {
   async function parseCalls(lines: string[]): Promise<ParsedProviderCall[]> {
     const filePath = await writeSession(tmpDir, '2026-09-27', 'rollout-usage-record.jsonl', lines)

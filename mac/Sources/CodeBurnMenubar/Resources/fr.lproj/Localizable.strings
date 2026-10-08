@@ -173,6 +173,8 @@
 "CodeBurn CLI %@ available" = "CodeBurn CLI %@ disponible";
 "Could not find the package manager for %1$@. Run “%2$@” manually, then try again." = "Gestionnaire de paquets introuvable pour %1$@. Exécutez « %2$@ » manuellement, puis réessayez.";
 "the CLI" = "la CLI";
+"This codeburn CLI comes with the CodeBurn desktop app. Update the desktop app, then try again." = "Cette CLI codeburn est fournie avec l’app de bureau CodeBurn. Mettez à jour l’app de bureau, puis réessayez.";
+"npm does not have permission to update the global codeburn install. Run “%@” in Terminal, then try again." = "npm n’a pas l’autorisation de mettre à jour l’installation globale de codeburn. Exécutez « %@ » dans le Terminal, puis réessayez.";
 "CLI update failed (exit %lld)" = "Échec de la mise à jour de la CLI (code %lld)";
 "Your codeburn CLI (%1$@) is too old to update the menubar. Run “%2$@” first, then try again." = "Votre CLI codeburn (%1$@) est trop ancienne pour mettre à jour l'app menu bar. Exécutez d'abord « %2$@ », puis réessayez.";
 "Update failed (exit %lld)" = "Échec de la mise à jour (code %lld)";
@@ -215,9 +217,6 @@
 "%1$@ over limit (%2$lld%%)" = "%1$@ au-delà de la limite (%2$lld%%)";
 "resets in %@" = "réinitialisation dans %@";
 "Change accent color" = "Changer la couleur d'accent";
-"CLI %@ available" = "CLI %@ disponible";
-"Update now" = "Mettre à jour";
-"Update the CLI (and the menubar if one is available) automatically" = "Mettre à jour automatiquement la CLI (et l'app menu bar si disponible)";
 "Copy update command to clipboard" = "Copier la commande de mise à jour";
 "Enjoying CodeBurn?" = "Vous aimez CodeBurn ?";
 "Star us on GitHub" = "Mettez-nous une étoile sur GitHub";

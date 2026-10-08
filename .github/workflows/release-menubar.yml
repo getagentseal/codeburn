@@ -1,9 +1,12 @@
 name: Release macOS Menubar
 
 # Triggers on a `mac-v*` tag push (e.g. `git tag mac-v0.8.0 && git push origin mac-v0.8.0`),
-# or manually via the Actions tab. Builds a universal arm64+x86_64 bundle, ad-hoc signs it,
-# zips via `ditto`, and uploads the zip to the GitHub Release. The installer verifies
-# the checksum and bundle identity before replacing the local app.
+# or manually via the Actions tab. Builds a universal arm64+x86_64 bundle, signs it with the
+# Developer ID Application cert (hardened runtime, secure timestamp), notarizes and staples it,
+# zips via `ditto`, and uploads the zip to the GitHub Release. Tag builds then point the
+# rolling `update-feeds` prerelease at it. Without the signing secrets the job fails.
+# The installer verifies the checksum, bundle id, team signature and Gatekeeper before
+# replacing the local app.
 on:
   push:
     tags:
@@ -37,8 +40,65 @@ jobs:
       - name: Show Swift toolchain
         run: swift --version
 
-      - name: Build + bundle + zip
+      - name: Import signing certificate and notary key
+        env:
+          MACOS_CERT_P12_BASE64: ${{ secrets.MACOS_CERT_P12_BASE64 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          MACOS_KEYCHAIN_PASSWORD: ${{ secrets.MACOS_KEYCHAIN_PASSWORD }}
+          APPSTORE_API_KEY_P8_BASE64: ${{ secrets.APPSTORE_API_KEY_P8_BASE64 }}
+          APPSTORE_API_KEY_ID: ${{ secrets.APPSTORE_API_KEY_ID }}
+          APPSTORE_API_ISSUER_ID: ${{ secrets.APPSTORE_API_ISSUER_ID }}
+        run: |
+          missing=()
+          for name in MACOS_CERT_P12_BASE64 MACOS_CERT_PASSWORD MACOS_KEYCHAIN_PASSWORD \
+                      APPSTORE_API_KEY_P8_BASE64 APPSTORE_API_KEY_ID APPSTORE_API_ISSUER_ID; do
+            [[ -n "${!name}" ]] || missing+=("$name")
+          done
+          if (( ${#missing[@]} )); then
+            echo "::error::Missing signing secrets: ${missing[*]}. Refusing to build an unsigned menubar release (see RELEASING.md)."
+            exit 1
+          fi
+
+          keychain="$RUNNER_TEMP/codeburn-signing.keychain-db"
+          cert="$RUNNER_TEMP/codeburn-signing.p12"
+          base64 --decode <<< "$MACOS_CERT_P12_BASE64" > "$cert"
+          security create-keychain -p "$MACOS_KEYCHAIN_PASSWORD" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$MACOS_KEYCHAIN_PASSWORD" "$keychain"
+          security import "$cert" -k "$keychain" -P "$MACOS_CERT_PASSWORD" -f pkcs12 -T /usr/bin/codesign -T /usr/bin/security
+          rm -f "$cert"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$MACOS_KEYCHAIN_PASSWORD" "$keychain" > /dev/null
+          # shellcheck disable=SC2046
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+
+          identity=$(security find-identity -v -p codesigning "$keychain" | awk '/Developer ID Application: .*\(XRVP7P7F9M\)/ { print $2; exit }')
+          if [[ -z "$identity" ]]; then
+            echo "::error::No Developer ID Application identity for team XRVP7P7F9M in MACOS_CERT_P12_BASE64."
+            exit 1
+          fi
+
+          key="$RUNNER_TEMP/AuthKey_${APPSTORE_API_KEY_ID}.p8"
+          base64 --decode <<< "$APPSTORE_API_KEY_P8_BASE64" > "$key"
+          {
+            echo "CODESIGN_IDENTITY=$identity"
+            echo "NOTARY_KEY_PATH=$key"
+            echo "NOTARY_KEY_ID=$APPSTORE_API_KEY_ID"
+            echo "NOTARY_ISSUER_ID=$APPSTORE_API_ISSUER_ID"
+          } >> "$GITHUB_ENV"
+
+      - name: Build + sign + notarize + zip
         run: mac/Scripts/package-app.sh "${{ steps.version.outputs.value }}"
+
+      - name: Verify the zip the way the installer will
+        env:
+          ZIP: mac/.build/dist/CodeBurnMenubar-${{ steps.version.outputs.value }}.zip
+        run: |
+          (cd "$(dirname "$ZIP")" && shasum -a 256 -c "$(basename "$ZIP").sha256")
+          check="$RUNNER_TEMP/verify-zip"
+          rm -rf "$check" && mkdir -p "$check"
+          ditto -x -k "$ZIP" "$check"
+          codesign --verify --deep --strict -R='anchor apple generic and certificate leaf[subject.OU] = "XRVP7P7F9M"' "$check/CodeBurnMenubar.app"
+          spctl --assess --type execute -vv "$check/CodeBurnMenubar.app"
 
       - name: Upload artifact (for manual runs)
         if: github.event_name == 'workflow_dispatch'
@@ -65,11 +125,44 @@ jobs:
             ```
 
             That command drops the app into `~/Applications`, records the persistent
-            `codeburn` CLI path used by the menubar, verifies the downloaded checksum,
-            clears quarantine after bundle verification, and launches it. If you download
-            the zip from this page directly and macOS shows "cannot verify developer",
-            right-click the app in Finder and pick Open to whitelist it once.
+            `codeburn` CLI path used by the menubar, verifies the checksum and the
+            AgentSeal Developer ID signature, and launches it. The app is notarized, so
+            the zip from this page also opens directly.
           files: |
             mac/.build/dist/CodeBurnMenubar-${{ steps.version.outputs.value }}.zip
             mac/.build/dist/CodeBurnMenubar-${{ steps.version.outputs.value }}.zip.sha256
           fail_on_unmatched_files: true
+
+      # Last on purpose: the feed only moves once the published asset is known to match the
+      # verified build. It lives on a prerelease so it never becomes GitHub's Latest release.
+      - name: Point the update feed at this release
+        if: startsWith(github.ref, 'refs/tags/mac-v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          zip_name="CodeBurnMenubar-${VERSION}.zip"
+          url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/${zip_name}"
+          built=$(cut -d' ' -f1 "mac/.build/dist/${zip_name}.sha256")
+          published=$(curl -fsSL --retry 5 --retry-all-errors --retry-delay 5 "$url" | shasum -a 256 | cut -d' ' -f1)
+          if [[ "$published" != "$built" ]]; then
+            echo "::error::Published ${zip_name} (${published}) does not match the verified build (${built})."
+            exit 1
+          fi
+
+          feed="$RUNNER_TEMP/menubar-latest.json"
+          jq -n --arg version "${VERSION#v}" --arg url "$url" --arg sha256 "$built" \
+            '{version: $version, url: $url, sha256: $sha256}' > "$feed"
+          cat "$feed"
+          if ! gh release view update-feeds > /dev/null 2>&1; then
+            gh release create update-feeds --prerelease --target "$GITHUB_SHA" --title "Update feeds" \
+              --notes "Machine-read update pointers. Do not edit or promote; CI rewrites the files here."
+          fi
+          gh release upload update-feeds "$feed" --clobber
+
+      - name: Remove signing material
+        if: always()
+        run: |
+          security delete-keychain "$RUNNER_TEMP/codeburn-signing.keychain-db" 2>/dev/null || true
+          rm -f "$RUNNER_TEMP"/AuthKey_*.p8 "$RUNNER_TEMP/codeburn-signing.p12"

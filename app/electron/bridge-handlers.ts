@@ -66,6 +66,14 @@ export type ProjectFilter = { project: string[]; exclude: string[] }
 
 const EMPTY_PROJECT_FILTER: ProjectFilter = { project: [], exclude: [] }
 
+/**
+ * The saved project filter narrowed to these paths. Its excludes still apply;
+ * its includes give way, since the paths already name the projects shown.
+ */
+export function scopeFilter(paths: readonly string[]): (filter: ProjectFilter) => ProjectFilter {
+  return filter => paths.length === 0 ? filter : { project: [...paths], exclude: filter.exclude }
+}
+
 // A file rather than a build-time constant so it toggles without rebuilding,
 // and it lives here, not in renderer storage, because this is where the argv is
 // assembled. Re-read whenever the file changes, so a hand edit lands.
@@ -468,9 +476,16 @@ export function exportedPath(stdout: string): string | null {
 
 export function createBridgeHandlers(deps: Deps): Record<string, Handler> {
   const emitProgress = deps.emitProgress ?? (() => {})
-  const projectArgs = (): string[] => {
+  const savedFilter = (): ProjectFilter => {
     const filter = readProjectFilter()
-    return filterArgs(deps.scopeProjectFilter ? deps.scopeProjectFilter(filter) : filter)
+    return deps.scopeProjectFilter ? deps.scopeProjectFilter(filter) : filter
+  }
+  // The top bar's project pick. Held in memory only, so a restart is back on
+  // every project and the saved filter is never touched.
+  let transientProject: string | null = null
+  const projectArgs = (): string[] => {
+    const filter = savedFilter()
+    return filterArgs(transientProject ? scopeFilter([transientProject])(filter) : filter)
   }
   const telemetry = deps.telemetry ?? null
   // Flips true after the first overview fetch succeeds. Until then, every
@@ -785,6 +800,15 @@ export function createBridgeHandlers(deps: Deps): Record<string, Handler> {
       try { return { ok: true, value: readProjectFilter() } }
       catch (error) { return { ok: false, error: toEnvelopeError(error) } }
     },
+    // An absolute path only: a bare name would be a substring pattern and
+    // could take in every project sharing it.
+    'codeburn:setTransientProject': async (projectPath?: unknown) => {
+      if (projectPath !== null && (typeof projectPath !== 'string' || !path.isAbsolute(projectPath) || projectPath.includes('\0'))) {
+        return { ok: false, error: { kind: 'bad-args', message: 'invalid project path' } }
+      }
+      transientProject = projectPath
+      return { ok: true, value: undefined }
+    },
     'codeburn:setProjectFilter': async (filter?: unknown) => {
       try { return { ok: true, value: writeProjectFilter(filter) } }
       catch (error) { return { ok: false, error: { kind: 'nonzero', message: sanitizeError(error) } } }
@@ -838,7 +862,7 @@ export function createBridgeHandlers(deps: Deps): Record<string, Handler> {
       try {
         const result = await deps.spawnCliAction([
           'export', '-f', vToken(format), '-o', vOutPath(outPath), '--provider', vProvider(provider),
-          ...projectArgs(),
+          ...filterArgs(savedFilter()),
         ])
         const savedPath = exportedPath(result.stdout)
         if (result.ok && savedPath === null) {
