@@ -459,7 +459,9 @@ fn pending() -> std::sync::MutexGuard<'static, Option<(Update, Vec<u8>)>> {
 pub async fn download(app: &AppHandle) -> Result<()> {
     let mut to = String::new();
     let result = download_into_pending(app, &mut to).await;
-    if let Err(err) = &result {
+    // An empty `to` is a feed with no newer release or an updater that never started: no
+    // download was attempted, so there is no outcome to report.
+    if let (Err(err), false) = (&result, to.is_empty()) {
         track_update_result(
             &app.package_info().version.to_string(),
             &to,
@@ -510,8 +512,9 @@ fn set_pending_update(versions: Option<(&str, &str)>) {
     }
 }
 
-/// On launch, after telemetry is up: the old version still running means the last install
-/// did not land; any other version means it did, and `to` is what actually runs.
+/// On launch, after telemetry is up: a newer version running means the last install landed,
+/// and `to` is what runs; the old one still running means it did not. An older one is a
+/// manual downgrade: the marker goes and nothing is sent.
 pub fn settle_pending_update(running: &str) {
     let settings = crate::settings::read();
     let Some(pending) = settings.get(KEY_PENDING_UPDATE) else {
@@ -529,11 +532,13 @@ fn pending_update_outcome(
 ) -> Option<(String, String, &'static str)> {
     let from = pending.get("from")?.as_str()?;
     let to = pending.get("to")?.as_str()?;
-    Some(if running == from {
-        (from.to_owned(), to.to_owned(), "install_fail")
+    if running == from {
+        Some((from.to_owned(), to.to_owned(), "install_fail"))
+    } else if is_newer(running, from) {
+        Some((from.to_owned(), running.to_owned(), "ok"))
     } else {
-        (from.to_owned(), running.to_owned(), "ok")
-    })
+        None
+    }
 }
 
 fn track_update_result(from: &str, to: &str, outcome: &str) {
@@ -864,7 +869,7 @@ mod tests {
     }
 
     #[test]
-    fn a_pending_update_settles_to_ok_when_the_version_moved() {
+    fn a_pending_update_settles_to_ok_only_when_newer() {
         let pending = serde_json::json!({ "from": "0.9.26", "to": "0.9.27" });
         assert_eq!(
             pending_update_outcome(&pending, "0.9.27"),
@@ -874,6 +879,11 @@ mod tests {
             pending_update_outcome(&pending, "0.9.26"),
             Some(("0.9.26".into(), "0.9.27".into(), "install_fail"))
         );
+        assert_eq!(
+            pending_update_outcome(&pending, "0.9.28"),
+            Some(("0.9.26".into(), "0.9.28".into(), "ok"))
+        );
+        assert_eq!(pending_update_outcome(&pending, "0.9.25"), None);
         assert_eq!(
             pending_update_outcome(&serde_json::json!("junk"), "0.9.27"),
             None

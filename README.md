@@ -504,7 +504,7 @@ The other events are name-only:
 | `section_view` | Which section you opened (`overview`, `spend`, …) |
 | `cold_start` | Milliseconds to the first painted overview, and whether it timed out |
 | `cli_error` | Error kind, the command name, how long it ran as a range (`<1s` to `120s+`), the exit code or signal, a reason label (`lock-busy`, `oom`, `eacces`, `enoent`, `network`, `parse`, `shutdown`, `serve`, `other`) picked on your machine from the error text, which is never sent, and the provider when the read was for one provider. Capped at 20 per kind per day |
-| `provider_read_fail` | A provider whose data could not be read: its name, the stage (`locate` or `parse`) and the error kind (`eacces`, `busy`, `enoent`, `malformed`, `error`). Once per provider per day |
+| `provider_read_fail` | A provider whose data could not be read: its name, the stage (`locate` or `parse`) and the error kind (`eacces`, `busy`, `enoent`, `malformed`, `error`). Once a day per provider, stage and kind |
 | `update_result` | How a one-click update went: the version before and after, and `ok`, `download_fail`, `verify_fail` or `install_fail`. Also sent by the macOS menu bar app and the Windows tray |
 | `optimize_apply` | The finding id you took a fix for (`unused-mcp`, `claude-md-too-long`, …) and the fix type |
 | `plan_set` | Provider and plan preset id |

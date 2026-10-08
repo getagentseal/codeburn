@@ -91,14 +91,19 @@ final class UpdateChecker {
         track("update_result", .object(["from": .string(from), "to": .string(to), "outcome": .string(outcome)]))
     }
 
-    /// On launch: the old version still running means the last install did not land; any
-    /// other version means it did, and `to` is what actually runs.
+    /// On launch: a newer version running means the last install landed, and `to` is what
+    /// runs; the old one still running means it did not. An older one is a manual
+    /// downgrade: the marker goes and nothing is sent.
     func settlePendingUpdate(running: String? = nil) {
         guard let pending = defaults.dictionary(forKey: pendingUpdateKey) as? [String: String],
               let from = pending["from"], let to = pending["to"] else { return }
         defaults.removeObject(forKey: pendingUpdateKey)
         let now = AppVersion.normalize(running ?? currentVersion)
-        trackUpdateResult(from: from, to: now == from ? to : now, outcome: now == from ? "install_fail" : "ok")
+        switch now.compare(from, options: .numeric) {
+        case .orderedDescending: trackUpdateResult(from: from, to: now, outcome: "ok")
+        case .orderedSame: trackUpdateResult(from: from, to: to, outcome: "install_fail")
+        case .orderedAscending: break
+        }
     }
 
     /// A failed `codeburn menubar --force`, sorted by the installer's own messages
@@ -505,10 +510,15 @@ final class UpdateChecker {
         isUpdating = true
         updateError = nil
         updateFailureStage = nil
-        defaults.set(
-            ["from": AppVersion.normalize(currentVersion), "to": AppVersion.normalize(latestVersion ?? "")],
-            forKey: pendingUpdateKey
-        )
+        // `menubar --force` installs the CLI's own version, so that is the target; when it
+        // is not ahead of this app the run cannot move it, and there is nothing to settle.
+        if Self.menubarInstallAdvances(installedCli: installedCliVersion, app: currentVersion),
+           let installedCliVersion {
+            defaults.set(
+                ["from": AppVersion.normalize(currentVersion), "to": AppVersion.normalize(installedCliVersion)],
+                forKey: pendingUpdateKey
+            )
+        }
 
         let process = CodeburnCLI.makeProcess(subcommand: ["menubar", "--force"])
         let errPipe = Pipe()

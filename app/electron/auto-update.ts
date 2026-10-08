@@ -54,7 +54,8 @@ export function createAutoUpdateChecker(opts: {
   now?: () => number
   /** A download that failed, as an outcome enum. */
   onDownloadFail?: (outcome: 'download_fail' | 'verify_fail', from: string, to: string) => void
-  /** Called just before the app quits into the new version. */
+  /** Called when the update is downloaded and again just before quitting into it: from then
+   *  on it installs, at the latest on the next quit. */
   onInstall?: (from: string, to: string) => void
 }): AutoUpdateChecker {
   const { updater, currentVersion, onChange } = opts
@@ -68,7 +69,9 @@ export function createAutoUpdateChecker(opts: {
   const set = (next: UpdateStatus) => { status = next; onChange(status) }
 
   updater.on('update-downloaded', () => {
-    if (status.install === 'downloading') set({ ...status, install: 'ready' })
+    if (status.install !== 'downloading') return
+    opts.onInstall?.(currentVersion, status.latestVersion ?? '')
+    set({ ...status, install: 'ready' })
   })
 
   const check = (): Promise<UpdateStatus> => {

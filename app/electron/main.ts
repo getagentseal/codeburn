@@ -310,10 +310,10 @@ function bootstrap(): void {
         getAppMetrics: () => app.getAppMetrics(),
         getServeUsage: serveUsage,
       })
+      telemetryInstance.settleUpdate(app.getVersion())
       // completeOnboarding tracks the first app_open itself; only already-
       // onboarded installs record subsequent opens here. app_open carries the
       // Capacity Dock state (on/off/none) so dock adoption is measurable.
-      telemetryInstance.settleUpdate(app.getVersion())
       if (telemetryInstance.status().onboarded) {
         const dockPref = readDockEnabled()
         telemetryInstance.track('app_open', { dock: dockPref === undefined ? 'none' : dockPref ? 'on' : 'off' })

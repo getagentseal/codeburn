@@ -100,9 +100,9 @@ describe('createAutoUpdateChecker', () => {
 
     await checker.check()
     await checker.download()
-    expect(installs).toEqual([])
-    checker.install()
     expect(installs).toEqual([{ from: '0.9.26', to: '0.9.27' }])
+    checker.install()
+    expect(installs).toEqual([{ from: '0.9.26', to: '0.9.27' }, { from: '0.9.26', to: '0.9.27' }])
     expect(updater.quitAndInstall).toHaveBeenCalledTimes(1)
   })
 

@@ -26,8 +26,11 @@ export function recordProviderIssue(provider: string, stage: ProviderIssue['stag
   issues.set(`${provider}:${stage}`, { provider, stage, kind: providerIssueKind(err) })
 }
 
-export function clearProviderIssue(provider: string, stage: ProviderIssue['stage']): void {
-  issues.delete(`${provider}:${stage}`)
+/** With `kind`, clears only an entry of that kind: a permission error that Full Disk
+ *  Access has since fixed, but not a malformed file that is still cached as failed. */
+export function clearProviderIssue(provider: string, stage: ProviderIssue['stage'], kind?: ProviderIssue['kind']): void {
+  const key = `${provider}:${stage}`
+  if (kind === undefined || issues.get(key)?.kind === kind) issues.delete(key)
 }
 
 export function providerIssues(): ProviderIssue[] {

@@ -280,9 +280,10 @@ describe('events', () => {
     telemetry.completeOnboarding(true)
     const before = telemetry.queueLength
     telemetry.track('provider_read_fail', { provider: 'cursor', stage: 'locate', kind: 'eacces' })
+    telemetry.track('provider_read_fail', { provider: 'cursor', stage: 'locate', kind: 'eacces' })
     telemetry.track('provider_read_fail', { provider: 'cursor', stage: 'parse', kind: 'malformed' })
     telemetry.track('provider_read_fail', { provider: 'codex', stage: 'parse', kind: 'busy' })
-    expect(telemetry.queueLength).toBe(before + 2)
+    expect(telemetry.queueLength).toBe(before + 3)
 
     const reloaded = new Telemetry({ stateDir: dir, country: 'US', isPackaged: true, appVersion: '1', now: () => instant })
     reloaded.track('provider_read_fail', { provider: 'cursor', stage: 'locate', kind: 'eacces' })
@@ -292,11 +293,12 @@ describe('events', () => {
     expect(reloaded.queueLength).toBe(1)
   })
 
-  it('settles a pending update once on the next launch: ok when the version moved, else install_fail', async () => {
+  it('settles a pending update once on the next launch: ok when newer, install_fail when unchanged, nothing when older', async () => {
     for (const [running, expected] of [
-      ['0.9.27', { from: '0.9.26', to: '0.9.27', outcome: 'ok' }],
-      ['0.9.26', { from: '0.9.26', to: '0.9.27', outcome: 'install_fail' }],
-      ['0.9.28', { from: '0.9.26', to: '0.9.28', outcome: 'ok' }],
+      ['0.9.27', [{ from: '0.9.26', to: '0.9.27', outcome: 'ok' }]],
+      ['0.9.26', [{ from: '0.9.26', to: '0.9.27', outcome: 'install_fail' }]],
+      ['0.9.28', [{ from: '0.9.26', to: '0.9.28', outcome: 'ok' }]],
+      ['0.9.25', []],
     ] as const) {
       const stateDir = join(dir, running)
       const first = new Telemetry({ stateDir, country: 'US', isPackaged: true, appVersion: '0.9.26' })
@@ -308,7 +310,7 @@ describe('events', () => {
       await next.flush()
       const events = (posts[0]?.body as { events: Array<{ name: string; props: unknown }> } | undefined)?.events ?? []
       expect(events.filter(e => e.name === 'update_result').map(e => e.props))
-        .toEqual([expected])
+        .toEqual(expected)
       expect(JSON.parse(readFileSync(join(stateDir, 'telemetry.v1.json'), 'utf-8')).pendingUpdate).toBeUndefined()
     }
   })

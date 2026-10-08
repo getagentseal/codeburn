@@ -14,7 +14,7 @@ import { antigravityCascadeIdFromPath, flushAntigravityCache, preloadAntigravity
 import { getClaudeConfigDirs, getDesktopSessionsDirs } from './providers/claude.js'
 import { kimicodeLineageForSource } from './providers/kimicode.js'
 import { isSqliteBusyError } from './sqlite.js'
-import { recordProviderIssue } from './provider-issues.js'
+import { clearProviderIssue, recordProviderIssue } from './provider-issues.js'
 import { getCodeburnCacheDir } from './cache-dir.js'
 import {
   isHermesLedgerPublicationError,
@@ -3385,7 +3385,6 @@ async function resolveProviderLineage(
 const warnedProviderReadFailures = new Set<string>()
 
 function warnProviderReadFailureOnce(providerName: string, err: unknown): void {
-  recordProviderIssue(providerName, 'parse', err)
   const key = `${providerName}:sqlite-busy`
   if (warnedProviderReadFailures.has(key)) return
   warnedProviderReadFailures.add(key)
@@ -6581,6 +6580,7 @@ async function runParseInner(
         claudeProjects.push(...deduplicateClaudeDesktopLedger(ledgerProjects, claudeProjects))
       }
       if (claudeSources.length > 0) emitScanProgress({ kind: 'provider', provider: 'claude', state: 'done', files: claudeSources.length })
+      clearProviderIssue('claude', 'parse', 'eacces')
     } catch (err) {
       if (!isPermissionError(err)) throw err
       permissionSkippedProviders.add('claude')
@@ -6597,6 +6597,7 @@ async function runParseInner(
     try {
       const projects = await parseProviderSources(providerName, sources, seenKeys, diskCache, dateRange, saveProgress, readOnly)
       emitScanProgress({ kind: 'provider', provider: providerName, state: 'done', files: sources.length })
+      clearProviderIssue(providerName, 'parse', 'eacces')
       otherProjects.push(...projects)
     } catch (err) {
       // A permission-locked provider skips-and-continues; any other error is a

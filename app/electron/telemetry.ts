@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { writeFileAtomic } from './tray-settings'
+import { compareSemver } from './updates'
 
 // Anonymous, consent-gated product telemetry for the desktop app ONLY.
 // Runs entirely in the Electron main process. Like cli.ts, this module must
@@ -357,7 +358,8 @@ export class Telemetry {
     }
     const sanitizedProps = sanitizeProps(props)
     const budgetKey = name === 'cli_error' ? String(sanitizedProps.kind ?? '')
-      : name === 'provider_read_fail' ? `provider:${String(sanitizedProps.provider ?? '')}`
+      : name === 'provider_read_fail'
+        ? `provider:${String(sanitizedProps.provider ?? '')}:${String(sanitizedProps.stage ?? '')}:${String(sanitizedProps.kind ?? '')}`
       : name === 'update_result' ? `update:${String(sanitizedProps.outcome ?? '')}`
       : null
     if (budgetKey !== null) {
@@ -381,15 +383,17 @@ export class Telemetry {
     this.save()
   }
 
-  /** On launch: the old version still running means the install did not land; any other
-   *  version means it did, and `to` is what actually runs. */
+  /** On launch: a newer version running means the install landed, and `to` is what runs;
+   *  the old one still running means it did not. An older one is a manual downgrade: the
+   *  marker goes and nothing is sent. */
   settleUpdate(currentVersion: string): void {
     const pending = this.state.pendingUpdate
     if (!pending) return
     delete this.state.pendingUpdate
     this.save()
-    const ok = currentVersion !== pending.from
-    this.track('update_result', { from: pending.from, to: ok ? currentVersion : pending.to, outcome: ok ? 'ok' : 'install_fail' })
+    const order = compareSemver(currentVersion, pending.from)
+    if (order > 0) this.track('update_result', { from: pending.from, to: currentVersion, outcome: 'ok' })
+    else if (order === 0) this.track('update_result', { from: pending.from, to: pending.to, outcome: 'install_fail' })
   }
 
   /** One cheap read of how heavy this app run is. Called on the existing flush

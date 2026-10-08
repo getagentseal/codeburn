@@ -250,10 +250,15 @@ struct UpdateResultTelemetryTests {
         #expect(UpdateChecker.updateFailureOutcome(stderr: "") == "install_fail")
     }
 
-    @Test("settles a pending update once: ok when the version moved, install_fail when it did not")
+    @Test("settles a pending update once: ok when newer, install_fail when unchanged, nothing when older")
     func settlesPendingUpdate() {
-        for (running, expected) in [("0.9.27", ["from": "0.9.26", "to": "0.9.27", "outcome": "ok"]),
-                                    ("0.9.26", ["from": "0.9.26", "to": "0.9.27", "outcome": "install_fail"])] {
+        let cases: [(String, [String: String]?)] = [
+            ("0.9.27", ["from": "0.9.26", "to": "0.9.27", "outcome": "ok"]),
+            ("0.9.28", ["from": "0.9.26", "to": "0.9.28", "outcome": "ok"]),
+            ("0.9.26", ["from": "0.9.26", "to": "0.9.27", "outcome": "install_fail"]),
+            ("0.9.25", nil),
+        ]
+        for (running, expected) in cases {
             let (defaults, suiteName) = TestDefaults.make("codeburn.update-result.\(running)")
             defer { TestDefaults.forget(suiteName) }
             var tracked: [(String, JSONValue)] = []
@@ -261,6 +266,11 @@ struct UpdateResultTelemetryTests {
             defaults.set(["from": "0.9.26", "to": "0.9.27"], forKey: "UpdateChecker.pendingUpdate")
             checker.settlePendingUpdate(running: running)
             checker.settlePendingUpdate(running: running)
+            #expect(defaults.dictionary(forKey: "UpdateChecker.pendingUpdate") == nil)
+            guard let expected else {
+                #expect(tracked.isEmpty)
+                continue
+            }
             #expect(tracked.count == 1)
             #expect(tracked.first?.0 == "update_result")
             #expect(tracked.first?.1 == .object(expected.mapValues { .string($0) }))
