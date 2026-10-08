@@ -424,6 +424,9 @@ export type Deps = {
   telemetry?: TelemetryBridge | null
   /** Cached update-availability status; absent under tests unless injected. */
   getUpdateStatus?: () => Promise<UpdateStatus>
+  /** One-click update download and restart; absent where updates are a download link. */
+  downloadUpdate?: () => Promise<UpdateStatus>
+  installUpdate?: () => void
   /** The bundled tray app and Capacity Dock; absent off Windows and under tests. */
   companion?: Pick<
     MenubarCompanion,
@@ -889,6 +892,11 @@ export function createBridgeHandlers(deps: Deps): Record<string, Handler> {
     // One-shot read of the cached update-availability status. The check itself
     // runs in the background (launch + 24h); this returns whatever is known.
     'codeburn:getUpdateStatus': async () => ({ ok: true, value: deps.getUpdateStatus ? await deps.getUpdateStatus() : NO_UPDATE_STATUS }),
+    'codeburn:downloadUpdate': async () => ({ ok: true, value: deps.downloadUpdate ? await deps.downloadUpdate() : NO_UPDATE_STATUS }),
+    'codeburn:installUpdate': async () => {
+      deps.installUpdate?.()
+      return { ok: true, value: true }
+    },
     // The bundled tray app and its Capacity Dock (Windows). Every setter answers with the
     // whole status, so the sidebar renders the state that actually took rather than the one
     // it asked for: an install that was cancelled leaves the switch where it was.

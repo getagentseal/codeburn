@@ -65,9 +65,11 @@ jobs:
         working-directory: windows
         run: npm ci
 
+      # The staged tray MSI needs no updater signature: the tray updates from its own windows-v* line.
       - name: Build tray app
         working-directory: windows
-        run: npm run tauri build
+        shell: bash
+        run: npm run tauri build -- --no-sign
 
       - name: Build NSIS installer
         run: npm --prefix app run package:win
@@ -88,6 +90,7 @@ jobs:
           path: |
             app/release/CodeBurn-Setup-*.exe
             app/release/CodeBurn-Setup-*.exe.blockmap
+            app/release/latest.yml
           if-no-files-found: error
           retention-days: 30
 
@@ -107,3 +110,36 @@ jobs:
           node app/scripts/verify-windows-installer.mjs \
             --tag "$RELEASE_TAG" \
             --release-assets "$RUNNER_TEMP/release-assets.json"
+
+  # Last step of a desktop release: point the app's update feed at it. Runs only after the
+  # live-asset check passes, and refuses to move the feed backwards.
+  publish-update-feeds:
+    needs: verify-release-assets
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Publish desktop update feeds
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name || inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP"
+          version="${RELEASE_TAG#desktop-v}"
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" --jq '[.assets[].name]' > release-assets.json
+          gh release download "$RELEASE_TAG" -R "$GITHUB_REPOSITORY" -p 'latest*.yml'
+          node "$GITHUB_WORKSPACE/app/scripts/update-feed.mjs" --tag "$RELEASE_TAG" --release-assets release-assets.json latest*.yml
+          if gh release view update-feeds -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            current=$(gh release download update-feeds -R "$GITHUB_REPOSITORY" -p latest-mac.yml -O - 2>/dev/null | sed -n 's/^version: //p' || true)
+            if [ -n "$current" ] && [ "$(printf '%s\n%s\n' "$current" "$version" | sort -V | tail -1)" != "$version" ]; then
+              echo "::error::update-feeds already serves $current, newer than $version"
+              exit 1
+            fi
+          else
+            gh release create update-feeds -R "$GITHUB_REPOSITORY" --prerelease --latest=false \
+              --title "Update feeds" --notes "Update metadata for the apps. Not a release to download."
+          fi
+          gh release upload update-feeds -R "$GITHUB_REPOSITORY" latest*.yml --clobber

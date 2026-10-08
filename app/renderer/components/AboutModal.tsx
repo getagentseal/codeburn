@@ -6,7 +6,8 @@ import { Icon } from './icons'
 import { BUILD_STAMP } from '../lib/build'
 import { useEscape } from '../hooks/useEscape'
 import { t } from '../i18n'
-import { updateDownloadUrl, useUpdateStatus } from '../hooks/useUpdateStatus'
+import { useUpdateStatus } from '../hooks/useUpdateStatus'
+import { UpdateAction } from './UpdateBanner'
 import { codeburn } from '../lib/ipc'
 import { DUR, useExitAnimation } from '../lib/motion'
 
@@ -87,13 +88,7 @@ export function AboutModal({ socials = SOCIALS, openKey, onClose }: { socials?: 
                   {status?.updateAvailable && status.tag ? (
                     <>
                       {t('shared.aboutModal.updateAvailable', { version: status.latestVersion ?? '' })}{' '}
-                      <button
-                        type="button"
-                        className="set-text-button"
-                        onClick={() => { void codeburn.openExternal(updateDownloadUrl(status.tag!)) }}
-                      >
-                        {t('shared.aboutModal.download')}
-                      </button>
+                      <UpdateAction status={status} downloadLabel={t('shared.aboutModal.download')} />
                     </>
                   ) : status?.latestVersion ? (
                     t('shared.aboutModal.upToDate')

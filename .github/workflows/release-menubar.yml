@@ -156,8 +156,8 @@ jobs:
             '{version: $version, url: $url, sha256: $sha256}' > "$feed"
           cat "$feed"
           if ! gh release view update-feeds > /dev/null 2>&1; then
-            gh release create update-feeds --prerelease --target "$GITHUB_SHA" --title "Update feeds" \
-              --notes "Machine-read update pointers. Do not edit or promote; CI rewrites the files here."
+            gh release create update-feeds --prerelease --latest=false \
+              --title "Update feeds" --notes "Update metadata for the apps. Not a release to download."
           fi
           gh release upload update-feeds "$feed" --clobber
 

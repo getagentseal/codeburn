@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { UpdateBanner } from './UpdateBanner'
@@ -9,6 +9,8 @@ const mocks = vi.hoisted(() => ({
   getUpdateStatus: vi.fn<() => Promise<UpdateStatus>>(),
   onUpdateStatus: vi.fn<(cb: (s: UpdateStatus) => void) => () => void>(() => () => {}),
   openExternal: vi.fn<(url: string) => Promise<void>>(),
+  downloadUpdate: vi.fn<() => Promise<UpdateStatus>>(),
+  installUpdate: vi.fn<() => Promise<void>>(),
 }))
 vi.mock('../lib/ipc', async orig => {
   const actual = await orig<typeof import('../lib/ipc')>()
@@ -43,6 +45,25 @@ describe('UpdateBanner', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Download' }))
     expect(mocks.openExternal).toHaveBeenCalledWith('https://github.com/getagentseal/codeburn/releases/tag/desktop-v0.9.17')
+  })
+
+  it('one-click: Update downloads, then Restart to update installs', async () => {
+    let push: (s: UpdateStatus) => void = () => {}
+    mocks.onUpdateStatus.mockImplementation(cb => { push = cb; return () => {} })
+    mocks.getUpdateStatus.mockResolvedValue({ ...NEWER, install: 'available' })
+    render(<UpdateBanner />)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Update' }))
+    expect(mocks.downloadUpdate).toHaveBeenCalledTimes(1)
+    expect(mocks.openExternal).not.toHaveBeenCalled()
+
+    act(() => push({ ...NEWER, install: 'downloading' }))
+    expect(screen.getByRole('status')).toHaveTextContent('Downloading update…')
+    expect(screen.queryByRole('button', { name: 'Update' })).toBeNull()
+
+    act(() => push({ ...NEWER, install: 'ready' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Restart to update' }))
+    expect(mocks.installUpdate).toHaveBeenCalledTimes(1)
   })
 
   it('does not render when the running version is current', async () => {
