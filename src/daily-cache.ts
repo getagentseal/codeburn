@@ -798,7 +798,7 @@ async function adoptOlderDailyCaches(): Promise<DailyCache> {
   } catch {
     return emptyCache()
   }
-  const candidates: { parsed: AdoptableCache; mtimeMs: number }[] = []
+  let candidates: { parsed: AdoptableCache; mtimeMs: number }[] = []
   for (const name of names) {
     if (!name.startsWith('daily-cache') || !name.includes('.json')) continue
     if (name === DAILY_CACHE_FILENAME) continue
@@ -815,9 +815,24 @@ async function adoptOlderDailyCaches(): Promise<DailyCache> {
     }
   }
   if (candidates.length === 0) return emptyCache()
-  // Priority: newer schema first, then most recently written. Higher priority
-  // wins per (day, provider); lower priority only fills what is missing.
-  candidates.sort((a, b) => (b.parsed.version - a.parsed.version) || (b.mtimeMs - a.mtimeMs))
+  // Priority: files finalized by a complete parse first (an interrupted
+  // backfill can hold under-read days), then newer schema, then most recently
+  // written. Higher priority wins per (day, provider); lower priority only
+  // fills what is missing. Not "more calls wins": older generations hold both
+  // days a later re-derive truncated and calls a later dedup removed, and a
+  // call count cannot tell the two apart.
+  candidates.sort((a, b) => Number(b.parsed.complete === true) - Number(a.parsed.complete === true) || (b.parsed.version - a.parsed.version) || (b.mtimeMs - a.mtimeMs))
+  // A date is a local-midnight bucket, so two files written under different
+  // timezones hold different hours under the same date and any per-slice union
+  // of them counts the hours between the two midnights twice. Adopt one
+  // timezone only: the machine's when some file has it, else the top file's,
+  // and tag the result with the zone it was bucketed in. Files from before
+  // tzKey existed cannot be told apart and stay in.
+  const machineTz = currentTzKey()
+  const adoptTz = candidates.some(c => c.parsed.tzKey === machineTz)
+    ? machineTz
+    : candidates.find(c => c.parsed.tzKey !== undefined)?.parsed.tzKey ?? machineTz
+  candidates = candidates.filter(c => c.parsed.tzKey === undefined || c.parsed.tzKey === adoptTz)
 
   let base: DailyCache
   let rest = candidates
@@ -848,6 +863,7 @@ async function adoptOlderDailyCaches(): Promise<DailyCache> {
   }
   const adopted: DailyCache = {
     ...base,
+    tzKey: adoptTz,
     lastComputedDate,
     days,
     // Anything adopted out of an OLDER file was derived under an older
@@ -1784,7 +1800,15 @@ export async function ensureCacheHydrated(
       : new Date(now.getFullYear(), now.getMonth(), now.getDate() - BACKFILL_DAYS)
 
     if (gapStart.getTime() <= yesterdayEnd.getTime()) {
-      const gapRange: DateRange = { start: gapStart, end: yesterdayEnd }
+      // Sealing a new day also re-derives the still-settling ones before it. A
+      // day sealed once is otherwise frozen, while every surface that parses
+      // that date live (report --day, a week period) prefers the live parse
+      // whenever it finds more calls: a call that landed after the seal, or a
+      // price change since, then made history.daily disagree with report for
+      // the same date. Their sources are still on disk, and the merge below
+      // lets the fresh parse win there.
+      const settleStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - SETTLE_DAYS)
+      const gapRange: DateRange = { start: settleStart < gapStart ? settleStart : gapStart, end: yesterdayEnd }
       const gapProjects = await parseSessions(gapRange)
       const gapDays = daysInRange(aggregateDays(gapProjects), gapRange)
       const parseWasComplete = sessionComplete()

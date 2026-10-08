@@ -449,6 +449,46 @@ describe('adoption union across older cache files', () => {
     expect(JSON.parse(await readFile(join(TMP_CACHE_ROOT, 'daily-cache.json.v9.bak'), 'utf-8'))).toEqual(JSON.parse(JSON.stringify(v9bak)))
   })
 
+  it('never mixes days from a file written under another timezone', async () => {
+    const foreignTz = currentTzKey() === 'UTC' ? 'America/Los_Angeles' : 'UTC'
+    const local = {
+      version: 27, tzKey: currentTzKey(), complete: true, lastComputedDate: '2026-07-28',
+      days: [day('2026-07-27', { claude: slice(307.02, 900) })],
+    }
+    const foreign = {
+      version: 28, tzKey: foreignTz, complete: true, lastComputedDate: '2026-07-28',
+      days: [day('2026-07-27', { claude: slice(625.71, 1500) }), day('2026-07-28', { codex: slice(40, 30) })],
+    }
+    await writeFile(join(TMP_CACHE_ROOT, 'daily-cache.v27.json'), JSON.stringify(local), 'utf-8')
+    await writeFile(join(TMP_CACHE_ROOT, 'daily-cache.v28.json'), JSON.stringify(foreign), 'utf-8')
+    const cache = await loadDailyCache()
+    expect(cache.days).toHaveLength(1)
+    expect(cache.days[0]).toMatchObject({ date: '2026-07-27', cost: 307.02, calls: 900 })
+    expect(cache.tzKey).toBe(currentTzKey())
+  })
+
+  it('adopts a foreign-timezone history whole and tagged when it is all there is', async () => {
+    const foreignTz = currentTzKey() === 'UTC' ? 'America/Los_Angeles' : 'UTC'
+    const onlyFile = {
+      version: 28, tzKey: foreignTz, complete: true, lastComputedDate: '2026-07-28',
+      days: [day('2026-07-27', { claude: slice(625.71, 1500) })],
+    }
+    await writeFile(join(TMP_CACHE_ROOT, 'daily-cache.v28.json'), JSON.stringify(onlyFile), 'utf-8')
+    const cache = await loadDailyCache()
+    expect(cache.days[0]).toMatchObject({ date: '2026-07-27', cost: 625.71 })
+    // Tagged with the zone it was bucketed in, so hydration re-buckets it.
+    expect(cache.tzKey).toBe(foreignTz)
+  })
+
+  it('a file finalized by a complete parse outranks a newer interrupted one', async () => {
+    const complete = { version: 27, complete: true, days: [day('2026-07-27', { claude: slice(300, 900) })] }
+    const interrupted = { version: 28, complete: false, days: [day('2026-07-27', { claude: slice(20, 40) })] }
+    await writeFile(join(TMP_CACHE_ROOT, 'daily-cache.v27.json'), JSON.stringify(complete), 'utf-8')
+    await writeFile(join(TMP_CACHE_ROOT, 'daily-cache.v28.json'), JSON.stringify(interrupted), 'utf-8')
+    const cache = await loadDailyCache()
+    expect(cache.days[0]).toMatchObject({ cost: 300, calls: 900 })
+  })
+
   it('skips malformed candidates without failing the adoption', async () => {
     const good = {
       version: 12,
