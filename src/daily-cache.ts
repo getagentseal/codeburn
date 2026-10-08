@@ -341,7 +341,11 @@ import type { DateRange, ProjectSummary } from './types.js'
 // clones and worktrees of one repository still group once the folder is
 // deleted. Totals and the split are unchanged; surviving days re-derive to
 // pick it up, carried days stay as they were.
-export const DAILY_CACHE_VERSION = 70
+// v71: a Cursor usage import that landed while the running binary had no
+// daily-cache file of its own skipped its invalidation, so adoption carried the
+// local Cursor estimates back and the guard kept them over the imported events,
+// which are fewer calls. cursor joins PENDING_REDERIVE_PROVIDER_VERSIONS at 71.
+export const DAILY_CACHE_VERSION = 71
 const MIN_SUPPORTED_VERSION = 28
 
 /// Providers whose per-day CALL COUNT means something different at
@@ -390,6 +394,8 @@ const PENDING_REDERIVE_PROVIDER_VERSIONS: Readonly<Record<string, number>> = {
   // 65: logged sessions moved from one rollup at last activity to per-request
   // calls at request time.
   grok: 65,
+  // 71: imported Cursor events replace the local estimates with fewer calls.
+  cursor: 71,
 }
 
 function providersPendingRederiveFrom(fromVersion: number): string[] {
@@ -1508,7 +1514,6 @@ export function mergeDayEntries(
 /// slices over.
 export async function invalidateProviderDays(providers: readonly string[], start: string, end: string): Promise<void> {
   await withDailyCacheLock(async () => {
-    if (!existsSync(getCachePath())) return
     const c = await loadDailyCache()
     for (const day of c.days) {
       if (day.date < start || day.date > end) continue

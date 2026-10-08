@@ -368,15 +368,16 @@ describe('Cursor import coverage in a non-UTC zone', () => {
 })
 
 describe('invalidateProviderDays', () => {
+  const day = (date: string): DailyEntry => ({
+    date, cost: 3, savingsUSD: 0, calls: 3, sessions: 2, inputTokens: 30, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0,
+    editTurns: 0, oneShotTurns: 0, models: {}, categories: {},
+    providers: {
+      cursor: { calls: 1, cost: 1, savingsUSD: 0, sessions: 1, inputTokens: 10 },
+      claude: { calls: 2, cost: 2, savingsUSD: 0, sessions: 1, inputTokens: 20 },
+    },
+  })
+
   it('drops only the named providers on the named days and pulls the watermark back', async () => {
-    const day = (date: string): DailyEntry => ({
-      date, cost: 3, savingsUSD: 0, calls: 3, sessions: 2, inputTokens: 30, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0,
-      editTurns: 0, oneShotTurns: 0, models: {}, categories: {},
-      providers: {
-        cursor: { calls: 1, cost: 1, savingsUSD: 0, sessions: 1, inputTokens: 10 },
-        claude: { calls: 2, cost: 2, savingsUSD: 0, sessions: 1, inputTokens: 20 },
-      },
-    })
     await saveDailyCache({ ...emptyCache(), complete: true, lastComputedDate: dayOf(5), days: [day(dayOf(0)), day(dayOf(2)), day(dayOf(4))] })
     await invalidateProviderDays(['cursor'], dayOf(1), dayOf(3))
     const c = await loadDailyCache()
@@ -386,5 +387,14 @@ describe('invalidateProviderDays', () => {
       [dayOf(2), ['claude'], 2],
       [dayOf(4), ['cursor', 'claude'], 3],
     ])
+  })
+
+  it('reaches days held only by an older daily-cache file', async () => {
+    const dir = process.env['CODEBURN_CACHE_DIR']!
+    await mkdir(dir, { recursive: true })
+    await writeFile(join(dir, 'daily-cache.v60.json'), JSON.stringify({ ...emptyCache(), version: 60, complete: true, lastComputedDate: dayOf(5), days: [day(dayOf(2))] }))
+    await invalidateProviderDays(['cursor'], dayOf(1), dayOf(3))
+    const c = await loadDailyCache()
+    expect(c.days.map(d => [d.date, Object.keys(d.providers)])).toEqual([[dayOf(2), ['claude']]])
   })
 })
