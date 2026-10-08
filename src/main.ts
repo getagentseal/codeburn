@@ -542,7 +542,9 @@ const program = new Command()
   .option('--verbose', 'print warnings to stderr on read failures and skipped files')
   .option('--timezone <zone>', 'IANA timezone for date grouping (e.g. Asia/Tokyo, America/New_York)')
 
-program.hook('preAction', async (thisCommand) => {
+program.hook('preAction', async (thisCommand, actionCommand) => {
+  // Metadata-only storage must not refresh FX rates or write their cache.
+  if (actionCommand.name() === 'storage') return
   const tz = thisCommand.opts<{ timezone?: string }>().timezone ?? process.env['CODEBURN_TZ']
   if (tz) {
     try {
@@ -3173,6 +3175,18 @@ program
     console.log = ((...args: unknown[]) => process.stderr.write(args.join(' ') + '\n')) as typeof console.log
     const { startStdioServer } = await import('./mcp/server.js')
     await startStdioServer(version)
+  })
+
+program
+  .command('storage')
+  .description('Read-only storage footprint of known provider roots and CodeBurn caches')
+  .option('--provider <provider>', 'Measure a single provider (cache is always included)', 'all')
+  .option('--json', 'Output machine-readable JSON')
+  .action(async (opts) => {
+    assertProvider(opts.provider, 'storage')
+    const { collectStorageReport, renderStorageTable } = await import('./storage.js')
+    const report = await collectStorageReport(opts.provider)
+    process.stdout.write(opts.json ? JSON.stringify(report, null, 2) + '\n' : renderStorageTable(report))
   })
 
 program

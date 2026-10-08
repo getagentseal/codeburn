@@ -58,6 +58,7 @@ Sync sends token counts, costs, models, and projects, never prompts or code. Thi
 | `codeburn quota --format json` | The same capacity readings as JSON |
 | `codeburn gateway-totals` | Show whether Vercel AI Gateway spend counts toward totals (`include`, `exclude`) |
 | `codeburn doctor` | Per-provider detection status: paths probed, sessions found, parse health (`--json`, `--provider`) |
+| `codeburn storage` | Read-only source/cache footprint, largest files and available disk space (`--json`, `--provider`); see [storage coverage](storage.md) |
 | `codeburn audit` | Per provider-model token source table: where every number comes from |
 | `codeburn context` | What fills a session's context window: interactive browser (Claude Code and Codex) |
 | `codeburn context <id> --json` | The same context tree, scriptable |
