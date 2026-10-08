@@ -45,7 +45,7 @@ const DEFAULT_OFF_COUNTRIES: [&str; 32] = [
 
 /// Every event this app may send. An unknown name is dropped rather than forwarded, so a
 /// frontend typo cannot invent a metric.
-const EVENT_NAMES: [&str; 11] = [
+const EVENT_NAMES: [&str; 12] = [
     "app_open",
     "app_close",
     "popover_open",
@@ -57,6 +57,7 @@ const EVENT_NAMES: [&str; 11] = [
     "dock_provider_switch",
     "dock_drag_end",
     "usage_snapshot",
+    "update_result",
 ];
 
 const MAX_QUEUE: usize = 200;

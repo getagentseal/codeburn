@@ -172,6 +172,7 @@ pub fn run() {
             // `track` is silent until this has run, so it comes before anything that reports.
             telemetry::init(app.package_info().version.to_string());
             telemetry::track("app_open", serde_json::Value::Null);
+            update::settle_pending_update(&app.package_info().version.to_string());
             tauri::async_runtime::spawn(async {
                 // The queue is offered on the beat rather than at launch, so starting up
                 // never costs a request on its own. After a failed send the wait is the

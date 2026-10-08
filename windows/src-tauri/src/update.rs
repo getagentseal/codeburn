@@ -457,11 +457,25 @@ fn pending() -> std::sync::MutexGuard<'static, Option<(Update, Vec<u8>)>> {
 /// Fetches the MSI the feed names. The plugin verifies its minisign signature against the
 /// compiled-in public key before this returns, so only a verified installer is kept.
 pub async fn download(app: &AppHandle) -> Result<()> {
+    let mut to = String::new();
+    let result = download_into_pending(app, &mut to).await;
+    if let Err(err) = &result {
+        track_update_result(
+            &app.package_info().version.to_string(),
+            &to,
+            download_outcome(err),
+        );
+    }
+    result
+}
+
+async fn download_into_pending(app: &AppHandle, to: &mut String) -> Result<()> {
     let update = app
         .updater()?
         .check()
         .await?
         .context("The update feed has no newer release yet.")?;
+    to.clone_from(&update.version);
     let bytes = update.download(|_, _| {}, || {}).await?;
     *pending() = Some((update, bytes));
     Ok(())
@@ -469,12 +483,80 @@ pub async fn download(app: &AppHandle) -> Result<()> {
 
 /// Runs the verified installer. On Windows the plugin hands it to msiexec with
 /// AUTOLAUNCHAPP and exits, so the new version starts itself; elsewhere this restarts.
+/// Whether it landed is only known on the next launch, so the versions are written first.
 pub fn install(app: &AppHandle) -> Result<()> {
     let (update, bytes) = pending()
         .take()
         .context("No downloaded update to install.")?;
-    update.install(bytes)?;
+    set_pending_update(Some((&update.current_version, &update.version)));
+    if let Err(err) = update.install(bytes) {
+        set_pending_update(None);
+        track_update_result(&update.current_version, &update.version, "install_fail");
+        return Err(err.into());
+    }
     app.restart()
+}
+
+const KEY_PENDING_UPDATE: &str = "pendingUpdate";
+
+fn set_pending_update(versions: Option<(&str, &str)>) {
+    let value = versions
+        .map(|(from, to)| serde_json::json!({ "from": from, "to": to }))
+        .unwrap_or(serde_json::Value::Null);
+    let mut patch = serde_json::Map::new();
+    patch.insert(KEY_PENDING_UPDATE.into(), value);
+    if let Err(err) = crate::settings::patch(patch) {
+        crate::log_line!("codeburn: failed to record the pending update: {err}");
+    }
+}
+
+/// On launch, after telemetry is up: the old version still running means the last install
+/// did not land; any other version means it did, and `to` is what actually runs.
+pub fn settle_pending_update(running: &str) {
+    let settings = crate::settings::read();
+    let Some(pending) = settings.get(KEY_PENDING_UPDATE) else {
+        return;
+    };
+    set_pending_update(None);
+    if let Some((from, to, outcome)) = pending_update_outcome(pending, running) {
+        track_update_result(&from, &to, outcome);
+    }
+}
+
+fn pending_update_outcome(
+    pending: &serde_json::Value,
+    running: &str,
+) -> Option<(String, String, &'static str)> {
+    let from = pending.get("from")?.as_str()?;
+    let to = pending.get("to")?.as_str()?;
+    Some(if running == from {
+        (from.to_owned(), to.to_owned(), "install_fail")
+    } else {
+        (from.to_owned(), running.to_owned(), "ok")
+    })
+}
+
+fn track_update_result(from: &str, to: &str, outcome: &str) {
+    crate::telemetry::track(
+        "update_result",
+        serde_json::json!({ "from": from, "to": to, "outcome": outcome }),
+    );
+}
+
+/// A download the plugin refused on its signature is a verify failure; anything else on the
+/// way (the feed, the network, the disk) is a download failure.
+fn download_outcome(err: &anyhow::Error) -> &'static str {
+    use tauri_plugin_updater::Error as E;
+    match err.downcast_ref::<E>() {
+        Some(
+            E::Minisign(_)
+            | E::Base64(_)
+            | E::SignatureUtf8(_)
+            | E::SignedVersionMismatch { .. }
+            | E::MissingSignedVersion,
+        ) => "verify_fail",
+        _ => "download_fail",
+    }
 }
 
 // Scrubbing -----------------------------------------------------------------------------------
@@ -778,6 +860,37 @@ mod tests {
         assert_eq!(
             scrub("“Bearer abc123” and on"),
             "“Bearer *** and on"
+        );
+    }
+
+    #[test]
+    fn a_pending_update_settles_to_ok_when_the_version_moved() {
+        let pending = serde_json::json!({ "from": "0.9.26", "to": "0.9.27" });
+        assert_eq!(
+            pending_update_outcome(&pending, "0.9.27"),
+            Some(("0.9.26".into(), "0.9.27".into(), "ok"))
+        );
+        assert_eq!(
+            pending_update_outcome(&pending, "0.9.26"),
+            Some(("0.9.26".into(), "0.9.27".into(), "install_fail"))
+        );
+        assert_eq!(
+            pending_update_outcome(&serde_json::json!("junk"), "0.9.27"),
+            None
+        );
+    }
+
+    #[test]
+    fn a_refused_signature_is_a_verify_failure() {
+        let signature = anyhow::Error::from(tauri_plugin_updater::Error::SignatureUtf8("x".into()));
+        assert_eq!(download_outcome(&signature), "verify_fail");
+        let missing = anyhow::Error::from(tauri_plugin_updater::Error::MissingSignedVersion);
+        assert_eq!(download_outcome(&missing), "verify_fail");
+        let feed = anyhow::Error::from(tauri_plugin_updater::Error::ReleaseNotFound);
+        assert_eq!(download_outcome(&feed), "download_fail");
+        assert_eq!(
+            download_outcome(&anyhow::anyhow!("no newer release")),
+            "download_fail"
         );
     }
 

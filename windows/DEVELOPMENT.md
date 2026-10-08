@@ -238,8 +238,10 @@ module doc before changing anything here: its invariants are the contract.
   Switching the toggle off mints a fresh install id and empties the queue, as the desktop does.
 - **Events.** `app_open` and `app_close` (`sessionMinutes`), `popover_open`, `settings_open`
   (`pane`), `update_click` (`action`), `glance_open`, `dock_enabled` / `dock_disabled` (`edge`,
-  `scaleBucket`), `dock_provider_switch` (`provider`), `dock_drag_end` (`edge`) and
-  `usage_snapshot`, which forwards the `telemetrySnapshot` object out of the CLI's menubar
+  `scaleBucket`), `dock_provider_switch` (`provider`), `dock_drag_end` (`edge`),
+  `update_result` (`from`, `to`, `outcome`: `ok`, `download_fail`, `verify_fail` or
+  `install_fail`; `ok` and a failed install are settled on the next launch from the
+  `pendingUpdate` key `update.rs` writes before the installer runs) and `usage_snapshot`, which forwards the `telemetrySnapshot` object out of the CLI's menubar
   payload at most once a calendar day, and only when the desktop app is not the consent source
   (that app sends the same aggregate from the same payload). An unknown name is dropped, and
   every prop goes through the same whitelist sanitizer the desktop uses: every leaf is a
