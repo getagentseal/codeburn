@@ -1429,9 +1429,14 @@ export function mergeDayEntries(
   /// a slice it could not produce at all is carried by the branch above,
   /// exactly as before.
   pendingRederive?: ReadonlySet<string>,
+  /// Days before this date count as settled for the guard even inside the
+  /// settle window: the gap path passes its first unsealed day, so a day it
+  /// re-derives after sealing it before can grow or re-price but never shrink.
+  sealedBefore?: string,
 ): DailyEntry[] {
   const byDate = new Map<string, DailyEntry>()
-  const settleCutoff = settleCutoffDate(new Date())
+  const windowCutoff = settleCutoffDate(new Date())
+  const settleCutoff = sealedBefore && sealedBefore > windowCutoff ? sealedBefore : windowCutoff
   for (const day of primary) byDate.set(day.date, structuredClone(day))
   for (const day of secondary) {
     const existing = byDate.get(day.date)
@@ -1805,8 +1810,9 @@ export async function ensureCacheHydrated(
       // that date live (report --day, a week period) prefers the live parse
       // whenever it finds more calls: a call that landed after the seal, or a
       // price change since, then made history.daily disagree with report for
-      // the same date. Their sources are still on disk, and the merge below
-      // lets the fresh parse win there.
+      // the same date. The merge below lets the fresh parse win there when it
+      // explains at least as many calls; a sealed day never shrinks, since a
+      // transcript cleaned up or a partial provider sync looks the same.
       const settleStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - SETTLE_DAYS)
       const gapRange: DateRange = { start: settleStart < gapStart ? settleStart : gapStart, end: yesterdayEnd }
       const gapProjects = await parseSessions(gapRange)
@@ -1822,7 +1828,7 @@ export async function ensureCacheHydrated(
       // partial one only fills days and slices the baseline lacks, so the gap
       // merge is strictly additive and no cached data can shrink.
       const merged = parseWasComplete
-        ? mergeDayEntries(gapDays, c.days, false, undefined, true)
+        ? mergeDayEntries(gapDays, c.days, false, undefined, true, undefined, toDateString(gapStart))
         : mergeDayEntries(c.days, gapDays, false)
       // Finalize as complete ONLY when the session parse that produced these days
       // was itself complete. If it was partial, leave `complete: false` so the

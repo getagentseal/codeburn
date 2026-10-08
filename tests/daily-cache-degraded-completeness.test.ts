@@ -299,6 +299,32 @@ describe('daily cache: sealing a day re-derives the still-settling ones', () => 
   })
 })
 
+describe('daily cache: a re-derived sealed day never shrinks', () => {
+  it('keeps a sealed day whose fresh parse lost calls, re-prices one with the same calls', async () => {
+    await seed({
+      lastComputedDate: daysAgoStr(2),
+      watermarkTrusted: true,
+      days: [
+        day(daysAgoStr(4), { claude: slice(200, 1000) }),
+        day(daysAgoStr(3), { claude: slice(376.71, 5563) }),
+      ],
+    })
+    const out = await ensureCacheHydrated(
+      async () => [],
+      () => [
+        day(daysAgoStr(4), { claude: slice(15, 40) }),
+        day(daysAgoStr(3), { claude: slice(356.17, 5563) }),
+        day(daysAgoStr(1), { claude: slice(10, 50) }),
+      ],
+      'cfg-A',
+      () => true,
+    )
+    expect(out.days.find(d => d.date === daysAgoStr(4))).toMatchObject({ cost: 200, calls: 1000 })
+    expect(out.days.find(d => d.date === daysAgoStr(3))).toMatchObject({ cost: 356.17, calls: 5563 })
+    expect(out.days.find(d => d.date === daysAgoStr(1))).toMatchObject({ cost: 10 })
+  })
+})
+
 describe('daily cache: out-of-range residue days never reach the gap merge', () => {
   it('a straddling turn anchored before the gap leaves the cached day untouched', async () => {
     // Issue #1130: the gap range starts on D+1, but a turn anchored on day D
