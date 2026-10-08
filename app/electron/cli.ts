@@ -42,6 +42,8 @@ export type NotFoundStage =
   | 'bin-not-executable'
   | 'bundled-not-absolute'
   | 'bundled-missing'
+  | 'bundled-denied'
+  | 'bundled-unreadable'
   | 'spawn-error'
   | 'no-path-match'
 
@@ -550,9 +552,22 @@ export function notFoundStage(): NotFoundStage {
   const bundled = process.env.CODEBURN_BUNDLED_CLI
   if (bundled) {
     if (!isAbsolute(bundled)) return 'bundled-not-absolute'
-    if (!isFile(bundled)) return 'bundled-missing'
+    if (!isFile(bundled)) return bundledStatStage(bundled)
   }
   return 'no-path-match'
+}
+
+// isFile() swallows the errno: ENOENT is a vanished bundle, EACCES/EPERM one we were refused.
+function bundledStatStage(p: string): NotFoundStage {
+  try {
+    statSync(p)
+    return 'bundled-missing'
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code
+    if (code === 'ENOENT' || code === 'ENOTDIR') return 'bundled-missing'
+    if (code === 'EACCES' || code === 'EPERM') return 'bundled-denied'
+    return 'bundled-unreadable'
+  }
 }
 
 /** Ask a child to exit, then insist. See {@link KILL_GRACE_MS}. The child is

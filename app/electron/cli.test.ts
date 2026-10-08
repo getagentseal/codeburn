@@ -298,6 +298,20 @@ describe('notFoundStage (non-sensitive telemetry enum for a not-found)', () => {
     expect(notFoundStage()).toBe('bundled-missing')
   })
 
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('reports bundled-denied when the bundled CLI exists but cannot be stat-ed', () => {
+    delete process.env.CODEBURN_BIN
+    const locked = join(dir, 'locked')
+    mkdirSync(locked)
+    writeFileSync(join(locked, 'launch.js'), '')
+    chmodSync(locked, 0o000)
+    process.env.CODEBURN_BUNDLED_CLI = join(locked, 'launch.js')
+    try {
+      expect(notFoundStage()).toBe('bundled-denied')
+    } finally {
+      chmodSync(locked, 0o755)
+    }
+  })
+
   it('reports bin-not-absolute for a relative CODEBURN_BIN override', () => {
     process.env.CODEBURN_BIN = 'relative/codeburn'
     delete process.env.CODEBURN_BUNDLED_CLI
