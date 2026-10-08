@@ -7,7 +7,7 @@ import { DUR, useExitAnimation } from '../lib/motion'
 import { codeburn } from '../lib/ipc'
 import type { InvestigationFilters } from '../lib/investigation'
 import { contributeRow } from '../lib/investigation'
-import type { SessionDrillRow } from '../lib/types'
+import type { SessionDrillRow, SessionRow } from '../lib/types'
 import { Icon } from './icons'
 import { t } from '../i18n'
 
@@ -145,6 +145,8 @@ export function SessionDetails({ row, filters, medianCost }: { row: SessionDrill
       <DrawerBreakdown label={t('sessions.drawer.modelsLabel')} rows={breakdown.models} />
       <DrawerBreakdown label={t('sessions.drawer.categoriesLabel')} rows={breakdown.categories} />
 
+      {row.subagents && row.subagents.length > 0 && <SubagentBreakdown subagents={row.subagents} />}
+
       <details className="drawer-fold">
         <summary>
           {t('sessions.drawer.tokensSummary', {
@@ -182,6 +184,27 @@ export function SessionDetails({ row, filters, medianCost }: { row: SessionDrill
         {row.savingsUSD > 0 ? t('sessions.drawer.savedBaseline', { amount: formatUsd(row.savingsUSD) }) : t('sessions.drawer.savedBaselineNone')}
       </p>
     </>
+  )
+}
+
+const SUBAGENTS_SHOWN = 20
+
+/** The subagent sessions folded into this row, most expensive first. */
+function SubagentBreakdown({ subagents }: { subagents: SessionRow[] }) {
+  const sorted = [...subagents].sort((a, b) => b.cost - a.cost)
+  const total = sorted.reduce((sum, entry) => sum + entry.cost, 0)
+  const rest = sorted.slice(SUBAGENTS_SHOWN)
+  return (
+    <details className="drawer-fold">
+      <summary>{t(`sessions.drawer.subagentsSummary.${sorted.length === 1 ? 'one' : 'other'}`, { count: sorted.length, amount: formatUsd(total) })}</summary>
+      <div className="drawer-fold-body">
+        <DrawerBreakdown
+          label={t('sessions.drawer.subagentsLabel')}
+          rows={sorted.slice(0, SUBAGENTS_SHOWN).map(entry => ({ key: entry.sessionId, label: entry.title || entry.sessionId, cost: entry.cost }))}
+          caption={rest.length > 0 ? t('sessions.drawer.subagentsMore', { count: rest.length, amount: formatUsd(rest.reduce((sum, entry) => sum + entry.cost, 0)) }) : undefined}
+        />
+      </div>
+    </details>
   )
 }
 

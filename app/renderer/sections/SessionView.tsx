@@ -523,6 +523,7 @@ export function SessionView({ row, filters, medianCost, onBack }: {
   const findings = allFindings ? why.findings : why.findings.slice(0, FINDINGS_SHOWN)
   const durationMs = Date.parse(why.endedAt) - Date.parse(why.startedAt)
   const r = why.rules
+  const ownTurns = row.turns - (row.subagents ?? []).reduce((sum, entry) => sum + entry.turns, 0)
 
   return (
     <div className="sv">
@@ -536,10 +537,10 @@ export function SessionView({ row, filters, medianCost, onBack }: {
             {why.helperCount > 0 && <> · <b>{plural('sessions.why.plusHelpers', why.helperCount, { amount: formatUsd(why.helperCost) })}</b></>}
           </span>
         </div>
-        {Math.abs(why.cost - row.cost) > 0.005 && <p className="sv-note">{t('sessions.why.periodNote', { amount: formatUsd(row.cost) })}</p>}
+        {Math.abs(why.cost + why.helperCost - row.cost) > 0.005 && <p className="sv-note">{t('sessions.why.periodNote', { amount: formatUsd(row.cost) })}</p>}
         <p className="sv-lead">{verdict(why)}</p>
         <div className="sv-kpis">
-          <span><b>{why.turns.length}</b> {t(`sessions.why.kpi.prompts.${why.turns.length === 1 ? 'one' : 'other'}`)}{why.turns.length !== row.turns && <small className="sv-kpi-note">{t('sessions.why.kpi.promptsNote', { turns: row.turns })}</small>}</span>
+          <span><b>{why.turns.length}</b> {t(`sessions.why.kpi.prompts.${why.turns.length === 1 ? 'one' : 'other'}`)}{why.turns.length !== ownTurns && <small className="sv-kpi-note">{t('sessions.why.kpi.promptsNote', { turns: ownTurns })}</small>}</span>
           <span><b>{why.calls}</b> {t(`sessions.why.kpi.calls.${why.calls === 1 ? 'one' : 'other'}`)}</span>
           {durationMs > 0 && <span><b>{formatStepDuration(durationMs)}</b> {t('sessions.why.kpi.wall')}</span>}
           <span><b>{why.findings.length}</b> {t('sessions.why.kpi.flags')}</span>

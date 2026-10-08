@@ -150,17 +150,22 @@ describe('session cost diagnosis: reconciliation', () => {
   it('matches `codeburn sessions` for the session, its turns and its helpers', () => {
     const run = cli('sessions', '--format', 'json', '--period', 'lifetime')
     expect(run.status, run.stderr).toBe(0)
-    const rows = JSON.parse(run.stdout) as Array<{ sessionId: string; cost: number; calls: number; turns: number }>
+    type Row = { sessionId: string; cost: number; calls: number; turns: number }
+    const rows = JSON.parse(run.stdout) as Array<Row & { subagents?: Row[] }>
     const row = rows.find(r => r.sessionId === SID)!
     expect(row).toBeDefined()
-    expect(Math.abs(why.cost - row.cost)).toBeLessThan(1e-9)
-    expect(Math.abs(why.turns.reduce((s, t) => s + t.cost, 0) - row.cost)).toBeLessThan(1e-9)
-    expect(why.calls).toBe(row.calls)
-    // `sessions` counts the injected hand-back as its own turn; the view folds it into prompt 2.
-    expect(why.turns.length).toBe(row.turns - 1)
-    const helperRows = rows.filter(r => r.sessionId.startsWith('agent-'))
+    // The parent row folds its helpers in and lists them under `subagents`.
+    const helperRows = row.subagents ?? []
     expect(helperRows).toHaveLength(3)
-    expect(Math.abs(why.helperCost - helperRows.reduce((s, r) => s + r.cost, 0))).toBeLessThan(1e-9)
+    expect(rows.some(r => r.sessionId.startsWith('agent-'))).toBe(false)
+    const helpers = (pick: (r: Row) => number) => helperRows.reduce((s, r) => s + pick(r), 0)
+    const ownCost = row.cost - helpers(r => r.cost)
+    expect(Math.abs(why.cost - ownCost)).toBeLessThan(1e-9)
+    expect(Math.abs(why.turns.reduce((s, t) => s + t.cost, 0) - ownCost)).toBeLessThan(1e-9)
+    expect(why.calls).toBe(row.calls - helpers(r => r.calls))
+    // `sessions` counts the injected hand-back as its own turn; the view folds it into prompt 2.
+    expect(why.turns.length).toBe(row.turns - helpers(r => r.turns) - 1)
+    expect(Math.abs(why.helperCost - helpers(r => r.cost))).toBeLessThan(1e-9)
   })
 
   it('prints the same payload through `sessions --id <id> --why --format json`, and text by default', () => {

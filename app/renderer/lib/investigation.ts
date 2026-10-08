@@ -274,7 +274,8 @@ export function contributeRow(row: SessionDrillRow, filters: InvestigationFilter
 function rowMatchesSessionDimensions(row: SessionDrillRow, filters: InvestigationFilters): boolean {
   return (filters.providers.length === 0 || filters.providers.includes(row.provider))
     && (filters.projects.length === 0 || filters.projects.some(project => rowMatchesProject(row, project)))
-    && (filters.sessions.length === 0 || filters.sessions.some(s => s.provider === row.provider && s.sessionId === row.sessionId))
+    && (filters.sessions.length === 0 || filters.sessions.some(s => s.provider === row.provider
+      && (s.sessionId === row.sessionId || (row.subagents ?? []).some(child => child.sessionId === s.sessionId))))
 }
 
 function canAttribute(row: SessionDrillRow, filters: InvestigationFilters): boolean {
