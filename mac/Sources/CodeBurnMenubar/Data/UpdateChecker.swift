@@ -11,6 +11,9 @@ private let lastCheckKey = "UpdateChecker.lastCheckDate"
 private let cachedVersionKey = "UpdateChecker.latestVersion"
 private let cachedCliVersionKey = "UpdateChecker.latestCliVersion"
 private let lastNotifiedVersionsKey = "UpdateChecker.lastNotifiedVersions"
+// Written just before the installer runs, settled on the next launch: the installer
+// stops and relaunches this app, so nothing tracked in this process would survive.
+private let pendingUpdateKey = "UpdateChecker.pendingUpdate"
 // A global npm install on a slow link or a cold cache can run for minutes.
 private let cliUpdateTimeoutSeconds: UInt64 = 600
 private let menubarUpdateTimeoutSeconds: UInt64 = 300
@@ -72,10 +75,49 @@ final class UpdateChecker {
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private let makeNotifier: () -> any UpdateNotifier
     @ObservationIgnored private var notifier: (any UpdateNotifier)?
+    @ObservationIgnored private let track: @MainActor (String, JSONValue) -> Void
 
-    init(defaults: UserDefaults = .standard, makeNotifier: @escaping () -> any UpdateNotifier = { SystemUpdateNotifier() }) {
+    init(
+        defaults: UserDefaults = .standard,
+        makeNotifier: @escaping () -> any UpdateNotifier = { SystemUpdateNotifier() },
+        track: @escaping @MainActor (String, JSONValue) -> Void = { Telemetry.shared.track($0, $1) }
+    ) {
         self.defaults = defaults
         self.makeNotifier = makeNotifier
+        self.track = track
+    }
+
+    private func trackUpdateResult(from: String, to: String, outcome: String) {
+        track("update_result", .object(["from": .string(from), "to": .string(to), "outcome": .string(outcome)]))
+    }
+
+    /// On launch: the old version still running means the last install did not land; any
+    /// other version means it did, and `to` is what actually runs.
+    func settlePendingUpdate(running: String? = nil) {
+        guard let pending = defaults.dictionary(forKey: pendingUpdateKey) as? [String: String],
+              let from = pending["from"], let to = pending["to"] else { return }
+        defaults.removeObject(forKey: pendingUpdateKey)
+        let now = AppVersion.normalize(running ?? currentVersion)
+        trackUpdateResult(from: from, to: now == from ? to : now, outcome: now == from ? "install_fail" : "ok")
+    }
+
+    /// A failed `codeburn menubar --force`, sorted by the installer's own messages
+    /// (src/menubar-installer.ts) so the stderr itself never leaves the machine.
+    nonisolated static func updateFailureOutcome(stderr: String) -> String {
+        let text = stderr.lowercased()
+        let verify = ["checksum", "not signed", "notarized", "bundle id", "refusing"]
+        if verify.contains(where: text.contains) { return "verify_fail" }
+        if text.range(of: #"failed after \d+ attempts|http \d{3}|econn|etimedout|enotfound|network"#, options: .regularExpression) != nil {
+            return "download_fail"
+        }
+        return "install_fail"
+    }
+
+    private func failPendingUpdate(outcome: String) {
+        guard let pending = defaults.dictionary(forKey: pendingUpdateKey) as? [String: String],
+              let from = pending["from"], let to = pending["to"] else { return }
+        defaults.removeObject(forKey: pendingUpdateKey)
+        trackUpdateResult(from: from, to: to, outcome: outcome)
     }
 
     var latestVersion: String?
@@ -463,6 +505,10 @@ final class UpdateChecker {
         isUpdating = true
         updateError = nil
         updateFailureStage = nil
+        defaults.set(
+            ["from": AppVersion.normalize(currentVersion), "to": AppVersion.normalize(latestVersion ?? "")],
+            forKey: pendingUpdateKey
+        )
 
         let process = CodeburnCLI.makeProcess(subcommand: ["menubar", "--force"])
         let errPipe = Pipe()
@@ -492,6 +538,7 @@ final class UpdateChecker {
                 guard let self else { return }
                 self.isUpdating = false
                 if proc.terminationStatus != 0 {
+                    self.failPendingUpdate(outcome: Self.updateFailureOutcome(stderr: stderr))
                     self.updateFailureStage = .menubarUpdate
                     self.updateError = stderr.isEmpty ? L("Update failed (exit %lld)", proc.terminationStatus) : stderr
                     NSLog("CodeBurn: update failed (exit \(proc.terminationStatus)): \(stderr)")
@@ -504,6 +551,7 @@ final class UpdateChecker {
         do {
             try process.run()
         } catch {
+            failPendingUpdate(outcome: "install_fail")
             isUpdating = false
             updateFailureStage = .menubarUpdate
             updateError = error.localizedDescription

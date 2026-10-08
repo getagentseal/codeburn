@@ -237,3 +237,34 @@ struct UnmanagedCliTests {
         #expect(UpdateChecker.cliUpdateFailureMessage(stderr: "boom", status: 1, manualCommand: "x") == "boom")
     }
 }
+
+@Suite("update_result telemetry")
+@MainActor
+struct UpdateResultTelemetryTests {
+    @Test("sorts installer failures by the installer's own messages")
+    func failureOutcome() {
+        #expect(UpdateChecker.updateFailureOutcome(stderr: "Checksum mismatch for /tmp/x.zip.") == "verify_fail")
+        #expect(UpdateChecker.updateFailureOutcome(stderr: "Refusing to install: the downloaded CodeBurn Menubar is not signed and notarized by AgentSeal") == "verify_fail")
+        #expect(UpdateChecker.updateFailureOutcome(stderr: "Menubar download failed after 3 attempts: ECONNRESET (https://x)") == "download_fail")
+        #expect(UpdateChecker.updateFailureOutcome(stderr: "ditto exited with status 1") == "install_fail")
+        #expect(UpdateChecker.updateFailureOutcome(stderr: "") == "install_fail")
+    }
+
+    @Test("settles a pending update once: ok when the version moved, install_fail when it did not")
+    func settlesPendingUpdate() {
+        for (running, expected) in [("0.9.27", ["from": "0.9.26", "to": "0.9.27", "outcome": "ok"]),
+                                    ("0.9.26", ["from": "0.9.26", "to": "0.9.27", "outcome": "install_fail"])] {
+            let (defaults, suiteName) = TestDefaults.make("codeburn.update-result.\(running)")
+            defer { TestDefaults.forget(suiteName) }
+            var tracked: [(String, JSONValue)] = []
+            let checker = UpdateChecker(defaults: defaults, track: { tracked.append(($0, $1)) })
+            defaults.set(["from": "0.9.26", "to": "0.9.27"], forKey: "UpdateChecker.pendingUpdate")
+            checker.settlePendingUpdate(running: running)
+            checker.settlePendingUpdate(running: running)
+            #expect(tracked.count == 1)
+            #expect(tracked.first?.0 == "update_result")
+            #expect(tracked.first?.1 == .object(expected.mapValues { .string($0) }))
+            #expect(Telemetry.eventNames.contains("update_result"))
+        }
+    }
+}
