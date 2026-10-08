@@ -5035,14 +5035,16 @@ export function setExactProjectPaths(exact: boolean): void {
 }
 
 /// "=/path" is one list row: its repository, or that folder without the folders
-/// under it, which are rows of their own.
-function compile(patterns: readonly string[]): CompiledPattern[] {
+/// under it, which are rows of their own. A plain path widens to its repository
+/// only to include: excluding one checkout must not hide its siblings, so an
+/// exclude names the repository only through "=".
+function compile(patterns: readonly string[], widen: boolean): CompiledPattern[] {
   return patterns.map(pattern => {
     if (pattern === TEMPORARY_PROJECTS || pattern === `=${TEMPORARY_PROJECTS}`) return { rooted: false as const, needle: '', temporary: true as const }
     const exact = pattern.startsWith('=') && isRootedProjectPattern(pattern.slice(1))
     if (!exact && !isRootedProjectPattern(pattern)) return { rooted: false as const, needle: pattern.toLowerCase() }
     const path = expandTilde(exact ? pattern.slice(1) : pattern)
-    return { rooted: true as const, anchor: normalizeAbsProjectPathKey(path), origin: exactProjectPaths ? null : projectOriginKey(path), exact }
+    return { rooted: true as const, anchor: normalizeAbsProjectPathKey(path), origin: exactProjectPaths || !(widen || exact) ? null : projectOriginKey(path), exact }
   })
 }
 
@@ -5055,7 +5057,10 @@ function compile(patterns: readonly string[]): CompiledPattern[] {
 /// does not, #1260), and rootedness alone picks the branch, so "/" names none.
 function hit(entry: ProjectFilterTarget, pattern: CompiledPattern, key: string | null): boolean {
   if (pattern.rooted) {
-    if (pattern.origin) return (entry.originKey ?? projectOriginKey(entry.projectPath)) === pattern.origin
+    // A folder with no known origin (deleted before it was recorded) falls
+    // back to the folder rule, so a repo path still takes its subfolders.
+    const origin = pattern.origin && (entry.originKey ?? projectOriginKey(entry.projectPath))
+    if (origin) return origin === pattern.origin
     const anchor = pattern.anchor
     return anchor !== null && key !== null && (key === anchor || (!pattern.exact && key.startsWith(anchor + '/')))
   }
@@ -5071,8 +5076,8 @@ export function makeProjectFilter(
   include?: readonly string[],
   exclude?: readonly string[],
 ): (entry: ProjectFilterTarget) => boolean {
-  const inc = compile(include ?? [])
-  const exc = compile(exclude ?? [])
+  const inc = compile(include ?? [], true)
+  const exc = compile(exclude ?? [], false)
   // The key costs a trim, a global replace and three regex passes. The day cache
   // runs this per project, per day, per provider slice, so it is only paid when
   // some pattern is rooted and can actually read it.

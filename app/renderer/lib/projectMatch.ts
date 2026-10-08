@@ -26,6 +26,11 @@ export function absProjectPathKey(value: string): string | null {
 
 export function projectMatches(project: MatchTarget, pattern: string): boolean {
   const projectPath = project.path ?? ''
+  // "=/path": that row's folder alone (the CLI widens it to the repository).
+  if (pattern.startsWith('=') && isRooted(pattern.slice(1))) {
+    const anchor = absProjectPathKey(pattern.slice(1))
+    return anchor !== null && anchor === absProjectPathKey(projectPath)
+  }
   if (isRooted(pattern)) {
     const anchor = absProjectPathKey(pattern)
     const target = absProjectPathKey(projectPath)
@@ -46,14 +51,27 @@ export function projectPattern(project: MatchTarget): string {
   return rooted ? raw : `/${raw}`
 }
 
+function checkoutsOf(project: MatchTarget): MatchTarget[] {
+  return !project.temporary && project.checkouts?.length ? project.checkouts.map(c => ({ name: project.name, path: c.path })) : [project]
+}
+
 /** A pattern naming any checkout of a repository row names the whole
  *  repository, as in the CLI. */
 export function projectNamedBy(project: MatchTarget, pattern: string): boolean {
-  if (projectMatches(project, pattern)) return true
-  return !project.temporary && (project.checkouts ?? []).some(c => projectMatches({ name: project.name, path: c.path }, pattern))
+  return projectMatches(project, pattern) || checkoutsOf(project).some(c => projectMatches(c, pattern))
 }
 
+/** The pattern that hides a whole row: "=" names its repository, a plain path
+ *  would hide one checkout only. */
+export function projectHidePattern(project: MatchTarget): string {
+  const pattern = projectPattern(project)
+  return checkoutsOf(project).length > 1 && isRooted(pattern) ? `=${pattern}` : pattern
+}
+
+/** Excludes hide a repository row only as a whole: through "=", or with every
+ *  checkout excluded. An include naming any checkout shows the row. */
 export function projectVisible(project: MatchTarget, filter: { project: string[]; exclude: string[] }): boolean {
-  if (filter.exclude.some(pattern => projectNamedBy(project, pattern))) return false
+  if (filter.exclude.some(pattern => pattern.startsWith('=') && projectNamedBy(project, pattern))) return false
+  if (checkoutsOf(project).every(c => filter.exclude.some(pattern => projectMatches(c, pattern)))) return false
   return filter.project.length === 0 || filter.project.some(pattern => projectNamedBy(project, pattern))
 }

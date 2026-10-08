@@ -25,6 +25,7 @@ const PATTERNS = [
   '/Users/me/work/my-company', '/Users/me/work/my-company/', 'my-company', 'MY-COMPANY',
   '/a/Vault', '/a/vault', 'c:/work/vault', 'C:\\Work\\Vault', '//server/share', '/root/vault',
   'root/vault', 'me/work', '/', '//', '', '-Users-me-Web', 'thing', '/nope',
+  '=/Users/me/work/my-company', '=/a/Vault', '=c:/work/vault', '=/root/vault',
 ]
 
 // This parity test lives in the CLI suite, not beside the module it covers:

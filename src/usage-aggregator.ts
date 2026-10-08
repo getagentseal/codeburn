@@ -1560,6 +1560,7 @@ export function buildPayloadProjects(
       calls,
       sessions,
       sessionCountBasis,
+      liveUnique,
     }
   })
   const basenameCounts = new Map<string, number>()
@@ -1583,7 +1584,17 @@ export function buildPayloadProjects(
     const lead = members[0]!
     const repo = key.startsWith('\0') ? null : key
     const temporary = key === TEMPORARY_KEY
-    const sessions = members.reduce((sum, m) => sum + m.sessions, 0)
+    // A session with slices in two checkouts counts once for the repository.
+    const keys = new Set<string>()
+    let anonymous = 0
+    for (const m of members) {
+      for (const session of m.acc.sessions) {
+        if (session.sessionId) keys.add(canonicalSessionCountKey(session, m.acc.path))
+        else anonymous += 1
+      }
+    }
+    const shared = members.reduce((sum, m) => sum + m.liveUnique, 0) - keys.size - anonymous
+    const sessions = members.reduce((sum, m) => sum + m.sessions, 0) - shared
     const sessionCountBasis = members.some(m => m.sessionCountBasis === 'partial') ? 'partial' as const : lead.sessionCountBasis
     const details = sessionDetailsOf(members.flatMap(m => m.acc.sessions))
     return {

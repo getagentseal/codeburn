@@ -210,7 +210,7 @@ describe('Settings', () => {
         { name: 'kept', path: '/Users/x/kept', cost: 0, sessions: 1 },
       ],
     })
-    mocks.getProjectFilter.mockResolvedValue({ project: [], exclude: ['/Users/x/kept', '/tmp/clone-3'] })
+    mocks.getProjectFilter.mockResolvedValue({ project: [], exclude: ['/Users/x/kept', '=/tmp/clone-3'] })
     const user = userEvent.setup()
     render(<Settings period="month" />)
     await user.click(screen.getByRole('button', { name: 'Projects' }))
@@ -225,6 +225,20 @@ describe('Settings', () => {
     expect(repo).toHaveAttribute('aria-checked', 'false')
     await user.click(repo)
     expect(mocks.setProjectFilter).toHaveBeenCalledWith({ project: [], exclude: ['/Users/x/kept'] })
+  })
+
+  it('keeps a repository shown when one checkout is excluded, and hides it whole with "="', async () => {
+    mocks.getUnfilteredProjects.mockResolvedValue({
+      projects: [{ name: 'codeburn', path: '/Users/x/codeburn', cost: 9, sessions: 3, checkouts: [{ path: '/Users/x/codeburn', cost: 6 }, { path: '/tmp/clone-3', cost: 3 }] }],
+    })
+    mocks.getProjectFilter.mockResolvedValue({ project: [], exclude: ['/tmp/clone-3'] })
+    const user = userEvent.setup()
+    render(<Settings period="month" />)
+    await user.click(screen.getByRole('button', { name: 'Projects' }))
+    const repo = await screen.findByRole('switch', { name: 'Show /Users/x/codeburn' })
+    expect(repo).toHaveAttribute('aria-checked', 'true')
+    await user.click(repo)
+    expect(mocks.setProjectFilter).toHaveBeenCalledWith({ project: [], exclude: ['/tmp/clone-3', '=/Users/x/codeburn'] })
   })
 
   it('sorts projects by lifetime cost and narrows them by a substring search', async () => {

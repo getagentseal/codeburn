@@ -50,11 +50,12 @@ describe('projectScopeOptions', () => {
     expect(projectScopeOptions([repo, row('/w/site', 1)], NO_FILTER).map(option => option.label)).toEqual(['codeburn', 'w/site'])
   })
 
-  it('offers the temporary-folders row and hides a repository excluded by any checkout', () => {
+  it('offers the temporary-folders row and hides a repository excluded whole by any checkout', () => {
     const repo = { ...row('/w/codeburn', 9, 'codeburn'), checkouts: [{ path: '/w/codeburn', cost: 6 }, { path: '/tmp/clone-3', cost: 3 }] }
     const temp = { ...row('@temp', 4, 'Temporary folders'), temporary: true }
     expect(projectScopeOptions([repo, temp], NO_FILTER).map(option => [option.value, option.label])).toEqual([['/w/codeburn', 'codeburn'], ['@temp', 'Temporary folders']])
-    expect(projectScopeOptions([repo, temp], { project: [], exclude: ['/tmp/clone-3'] }).map(option => option.value)).toEqual(['@temp'])
+    expect(projectScopeOptions([repo, temp], { project: [], exclude: ['=/tmp/clone-3'] }).map(option => option.value)).toEqual(['@temp'])
+    expect(projectScopeOptions([repo, temp], { project: [], exclude: ['/tmp/clone-3'] }).map(option => option.value)).toEqual(['/w/codeburn', '@temp'])
   })
 
   it('hides projects whose lifetime cost rounds to $0.00', () => {
