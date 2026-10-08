@@ -110,6 +110,7 @@ describe('Claude per-call cwd', () => {
     const home = join(tmpDir, 'home')
     const repo = join(home, 'Projects', 'crew')
     await mkdir(join(repo, '.git'), { recursive: true })
+    await mkdir(join(repo, 'src'), { recursive: true })
     await mkdir(join(home, 'notes'), { recursive: true })
     await writeSession([
       user('start', home, '2099-06-01T10:00:00.000Z'),
@@ -117,9 +118,11 @@ describe('Claude per-call cwd', () => {
       assistant('m2', join(home, 'notes'), '2099-06-01T10:00:02.000Z', 1_000_000),
       assistant('m3', repo, '2099-06-01T10:00:03.000Z', 2_000_000),
       assistant('m4', join(repo, 'src'), '2099-06-01T10:00:04.000Z', 2_000_000),
+      // A deleted worktree cannot prove it belonged to home, so it stays apart.
+      assistant('m5', join(home, 'gone-wt'), '2099-06-01T10:00:05.000Z', 1_000_000),
     ])
     const paths = byPath(await parseAllSessions(RANGE, 'claude'))
-    expect(Object.keys(paths).sort()).toEqual([home, repo].sort())
+    expect(Object.keys(paths).sort()).toEqual([home, repo, join(home, 'gone-wt')].sort())
     expect(paths[home]!.totalApiCalls).toBe(2)
     expect(paths[repo]!.totalApiCalls).toBe(2)
   })
