@@ -323,8 +323,8 @@ export type SessionSummary = {
   /// reference made before the window into its later, in-range, ref-less turns.
   /// Absent when no PR was referenced before the range (or no range filter).
   prRefsAtRangeStart?: string[]
-  /// Human session title captured from the transcript (last ai-title entry).
-  /// Absent when the transcript never produced one.
+  /// Human title from the transcript or the optional Codex session index.
+  /// Codex names are refreshed at report time, independently of usage caches.
   title?: string
   /// True when the session observed a git branch on ANY turn of its FULL
   /// (pre-date-filter) transcript. Set before turns are sliced to a range so the

@@ -7,6 +7,7 @@ import { basename, dirname, join, resolve, sep } from 'path'
 import { FS_SCAN_CONCURRENCY, mapWithConcurrency, readSessionLines } from './fs-utils.js'
 import { billableOutputTokens, calculateCost, calculateLocalModelSavings, getShortModelName, modelRowKey, pricingModelAt, isProxiedPath, getProxyPathsConfigHash, getModelAliasesConfigHash, getPriceOverridesConfigHash, getLocalModelSavingsConfigHash, recordedCostFallback, getModelRoute, isStandInPricedAt } from './models.js'
 import { resolveSubagentAttribution, sessionIdentity } from './sessions-report.js'
+import { applyCodexSessionNames } from './codex-session-index.js'
 import { normalizeContentBlocks, flatSlice, flatString } from './content-utils.js'
 import { discoverAllSessions, discoverAllSessionsWithFailures, getProvider } from './providers/index.js'
 import { evictCachedCodexResults, flushCodexCache, readCachedCodexResults, withCodexCacheDirectory, writeCachedCodexResults } from './codex-cache.js'
@@ -6073,7 +6074,7 @@ export function parseAllSessions(
   providerFilter?: string,
   opts?: { includeAggregateOnly?: boolean },
 ): Promise<ProjectSummary[]> {
-  const parsed = parseAllSessionsUnfiltered(dateRange, providerFilter)
+  const parsed = parseAllSessionsUnfiltered(dateRange, providerFilter).then(applyCodexSessionNames)
   if (opts?.includeAggregateOnly === true) return parsed
   return parsed.then(projects => excludeAggregateOnlyProjects(projects, providerFilter))
 }
