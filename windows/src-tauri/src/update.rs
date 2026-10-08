@@ -4,13 +4,14 @@
 //! line in place of the mac one: the app ships as an `.msi` under a `windows-v*` tag rather
 //! than a zip under `mac-v*`. The check is the same on every route. The install is not.
 //!
-//! Outside a Store package this module installs nothing and offers no button that would. The
-//! MSI is unsigned and its `.sha256` is published in the same GitHub release, so an automated
-//! install has no authenticity to check: whoever can replace the one file replaces the other
-//! with it. A manual install at least passes through SmartScreen, where the reader is told
-//! who signed the thing they are about to run, which today is nobody. So an available update
-//! is answered with a release page to open and a command to run by hand. One-click install
-//! comes back once the MSI is signed and the installer verifies that signature.
+//! A signature is required before anything installs in one click. The MSI's `.sha256` sits in
+//! the same GitHub release, so it proves nothing about who built the file: whoever can replace
+//! the one replaces the other. The updater's minisign signature does: the private key lives in
+//! CI secrets, never in a release, and the public key is compiled into this binary. So on
+//! Windows, once tauri.conf.json carries a real `plugins.updater.pubkey`, an available update
+//! gets one button: `download` fetches the MSI that `update-feeds/windows-latest.json` names
+//! and refuses it unless the signature verifies, and `install` runs it. Without the key, and on
+//! Linux, an available update is answered with a release page and a command to run by hand.
 //!
 //! Inside a Store package nothing is offered at all: the Store owns the update, and an .msi
 //! install underneath it would be undone by the next one.
@@ -20,11 +21,13 @@
 //! api.github.com when the fetch can be made from a place that already talks HTTPS.
 
 use std::path::PathBuf;
+use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
+use tauri_plugin_updater::{Update, UpdaterExt};
 
 use crate::cli::CodeburnCli;
 
@@ -107,8 +110,7 @@ fn msi_version(name: &str) -> Option<&str> {
 /// an unknown publisher and the elevation prompt says "Unknown". The trust boundary is the
 /// GitHub release, not the installer.
 ///
-/// Closing that means signing the MSI, which is a release decision and not a code change, so
-/// nothing here attempts it.
+/// The one-click route does not lean on it: `download` checks the updater signature instead.
 pub fn resolve_latest_windows_version(releases: &[GitHubRelease]) -> Option<String> {
     for release in releases
         .iter()
@@ -181,7 +183,7 @@ pub fn is_packaged_app() -> bool {
 // What the page renders -------------------------------------------------------------------
 
 /// Which stage failed, so the badge can say so. The mac's UpdateFailureStage, down to the
-/// one stage that still runs here: with no install of our own there is nothing else to fail.
+/// check: a failed download or install answers the click that started it instead.
 /// The labels and the help text live in the page, since that is where they are read.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -190,13 +192,14 @@ pub enum FailureStage {
 }
 
 /// Where an update comes from on this install. The page switches its copy on it: a Store
-/// package is told nothing is needed, everywhere else is offered the release page and the
-/// command rather than a button that installs.
+/// package is told nothing is needed, a signed Windows build gets the one-click button, and
+/// everywhere else is offered the release page and the command.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum InstallRoute {
     Store,
     Manual,
+    OneClick,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -225,6 +228,8 @@ pub struct UpdateStatus {
     /// Running inside an installed MSIX/AppX package, where the Store owns updates and this
     /// checker has nothing to offer. Every update surface hides itself on it.
     pub store_managed: bool,
+    /// A verified update is downloaded and waits for Restart to Update.
+    pub ready_to_install: bool,
 }
 
 impl UpdateStatus {
@@ -245,6 +250,7 @@ impl UpdateStatus {
             failure_stage: None,
             error: None,
             store_managed: false,
+            ready_to_install: false,
         }
     }
 
@@ -380,6 +386,10 @@ pub async fn check(app: &AppHandle, cli: &CodeburnCli, force: bool) -> UpdateSta
 
     let mut status = UpdateStatus::new(app.package_info().version.to_string());
     status.installed_cli_version = installed_cli_version(cli).await;
+    if cfg!(target_os = "windows") && pubkey_is_set(configured_pubkey(app).as_deref()) {
+        status.install_route = InstallRoute::OneClick;
+    }
+    status.ready_to_install = pending().is_some();
 
     let cached = read_cache().unwrap_or_default();
     if !force && is_fresh(cached.checked_at) {
@@ -417,6 +427,54 @@ pub async fn check(app: &AppHandle, cli: &CodeburnCli, force: bool) -> UpdateSta
     }
     status.recompute();
     status
+}
+
+// One-click install ----------------------------------------------------------------------------
+
+/// What tauri.conf.json ships with until the maintainer runs `tauri signer generate`.
+const PUBKEY_PLACEHOLDER: &str = "REPLACE_WITH_TAURI_UPDATER_PUBKEY";
+
+fn pubkey_is_set(pubkey: Option<&str>) -> bool {
+    pubkey.is_some_and(|key| !key.trim().is_empty() && key != PUBKEY_PLACEHOLDER)
+}
+
+fn configured_pubkey(app: &AppHandle) -> Option<String> {
+    app.config()
+        .plugins
+        .0
+        .get("updater")?
+        .get("pubkey")?
+        .as_str()
+        .map(str::to_owned)
+}
+
+static PENDING: Mutex<Option<(Update, Vec<u8>)>> = Mutex::new(None);
+
+fn pending() -> std::sync::MutexGuard<'static, Option<(Update, Vec<u8>)>> {
+    PENDING.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Fetches the MSI the feed names. The plugin verifies its minisign signature against the
+/// compiled-in public key before this returns, so only a verified installer is kept.
+pub async fn download(app: &AppHandle) -> Result<()> {
+    let update = app
+        .updater()?
+        .check()
+        .await?
+        .context("The update feed has no newer release yet.")?;
+    let bytes = update.download(|_, _| {}, || {}).await?;
+    *pending() = Some((update, bytes));
+    Ok(())
+}
+
+/// Runs the verified installer. On Windows the plugin hands it to msiexec with
+/// AUTOLAUNCHAPP and exits, so the new version starts itself; elsewhere this restarts.
+pub fn install(app: &AppHandle) -> Result<()> {
+    let (update, bytes) = pending()
+        .take()
+        .context("No downloaded update to install.")?;
+    update.install(bytes)?;
+    app.restart()
 }
 
 // Scrubbing -----------------------------------------------------------------------------------
@@ -536,13 +594,13 @@ mod tests {
         assert!(!is_packaged_app());
     }
 
-    /// Outside a Store package an available update is answered with a page and a command,
-    /// and nothing is installed. The second half of that is an absence, and an absence has
-    /// no seam to record a call on now that the spawns are gone, so it is read off the
-    /// module's own source: wiring an installer back in fails here first, which is where the
-    /// module doc explaining why it must not be wired back in is read.
+    /// Without the updater key an available update is answered with a page and a command.
+    /// The only install is the plugin's signature-checked one, so this module never spawns an
+    /// installer of its own. That is an absence with no seam to record a call on, so it is
+    /// read off the module's own source: wiring an unverified installer in fails here first,
+    /// which is where the module doc explaining why is read.
     #[test]
-    fn outside_a_store_package_the_route_is_manual_and_nothing_is_spawned() {
+    fn without_the_updater_key_the_route_is_manual_and_nothing_is_spawned() {
         let mut status = UpdateStatus::new("0.9.23".into());
         status.latest_version = Some("0.9.24".into());
         status.installed_cli_version = Some("0.9.20".into());
@@ -572,6 +630,15 @@ mod tests {
                 "update.rs starts an install again ({needle}); see the module doc"
             );
         }
+    }
+
+    /// The placeholder shipped in tauri.conf.json is not a key, so it never turns the button on.
+    #[test]
+    fn only_a_real_pubkey_enables_one_click() {
+        assert!(!pubkey_is_set(None));
+        assert!(!pubkey_is_set(Some("")));
+        assert!(!pubkey_is_set(Some(PUBKEY_PLACEHOLDER)));
+        assert!(pubkey_is_set(Some("dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWdu")));
     }
 
     /// Nothing on offer sends nobody anywhere in particular: the index, not a tag page for a

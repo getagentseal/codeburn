@@ -7,12 +7,15 @@ import { MenubarCompanion, readDockEnabled, STARTUP_APPS_SETTINGS_URL } from './
 import { MacMenubar, type InstallPhase } from './mac-menubar'
 import { getQuota } from './quota'
 import { Telemetry } from './telemetry'
+import { autoUpdateSupported, createAutoUpdateChecker, type AutoUpdateChecker } from './auto-update'
 import { createUpdateChecker, type UpdateChecker, type UpdateStatus } from './updates'
 
 // Initialized in bootstrap() once Electron paths exist; stays null under tests.
 let telemetryInstance: Telemetry | null = null
 // The once-per-launch + 24h update-availability checker. Null under tests.
 let updateChecker: UpdateChecker | null = null
+// Set instead of a link-only checker where the install can replace itself.
+let autoUpdate: AutoUpdateChecker | null = null
 // The bundled tray app and its Capacity Dock (Windows only). Null under tests.
 let companion: MenubarCompanion | null = null
 let macMenubar: MacMenubar | null = null
@@ -102,7 +105,7 @@ function broadcastUpdateStatus(status: UpdateStatus): void {
 
 
 
-export function createBridgeHandlers(deps: Deps = { spawnCli, spawnCliAction, resolveCodeburnPath, getQuota, emitProgress: broadcastProgress, telemetry: telemetryInstance, getUpdateStatus: () => updateChecker ? updateChecker.getStatus() : Promise.resolve(NO_UPDATE_STATUS), companion: companion, macMenubar: macMenubar, stateDir: app.getPath('userData'), appVersion: app.getVersion(), isOnBatteryPower: () => powerMonitor.isOnBatteryPower() }): Record<string, Handler> {
+export function createBridgeHandlers(deps: Deps = { spawnCli, spawnCliAction, resolveCodeburnPath, getQuota, emitProgress: broadcastProgress, telemetry: telemetryInstance, getUpdateStatus: () => updateChecker ? updateChecker.getStatus() : Promise.resolve(NO_UPDATE_STATUS), downloadUpdate: () => autoUpdate ? autoUpdate.download() : Promise.resolve(NO_UPDATE_STATUS), installUpdate: () => autoUpdate?.install(), companion: companion, macMenubar: macMenubar, stateDir: app.getPath('userData'), appVersion: app.getVersion(), isOnBatteryPower: () => powerMonitor.isOnBatteryPower() }): Record<string, Handler> {
   return createHandlers(deps)
 }
 
@@ -374,12 +377,24 @@ function bootstrap(): void {
     })
 
     // Update availability: check once at launch, then every 24h, pushing each
-    // result to any open window. Never downloads/installs (unsigned builds);
-    // errors are swallowed inside the checker as a silent no-op.
-    updateChecker = createUpdateChecker({
-      currentVersion: app.getVersion(),
-      storeManaged: (process as NodeJS.Process & { windowsStore?: boolean }).windowsStore === true,
-    })
+    // result to any open window. Signed mac builds and the AppImage download and
+    // install on the reader's click; everything else gets a download link.
+    // Errors are swallowed inside the checkers as a silent no-op.
+    const windowsStore = (process as NodeJS.Process & { windowsStore?: boolean }).windowsStore === true
+    if (autoUpdateSupported({
+      platform: process.platform,
+      isPackaged: app.isPackaged,
+      mas: (process as NodeJS.Process & { mas?: boolean }).mas === true,
+      windowsStore,
+      appImage: process.env.APPIMAGE,
+    })) {
+      // Loaded only here: electron-updater picks a platform updater as soon as it is touched.
+      const { autoUpdater } = require('electron-updater') as typeof import('electron-updater')
+      autoUpdate = createAutoUpdateChecker({ updater: autoUpdater, currentVersion: app.getVersion(), onChange: broadcastUpdateStatus })
+      updateChecker = autoUpdate
+    } else {
+      updateChecker = createUpdateChecker({ currentVersion: app.getVersion(), storeManaged: windowsStore })
+    }
     const runUpdateCheck = () => { void updateChecker?.check().then(broadcastUpdateStatus) }
     runUpdateCheck()
     setInterval(runUpdateCheck, 24 * 60 * 60 * 1000)

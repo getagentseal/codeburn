@@ -328,7 +328,10 @@ import type { DateRange, ProjectSummary } from './types.js'
 // label (e.g. every home-folder Claude session) to whichever project owned it.
 // Day and provider totals are unchanged, only the split inside them moves, so
 // no PENDING_REDERIVE_PROVIDER_VERSIONS entry is needed.
-export const DAILY_CACHE_VERSION = 67
+// v68: Kimi Code sessions whose state.json carries `cwd` but no `workDir` land
+// on that folder. Only the per-project split moves; cost, tokens and calls are
+// unchanged, so the bump re-derives surviving days.
+export const DAILY_CACHE_VERSION = 68
 const MIN_SUPPORTED_VERSION = 28
 
 /// Providers whose per-day CALL COUNT means something different at
