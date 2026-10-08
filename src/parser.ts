@@ -144,6 +144,19 @@ async function resolveClaudeCallProject(cwd: string, filePath: string): Promise<
   }
 }
 
+// True when cwd lies below projectPath without crossing into another repository
+// (a .git entry between the two): `cd app` inside a repo stays in the repo,
+// while `cd Projects/x` out of a home folder reaches another project.
+async function insideProjectTree(projectPath: string, cwd: string): Promise<boolean> {
+  const root = normalizeProjectPathKey(projectPath)
+  if (!normalizeProjectPathKey(cwd).startsWith(root + '/')) return false
+  for (let dir = cwd.trim(); normalizeProjectPathKey(dir) !== root; dir = dirname(dir)) {
+    if (await lstat(join(dir, '.git')).catch(() => null)) return false
+    if (dirname(dir) === dir) return false
+  }
+  return true
+}
+
 // Partition turns by each call's project. A turn whose calls span projects is
 // cut per call; only the piece holding its first call keeps the turn weight
 // (turn, edit and retry counts), so those stay whole. Every piece keeps the
@@ -2658,6 +2671,19 @@ async function scanProjectDirs(
     for (const cwd of new Set(callCwds.values())) {
       const resolved = await resolveClaudeCallProject(cwd, filePath)
       callProjects.set(cwd, resolved && resolved.key !== projectKey ? resolved : fileProject)
+    }
+    // A subfolder of a folder this session worked in joins that folder's
+    // project (the outermost one), so `cd app` inside a repo is not a move.
+    const roots = [...new Map([fileProject, ...callProjects.values()].map(p => [p.key, p])).values()]
+      .sort((a, b) => a.path.length - b.path.length)
+    for (const [cwd, project] of callProjects) {
+      if (project === fileProject) continue
+      for (const root of roots) {
+        if (await insideProjectTree(root.path, cwd)) {
+          callProjects.set(cwd, root)
+          break
+        }
+      }
     }
     const groups = [...callProjects.values()].some(p => p !== fileProject)
       ? splitTurnsByProject(classifiedTurns, call => {

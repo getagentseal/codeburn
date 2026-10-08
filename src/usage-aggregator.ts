@@ -1836,7 +1836,7 @@ export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: 
 
   const retryTax = buildRetryTax(effMap.values())
 
-  currentData.topSessions = scanProjects.flatMap(p =>
+  currentData.topSessions = mergeProjectSplits(scanProjects).flatMap(p =>
     p.sessions.map(s => ({
       project: friendlyProject(p),
       cost: s.totalCostUSD,

@@ -7,7 +7,7 @@ import { clearSessionCache, filterProjectsByName, mergeProjectSplits, parseAllSe
 import { aggregateSessions } from '../src/sessions-report.js'
 import { aggregateProjectsIntoDays } from '../src/day-aggregator.js'
 import { countSessions } from '../src/session-output.js'
-import { uniqueCanonicalSessionCountFromProjects } from '../src/usage-aggregator.js'
+import { buildMenubarPayloadForRange, uniqueCanonicalSessionCountFromProjects } from '../src/usage-aggregator.js'
 import type { DateRange, ProjectSummary } from '../src/types.js'
 
 let tmpDir: string
@@ -82,9 +82,46 @@ describe('Claude per-call cwd', () => {
     expect(rows[0]!.turns).toBe(2)
     expect(rows[0]!.cost).toBeCloseTo(paths[HOME]!.totalCostUSD + paths[APP]!.totalCostUSD, 10)
 
+    const payload = await buildMenubarPayloadForRange({ range: RANGE, label: 'p' }, { provider: 'claude', optimize: false, timeline: false })
+    expect(payload.current.topSessions.map(s => [s.sessionId, s.calls])).toEqual([['s1', 3]])
+
     const onlyApp = filterProjectsByName(projects, ['app'], [])
     expect(onlyApp.map(p => p.projectPath)).toEqual([APP])
     expect(countSessions(onlyApp)).toBe(1)
+  })
+
+  it('keeps a cd into a subfolder of the same repository on the transcript project', async () => {
+    const repo = join(tmpDir, 'repo')
+    await mkdir(join(repo, '.git'), { recursive: true })
+    await mkdir(join(repo, 'app', 'src'), { recursive: true })
+    await writeSession([
+      user('start', repo, '2099-06-01T10:00:00.000Z'),
+      assistant('m1', repo, '2099-06-01T10:00:01.000Z', 1_000_000),
+      assistant('m2', join(repo, 'app'), '2099-06-01T10:00:02.000Z', 2_000_000),
+      assistant('m3', join(repo, 'app', 'src'), '2099-06-01T10:00:03.000Z', 3_000_000),
+    ])
+    const projects = await parseAllSessions(RANGE, 'claude')
+    expect(projects.map(p => p.projectPath)).toEqual([repo])
+    expect(projects[0]!.totalApiCalls).toBe(3)
+    expect(projects[0]!.sessions[0]!.projectSplit).toBeUndefined()
+  })
+
+  it('splits a cd from a plain folder into a repository below it, and keeps the repository whole', async () => {
+    const home = join(tmpDir, 'home')
+    const repo = join(home, 'Projects', 'crew')
+    await mkdir(join(repo, '.git'), { recursive: true })
+    await mkdir(join(home, 'notes'), { recursive: true })
+    await writeSession([
+      user('start', home, '2099-06-01T10:00:00.000Z'),
+      assistant('m1', home, '2099-06-01T10:00:01.000Z', 1_000_000),
+      assistant('m2', join(home, 'notes'), '2099-06-01T10:00:02.000Z', 1_000_000),
+      assistant('m3', repo, '2099-06-01T10:00:03.000Z', 2_000_000),
+      assistant('m4', join(repo, 'src'), '2099-06-01T10:00:04.000Z', 2_000_000),
+    ])
+    const paths = byPath(await parseAllSessions(RANGE, 'claude'))
+    expect(Object.keys(paths).sort()).toEqual([home, repo].sort())
+    expect(paths[home]!.totalApiCalls).toBe(2)
+    expect(paths[repo]!.totalApiCalls).toBe(2)
   })
 
   it('reads the same split from an appended transcript as from a fresh parse', async () => {
