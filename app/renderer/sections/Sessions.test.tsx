@@ -287,6 +287,45 @@ describe('Sessions', () => {
     }
   })
 
+  it('lists folded subagents on the parent row and breaks them down in the drawer', async () => {
+    const user = userEvent.setup()
+    const parent = {
+      ...rows[0]!,
+      subagents: [
+        session({ sessionId: 'agent-small', project: rows[0]!.project, provider: 'claude', cost: 0.4 }),
+        session({ sessionId: 'agent-big', project: rows[0]!.project, provider: 'claude', cost: 2.1 }),
+      ],
+    }
+    getSessions.mockResolvedValue([parent, ...rows.slice(1)])
+    const { container } = render(<Sessions period="30days" provider="all" openSessionId={sessionRowKey(parent)} />)
+    const drawer = await screen.findByRole('dialog', { name: /session details/i })
+
+    expect([...container.querySelectorAll('.session-row .session-project')].map(node => node.textContent)).toContain('claude-session-123 · 2 subagents')
+    const fold = [...drawer.querySelectorAll('details')].find(node => node.textContent?.includes('2 subagents, $2.50'))!
+    expect(fold).toBeDefined()
+    const labels = [...fold.querySelectorAll('.drawer-breakdown-label')].map(node => node.textContent)
+    expect(labels).toEqual(['agent-big', 'agent-small'])
+  })
+
+  it('finds a parent by its subagent, opens the parent for a subagent key, and counts subagents apart', async () => {
+    const user = userEvent.setup()
+    const child = session({ sessionId: 'agent-needle', title: 'Fix flaky login', project: 'elsewhere', provider: 'claude', cost: 0.4 })
+    const parent = { ...rows[0]!, subagents: [child] }
+    getSessions.mockResolvedValue([parent, ...rows.slice(1)])
+    const { container } = render(<Sessions period="30days" provider="all" openSessionId={sessionRowKey(child)} />)
+    const drawer = await screen.findByRole('dialog', { name: /session details/i })
+
+    expect(within(drawer).getAllByText(/claude-session-123/).length).toBeGreaterThan(0)
+    expect(container.querySelector('.sessions-summary')?.textContent).toMatch(/^6 sessions \+ 1 subagent · /)
+    expect(screen.getByText(`Showing 6 of 6 top-level sessions`)).toBeInTheDocument()
+
+    for (const query of ['agent-needle', 'flaky login']) {
+      await user.clear(screen.getByLabelText('Search sessions'))
+      await user.type(screen.getByLabelText('Search sessions'), query)
+      expect([...container.querySelectorAll('.session-row .session-project')].map(node => node.textContent)).toEqual(['claude-session-123 · 1 subagent'])
+    }
+  })
+
   it('drops the median comparison under five loaded sessions and dims an empty saving', async () => {
     const small = [{ ...rows[0]!, savingsUSD: 0 }, rows[1]!, rows[2]!]
     getSessions.mockResolvedValue(small)
