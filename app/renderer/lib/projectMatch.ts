@@ -6,7 +6,7 @@
 
 type MatchTarget = { name: string; path?: string }
 
-function isRooted(pattern: string): boolean {
+export function isRooted(pattern: string): boolean {
   const raw = pattern.trim().replace(/\\/g, '/')
   return raw.startsWith('/') || /^[a-zA-Z]:\//.test(raw)
 }
@@ -40,4 +40,10 @@ export function projectPattern(project: MatchTarget): string {
   // substring that would hide the siblings sharing its prefix too.
   const rooted = raw.startsWith('/') || /^[a-zA-Z]:[\\/]/.test(raw) || !raw.includes('/')
   return rooted ? raw : `/${raw}`
+}
+
+/** Excludes win; an empty include list means every project. */
+export function projectVisible(project: MatchTarget, filter: { project: string[]; exclude: string[] }): boolean {
+  if (filter.exclude.some(pattern => projectMatches(project, pattern))) return false
+  return filter.project.length === 0 || filter.project.some(pattern => projectMatches(project, pattern))
 }

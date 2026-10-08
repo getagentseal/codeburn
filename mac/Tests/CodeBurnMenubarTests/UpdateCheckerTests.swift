@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import CodeBurnMenubar
 
@@ -188,5 +189,51 @@ struct CliUpdateCommandTests {
         #expect(UpdateChecker.cliUpdateCommand(cliPath: "/opt/homebrew/bin/codeburn", resolvingSymlinks: resolve) == "npm update -g codeburn")
         #expect(UpdateChecker.cliUpdateCommand(cliPath: "/usr/local/Cellar/codeburn/0.9.25/bin/codeburn") == "brew upgrade codeburn")
         #expect(UpdateChecker.cliUpdateCommand(cliPath: "/Users/u/.nvm/versions/node/v22.1.0/bin/codeburn") == "npm update -g codeburn")
+    }
+}
+
+@Suite("Menubar update feed")
+struct MenubarUpdateFeedTests {
+    private func feed(_ json: String) -> Data { Data(json.utf8) }
+
+    @Test("reads the version when the url is that version's mac-v zip")
+    func readsMatchingFeed() {
+        let data = feed(#"{"version":"0.9.30","url":"https://github.com/getagentseal/codeburn/releases/download/mac-v0.9.30/CodeBurnMenubar-v0.9.30.zip","sha256":"ab"}"#)
+        #expect(UpdateChecker.menubarVersion(fromFeed: data) == "v0.9.30")
+    }
+
+    @Test("rejects a feed whose url does not match its version")
+    func rejectsMismatchedFeed() {
+        let other = feed(#"{"version":"0.9.30","url":"https://github.com/getagentseal/codeburn/releases/download/mac-v0.9.29/CodeBurnMenubar-v0.9.29.zip"}"#)
+        let foreign = feed(#"{"version":"0.9.30","url":"https://evil.test/mac-v0.9.30/CodeBurnMenubar-v0.9.30.zip"}"#)
+        #expect(UpdateChecker.menubarVersion(fromFeed: other) == nil)
+        #expect(UpdateChecker.menubarVersion(fromFeed: foreign) == nil)
+        #expect(UpdateChecker.menubarVersion(fromFeed: feed("not json")) == nil)
+    }
+}
+
+@Suite("CLI the menubar cannot update")
+struct UnmanagedCliTests {
+    @Test("recognizes the desktop app's bundled CLI launcher")
+    func desktopLauncher() {
+        #expect(UpdateChecker.isDesktopBundledCli("/Users/u/Library/Application Support/CodeBurn/codeburn-desktop-cli.sh"))
+        #expect(!UpdateChecker.isDesktopBundledCli("/opt/homebrew/bin/codeburn"))
+    }
+
+    @Test("runs the installer without a CLI update only when the CLI is ahead of the app")
+    func installAdvancesOnlyWhenCliAhead() {
+        #expect(UpdateChecker.menubarInstallAdvances(installedCli: "0.9.31", app: "0.9.30"))
+        #expect(!UpdateChecker.menubarInstallAdvances(installedCli: "0.9.30", app: "0.9.30"))
+        #expect(!UpdateChecker.menubarInstallAdvances(installedCli: nil, app: "0.9.30"))
+        #expect(!UpdateChecker.menubarInstallAdvances(installedCli: "0.9.31", app: "dev"))
+    }
+
+    @Test("npm permission errors read as a permission problem with the manual command")
+    func npmPermissionError() {
+        let stderr = "npm error code EACCES\nnpm error syscall rename\nnpm error path /usr/local/lib/node_modules/codeburn"
+        let message = UpdateChecker.cliUpdateFailureMessage(stderr: stderr, status: 243, manualCommand: "npm update -g codeburn")
+        #expect(message.contains("permission"))
+        #expect(message.contains("npm update -g codeburn"))
+        #expect(UpdateChecker.cliUpdateFailureMessage(stderr: "boom", status: 1, manualCommand: "x") == "boom")
     }
 }

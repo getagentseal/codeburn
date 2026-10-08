@@ -143,30 +143,41 @@ git tag mac-v0.9.8
 git push origin mac-v0.9.8
 ```
 
-### 3. GitHub Actions Builds the Bundle
+### 3. GitHub Actions Builds, Signs, and Notarizes the Bundle
 
-The `.github/workflows/release-menubar.yml` workflow automatically detects the `mac-v*` tag and:
+The `.github/workflows/release-menubar.yml` workflow runs on the `mac-v*` tag and:
 
-1. Checks out the repo
-2. Runs `mac/Scripts/package-app.sh v0.9.8`
-3. Signs the app bundle with the Developer ID Application certificate, notarizes it with Apple, and staples the ticket
-4. Creates a zip file: `CodeBurnMenubar-v0.9.8.zip`
-5. Computes a SHA-256 checksum: `CodeBurnMenubar-v0.9.8.zip.sha256`
-6. Uploads both to a GitHub Release named "Menubar v0.9.8"
+1. Fails right away if any signing secret below is missing. It never publishes an ad-hoc build.
+2. Imports the Developer ID Application certificate into a temporary keychain.
+3. Runs `mac/Scripts/package-app.sh v0.9.8`, which builds the universal app, signs it with hardened runtime and a secure timestamp, notarizes it with `notarytool` using the App Store Connect API key, staples the ticket, then zips it to `CodeBurnMenubar-v0.9.8.zip` and writes `CodeBurnMenubar-v0.9.8.zip.sha256`.
+4. Unzips the result and checks it the way the installer will: checksum, `codesign --verify --strict` against team `XRVP7P7F9M`, and `spctl --assess`.
+5. Uploads both files to a GitHub Release named "Menubar v0.9.8".
+6. Downloads the published zip, confirms it matches the verified build, and only then rewrites `menubar-latest.json` on the `update-feeds` prerelease (see below).
 
-The script output on the build machine shows:
+No manual re-signing, notarizing, or re-uploading is needed. Repository secrets the workflow needs (Settings > Secrets and variables > Actions):
 
-```
-✓ Built /path/mac/.build/dist/CodeBurnMenubar-v0.9.8.zip
-✓ Checksum /path/mac/.build/dist/CodeBurnMenubar-v0.9.8.zip.sha256
-<sha256-hash>  CodeBurnMenubar-v0.9.8.zip
-```
+| Secret | What it holds |
+| --- | --- |
+| `MACOS_CERT_P12_BASE64` | The "Developer ID Application: Resham Joshi (XRVP7P7F9M)" certificate and private key, exported as .p12, base64 encoded (`base64 -i cert.p12`) |
+| `MACOS_CERT_PASSWORD` | The password the .p12 was exported with |
+| `MACOS_KEYCHAIN_PASSWORD` | Any random string; it locks the throwaway CI keychain |
+| `APPSTORE_API_KEY_P8_BASE64` | The App Store Connect API key (`AuthKey_<id>.p8`, Developer role or higher), base64 encoded |
+| `APPSTORE_API_KEY_ID` | That key's Key ID |
+| `APPSTORE_API_ISSUER_ID` | The Issuer ID shown above the key list in App Store Connect |
 
-No manual action is needed; the workflow handles everything.
+To build a signed release locally, run `package-app.sh` with `CODESIGN_IDENTITY`, `NOTARY_KEY_PATH`, `NOTARY_KEY_ID` and `NOTARY_ISSUER_ID` set.
 
 ### 4. Verify the Release
 
-After the workflow completes, the GitHub Release page shows the zip and sha256 files. The installed CLI command `codeburn menubar --force` fetches the newest `mac-v*` menubar release that includes both assets, verifies the checksum and bundle identity, and installs it into `~/Applications`.
+After the workflow completes, the GitHub Release page shows the zip and sha256 files, and the `update-feeds` prerelease carries a `menubar-latest.json` naming the new version. `codeburn menubar --force` installs the `mac-v*` release matching the CLI version. When that is missing, it reads the feed, and if the feed is unavailable it scans recent `mac-v*` releases. It refuses any bundle that fails the checksum, bundle id, Developer ID team (`XRVP7P7F9M`) or Gatekeeper check.
+
+### Update Feeds
+
+GitHub's "Latest release" is whichever line (`v*`, `mac-v*`, `desktop-v*`, `windows-v*`) was published last, so nothing should read `/releases/latest`. Update clients read fixed files on the rolling `update-feeds` prerelease instead:
+
+- `menubar-latest.json`: `{"version": "0.9.8", "url": "<zip download url>", "sha256": "<zip sha256>"}`. The menubar's update check and `codeburn menubar` read it.
+
+CI creates the prerelease on first use and replaces files with `gh release upload --clobber`. Keep it a prerelease and never edit it by hand except to roll back.
 
 ## Homebrew Core
 
@@ -178,19 +189,9 @@ brew bump-formula-pr codeburn --url "https://registry.npmjs.org/codeburn/-/codeb
 
 Users install with `brew install codeburn` and upgrade with `brew upgrade codeburn`.
 
-## Replacing Assets on an Existing Release
+## Never Replace Assets on an Existing Release
 
-If a release is published with broken assets (e.g., a menubar zip with a build error), re-run the build and upload the fixed assets without creating a new tag.
-
-Use `gh release upload` with the `--clobber` flag to overwrite existing files:
-
-```bash
-# After re-running mac/Scripts/package-app.sh v0.9.8 to regenerate the zip and sha256
-gh release upload mac-v0.9.8 mac/.build/dist/CodeBurnMenubar-v0.9.8.zip --clobber
-gh release upload mac-v0.9.8 mac/.build/dist/CodeBurnMenubar-v0.9.8.zip.sha256 --clobber
-```
-
-The GitHub Release page will now serve the fixed assets. The menubar installer selects the newest `mac-v*` release with `CodeBurnMenubar-v*.zip` plus its checksum, so users who run `codeburn menubar --force` after the replacement get the fixed version automatically.
+Do not re-upload or `--clobber` assets on a published `v*`, `mac-v*`, `desktop-v*` or `windows-v*` release. Installed copies and checksums already point at them. If a build is broken, cut a new patch release instead. The only release whose files change is `update-feeds`: CI writes it, and a rollback (below) restores it by hand.
 
 ## Rollback
 
@@ -203,8 +204,18 @@ git push origin --delete v0.9.8
 
 npm does not allow republishing to the same version. If you must unpublish from npm, use `npm unpublish codeburn@0.9.8 --force` (requires Owner role), but this is discouraged and all users who installed that version retain it.
 
-For the menubar, tag a new mac-v0.9.9 and let the workflow build and upload it. Users will see the update pill in the menubar settings and upgrade automatically (or manually via `codeburn menubar --force`).
+For the menubar, tag a new mac-v0.9.9 and let the workflow build and upload it; the feed moves to it when the workflow finishes. Users see the update pill and upgrade from it (or manually via `codeburn menubar --force`).
+
+To stop a bad menubar release from spreading before the fix is out, point the feed back at the previous good release:
+
+```bash
+gh release download update-feeds -p menubar-latest.json -O /tmp/menubar-latest.json
+# set version, url and sha256 back to the previous mac-v release (sha256 is in its .zip.sha256)
+gh release upload update-feeds /tmp/menubar-latest.json --clobber
+```
+
+That stops the update pill from offering the bad version. A CLI at the bad version still installs its matching `mac-v*` release, so the real fix is still the new patch release.
 
 ## Summary
 
-The CLI release is manual: bump the version, update `CHANGELOG.md`, commit, run `npm publish`, then tag and create a GitHub Release. The macOS menubar release is automated: pushing a `mac-v*` tag fires `.github/workflows/release-menubar.yml`, which builds, signs, zips, and publishes the bundle. The Electron desktop release is assembled manually under a `desktop-v*` tag, with the release-authoritative Windows NSIS installer built by the read-only `windows-latest` workflow. The homebrew-core formula is updated automatically or via `brew bump-formula-pr`.
+The CLI release is manual: bump the version, update `CHANGELOG.md`, commit, run `npm publish`, then tag and create a GitHub Release. The macOS menubar release is automated: pushing a `mac-v*` tag fires `.github/workflows/release-menubar.yml`, which builds, signs with Developer ID, notarizes, staples, zips, publishes the bundle, and then moves the `update-feeds` pointer. The Electron desktop release is assembled manually under a `desktop-v*` tag, with the release-authoritative Windows NSIS installer built by the read-only `windows-latest` workflow. The homebrew-core formula is updated automatically or via `brew bump-formula-pr`.

@@ -54,7 +54,8 @@ enum ProviderConnectionCatalog {
         entry("azureopenai", "Azure OpenAI", [.automatic, .api], [.apiTokenOrCloudCredentials]),
         entry("claude", "Claude", [.automatic, .api, .web, .cli, .oauth],
               [.localAppOrCLI, .oauth, .apiTokenOrCloudCredentials, .cookieOrWebSession], live: true),
-        entry("clinepass", "ClinePass", [.automatic, .api], [.apiTokenOrCloudCredentials], live: true),
+        entry("clinepass", "ClinePass", [.automatic, .api, .cli],
+              [.localAppOrCLI, .apiTokenOrCloudCredentials], live: true),
         entry("cursor", "Cursor", [.automatic, .cli, .web], [.localAppOrCLI, .cookieOrWebSession], live: true),
         entry("opencode", "OpenCode", [.automatic, .web], [.cookieOrWebSession]),
         entry("opencodego", "OpenCode Go", [.automatic, .api, .web],
@@ -115,7 +116,7 @@ enum ProviderConnectionCatalog {
               [.localAppOrCLI, .apiTokenOrCloudCredentials]),
         entry("crof", "Crof", [.automatic, .api], [.apiTokenOrCloudCredentials]),
         entry("venice", "Venice", [.automatic, .api], [.apiTokenOrCloudCredentials]),
-        entry("commandcode", "Command Code", [.automatic, .web], [.cookieOrWebSession]),
+        entry("commandcode", "Command Code", [.automatic, .cli], [.localAppOrCLI], live: true),
         entry("qoder", "Qoder", [.automatic, .web], [.cookieOrWebSession]),
         entry("stepfun", "StepFun", [.automatic, .web], [.cookieOrWebSession]),
         entry("bedrock", "AWS Bedrock", [.automatic, .api], [.apiTokenOrCloudCredentials]),
@@ -166,6 +167,10 @@ enum ProviderConnectionCatalog {
 enum ProviderConnectionGuidance {
     static func instruction(for provider: CapacityDockProvider) -> String {
         let methods = provider.catalogEntry.authMethods
+        // ClinePass rides on the Cline sign-in; there is no ClinePass app.
+        if provider.id == "clinepass" {
+            return L("Sign in with Cline, or enter a ClinePass API key below, then click Retry.")
+        }
         if methods == [.apiTokenOrCloudCredentials] {
             return L("Enter an API key or token below, then press Save & Connect.")
         }

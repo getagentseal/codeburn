@@ -470,9 +470,12 @@ export type PlanId =
   | 'cursor-pro'
   | 'supergrok'
   | 'supergrok-heavy'
+  | 'google-ai-pro'
+  | 'google-ai-ultra-5x'
+  | 'google-ai-ultra-20x'
   | 'custom'
   | 'none'
-export type PlanProvider = 'claude' | 'codex' | 'cursor' | 'grok' | 'all'
+export type PlanProvider = 'claude' | 'codex' | 'cursor' | 'grok' | 'antigravity' | 'all'
 export type PlanStatus = 'under' | 'near' | 'over'
 
 /** Serialized plan summary from `attachPlanSummaries` (src/main.ts:90). */
@@ -1317,6 +1320,9 @@ export interface CodeburnBridge {
   setProjectFilter(filter: ProjectFilter): Promise<ProjectFilter>
   /** Every project that exists, filter NOT applied: the Projects pane's checklist. */
   getUnfilteredProjects(): Promise<ProjectsReport>
+  /** Scope every report to one project path until cleared or the app restarts.
+   *  Absent on the IDE host, which has its own workspace scope. */
+  setTransientProject?(projectPath: string | null): Promise<void>
   setPriceOverride(model: string, rates: PriceRates): Promise<ActionResult>
   removePriceOverride(model: string): Promise<ActionResult>
   setCurrency(code: string): Promise<ActionResult>

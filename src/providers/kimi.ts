@@ -5,7 +5,7 @@ import { homedir } from 'os'
 
 import { extractBashCommands } from '../bash-utils.js'
 import { readSessionLines } from '../fs-utils.js'
-import { calculateCost, getShortModelName } from '../models.js'
+import { calculateCost, getShortModelName, pricingModelAt } from '../models.js'
 import type { ProbeRoot, ParsedProviderCall, Provider, SessionParser, SessionSource } from './types.js'
 
 type JsonObject = Record<string, unknown>
@@ -298,7 +298,7 @@ function createParser(source: SessionSource, shareDir: string, seenKeys: Set<str
 
         const model = stringField(envelope.payload, 'model') ?? stringField(envelope.payload, 'model_name') ?? configuredModel
         const costUSD = calculateCost(
-          model,
+          pricingModelAt(model, envelope.timestamp),
           usage.inputTokens,
           usage.outputTokens,
           usage.cacheCreationInputTokens,

@@ -377,7 +377,9 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // reported-cost-v1: the CLI reports its own per-message cost, so entries
   // cached before cline-cli joined the reported-cost allowlist in parser.ts
   // hold costUSD: undefined and get re-priced from tokens on every read.
-  'cline-cli': 'reported-cost-v1-est-reprice-v1',
+  // cache-inclusive-input-v1: cached calls hold inputTokens with cache reads
+  // and writes still inside it, so they must re-parse.
+  'cline-cli': 'reported-cost-v1-est-reprice-v1-cache-inclusive-input-v1',
   codewhale: 'aggregate-session-v1-est-cost',
   'command-code': 'cache-inclusive-input-v1',
   // Bump when the Codex parser changes attribution so unchanged, already-cached
@@ -420,8 +422,10 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // auto-review model by date (gpt-5.4 before 30 Jul 2026, Luna after).
   // codex-flex-reserve-v1: flex turns record speed 'flex' (cached calls hold
   // 'standard'), and `gpt-reserve` now splits cache writes like GPT-5.6 Luna.
+  // codex-fork-mask-v1: a fork's replay burst drops only records the parent
+  // rollout holds, so cached forks that dropped the whole burst re-parse.
   // Compose every suffix so cached sessions receive all accounting fixes.
-  codex: 'mcp-attribution-v5-est-cost-active-timing-mcp-wait-rich-capture-v1-cross-provider-pr-v1-session-meta-model-v1-session-meta-fields-v1-codex-pricing-v1-codex-tps-v1-codex-mcp-skills-v1-activity-price-v1-fork-replay-burst-v1-codex-token-usage-record-v1-codex-priority-tier-v1-codex-auto-review-date-v1-codex-flex-reserve-v1',
+  codex: 'mcp-attribution-v5-est-cost-active-timing-mcp-wait-rich-capture-v1-cross-provider-pr-v1-session-meta-model-v1-session-meta-fields-v1-codex-pricing-v1-codex-tps-v1-codex-mcp-skills-v1-activity-price-v1-fork-replay-burst-v1-codex-token-usage-record-v1-codex-priority-tier-v1-codex-auto-review-date-v1-codex-flex-reserve-v1-codex-fork-mask-v1',
   // reported-cost-v1: cached Crush calls stored costUSD: undefined and must
   // re-parse to keep the recorded session cost.
   crush: 'reported-cost-v1',
@@ -482,7 +486,9 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // authoritative-usage-v4: persist one Grok session call from top-level
   // authoritative totals, use modelUsage only for priced attribution, clamp
   // reasoning per record, and label mixed sessions estimated.
-  grok: 'authoritative-usage-v4',
+  // unified-log-v1: per-request usage from logs/unified.jsonl replaces the
+  // session-dir rollup for every session the log holds.
+  grok: 'authoritative-usage-v4-unified-log-v1',
   // Estimated from message text: Grok Bot's local mirror records no tokens.
   // import-guess-est-v1: synced Grok Bot rows with no dollar amount are estimated.
   grokbot: 'estimated-usage-v1-import-guess-est-v1',
@@ -512,7 +518,9 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // database is unusable. The legacy metadata.metrics path no longer carves
   // cache reads out of an input count that never held them. Devin is not
   // durable, so the bump rebuilds its section and old step_id keys go with it.
-  devin: 'sessions-db-v1',
+  // swe-pricing-v1: cached Devin calls carry their parse-time cost, so SWE-2
+  // calls cached at $0 must re-parse to pick up its price.
+  devin: 'sessions-db-v1-swe-pricing-v1',
   'lingtai-tui': 'token-ledger-registry-activity-v3',
   'ibm-bob': 'worktree-project-grouping-v1',
   // project-path-v1: the parser now records the session's full working

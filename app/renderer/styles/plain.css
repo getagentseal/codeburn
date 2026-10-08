@@ -341,6 +341,11 @@ body { overflow: hidden; background: var(--bg); color: var(--ink); }
 .pop-item-note { flex: 0 0 auto; margin-left: auto; padding-left: 8px; color: var(--mut2); font-size: var(--fs-label); }
 .pop-menu .pop-item:hover:not(:disabled), .pop-menu .pop-item:focus-visible { background: var(--hover); }
 .pop-menu .pop-item:disabled { opacity: .45; cursor: default; }
+.pop-search { box-sizing: border-box; width: 100%; margin: 0 0 4px; padding: 5px 9px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); color: var(--ink); font: inherit; font-size: var(--fs-body); }
+.pop-search::placeholder { color: var(--mut2); }
+.pop-search:focus-visible { border-color: var(--accent); }
+/* A project path runs long; its label ellipsizes past this. */
+#project-scope { max-width: 180px; }
 .dropdown-foot { max-width: 220px; margin-top: 4px; padding: 7px 11px 2px; border-top: 1px solid var(--line2); color: var(--mut2); font-size: var(--fs-label); line-height: 1.35; white-space: normal; }
 .calendar-trigger {
   display: inline-flex; align-items: center; gap: 6px; height: 25px; padding: 3px 7px;
@@ -1506,6 +1511,10 @@ html.page-hidden *::after {
    so it goes rather than truncates. */
 @media (max-width: 1279px) {
   .bar .scope { display: none; }
+  /* With the caption gone, the two name pickers give way next: their labels
+     ellipsize while the period and provider controls stay whole. */
+  .bar .pop-wrap:has(> #project-scope) { flex: 0 1 auto; min-width: 72px; }
+  .bar .pop-wrap:has(> #claude-config-select) { flex: 0 1 168px; min-width: 96px !important; }
 }
 @media (max-width: 1199px) {
   .bar { gap: var(--sp-2); }
