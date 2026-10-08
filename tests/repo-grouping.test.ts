@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { loadDailyCache, projectDayIdentity, type DailyEntry } from '../src/daily-cache.js'
 import { aggregateProjectsIntoDays } from '../src/day-aggregator.js'
-import { __resetGitOriginCache, __setTempRoots, folderNameOriginKey, projectOriginKey, saveGitOrigins } from '../src/git-origin.js'
+import { __resetGitOriginCache, __setTempRoots, folderNameOriginKey, linkedOriginKey, projectOriginKey, saveGitOrigins, setProjectLinks } from '../src/git-origin.js'
 import { filterProjectsByName, makeProjectFilter, setExactProjectPaths } from '../src/parser.js'
 import { spendProjectIdentity } from '../src/spend-flow.js'
 import type { ProjectSummary, SessionSummary } from '../src/types.js'
@@ -282,5 +282,50 @@ describe('projects grouped by git repository', () => {
         expect(folderNameOriginKey(name)).toBeNull()
       }
     })
+  })
+})
+
+describe('project links', () => {
+  it('puts a linked folder and its subfolders in the repository row, and unlinking restores them', () => {
+    const { a1, other, plain } = fixtures()
+    const sub = join(plain, 'site')
+    const projects = [live(a1, 5), live(other, 4), live(plain, 1), live(sub, 2)]
+    setProjectLinks({ [`${plain}/`]: 'github.com/getagentseal/codeburn' })
+
+    const rows = buildPayloadProjects(projects, null, homedir())
+    expect(rows.map(r => [r.name, r.cost])).toEqual([['codeburn', 8], ['codeburn-app', 4]])
+    expect(rows[0]!.path).toBe(a1)
+    expect(filterProjectsByName(projects, [a1]).map(p => p.projectPath).sort()).toEqual([a1, plain, sub].sort())
+    expect(filterProjectsByName(projects, [sub]).map(p => p.projectPath).sort()).toEqual([a1, plain, sub].sort())
+
+    setProjectLinks({})
+    expect(buildPayloadProjects(projects, null, homedir()).map(r => r.name)).toEqual(['codeburn', 'codeburn-app', 'site', 'codeburn-marketing'])
+  })
+
+  it('takes the longest link, and a link beats the folder\'s own origin', () => {
+    const { a1, other, plain } = fixtures()
+    const inner = join(plain, 'inner')
+    setProjectLinks({ [plain]: 'github.com/getagentseal/codeburn', [inner]: 'github.com/getagentseal/codeburn-app', [other]: 'github.com/getagentseal/codeburn' })
+
+    expect(linkedOriginKey(join(inner, 'deep'))).toBe('github.com/getagentseal/codeburn-app')
+    expect(linkedOriginKey(join(plain, 'other'))).toBe('github.com/getagentseal/codeburn')
+    expect(linkedOriginKey(`${plain}-ui`)).toBeNull()
+    const rows = buildPayloadProjects([live(a1, 5), live(other, 4), live(inner, 1)], null, homedir())
+    expect(rows.map(r => [r.name, r.cost])).toEqual([['codeburn', 9], ['codeburn-app', 1]])
+  })
+
+  it('does not widen an exclude', () => {
+    const { a1, a2, plain } = fixtures()
+    const projects = [live(a1, 5), live(a2, 3), live(plain, 1)]
+    setProjectLinks({ [plain]: 'github.com/getagentseal/codeburn' })
+    expect(filterProjectsByName(projects, [], [plain]).map(p => p.projectPath).sort()).toEqual([a1, a2].sort())
+    expect(filterProjectsByName(projects, [], [a1]).map(p => p.projectPath).sort()).toEqual([a2, plain].sort())
+  })
+
+  it('matches Windows-style links on folder boundaries', () => {
+    setProjectLinks({ 'C:\\Work\\Proj\\': 'github.com/o/proj' })
+    expect(linkedOriginKey('C:/Work/Proj/sub')).toBe('github.com/o/proj')
+    expect(linkedOriginKey('C:\\Work\\Proj')).toBe('github.com/o/proj')
+    expect(linkedOriginKey('C:/Work/Project')).toBeNull()
   })
 })

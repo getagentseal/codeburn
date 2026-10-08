@@ -70,6 +70,9 @@ export type CodeburnConfig = {
   // Matched against the canonical project path: prefix on a path-segment
   // boundary, case-insensitive, trailing-slash and backslash tolerant.
   proxyPaths?: string[]
+  // Folder -> repository origin key (`codeburn project link`): the folder and
+  // everything under it join that repository's project row.
+  projectLinks?: Record<string, string>
   // Vercel AI Gateway rows are DAILY AGGREGATES per model with no request id,
   // timestamp or attribution (see src/providers/vercel-gateway.ts), so they
   // cannot be matched against the local tools that were pointed at the gateway

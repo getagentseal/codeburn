@@ -1,8 +1,9 @@
 import { existsSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { basename, dirname, isAbsolute, join } from 'node:path'
+import { homedir, tmpdir } from 'node:os'
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 
 import { getCodeburnCacheDir } from './cache-dir.js'
+import { normalizeProxyPath } from './models.js'
 
 /// The `origin` remote of a checkout, read straight from .git/config. Two clones
 /// or worktrees of the same repository share it, which is what lets surfaces
@@ -239,6 +240,44 @@ export function isTemporaryProjectPath(projectPath: string | undefined): boolean
   return tempRoots().some(root => key === root || key.startsWith(`${root}/`))
 }
 
+/** Every repository an earlier parse saw a checkout of. */
+export function knownOriginKeys(): string[] {
+  recorded ??= readRecorded()
+  return [...new Set(Object.values(recorded))]
+}
+
+/** A folder as `project link` stores it: absolute, with ~ expanded. */
+export function projectLinkFolder(folder: string): string {
+  const raw = folder.trim()
+  const path = raw === '~' || /^~[\\/]/.test(raw) ? homedir() + raw.slice(1) : raw
+  return /^[a-zA-Z]:[\\/]/.test(path) ? path : resolve(path)
+}
+
+// Folders the user put in a repository (`codeburn project link`), longest
+// first so a nested link wins. Never stamped into the day cache, so an unlink
+// takes effect on the next report.
+let projectLinks: Array<[folder: string, origin: string]> = []
+
+export function setProjectLinks(links: Record<string, string> | undefined): void {
+  projectLinks = Object.entries(links && typeof links === 'object' ? links : {})
+    .filter((e): e is [string, string] => typeof e[1] === 'string' && e[1] !== '')
+    .map(([folder, origin]): [string, string] => [normalizeProxyPath(projectLinkFolder(folder)), origin])
+    .filter(([folder]) => folder !== '')
+    .sort((a, b) => b[0].length - a[0].length)
+}
+
+/** The repository a project link puts `projectPath` in. It beats the folder's
+ *  own origin. Same path rule as proxy paths: per-OS case, folder boundary. */
+export function linkedOriginKey(projectPath: string | undefined): string | null {
+  if (!projectPath || projectLinks.length === 0) return null
+  const path = normalizeProxyPath(projectPath)
+  return projectLinks.find(([folder]) => path === folder || path.startsWith(`${folder}/`))?.[1] ?? null
+}
+
+export function getProjectLinksConfigHash(): string {
+  return projectLinks.length ? JSON.stringify(projectLinks) : ''
+}
+
 /** "github.com/org/repo" -> "repo". */
 export function originRepoName(originKey: string): string {
   return originKey.split('/').filter(Boolean).pop() ?? originKey
@@ -275,4 +314,5 @@ export function __resetGitOriginCache(): void {
   recorded = null
   checkoutsByParent = null
   folderNameMatch.clear()
+  projectLinks = []
 }

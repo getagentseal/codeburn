@@ -25,7 +25,7 @@ import { activityStreak } from './streak.js'
 import { getDaysInRange, ensureCacheHydrated, loadDailyCache, cachedProjectIdentities, projectDayIdentity, emptyCache, mergeDayEntries, BACKFILL_DAYS, toDateString, type DailyCache, type DailyEntry, type ProjectDayStats, type ProviderDaySlice } from './daily-cache.js'
 import { buildGranularHistory } from './granular-history.js'
 import { spendProjectIdentity } from './spend-flow.js'
-import { folderNameOriginKey, isTemporaryProjectPath, originRepoName, projectOriginKey, TEMPORARY_PROJECTS } from './git-origin.js'
+import { folderNameOriginKey, isTemporaryProjectPath, linkedOriginKey, originRepoName, projectOriginKey, TEMPORARY_PROJECTS } from './git-origin.js'
 import { AGGREGATE_ONLY_PROVIDER, excludeAggregateOnlyProjects, excludesAggregateOnlyProviders } from './parser.js'
 
 // Row caps for the by-PR / by-branch payload aggregations, ranked by cost.
@@ -1572,7 +1572,7 @@ export function buildPayloadProjects(
   const groups = new Map<string, typeof rows>()
   const byFolderName = new Set<(typeof rows)[number]>()
   for (const row of rows) {
-    const realOrigin = row.acc.originKey ?? projectOriginKey(row.path)
+    const realOrigin = linkedOriginKey(row.path) ?? row.acc.originKey ?? projectOriginKey(row.path)
     const nameOrigin = realOrigin ? null : folderNameOriginKey(row.path)
     if (nameOrigin) byFolderName.add(row)
     const key = realOrigin ?? nameOrigin ?? (isTemporaryProjectPath(row.path) ? TEMPORARY_KEY : `\0${row.acc.id}`)

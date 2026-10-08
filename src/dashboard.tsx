@@ -27,7 +27,7 @@ import { planDisplayName } from './plans.js'
 import { formatDayRangeLabel, getDateRange, parseDayFlag, PERIODS, PERIOD_LABELS, shiftDay, type Period } from './cli-date.js'
 import { BSU, patchStdoutForWindows } from './ink-win.js'
 import { startUserTimingGuard } from './user-timing-guard.js'
-import { folderNameOriginKey, isTemporaryProjectPath, originRepoName, projectOriginKey, TEMPORARY_PROJECTS } from './git-origin.js'
+import { folderNameOriginKey, isTemporaryProjectPath, linkedOriginKey, originRepoName, projectOriginKey, TEMPORARY_PROJECTS } from './git-origin.js'
 import { countSessions } from './session-output.js'
 
 type View = 'dashboard' | 'optimize' | 'compare'
@@ -808,7 +808,7 @@ function getProjectBreakdownRowLimit(period: Period, dayMode = false): number {
 export function foldProjectsByRepository(projects: ProjectSummary[]): Array<ProjectSummary & { repo?: string }> {
   const rows = new Map<string, ProjectSummary & { repo?: string }>()
   projects.forEach((p, i) => {
-    const origin = projectOriginKey(p.projectPath) ?? folderNameOriginKey(p.projectPath)
+    const origin = linkedOriginKey(p.projectPath) ?? projectOriginKey(p.projectPath) ?? folderNameOriginKey(p.projectPath)
     const temporary = !origin && isTemporaryProjectPath(p.projectPath)
     const key = origin ?? (temporary ? TEMPORARY_PROJECTS : `\0${i}`)
     const held = rows.get(key)

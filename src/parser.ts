@@ -58,7 +58,7 @@ import { classifyWslCachePath, isWslUncPath, refreshWslHomes, wslMode } from './
 import { decideParseWorkers, parseFilesInOrder, ParseWorkerPool, type ClaudeWorkerParse, type ParseJob } from './parse-workers.js'
 import type { CodexFullParse } from './providers/codex.js'
 import { dateKey } from './day-aggregator.js'
-import { folderNameOriginKey, isTemporaryProjectPath, projectOriginKey, saveGitOrigins, TEMPORARY_PROJECTS } from './git-origin.js'
+import { folderNameOriginKey, isTemporaryProjectPath, linkedOriginKey, projectOriginKey, saveGitOrigins, TEMPORARY_PROJECTS } from './git-origin.js'
 import { behavioralCallWeight, isBehavioralTurn } from './behavioral-weight.js'
 import { gatewayIncludedInTotals } from './config.js'
 import { coverageFor, cursorImportPath, dropImportCoveredCalls, loadCursorImport, replacedProviders } from './cursor-import.js'
@@ -5045,7 +5045,7 @@ function compile(patterns: readonly string[], widen: boolean): CompiledPattern[]
     const exact = pattern.startsWith('=') && isRootedProjectPattern(pattern.slice(1))
     if (!exact && !isRootedProjectPattern(pattern)) return { rooted: false as const, needle: pattern.toLowerCase() }
     const path = expandTilde(exact ? pattern.slice(1) : pattern)
-    return { rooted: true as const, anchor: normalizeAbsProjectPathKey(path), origin: exactProjectPaths || !(widen || exact) ? null : projectOriginKey(path), exact }
+    return { rooted: true as const, anchor: normalizeAbsProjectPathKey(path), origin: exactProjectPaths || !(widen || exact) ? null : linkedOriginKey(path) ?? projectOriginKey(path), exact }
   })
 }
 
@@ -5060,12 +5060,12 @@ function hit(entry: ProjectFilterTarget, pattern: CompiledPattern, key: string |
   if (pattern.rooted) {
     // A folder with no known origin (deleted before it was recorded) falls
     // back to the folder rule, so a repo path still takes its subfolders.
-    const origin = pattern.origin && (entry.originKey ?? projectOriginKey(entry.projectPath) ?? folderNameOriginKey(entry.projectPath))
+    const origin = pattern.origin && (linkedOriginKey(entry.projectPath) ?? entry.originKey ?? projectOriginKey(entry.projectPath) ?? folderNameOriginKey(entry.projectPath))
     if (origin) return origin === pattern.origin
     const anchor = pattern.anchor
     return anchor !== null && key !== null && (key === anchor || (!pattern.exact && key.startsWith(anchor + '/')))
   }
-  if (pattern.temporary) return isTemporaryProjectPath(entry.projectPath) && !(entry.originKey ?? projectOriginKey(entry.projectPath) ?? folderNameOriginKey(entry.projectPath))
+  if (pattern.temporary) return isTemporaryProjectPath(entry.projectPath) && !(linkedOriginKey(entry.projectPath) ?? entry.originKey ?? projectOriginKey(entry.projectPath) ?? folderNameOriginKey(entry.projectPath))
   return entry.project.toLowerCase().includes(pattern.needle)
     || (entry.projectPath ?? '').toLowerCase().includes(pattern.needle)
 }

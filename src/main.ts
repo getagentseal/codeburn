@@ -52,6 +52,7 @@ import {
   runAgyStatusLineHook,
   uninstallAntigravityStatusLineHook,
 } from './antigravity-statusline.js'
+import { getProjectLinksConfigHash, knownOriginKeys, originRepoName, projectLinkFolder, setProjectLinks } from './git-origin.js'
 import { clearPlan, readConfig, readPlan, readPlans, saveConfig, savePlan, getConfigFilePath, setIncludeGatewayInTotals, gatewayIncludedInTotals, type CodeburnConfig, type Plan, type PlanId, type PlanProvider } from './config.js'
 import { clampResetDay, copilotCreditsNote, getPlanUsageOrNull, getPlanUsages, type PlanUsage } from './plan-usage.js'
 import { getPresetPlan, isPlanId, isPlanProvider, PLAN_IDS, PLAN_PROVIDERS, planDisplayName } from './plans.js'
@@ -562,6 +563,7 @@ program.hook('preAction', async (thisCommand) => {
   setFlatRateModels(config.flatRateModels ?? [])
   setFlatRateRemoved(config.flatRateModelsRemoved ?? [])
   setProxyPaths(config.proxyPaths ?? [])
+  setProjectLinks(config.projectLinks)
   setIncludeGatewayInTotals(config.includeGatewayInTotals === true)
   if (thisCommand.opts<{ verbose?: boolean }>().verbose) {
     process.env['CODEBURN_VERBOSE'] = '1'
@@ -1284,6 +1286,7 @@ program
         // serving costs priced under the old config until something
         // unrelated moves the corpus fingerprint.
         proxyPathsConfigHash: getProxyPathsConfigHash(),
+        projectLinksConfigHash: getProjectLinksConfigHash(),
         modelAliasesConfigHash: getModelAliasesConfigHash(),
         priceOverridesConfigHash: getPriceOverridesConfigHash(),
         localModelSavingsConfigHash: getLocalModelSavingsConfigHash(),
@@ -2076,6 +2079,82 @@ program
     await saveConfig(config)
     console.log(`\n  Proxy path saved: ${trimmed}`)
     console.log('  Sessions under it keep their full API-rate cost as the would-be figure; that amount is reported as subscription-covered (net out-of-pocket excludes it).')
+    console.log(`  Config: ${getConfigFilePath()}\n`)
+  })
+
+program
+  .command('project [action] [folder] [project]')
+  .description('Put a folder (and everything under it) in a repository project: project link <folder> <project>, project unlink <folder>, project links. <project> is the name shown in the project list (e.g. codeburn project link ~/crewroom crewroom).')
+  .option('--format <format>', 'Output format: text, json', 'text')
+  .action(async (action?: string, folder?: string, project?: string, opts?: { format?: string }) => {
+    const format = opts?.format ?? 'text'
+    assertFormat(format, ['text', 'json'], 'project')
+    const config = await readConfig()
+    const links = config.projectLinks && typeof config.projectLinks === 'object' ? { ...config.projectLinks } : {}
+    const sameFolder = (a: string, b: string) => normalizeProxyPath(projectLinkFolder(a)) === normalizeProxyPath(projectLinkFolder(b))
+
+    if (!action || action === 'links') {
+      if (format === 'json') {
+        console.log(JSON.stringify(Object.entries(links).map(([f, origin]) => ({ folder: f, project: originRepoName(origin), origin })), null, 2))
+        return
+      }
+      if (Object.keys(links).length === 0) {
+        console.log('\n  No project links.')
+        console.log('  Add one with: codeburn project link <folder> <project>\n')
+        return
+      }
+      console.log('\n  Project links:')
+      for (const [f, origin] of Object.entries(links)) console.log(`    ${f} -> ${originRepoName(origin)} (${origin})`)
+      console.log(`  Config: ${getConfigFilePath()}\n`)
+      return
+    }
+
+    if (action === 'unlink') {
+      const key = folder && Object.keys(links).find(f => sameFolder(f, folder))
+      if (!key) {
+        console.error(`\n  No project link for: ${folder ?? '(no folder given)'}\n`)
+        process.exitCode = 1
+        return
+      }
+      delete links[key]
+      config.projectLinks = Object.keys(links).length ? links : undefined
+      await saveConfig(config)
+      console.log(`\n  Removed project link: ${key}\n`)
+      return
+    }
+
+    if (action !== 'link' || !folder || !project) {
+      console.error('\n  Usage: codeburn project link <folder> <project> | project unlink <folder> | project links\n')
+      process.exitCode = 1
+      return
+    }
+    const target = projectLinkFolder(folder)
+    if (normalizeProxyPath(target) === '') {
+      console.error('\n  The filesystem root is too broad to link.\n')
+      process.exitCode = 1
+      return
+    }
+    // The names the project list shows for repository rows: "repo", or
+    // "org/repo" when two repositories share a name.
+    const wanted = project.trim().toLowerCase()
+    const origins = knownOriginKeys()
+    const matches = origins.filter(o => [o, o.split('/').slice(-2).join('/'), originRepoName(o)].includes(wanted))
+    if (matches.length !== 1) {
+      if (matches.length > 1) {
+        console.error(`\n  Several repositories are named "${project}": ${matches.map(o => o.split('/').slice(-2).join('/')).join(', ')}. Use one of those names.\n`)
+      } else {
+        const close = [...new Set(origins.map(originRepoName))].filter(n => n.includes(wanted) || wanted.includes(n)).sort().slice(0, 5)
+        console.error(`\n  No repository project named "${project}".${close.length ? ` Did you mean: ${close.join(', ')}?` : ''}`)
+        console.error('  A folder can join a project that is a git repository CodeBurn has seen.\n')
+      }
+      process.exitCode = 1
+      return
+    }
+    for (const f of Object.keys(links)) if (sameFolder(f, target)) delete links[f]
+    links[target] = matches[0]!
+    config.projectLinks = links
+    await saveConfig(config)
+    console.log(`\n  Linked ${target} -> ${originRepoName(matches[0]!)} (${matches[0]})`)
     console.log(`  Config: ${getConfigFilePath()}\n`)
   })
 
