@@ -33,7 +33,12 @@ export function projectScopeOptions(projects: ProjectRow[], filter: ProjectFilte
   }
   return rows.map(([path, project]) => {
     const label = shortenProjectPath(path, 2)
-    return { value: path, label: project.temporary ? t('shell.project.temporary') : project.checkouts ? project.name : labels.get(label)! > 1 ? path : label, name: project.name }
+    return {
+      value: path,
+      label: project.temporary ? t('shell.project.temporary') : project.checkouts ? project.name : labels.get(label)! > 1 ? path : label,
+      name: project.name,
+      ...(project.checkouts?.some(c => c.matchedByFolderName) ? { title: t('shell.project.matchedByFolderName') } : {}),
+    }
   })
 }
 

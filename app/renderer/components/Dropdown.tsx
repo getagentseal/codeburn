@@ -4,7 +4,7 @@ import { useEscape } from '../hooks/useEscape'
 import { AnchoredSurface } from './AnchoredSurface'
 import { Icon } from './icons'
 
-export type DropdownOption = { value: string; label: string; muted?: boolean; note?: string }
+export type DropdownOption = { value: string; label: string; muted?: boolean; note?: string; title?: string }
 
 /** A query box above the options. The caller filters `options` on `value`. */
 export type DropdownSearch = { value: string; onChange: (query: string) => void; placeholder: string; ariaLabel: string }
@@ -147,6 +147,7 @@ export function Dropdown({
               key={option.value}
               ref={node => { optionRefs.current[index] = node }}
               type="button"
+              title={option.title}
               className={`pop-item${option.value === value ? ' on' : ''}${option.muted ? ' muted' : ''}`}
               role="option"
               aria-selected={option.value === value}

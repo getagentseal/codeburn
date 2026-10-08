@@ -58,6 +58,12 @@ describe('projectScopeOptions', () => {
     expect(projectScopeOptions([repo, temp], { project: [], exclude: ['/tmp/clone-3'] }).map(option => option.value)).toEqual(['/w/codeburn', '@temp'])
   })
 
+  it('notes a repository row that holds a folder matched by name', () => {
+    const repo = { ...row('/w/codeburn', 9, 'codeburn'), checkouts: [{ path: '/w/codeburn', cost: 6 }, { path: '/w/codeburn-fix', cost: 3, matchedByFolderName: true }] }
+    const plain = { ...row('/w/other', 5, 'other'), checkouts: [{ path: '/w/other', cost: 4 }, { path: '/w/other-wt', cost: 1 }] }
+    expect(projectScopeOptions([repo, plain], NO_FILTER).map(option => option.title)).toEqual(['Includes deleted folders matched by folder name only', undefined])
+  })
+
   it('hides projects whose lifetime cost rounds to $0.00', () => {
     const projects = [row('/w/zero', 0), row('/w/tiny', 0.004), row('/w/half', 0.005), row('/w/cent', 0.01)]
     expect(projectScopeOptions(projects, NO_FILTER).map(option => option.value)).toEqual(['/w/cent', '/w/half'])

@@ -11,6 +11,7 @@ import { filterProjectsByName, makeProjectFilter, setExactProjectPaths } from '.
 import { spendProjectIdentity } from '../src/spend-flow.js'
 import type { ProjectSummary, SessionSummary } from '../src/types.js'
 import { buildPayloadProjects } from '../src/usage-aggregator.js'
+import { renderOverview } from '../src/overview.js'
 
 let root: string
 // Checkout ids are spend identities: on Windows, lower-cased with forward slashes.
@@ -231,6 +232,12 @@ describe('projects grouped by git repository', () => {
       expect(checkouts.find(c => c.id === id(a1))!.matchedByFolderName).toBeUndefined()
       expect(checkouts.filter(c => c.matchedByFolderName).map(c => c.id).sort()).toEqual([dash, under].map(id).sort())
       expect(filterProjectsByName(projects, [a1]).map(p => p.projectPath).sort()).toEqual([a1, dash, under].sort())
+      expect(filterProjectsByName(projects, [], [a1]).map(p => p.projectPath).sort()).toEqual([dash, under, other].sort())
+
+      const report = renderOverview(projects, { label: 'p', color: false })
+      expect(report).toMatch(/codeburn \*/)
+      expect(report).toContain('* includes deleted folders matched by folder name')
+      expect(renderOverview([live(a1, 5), live(other, 4)], { label: 'p', color: false })).not.toContain('matched by folder name')
     })
 
     it('never applies to a folder that still exists', () => {

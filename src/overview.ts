@@ -162,19 +162,21 @@ export function renderOverview(
   const byCat = new Map<string, { cost: number; turns: number }>()
   const byTool = new Map<string, number>()
   const byDay = new Map<string, { cost: number; tokens: number; providers: Set<string> }>()
-  const byProject = new Map<string, { cost: number; sessions: number; sample: ProjectSummary; repo?: string }>()
+  const byProject = new Map<string, { cost: number; sessions: number; sample: ProjectSummary; repo?: string; byFolderName?: boolean }>()
 
   sessions = countSessions(projects)
   for (const p of projects) {
     cost += p.totalCostUSD
     savings += p.totalSavingsUSD
     calls += p.totalApiCalls
-    const origin = projectOriginKey(p.projectPath) ?? folderNameOriginKey(p.projectPath)
+    const realOrigin = projectOriginKey(p.projectPath)
+    const origin = realOrigin ?? folderNameOriginKey(p.projectPath)
     const temporary = !origin && isTemporaryProjectPath(p.projectPath)
     const pkey = origin ? `origin:${origin}` : temporary ? TEMPORARY_PROJECTS : projectAggKey(p)
     const pe = byProject.get(pkey) ?? { cost: 0, sessions: 0, sample: p, ...(origin ? { repo: originRepoName(origin) } : temporary ? { repo: 'Temporary folders' } : {}) }
     pe.cost += p.totalCostUSD
     pe.sessions += p.sessions.length
+    if (origin && !realOrigin) pe.byFolderName = true
     byProject.set(pkey, pe)
     for (const s of p.sessions) {
       inTok += s.totalInputTokens
@@ -372,8 +374,9 @@ export function renderOverview(
     out.push(heading('Top projects'))
     out.push(renderTable(c,
       [{ header: 'Project' }, { header: 'Cost', right: true }, { header: 'Sessions', right: true }],
-      projRows.map(([key, v]) => [v.repo ?? disambiguatedProjectLabel(key, v.sample, basenameCounts), formatCost(v.cost), formatCount(v.sessions)]),
+      projRows.map(([key, v]) => [(v.repo ?? disambiguatedProjectLabel(key, v.sample, basenameCounts)) + (v.byFolderName ? ' *' : ''), formatCost(v.cost), formatCount(v.sessions)]),
     ))
+    if (projRows.some(([, v]) => v.byFolderName)) out.push(c.dim('* includes deleted folders matched by folder name'))
     out.push('')
   }
 
