@@ -117,6 +117,7 @@
 "Enter an API key or token below, then press Save & Connect." = "Enter an API key or token below, then press Save & Connect.";
 "Sign in to %@ in a supported browser, then click Retry." = "Sign in to %@ in a supported browser, then click Retry.";
 "Sign in with the %@ app or CLI, then click Retry." = "Sign in with the %@ app or CLI, then click Retry.";
+"Sign in with Cline, or enter a ClinePass API key below, then click Retry." = "Sign in with Cline, or enter a ClinePass API key below, then click Retry.";
 "Complete %@ OAuth, then click Retry." = "Complete %@ OAuth, then click Retry.";
 "Start the local %@ service, then click Retry." = "Start the local %@ service, then click Retry.";
 "Enter the required API or cloud credentials below, then press Save & Connect." = "Enter the required API or cloud credentials below, then press Save & Connect.";
@@ -179,6 +180,8 @@
 "CodeBurn CLI %@ available" = "CodeBurn CLI %@ available";
 "Could not find the package manager for %1$@. Run “%2$@” manually, then try again." = "Could not find the package manager for %1$@. Run “%2$@” manually, then try again.";
 "the CLI" = "the CLI";
+"This codeburn CLI comes with the CodeBurn desktop app. Update the desktop app, then try again." = "This codeburn CLI comes with the CodeBurn desktop app. Update the desktop app, then try again.";
+"npm does not have permission to update the global codeburn install. Run “%@” in Terminal, then try again." = "npm does not have permission to update the global codeburn install. Run “%@” in Terminal, then try again.";
 "CLI update failed (exit %lld)" = "CLI update failed (exit %lld)";
 "Your codeburn CLI (%1$@) is too old to update the menubar. Run “%2$@” first, then try again." = "Your codeburn CLI (%1$@) is too old to update the menubar. Run “%2$@” first, then try again.";
 "Update failed (exit %lld)" = "Update failed (exit %lld)";
@@ -221,9 +224,6 @@
 "%1$@ over limit (%2$lld%%)" = "%1$@ over limit (%2$lld%%)";
 "resets in %@" = "resets in %@";
 "Change accent color" = "Change accent color";
-"CLI %@ available" = "CLI %@ available";
-"Update now" = "Update now";
-"Update the CLI (and the menubar if one is available) automatically" = "Update the CLI (and the menubar if one is available) automatically";
 "Copy update command to clipboard" = "Copy update command to clipboard";
 "Enjoying CodeBurn?" = "Enjoying CodeBurn?";
 "Star us on GitHub" = "Star us on GitHub";

@@ -5,7 +5,7 @@ import { createHash } from 'crypto'
 import { performance } from 'node:perf_hooks'
 import { basename, dirname, join, resolve, sep } from 'path'
 import { FS_SCAN_CONCURRENCY, mapWithConcurrency, readSessionLines } from './fs-utils.js'
-import { billableOutputTokens, calculateCost, calculateLocalModelSavings, getShortModelName, modelRowKey, pricingModelAt, isProxiedPath, getProxyPathsConfigHash, getModelAliasesConfigHash, getPriceOverridesConfigHash, getLocalModelSavingsConfigHash, recordedCostFallback, getModelRoute } from './models.js'
+import { billableOutputTokens, calculateCost, calculateLocalModelSavings, getShortModelName, modelRowKey, pricingModelAt, isProxiedPath, getProxyPathsConfigHash, getModelAliasesConfigHash, getPriceOverridesConfigHash, getLocalModelSavingsConfigHash, recordedCostFallback, getModelRoute, isStandInPricedAt } from './models.js'
 import { resolveSubagentAttribution, sessionIdentity } from './sessions-report.js'
 import { normalizeContentBlocks, flatSlice, flatString } from './content-utils.js'
 import { discoverAllSessions, discoverAllSessionsWithFailures, getProvider } from './providers/index.js'
@@ -2870,7 +2870,7 @@ function cachedCallToApiCall(call: CachedCall): ParsedApiCall {
       webSearchRequests: u.webSearchRequests,
     },
     costUSD: call.costUSD ?? recordedCostFallback(call.model, costUSD, call.fallbackCostUSD) ?? costUSD,
-    isEstimated: call.isEstimated,
+    isEstimated: call.isEstimated || (call.costUSD === undefined && isStandInPricedAt(call.model, call.timestamp)) || undefined,
     tools: call.tools,
     mcpTools: extractMcpTools(call.tools),
     skills: call.skills,
@@ -3221,6 +3221,11 @@ function cachedFileNeedsProviderReparse(providerName: string, sourcePath: string
   // from sessions.db, which its fingerprint does not track, so it always
   // reparses. A sessions.db source's fingerprint folds in the WAL already.
   if (providerName === 'devin') return sourcePath.endsWith('.json')
+
+  // A Grok session dir parses to nothing while logs/unified.jsonl holds its
+  // session, which its fingerprint does not track. Once the log rotates or is
+  // truncated past it, the dir has to count again.
+  if (providerName === 'grok') return cached.turns.length === 0
 
   if (providerName !== 'gemini') return false
 

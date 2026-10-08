@@ -845,9 +845,12 @@ skipUnlessSqlite('devin provider sessions.db enrichment', () => {
 
     expect(expectedKimiCost).toBeGreaterThan(0)
     expect(sum(c => (c.model === 'Kimi K3' ? c.costUSD : 0))).toBeCloseTo(expectedKimiCost, 12)
-    // swe-2-high has no pricing table entry: unpriced, never silently priced.
-    expect(getModelCosts('swe-2-high')).toBeNull()
-    expect(calls.filter(c => c.model === 'swe-2-high').every(c => c.costUSD === 0)).toBe(true)
+    // Cognition's SWE-2 list price: $3 input, $15 output, $0.30 cache read per 1M.
+    const expectedSweCost = steps
+      .filter(([model]) => model === 'swe-2-high')
+      .reduce((total, [, prompt, completion, cached]) =>
+        total + (prompt - cached) * 3e-6 + completion * 15e-6 + cached * 0.3e-6, 0)
+    expect(sum(c => (c.model === 'swe-2-high' ? c.costUSD : 0))).toBeCloseTo(expectedSweCost, 12)
 
     expect(calls[0]).toMatchObject({
       project: 'codeburn',

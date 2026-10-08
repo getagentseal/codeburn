@@ -20,7 +20,8 @@ final class CapacityDockProviderQuotaService {
         // No defaults here: only `.live` may reach the real adapters, so a
         // test can never silently read the local Cursor session or hit the
         // network by omitting a field.
-        var refreshClinePass: @Sendable (String) async throws -> QuotaSummary
+        var refreshClinePass: @Sendable (String?) async throws -> QuotaSummary
+        var refreshCommandCode: @Sendable () async throws -> QuotaSummary
         var refreshCursor: @Sendable () async throws -> QuotaSummary
         var refreshDevin: @Sendable () async throws -> QuotaSummary
         var refreshGrok: @Sendable () async throws -> QuotaSummary
@@ -31,6 +32,9 @@ final class CapacityDockProviderQuotaService {
         static let live = Dependencies(
             refreshClinePass: { apiKey in
                 try await ClinePassSubscriptionService.refresh(apiKey: apiKey)
+            },
+            refreshCommandCode: {
+                try await CommandCodeSubscriptionService.refresh()
             },
             refreshCursor: {
                 try await CursorSubscriptionService.refresh()
@@ -99,14 +103,16 @@ final class CapacityDockProviderQuotaService {
                 throw CapacityDockProviderFetchFailure(error: error)
             }
         case "clinepass":
-            guard let apiKey = credential.sanitizedOverride.apiKey else {
-                throw CapacityDockProviderFetchFailure(
-                    message: ClinePassSubscriptionService.FetchError.noCredentials.localizedDescription,
-                    disposition: .terminal
-                )
-            }
             do {
-                return try await dependencies.refreshClinePass(apiKey)
+                return try await dependencies.refreshClinePass(credential.sanitizedOverride.apiKey)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                throw CapacityDockProviderFetchFailure(error: error)
+            }
+        case "commandcode":
+            do {
+                return try await dependencies.refreshCommandCode()
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
@@ -166,6 +172,14 @@ struct CapacityDockProviderFetchFailure: LocalizedError, Equatable, Sendable {
             return failure.disposition
         }
         if let error = error as? ClinePassSubscriptionService.FetchError {
+            switch error.classification {
+            case .terminalAuth:
+                return .terminal
+            case .transient, .parseFailure:
+                return .transient
+            }
+        }
+        if let error = error as? CommandCodeSubscriptionService.FetchError {
             switch error.classification {
             case .terminalAuth:
                 return .terminal

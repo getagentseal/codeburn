@@ -11,6 +11,10 @@ struct CapacityDockProviderQuotaServiceTests {
         Issue.record("Wrong adapter dispatched")
         return Self.summary()
     }
+    nonisolated private static let unusedCommandCode: @Sendable () async throws -> QuotaSummary = {
+        Issue.record("Wrong adapter dispatched")
+        return Self.summary()
+    }
     nonisolated private static let unusedDevin: @Sendable () async throws -> QuotaSummary = {
         Issue.record("Wrong adapter dispatched")
         return Self.summary()
@@ -38,9 +42,10 @@ struct CapacityDockProviderQuotaServiceTests {
         let expected = Self.summary(percent: 0.42)
         let service = CapacityDockProviderQuotaService(dependencies: .init(
             refreshClinePass: { apiKey in
-                await capture.record(apiKey)
+                await capture.record(apiKey ?? "")
                 return expected
             },
+            refreshCommandCode: Self.unusedCommandCode,
             refreshCursor: Self.unusedCursor,
             refreshDevin: Self.unusedDevin,
             refreshGrok: Self.unusedGrok,
@@ -70,6 +75,7 @@ struct CapacityDockProviderQuotaServiceTests {
                 Issue.record("Wrong adapter dispatched")
                 return Self.summary()
             },
+            refreshCommandCode: Self.unusedCommandCode,
             refreshCursor: Self.unusedCursor,
             refreshDevin: Self.unusedDevin,
             refreshGrok: Self.unusedGrok,
@@ -100,6 +106,7 @@ struct CapacityDockProviderQuotaServiceTests {
                 Issue.record("Wrong adapter dispatched")
                 return Self.summary()
             },
+            refreshCommandCode: Self.unusedCommandCode,
             refreshCursor: { expected },
             refreshDevin: Self.unusedDevin,
             refreshGrok: Self.unusedGrok,
@@ -125,6 +132,7 @@ struct CapacityDockProviderQuotaServiceTests {
                 Issue.record("Wrong adapter dispatched")
                 return Self.summary()
             },
+            refreshCommandCode: Self.unusedCommandCode,
             refreshCursor: Self.unusedCursor,
             refreshDevin: Self.unusedDevin,
             refreshGrok: { expected },
@@ -150,6 +158,7 @@ struct CapacityDockProviderQuotaServiceTests {
                 Issue.record("Wrong adapter dispatched")
                 return Self.summary()
             },
+            refreshCommandCode: Self.unusedCommandCode,
             refreshCursor: Self.unusedCursor,
             refreshDevin: Self.unusedDevin,
             refreshGrok: Self.unusedGrok,
@@ -175,6 +184,7 @@ struct CapacityDockProviderQuotaServiceTests {
                 Issue.record("Wrong adapter dispatched")
                 return Self.summary()
             },
+            refreshCommandCode: Self.unusedCommandCode,
             refreshCursor: Self.unusedCursor,
             refreshDevin: Self.unusedDevin,
             refreshGrok: Self.unusedGrok,
@@ -208,6 +218,7 @@ struct CapacityDockProviderQuotaServiceTests {
                     Issue.record("Wrong adapter dispatched")
                     return Self.summary()
                 },
+                refreshCommandCode: Self.unusedCommandCode,
                 refreshCursor: Self.unusedCursor,
                 refreshDevin: refresh,
                 refreshGrok: Self.unusedGrok,
@@ -225,13 +236,15 @@ struct CapacityDockProviderQuotaServiceTests {
         }
     }
 
-    @Test("ClinePass requires its own saved API key")
-    func requiresClinePassKey() async throws {
+    @Test("ClinePass without a saved key falls back to the Cline sign-in")
+    func clinePassWithoutSavedKey() async throws {
+        let capture = SecretCapture()
         let service = CapacityDockProviderQuotaService(dependencies: .init(
-            refreshClinePass: { _ in
-                Issue.record("Adapter must not run without a key")
-                return Self.summary()
+            refreshClinePass: { apiKey in
+                await capture.record(apiKey ?? "<none>")
+                throw ClinePassSubscriptionService.FetchError.noCredentials
             },
+            refreshCommandCode: Self.unusedCommandCode,
             refreshCursor: Self.unusedCursor,
             refreshDevin: Self.unusedDevin,
             refreshGrok: Self.unusedGrok,
@@ -241,22 +254,80 @@ struct CapacityDockProviderQuotaServiceTests {
         ))
         let provider = try #require(CapacityDockProvider(rawValue: "clinepass"))
 
-        await #expect(throws: CapacityDockProviderFetchFailure.self) {
-            try await service.fetch(
-                provider: provider,
-                credential: CapacityDockProviderCredential(sourceMode: "api", apiKey: "  ")
-            )
-        }
-
         do {
             _ = try await service.fetch(
                 provider: provider,
-                credential: CapacityDockProviderCredential(sourceMode: "api", apiKey: "")
+                credential: CapacityDockProviderCredential(sourceMode: "api", apiKey: "  ")
             )
-            Issue.record("Expected a terminal missing-key failure")
+            Issue.record("Expected a terminal missing-credential failure")
         } catch let failure as CapacityDockProviderFetchFailure {
             #expect(failure.disposition == .terminal)
-            #expect(failure.message == "Enter a ClinePass API key or token, then press Save & Connect.")
+            #expect(failure.message == "Sign in with Cline, or enter a ClinePass API key, then click Retry.")
+        }
+        #expect(await capture.values == ["<none>"])
+    }
+
+    @Test("An expired Cline sign-in is retried with its guidance; a rejected key is terminal")
+    func clinePassExpiredSignInIsTransient() async throws {
+        let provider = try #require(CapacityDockProvider(rawValue: "clinepass"))
+        let cases: [(ClinePassSubscriptionService.FetchError, CapacityDockProviderFetchFailureDisposition)] = [
+            (.signInExpired, .transient),
+            (.authenticationRejected, .terminal),
+            (.noCredentials, .terminal),
+        ]
+        for (error, expectedDisposition) in cases {
+            let service = CapacityDockProviderQuotaService(dependencies: .init(
+                refreshClinePass: { _ in throw error },
+                refreshCommandCode: Self.unusedCommandCode,
+                refreshCursor: Self.unusedCursor,
+                refreshDevin: Self.unusedDevin,
+                refreshGrok: Self.unusedGrok,
+                refreshGrokBot: Self.unusedGrokBot,
+                refreshZai: Self.unusedZai,
+                refreshZcode: Self.unusedZcode
+            ))
+            do {
+                _ = try await service.fetch(provider: provider, credential: CapacityDockProviderCredential())
+                Issue.record("Expected \(error) to fail")
+            } catch let failure as CapacityDockProviderFetchFailure {
+                #expect(failure.disposition == expectedDisposition)
+                #expect(failure.message == error.localizedDescription)
+            }
+        }
+    }
+
+    @Test("Command Code dispatches to the CLI key and an expired session is terminal")
+    func dispatchesCommandCode() async throws {
+        let expected = Self.summary(percent: 0.5)
+        let provider = try #require(CapacityDockProvider(rawValue: "commandcode"))
+        let cases: [(@Sendable () async throws -> QuotaSummary, CapacityDockProviderFetchFailureDisposition?)] = [
+            ({ expected }, nil),
+            ({ throw CommandCodeSubscriptionService.FetchError.noCredentials }, .terminal),
+            ({ throw CommandCodeSubscriptionService.FetchError.authenticationRejected }, .terminal),
+            ({ throw CommandCodeSubscriptionService.FetchError.network }, .transient),
+            ({ throw CommandCodeSubscriptionService.FetchError.parseFailure }, .transient),
+        ]
+        for (refresh, expectedDisposition) in cases {
+            let service = CapacityDockProviderQuotaService(dependencies: .init(
+                refreshClinePass: { _ in
+                    Issue.record("Wrong adapter dispatched")
+                    return Self.summary()
+                },
+                refreshCommandCode: refresh,
+                refreshCursor: Self.unusedCursor,
+                refreshDevin: Self.unusedDevin,
+                refreshGrok: Self.unusedGrok,
+                refreshGrokBot: Self.unusedGrokBot,
+                refreshZai: Self.unusedZai,
+                refreshZcode: Self.unusedZcode
+            ))
+            do {
+                let result = try await service.fetch(provider: provider, credential: CapacityDockProviderCredential())
+                #expect(expectedDisposition == nil)
+                #expect(result == expected)
+            } catch let failure as CapacityDockProviderFetchFailure {
+                #expect(failure.disposition == expectedDisposition)
+            }
         }
     }
 
@@ -267,6 +338,7 @@ struct CapacityDockProviderQuotaServiceTests {
                 Issue.record("Wrong adapter dispatched")
                 return Self.summary()
             },
+            refreshCommandCode: Self.unusedCommandCode,
             refreshCursor: Self.unusedCursor,
             refreshDevin: Self.unusedDevin,
             refreshGrok: Self.unusedGrok,
@@ -293,6 +365,7 @@ struct CapacityDockProviderQuotaServiceTests {
     func classifiesAuthenticationFailure() async throws {
         let service = CapacityDockProviderQuotaService(dependencies: .init(
             refreshClinePass: { _ in throw ClinePassSubscriptionService.FetchError.authenticationRejected },
+            refreshCommandCode: Self.unusedCommandCode,
             refreshCursor: Self.unusedCursor,
             refreshDevin: Self.unusedDevin,
             refreshGrok: Self.unusedGrok,
@@ -322,6 +395,7 @@ struct CapacityDockProviderQuotaServiceTests {
         for error in errors {
             let service = CapacityDockProviderQuotaService(dependencies: .init(
                 refreshClinePass: { _ in throw error },
+                refreshCommandCode: Self.unusedCommandCode,
                 refreshCursor: Self.unusedCursor,
                 refreshDevin: Self.unusedDevin,
                 refreshGrok: Self.unusedGrok,
@@ -362,6 +436,7 @@ struct CapacityDockProviderQuotaServiceTests {
                     Issue.record("Wrong adapter dispatched")
                     return Self.summary()
                 },
+                refreshCommandCode: Self.unusedCommandCode,
                 refreshCursor: Self.unusedCursor,
                 refreshDevin: Self.unusedDevin,
                 refreshGrok: { throw error },
@@ -399,6 +474,7 @@ struct CapacityDockProviderQuotaServiceTests {
                     Issue.record("Wrong adapter dispatched")
                     return Self.summary()
                 },
+                refreshCommandCode: Self.unusedCommandCode,
                 refreshCursor: Self.unusedCursor,
                 refreshDevin: Self.unusedDevin,
                 refreshGrok: Self.unusedGrok,
@@ -434,6 +510,7 @@ struct CapacityDockProviderQuotaServiceTests {
                 await gate.pause()
                 return Self.summary(percent: 0.73)
             },
+            refreshCommandCode: Self.unusedCommandCode,
             refreshCursor: Self.unusedCursor,
             refreshDevin: Self.unusedDevin,
             refreshGrok: Self.unusedGrok,

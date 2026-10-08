@@ -2,7 +2,9 @@ import Foundation
 
 /// Live ClinePass quota from the public usage-limits HTTP contract.
 /// GET https://api.cline.bot/api/v1/users/me/plan/usage-limits with a bearer
-/// API key. The caller supplies the key; this adapter never reads Keychain.
+/// token: the caller's saved key, else CLINEPASS_API_KEY / CLINE_API_KEY, else
+/// the session the Cline CLI keeps in ~/.cline/data/settings/providers.json.
+/// That file is only read, never refreshed or written. Never reads Keychain.
 enum ClinePassSubscriptionService {
     static let usageURL = URL(string: "https://api.cline.bot/api/v1/users/me/plan/usage-limits")!
     private static let timeoutSeconds: TimeInterval = 15
@@ -10,6 +12,7 @@ enum ClinePassSubscriptionService {
     enum FetchError: Error, Equatable, LocalizedError, Sendable {
         case noCredentials
         case authenticationRejected
+        case signInExpired
         case rateLimited
         case providerUnavailable
         case parseFailure
@@ -25,7 +28,9 @@ enum ClinePassSubscriptionService {
             switch self {
             case .noCredentials, .authenticationRejected:
                 return .terminalAuth
-            case .rateLimited, .providerUnavailable, .network:
+            // Running cline refreshes the session file this only reads, so the
+            // next scheduled read picks it up; keep the last quota until then.
+            case .signInExpired, .rateLimited, .providerUnavailable, .network:
                 return .transient
             case .parseFailure:
                 return .parseFailure
@@ -37,9 +42,11 @@ enum ClinePassSubscriptionService {
         var errorDescription: String? {
             switch self {
             case .noCredentials:
-                return "Enter a ClinePass API key or token, then press Save & Connect."
+                return "Sign in with Cline, or enter a ClinePass API key, then click Retry."
             case .authenticationRejected:
                 return "ClinePass rejected this API key."
+            case .signInExpired:
+                return "Cline sign-in expired. Run cline to refresh it."
             case .rateLimited:
                 return "ClinePass rate-limited the quota request."
             case .providerUnavailable:
@@ -52,8 +59,16 @@ enum ClinePassSubscriptionService {
         }
     }
 
+    struct Credential: Equatable, Sendable {
+        let token: String
+        let isOAuth: Bool
+        let expiresAt: Date?
+    }
+
     struct Deps: Sendable {
         var fetch: @Sendable (URLRequest) async throws -> (Data, HTTPURLResponse)
+        var loadAmbientCredential: @Sendable () -> Credential?
+        var now: @Sendable () -> Date
 
         static let live = Deps(
             fetch: { request in
@@ -62,20 +77,88 @@ enum ClinePassSubscriptionService {
                     throw FetchError.network
                 }
                 return (data, http)
-            }
+            },
+            loadAmbientCredential: { ambientCredential(environment: ProcessInfo.processInfo.environment) },
+            now: { Date() }
         )
     }
 
+    static func ambientCredential(environment: [String: String]) -> Credential? {
+        for name in ["CLINEPASS_API_KEY", "CLINE_API_KEY"] {
+            if let key = cleaned(environment[name]) {
+                return Credential(token: key, isOAuth: false, expiresAt: nil)
+            }
+        }
+        guard let data = try? Data(contentsOf: providersFileURL(environment: environment)) else { return nil }
+        return fileCredential(data)
+    }
+
+    /// Cline's own lookup order: a settings file override, then a data dir, then a Cline dir.
+    static func providersFileURL(
+        environment: [String: String],
+        home: URL = FileManager.default.homeDirectoryForCurrentUser
+    ) -> URL {
+        func path(_ name: String) -> URL? {
+            guard let value = cleaned(environment[name]) else { return nil }
+            if value == "~" { return home }
+            if value.hasPrefix("~/") { return home.appendingPathComponent(String(value.dropFirst(2))) }
+            return URL(fileURLWithPath: value)
+        }
+        if let file = path("CLINE_PROVIDER_SETTINGS_PATH") { return file }
+        let dataDir = path("CLINE_DATA_DIR")
+            ?? (path("CLINE_DIR") ?? home.appendingPathComponent(".cline")).appendingPathComponent("data")
+        return dataDir.appendingPathComponent("settings/providers.json")
+    }
+
+    /// Matches Cline's getApiKey: the OAuth access token wins over keys kept in the same entry.
+    static func fileCredential(_ data: Data) -> Credential? {
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let providers = root["providers"] as? [String: Any],
+              let cline = providers["cline"] as? [String: Any],
+              let settings = cline["settings"] as? [String: Any] else { return nil }
+        let auth = settings["auth"] as? [String: Any]
+        if let access = cleaned(auth?["accessToken"] as? String) {
+            let expiresAt = (auth?["expiresAt"] as? NSNumber).map { Date(timeIntervalSince1970: $0.doubleValue / 1000) }
+            return Credential(
+                token: access.hasPrefix("workos:") ? access : "workos:\(access)",
+                isOAuth: true,
+                expiresAt: expiresAt
+            )
+        }
+        guard let key = cleaned(settings["apiKey"] as? String) ?? cleaned(auth?["apiKey"] as? String) else {
+            return nil
+        }
+        return Credential(token: key, isOAuth: false, expiresAt: nil)
+    }
+
+    private static func cleaned(_ value: String?) -> String? {
+        guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty else {
+            return nil
+        }
+        return trimmed
+    }
+
     @MainActor
-    static func refresh(apiKey: String, deps: Deps = .live) async throws -> QuotaSummary {
-        let trimmed = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { throw FetchError.noCredentials }
+    static func refresh(apiKey: String?, deps: Deps = .live) async throws -> QuotaSummary {
+        let credential: Credential
+        if let key = cleaned(apiKey) {
+            credential = Credential(token: key, isOAuth: false, expiresAt: nil)
+        } else {
+            let load = deps.loadAmbientCredential
+            guard let ambient = await Task.detached(operation: { load() }).value else {
+                throw FetchError.noCredentials
+            }
+            credential = ambient
+        }
+        if credential.isOAuth, let expiresAt = credential.expiresAt, expiresAt <= deps.now() {
+            throw FetchError.signInExpired
+        }
 
         var request = URLRequest(url: usageURL)
         request.httpMethod = "GET"
         request.timeoutInterval = timeoutSeconds
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        request.setValue("Bearer \(trimmed)", forHTTPHeaderField: "Authorization")
+        request.setValue("Bearer \(credential.token)", forHTTPHeaderField: "Authorization")
 
         let data: Data
         let response: HTTPURLResponse
@@ -91,7 +174,7 @@ enum ClinePassSubscriptionService {
         case 200:
             break
         case 401, 403:
-            throw FetchError.authenticationRejected
+            throw credential.isOAuth ? FetchError.signInExpired : FetchError.authenticationRejected
         case 429:
             throw FetchError.rateLimited
         case 500...599:
