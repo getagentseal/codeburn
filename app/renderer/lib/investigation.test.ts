@@ -205,6 +205,13 @@ describe('contribution math', () => {
     expect(claudeSelection.included[0]!.row.provider).toBe('codex')
   })
 
+  it('a session chip for a folded subagent selects its parent row', () => {
+    const parent = row({ sessionId: 'parent', provider: 'claude', cost: 3, subagents: [row({ sessionId: 'agent-x', provider: 'claude', cost: 1 })] })
+    const other = row({ sessionId: 'other', provider: 'claude', cost: 5 })
+    const selection = applyInvestigation([parent, other], sessionFilters({ provider: 'claude', sessionId: 'agent-x' }))
+    expect(selection.included.map(entry => entry.row.sessionId)).toEqual(['parent'])
+  })
+
   it('model selections use the canonical short-name identity', () => {
     const subject = row({
       sessionId: 'mm',
