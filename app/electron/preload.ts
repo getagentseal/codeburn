@@ -100,6 +100,8 @@ const bridge = {
     ipcRenderer.on('codeburn:update', listener)
     return () => { ipcRenderer.removeListener('codeburn:update', listener) }
   },
+  downloadUpdate: () => invoke('codeburn:downloadUpdate'),
+  installUpdate: () => invoke('codeburn:installUpdate'),
   // The bundled tray app and its Capacity Dock (Windows). Every setter answers with the
   // whole status, so the sidebar renders what took rather than what it asked for.
   companionStatus: () => invoke('codeburn:companionStatus'),

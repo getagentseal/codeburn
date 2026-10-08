@@ -167,6 +167,30 @@ describe('Kimi Code provider', () => {
     expect(sources.every(source => source.sourcePath === '/workspace/neutral-project')).toBe(true)
   })
 
+  it('falls back to state.json cwd when workDir is absent', async () => {
+    const agentDir = join(fixtureHome, 'sessions', 'wd_neutral-project-wt1_0123456789ab', 'session_cwd', 'agents', 'main')
+    await mkdir(agentDir, { recursive: true })
+    await writeFile(join(agentDir, '..', '..', 'state.json'), JSON.stringify({
+      createdAt: '2026-07-01T10:00:00.000Z',
+      updatedAt: '2026-07-01T10:05:00.000Z',
+      cwd: '/workspace/neutral-project-wt1',
+    }))
+    await writeFile(join(agentDir, 'wire.jsonl'), [
+      JSON.stringify({ type: 'metadata', protocol_version: '1.4', created_at: 1782900000000 }),
+      JSON.stringify(prompt('hello', 1782900000000)),
+      JSON.stringify(request('0.1', 'k3-agent', 'k3-agent', 1782900001000)),
+      JSON.stringify(usage('k3-agent', 1782900002000, { input: 100, output: 50 })),
+      '',
+    ].join('\n'))
+
+    const provider = createKimicodeProvider(fixtureHome)
+    const [source] = await provider.discoverSessions()
+    expect(source?.project).toBe('neutral-project-wt1')
+    expect(source?.sourcePath).toBe('/workspace/neutral-project-wt1')
+    const calls = await collect(provider, source!, new Set())
+    expect(calls.map(call => call.projectPath)).toEqual(['/workspace/neutral-project-wt1'])
+  })
+
   it('discovers embedded-runtime conv-* and ctitle-* session directories', async () => {
     // Embedded runtimes (Kimi desktop app, Kimi Code IDE) name session dirs
     // conv-*/ctitle-* instead of session_*; their wires carry the same event

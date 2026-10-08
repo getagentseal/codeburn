@@ -2,8 +2,9 @@ name: Release Windows Menubar
 
 # Triggers on a `windows-v*` tag push (e.g. `git tag windows-v0.9.20 && git push origin
 # windows-v0.9.20`), or manually via the Actions tab. Mirrors release-menubar.yml, which
-# does the same job for the macOS menubar under the `mac-v*` tags. The produced `.msi` is
-# unsigned; users see a SmartScreen prompt on first run until we add signing.
+# does the same job for the macOS menubar under the `mac-v*` tags. The produced `.msi` has no
+# Authenticode signature, so SmartScreen prompts on first run; the tray's one-click updater
+# instead checks the minisign signature written into windows-latest.json on update-feeds.
 on:
   push:
     tags:
@@ -54,9 +55,20 @@ jobs:
         working-directory: windows
         run: npm ci
 
+      # Without the updater key the MSI ships unsigned for the updater and the feed is left alone.
       - name: Build MSI bundle
         working-directory: windows
-        run: npm run tauri build
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          if [ -n "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            npm run tauri build
+          else
+            echo "::warning::TAURI_SIGNING_PRIVATE_KEY is not set; building without an updater signature"
+            npm run tauri build -- --no-sign
+          fi
 
       - name: Collect artifacts
         shell: bash
@@ -98,8 +110,43 @@ jobs:
 
             This `.msi` is a developer preview. The recommended install is the Microsoft
             Store (https://apps.microsoft.com/detail/9P0R4ZL5XMB8), which is signed and
-            updates itself. Preview builds do not update themselves: the tray app reports
-            that a newer version exists and links to the release, and you take it by
-            re-running `codeburn menubar --force` or downloading the new `.msi` here.
+            updates itself. Previews built with the updater key install newer previews from
+            the tray in one click, after checking their signature. Older previews link to the
+            release instead: take it by re-running `codeburn menubar --force` or downloading
+            the new `.msi` here.
           files: release-artifacts/*
           fail_on_unmatched_files: true
+
+      # Last: point the tray's updater at the release, once its MSI is live on it.
+      - name: Publish tray update feed
+        if: startsWith(github.ref, 'refs/tags/windows-v')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#windows-v}"
+          msi="CodeBurn.Menubar_${version}_x64_en-US.msi"
+          gh release view "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | grep -Fqx "$msi"
+          sig=$(find windows/src-tauri/target/release/bundle/msi -name "*_${version}_x64_en-US.msi.sig" | head -1)
+          if [ -z "$sig" ]; then
+            echo "::warning::no updater signature for $msi; update-feeds/windows-latest.json not changed"
+            exit 0
+          fi
+          VERSION="$version" MSI="$msi" SIG="$sig" node -e '
+            const fs = require("fs")
+            const { VERSION, MSI, SIG } = process.env
+            fs.writeFileSync("windows-latest.json", JSON.stringify({
+              version: VERSION,
+              pub_date: new Date().toISOString(),
+              platforms: {
+                "windows-x86_64": {
+                  signature: fs.readFileSync(SIG, "utf8").trim(),
+                  url: `https://github.com/getagentseal/codeburn/releases/download/windows-v${VERSION}/${MSI}`,
+                },
+              },
+            }, null, 2))'
+          gh release view update-feeds -R "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
+            gh release create update-feeds -R "$GITHUB_REPOSITORY" --prerelease --latest=false \
+              --title "Update feeds" --notes "Update metadata for the apps. Not a release to download."
+          gh release upload update-feeds -R "$GITHUB_REPOSITORY" windows-latest.json --clobber

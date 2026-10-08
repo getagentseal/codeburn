@@ -5,7 +5,7 @@ import { homedir } from 'os'
 import { CATEGORY_LABELS, type ProjectSummary, type TaskCategory } from './types.js'
 import { formatCost as baseCost, getCurrency } from './currency.js'
 import { findUnpricedModels, modelRowKey, unpricedModelHint } from './models.js'
-import { callBillableOutputTokens, sessionBillableOutputTokens, sessionModelBillableOutputTokens } from './session-output.js'
+import { callBillableOutputTokens, countSessions, sessionBillableOutputTokens, sessionModelBillableOutputTokens } from './session-output.js'
 import { markEstimated, excludedGatewayNote, isEstimatedCost, ESTIMATED_COST_LEGEND } from './format.js'
 import { AGGREGATE_ONLY_PROVIDER } from './parser.js'
 import { maxOf } from './math-utils.js'
@@ -164,11 +164,11 @@ export function renderOverview(
   const byDay = new Map<string, { cost: number; tokens: number; providers: Set<string> }>()
   const byProject = new Map<string, { cost: number; sessions: number; sample: ProjectSummary; repo?: string }>()
 
+  sessions = countSessions(projects)
   for (const p of projects) {
     cost += p.totalCostUSD
     savings += p.totalSavingsUSD
     calls += p.totalApiCalls
-    sessions += p.sessions.length
     const origin = projectOriginKey(p.projectPath) ?? folderNameOriginKey(p.projectPath)
     const temporary = !origin && isTemporaryProjectPath(p.projectPath)
     const pkey = origin ? `origin:${origin}` : temporary ? TEMPORARY_PROJECTS : projectAggKey(p)

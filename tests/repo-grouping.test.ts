@@ -145,11 +145,38 @@ describe('projects grouped by git repository', () => {
     const projects = [live(a1, 5), live(a2, 3), live(awt, 2), live(other, 4), live(plain, 1)]
 
     expect(filterProjectsByName(projects, [join(a2, 'src')]).map(p => p.projectPath).sort()).toEqual([a1, a2, awt].sort())
-    expect(filterProjectsByName(projects, [], [a1]).map(p => p.projectPath).sort()).toEqual([other, plain].sort())
+    expect(filterProjectsByName(projects, [], [`=${a1}`]).map(p => p.projectPath).sort()).toEqual([other, plain].sort())
     expect(filterProjectsByName(projects, [plain]).map(p => p.projectPath)).toEqual([plain])
 
     setExactProjectPaths(true)
     expect(filterProjectsByName(projects, [a2]).map(p => p.projectPath)).toEqual([a2])
+  })
+
+  it('excludes one checkout by its path without hiding the rest of the repository', () => {
+    const { a1, a2, awt, other } = fixtures()
+    const projects = [live(a1, 5), live(a2, 3), live(awt, 2), live(other, 4)]
+    expect(filterProjectsByName(projects, [], [a2]).map(p => p.projectPath).sort()).toEqual([a1, awt, other].sort())
+    expect(filterProjectsByName(projects, [a1], [a2]).map(p => p.projectPath).sort()).toEqual([a1, awt].sort())
+  })
+
+  it('takes the subfolders of a repository path whose origin they never recorded', () => {
+    const { a1, other } = fixtures()
+    const gone = join(a1, 'packages', 'deleted')
+    const projects = [live(a1, 5), live(gone, 1), live(other, 4)]
+    expect(filterProjectsByName(projects, [a1]).map(p => p.projectPath).sort()).toEqual([a1, gone].sort())
+    expect(makeProjectFilter([a1])({ project: 'deleted', projectPath: gone })).toBe(true)
+  })
+
+  it('counts a session with slices in two checkouts once on the repository row', () => {
+    const { a1, a2, awt } = fixtures()
+    const slice = (projectPath: string, cost: number, primary: boolean): ProjectSummary => {
+      const p = live(projectPath, cost)
+      p.sessions[0]!.sessionId = 'moved'
+      p.sessions[0]!.projectSplit = { primaryProject: 'codeburn', primaryProjectPath: a1, primary }
+      return p
+    }
+    const rows = buildPayloadProjects([slice(a1, 5, true), slice(a2, 3, false), live(awt, 1)], null, homedir())
+    expect(rows.find(r => r.name === 'codeburn')!.sessions).toBe(2)
   })
 
   it('takes one list row for a "=" path: the repository, or the folder without its sub-folders', () => {

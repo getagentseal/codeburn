@@ -88,6 +88,8 @@ const CHANNELS = [
   'codeburn:telemetryOnboarded',
   'codeburn:telemetryTrack',
   'codeburn:getUpdateStatus',
+  'codeburn:downloadUpdate',
+  'codeburn:installUpdate',
   'codeburn:companionStatus',
   'codeburn:companionInstall',
   'codeburn:companionOpen',

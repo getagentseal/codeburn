@@ -3,7 +3,7 @@ import { CATEGORY_LABELS, type ProjectSummary, type SessionSummary, type TaskCat
 import { behavioralCallWeight } from './behavioral-weight.js'
 import { type PeriodData, type ProviderCost, type BreakdownArrays, type MenubarPayload, type ClaudeConfigSelector, type HydrationState, buildMenubarPayload } from './menubar-json.js'
 import { type SessionCountBasis } from './session-count-label.js'
-import { parseAllSessions, filterProjectsByName, filterProjectsByDays, filterProjectsByClaudeConfigSource, filterProjectsByDateRange, isSessionHydrationComplete, makeProjectFilter, type ProjectFilterTarget, sessionHydrationSnapshot } from './parser.js'
+import { parseAllSessions, filterProjectsByName, mergeProjectSplits, filterProjectsByDays, filterProjectsByClaudeConfigSource, filterProjectsByDateRange, isSessionHydrationComplete, makeProjectFilter, type ProjectFilterTarget, sessionHydrationSnapshot } from './parser.js'
 type ProjectFilter = (entry: ProjectFilterTarget) => boolean
 
 import { findUnpricedModels, getFlatRateModelsConfigHash, getLocalModelSavingsConfigHash, getPriceOverridesConfigHash, getShortModelName, isExpectedFreeModel, billableOutputTokens, modelRowKey } from './models.js'
@@ -1099,7 +1099,7 @@ type PayloadSessionDetail = NonNullable<PayloadProject['sessionDetails']>[number
 /// Filename-colliding `sess.jsonl` in two folders stay distinct. Same file
 /// spanning days stays one. Not fingerprint/cost/calls.
 export function canonicalSessionCountKey(session: SessionSummary, projectPath?: string): string {
-  const loc = projectPath || session.workingDirectory || session.project
+  const loc = session.projectSplit?.primaryProjectPath || projectPath || session.workingDirectory || session.project
   return `${inferSessionProvider(session)}\0${loc}\0${session.sessionId}`
 }
 
@@ -1560,6 +1560,7 @@ export function buildPayloadProjects(
       calls,
       sessions,
       sessionCountBasis,
+      liveUnique,
     }
   })
   const basenameCounts = new Map<string, number>()
@@ -1587,7 +1588,17 @@ export function buildPayloadProjects(
     const lead = members[0]!
     const repo = key.startsWith('\0') ? null : key
     const temporary = key === TEMPORARY_KEY
-    const sessions = members.reduce((sum, m) => sum + m.sessions, 0)
+    // A session with slices in two checkouts counts once for the repository.
+    const keys = new Set<string>()
+    let anonymous = 0
+    for (const m of members) {
+      for (const session of m.acc.sessions) {
+        if (session.sessionId) keys.add(canonicalSessionCountKey(session, m.acc.path))
+        else anonymous += 1
+      }
+    }
+    const shared = members.reduce((sum, m) => sum + m.liveUnique, 0) - keys.size - anonymous
+    const sessions = members.reduce((sum, m) => sum + m.sessions, 0) - shared
     const sessionCountBasis = members.some(m => m.sessionCountBasis === 'partial') ? 'partial' as const : lead.sessionCountBasis
     const details = sessionDetailsOf(members.flatMap(m => m.acc.sessions))
     return {
@@ -1882,7 +1893,7 @@ export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: 
 
   const retryTax = buildRetryTax(effMap.values())
 
-  currentData.topSessions = scanProjects.flatMap(p =>
+  currentData.topSessions = mergeProjectSplits(scanProjects).flatMap(p =>
     p.sessions.map(s => ({
       project: friendlyProject(p),
       cost: s.totalCostUSD,
@@ -1910,7 +1921,7 @@ export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: 
   // sessions) so this stays the genuine unscoped all-provider aggregation.
   if (isAllProviders && !effectivelyScoped) {
     // One pass yields both rows and totals, so they never disagree.
-    const { rows: prRows, totals: prTotals } = buildPrAttribution(scanProjects)
+    const { rows: prRows, totals: prTotals } = buildPrAttribution(mergeProjectSplits(scanProjects))
     if (prRows.length > 0) {
       currentData.pullRequests = {
         // PRs are user-auditable spend records, so never collapse the tail into

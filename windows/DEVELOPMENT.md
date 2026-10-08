@@ -140,11 +140,12 @@ never runs.
 ## Build a production package
 
 ```bash
-# Windows (.msi): run from a Windows host
-npm run tauri build
+# Windows (.msi): run from a Windows host. Without TAURI_SIGNING_PRIVATE_KEY the
+# updater signature cannot be written, so add --no-sign for a local package.
+npm run tauri build -- --no-sign
 
 # Linux (experimental): produces .deb, .rpm, .AppImage under src-tauri/target/release/bundle/
-npm run tauri build
+npm run tauri build -- --no-sign
 ```
 
 ## Security model

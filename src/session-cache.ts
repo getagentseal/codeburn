@@ -45,6 +45,9 @@ export type CachedCall = {
   /** Present only when workingDirectory came from a dedicated provider field. */
   workingDirectoryProvenance?: 'provider-field'
   workingDirectory?: string
+  /// Claude: the call's raw cwd, stored only when it differs from the previous
+  /// call's in the same parse batch (carried forward like gitBranch).
+  cwd?: string
   toolSequence?: ToolCall[][]
   // Rich-session-capture (capture-only; no report consumes these yet). All
   // optional and omitted at zero/false to keep the per-call cache cost minimal.
@@ -372,7 +375,9 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // byte-identical to a build that omits it (see parser-lineage-capture test).
   // queued-human-prompts-v1: cached turns need to be regrouped around Claude's
   // queued_command prompt attachments, including classification and PR links.
-  claude: 'advisor-usage-v1-skills-rich-capture-v1-cross-provider-pr-v1-session-lineage-capture-v1-queued-human-prompts-v1',
+  // per-call-cwd-v1: cached calls carry their cwd so a session that moved
+  // folders splits across projects per call.
+  claude: 'advisor-usage-v1-skills-rich-capture-v1-cross-provider-pr-v1-session-lineage-capture-v1-queued-human-prompts-v1-per-call-cwd-v1',
   cline: 'worktree-project-grouping-v1',
   // reported-cost-v1: the CLI reports its own per-message cost, so entries
   // cached before cline-cli joined the reported-cost allowlist in parser.ts
@@ -586,7 +591,9 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // sessions without the lineage field gain it. The field is purely
   // additive; every cost / token / call total is byte-identical to a build
   // that omits it.
-  kimicode: 'wire-usage-v1-est-cost-session-lineage-capture-v1',
+  // cwd-project-v1: sessions whose state.json has `cwd` but no `workDir` land
+  // on that folder instead of a path decoded from the wd_ directory name.
+  kimicode: 'wire-usage-v1-est-cost-session-lineage-capture-v1-cwd-project-v1',
   // archived-subtree-v1: KiloCode shares the SQLite parser and the same schema.
   // billing-routes-v2: its warm cache must move with both shared route fields.
   'kilo-code': 'worktree-project-grouping-v1-session-model-v1-archived-subtree-v1-billing-routes-v2-v2-legacy-union-v1-unknown-usage-v1-vertex-fallback-cost-v1',
@@ -1185,6 +1192,7 @@ function validateCall(c: unknown): c is CachedCall {
     && isOptionalString(o['projectPath'])
     && (o['workingDirectoryProvenance'] === undefined || o['workingDirectoryProvenance'] === 'provider-field')
     && isOptionalString(o['workingDirectory'])
+    && isOptionalString(o['cwd'])
     && (o['toolSequence'] === undefined || (Array.isArray(o['toolSequence']) && (o['toolSequence'] as unknown[]).every(s => isToolCallArray(s))))
     && isOptionalNum(o['locAdded'])
     && isOptionalNum(o['locRemoved'])

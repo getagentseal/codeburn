@@ -16,7 +16,7 @@ import { readDailyBudget } from '../lib/budget'
 import { formatConverted, formatCount, formatUsd, shortenProjectPath } from '../lib/format'
 import { codeburn, normalizeCliError } from '../lib/ipc'
 import { t, useLocale, type LocaleChoice } from '../i18n'
-import { projectMatches, projectNamedBy, projectPattern, projectVisible } from '../lib/projectMatch'
+import { projectHidePattern, projectNamedBy, projectPattern, projectVisible } from '../lib/projectMatch'
 import { displayVersion, isIdeHost, shortcutLabel } from '../lib/platform'
 import { motionClass } from '../lib/motion'
 import { clearOverviewHeadlines } from '../lib/overviewSnapshot'
@@ -381,10 +381,10 @@ function ProjectsPane({ refreshToken, onConfigMutated }: { refreshToken: number;
       return
     }
     // Exclude wins over include in the CLI, so hiding is always one append.
-    apply({ ...filter, exclude: [...filter.exclude, projectPattern(project)] })
+    apply({ ...filter, exclude: [...filter.exclude, projectHidePattern(project)] })
   }
 
-  const orphans = report.data ? filter.exclude.filter(entry => !projects.some(project => projectMatches(project, entry))) : []
+  const orphans = report.data ? filter.exclude.filter(entry => !projects.some(project => projectNamedBy(project, entry))) : []
   const hiddenCount = projects.filter(project => !projectVisible(project, filter)).length
 
   return <section className="set-p set-p-wide on">
