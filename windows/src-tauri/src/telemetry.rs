@@ -1889,6 +1889,16 @@ mod tests {
     }
 
     #[test]
+    fn update_result_is_allowed_and_an_unknown_name_is_not() {
+        let telemetry = client(consented(ConsentSource::App), None);
+        telemetry.track_on("update_results", &Value::Null, "2026-09-03");
+        assert_eq!(telemetry.queue_len(), 0);
+        let props = serde_json::json!({ "from": "0.9.26", "to": "0.9.27", "outcome": "ok" });
+        telemetry.track_on("update_result", &props, "2026-09-03");
+        assert_eq!(telemetry.queue_len(), 1);
+    }
+
+    #[test]
     fn a_debug_build_queues_but_does_not_send() {
         let telemetry = client(consented(ConsentSource::App), None);
         telemetry.track_on("popover_open", &Value::Null, "2026-09-03");
