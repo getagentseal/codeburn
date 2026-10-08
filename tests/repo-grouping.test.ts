@@ -13,6 +13,8 @@ import type { ProjectSummary, SessionSummary } from '../src/types.js'
 import { buildPayloadProjects } from '../src/usage-aggregator.js'
 
 let root: string
+// Checkout ids are spend identities: on Windows, lower-cased with forward slashes.
+const id = (path: string) => spendProjectIdentity({ project: '', projectPath: path }).id
 const savedCacheDir = process.env['CODEBURN_CACHE_DIR']
 
 function repo(dir: string, origin: string): string {
@@ -106,7 +108,7 @@ describe('projects grouped by git repository', () => {
     const group = rows[0]!
     expect(group.path).toBe(a1)
     expect(group.sessions).toBe(3)
-    expect(group.checkouts?.map(c => c.id).sort()).toEqual([a1, a2, awt].map(p => spendProjectIdentity({ project: '', projectPath: p }).id).sort())
+    expect(group.checkouts?.map(c => c.id).sort()).toEqual([a1, a2, awt].map(id).sort())
     expect(rows[1]!.checkouts).toBeUndefined()
     expect(rows[2]!.path).toBe(plain)
     // Folding never moves money.
@@ -199,8 +201,8 @@ describe('projects grouped by git repository', () => {
       const rows = buildPayloadProjects(projects, null, homedir())
       expect(rows.map(r => [r.name, r.cost])).toEqual([['codeburn', 8], ['codeburn-app', 4]])
       const checkouts = rows[0]!.checkouts!
-      expect(checkouts.find(c => c.id === a1)!.matchedByFolderName).toBeUndefined()
-      expect(checkouts.filter(c => c.matchedByFolderName).map(c => c.id).sort()).toEqual([dash, under].sort())
+      expect(checkouts.find(c => c.id === id(a1))!.matchedByFolderName).toBeUndefined()
+      expect(checkouts.filter(c => c.matchedByFolderName).map(c => c.id).sort()).toEqual([dash, under].map(id).sort())
       expect(filterProjectsByName(projects, [a1]).map(p => p.projectPath).sort()).toEqual([a1, dash, under].sort())
     })
 
@@ -224,7 +226,7 @@ describe('projects grouped by git repository', () => {
       expect(folderNameOriginKey(gone)).toBe('github.com/getagentseal/codeburn-app')
       const rows = buildPayloadProjects([live(a1, 5), live(other, 4), live(gone, 1)], null, homedir())
       expect(rows.map(r => [r.name, r.cost])).toEqual([['codeburn', 5], ['codeburn-app', 5]])
-      expect(rows[1]!.checkouts!.find(c => c.id === gone)!.matchedByFolderName).toBe(true)
+      expect(rows[1]!.checkouts!.find(c => c.id === id(gone))!.matchedByFolderName).toBe(true)
     })
 
     it('skips a name whose longest fits belong to two repositories', () => {
