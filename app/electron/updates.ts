@@ -3,9 +3,9 @@
 // the public GitHub releases feed once per launch and every 24h, finds the newest
 // `desktop-v<semver>` release, and semver-compares it to the running version.
 //
-// It NEVER downloads or installs. The desktop builds are unsigned, so an in-app
-// auto-update can't run yet — that arrives with Developer ID signing. Offline or
-// any error is a silent no-op that retries on the next cycle.
+// It never downloads or installs. It serves the installs that cannot update
+// themselves (Windows NSIS, deb, rpm, snap, Flathub, dev builds); the rest use
+// auto-update.ts. Offline or any error is a silent no-op that retries on the next cycle.
 //
 // Privacy: this is a plain, unauthenticated GitHub read that carries no
 // identifiers. We deliberately send NO app-identifying headers — only the
@@ -29,6 +29,8 @@ export type UpdateStatus = {
   /** A Microsoft Store (AppX) install: the Store delivers updates, on its own schedule, so
    *  GitHub is never asked and nothing is offered. */
   storeManaged?: boolean
+  /** One-click update state (auto-update.ts); absent where the banner links to a download instead. */
+  install?: 'available' | 'downloading' | 'ready'
 }
 
 type GitHubRelease = { tag_name?: string }

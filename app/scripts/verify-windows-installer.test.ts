@@ -123,6 +123,8 @@ describe('Windows installer release manifest verifier', () => {
       'codeburn-desktop-1.2.3.x86_64.rpm',
       'CodeBurn-Setup-1.2.3.exe',
       'CodeBurn-Setup-1.2.3.exe.blockmap',
+      'latest-mac.yml',
+      'latest-linux.yml',
     ])
 
     expect(result.status).toBe(0)
@@ -139,6 +141,8 @@ describe('Windows installer release manifest verifier', () => {
       'codeburn-desktop_1.2.3_amd64.deb',
       'codeburn-desktop-1.2.3.x86_64.rpm',
       'CodeBurn-Setup-1.2.3.exe.blockmap',
+      'latest-mac.yml',
+      'latest-linux.yml',
     ])
 
     expect(result.status).toBe(1)
@@ -148,6 +152,8 @@ describe('Windows installer release manifest verifier', () => {
   it.each([
     'codeburn-desktop_1.2.3_amd64.deb',
     'codeburn-desktop-1.2.3.x86_64.rpm',
+    'latest-mac.yml',
+    'latest-linux.yml',
   ])('rejects a live desktop release missing %s', missing => {
     const required = [
       'CodeBurn-1.2.3-arm64.dmg',
@@ -159,6 +165,8 @@ describe('Windows installer release manifest verifier', () => {
       'codeburn-desktop-1.2.3.x86_64.rpm',
       'CodeBurn-Setup-1.2.3.exe',
       'CodeBurn-Setup-1.2.3.exe.blockmap',
+      'latest-mac.yml',
+      'latest-linux.yml',
     ]
     const result = releaseFixture(required.filter(asset => asset !== missing))
 

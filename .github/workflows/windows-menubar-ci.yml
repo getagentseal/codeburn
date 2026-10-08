@@ -89,4 +89,5 @@ jobs:
       - name: Release build smoke
         if: runner.os == 'Windows'
         working-directory: windows
-        run: npm run tauri build -- --no-bundle
+        shell: bash
+        run: npm run tauri build -- --no-bundle --no-sign

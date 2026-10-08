@@ -57,7 +57,8 @@ jobs:
 
       - name: Build tray app
         working-directory: windows
-        run: npm run tauri build -- --no-bundle
+        shell: bash
+        run: npm run tauri build -- --no-bundle --no-sign
 
       - name: Build Microsoft Store package
         run: npm --prefix app run package:store

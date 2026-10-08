@@ -586,7 +586,9 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // sessions without the lineage field gain it. The field is purely
   // additive; every cost / token / call total is byte-identical to a build
   // that omits it.
-  kimicode: 'wire-usage-v1-est-cost-session-lineage-capture-v1',
+  // cwd-project-v1: sessions whose state.json has `cwd` but no `workDir` land
+  // on that folder instead of a path decoded from the wd_ directory name.
+  kimicode: 'wire-usage-v1-est-cost-session-lineage-capture-v1-cwd-project-v1',
   // archived-subtree-v1: KiloCode shares the SQLite parser and the same schema.
   // billing-routes-v2: its warm cache must move with both shared route fields.
   'kilo-code': 'worktree-project-grouping-v1-session-model-v1-archived-subtree-v1-billing-routes-v2-v2-legacy-union-v1-unknown-usage-v1-vertex-fallback-cost-v1',

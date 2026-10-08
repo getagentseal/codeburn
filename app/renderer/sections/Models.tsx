@@ -183,6 +183,7 @@ function AuditLens({
         ) : (
           <EmptyNote>{t('models.empty.noAudit')}</EmptyNote>
         )}
+        <p className="pr-footnote">{t('models.audit.unloggedNote')}</p>
       </Panel>
     </>
   )

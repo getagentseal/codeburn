@@ -329,6 +329,9 @@ import type { DateRange, ProjectSummary } from './types.js'
 // label (e.g. every home-folder Claude session) to whichever project owned it.
 // Day and provider totals are unchanged, only the split inside them moves, so
 // no PENDING_REDERIVE_PROVIDER_VERSIONS entry is needed.
+// v68: Kimi Code sessions whose state.json carries `cwd` but no `workDir` land
+// on that folder. Only the per-project split moves; cost, tokens and calls are
+// unchanged, so the bump re-derives surviving days.
 // v70: a day's project entry records the `origin` remote of its checkout, so
 // clones and worktrees of one repository still group once the folder is
 // deleted. Totals and the split are unchanged; surviving days re-derive to
