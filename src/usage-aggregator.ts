@@ -17,7 +17,7 @@ import { aggregateModelEfficiency, buildRetryTax } from './model-efficiency.js'
 import { aggregateModels } from './models-report.js'
 import { aggregateModelTaskTurns, sessionDurationMinutes } from './telemetry-snapshot.js'
 import { scanUserCorrections, medianTimeToFirstEditMs, aggregateFileChurn, computePricingCoverage } from './workflow-insights.js'
-import { buildPrAttribution, aggregateByBranch } from './sessions-report.js'
+import { buildPrAttribution, aggregateByBranch, foldedSessionRows } from './sessions-report.js'
 import { scanAndDetect } from './optimize.js'
 import { callBillableOutputTokens, sessionBillableOutput, sessionBillableOutputTokens, inferSessionProvider } from './session-output.js'
 import { getDateRange } from './cli-date.js'
@@ -1893,22 +1893,20 @@ export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: 
 
   const retryTax = buildRetryTax(effMap.values())
 
-  currentData.topSessions = mergeProjectSplits(scanProjects).flatMap(p =>
-    p.sessions.map(s => ({
-      project: friendlyProject(p),
-      cost: s.totalCostUSD,
-      savingsUSD: s.totalSavingsUSD,
-      calls: s.apiCalls,
-      date: s.firstTimestamp?.split('T')[0] ?? '',
-      // Drill-through identity (additive): provider + id let the desktop open
-      // the exact session even when another provider reuses the id or title.
-      // `projectKey` is the RAW session project (the sessions-list row key);
-      // `project` above stays the friendly display name.
-      sessionId: s.sessionId,
-      provider: inferSessionProvider(s),
-      projectKey: s.project || p.project,
-    }))
-  ).sort((a, b) => (b.cost + b.savingsUSD) - (a.cost + a.savingsUSD)).slice(0, 5)
+  currentData.topSessions = foldedSessionRows(mergeProjectSplits(scanProjects)).map(row => ({
+    project: friendlyProject(row.summary),
+    cost: row.cost,
+    savingsUSD: row.savingsUSD,
+    calls: row.calls,
+    date: row.startedAt?.split('T')[0] ?? '',
+    // Drill-through identity (additive): provider + id let the desktop open
+    // the exact session even when another provider reuses the id or title.
+    // `projectKey` is the RAW session project (the sessions-list row key);
+    // `project` above stays the friendly display name.
+    sessionId: row.sessionId,
+    provider: row.provider,
+    projectKey: row.project,
+  })).sort((a, b) => (b.cost + b.savingsUSD) - (a.cost + a.savingsUSD)).slice(0, 5)
 
   // PULL REQUESTS + BRANCHES (all-provider path only). Both are session-layer
   // aggregations over the surviving-session parse, so carried history cannot

@@ -16,7 +16,7 @@ import { ESTIMATED_COST_LEGEND, excludedGatewayNote, formatTokens, isEstimatedCo
 import { toDateString } from './daily-cache.js'
 import { statusSnapshotSemanticKey } from './status-snapshot-semantic.js'
 import { dateKey } from './day-aggregator.js'
-import { inferSessionProvider } from './session-output.js'
+import { foldedSessionRows } from './sessions-report.js'
 import { behavioralCallWeight } from './behavioral-weight.js'
 import { CATEGORY_LABELS, type DateRange, type ProjectSummary, type TaskCategory } from './types.js'
 import type { AppliedFix } from './act/types.js'
@@ -776,17 +776,17 @@ function buildJsonReport(projects: ProjectSummary[], period: string, periodKey: 
   const sortedMap = (m: Record<string, number>) =>
     Object.entries(m).sort(([, a], [, b]) => b - a).map(([name, calls]) => ({ name, calls }))
 
-  const topSessions = mergeProjectSplits(projects)
-    .flatMap(p => p.sessions.map(s => ({
-      project: p.project,
-      sessionId: s.sessionId,
-      provider: inferSessionProvider(s),
-      projectKey: s.project || p.project,
-      date: s.firstTimestamp ? dateKey(s.firstTimestamp) : null,
-      cost: convertCost(s.totalCostUSD),
-      savings: convertCost(s.totalSavingsUSD),
-      calls: s.apiCalls,
-    })))
+  const topSessions = foldedSessionRows(mergeProjectSplits(projects))
+    .map(row => ({
+      project: row.summary.project,
+      sessionId: row.sessionId,
+      provider: row.provider,
+      projectKey: row.project,
+      date: row.startedAt ? dateKey(row.startedAt) : null,
+      cost: convertCost(row.cost),
+      savings: convertCost(row.savingsUSD),
+      calls: row.calls,
+    }))
     .sort((a, b) => (b.cost + b.savings) - (a.cost + a.savings))
     .slice(0, 5)
 

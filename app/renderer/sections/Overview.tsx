@@ -572,7 +572,10 @@ function buildModelIndex(data: MenubarPayload): Map<string, string> {
   for (const project of data.current.topProjects) {
     for (const session of project.sessionDetails) {
       const dominant = [...session.models].sort((a, b) => b.cost - a.cost)[0]
-      if (dominant) index.set(sessionModelKey(project.name, session.date, session.calls, session.cost), dominant.name)
+      if (!dominant) continue
+      index.set(sessionModelKey(project.name, session.date, session.calls, session.cost), dominant.name)
+      // A top session's cost and calls include its subagents, so match it by identity.
+      if (session.provider && session.sessionId) index.set(`${session.provider}\u0000${session.sessionId}`, dominant.name)
     }
   }
   return index
@@ -1306,7 +1309,8 @@ export function OverviewContent({
             <div className="ov-panel-head"><Icon name="coins" /><h3>{t('overview.sessions.mostExpensive')}</h3><span className="r"><button className="ov-link" type="button" onClick={() => onNavigate?.('sessions')}>{t('overview.sessions.seeAll')}</button></span></div>
             <div className="ov-panel-body">
               {data.current.topSessions.length ? data.current.topSessions.map((session, index) => {
-                const model = modelIndex.get(sessionModelKey(session.project, session.date, session.calls, session.cost))
+                const model = (session.provider && session.sessionId ? modelIndex.get(`${session.provider}\u0000${session.sessionId}`) : undefined)
+                  ?? modelIndex.get(sessionModelKey(session.project, session.date, session.calls, session.cost))
                 const sub = [formatChartDate(session.date), model, formatCount(session.calls, 'call')].filter(Boolean).join(' · ')
                 return <ListRow key={`${session.project}-${session.date}-${index}`} no={String(index + 1).padStart(2, '0')} title={session.project} sub={sub} value={formatUsd(session.cost)} onClick={() => openSessionRow(session)} />
               }) : <EmptyNote>{t('overview.sessions.noSessions')}</EmptyNote>}

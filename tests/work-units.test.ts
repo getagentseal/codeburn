@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { aggregateSessions, foldSubagentRows, renderJson, renderTable, renderWorkUnitJson, renderWorkUnitTable } from '../src/sessions-report.js'
+import { aggregateSessions, foldedSessionRows, foldSubagentRows, renderJson, renderTable, renderWorkUnitJson, renderWorkUnitTable } from '../src/sessions-report.js'
 import { foldContributionRows, withContributions } from '../src/session-contributions.js'
 import { inferSessionProvider } from '../src/session-output.js'
 import { deriveTraceId } from '../src/sync/otlp.js'
@@ -324,6 +324,17 @@ describe('default sessions list folds subagents under their parent', () => {
     expect(sum(folded, row => row.cost)).toBeCloseTo(sum(rows, row => row.cost))
     expect(sum(folded, row => row.calls)).toBe(sum(rows, row => row.calls))
     expect(totalOf(renderTable(folded, { terminalWidth: 200 }))).toBe(totalOf(renderTable(rows, { terminalWidth: 200 })))
+  })
+
+  it('ranks top sessions by cost including subagents, never listing a folded subagent', () => {
+    const projects = familyFixture()
+    projects[0]!.sessions.find(session => session.sessionId === 'solo')!.totalCostUSD = 1.5
+    const ranked = foldedSessionRows(projects).sort((a, b) => b.cost - a.cost)
+
+    expect(ranked.map(row => row.sessionId)).toEqual(['root', 'solo'])
+    expect(ranked[0]!.cost).toBeCloseTo(1.75)
+    expect(ranked[0]!.calls).toBe(7)
+    expect(ranked[0]!.summary).toBe(projects[0])
   })
 
   it('leaves a subagent whose parent is not in view as its own row', () => {

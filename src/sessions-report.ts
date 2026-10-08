@@ -5,7 +5,7 @@ import { maxOf } from './math-utils.js'
 import { inferSessionProvider, sessionBillableOutputTokens } from './session-output.js'
 import { CATEGORY_LABELS } from './types.js'
 import type { ProjectSummary, SessionSummary, TaskCategory } from './types.js'
-import { workUnitSessionKey } from './work-units.js'
+import { resolveWorkUnits, workUnitSessionKey } from './work-units.js'
 import type { WorkUnit, WorkUnitResolution } from './work-units.js'
 
 export type SessionRow = {
@@ -349,6 +349,19 @@ function groupWorkUnitRows<T extends SessionRow>(rows: T[], resolution: WorkUnit
 /// grouping changes: the rows still sum to exactly the ungrouped total.
 export function foldSubagentRows<T extends SessionRow>(rows: T[], resolution: WorkUnitResolution): T[] {
   return groupWorkUnitRows(rows, resolution).map(({ row, children }) => (children.length ? { ...row, subagents: children } : row))
+}
+
+/// Every session in `projects` with its subagents folded in as in the default
+/// sessions list, each row tagged with the project summary it came from. Ranked
+/// lists (top sessions) use this so a parent's cost includes its subagents and
+/// a folded subagent never shows as its own row.
+export function foldedSessionRows(projects: ProjectSummary[]): Array<SessionRow & { summary: ProjectSummary }> {
+  const resolution = resolveWorkUnits(projects.flatMap(summary => summary.sessions.map(session => ({
+    sessionId: session.sessionId,
+    provider: inferSessionProvider(session),
+    lineage: session.lineage,
+  }))))
+  return foldSubagentRows(projects.flatMap(summary => aggregateSessions([summary]).map(row => ({ ...row, summary }))), resolution)
 }
 
 /// The `sessions --by-work-unit` table: one row per multi-session work unit
