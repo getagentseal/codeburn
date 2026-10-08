@@ -6,7 +6,7 @@
 //
 // Endpoints (localhost only, Connect-RPC JSON):
 // - POST https://127.0.0.1:<port>/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary
-//     (preferred; falls back to)
+//     (preferred windows; the tier and fallback windows come from)
 // - POST https://127.0.0.1:<port>/exa.language_server_pb.LanguageServerService/GetUserStatus
 //
 // Discovery lists processes to find candidates (app language
@@ -246,24 +246,22 @@ export function decodeAntigravityStatus(body: unknown): QuotaWindow[] {
 
 function planFromStatus(body: unknown): string | null {
   const data = body && typeof body === 'object' ? body as Record<string, any> : {}
-  const plan = data.planName ?? data.userStatus?.planName ?? data.account_plan
-  return typeof plan === 'string' && plan.trim() ? plan.trim() : null
+  // userTier is the Google subscription; planStatus.planInfo.planName says "Pro" even on the free tier.
+  const plan = [data.userStatus?.userTier?.name, data.planName, data.userStatus?.planName, data.account_plan]
+    .find(value => typeof value === 'string' && value.trim())
+  return plan ? plan.trim() : null
 }
 
 async function probePort(deps: AntigravityDeps, port: number, csrf?: string): Promise<{ windows: QuotaWindow[]; planLabel: string | null } | null> {
   const body = JSON.stringify({})
   for (const tls of [true, false]) {
     const summary = await deps.request(port, tls, SUMMARY_PATH, body, csrf)
-    if (summary?.status === 200) {
-      const windows = decodeAntigravitySummary(parseJson(summary.text))
-      if (windows.length > 0) return { windows, planLabel: null }
-    }
+    const summaryWindows = summary?.status === 200 ? decodeAntigravitySummary(parseJson(summary.text)) : []
+    // The summary payload carries no tier, so GetUserStatus is asked either way.
     const status = await deps.request(port, tls, STATUS_PATH, body, csrf)
-    if (status?.status === 200) {
-      const parsed = parseJson(status.text)
-      const windows = decodeAntigravityStatus(parsed)
-      if (windows.length > 0) return { windows, planLabel: planFromStatus(parsed) }
-    }
+    const parsed = status?.status === 200 ? parseJson(status.text) : null
+    const windows = summaryWindows.length > 0 ? summaryWindows : decodeAntigravityStatus(parsed)
+    if (windows.length > 0) return { windows, planLabel: planFromStatus(parsed) }
   }
   return null
 }

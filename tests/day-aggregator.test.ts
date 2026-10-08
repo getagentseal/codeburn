@@ -414,7 +414,7 @@ describe('aggregateProjectsIntoDays', () => {
       .toEqual(expect.arrayContaining([{ project: home, projectPath: '/home/u/app' }, { project: home, projectPath: '/home/u/web' }]))
   })
 
-  it('still reads a day split written before v68 (label key, one path)', () => {
+  it('still reads a day split written before v67 (label key, one path)', () => {
     const legacy = { cost: 4, calls: 1, savingsUSD: 0, sessions: 1, path: '/home/u/app' }
     expect(projectDayIdentity('-home-u', legacy)).toEqual({ project: '-home-u', projectPath: '/home/u/app' })
     expect(makeProjectFilter(['/home/u/app'])(projectDayIdentity('-home-u', legacy))).toBe(true)

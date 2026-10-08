@@ -478,6 +478,125 @@ describe('grok provider - parsing', () => {
   })
 })
 
+describe('grok provider - unified log', () => {
+  const SID_A = '019f0000-0000-7000-8000-00000000000a'
+  const SID_B = '019f0000-0000-7000-8000-00000000000b'
+
+  function logLine(msg: string, sid: string | undefined, ts: string, ctx?: Record<string, unknown>) {
+    return JSON.stringify({ ts, src: 'shell', pid: 4242, lvl: 'info', msg, ...(sid ? { sid } : {}), ...(ctx ? { ctx } : {}) })
+  }
+
+  function inferenceDone(sid: string, ts: string, loopIndex: number, prompt: number, cached: number, completion: number, reasoning: number) {
+    return logLine('shell.turn.inference_done', sid, ts, {
+      loop_index: loopIndex, model_elapsed_ms: 1000, attempts: 1,
+      prompt_tokens: prompt, cached_prompt_tokens: cached, completion_tokens: completion, reasoning_tokens: reasoning,
+    })
+  }
+
+  async function writeLog(lines: string[]) {
+    await mkdir(join(tmpDir, 'logs'), { recursive: true })
+    await writeFile(join(tmpDir, 'logs', 'unified.jsonl'), [
+      logLine('AuthManager::new', undefined, '2026-07-28T09:59:59.000Z', { result: 'ok' }),
+      ...lines,
+    ].join('\n') + '\n')
+  }
+
+  async function parseAll() {
+    const provider = createGrokProvider(join(tmpDir, 'sessions'))
+    const calls: ParsedProviderCall[] = []
+    const seen = new Set<string>()
+    for (const source of await provider.discoverSessions()) {
+      for await (const call of provider.createSessionParser(source, seen).parse()) calls.push(call)
+    }
+    return calls
+  }
+
+  it('reads each inference as a call with cached and reasoning split out', async () => {
+    await writeLog([
+      logLine('session created', SID_A, '2026-07-28T10:00:00.000Z', { cwd: '/Users/test/grok-cwd' }),
+      logLine('model changed', SID_A, '2026-07-28T10:00:00.100Z', { model: 'grok-4.5' }),
+      logLine('shell.handle_prompt.start', SID_A, '2026-07-28T10:00:01.000Z', { prompt_id: 'p1', block_count: 1 }),
+      inferenceDone(SID_A, '2026-07-28T10:00:18.000Z', 1, 36828, 21888, 1522, 903),
+      inferenceDone(SID_A, '2026-07-28T10:00:30.000Z', 2, 40000, 36000, 500, 100),
+    ])
+    const calls = await parseAll()
+    expect(calls).toHaveLength(2)
+    const [first] = calls
+    expect(first).toMatchObject({
+      model: 'grok-4.5',
+      inputTokens: 36828 - 21888,
+      cacheReadInputTokens: 21888,
+      cachedInputTokens: 21888,
+      outputTokens: 1522 - 903,
+      reasoningTokens: 903,
+      cacheCreationInputTokens: 0,
+      costIsEstimated: false,
+      timestamp: '2026-07-28T10:00:18.000Z',
+      sessionId: SID_A,
+      project: 'grok-cwd',
+      projectPath: '/Users/test/grok-cwd',
+    })
+    expect(first!.costUSD).toBeCloseTo((14940 * 2 + 21888 * 0.3 + 1522 * 6) / 1e6, 10)
+    expect(first!.costUSD).toBeCloseTo(calculateCost('grok-4.5', 14940, 1522, 0, 21888, 0), 10)
+    expect(new Set(calls.map(c => c.deduplicationKey)).size).toBe(2)
+  })
+
+  it('reads a logged session from the log instead of its session dir, and keeps session-only sessions', async () => {
+    const SID_C = '019f0000-0000-7000-8000-00000000000c'
+    const sessionsCwd = join('sessions', '%2FUsers%2Ftest')
+    await writeSession({ cwdEncoded: sessionsCwd, uuid: SID_A, completedTurns: [{ promptId: 'p1', usage: authoritativeUsage() }] })
+    await writeSession({ cwdEncoded: sessionsCwd, uuid: SID_C, completedTurns: [{ promptId: 'p1', usage: authoritativeUsage() }] })
+    await writeLog([
+      logLine('model changed', SID_A, '2026-07-28T10:00:00.000Z', { model: 'grok-4.5' }),
+      inferenceDone(SID_A, '2026-07-28T10:00:18.000Z', 1, 1000, 0, 100, 0),
+      inferenceDone(SID_A, '2026-07-28T10:00:30.000Z', 2, 1200, 1000, 50, 0),
+      logLine('model changed', SID_B, '2026-07-28T11:00:00.000Z', { model: 'grok-4.5' }),
+      inferenceDone(SID_B, '2026-07-28T11:00:18.000Z', 1, 2000, 500, 200, 50),
+    ])
+    const calls = await parseAll()
+    const a = calls.filter(c => c.sessionId === SID_A)
+    expect(a).toHaveLength(2)
+    expect(a.every(c => c.deduplicationKey.startsWith('grok:unified:'))).toBe(true)
+    const c = calls.filter(c => c.sessionId === SID_C)
+    expect(c).toHaveLength(1)
+    expect(c[0]!.deduplicationKey).not.toContain('unified')
+    expect(calls.filter(c => c.sessionId === SID_B)).toHaveLength(1)
+    expect(calls.find(c => c.sessionId === SID_B)!.project).toBe('grok')
+  })
+
+  it('prices the long-context tier per request, not on the session total', async () => {
+    await writeLog([
+      logLine('model changed', SID_B, '2026-07-28T11:00:00.000Z', { model: 'grok-4.6' }),
+      inferenceDone(SID_B, '2026-07-28T11:00:18.000Z', 1, 150000, 0, 1000, 0),
+      inferenceDone(SID_B, '2026-07-28T11:01:18.000Z', 1, 150000, 0, 1000, 0),
+    ])
+    const calls = await parseAll()
+    const total = calls.reduce((sum, c) => sum + c.costUSD, 0)
+    expect(total).toBeCloseTo(2 * calculateCost('grok-4.6', 150000, 1000, 0, 0, 0), 10)
+    expect(total).toBeLessThan(calculateCost('grok-4.6', 300000, 2000, 0, 0, 0))
+  })
+
+  it('takes the model from the process when the session never names one', async () => {
+    await writeLog([
+      logLine('model catalog: notifying clients', undefined, '2026-07-28T11:00:00.000Z', { current_model_id: 'grok-4.5', model_count: 3 }),
+      inferenceDone(SID_B, '2026-07-28T11:00:18.000Z', 1, 2000, 0, 200, 0),
+    ])
+    const [call] = await parseAll()
+    expect(call!.model).toBe('grok-4.5')
+  })
+
+  it('falls back to grok-build, marked estimated, when nothing names the model', async () => {
+    await writeLog([inferenceDone(SID_B, '2026-07-28T11:00:18.000Z', 1, 2000, 0, 200, 0)])
+    const [call] = await parseAll()
+    expect(call!.model).toBe('grok-build')
+    expect(call!.costIsEstimated).toBe(true)
+  })
+
+  it('discovers nothing extra when there is no unified log', async () => {
+    expect(await createGrokProvider(join(tmpDir, 'sessions')).discoverSessions()).toEqual([])
+  })
+})
+
 describe('grok provider - display names', () => {
   const provider = createGrokProvider('/tmp')
 

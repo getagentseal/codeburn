@@ -19,6 +19,11 @@ import {
 /// versioned release asset URLs; the API scan is only a fallback for missing assets.
 const RELEASE_API = 'https://api.github.com/repos/getagentseal/codeburn/releases?per_page=20'
 const RELEASE_DOWNLOAD_BASE = 'https://github.com/getagentseal/codeburn/releases/download'
+/// Written by release-menubar.yml to the rolling `update-feeds` prerelease after a mac-v*
+/// release's assets are verified, so "latest" never depends on which release line GitHub calls Latest.
+export const MAC_FEED_URL = `${RELEASE_DOWNLOAD_BASE}/update-feeds/menubar-latest.json`
+/// Only builds signed by AgentSeal's Developer ID team install; an ad-hoc or foreign signature is refused.
+export const MAC_TEAM_REQUIREMENT = 'anchor apple generic and certificate leaf[subject.OU] = "XRVP7P7F9M"'
 const APP_BUNDLE_NAME = 'CodeBurnMenubar.app'
 const EXPECTED_BUNDLE_ID = 'org.agentseal.codeburn-menubar'
 const VERSIONED_ASSET_PATTERN = /^CodeBurnMenubar-v.+\.zip$/
@@ -474,6 +479,24 @@ async function fetchLatestReleaseAssets(spec: ReleaseSpec = MAC_RELEASE, fetchIm
   return resolveLatestMenubarReleaseAssets(body, spec)
 }
 
+/// The feed only names a version; assets still come from that mac-v* release, so the .sha256 and
+/// the team pin gate the download exactly as for a versioned install. A missing, unreadable, or
+/// inconsistent feed falls back to the release-API scan.
+export async function fetchLatestMacReleaseAssets(fetchImpl: ReleaseApiFetch = fetchWithProxy): Promise<ResolvedAssets> {
+  try {
+    const response = await fetchImpl(MAC_FEED_URL, { headers: { 'User-Agent': 'codeburn-menubar-installer' } })
+    if (!response.ok) throw new Error(`HTTP ${response.status}`)
+    const feed = await response.json() as { version?: unknown; url?: unknown }
+    if (typeof feed.version !== 'string') throw new Error('no version')
+    const assets = resolveVersionedMenubarReleaseAssets(feed.version)
+    if (feed.url !== assets.zip.browser_download_url) throw new Error(`url ${String(feed.url)} does not match ${assets.zip.browser_download_url}`)
+    return assets
+  } catch (err) {
+    console.log(`Update feed unavailable (${err instanceof Error ? err.message : String(err)}). Scanning releases instead...`)
+    return fetchLatestReleaseAssets(MAC_RELEASE, fetchImpl)
+  }
+}
+
 /// 5xx means "GitHub/the CDN is unhappy right now" and is worth another attempt. 4xx is not:
 /// 404/410 must keep falling through to the release-API path untouched, and a 403/429 rate limit
 /// cannot clear inside a 1.5s backoff window, and hammering it would only spend more of the budget,
@@ -702,8 +725,24 @@ async function verifyBundleIdentity(appPath: string): Promise<void> {
   await verifyBundleSignature(appPath)
 }
 
-async function verifyBundleSignature(appPath: string): Promise<void> {
-  await runCommand('/usr/bin/codesign', ['--verify', '--deep', '--strict', appPath])
+export async function verifyBundleSignature(
+  appPath: string,
+  run: (command: string, args: string[]) => Promise<unknown> = captureCommand,
+): Promise<void> {
+  const checks: [string, string[]][] = [
+    ['/usr/bin/codesign', ['--verify', '--deep', '--strict', `-R=${MAC_TEAM_REQUIREMENT}`, appPath]],
+    ['/usr/sbin/spctl', ['--assess', '--type', 'execute', appPath]],
+  ]
+  for (const [command, args] of checks) {
+    try {
+      await run(command, args)
+    } catch (err) {
+      throw new Error(
+        'Refusing to install: the downloaded CodeBurn Menubar is not signed and notarized by AgentSeal ' +
+        `(Developer ID team XRVP7P7F9M). ${err instanceof Error ? err.message : String(err)}`,
+      )
+    }
+  }
 }
 
 async function resolvePersistentCodeburnPath(): Promise<string> {
@@ -1640,7 +1679,7 @@ export async function installMenubarApp(options: InstallOptions = {}): Promise<I
     assets = resolveVersionedMenubarReleaseAssets(cliVersion)
   } else {
     console.log('Looking up the latest CodeBurn Menubar release...')
-    assets = await fetchLatestReleaseAssets()
+    assets = await fetchLatestMacReleaseAssets()
   }
 
   const stagingDir = await mkdtemp(join(tmpdir(), 'codeburn-menubar-'))
@@ -1651,7 +1690,7 @@ export async function installMenubarApp(options: InstallOptions = {}): Promise<I
     } catch (err) {
       if (!cliVersion || !isMissingDirectAssetError(err)) throw err
       console.log(`CodeBurn Menubar v${cliVersion} assets were not found. Looking up the latest CodeBurn Menubar release...`)
-      assets = await fetchLatestReleaseAssets()
+      assets = await fetchLatestMacReleaseAssets()
       unpackedApp = await stageMenubarApp(assets, stagingDir)
     }
 
