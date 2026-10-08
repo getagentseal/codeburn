@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   buildPersistentCodeburnLookupPath,
   downloadToFile,
+  fetchLatestMacReleaseAssets,
   formatGitHubReleaseLookupError,
   hasRunnableRecordedCli,
   isMissingDirectAssetError,
@@ -20,7 +21,10 @@ import {
   resolveProxyUrlForUrl,
   resolveVersionedMenubarReleaseAssets,
   shouldFallbackToReleaseApi,
+  verifyBundleSignature,
   verifyChecksum,
+  MAC_FEED_URL,
+  type ReleaseApiFetch,
   type ReleaseResponse,
 } from '../src/menubar-installer.js'
 
@@ -797,5 +801,72 @@ describe('leftoverBundleLines', () => {
 
   it('adds a machine-readable twin for the desktop app', () => {
     expect(leftoverBundleLines([path], { CODEBURN_PROGRESS: '1' })[1]).toBe(`CODEBURN_LEFTOVER ${path}`)
+  })
+})
+
+describe('verifyBundleSignature', () => {
+  it('pins the AgentSeal team and asks Gatekeeper before accepting a bundle', async () => {
+    const calls: string[][] = []
+    await verifyBundleSignature('/tmp/x/CodeBurnMenubar.app', async (command, args) => { calls.push([command, ...args]) })
+    expect(calls).toEqual([
+      ['/usr/bin/codesign', '--verify', '--deep', '--strict', '-R=anchor apple generic and certificate leaf[subject.OU] = "XRVP7P7F9M"', '/tmp/x/CodeBurnMenubar.app'],
+      ['/usr/sbin/spctl', '--assess', '--type', 'execute', '/tmp/x/CodeBurnMenubar.app'],
+    ])
+  })
+
+  it('refuses an ad-hoc or foreign signature without running Gatekeeper', async () => {
+    const calls: string[] = []
+    const run = async (command: string) => {
+      calls.push(command)
+      if (command.endsWith('codesign')) throw new Error('/usr/bin/codesign exited with status 3: test-requirement: code failed to satisfy specified code requirement(s)')
+    }
+    await expect(verifyBundleSignature('/tmp/x/CodeBurnMenubar.app', run)).rejects.toThrow(/Refusing to install.*XRVP7P7F9M.*failed to satisfy/)
+    expect(calls).toEqual(['/usr/bin/codesign'])
+  })
+
+  it('refuses a team-signed bundle Gatekeeper rejects (not notarized)', async () => {
+    const run = async (command: string) => {
+      if (command.endsWith('spctl')) throw new Error('/usr/sbin/spctl exited with status 3: rejected')
+    }
+    await expect(verifyBundleSignature('/tmp/x/CodeBurnMenubar.app', run)).rejects.toThrow(/Refusing to install.*rejected/)
+  })
+})
+
+describe('fetchLatestMacReleaseAssets', () => {
+  const zipUrl = 'https://github.com/getagentseal/codeburn/releases/download/mac-v0.9.30/CodeBurnMenubar-v0.9.30.zip'
+  const json = (status: number, body: unknown) => ({ ok: status === 200, status, headers: { get: () => null }, json: async () => body })
+  const scan = [{
+    tag_name: 'mac-v0.9.29',
+    assets: [
+      { name: 'CodeBurnMenubar-v0.9.29.zip', browser_download_url: 'https://example.test/z' },
+      { name: 'CodeBurnMenubar-v0.9.29.zip.sha256', browser_download_url: 'https://example.test/z.sha256' },
+    ],
+  }]
+
+  it('takes the version from the update feed and the assets from that mac-v release', async () => {
+    const urls: string[] = []
+    const fetchImpl: ReleaseApiFetch = async (url) => {
+      urls.push(url)
+      return json(200, { version: '0.9.30', url: zipUrl, sha256: 'ab'.repeat(32) })
+    }
+    const assets = await fetchLatestMacReleaseAssets(fetchImpl)
+    expect(urls).toEqual([MAC_FEED_URL])
+    expect(assets.release.tag_name).toBe('mac-v0.9.30')
+    expect(assets.zip.browser_download_url).toBe(zipUrl)
+    expect(assets.checksum.browser_download_url).toBe(`${zipUrl}.sha256`)
+  })
+
+  it('falls back to the mac-v release scan when the feed is missing', async () => {
+    const fetchImpl: ReleaseApiFetch = async (url) => url === MAC_FEED_URL ? json(404, null) : json(200, scan)
+    const assets = await fetchLatestMacReleaseAssets(fetchImpl)
+    expect(assets.release.tag_name).toBe('mac-v0.9.29')
+  })
+
+  it('ignores a feed whose url points anywhere but the matching mac-v release asset', async () => {
+    const fetchImpl: ReleaseApiFetch = async (url) => url === MAC_FEED_URL
+      ? json(200, { version: '0.9.30', url: 'https://evil.test/CodeBurnMenubar-v0.9.30.zip' })
+      : json(200, scan)
+    const assets = await fetchLatestMacReleaseAssets(fetchImpl)
+    expect(assets.release.tag_name).toBe('mac-v0.9.29')
   })
 })

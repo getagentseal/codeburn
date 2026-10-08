@@ -143,30 +143,24 @@ git tag mac-v0.9.8
 git push origin mac-v0.9.8
 ```
 
-### 3. GitHub Actions Builds the Bundle
+### 3. GitHub Actions Builds, Signs, and Notarizes the Bundle
 
-The `.github/workflows/release-menubar.yml` workflow automatically detects the `mac-v*` tag and:
+The `.github/workflows/release-menubar.yml` workflow runs on the `mac-v*` tag and:
 
-1. Checks out the repo
-2. Runs `mac/Scripts/package-app.sh v0.9.8`
-3. Signs the app bundle with the Developer ID Application certificate, notarizes it with Apple, and staples the ticket
-4. Creates a zip file: `CodeBurnMenubar-v0.9.8.zip`
-5. Computes a SHA-256 checksum: `CodeBurnMenubar-v0.9.8.zip.sha256`
-6. Uploads both to a GitHub Release named "Menubar v0.9.8"
+1. Fails right away if any signing secret below is missing. It never publishes an ad-hoc build.
+2. Imports the Developer ID Application certificate into a temporary keychain.
+3. Runs `mac/Scripts/package-app.sh v0.9.8`, which builds the universal app, signs it with hardened runtime and a secure timestamp, notarizes it with `notarytool` using the App Store Connect API key, staples the ticket, then zips it to `CodeBurnMenubar-v0.9.8.zip` and writes `CodeBurnMenubar-v0.9.8.zip.sha256`.
+4. Unzips the result and checks it the way the installer will: checksum, `codesign --verify --strict` against team `XRVP7P7F9M`, and `spctl --assess`.
+5. Uploads both files to a GitHub Release named "Menubar v0.9.8".
+6. Downloads the published zip, confirms it matches the verified build, and only then rewrites `menubar-latest.json` on the `update-feeds` prerelease (see below).
 
-The script output on the build machine shows:
+No manual re-signing, notarizing, or re-uploading is needed. The repository secrets it needs are listed under "Secrets" below.
 
-```
-✓ Built /path/mac/.build/dist/CodeBurnMenubar-v0.9.8.zip
-✓ Checksum /path/mac/.build/dist/CodeBurnMenubar-v0.9.8.zip.sha256
-<sha256-hash>  CodeBurnMenubar-v0.9.8.zip
-```
-
-No manual action is needed; the workflow handles everything.
+To build a signed release locally, run `package-app.sh` with `CODESIGN_IDENTITY`, `NOTARY_KEY_PATH`, `NOTARY_KEY_ID` and `NOTARY_ISSUER_ID` set.
 
 ### 4. Verify the Release
 
-After the workflow completes, the GitHub Release page shows the zip and sha256 files. The installed CLI command `codeburn menubar --force` fetches the newest `mac-v*` menubar release that includes both assets, verifies the checksum and bundle identity, and installs it into `~/Applications`.
+After the workflow completes, the GitHub Release page shows the zip and sha256 files, and the `update-feeds` prerelease carries a `menubar-latest.json` naming the new version. `codeburn menubar --force` installs the `mac-v*` release matching the CLI version. When that is missing, it reads the feed, and if the feed is unavailable it scans recent `mac-v*` releases. It refuses any bundle that fails the checksum, bundle id, Developer ID team (`XRVP7P7F9M`) or Gatekeeper check.
 
 ## Homebrew Core
 
@@ -178,28 +172,17 @@ brew bump-formula-pr codeburn --url "https://registry.npmjs.org/codeburn/-/codeb
 
 Users install with `brew install codeburn` and upgrade with `brew upgrade codeburn`.
 
+## Update Feeds
+
+GitHub's "Latest release" is whichever line (`v*`, `mac-v*`, `desktop-v*`, `windows-v*`) was published last, so nothing should read `/releases/latest`. Update clients read fixed files on the rolling `update-feeds` prerelease instead, at `https://github.com/getagentseal/codeburn/releases/download/update-feeds/<file>`:
+
+- `menubar-latest.json`: `{"version": "0.9.8", "url": "<zip download url>", "sha256": "<zip sha256>"}`. The menubar's update check and `codeburn menubar` read it. Written by `release-menubar.yml`.
+- `latest-mac.yml`, `latest-linux.yml` and `latest.yml`: the desktop app (electron-updater). Written by the `publish-update-feeds` job in `build-windows-installer.yml`.
+- `windows-latest.json`: the Windows tray (tauri-plugin-updater). Written by `release-menubar-windows.yml`.
+
+`update-feeds` holds only metadata; the files point at the versioned `mac-v*`, `desktop-v*` and `windows-v*` releases that hold the downloads. Whichever workflow runs first creates it with the same flags (`--prerelease --latest=false`, title "Update feeds"), and each workflow replaces only its own files with `gh release upload --clobber`. Keep it a prerelease, never mark it Latest, and never edit it by hand except to roll back.
+
 ## Desktop and tray auto-update
-
-The desktop app (electron-updater) and the Windows tray (tauri-plugin-updater) read their update metadata from one rolling prerelease, `update-feeds`, at fixed URLs:
-
-- `https://github.com/getagentseal/codeburn/releases/download/update-feeds/latest-mac.yml`, `latest-linux.yml` and `latest.yml` (desktop)
-- `https://github.com/getagentseal/codeburn/releases/download/update-feeds/windows-latest.json` (tray)
-
-`update-feeds` is never marked Latest, holds only metadata, and is the one release whose assets are replaced (`gh release upload --clobber`). The metadata points at the versioned `desktop-v*` / `windows-v*` releases, which hold the installers.
-
-### Secrets
-
-| Secret | Used by | What it is |
-| --- | --- | --- |
-| `MACOS_CERT_P12_BASE64` | `build-desktop-mac.yml` | Developer ID Application certificate + key, `.p12`, base64 |
-| `MACOS_CERT_PASSWORD` | `build-desktop-mac.yml` | Password of that `.p12` |
-| `APPSTORE_API_KEY_P8_BASE64` | `build-desktop-mac.yml` | App Store Connect API key (`.p8`), base64, for notarization |
-| `APPSTORE_API_KEY_ID` | `build-desktop-mac.yml` | Key ID of that API key |
-| `APPSTORE_API_ISSUER_ID` | `build-desktop-mac.yml` | Issuer ID of that API key |
-| `TAURI_SIGNING_PRIVATE_KEY` | `release-menubar-windows.yml` | Tray updater private key |
-| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | `release-menubar-windows.yml` | Its password |
-
-The macOS names match the menubar release workflow. Generate the tray key pair once with `npx @tauri-apps/cli signer generate -w ~/.tauri/codeburn-tray.key`, store the private key and password as the two secrets, and replace `REPLACE_WITH_TAURI_UPDATER_PUBKEY` in `windows/src-tauri/tauri.conf.json` (`plugins.updater.pubkey`) with the public key. Add the secrets and the pubkey in one go: a private key without its matching pubkey fails the tray build. Without the secret the workflow builds the MSI without an updater signature and leaves `windows-latest.json` alone, and trays keep their release-page link. Losing the private key means every installed tray needs a manual update to a build with a new key. Without the macOS secrets `Build macOS desktop` fails; the manual signed build in `app/DISTRIBUTION.md` still works, but it must build both arches in one `electron-builder --mac` run so one `latest-mac.yml` lists both zips.
 
 ### Feed upload order
 
@@ -219,21 +202,28 @@ Off. The switch is `WINDOWS_AUTO_UPDATE` in `app/electron/auto-update.ts`; with 
 
 Then set the constant to `true`, rebuild, and add `latest.yml` to the required list in `app/scripts/verify-windows-installer.mjs`.
 
-## Replacing Assets on an Existing Release
+## Secrets
 
-Never replace assets on a `desktop-v*` or `windows-v*` release. The feeds on `update-feeds` carry each file's sha512 (desktop) or signature (tray), so a replaced installer fails verification on every client. Cut a new patch version instead. `--clobber` is for `update-feeds` only.
+Repository secrets (Settings > Secrets and variables > Actions). All are set today.
 
-For the macOS menubar (`mac-v*`), if a release is published with broken assets (e.g., a menubar zip with a build error), re-run the build and upload the fixed assets without creating a new tag.
+| Secret | Used by | What it holds |
+| --- | --- | --- |
+| `MACOS_CERT_P12_BASE64` | `release-menubar.yml`, `build-desktop-mac.yml` | The "Developer ID Application: Resham Joshi (XRVP7P7F9M)" certificate and private key, exported as .p12, base64 encoded (`base64 -i cert.p12`) |
+| `MACOS_CERT_PASSWORD` | `release-menubar.yml`, `build-desktop-mac.yml` | The password the .p12 was exported with |
+| `MACOS_KEYCHAIN_PASSWORD` | `release-menubar.yml` | Any random string; it locks the throwaway CI keychain |
+| `APPSTORE_API_KEY_P8_BASE64` | `release-menubar.yml`, `build-desktop-mac.yml` | The App Store Connect API key (`AuthKey_<id>.p8`, Developer role or higher), base64 encoded, for notarization |
+| `APPSTORE_API_KEY_ID` | `release-menubar.yml`, `build-desktop-mac.yml` | That key's Key ID |
+| `APPSTORE_API_ISSUER_ID` | `release-menubar.yml`, `build-desktop-mac.yml` | The Issuer ID shown above the key list in App Store Connect |
+| `TAURI_SIGNING_PRIVATE_KEY` | `release-menubar-windows.yml` | Tray updater private key |
+| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | `release-menubar-windows.yml` | Its password |
 
-Use `gh release upload` with the `--clobber` flag to overwrite existing files:
+Without the macOS secrets the menubar release and `Build macOS desktop` fail; the manual signed desktop build in `app/DISTRIBUTION.md` still works, but it must build both arches in one `electron-builder --mac` run so one `latest-mac.yml` lists both zips.
 
-```bash
-# After re-running mac/Scripts/package-app.sh v0.9.8 to regenerate the zip and sha256
-gh release upload mac-v0.9.8 mac/.build/dist/CodeBurnMenubar-v0.9.8.zip --clobber
-gh release upload mac-v0.9.8 mac/.build/dist/CodeBurnMenubar-v0.9.8.zip.sha256 --clobber
-```
+The tray key's public half is `plugins.updater.pubkey` in `windows/src-tauri/tauri.conf.json`. To rotate it, run `npx @tauri-apps/cli signer generate -w ~/.tauri/codeburn-tray.key`, then replace the two secrets and the pubkey in one go: a private key without its matching pubkey fails the tray build. Losing the private key means every installed tray needs a manual update to a build with a new key. Without the secret the workflow builds the MSI with `npm run tauri build -- --no-sign` and leaves `windows-latest.json` alone, so trays keep their release-page link. That step runs under `shell: bash`; PowerShell drops the `--` and the flag never reaches the Tauri CLI.
 
-The GitHub Release page will now serve the fixed assets. The menubar installer selects the newest `mac-v*` release with `CodeBurnMenubar-v*.zip` plus its checksum, so users who run `codeburn menubar --force` after the replacement get the fixed version automatically.
+## Never Replace Assets on an Existing Release
+
+Do not re-upload or `--clobber` assets on a published `v*`, `mac-v*`, `desktop-v*` or `windows-v*` release. Installed copies, checksums and the feeds already point at them: the feeds carry each file's sha256 (menubar), sha512 (desktop) or signature (tray), so a replaced file fails verification on every client. If a build is broken, cut a new patch release instead. The only release whose files change is `update-feeds`: CI writes it, and a rollback (below) restores it by hand.
 
 ## Rollback
 
@@ -246,8 +236,18 @@ git push origin --delete v0.9.8
 
 npm does not allow republishing to the same version. If you must unpublish from npm, use `npm unpublish codeburn@0.9.8 --force` (requires Owner role), but this is discouraged and all users who installed that version retain it.
 
-For the menubar, tag a new mac-v0.9.9 and let the workflow build and upload it. Users will see the update pill in the menubar settings and upgrade automatically (or manually via `codeburn menubar --force`).
+For the menubar, tag a new mac-v0.9.9 and let the workflow build and upload it; the feed moves to it when the workflow finishes. Users see the update pill and upgrade from it (or manually via `codeburn menubar --force`).
+
+To stop a bad menubar release from spreading before the fix is out, point the feed back at the previous good release:
+
+```bash
+gh release download update-feeds -p menubar-latest.json -O /tmp/menubar-latest.json
+# set version, url and sha256 back to the previous mac-v release (sha256 is in its .zip.sha256)
+gh release upload update-feeds /tmp/menubar-latest.json --clobber
+```
+
+That stops the update pill from offering the bad version. A CLI at the bad version still installs its matching `mac-v*` release, so the real fix is still the new patch release.
 
 ## Summary
 
-The CLI release is manual: bump the version, update `CHANGELOG.md`, commit, run `npm publish`, then tag and create a GitHub Release. The macOS menubar release is automated: pushing a `mac-v*` tag fires `.github/workflows/release-menubar.yml`, which builds, signs, zips, and publishes the bundle. The Electron desktop release is assembled manually under a `desktop-v*` tag, with the release-authoritative Windows NSIS installer built by the read-only `windows-latest` workflow. The homebrew-core formula is updated automatically or via `brew bump-formula-pr`.
+The CLI release is manual: bump the version, update `CHANGELOG.md`, commit, run `npm publish`, then tag and create a GitHub Release. The macOS menubar release is automated: pushing a `mac-v*` tag fires `.github/workflows/release-menubar.yml`, which builds, signs with Developer ID, notarizes, staples, zips, publishes the bundle, and then moves the `update-feeds` pointer. The Electron desktop release is assembled manually under a `desktop-v*` tag, with the release-authoritative Windows NSIS installer built by the read-only `windows-latest` workflow. The homebrew-core formula is updated automatically or via `brew bump-formula-pr`.
