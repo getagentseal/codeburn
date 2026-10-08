@@ -147,10 +147,11 @@ async function resolveClaudeCallProject(cwd: string, filePath: string): Promise<
 
 // True when cwd lies below projectPath without crossing into another repository
 // (a .git entry between the two): `cd app` inside a repo stays in the repo,
-// while `cd Projects/x` out of a home folder reaches another project.
+// while `cd Projects/x` out of a home folder reaches another project. A folder
+// that is gone cannot show a boundary (a deleted worktree), so it stays apart.
 async function insideProjectTree(projectPath: string, cwd: string): Promise<boolean> {
   const root = normalizeProjectPathKey(projectPath)
-  if (!normalizeProjectPathKey(cwd).startsWith(root + '/')) return false
+  if (!normalizeProjectPathKey(cwd).startsWith(root + '/') || !existsSync(cwd)) return false
   for (let dir = cwd.trim(); normalizeProjectPathKey(dir) !== root; dir = dirname(dir)) {
     if (await lstat(join(dir, '.git')).catch(() => null)) return false
     if (dirname(dir) === dir) return false
