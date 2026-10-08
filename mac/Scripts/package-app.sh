@@ -5,6 +5,10 @@
 # Usage:
 #   mac/Scripts/package-app.sh [<version>]
 # Defaults to `dev` if no version is given.
+#
+# Release builds set CODESIGN_IDENTITY (Developer ID Application) plus NOTARY_KEY_PATH,
+# NOTARY_KEY_ID and NOTARY_ISSUER_ID (App Store Connect API key) to notarize and staple
+# the app before it is zipped.
 
 set -euo pipefail
 
@@ -135,7 +139,8 @@ PKG
 CODESIGN_IDENTITY="${CODESIGN_IDENTITY:-}"
 if [[ -n "${CODESIGN_IDENTITY}" ]]; then
   echo "▸ Signing with identity: ${CODESIGN_IDENTITY}"
-  codesign --force --sign "${CODESIGN_IDENTITY}" --options runtime --timestamp=none --deep "${BUNDLE}"
+  # --deep is enough: the only nested item is the resources-only SwiftPM bundle, no nested Mach-O.
+  codesign --force --sign "${CODESIGN_IDENTITY}" --options runtime --timestamp --deep "${BUNDLE}"
 else
   echo "▸ Ad-hoc signing (set CODESIGN_IDENTITY for a persistent TCC grant)..."
   codesign --force --sign - --timestamp=none --deep "${BUNDLE}"
@@ -160,6 +165,32 @@ if otool -L "${BUILT_EXE}" | grep libswift_errno | grep -qv 'weak'; then
   exit 1
 fi
 echo "  minos 14.0 confirmed, no libswift_errno dependency."
+
+if [[ -n "${NOTARY_KEY_PATH:-}" ]]; then
+  if [[ -z "${CODESIGN_IDENTITY}" || -z "${NOTARY_KEY_ID:-}" || -z "${NOTARY_ISSUER_ID:-}" ]]; then
+    echo "✗ NOTARY_KEY_PATH also needs CODESIGN_IDENTITY, NOTARY_KEY_ID and NOTARY_ISSUER_ID." >&2
+    exit 1
+  fi
+  NOTARY_AUTH=(--key "${NOTARY_KEY_PATH}" --key-id "${NOTARY_KEY_ID}" --issuer "${NOTARY_ISSUER_ID}")
+  NOTARY_ZIP="${DIST_DIR}/notarize-upload.zip"
+  echo "▸ Notarizing (usually a few minutes)..."
+  (cd "${DIST_DIR}" && /usr/bin/ditto -c -k --keepParent "${BUNDLE_NAME}" "$(basename "${NOTARY_ZIP}")")
+  NOTARY_RESULT=$(xcrun notarytool submit "${NOTARY_ZIP}" "${NOTARY_AUTH[@]}" --wait --output-format json || true)
+  rm -f "${NOTARY_ZIP}"
+  echo "${NOTARY_RESULT}"
+  NOTARY_STATUS=$(jq -r '.status // empty' <<< "${NOTARY_RESULT}" 2>/dev/null || true)
+  if [[ "${NOTARY_STATUS}" != "Accepted" ]]; then
+    NOTARY_ID=$(jq -r '.id // empty' <<< "${NOTARY_RESULT}" 2>/dev/null || true)
+    if [[ -n "${NOTARY_ID}" ]]; then
+      xcrun notarytool log "${NOTARY_ID}" "${NOTARY_AUTH[@]}" || true
+    fi
+    echo "✗ Notarization status: ${NOTARY_STATUS:-unknown}" >&2
+    exit 1
+  fi
+  xcrun stapler staple "${BUNDLE}"
+  xcrun stapler validate "${BUNDLE}"
+  spctl --assess --type execute -vv "${BUNDLE}"
+fi
 
 ZIP_NAME="CodeBurnMenubar-${ASSET_VERSION}.zip"
 ZIP_PATH="${DIST_DIR}/${ZIP_NAME}"

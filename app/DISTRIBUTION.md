@@ -278,7 +278,7 @@ separate `electron-builder.yml`):
   with a broken/absent seal (`codesign --verify --deep --strict` fails with
   `code has no resources but signature indicates they must be present`, and
   Apple Silicon refuses to run it at all). `"-"` is the same ad-hoc identity
-  `mac/Scripts/package-app.sh` falls back to for the menubar app's local/CI
+  `mac/Scripts/package-app.sh` falls back to for the menubar app's local
   builds. This is the local/dev default; signed release builds pass the real
   Developer ID identity as a CLI override instead of changing this file (see
   "macOS code signing and notarization" below) — worth baking into `build.mac`
@@ -561,11 +561,11 @@ settings into `build.mac` directly (falling back to ad-hoc only when no
 Developer ID identity is present in the keychain) would remove the risk of a
 release accidentally shipping unsigned.
 
-The menubar app (`mac/Scripts/package-app.sh`) picks up the same identity
-through its existing `CODESIGN_IDENTITY` environment variable — set
-`CODESIGN_IDENTITY="Resham Joshi (XRVP7P7F9M)"` before running it — and then
-needs the same notarize-and-staple pass as the dmg above, run against the
-built `.app` before it is zipped.
+The menubar app is signed, notarized and stapled in CI by
+`.github/workflows/release-menubar.yml` (see RELEASING.md for the secrets).
+For a local signed build, `mac/Scripts/package-app.sh` takes the identity in
+`CODESIGN_IDENTITY` and notarizes and staples the `.app` before zipping when
+`NOTARY_KEY_PATH`, `NOTARY_KEY_ID` and `NOTARY_ISSUER_ID` are also set.
 
 ### Ad-hoc is still the fallback
 

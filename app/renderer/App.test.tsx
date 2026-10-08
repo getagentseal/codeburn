@@ -41,6 +41,8 @@ const mocks = vi.hoisted(() => ({
   cliStatus: vi.fn(),
   getPriceOverrides: vi.fn(),
   getProjectFilter: vi.fn<() => Promise<{ project: string[]; exclude: string[] }>>(),
+  getUnfilteredProjects: vi.fn(),
+  setTransientProject: vi.fn<(projectPath: string | null) => Promise<void>>(),
   getAliases: vi.fn(),
   setCurrency: vi.fn(),
   resetCurrency: vi.fn(),
@@ -162,6 +164,8 @@ function installDefaultMocks() {
   })
   mocks.getModels.mockResolvedValue([])
   mocks.getProjectFilter.mockResolvedValue({ project: [], exclude: [] })
+  mocks.getUnfilteredProjects.mockResolvedValue({ projects: [{ name: 'site', path: '/w/site', cost: 3, sessions: 2 }] })
+  mocks.setTransientProject.mockResolvedValue(undefined)
   mocks.getSessions.mockResolvedValue([])
   mocks.getCompareModels.mockResolvedValue([])
   mocks.getQuota.mockResolvedValue([
@@ -556,6 +560,38 @@ describe('App shortcuts', () => {
     expect(hasPolledMemo('sentinel-filter-key')).toBe(true)
   })
 
+  it('scopes to a top bar project in memory only, keeping the saved Combined choice', async () => {
+    localStorage.setItem('codeburn.scope', 'combined')
+    render(<App />)
+    await waitFor(() => expect(mocks.getOverview).toHaveBeenCalledWith('30days', 'all', undefined, undefined, undefined, 'combined'))
+    expect(mocks.setTransientProject).toHaveBeenCalledWith(null)
+    primePolledMemo('sentinel-project-key', { stale: true })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Project' }))
+    fireEvent.click(await screen.findByRole('option', { name: 'w/site' }))
+    await waitFor(() => expect(mocks.setTransientProject).toHaveBeenLastCalledWith('/w/site'))
+    // Local, since a project pick is this device's data; the saved choice stays.
+    await waitFor(() => expect(mocks.getOverview).toHaveBeenLastCalledWith('30days', 'all'))
+    expect(localStorage.getItem('codeburn.scope')).toBe('combined')
+    expect(hasPolledMemo('sentinel-project-key')).toBe(false)
+    expect(screen.getByText(/· w\/site$/)).toBeInTheDocument()
+    expect([...stored.keys()].some(key => key.startsWith('codeburn.reportSnapshot.v1.'))).toBe(false)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Project' }))
+    fireEvent.click(await screen.findByRole('option', { name: 'All projects' }))
+    await waitFor(() => expect(mocks.setTransientProject).toHaveBeenLastCalledWith(null))
+    await waitFor(() => expect(mocks.getOverview).toHaveBeenLastCalledWith('30days', 'all', undefined, undefined, undefined, 'combined'))
+  })
+
+  it('says so when the main process refuses a project pick', async () => {
+    render(<App />)
+    await waitFor(() => expect(mocks.setTransientProject).toHaveBeenCalledWith(null))
+    mocks.setTransientProject.mockRejectedValueOnce({ kind: 'bad-args', message: 'invalid project path' })
+    fireEvent.click(screen.getByRole('button', { name: 'Project' }))
+    fireEvent.click(await screen.findByRole('option', { name: 'w/site' }))
+    expect(await screen.findByText('invalid project path')).toBeInTheDocument()
+  })
+
   it('records the filter for the next boot when the pane is empty', async () => {
     render(<App />)
     await waitFor(() => expect(localStorage.getItem('codeburn.projectFiltered')).toBe('0'))
@@ -880,6 +916,7 @@ describe('overview idle warming', () => {
   beforeEach(() => {
     for (const mock of Object.values(mocks)) mock.mockReset()
     mocks.getOverview.mockResolvedValue(manyProviderPayload())
+    mocks.setTransientProject.mockResolvedValue(undefined)
     mocks.getActReport.mockResolvedValue({ totals: { realizedCostUSD: 0, measuredActions: 0 } })
     mocks.getYield.mockResolvedValue({
       period: { label: 'Last 30 days', start: '', end: '' },

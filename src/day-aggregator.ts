@@ -1,4 +1,4 @@
-import type { DailyEntry, ProjectDayStats, ProviderDaySlice } from './daily-cache.js'
+import { projectDayKey, type DailyEntry, type ProjectDayStats, type ProviderDaySlice } from './daily-cache.js'
 import type { PeriodData } from './menubar-json.js'
 import { CATEGORY_LABELS, type ProjectSummary, type TaskCategory } from './types.js'
 import { behavioralCallWeight, isBehavioralTurn } from './behavioral-weight.js'
@@ -67,14 +67,14 @@ export function aggregateProjectsIntoDays(projects: ProjectSummary[], dateKeyFn:
   }
   const ensureProject = (holder: { projects?: Record<string, ProjectDayStats> }, project: string, path?: string): ProjectDayStats => {
     const projects = (holder.projects ??= {})
+    const key = projectDayKey(project, path)
     // defineProperty so a project directory named "__proto__" becomes an own
     // key instead of mutating the prototype link.
-    let p = Object.hasOwn(projects, project) ? projects[project] : undefined
+    let p = Object.hasOwn(projects, key) ? projects[key] : undefined
     if (!p) {
-      p = { cost: 0, calls: 0, savingsUSD: 0, sessions: 0 }
-      Object.defineProperty(projects, project, { value: p, enumerable: true, writable: true, configurable: true })
+      p = { cost: 0, calls: 0, savingsUSD: 0, sessions: 0, ...(path ? { path } : {}) }
+      Object.defineProperty(projects, key, { value: p, enumerable: true, writable: true, configurable: true })
     }
-    if (!p.path && path) p.path = path
     return p
   }
 

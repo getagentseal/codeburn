@@ -53,6 +53,14 @@ type MemoEntry = { value: unknown; at: number; durable?: boolean; sizeChars?: nu
 const memoStore = new Map<string, MemoEntry>()
 let memoSizeChars = 0
 let memoEpoch = 0
+let persistencePaused = false
+
+/** Keep new results in memory only. On while the top bar scopes the app to one
+ *  project: a restart is back on every project and must not paint one project's
+ *  numbers under that label. */
+export function pausePolledPersistence(paused: boolean): void {
+  persistencePaused = paused
+}
 
 function memoPut(key: string, entry: MemoEntry): void {
   // Map iteration order is the eviction order. Both a cache hit and a write
@@ -175,7 +183,7 @@ function memoSet(key: string, value: unknown): void {
   memoPut(key, entry)
   // Partial hydration and stale read-only reports are useful last-good data for
   // the current renderer, but must never become the restart-time exact answer.
-  if (!isCompleteReport(value)) return
+  if (!isCompleteReport(value) || persistencePaused) return
   try {
     const storage = globalThis.localStorage
     if (!storage) return

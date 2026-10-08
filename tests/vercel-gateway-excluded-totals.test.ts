@@ -5,7 +5,7 @@ import { aggregateProjectsIntoDays } from '../src/day-aggregator.js'
 import { getDateRange } from '../src/cli-date.js'
 import { loadPricing } from '../src/models.js'
 import { setIncludeGatewayInTotals } from '../src/config.js'
-import { emptyCache, type DailyCache } from '../src/daily-cache.js'
+import { emptyCache, projectDayKey, type DailyCache } from '../src/daily-cache.js'
 import { renderOverview } from '../src/overview.js'
 import { aggregateSessions } from '../src/sessions-report.js'
 import { aggregateModels } from '../src/models-report.js'
@@ -417,7 +417,7 @@ describe('vercel-gateway: daily aggregates are shown but not totalled', () => {
     expect(left.providers['vercel-gateway']!.cost).toBeCloseTo(GATEWAY_COST, 10)
     expect(left.providers['vercel-gateway']!.calls).toBe(3)
     // The gateway's own synthetic project leaves the day's project split.
-    expect(Object.keys(left.projects ?? {})).toEqual(['local-repo'])
+    expect(Object.keys(left.projects ?? {})).toEqual([projectDayKey('local-repo', 'local-repo')])
     // A day with no slice for the provider is returned untouched.
     expect(excludeProviderFromDay(day!, 'nope')).toBe(day)
   })

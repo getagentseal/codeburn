@@ -173,6 +173,8 @@
 "CodeBurn CLI %@ available" = "CodeBurn CLI %@ が利用可能";
 "Could not find the package manager for %1$@. Run “%2$@” manually, then try again." = "%1$@用のパッケージマネージャーが見つかりませんでした。「%2$@」を手動で実行してから、もう一度お試しください。";
 "the CLI" = "CLI";
+"This codeburn CLI comes with the CodeBurn desktop app. Update the desktop app, then try again." = "このcodeburn CLIはCodeBurnデスクトップアプリに同梱されています。デスクトップアプリを更新してから、もう一度お試しください。";
+"npm does not have permission to update the global codeburn install. Run “%@” in Terminal, then try again." = "npmにはグローバルのcodeburnを更新する権限がありません。ターミナルで「%@」を実行してから、もう一度お試しください。";
 "CLI update failed (exit %lld)" = "CLIの更新に失敗しました（終了コード %lld）";
 "Your codeburn CLI (%1$@) is too old to update the menubar. Run “%2$@” first, then try again." = "codeburn CLI（%1$@）が古すぎるためメニューバーアプリを更新できません。まず「%2$@」を実行してから、もう一度お試しください。";
 "Update failed (exit %lld)" = "更新に失敗しました（終了コード %lld）";
@@ -215,9 +217,6 @@
 "%1$@ over limit (%2$lld%%)" = "%1$@が上限超過（%2$lld%%）";
 "resets in %@" = "%@後にリセット";
 "Change accent color" = "アクセントカラーを変更";
-"CLI %@ available" = "CLI %@ が利用可能";
-"Update now" = "今すぐ更新";
-"Update the CLI (and the menubar if one is available) automatically" = "CLI（および利用可能であればメニューバーアプリ）を自動的に更新";
 "Copy update command to clipboard" = "更新コマンドをクリップボードにコピー";
 "Enjoying CodeBurn?" = "CodeBurnを楽しんでいますか？";
 "Star us on GitHub" = "GitHubでスターをつける";
