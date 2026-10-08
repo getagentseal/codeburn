@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
-import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
+import { basename, dirname, isAbsolute, join, resolve, win32 } from 'node:path'
 
 import { getCodeburnCacheDir } from './cache-dir.js'
 import { normalizeProxyPath } from './models.js'
@@ -250,7 +250,7 @@ export function knownOriginKeys(): string[] {
 export function projectLinkFolder(folder: string): string {
   const raw = folder.trim()
   const path = raw === '~' || /^~[\\/]/.test(raw) ? homedir() + raw.slice(1) : raw
-  return /^[a-zA-Z]:[\\/]/.test(path) ? path : resolve(path)
+  return /^[a-zA-Z]:[\\/]/.test(path) ? win32.resolve(path) : resolve(path)
 }
 
 // Folders the user put in a repository (`codeburn project link`), longest
