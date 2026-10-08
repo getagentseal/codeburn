@@ -221,6 +221,22 @@ describe('detectUnusedMcp', () => {
     expect(finding!.explanation).toContain('ghost')
   })
 
+  it('counts a session split across projects once', () => {
+    const root = makeFixtureRoot()
+    const projectDir = join(root, 'myapp')
+    mkdirSync(projectDir, { recursive: true })
+    writeFile(join(projectDir, '.mcp.json'), JSON.stringify({ mcpServers: { ghost: { command: 'x' } } }))
+    touchOld(join(projectDir, '.mcp.json'), 30)
+    const slice = (primary: boolean) => ({ sessionId: 's1', mcpBreakdown: {}, projectSplit: { primaryProject: 'a', primaryProjectPath: '/a', primary } })
+    const projects = [
+      { project: 'a', projectPath: '/a', sessions: [slice(true)] },
+      { project: 'b', projectPath: '/b', sessions: [slice(false)] },
+    ] as unknown as ProjectSummary[]
+    const split = detectUnusedMcp([], projects, new Set([projectDir]), [])
+    const single = detectUnusedMcp([], projects.slice(0, 1), new Set([projectDir]), [])
+    expect(split!.tokensSaved).toBe(single!.tokensSaved)
+  })
+
   it('does not flag servers configured within 24 hours', () => {
     const root = makeFixtureRoot()
     const projectDir = join(root, 'myapp')

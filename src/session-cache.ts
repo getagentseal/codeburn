@@ -45,6 +45,9 @@ export type CachedCall = {
   /** Present only when workingDirectory came from a dedicated provider field. */
   workingDirectoryProvenance?: 'provider-field'
   workingDirectory?: string
+  /// Claude: the call's raw cwd, stored only when it differs from the previous
+  /// call's in the same parse batch (carried forward like gitBranch).
+  cwd?: string
   toolSequence?: ToolCall[][]
   // Rich-session-capture (capture-only; no report consumes these yet). All
   // optional and omitted at zero/false to keep the per-call cache cost minimal.
@@ -372,7 +375,9 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // byte-identical to a build that omits it (see parser-lineage-capture test).
   // queued-human-prompts-v1: cached turns need to be regrouped around Claude's
   // queued_command prompt attachments, including classification and PR links.
-  claude: 'advisor-usage-v1-skills-rich-capture-v1-cross-provider-pr-v1-session-lineage-capture-v1-queued-human-prompts-v1',
+  // per-call-cwd-v1: cached calls carry their cwd so a session that moved
+  // folders splits across projects per call.
+  claude: 'advisor-usage-v1-skills-rich-capture-v1-cross-provider-pr-v1-session-lineage-capture-v1-queued-human-prompts-v1-per-call-cwd-v1',
   cline: 'worktree-project-grouping-v1',
   // reported-cost-v1: the CLI reports its own per-message cost, so entries
   // cached before cline-cli joined the reported-cost allowlist in parser.ts
@@ -1187,6 +1192,7 @@ function validateCall(c: unknown): c is CachedCall {
     && isOptionalString(o['projectPath'])
     && (o['workingDirectoryProvenance'] === undefined || o['workingDirectoryProvenance'] === 'provider-field')
     && isOptionalString(o['workingDirectory'])
+    && isOptionalString(o['cwd'])
     && (o['toolSequence'] === undefined || (Array.isArray(o['toolSequence']) && (o['toolSequence'] as unknown[]).every(s => isToolCallArray(s))))
     && isOptionalNum(o['locAdded'])
     && isOptionalNum(o['locRemoved'])

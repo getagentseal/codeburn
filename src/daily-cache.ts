@@ -332,6 +332,11 @@ import type { DateRange, ProjectSummary } from './types.js'
 // v68: Kimi Code sessions whose state.json carries `cwd` but no `workDir` land
 // on that folder. Only the per-project split moves; cost, tokens and calls are
 // unchanged, so the bump re-derives surviving days.
+// v69: Claude calls go to the project of their own cwd, so a session that
+// moved folders splits across projects per call. Settled days re-derive their
+// project rows; provider call counts and cost are unchanged, so no
+// PENDING_REDERIVE_PROVIDER_VERSIONS entry is needed. Days whose transcripts
+// are gone keep their old single-project attribution.
 // v70: a day's project entry records the `origin` remote of its checkout, so
 // clones and worktrees of one repository still group once the folder is
 // deleted. Totals and the split are unchanged; surviving days re-derive to

@@ -9,7 +9,7 @@
 // supplementary accounting must never be filtered out, only weightless.
 
 type WeightedCall = { supplementaryAccounting?: boolean; requestCount?: number }
-type WeightedTurn = { assistantCalls: readonly WeightedCall[] }
+type WeightedTurn = { assistantCalls: readonly WeightedCall[]; projectContinuation?: boolean }
 
 /** True when the call is a real request; false for supplementary accounting (weight 0). */
 export function isBehavioralCall(call: WeightedCall): boolean {
@@ -37,6 +37,7 @@ export function behavioralCallCount(calls: readonly WeightedCall[]): number {
 
 /** True when the turn holds at least one behavioral call — supplementary-only turns add no turn/edit weight. */
 export function isBehavioralTurn(turn: WeightedTurn): boolean {
+  if (turn.projectContinuation) return false
   return turn.assistantCalls.some(call => !call.supplementaryAccounting)
 }
 

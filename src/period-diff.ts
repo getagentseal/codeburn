@@ -512,6 +512,14 @@ export function diffSessions(
 ): SessionDiffRow[] {
   type Acc = { provider: string; sessionId: string; project: string; title?: string; costA: number; costB: number; callsA: number; callsB: number }
   const accs = new Map<string, Acc>()
+  // A session split across projects names its primary slice per range, so the
+  // canonical key can differ between A and B: join those sessions on the id.
+  const splitIds = new Set<string>()
+  for (const project of [...projectsA, ...projectsB]) {
+    for (const session of project.sessions) {
+      if (session.projectSplit) splitIds.add(`${inferSessionProvider(session)}\0${session.sessionId}`)
+    }
+  }
 
   const fold = (projects: ProjectSummary[], side: 'A' | 'B') => {
     for (const project of projects) {
@@ -524,7 +532,8 @@ export function diffSessions(
         if (dimension === 'project' && spendProjectIdentity(project).id !== key) continue
         const cost = dimension === 'model' ? modelEntry!.costUSD : session.totalCostUSD
         const calls = dimension === 'model' ? modelEntry!.calls : session.apiCalls
-        const identity = canonicalSessionCountKey(session, project.projectPath)
+        const splitId = `${inferSessionProvider(session)}\0${session.sessionId}`
+        const identity = splitIds.has(splitId) ? `${splitId}\0split` : canonicalSessionCountKey(session, project.projectPath)
         const acc = accs.get(identity) ?? {
           provider: inferSessionProvider(session),
           sessionId: session.sessionId,

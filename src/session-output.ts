@@ -116,3 +116,16 @@ export function callBillableOutputTokens(call: CallLike): number {
 export function sessionBillableOutputTokens(session: SessionSummary): number {
   return sessionBillableOutput(session).total
 }
+
+/** Sessions across projects, counting a session split across projects once. */
+export function countSessions(projects: ReadonlyArray<{ sessions: SessionSummary[] }>): number {
+  const split = new Set<string>()
+  let count = 0
+  for (const project of projects) {
+    for (const session of project.sessions) {
+      if (session.projectSplit) split.add(`${session.projectSplit.primaryProjectPath}\0${session.sessionId}`)
+      else count++
+    }
+  }
+  return count + split.size
+}
