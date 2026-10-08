@@ -52,11 +52,14 @@ export class CliError extends Error {
   readonly kind: CliErrorKind
   /** For `not-found` only: the non-sensitive stage enum. Undefined otherwise. */
   readonly detail?: NotFoundStage
-  constructor(kind: CliErrorKind, message: string, detail?: NotFoundStage) {
+  /** A one-shot child's exit code, or the signal that ended it. Undefined on the serve path. */
+  readonly exit?: string
+  constructor(kind: CliErrorKind, message: string, detail?: NotFoundStage, exit?: string) {
     super(message)
     this.name = 'CliError'
     this.kind = kind
     this.detail = detail
+    this.exit = exit
   }
 }
 
@@ -672,10 +675,10 @@ function runCli(spec: SpawnSpec, cmdLabel: string, timeoutMs: number, onStderr?:
       finish(() => reject(new CliError('not-found', err.message, 'spawn-error')))
     })
 
-    child.on('close', code => {
+    child.on('close', (code, signal) => {
       finish(() => {
         if (code !== 0) {
-          reject(new CliError('nonzero', withoutProgressLines(stderr) || `codeburn exited with code ${code}`))
+          reject(new CliError('nonzero', withoutProgressLines(stderr) || `codeburn exited with code ${code}`, undefined, signal ?? String(code)))
           return
         }
         try {

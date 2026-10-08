@@ -474,7 +474,7 @@ describe('spawnCli', () => {
 
   it('rejects with kind "nonzero" on a non-zero exit', async () => {
     fakeBin('fail.js', 'process.stderr.write("boom"); process.exit(2)')
-    await expect(spawnCli(['status'])).rejects.toMatchObject({ kind: 'nonzero' } satisfies Partial<CliError>)
+    await expect(spawnCli(['status'])).rejects.toMatchObject({ kind: 'nonzero', exit: '2' } satisfies Partial<CliError>)
   })
 
   it('rejects with kind "bad-json" on non-JSON stdout', async () => {

@@ -1404,7 +1404,13 @@ program
       // carry this machine's sync status.
       const { cursorSyncStatus } = await import('./cursor-sync.js')
       const cursorSync = await cursorSyncStatus().catch(() => null)
-      console.log(JSON.stringify(cursorSync ? { ...payload, cursorSync } : payload))
+      const { providerIssues } = await import('./provider-issues.js')
+      const issues = providerIssues()
+      console.log(JSON.stringify({
+        ...payload,
+        ...(cursorSync ? { cursorSync } : {}),
+        ...(issues.length > 0 ? { providerIssues: issues } : {}),
+      }))
       return
     }
 

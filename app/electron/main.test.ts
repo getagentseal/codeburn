@@ -779,7 +779,7 @@ describe('createBridgeHandlers (telemetry wiring)', () => {
     }
     const handlers = createBridgeHandlers(failing)
     await handlers['codeburn:getSessions']!('week', 'all')
-    expect(telemetry.track).toHaveBeenCalledWith('cli_error', { cmd: 'sessions', kind: 'timeout' })
+    expect(telemetry.track).toHaveBeenCalledWith('cli_error', { cmd: 'sessions', kind: 'timeout', ms: '<1s' })
   })
 
   it('includes the resolution-stage detail for a not-found (self-diagnosing without a repro)', async () => {
@@ -791,7 +791,7 @@ describe('createBridgeHandlers (telemetry wiring)', () => {
     }
     const handlers = createBridgeHandlers(failing)
     await handlers['codeburn:getPlans']!('week')
-    expect(telemetry.track).toHaveBeenCalledWith('cli_error', { cmd: 'status', kind: 'not-found', detail: 'bundled-not-absolute' })
+    expect(telemetry.track).toHaveBeenCalledWith('cli_error', { cmd: 'status', kind: 'not-found', detail: 'bundled-not-absolute', ms: '<1s' })
   })
 
   it('never leaks a path or message into cli_error telemetry, even when the error carries one', async () => {
@@ -806,9 +806,50 @@ describe('createBridgeHandlers (telemetry wiring)', () => {
     const handlers = createBridgeHandlers(failing)
     await handlers['codeburn:getSessions']!('week', 'all')
     const props = telemetry.track.mock.calls.find(([name]) => name === 'cli_error')![1] as Record<string, unknown>
-    expect(props).toEqual({ cmd: 'sessions', kind: 'not-found', detail: 'spawn-error' })
+    expect(props).toEqual({ cmd: 'sessions', kind: 'not-found', detail: 'spawn-error', ms: '<1s' })
     expect(JSON.stringify(props)).not.toContain('secret')
     expect(JSON.stringify(props)).not.toContain('C:\\')
+  })
+
+  it('adds the exit code, a stderr reason label and a scoped provider, never the stderr or a project', async () => {
+    const telemetry = fakeTelemetry()
+    const handlers = createBridgeHandlers({
+      ...deps(telemetry),
+      spawnCli: vi.fn(async () => {
+        throw new CliError('nonzero', "EACCES: permission denied, open '/Users/alice/secret/a.jsonl'", undefined, '1')
+      }),
+    })
+    await handlers['codeburn:getSessions']!('week', 'codex')
+    await handlers['codeburn:getOverview']!('week', 'all')
+    const calls = telemetry.track.mock.calls.filter(([name]) => name === 'cli_error').map(([, props]) => props)
+    expect(calls).toEqual([
+      { cmd: 'sessions', kind: 'nonzero', ms: '<1s', exit: '1', reason: 'eacces', provider: 'codex' },
+      { cmd: 'status', kind: 'nonzero', ms: '<1s', exit: '1', reason: 'eacces' },
+    ])
+    expect(JSON.stringify(calls)).not.toContain('secret')
+  })
+
+  it('forwards valid providerIssues from the overview payload as provider_read_fail', async () => {
+    const telemetry = fakeTelemetry()
+    const handlers = createBridgeHandlers({
+      ...deps(telemetry),
+      spawnCli: vi.fn(async () => ({
+        current: { cost: 1 },
+        providerIssues: [
+          { provider: 'cursor', stage: 'locate', kind: 'eacces' },
+          { provider: 'codex', stage: 'parse', kind: 'malformed' },
+          { provider: '/Users/alice', stage: 'parse', kind: 'error' },
+          { provider: 'kiro', stage: 'empty', kind: 'error' },
+          { provider: 'zed', stage: 'parse', kind: 'EACCES: /Users/alice' },
+        ],
+      })),
+    })
+    await handlers['codeburn:getOverview']!('week', 'all')
+    const forwarded = telemetry.track.mock.calls.filter(([name]) => name === 'provider_read_fail').map(([, props]) => props)
+    expect(forwarded).toEqual([
+      { provider: 'cursor', stage: 'locate', kind: 'eacces' },
+      { provider: 'codex', stage: 'parse', kind: 'malformed' },
+    ])
   })
 })
 

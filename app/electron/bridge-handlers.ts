@@ -8,7 +8,7 @@ import type { CompanionStatus, MenubarCompanion } from './menubar'
 import { NO_MAC_MENUBAR, type MacMenubar } from './mac-menubar'
 import { readOptimizeSnapshot, sameLocalDay, writeOptimizeSnapshot, type OptimizeBlock, type OptimizeSnapshot } from './optimize-store'
 import { sanitizeError, type getQuota } from './quota'
-import type { Telemetry } from './telemetry'
+import { cliErrorReason, durationBucket, type Telemetry } from './telemetry'
 import type { UpdateStatus } from './updates'
 
 // The IPC bridge's channel -> argv mapping, free of any `electron` import so a
@@ -393,20 +393,29 @@ function toEnvelopeError(err: unknown): { kind: string; message: string } {
   return { kind: 'nonzero', message: sanitizeError(err instanceof Error ? err.message : String(err)) }
 }
 
+const PROVIDER_ISSUE_KINDS = new Set(['eacces', 'busy', 'enoent', 'malformed', 'error'])
+
 /**
  * Props for a `cli_error` telemetry event. Deliberately carries only
  * non-sensitive enums so the event is diagnosable without a repro yet leaks
  * nothing: `cmd` is the CLI subcommand (argv[0], a fixed literal like 'status'/
  * 'sessions' — never the full args, which can hold paths), and `detail` is the
  * not-found resolution/spawn stage. The error's `message` (which may contain a
- * path or stderr) is never read here — only `kind` and the stage enum are.
+ * path or stderr) only ever reaches cliErrorReason, which reduces it to a fixed
+ * label. `ms` is a duration bucket, `exit` a one-shot child's exit code or
+ * signal name, and `provider` appears only when the read was scoped to one.
  */
-function cliErrorProps(err: unknown, cmd: string | undefined): Record<string, unknown> {
-  const props: Record<string, unknown> = {}
+function cliErrorProps(err: unknown, argv: readonly string[] | undefined, startedAt: number): Record<string, unknown> {
+  const props: Record<string, unknown> = { ms: durationBucket(Date.now() - startedAt) }
+  const cmd = argv?.[0]
   if (cmd) props.cmd = cmd
+  const providerAt = argv ? argv.indexOf('--provider') : -1
+  if (providerAt >= 0 && argv![providerAt + 1]) props.provider = argv![providerAt + 1]
   if (err instanceof CliError) {
     props.kind = err.kind
     if (err.kind === 'not-found' && err.detail) props.detail = err.detail
+    if (err.exit !== undefined) props.exit = err.exit
+    if (err.kind === 'nonzero') props.reason = cliErrorReason(err.message)
   } else {
     props.kind = 'nonzero'
   }
@@ -492,6 +501,21 @@ export function createBridgeHandlers(deps: Deps): Record<string, Handler> {
     return filterArgs(transientProject ? scopeFilter([`=${transientProject}`])(filter) : filter)
   }
   const telemetry = deps.telemetry ?? null
+  // The CLI lists providers it could not read on the payload; forwarded as enums only,
+  // and the telemetry budget keeps it to one per provider per day.
+  const trackProviderIssues = <T>(payload: T): T => {
+    const issues = (payload as { providerIssues?: unknown } | null)?.providerIssues
+    if (Array.isArray(issues)) {
+      for (const issue of issues.slice(0, 50)) {
+        const { provider, stage, kind } = (issue ?? {}) as Record<string, unknown>
+        if (typeof provider !== 'string' || !/^[a-z0-9-]{1,40}$/.test(provider)) continue
+        if (stage !== 'locate' && stage !== 'parse') continue
+        if (typeof kind !== 'string' || !PROVIDER_ISSUE_KINDS.has(kind)) continue
+        telemetry?.track('provider_read_fail', { provider, stage, kind })
+      }
+    }
+    return payload
+  }
   // Flips true after the first overview fetch succeeds. Until then, every
   // overview fetch runs cold (long timeout + progress streaming); the shared
   // spawnCli coalescing means concurrent same-arg re-polls join one child.
@@ -532,12 +556,12 @@ export function createBridgeHandlers(deps: Deps): Record<string, Handler> {
   }
 
   const run = (build: (...args: any[]) => string[], backgroundIndex?: number): Handler => async (...args: any[]) => {
-    let cmd: string | undefined
+    let argv: string[] | undefined
+    const startedAt = Date.now()
     try {
       const background = backgroundIndex !== undefined && args[backgroundIndex] === true
       // `background` is renderer scheduling metadata, not a CLI argument.
-      const argv = build(...(backgroundIndex === undefined ? args : args.slice(0, backgroundIndex)))
-      cmd = argv[0]
+      argv = build(...(backgroundIndex === undefined ? args : args.slice(0, backgroundIndex)))
       const baseOpts = readOpts()
       return {
         ok: true,
@@ -547,7 +571,7 @@ export function createBridgeHandlers(deps: Deps): Record<string, Handler> {
       }
     } catch (err) {
       const error = coldError(err)
-      telemetry?.track('cli_error', cliErrorProps(err, cmd))
+      telemetry?.track('cli_error', cliErrorProps(err, argv, startedAt))
       return { ok: false, error }
     }
   }
@@ -608,6 +632,7 @@ export function createBridgeHandlers(deps: Deps): Record<string, Handler> {
       const now = Date.now()
       if (cached && now - computedAt < maxAge && sameLocalDay(computedAt, now)) return { ok: true, value: cached }
     }
+    const startedAt = Date.now()
     try {
       // Background priority, which only applies to the one-shot fallback path:
       // a serve-routed command (this one is `status`) is dispatched before
@@ -624,7 +649,7 @@ export function createBridgeHandlers(deps: Deps): Record<string, Handler> {
       return { ok: true, value: snapshot }
     } catch (err) {
       const error = coldError(err)
-      telemetry?.track('cli_error', cliErrorProps(err, 'status'))
+      telemetry?.track('cli_error', cliErrorProps(err, argv, startedAt))
       return { ok: false, error }
     }
   }
@@ -635,15 +660,17 @@ export function createBridgeHandlers(deps: Deps): Record<string, Handler> {
   const getOverview: Handler = async (period: string, provider: string, range?: DateRange, configSource?: string | null, background?: boolean, scope?: string) => {
     coldStartBegan ??= Date.now()
     const priority: SpawnPriority | undefined = background ? 'background' : undefined
+    const startedAt = Date.now()
+    let args: string[] | undefined
     try {
-      const args = buildOverviewArgs(period, provider, range, configSource, scope)
-      if (overviewWarmed) return { ok: true, value: await deps.spawnCli(args, priority ? { priority } : undefined) }
-      const value = await deps.spawnCli(args, {
+      args = buildOverviewArgs(period, provider, range, configSource, scope)
+      if (overviewWarmed) return { ok: true, value: trackProviderIssues(await deps.spawnCli(args, priority ? { priority } : undefined)) }
+      const value = trackProviderIssues(await deps.spawnCli(args, {
         timeoutMs: WARMUP_TIMEOUT_MS,
         extraEnv: { CODEBURN_PROGRESS: '1' },
         onStderr: makeProgressReader(emitProgress),
         ...(priority ? { priority } : {}),
-      })
+      }))
       overviewWarmed = true
       emitProgress({ kind: 'done' })
       emitColdStart(false)
@@ -651,7 +678,7 @@ export function createBridgeHandlers(deps: Deps): Record<string, Handler> {
     } catch (err) {
       const error = coldError(err)
       if (!overviewWarmed) emitColdStart(error.kind === 'timeout')
-      telemetry?.track('cli_error', cliErrorProps(err, 'status'))
+      telemetry?.track('cli_error', cliErrorProps(err, args ?? ['status'], startedAt))
       return { ok: false, error }
     }
   }

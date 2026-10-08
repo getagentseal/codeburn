@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { autoUpdateSupported, createAutoUpdateChecker, WINDOWS_AUTO_UPDATE, type Updater } from './auto-update'
+import { autoUpdateSupported, createAutoUpdateChecker, downloadFailOutcome, WINDOWS_AUTO_UPDATE, type Updater } from './auto-update'
 import type { UpdateStatus } from './updates'
 
 function fakeUpdater(version: string | null) {
@@ -80,5 +80,36 @@ describe('createAutoUpdateChecker', () => {
     await checker.check()
     updater.checkForUpdates.mockRejectedValueOnce(new Error('offline'))
     expect((await checker.check()).install).toBe('available')
+  })
+
+  it('reports a failed download as download_fail or verify_fail, and marks the install before quitting', async () => {
+    const results: unknown[] = []
+    const installs: unknown[] = []
+    const updater = fakeUpdater('0.9.27')
+    updater.downloadUpdate.mockRejectedValueOnce(new Error('net::ERR_CONNECTION_RESET'))
+    const checker = createAutoUpdateChecker({
+      updater,
+      currentVersion: '0.9.26',
+      onChange: () => {},
+      onDownloadFail: (outcome, from, to) => results.push({ outcome, from, to }),
+      onInstall: (from, to) => installs.push({ from, to }),
+    })
+    await checker.check()
+    await checker.download()
+    expect(results).toEqual([{ outcome: 'download_fail', from: '0.9.26', to: '0.9.27' }])
+
+    await checker.check()
+    await checker.download()
+    expect(installs).toEqual([])
+    checker.install()
+    expect(installs).toEqual([{ from: '0.9.26', to: '0.9.27' }])
+    expect(updater.quitAndInstall).toHaveBeenCalledTimes(1)
+  })
+
+  it('tells a refused checksum or code signature from a failed download', () => {
+    expect(downloadFailOutcome(Object.assign(new Error('x'), { code: 'ERR_CHECKSUM_MISMATCH' }))).toBe('verify_fail')
+    expect(downloadFailOutcome(new Error('sha512 checksum mismatch, expected a, got b'))).toBe('verify_fail')
+    expect(downloadFailOutcome(new Error('Code signature at URL file:///x did not pass validation'))).toBe('verify_fail')
+    expect(downloadFailOutcome(new Error('HttpError: 404'))).toBe('download_fail')
   })
 })

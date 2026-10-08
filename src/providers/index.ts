@@ -30,6 +30,7 @@ import { zerostack } from './zerostack.js'
 import { grok } from './grok.js'
 import { grokbot } from './grokbot.js'
 import { isBlockedDatabaseError } from '../sqlite.js'
+import { clearProviderIssue, recordProviderIssue } from '../provider-issues.js'
 import type { Provider, SessionSource } from './types.js'
 
 let antigravityProvider: Provider | null = null
@@ -266,8 +267,11 @@ export const providers = coreProviders
 const warnedDiscoveryFailures = new Set<string>()
 async function discoverOne(provider: Provider): Promise<{ sources: SessionSource[]; failed: boolean }> {
   try {
-    return { sources: await provider.discoverSessions(), failed: false }
+    const sources = await provider.discoverSessions()
+    clearProviderIssue(provider.name, 'locate')
+    return { sources, failed: false }
   } catch (err) {
+    recordProviderIssue(provider.name, 'locate', err)
     // An error that already explained itself on stderr does not need a second,
     // vaguer line.
     if (!warnedDiscoveryFailures.has(provider.name) && !isBlockedDatabaseError(err)) {
