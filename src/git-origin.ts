@@ -222,7 +222,7 @@ export function saveGitOrigins(): void {
 }
 
 export function __setTempRoots(paths: string[] | null): void {
-  roots = paths
+  roots = paths && paths.map(foldTempKey)
 }
 
 export function __resetGitOriginCache(): void {

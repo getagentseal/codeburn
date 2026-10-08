@@ -8,6 +8,7 @@ import { loadDailyCache, projectDayIdentity, type DailyEntry } from '../src/dail
 import { aggregateProjectsIntoDays } from '../src/day-aggregator.js'
 import { __resetGitOriginCache, __setTempRoots, projectOriginKey, saveGitOrigins } from '../src/git-origin.js'
 import { filterProjectsByName, makeProjectFilter, setExactProjectPaths } from '../src/parser.js'
+import { spendProjectIdentity } from '../src/spend-flow.js'
 import type { ProjectSummary, SessionSummary } from '../src/types.js'
 import { buildPayloadProjects } from '../src/usage-aggregator.js'
 
@@ -105,7 +106,7 @@ describe('projects grouped by git repository', () => {
     const group = rows[0]!
     expect(group.path).toBe(a1)
     expect(group.sessions).toBe(3)
-    expect(group.checkouts?.map(c => c.id).sort()).toEqual([a1, a2, awt].sort())
+    expect(group.checkouts?.map(c => c.id).sort()).toEqual([a1, a2, awt].map(p => spendProjectIdentity({ project: '', projectPath: p }).id).sort())
     expect(rows[1]!.checkouts).toBeUndefined()
     expect(rows[2]!.path).toBe(plain)
     // Folding never moves money.
