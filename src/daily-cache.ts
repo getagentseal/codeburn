@@ -5,6 +5,7 @@ import { join } from 'path'
 
 import { getCodeburnCacheDir, RETIRED_PROVIDER_NAMES } from './cache-dir.js'
 import { sweepSupersededCacheFiles } from './cache-sweep.js'
+import { coverageFor, coversLocalDay, loadCursorImport } from './cursor-import.js'
 import { projectOriginKey } from './git-origin.js'
 import type { ProjectFilterTarget } from './parser.js'
 import type { DateRange, ProjectSummary } from './types.js'
@@ -345,7 +346,11 @@ import type { DateRange, ProjectSummary } from './types.js'
 // daily-cache file of its own skipped its invalidation, so adoption carried the
 // local Cursor estimates back and the guard kept them over the imported events,
 // which are fewer calls. cursor joins PENDING_REDERIVE_PROVIDER_VERSIONS at 71.
-export const DAILY_CACHE_VERSION = 71
+// v72: on days a Cursor import fully covers, the parse produces no local
+// cursor-agent (or Grok Bot, when the import holds its rows) slice, so the
+// merge carried the old one on top of the imported rows. Adoption and the
+// complete re-derive now drop those slices; the bump repairs carried days.
+export const DAILY_CACHE_VERSION = 72
 const MIN_SUPPORTED_VERSION = 28
 
 /// Providers whose per-day CALL COUNT means something different at
@@ -848,7 +853,7 @@ async function adoptOlderDailyCaches(): Promise<DailyCache> {
   }
   let days = base.days
   for (const { parsed } of rest) {
-    days = mergeDayEntries(days, migrateDays(parsed.days), true)
+    days = mergeDayEntries(days, await withoutImportReplacedSlices(migrateDays(parsed.days)), true)
   }
   // loadDailyCache has standalone readers, so the adopted result must already
   // satisfy the cache's own invariants: no today/future entries (they would be
@@ -1357,6 +1362,25 @@ function subtractSliceFromDay(day: DailyEntry, provider: string, sub: ProviderDa
   }
 }
 
+/// A Cursor usage import stands in for the replaced providers on the days it
+/// covers, and the parse drops their local calls there. A cached slice of one
+/// of them on such a day is an old local estimate no parse produces again, so
+/// merging it would stack it on the imported rows. Days before the backfill
+/// window stay: the re-derive cannot rebuild their imported rows.
+async function withoutImportReplacedSlices(days: DailyEntry[]): Promise<DailyEntry[]> {
+  const coverage = await loadCursorImport().then(s => s && coverageFor(s), () => null)
+  if (!coverage) return days
+  const now = new Date()
+  const backfillStart = toDateString(new Date(now.getFullYear(), now.getMonth(), now.getDate() - BACKFILL_DAYS))
+  return days.flatMap(day => {
+    const replaced = Object.keys(day.providers).filter(p => coverage.providers.has(p))
+    if (replaced.length === 0 || day.date < backfillStart || !coversLocalDay(coverage, day.date)) return [day]
+    const copy = structuredClone(day)
+    for (const provider of replaced) subtractSliceFromDay(copy, provider, copy.providers[provider]!)
+    return hasPositiveDayContent(copy) ? [copy] : []
+  })
+}
+
 /// Did the tz subtraction leave any positive data on a carried baseline day?
 /// Mirrors the merge's own carry criterion (`hasSliceData` or sessions) at the
 /// day level, extended to the day's other scalar and nested content.
@@ -1838,7 +1862,7 @@ export async function ensureCacheHydrated(
       // Without the subtraction an old-zone slice is never a partial survivor
       // of the fresh one, so the guard would swap a shifted day back in.
       const merged = parseWasComplete
-        ? mergeDayEntries(freshDays, carriedBaseline, true, tzSubtraction, !tzChanged || tzSubtraction !== undefined, pendingRederive)
+        ? mergeDayEntries(freshDays, await withoutImportReplacedSlices(carriedBaseline), true, tzSubtraction, !tzChanged || tzSubtraction !== undefined, pendingRederive)
         : mergeDayEntries(baseline, freshDays, false)
       // Only the complete re-derive re-parses the whole window, so freshDays is
       // the authoritative record set and every non-carried merged day should be

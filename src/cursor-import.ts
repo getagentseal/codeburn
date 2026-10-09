@@ -339,7 +339,7 @@ export async function removeCursorImport(): Promise<CoverageRange[] | null> {
   return store?.ranges ?? []
 }
 
-type ImportCoverage = { ranges: Array<[number, number]>; providers: ReadonlySet<string> }
+export type ImportCoverage = { ranges: Array<[number, number]>; providers: ReadonlySet<string> }
 
 export function coverageFor(store: CursorImportStore): ImportCoverage {
   const providers = new Set(REPLACED_PROVIDERS)
@@ -367,6 +367,15 @@ export function dropImportCoveredCalls<T extends { timestamp: string; calls: Arr
   if (kept.length === turn.calls.length) return turn
   if (kept.length === 0) return null
   return { ...turn, calls: kept, timestamp: kept[0]!.timestamp }
+}
+
+/// Whether the import covers the whole local day `date` (YYYY-MM-DD), so no
+/// local call of a replaced provider on it is served.
+export function coversLocalDay(coverage: ImportCoverage, date: string): boolean {
+  const [y, m, d] = date.split('-').map(Number) as [number, number, number]
+  const start = new Date(y, m - 1, d).getTime()
+  const end = new Date(y, m - 1, d + 1).getTime() - 1
+  return coverage.ranges.some(([s, e]) => s <= start && e >= end)
 }
 
 /// Cursor's own ids, mapped to the catalog ids CodeBurn prices and labels:
