@@ -1858,6 +1858,7 @@ function createChatSessionParser(
 // specific name (e.g. "gpt-4.1-mini" before "gpt-4.1").
 const JETBRAINS_MODEL_TOKENS = [
   'claude-opus-4.8',
+  'claude-opus-4.7',
   'claude-opus-4.6',
   'claude-opus-4.5',
   'claude-opus-4.1',

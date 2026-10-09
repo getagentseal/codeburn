@@ -487,7 +487,9 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // store-row-output-v1: every session-store row carries its own
   // output_tokens; serve time zeroes it where a per-turn call owns the output.
   // Keys are unchanged, so the re-parse replaces cached output-0 rows in place.
-  copilot: 'cli-shutdown-cost-v1-skills-source-provenance-v1-session-store-v3-chatsession-otel-skills-v1-otel-trace-metadata-once-v1-transcript-unknown-usage-v1-otel-workspace-project-v1-journal-request-input-v1-tokenless-turns-v1-store-row-output-v1',
+  // jetbrains-opus-4-7-v1: JetBrains claude-opus-4.7 turns priced as the
+  // anthropic-auto fallback; cached entries must re-parse once.
+  copilot: 'cli-shutdown-cost-v1-skills-source-provenance-v1-session-store-v3-chatsession-otel-skills-v1-otel-trace-metadata-once-v1-transcript-unknown-usage-v1-otel-workspace-project-v1-journal-request-input-v1-tokenless-turns-v1-store-row-output-v1-jetbrains-opus-4-7-v1',
   // authoritative-usage-v4: persist one Grok session call from top-level
   // authoritative totals, use modelUsage only for priced attribution, clamp
   // reasoning per record, and label mixed sessions estimated.

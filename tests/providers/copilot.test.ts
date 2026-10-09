@@ -4400,9 +4400,16 @@ describe('copilot provider - JetBrains model token scan', () => {
     expect(findJetBrainsModelToken('"model":"gpt-5.6"')).toBe('gpt-5.6')
     expect(findJetBrainsModelToken('gpt-5.4-mini beta')).toBe('gpt-5.4-mini')
     expect(findJetBrainsModelToken('switched to claude-opus-4.8 today')).toBe('claude-opus-4-8')
+    expect(findJetBrainsModelToken('switched to claude-opus-4.7 today')).toBe('claude-opus-4-7')
     expect(findJetBrainsModelToken('switched to claude-opus-4.6 today')).toBe('claude-opus-4-6')
     expect(findJetBrainsModelToken('switched to claude-sonnet-4.6 today')).toBe('claude-sonnet-4-6')
     expect(findJetBrainsModelToken('switched to claude-haiku-4.5 today')).toBe('claude-haiku-4-5')
+  })
+
+  it('prices a JetBrains claude-opus-4.7 chunk at the Opus 4.7 rate', () => {
+    const model = findJetBrainsModelToken('"model":"claude-opus-4.7"')
+    expect(model).toBe('claude-opus-4-7')
+    expect(calculateCost(model, 1_000_000, 1_000_000, 0, 0, 0)).toBeCloseTo(30, 6)
   })
 
   it('still matches tokens followed by sentence punctuation or file extensions', () => {
