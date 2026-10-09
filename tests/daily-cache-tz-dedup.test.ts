@@ -86,17 +86,17 @@ function makeCall(timestamp: string, costUSD: number, provider = 'codex') {
   }
 }
 
-function makeProject(calls: ReturnType<typeof makeCall>[]): ProjectSummary {
+function makeProject(calls: ReturnType<typeof makeCall>[], project = 'p', projectPath = '/p'): ProjectSummary {
   const timestamp = calls[0]!.timestamp
   const totalCostUSD = calls.reduce((s, c) => s + c.costUSD, 0)
   return {
-    project: 'p',
-    projectPath: '/p',
+    project,
+    projectPath,
     totalCostUSD,
     totalApiCalls: calls.length,
     sessions: [{
       sessionId: 's1',
-      project: 'p',
+      project,
       firstTimestamp: timestamp,
       lastTimestamp: calls.at(-1)!.timestamp,
       totalCostUSD,
@@ -603,5 +603,82 @@ describe('tz re-derive after adopting an older cache under another savings hash'
     // The source-gone call on 06-03 is the price of not mixing old and new
     // pricing: it shares a (date, provider) with surviving calls, so it goes.
     expect(out.days.reduce((s, d) => s + d.calls, 0)).toBe(calls.length + 7)
+  })
+})
+
+describe('tz re-derive over a slice whose breakdown keys the fresh parse no longer produces', () => {
+  it('keeps every project and model split within its totals', async () => {
+    const places = [['alpha', '/alpha'], ['crew-wt1', '/crew/wt1'], ['crew-wt2', '/crew/wt2']] as const
+    const fixture: ProjectSummary[] = []
+    let n = 0
+    for (let d = 1; d <= 6; d++) {
+      for (let h = 0; h < 24; h += 2) {
+        const [project, path] = places[n++ % places.length]!
+        fixture.push(makeProject([makeCall(`2026-06-0${d}T${String(h).padStart(2, '0')}:15:00.000Z`, d + h / 10, 'claude')], project, path))
+      }
+    }
+    const SEP = '\u0000'
+    const oldTzDays = aggregateInTz(fixture, OLD_TZ)
+    const drifted = oldTzDays.find(d => d.date === '2026-06-03')!
+    // An older cache keyed this day differently: label-only (pre-v67) for
+    // alpha, one key for what the fresh parse splits per worktree, an old model
+    // name. It also holds one call whose transcript is gone.
+    for (const holder of [drifted, drifted.providers['claude']!]) {
+      const old: Record<string, { cost: number; calls: number; savingsUSD: number; sessions: number }> = {}
+      for (const [key, p] of Object.entries(holder.projects!)) {
+        const label = key.startsWith(`alpha${SEP}`) ? 'alpha' : 'crew'
+        const acc = (old[label] ??= { cost: 0, calls: 0, savingsUSD: 0, sessions: 0 })
+        acc.cost += p.cost
+        acc.calls += p.calls
+        acc.sessions += p.sessions
+      }
+      old['alpha']!.cost += 5
+      old['alpha']!.calls += 1
+      holder.projects = old
+      const model = holder.models!['codex-1']!
+      model.cost += 5
+      model.calls += 1
+      holder.models = { 'codex-1-old': model }
+      holder.cost += 5
+      holder.calls += 1
+    }
+    await seed(oldTzDays, { lastComputedDate: '2026-06-14' })
+
+    const out = await ensureCacheHydrated(
+      rangeAwareParse(fixture),
+      aggregateProjectsIntoDays,
+      'cfg-A',
+      () => true,
+      aggregateInTz,
+    )
+
+    const sum = (m: Record<string, { cost: number; calls: number }> | undefined, k: 'cost' | 'calls') =>
+      Object.values(m ?? {}).reduce((s, v) => s + v[k], 0)
+    for (const d of out.days) {
+      for (const [name, h] of [['day', d], ...Object.entries(d.providers)] as const) {
+        expect(sum(h.projects, 'cost'), `${d.date} ${name} projects`).toBeCloseTo(h.cost, 5)
+        expect(sum(h.projects, 'calls'), `${d.date} ${name} projects`).toBe(h.calls)
+        expect(sum(h.models, 'cost'), `${d.date} ${name} models`).toBeCloseTo(h.cost, 5)
+        expect(sum(h.models, 'calls'), `${d.date} ${name} models`).toBe(h.calls)
+      }
+    }
+    const fresh = aggregateProjectsIntoDays(fixture).find(d => d.date === '2026-06-03')!
+    const got = out.days.find(d => d.date === '2026-06-03')!
+    expect(got.cost).toBeCloseTo(fresh.cost + 5, 5)
+    expect(got.calls).toBe(fresh.calls + 1)
+    expect(out.days.reduce((s, d) => s + d.calls, 0)).toBe(fixture.length + 1)
+  })
+
+  it('trims the day-level split of a carried-only date too', () => {
+    const projects = { crew: { cost: 12, calls: 4, savingsUSD: 0, sessions: 1 } }
+    const baseline = day('2026-06-13', { claude: slice(12, 4, { projects: structuredClone(projects) }) }, { projects })
+    const subtract = new Map([['2026-06-13', new Map([['claude', slice(9, 3, {
+      projects: { 'crew-wt1\u0000/crew/wt1': { cost: 9, calls: 3, savingsUSD: 0, sessions: 1 } },
+    })]])]])
+    const m = mergeDayEntries([], [baseline], true, subtract)[0]!
+    expect(m.cost).toBeCloseTo(3, 5)
+    expect(m.projects!['crew']).toMatchObject({ cost: 3, calls: 1 })
+    expect(m.providers['claude']!.projects!['crew']).toMatchObject({ cost: 3, calls: 1 })
+    expect(baseline.providers['claude']!.projects!['crew']!.cost).toBe(12)
   })
 })

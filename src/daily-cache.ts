@@ -1145,9 +1145,10 @@ function subtractSlice(base: ProviderDaySlice, sub: ProviderDaySlice): ProviderD
   const cacheWriteTokens = Math.max(0, (base.cacheWriteTokens ?? 0) - (sub.cacheWriteTokens ?? 0))
   const editTurns = Math.max(0, (base.editTurns ?? 0) - (sub.editTurns ?? 0))
   const oneShotTurns = Math.max(0, (base.oneShotTurns ?? 0) - (sub.oneShotTurns ?? 0))
-  const models = subtractModels(base.models, sub.models)
-  const categories = subtractCategories(base.categories, sub.categories)
-  const projects = subtractProjects(base.projects, sub.projects)
+  const totals = { calls, cost, savingsUSD, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, editTurns, oneShotTurns }
+  const models = capToTotals(subtractModels(base.models, sub.models), totals, REMAINDER_KEYS)
+  const categories = capToTotals(subtractCategories(base.categories, sub.categories), totals, ['cost', 'savingsUSD', 'editTurns', 'oneShotTurns'])
+  const projects = capToTotals(subtractProjects(base.projects, sub.projects), totals, ['cost', 'calls', 'savingsUSD'])
   const out: ProviderDaySlice = {
     calls, cost, savingsUSD,
     ...(sessions > 0 ? { sessions } : {}),
@@ -1162,6 +1163,35 @@ function subtractSlice(base: ProviderDaySlice, sub: ProviderDaySlice): ProviderD
     ...(projects ? { projects } : {}),
   }
   return hasSliceData(out) || (out.sessions ?? 0) > 0 ? out : null
+}
+
+/// Entries are subtracted key by key, so content the fresh parse files under a
+/// key the base lacks (a pre-v67 label-only project, a project now split per
+/// worktree, a renamed model) leaves the base's entry whole and the breakdown
+/// outgrows the residual. Scale each field back to the residual's own total,
+/// keeping whole counts whole; the old keys are the only identity that content has.
+function capToTotals<T extends object>(entries: Record<string, T> | undefined, totals: Record<string, number>, keys: readonly string[]): Record<string, T> | undefined {
+  if (!entries) return undefined
+  // Untouched entries are still the base's own objects.
+  const rows = Object.entries(entries).map(([name, r]) => {
+    const copy = { ...r }
+    setOwn(entries, name, copy)
+    return copy as unknown as Record<string, number>
+  })
+  for (const key of keys) {
+    const total = totals[key] ?? 0
+    const sum = rows.reduce((s, r) => s + num(r[key]), 0)
+    if (sum <= total) continue
+    for (const r of rows) r[key] = num(r[key]) * total / sum
+    if (key === 'cost' || key === 'savingsUSD') continue
+    let left = total
+    for (const r of rows) left -= (r[key] = Math.floor(r[key]!))
+    rows.reduce((a, b) => (b[key]! > a[key]! ? b : a))[key]! += left
+  }
+  for (const [name, r] of Object.entries(entries)) {
+    if (Object.values(r).every(v => typeof v !== 'number' || v === 0)) delete entries[name]
+  }
+  return Object.keys(entries).length > 0 ? entries : undefined
 }
 
 function subtractModelStats(base: ModelDayStats, sub: ModelDayStats): ModelDayStats | null {
