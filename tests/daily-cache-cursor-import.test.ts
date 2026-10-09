@@ -78,6 +78,24 @@ describe('cursor-agent slices on days a Cursor import covers', () => {
     expect(slice(after.days, coveredDay, 'cursor-agent')).toBeUndefined()
   })
 
+  it('keeps a Grok Bot slice the import holds no Grok Bot rows for', async () => {
+    await writeAgentTranscript('inside', base + DAY + 5 * 3_600_000)
+    await hydrate()
+    await demoteCurrentFileTo(34)
+    const oldPath = join(process.env['CODEBURN_CACHE_DIR']!, 'daily-cache.v34.json')
+    const old = JSON.parse(await readFile(oldPath, 'utf-8'))
+    const day = old.days.find((d: DailyEntry) => d.date === coveredDay)
+    day.providers.grokbot = structuredClone(day.providers['cursor-agent'])
+    day.calls += day.providers.grokbot.calls
+    day.cost += day.providers.grokbot.cost
+    await writeFile(oldPath, JSON.stringify(old))
+
+    await importCursorCsv(await writeCsv())
+    const after = await hydrate()
+    expect(slice(after.days, coveredDay, 'grokbot')?.calls).toBe(1)
+    expect(slice(after.days, coveredDay, 'cursor-agent')).toBeUndefined()
+  })
+
   it('the next version bump does not adopt the cursor-agent slice back from an older file', async () => {
     await writeAgentTranscript('inside', base + DAY + 5 * 3_600_000)
     await hydrate()
