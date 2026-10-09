@@ -76,12 +76,15 @@ export function readGitOriginUrl(path: string): string | null {
 /// (`<repo>/app`, `<repo>/src/lib`), so reading only `<path>/.git` found an
 /// origin for a handful of the identities on a real machine and left every
 /// other checkout of the same repository as its own picker row. Walk up to the
-/// first ancestor that has one.
+/// first ancestor with a .git and take its origin, or none: a local-only repo
+/// nested in another one is its own project. Home is never the repo of a folder
+/// below it, so a dotfiles repo there does not swallow every other folder.
 function readGitOriginUrlUncached(path: string): string | null {
+  const home = normalizeProxyPath(homedir())
   let dir = path
   for (let depth = 0; depth < 64; depth++) {
-    const url = originAt(dir)
-    if (url) return url
+    if (dir !== path && normalizeProxyPath(dir) === home) return null
+    if (entryKind(join(dir, '.git'))) return originAt(dir)
     const parent = dirname(dir)
     if (parent === dir) return null
     dir = parent
