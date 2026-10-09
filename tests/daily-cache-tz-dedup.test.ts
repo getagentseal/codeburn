@@ -360,7 +360,7 @@ describe('tz-change re-derive: subtract what the fresh parse re-bucketed (issue 
     expect(kept.carried).toBe(true)
   })
 
-  it('(e) tzChanged AND savingsConfigHash changed together: no subtraction', async () => {
+  it('(e) tzChanged AND savingsConfigHash changed together: no subtraction, the fresh slice wins', async () => {
     const ts = straddlingTimestamp(OLD_TZ)
     const oldDay = dateKeyInTz(ts, OLD_TZ)
     const newDay = dateKey(ts)
@@ -376,15 +376,13 @@ describe('tz-change re-derive: subtract what the fresh parse re-bucketed (issue 
       aggregateInTz,
     )
 
-    // Re-pricing drift must not masquerade as re-bucketing spend: the carry is
-    // unchanged (the double count stays, exactly as on main today).
-    const carried = out.days.find(d => d.date === oldDay)
-    expect(carried).toBeDefined()
-    expect(carried!.providers['codex']!.cost).toBeCloseTo(10, 5)
+    // Re-pricing drift is not subtracted, but the old-zone slice a surviving
+    // source explains is dropped whole instead of counted on both days.
+    expect(out.days.find(d => d.date === oldDay)).toBeUndefined()
     const migrated = out.days.find(d => d.date === newDay)
     expect(migrated!.providers['codex']!.cost).toBeCloseTo(10, 5)
     const total = out.days.reduce((s, d) => s + d.cost, 0)
-    expect(total).toBeCloseTo(20, 5)
+    expect(total).toBeCloseTo(10, 5)
   })
 })
 
@@ -538,5 +536,72 @@ describe('tz re-derive after adopting an older-version cache', () => {
     }
     expect(byDate.get('2026-05-20')).toMatchObject({ cost: 77, calls: 7 })
     expect(out.days.reduce((s, d) => s + d.calls, 0)).toBe(calls.length + 1 + 7)
+  })
+})
+
+describe('tz re-derive after adopting an older cache under another savings hash', () => {
+  it('never counts the hours between the two midnights twice', async () => {
+    const calls: ReturnType<typeof makeCall>[] = []
+    for (let d = 1; d <= 6; d++) {
+      for (let h = 0; h < 24; h += 2) {
+        if ((d * 5 + h) % 3 === 0) continue
+        calls.push(makeCall(`2026-06-0${d}T${String(h).padStart(2, '0')}:15:00.000Z`, d + h / 10, 'claude'))
+      }
+    }
+    // A sporadic provider whose only call sits on a different date per tz, so
+    // the fresh parse has nothing on its old-zone date.
+    let straddle = ''
+    for (let h = 0; h < 24 && !straddle; h++) {
+      const iso = `2026-06-04T${String(h).padStart(2, '0')}:45:00.000Z`
+      if (dateKey(iso) !== dateKeyInTz(iso, OLD_TZ)) straddle = iso
+    }
+    calls.push(makeCall(straddle, 3))
+    const fixture = calls.map(c => makeProject([c]))
+    const goneDay = day('2026-05-20', { claude: slice(77, 7) })
+    // Old-zone days priced under the old config, plus one source-gone call on
+    // a live day.
+    const oldTzDays = aggregateInTz(fixture, OLD_TZ)
+    for (const d of oldTzDays) {
+      for (const holder of [d, ...Object.values(d.providers)]) holder.cost *= 1.25
+    }
+    const partial = oldTzDays.find(d => d.date === '2026-06-03')!
+    for (const holder of [partial, partial.providers['claude']!]) {
+      holder.calls += 1
+      holder.cost += 5
+    }
+    await mkdir(TMP_CACHE_ROOT, { recursive: true })
+    await writeFile(join(TMP_CACHE_ROOT, `daily-cache.v${DAILY_CACHE_VERSION - 1}.json`), JSON.stringify({
+      version: DAILY_CACHE_VERSION - 1,
+      savingsConfigHash: 'cfg-A',
+      tzKey: OLD_TZ,
+      lastComputedDate: '2026-06-14',
+      complete: true,
+      days: [goneDay, ...oldTzDays],
+    }), 'utf-8')
+
+    const out = await ensureCacheHydrated(
+      rangeAwareParse(fixture),
+      aggregateProjectsIntoDays,
+      'cfg-B',
+      () => true,
+      aggregateInTz,
+    )
+
+    expect(out.savingsConfigHash).toBe('cfg-B')
+    const fresh = aggregateProjectsIntoDays(fixture).filter(d => d.calls > 0)
+    const byDate = new Map(out.days.map(d => [d.date, d]))
+    for (const f of fresh) {
+      const got = byDate.get(f.date)!
+      expect(got.calls, f.date).toBe(f.calls)
+      expect(got.cost, f.date).toBeCloseTo(f.cost, 5)
+      for (const [provider, s] of Object.entries(f.providers)) {
+        expect(got.providers[provider]!.calls, `${f.date} ${provider}`).toBe(s.calls)
+        expect(got.providers[provider]!.cost, `${f.date} ${provider}`).toBeCloseTo(s.cost, 5)
+      }
+    }
+    expect(byDate.get('2026-05-20')).toMatchObject({ cost: 77, calls: 7 })
+    // The source-gone call on 06-03 is the price of not mixing old and new
+    // pricing: it shares a (date, provider) with surviving calls, so it goes.
+    expect(out.days.reduce((s, d) => s + d.calls, 0)).toBe(calls.length + 7)
   })
 })

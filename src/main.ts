@@ -22,7 +22,7 @@ import { CATEGORY_LABELS, type DateRange, type ProjectSummary, type TaskCategory
 import type { AppliedFix } from './act/types.js'
 import { aggregateModelEfficiency } from './model-efficiency.js'
 import { buildPayloadProjects, buildPeriodData, buildMenubarPayloadForRange, buildDurablePeriod, getDailyCacheConfigHash, SERVE_HYDRATION_ENV, type DurablePeriod } from './usage-aggregator.js'
-import { aggregateProjectsIntoDays } from './day-aggregator.js'
+import { aggregateProjectsIntoDays, dateKeyInTz } from './day-aggregator.js'
 import { buildPeriodDiffReport, defaultSevenDayRanges, diffSessions, dayKeyToRange, historyBasis, localRangeInfo } from './period-diff.js'
 import { loadStatusSnapshot, saveStatusSnapshot } from './session-cache.js'
 import { renderDashboard } from './dashboard.js'
@@ -2778,6 +2778,7 @@ program
           aggregateProjectsIntoDays,
           getDailyCacheConfigHash(),
           isSessionHydrationComplete,
+          (projects, tz) => aggregateProjectsIntoDays(projects, (iso) => dateKeyInTz(iso, tz)),
         )
         history = historyBasis(
           cache,

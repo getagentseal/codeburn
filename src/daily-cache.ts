@@ -1773,10 +1773,14 @@ export async function ensureCacheHydrated(
       // from each carried baseline slice the content the fresh parse still
       // attributes to that (date, provider) under the OLD bucketing: the turns
       // that re-bucketed across local midnight. That is the issue #770
-      // double-count; re-pricing drift (a savings-hash change) must never be
-      // subtracted, so a hash change in the same re-derive skips this entirely.
+      // double-count. Re-pricing drift (a savings-hash change) must never be
+      // subtracted, so with a hash change in the same re-derive every baseline
+      // slice a surviving source touches under the old bucketing is dropped
+      // whole and the fresh parse wins there: a tz change must never inflate,
+      // even if that loses the source-gone part of a partly surviving slice.
       let tzSubtraction: ReadonlyMap<string, ReadonlyMap<string, ProviderDaySlice>> | undefined
-      if (parseWasComplete && tzChanged && c.savingsConfigHash === savingsConfigHash && aggregateDaysInTz && c.tzKey !== undefined) {
+      let carriedBaseline = baseline
+      if (parseWasComplete && tzChanged && aggregateDaysInTz && c.tzKey !== undefined) {
         // The subtraction re-parses THROUGH NOW (fix round 1): a call bucketed
         // to OLD-tz yesterday that re-buckets to NEW-tz TODAY sits past the
         // history parse's yesterdayEnd, so `freshUnderOldTz` built from `projects`
@@ -1786,11 +1790,25 @@ export async function ensureCacheHydrated(
         // days written to the cache stay exactly the history days and today is
         // still owned by the caller's live parse.
         const wideProjects = await parseSessions({ start: backfillStart, end: now })
-        tzSubtraction = buildTzSubtraction(aggregateDaysInTz(wideProjects, c.tzKey))
+        const freshUnderOldTz = buildTzSubtraction(aggregateDaysInTz(wideProjects, c.tzKey))
+        if (c.savingsConfigHash === savingsConfigHash) {
+          tzSubtraction = freshUnderOldTz
+        } else {
+          carriedBaseline = structuredClone(baseline)
+          for (const day of carriedBaseline) {
+            for (const [provider, slice] of Object.entries(day.providers)) {
+              const explained = freshUnderOldTz.get(day.date)?.get(provider)
+              if (explained && hasSliceData(explained)) subtractSliceFromDay(day, provider, slice)
+            }
+          }
+          carriedBaseline = carriedBaseline.filter(hasPositiveDayContent)
+        }
       }
       const pendingRederive = c.pendingRederive?.length ? new Set(c.pendingRederive) : undefined
+      // Without the subtraction an old-zone slice is never a partial survivor
+      // of the fresh one, so the guard would swap a shifted day back in.
       const merged = parseWasComplete
-        ? mergeDayEntries(freshDays, baseline, true, tzSubtraction, true, pendingRederive)
+        ? mergeDayEntries(freshDays, carriedBaseline, true, tzSubtraction, !tzChanged || tzSubtraction !== undefined, pendingRederive)
         : mergeDayEntries(baseline, freshDays, false)
       // Only the complete re-derive re-parses the whole window, so freshDays is
       // the authoritative record set and every non-carried merged day should be
