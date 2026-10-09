@@ -2,13 +2,14 @@ import { useEffect, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import type { MenubarPayload } from '../lib/payload'
 import type { CurrencyState } from '../lib/currency'
-import { formatCompactCurrency, formatTokens, plural } from '../lib/currency'
+import { formatCompactCurrency, formatTokens } from '../lib/currency'
 import { relativeFuture } from '../lib/dates'
 import type { PlanProjection, PlanUsage } from '../lib/plan'
 import { projectQuotaWindow, projectWindow, earliestReset } from '../lib/plan'
 import { displayLabel, refreshQuota, summaryFor, type QuotaState, type QuotaSummary } from '../lib/quota'
 import { ALL_PROVIDER, type Provider } from './AgentTabStrip'
 import { BulbIcon, ChevronRight, KeySlashIcon, PersonDashedIcon, WarningIcon, ArrowUpRight } from './Icons'
+import { t } from '../i18n/index'
 
 /// Sonnet-weighted approximation the mac app uses to turn a dollar saving into tokens.
 const USD_PER_MILLION_EFFECTIVE_TOKENS = 9
@@ -94,19 +95,19 @@ function ClaudePlan({ payload, currency, onOpenTerminal, onConnectClaude }: {
       return (
         <div className="plan-state">
           <PersonDashedIcon size={22} className="plan-state-icon" />
-          <div className="plan-state-title-muted">Loading your plan...</div>
-          <div className="plan-state-note">Reading Claude Code credentials from this machine.</div>
+          <div className="plan-state-title-muted">{t('Loading your plan...')}</div>
+          <div className="plan-state-note">{t('Reading Claude Code credentials from this machine.')}</div>
         </div>
       )
     case 'no_credentials':
       return (
         <div className="plan-state">
           <KeySlashIcon size={20} className="plan-state-icon" />
-          <div className="plan-state-title">No Claude subscription connected</div>
-          <div className="plan-state-note">Click Connect to sign in with Claude in a terminal, then return here.</div>
+          <div className="plan-state-title">{t('No Claude subscription connected')}</div>
+          <div className="plan-state-note">{t('Click Connect to sign in with Claude in a terminal, then return here.')}</div>
           <div className="plan-actions">
-            <button type="button" className="btn btn-prominent" onClick={() => onConnectClaude()}>Connect Claude</button>
-            <button type="button" className="btn" onClick={load}>Retry</button>
+            <button type="button" className="btn btn-prominent" onClick={() => onConnectClaude()}>{t('Connect Claude')}</button>
+            <button type="button" className="btn" onClick={load}>{t('Retry')}</button>
           </div>
         </div>
       )
@@ -114,11 +115,11 @@ function ClaudePlan({ payload, currency, onOpenTerminal, onConnectClaude }: {
       return (
         <div className="plan-state">
           <WarningIcon size={18} filled={false} className="plan-state-icon plan-state-icon-accent" />
-          <div className="plan-state-title">Couldn't load plan data</div>
+          <div className="plan-state-title">{t("Couldn't load plan data")}</div>
           <div className="plan-state-error">{state.message}</div>
           <div className="plan-actions">
-            <button type="button" className="btn btn-prominent" onClick={() => onConnectClaude()}>Reconnect Claude</button>
-            <button type="button" className="btn" onClick={load}>Retry</button>
+            <button type="button" className="btn btn-prominent" onClick={() => onConnectClaude()}>{t('Reconnect Claude')}</button>
+            <button type="button" className="btn" onClick={load}>{t('Retry')}</button>
           </div>
         </div>
       )
@@ -140,9 +141,9 @@ function ClaudePlan({ payload, currency, onOpenTerminal, onConnectClaude }: {
             <button type="button" className="savings-badge" onClick={() => onOpenTerminal(['optimize'])}>
               <BulbIcon size={10} className="savings-badge-icon" />
               <span>
-                Save ~{formatCompactCurrency(payload.optimize.savingsUSD, currency)} / ~
-                {formatTokens((payload.optimize.savingsUSD / USD_PER_MILLION_EFFECTIVE_TOKENS) * MILLION)} tokens
-                {' · '}{plural(payload.optimize.findingCount, 'finding')}
+                {payload.optimize.findingCount === 1
+                  ? t('Save ~%1$@ / ~%2$@ tokens · 1 finding', formatCompactCurrency(payload.optimize.savingsUSD, currency), formatTokens((payload.optimize.savingsUSD / USD_PER_MILLION_EFFECTIVE_TOKENS) * MILLION))
+                  : t('Save ~%1$@ / ~%2$@ tokens · %3$lld findings', formatCompactCurrency(payload.optimize.savingsUSD, currency), formatTokens((payload.optimize.savingsUSD / USD_PER_MILLION_EFFECTIVE_TOKENS) * MILLION), payload.optimize.findingCount)}
               </span>
               <ChevronRight size={8} className="savings-badge-chevron" />
             </button>
@@ -173,7 +174,7 @@ function ProviderPlan({ summary }: { summary: QuotaSummary }) {
         <div className="plan-state-title">No {summary.name} credentials found</div>
         <div className="plan-state-note">Sign in with the {summary.name} CLI first. Then click Try Again.</div>
         <div className="plan-actions">
-          <button type="button" className="btn btn-prominent" onClick={retry}>Try Again</button>
+          <button type="button" className="btn btn-prominent" onClick={retry}>{t('Try Again')}</button>
         </div>
       </div>
     )
@@ -185,7 +186,7 @@ function ProviderPlan({ summary }: { summary: QuotaSummary }) {
         <div className="plan-state-title">Reconnect {summary.name}</div>
         <div className="plan-state-error">{summary.reason ?? `Your ${summary.name} session has expired. Sign in again in your terminal, then click Reconnect.`}</div>
         <div className="plan-actions">
-          <button type="button" className="btn btn-prominent" onClick={retry}>Reconnect</button>
+          <button type="button" className="btn btn-prominent" onClick={retry}>{t('Reconnect')}</button>
         </div>
       </div>
     )
@@ -224,7 +225,7 @@ function ProviderPlan({ summary }: { summary: QuotaSummary }) {
       {summary.connection === 'transientFailure' && (
         <div className="plan-note">{summary.name} temporarily unreachable. Retrying.</div>
       )}
-      {summary.connection === 'stale' && <div className="plan-note">Showing the last reading.</div>}
+      {summary.connection === 'stale' && <div className="plan-note">{t('Showing the last reading.')}</div>}
     </div>
   )
 }

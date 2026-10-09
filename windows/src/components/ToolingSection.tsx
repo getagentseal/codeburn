@@ -3,6 +3,7 @@ import type { CurrencyState } from '../lib/currency'
 import { formatCompactCurrency } from '../lib/currency'
 import { CollapsibleSection } from './CollapsibleSection'
 import { FixedBar } from './ActivitySection'
+import { t } from '../i18n/index'
 
 /// Port of ToolingSection in mac/.../Views/ToolingSection.swift: what the agent reached for,
 /// in three lists. Skills and subagents are merged because from the reader's side they are
@@ -34,11 +35,11 @@ export function ToolingSection({ payload, currency }: { payload: MenubarPayload;
   const maxCost = Math.max(...combined.map(d => d.cost), 0.01)
 
   return (
-    <CollapsibleSection caption="Tooling" defaultExpanded={false}>
+    <CollapsibleSection caption={t('Tooling')} defaultExpanded={false}>
       <div className="tooling-groups">
         {tools.length > 0 && (
           <div className="tooling-group">
-            <div className="tooling-title">Tools</div>
+            <div className="tooling-title">{t('Tools')}</div>
             {tools.map(tool => (
               <CallsRow key={tool.name} name={tool.name} calls={tool.calls} max={maxToolCalls} />
             ))}
@@ -46,7 +47,7 @@ export function ToolingSection({ payload, currency }: { payload: MenubarPayload;
         )}
         {combined.length > 0 && (
           <div className="tooling-group">
-            <div className="tooling-title">Skills &amp; Agents</div>
+            <div className="tooling-title">{t('Skills & Agents')}</div>
             {combined.map(entry => (
               <div key={entry.name} className="data-row">
                 <FixedBar fraction={entry.cost / maxCost} />
@@ -61,7 +62,7 @@ export function ToolingSection({ payload, currency }: { payload: MenubarPayload;
         )}
         {mcpServers.length > 0 && (
           <div className="tooling-group">
-            <div className="tooling-title">MCP Servers</div>
+            <div className="tooling-title">{t('MCP Servers')}</div>
             {mcpServers.map(server => (
               <CallsRow key={server.name} name={server.name} calls={server.calls} max={maxMcpCalls} />
             ))}

@@ -3,6 +3,7 @@ import type { MenubarPayload, RetryTax, RoutingWaste } from '../lib/payload'
 import type { CurrencyState } from '../lib/currency'
 import { formatCompactCurrency, plural } from '../lib/currency'
 import { ChevronRight, RetryIcon, RouteIcon } from './Icons'
+import { t } from '../i18n/index'
 
 /// Port of OptimizeInsight in mac/.../Views/HeatmapSection.swift: the two kinds of spend the
 /// CLI can name as avoidable. Retry tax is the spend on edit turns that needed a retry; routing waste is what the
@@ -18,8 +19,7 @@ export function OptimizeInsight({ payload, currency }: { payload: MenubarPayload
   if (totalWaste <= 0) {
     return (
       <div className="optimize-empty">
-        Nothing to optimize in this period. No retries and no calls that a cheaper model
-        would have handled.
+        {t('Nothing to optimize in this period. No retries and no calls that a cheaper model would have handled.')}
       </div>
     )
   }
@@ -29,12 +29,12 @@ export function OptimizeInsight({ payload, currency }: { payload: MenubarPayload
       {cost > 0 && (
         <div className="insight-header optimize-headline">
           <div>
-            <div className="insight-sublabel">Potential savings</div>
+            <div className="insight-sublabel">{t('Potential savings')}</div>
             <div className="optimize-total">{formatCompactCurrency(totalWaste, currency)}</div>
           </div>
           <div className="optimize-share">
             <div className="optimize-share-pct">{Math.round((totalWaste / cost) * 100)}% of spend</div>
-            <div className="optimize-share-note">could be optimized</div>
+            <div className="optimize-share-note">{t('could be optimized')}</div>
           </div>
         </div>
       )}
@@ -56,7 +56,7 @@ function RetryTaxRow({ retryTax, totalCost, currency }: {
     <div className="waste-block is-retry">
       <button type="button" className="waste-head" aria-expanded={expanded} onClick={() => setExpanded(e => !e)}>
         <RetryIcon size={9} className="waste-icon" />
-        <span className="waste-title">Retry tax</span>
+        <span className="waste-title">{t('Retry tax')}</span>
         <span className="waste-spacer" />
         <span className="waste-total">{formatCompactCurrency(retryTax.totalUSD, currency)}</span>
         {totalCost > 0 && (
@@ -97,7 +97,7 @@ function RoutingWasteRow({ routingWaste, totalCost, currency }: {
     <div className="waste-block is-routing">
       <button type="button" className="waste-head" aria-expanded={expanded} onClick={() => setExpanded(e => !e)}>
         <RouteIcon size={9} className="waste-icon" />
-        <span className="waste-title">Routing waste</span>
+        <span className="waste-title">{t('Routing waste')}</span>
         <span className="waste-spacer" />
         <span className="waste-total">{formatCompactCurrency(routingWaste.totalSavingsUSD, currency)}</span>
         {totalCost > 0 && (

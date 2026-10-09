@@ -1,6 +1,7 @@
 import type { MenubarPayload } from '../lib/payload'
 import type { CurrencyState } from '../lib/currency'
 import { formatCompactCurrency } from '../lib/currency'
+import { t } from '../i18n'
 import { CollapsibleSection } from './CollapsibleSection'
 
 /// Column widths shared with the header captions (mac: Cost 54 / Turns 52 / 1-shot 44).
@@ -20,11 +21,11 @@ export function ActivitySection({ payload, currency }: Props) {
 
   return (
     <CollapsibleSection
-      caption="Activity"
+      caption={t('Activity')}
       columns={[
-        { label: 'Cost', width: COL_COST },
-        { label: 'Turns', width: COL_COUNT },
-        { label: '1-shot', width: COL_ONESHOT },
+        { label: t('Cost'), width: COL_COST },
+        { label: t('Turns'), width: COL_COUNT },
+        { label: t('1-shot'), width: COL_ONESHOT },
       ]}
     >
       {activities.map(a => (

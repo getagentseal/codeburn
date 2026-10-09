@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { openUrl } from '@tauri-apps/plugin-opener'
 
+import { t } from '../i18n'
 import {
   TELEMETRY_DOCS_URL, completeTelemetryConsent, telemetryStatus, type TelemetryStatus,
 } from '../lib/telemetry'
@@ -30,8 +31,8 @@ export function TelemetryNotice({ onDecided }: { onDecided?: (status: TelemetryS
   }
 
   return (
-    <section className="consent" aria-label="Anonymous telemetry">
-      <h3 className="consent-title">Help improve CodeBurn</h3>
+    <section className="consent" aria-label={t('Anonymous telemetry')}>
+      <h3 className="consent-title">{t('Help improve CodeBurn')}</h3>
       <p className="consent-body">
         Share anonymous usage statistics: which parts of the app get opened, how the Capacity
         Dock is used, and errors. The daily report includes the names of the models, tools,
@@ -42,8 +43,8 @@ export function TelemetryNotice({ onDecided }: { onDecided?: (status: TelemetryS
         What data we collect
       </button>
       <div className="consent-actions">
-        <button type="button" className="btn" onClick={() => answer(false)}>Decline</button>
-        <button type="button" className="btn btn-prominent" onClick={() => answer(true)}>Accept</button>
+        <button type="button" className="btn" onClick={() => answer(false)}>{t('Decline')}</button>
+        <button type="button" className="btn btn-prominent" onClick={() => answer(true)}>{t('Accept')}</button>
       </div>
     </section>
   )

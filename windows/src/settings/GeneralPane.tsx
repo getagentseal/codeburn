@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
+import { listen } from '@tauri-apps/api/event'
 import { openUrl } from '@tauri-apps/plugin-opener'
 
 import type { CurrencyState } from '../lib/currency'
@@ -23,6 +24,11 @@ import {
   TELEMETRY_DOCS_URL, setTelemetryEnabled, telemetryStatus, type TelemetryStatus,
 } from '../lib/telemetry'
 import { Field, Group, Note, Pane, Row, Select, Slider, Switch } from './controls'
+import { labels, t } from '../i18n'
+
+type ConfigLanguage = 'system' | 'en' | 'fr' | 'ja' | 'ko' | 'zh-CN' | 'zh-TW'
+
+type LanguageState = { choice: ConfigLanguage; locale: string }
 
 /// The mac's GeneralSettingsTab. Display first, because it is what the reader came for; the
 /// Windows-only rows (login item, tray badge) sit under System at the end, where the mac
@@ -40,8 +46,24 @@ export function GeneralPane({ quota, anchor }: Props) {
   const [currencyError, setCurrencyError] = useState<string | null>(null)
   const [loginItem, setLoginItem] = useState<boolean | null>(null)
   const [loginError, setLoginError] = useState<string | null>(null)
+  const [language, setLanguage] = useState<ConfigLanguage>('system')
 
   useEffect(() => subscribeSettings(setSettings), [])
+
+  useEffect(() => {
+    let live = true
+    const read = () => {
+      void invoke<LanguageState>('language_state').then(state => {
+        if (live) setLanguage(state.choice)
+      }).catch(() => {})
+    }
+    read()
+    const unlisten = listen('codeburn://language-changed', read)
+    return () => {
+      live = false
+      unlisten.then(fn => fn())
+    }
+  }, [])
 
   useEffect(() => {
     invoke<boolean>('launch_at_login').then(setLoginItem).catch(() => setLoginItem(false))
@@ -89,70 +111,93 @@ export function GeneralPane({ quota, anchor }: Props) {
   return (
     <Pane>
       <Group
-        title="Display"
-        footer={`The currency is shared with the CLI through ${homePath('.config', 'codeburn', 'config.json')}.`}
+        title={t('Display')}
+        footer={t('The currency is shared with the CLI through %@.', homePath('.config', 'codeburn', 'config.json'))}
       >
         <Row
-          label="Currency"
+          label={t('Language')}
+          hint={t('Sets the language for this app and the desktop app. System follows Windows.')}
           control={
             <Select
-              ariaLabel="Currency"
+              ariaLabel={t('Language')}
+              value={language}
+              options={[
+                { id: 'system' as ConfigLanguage, label: t('System') },
+                { id: 'en' as ConfigLanguage, label: 'English' },
+                { id: 'fr' as ConfigLanguage, label: 'Français' },
+                { id: 'ja' as ConfigLanguage, label: '日本語' },
+                { id: 'ko' as ConfigLanguage, label: '한국어' },
+                { id: 'zh-CN' as ConfigLanguage, label: '简体中文' },
+                { id: 'zh-TW' as ConfigLanguage, label: '繁體中文' },
+              ]}
+              onChange={(choice: ConfigLanguage) => {
+                setLanguage(choice)
+                void invoke('set_language_choice', { choice })
+              }}
+            />
+          }
+        />
+        <Row
+          label={t('Currency')}
+          control={
+            <Select
+              ariaLabel={t('Currency')}
               value={currency.code}
-              options={CURRENCY_CODES.map(code => ({ id: code as string, label: `${code} - ${CURRENCY_NAMES[code] ?? code}` }))}
+              options={CURRENCY_CODES.map(code => ({ id: code as string, label: `${code} - ${t(CURRENCY_NAMES[code] ?? code)}` }))}
               onChange={applyCurrency}
             />
           }
         />
         {currencyError && <Note><span className="stg-error">{currencyError}</span></Note>}
         <Row
-          label="Metric"
-          hint="What the number beside the tray flame counts."
+          label={t('Metric')}
+          hint={t('What the number beside the tray flame counts.')}
           control={
             <Select
-              ariaLabel="Metric"
+              ariaLabel={t('Metric')}
               value={settings.metric}
-              options={DISPLAY_METRICS}
+              options={labels(DISPLAY_METRICS)}
               onChange={(metric: DisplayMetric) => writeSettings({ metric })}
             />
           }
         />
         <Row
-          label="Period"
-          hint="How far back that number reaches."
+          label={t('Period')}
+          hint={t('How far back that number reaches.')}
           control={
             <Select
-              ariaLabel="Period"
+              ariaLabel={t('Period')}
               value={settings.menubarPeriod}
-              options={MENUBAR_PERIODS}
+              options={labels(MENUBAR_PERIODS)}
               onChange={(menubarPeriod: MenubarPeriod) => writeSettings({ menubarPeriod })}
             />
           }
         />
         <Row
-          label="Scope"
-          hint="Combined adds every paired device the CLI can reach."
+          label={t('Scope')}
+          hint={t('Combined adds every paired device the CLI can reach.')}
           control={
             <Select
-              ariaLabel="Scope"
+              ariaLabel={t('Scope')}
               value={settings.menubarScope}
-              options={[{ id: 'local' as MenubarScope, label: 'Local' }, { id: 'combined' as MenubarScope, label: 'Combined' }]}
+              options={labels([{ id: 'local' as MenubarScope, label: 'Local' }, { id: 'combined' as MenubarScope, label: 'Combined' }])}
               onChange={(menubarScope: MenubarScope) => writeSettings({ menubarScope })}
             />
           }
         />
         <Row
-          label="Accent"
-          hint="Tints the popover, this window and the Capacity Dock."
+          label={t('Accent')}
+          hint={t('Tints the popover, this window and the Capacity Dock.')}
           control={
-            <div className="stg-swatches" role="radiogroup" aria-label="Accent">
+            <div className="stg-swatches" role="radiogroup" aria-label={t('Accent')}>
               {ACCENT_PRESETS.map(preset => (
                 <button
                   key={preset.id}
                   type="button"
                   role="radio"
                   aria-checked={settings.accent === preset.id}
-                  aria-label={preset.label}
-                  title={preset.label}
+                  aria-label={t(preset.label)}
+                  title={t(preset.label)}
                   className={`stg-swatch ${settings.accent === preset.id ? 'stg-swatch-on' : ''}`}
                   style={{ background: preset.base }}
                   onClick={() => chooseAccent(preset.id)}
@@ -165,22 +210,20 @@ export function GeneralPane({ quota, anchor }: Props) {
 
       <CapacityDockSection quota={quota} />
 
-      <Group title="Usage Refresh">
+      <Group title={t('Usage Refresh')}>
         <Row
-          label="Update every"
+          label={t('Update every')}
           control={
             <Select
-              ariaLabel="Usage refresh cadence"
+              ariaLabel={t('Usage refresh cadence')}
               value={settings.usageRefreshSeconds}
-              options={USAGE_CADENCES}
+              options={labels(USAGE_CADENCES)}
               onChange={usageRefreshSeconds => writeSettings({ usageRefreshSeconds })}
             />
           }
         />
         <Note>
-          How often the tray figure re-reads your local session data. Auto refreshes every
-          minute while the popover is open and every two minutes when it is closed. Manual only
-          refreshes when you open the popover or press Refresh.
+          {t('How often the tray figure re-reads your local session data. Auto refreshes every minute while the popover is open and every two minutes when it is closed. Manual only refreshes when you open the popover or press Refresh.')}
         </Note>
       </Group>
 
@@ -188,28 +231,28 @@ export function GeneralPane({ quota, anchor }: Props) {
 
       <AlertsSection settings={settings} currency={currency} />
 
-      <Group title="System">
+      <Group title={t('System')}>
         <Row
-          label="Theme"
+          label={t('Theme')}
           control={
             <Select
-              ariaLabel="Theme"
+              ariaLabel={t('Theme')}
               value={settings.theme}
-              options={[
+              options={labels([
                 { id: 'system' as ThemeChoice, label: 'System' },
                 { id: 'light' as ThemeChoice, label: 'Light' },
                 { id: 'dark' as ThemeChoice, label: 'Dark' },
-              ]}
+              ])}
               onChange={chooseTheme}
             />
           }
         />
         <Row
-          label="Launch at login"
-          hint="Start CodeBurn in the tray when you sign in."
+          label={t('Launch at login')}
+          hint={t('Start CodeBurn in the tray when you sign in.')}
           control={
             <Switch
-              ariaLabel="Launch at login"
+              ariaLabel={t('Launch at login')}
               on={loginItem === true}
               disabled={loginItem === null}
               onToggle={toggleLogin}
@@ -219,11 +262,11 @@ export function GeneralPane({ quota, anchor }: Props) {
         {loginError && <Note><span className="stg-error">{loginError}</span></Note>}
         {TRAY_BADGE_SUPPORTED && (
           <Row
-            label="Show today's figure in the tray"
-            hint="A second tray icon carrying the number, next to the logo."
+            label={t("Show today's figure in the tray")}
+            hint={t('A second tray icon carrying the number, next to the logo.')}
             control={
               <Switch
-                ariaLabel="Show today's figure in the tray"
+                ariaLabel={t("Show today's figure in the tray")}
                 on={settings.trayBadge}
                 onToggle={() => writeSettings({ trayBadge: !settings.trayBadge })}
               />
@@ -258,7 +301,7 @@ function TelemetrySection() {
   // recorded or sent until it is answered.
   if (!status.onboarded && !fromDesktop) {
     return (
-      <Group title="Privacy">
+      <Group title={t('Privacy')}>
         <TelemetryNotice onDecided={setStatus} />
       </Group>
     )
@@ -269,13 +312,13 @@ function TelemetrySection() {
   }
 
   return (
-    <Group title="Privacy">
+    <Group title={t('Privacy')}>
       <Row
-        label="Anonymous telemetry"
-        hint="Which parts of the app get opened, how the Capacity Dock is used, and errors. The daily report includes the names of the models, tools, skills and MCP servers you use alongside the bucketed counts. Never your prompts, your code, or your project and file names."
+        label={t('Anonymous telemetry')}
+        hint={t('Which parts of the app get opened, how the Capacity Dock is used, and errors. The daily report includes the names of the models, tools, skills and MCP servers you use alongside the bucketed counts. Never your prompts, your code, or your project and file names.')}
         control={
           <Switch
-            ariaLabel="Anonymous telemetry"
+            ariaLabel={t('Anonymous telemetry')}
             on={status.enabled}
             disabled={fromDesktop}
             onToggle={toggle}
@@ -284,13 +327,12 @@ function TelemetrySection() {
       />
       <Note>
         {fromDesktop ? (
-          "This is the CodeBurn desktop app's setting and it covers both apps. Change it there, under Privacy and data."
+          t("This is the CodeBurn desktop app's setting and it covers both apps. Change it there, under Privacy and data.")
         ) : (
           <>
-            Switching this off gives this install a new anonymous id, so nothing recorded
-            before can be tied to anything after.{' '}
+            {t('Switching this off gives this install a new anonymous id, so nothing recorded before can be tied to anything after.')}{' '}
             <button type="button" className="consent-link" onClick={() => { void openUrl(TELEMETRY_DOCS_URL) }}>
-              What data we collect
+              {t('What data we collect')}
             </button>
           </>
         )}
@@ -339,15 +381,15 @@ function CapacityDockSection({ quota }: { quota: QuotaState }) {
   return (
     <Group
       id="stg-dock"
-      title="Capacity Dock"
-      footer="Connected providers, and anything already in the dock, appear here, so a provider can always be removed even after its connection fails."
+      title={t('Capacity Dock')}
+      footer={t('Connected providers, and anything already in the dock, appear here, so a provider can always be removed even after its connection fails.')}
     >
       <Row
-        label="Show Capacity Dock"
-        hint="A slim quota rail docked to a screen edge."
+        label={t('Show Capacity Dock')}
+        hint={t('A slim quota rail docked to a screen edge.')}
         control={
           <Switch
-            ariaLabel="Show Capacity Dock"
+            ariaLabel={t('Show Capacity Dock')}
             on={prefs.enabled}
             onToggle={() => apply({ enabled: !prefs.enabled })}
           />
@@ -355,11 +397,11 @@ function CapacityDockSection({ quota }: { quota: QuotaState }) {
       />
       {restable.length > 0 && (
         <Row
-          label="Resting provider"
-          hint="The one the rail shows before you hover it."
+          label={t('Resting provider')}
+          hint={t('The one the rail shows before you hover it.')}
           control={
             <Select
-              ariaLabel="Resting provider"
+              ariaLabel={t('Resting provider')}
               value={resting}
               options={restable.map(id => ({ id, label: nameOf(id) }))}
               onChange={preferred => apply({ preferred })}
@@ -368,22 +410,22 @@ function CapacityDockSection({ quota }: { quota: QuotaState }) {
         />
       )}
       <Row
-        label="Keep expanded"
-        hint="Every ring stays out. Off, the rail rests on one ring and opens when you hover it."
+        label={t('Keep expanded')}
+        hint={t('Every ring stays out. Off, the rail rests on one ring and opens when you hover it.')}
         control={
           <Switch
-            ariaLabel="Keep the Capacity Dock expanded"
+            ariaLabel={t('Keep the Capacity Dock expanded')}
             on={prefs.keepExpanded}
             onToggle={() => apply({ keepExpanded: !prefs.keepExpanded })}
           />
         }
       />
       <Row
-        label="Size"
+        label={t('Size')}
         control={
           <>
             <Slider
-              ariaLabel="Capacity Dock size"
+              ariaLabel={t('Capacity Dock size')}
               value={prefs.scale}
               min={DOCK_SCALE_MIN}
               max={DOCK_SCALE_MAX}
@@ -395,35 +437,35 @@ function CapacityDockSection({ quota }: { quota: QuotaState }) {
         }
       />
       <Row
-        label="Appearance"
+        label={t('Appearance')}
         control={
           <Select
             ariaLabel="Capacity Dock appearance"
             value={prefs.theme}
-            options={DOCK_THEMES}
+            options={labels(DOCK_THEMES)}
             onChange={theme => apply({ theme })}
           />
         }
       />
       <Row
-        label="Hover bubble"
-        hint="The details card can keep its own surface, so a Glass rail can carry a Graphite card."
+        label={t('Hover bubble')}
+        hint={t('The details card can keep its own surface, so a Glass rail can carry a Graphite card.')}
         control={
           <Select
             ariaLabel="Capacity Dock hover bubble appearance"
             value={prefs.detailTheme}
-            options={DOCK_DETAIL_THEMES}
+            options={labels(DOCK_DETAIL_THEMES)}
             onChange={detailTheme => apply({ detailTheme })}
           />
         }
       />
       <Row
-        label="Gauge shape"
+        label={t('Gauge shape')}
         control={
           <Select
             ariaLabel="Capacity Dock gauge shape"
             value={prefs.gaugeShape}
-            options={DOCK_GAUGE_SHAPES}
+            options={labels(DOCK_GAUGE_SHAPES)}
             onChange={gaugeShape => apply({ gaugeShape })}
           />
         }
@@ -431,20 +473,20 @@ function CapacityDockSection({ quota }: { quota: QuotaState }) {
       {/* Only meaningful with more than one Claude config directory. */}
       {quota.claudeProfiles.length > 1 && (
         <Row
-          label="Claude profiles"
-          hint="One ring per Claude config directory, each with its own limit and sessions."
+          label={t('Claude profiles')}
+          hint={t('One ring per Claude config directory, each with its own limit and sessions.')}
           control={
             <Select
-              ariaLabel="Claude profiles"
+              ariaLabel={t('Claude profiles')}
               value={prefs.claudeProfiles}
-              options={DOCK_CLAUDE_PROFILES}
+              options={labels(DOCK_CLAUDE_PROFILES)}
               onChange={claudeProfiles => apply({ claudeProfiles })}
             />
           }
         />
       )}
       {manageable.length === 0 ? (
-        <Note>Connect a provider from its page in the sidebar to make it available here.</Note>
+        <Note>{t('Connect a provider from its page in the sidebar to make it available here.')}</Note>
       ) : (
         manageable.map(id => {
           const on = prefs.providers.length > 0 ? prefs.providers.includes(id) : isConnected(id)
@@ -455,7 +497,7 @@ function CapacityDockSection({ quota }: { quota: QuotaState }) {
                 <span className="stg-provider">
                   <ProviderGlyph id={id} size={14} />
                   <span>{nameOf(id)}</span>
-                  {!isConnected(id) && <span className="stg-attention">Needs attention</span>}
+                  {!isConnected(id) && <span className="stg-attention">{t('Needs attention')}</span>}
                 </span>
               }
               control={
@@ -489,24 +531,23 @@ function TerminalSection({ settings }: { settings: AppSettings }) {
   if (installed === null || Object.keys(installed).length === 0) return null
 
   return (
-    <Group title="Terminal">
+    <Group title={t('Terminal')}>
       <Row
-        label="Open commands in"
+        label={t('Open commands in')}
         control={
           <Select
-            ariaLabel="Terminal"
+            ariaLabel={t('Terminal')}
             value={settings.terminal}
             options={TERMINALS.map(term => ({
               id: term.id,
-              label: installed[term.id] === false ? `${term.label} (not installed)` : term.label,
+              label: installed[term.id] === false ? t('%@ (not installed)', t(term.label)) : t(term.label),
             }))}
             onChange={terminal => writeSettings({ terminal })}
           />
         }
       />
       <Note>
-        Where Full Report and Optimize open. If the chosen console is not installed, CodeBurn
-        falls back to the Command Prompt, which always is.
+        {t('Where Full Report and Optimize open. If the chosen console is not installed, CodeBurn falls back to the Command Prompt, which always is.')}
       </Note>
     </Group>
   )
@@ -576,26 +617,28 @@ function AlertsSection({ settings, currency }: { settings: AppSettings; currency
   }
 
   const label = (value: number) => {
-    if (value === 0) return 'Off'
+    if (value === 0) return t('Off')
     return isTokens ? `${trim(value / 1e6)}M` : `${currency.symbol}${trim(value)}`
   }
 
   const armed = stored !== null && stored > 0
   const help = custom && !armed
-    ? 'Enter an amount above, or the alert stays off.'
-    : `The tray flame turns yellow when today's ${isTokens ? 'tokens pass' : 'cost passes'} the daily budget.`
+    ? t('Enter an amount above, or the alert stays off.')
+    : t(isTokens
+      ? "Flame icon turns yellow when today's tokens pass the daily budget."
+      : "Flame icon turns yellow when today's cost pass the daily budget.")
 
   return (
-    <Group title="Alerts">
+    <Group title={t('Alerts')}>
       <Row
-        label="Daily budget"
+        label={t('Daily budget')}
         control={
           <Select
-            ariaLabel="Daily budget"
+            ariaLabel={t('Daily budget')}
             value={custom ? CUSTOM : stored ?? 0}
             options={[
               ...presets.map(value => ({ id: value, label: label(value) })),
-              { id: CUSTOM, label: 'Custom...' },
+              { id: CUSTOM, label: t('Custom...') },
             ]}
             onChange={choose}
           />
@@ -603,11 +646,11 @@ function AlertsSection({ settings, currency }: { settings: AppSettings; currency
       />
       {custom && (
         <Row
-          label={isTokens ? 'Millions of tokens' : `Amount in ${currency.code}`}
+          label={isTokens ? t('Millions of tokens') : t('Amount in %@', currency.code)}
           control={
             <Field
-              ariaLabel="Custom daily budget"
-              placeholder="Amount"
+              ariaLabel={t('Custom daily budget')}
+              placeholder={t('Amount')}
               value={draft}
               onChange={applyDraft}
               width={110}

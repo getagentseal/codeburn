@@ -1,4 +1,5 @@
 import { displayLabel, pct, resetsIn, severity, type QuotaSummary, type QuotaWindow } from '../lib/quota'
+import { t } from '../i18n/index'
 
 /// Port of QuotaDetailPopover in mac/Sources/CodeBurnMenubar/Views/AgentTabStrip.swift: the
 /// 260pt card a tab shows on hover. Same four states, same copy.
@@ -17,14 +18,14 @@ export function QuotaPopover({ quota }: { quota: QuotaSummary }) {
     return <div className="quota-card"><div className="quota-note">{disconnectedMessage(quota)}</div></div>
   }
   if (quota.connection === 'loading' && quota.windows.length === 0) {
-    return <div className="quota-card"><div className="quota-note">Loading...</div></div>
+    return <div className="quota-card"><div className="quota-note">{t('Loading...')}</div></div>
   }
   return (
     <div className="quota-card">
       <div className="quota-head">
         <span className="quota-head-title">{quota.name} usage</span>
-        {quota.connection === 'stale' && <span className="quota-flag">stale</span>}
-        {quota.connection === 'transientFailure' && <span className="quota-flag quota-flag-warn">retrying</span>}
+        {quota.connection === 'stale' && <span className="quota-flag">{t('stale')}</span>}
+        {quota.connection === 'transientFailure' && <span className="quota-flag quota-flag-warn">{t('retrying')}</span>}
         <span className="quota-head-spacer" />
         {quota.planLabel && <span className="quota-plan-pill">{quota.planLabel}</span>}
       </div>
@@ -54,23 +55,23 @@ function QuotaRow({ window }: { window: QuotaWindow }) {
 }
 
 function disconnectedMessage(quota: QuotaSummary): string {
-  if (quota.id === 'codex') return 'Sign in with `codex` (ChatGPT mode) to track quota.'
-  if (quota.id === 'claude') return 'Sign in to Claude Code to track quota.'
-  return 'Sign in to track quota.'
+  if (quota.id === 'codex') return t('Sign in with `codex` (ChatGPT mode) to track quota.')
+  if (quota.id === 'claude') return t('Sign in to Claude Code to track quota.')
+  return t('Sign in to track quota.')
 }
 
 function reconnectTitle(quota: QuotaSummary): string {
-  return `Reconnect ${quota.name}`
+  return t('Reconnect %@', quota.name)
 }
 
 function reconnectReason(quota: QuotaSummary): string {
-  if (quota.id === 'codex') return 'Refresh token rejected by OpenAI.'
-  if (quota.id === 'claude') return 'Refresh token rejected by Anthropic.'
-  return `${quota.name} rejected the stored credential.`
+  if (quota.id === 'codex') return t('Refresh token rejected by OpenAI.')
+  if (quota.id === 'claude') return t('Refresh token rejected by Anthropic.')
+  return t('%@ rejected the stored credential.', quota.name)
 }
 
 function reconnectInstruction(quota: QuotaSummary): string {
-  if (quota.id === 'codex') return 'Run `codex login` in your terminal, then click Reconnect.'
-  if (quota.id === 'claude') return 'Open Claude Code in your terminal and type `/login`, then click Reconnect.'
-  return `Sign in to ${quota.name} again in your terminal, then click Reconnect.`
+  if (quota.id === 'codex') return t('Run `codex login` in your terminal, then click Reconnect.')
+  if (quota.id === 'claude') return t('Open Claude Code in your terminal and type `/login`, then click Reconnect.')
+  return t('Sign in to %@ again in your terminal, then click Reconnect.', quota.name)
 }

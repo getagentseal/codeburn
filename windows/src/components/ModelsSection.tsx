@@ -3,6 +3,7 @@ import type { CurrencyState } from '../lib/currency'
 import { ESTIMATED_COST_LEGEND, formatCompactCurrency, formatTokens, isEstimatedCost } from '../lib/currency'
 import { CollapsibleSection } from './CollapsibleSection'
 import { FixedBar, COL_COST, COL_COUNT } from './ActivitySection'
+import { t } from '../i18n/index'
 
 /// The Saved column only appears once something was actually saved. With no local-model
 /// mapping it would be an unlabelled column of dashes, so the mac drops it entirely.
@@ -26,11 +27,11 @@ export function ModelsSection({ models, inputTokens, outputTokens, cacheHitPerce
 
   return (
     <CollapsibleSection
-      caption="Models"
+      caption={t('Models')}
       columns={[
-        { label: 'Cost', width: COL_COST },
-        ...(showSavings ? [{ label: 'Saved', width: COL_SAVED }] : []),
-        { label: 'Calls', width: COL_COUNT },
+        { label: t('Cost'), width: COL_COST },
+        ...(showSavings ? [{ label: t('Saved'), width: COL_SAVED }] : []),
+        { label: t('Calls'), width: COL_COUNT },
       ]}
     >
       {models.map(m => (
@@ -55,7 +56,7 @@ export function ModelsSection({ models, inputTokens, outputTokens, cacheHitPerce
       ))}
       {(inputTokens > 0 || outputTokens > 0) && (
         <div className="tokens-line">
-          <span className="tokens-label">Tokens</span>
+          <span className="tokens-label">{t('Tokens')}</span>
           <span className="tokens-value">{formatTokens(inputTokens)} in</span>
           <span className="tokens-sep">·</span>
           <span className="tokens-value">{formatTokens(outputTokens)} out</span>
@@ -73,11 +74,11 @@ export function ModelsSection({ models, inputTokens, outputTokens, cacheHitPerce
           as every other consumer of the block ("counted at $0"). */}
       {unpriced.length > 0 && (
         <div className="tokens-line" title={unpriced.map(m => `${m.model} (${m.calls} calls)`).join(', ')}>
-          <span className="tokens-label">Unpriced</span>
+          <span className="tokens-label">{t('Unpriced')}</span>
           <span className="tokens-value">
             {unpriced.length === 1
-              ? `1 model counted at $0 · ${formatTokens(unpricedTokens)} tokens`
-              : `${unpriced.length} models counted at $0 · ${formatTokens(unpricedTokens)} tokens`}
+              ? t('1 model unpriced, counted at $0 · %@ tokens', formatTokens(unpricedTokens))
+              : t('%1$lld models unpriced, counted at $0 · %2$@ tokens', unpriced.length, formatTokens(unpricedTokens))}
           </span>
         </div>
       )}

@@ -6,6 +6,7 @@ import { SectionCaption } from './CollapsibleSection'
 import { ArrowDownRight, ArrowUpRight, LeafIcon, MonitorIcon, WarningIcon } from './Icons'
 import type { DisplayMetric } from '../lib/appSettings'
 import { formatCombinedSessionCount, formatSessionCount, sessionCountIsExact, COMBINED_SESSION_COUNT_HELP, SESSION_COUNT_HELP } from '../lib/session-count-label'
+import { t } from '../i18n'
 
 const CURSOR_SYNC_ERRORS: Record<string, string> = {
   login: 'Cursor login expired, open Cursor to sign in again',
@@ -55,7 +56,7 @@ export function HeroSection({ payload, currency, periodLabel, isToday, dailyBudg
     : formatCurrency(cost, currency)
 
   const label = payload?.current.label || periodLabel
-  const caption = combined ? `Combined · ${label}` : isToday ? `Today · ${todayLabel}` : label
+  const caption = combined ? t('Combined · %@', label) : isToday ? t('Today · %@', todayLabel) : label
   // The spend limit is stored in the display currency, as the CLI's own budget.daily is, and
   // reaches this component already converted to the dollars the payload is measured in. It is
   // printed back in the display currency, which is what the reader typed. Combined totals are
@@ -71,7 +72,7 @@ export function HeroSection({ payload, currency, periodLabel, isToday, dailyBudg
         {payload ? (
           <div className="hero-amount">{headline}</div>
         ) : (
-          <div className="hero-amount hero-skeleton" aria-label="Loading" />
+          <div className="hero-amount hero-skeleton" aria-label={t('Loading')} />
         )}
         <div className="hero-meta">
           {!payload ? (
@@ -86,8 +87,8 @@ export function HeroSection({ payload, currency, periodLabel, isToday, dailyBudg
             </>
           ) : (
             <>
-              <span className="hero-calls">{calls.toLocaleString()} {calls === 1 ? 'call' : 'calls'}</span>
-              <span className="hero-sessions" title={sessionHelp}>{sessionLabel}</span>
+              <span className="hero-calls">{calls === 1 ? t('1 call') : t('%lld calls', calls)}</span>
+              <span className="hero-sessions" title={sessionHelp ? t(sessionHelp) : undefined}>{sessionLabel}</span>
             </>
           )}
         </div>
@@ -96,7 +97,7 @@ export function HeroSection({ payload, currency, periodLabel, isToday, dailyBudg
         <div className="hero-note hero-note-warn">
           <WarningIcon size={10} />
           <span>
-            Daily budget of {isTokenMetric ? `${formatTokens(dailyBudget)} tok` : formatCurrency(dailyBudget, currency)} exceeded
+            {t('Daily budget of %@ exceeded', isTokenMetric ? `${formatTokens(dailyBudget)} tok` : formatCurrency(dailyBudget, currency))}
           </span>
         </div>
       )}
@@ -105,7 +106,7 @@ export function HeroSection({ payload, currency, periodLabel, isToday, dailyBudg
       ) : combinedScope && payload !== null ? (
         <div className="hero-note hero-note-muted">
           <WarningIcon size={10} />
-          <span>Combined unavailable · showing local</span>
+          <span>{t('Combined unavailable · showing local')}</span>
         </div>
       ) : null}
       {/* Actual spend above, hypothetical avoided spend here: kept apart so the two are
@@ -113,18 +114,18 @@ export function HeroSection({ payload, currency, periodLabel, isToday, dailyBudg
       {savings > 0 && (
         <div className="hero-note hero-note-saved">
           <LeafIcon size={10} />
-          <span>Saved {formatCurrency(savings, currency)} with local models</span>
+          <span>{t('Saved %@ with local models', formatCurrency(savings, currency))}</span>
         </div>
       )}
       {cursorSync && cursorSync.state !== 'off' && (
         cursorSync.errorCode ? (
           <div className="hero-note hero-note-caution">
             <WarningIcon size={10} />
-            <span>{CURSOR_SYNC_ERRORS[cursorSync.errorCode] ?? CURSOR_SYNC_ERRORS.export}</span>
+            <span>{t(CURSOR_SYNC_ERRORS[cursorSync.errorCode] ?? CURSOR_SYNC_ERRORS.export)}</span>
           </div>
         ) : (
           <div className="hero-note hero-note-muted">
-            <span>{cursorSync.lastSuccessAt ? `Synced from cursor.com ${relativePast(new Date(cursorSync.lastSuccessAt))}` : 'Not synced from cursor.com yet'}</span>
+            <span>{cursorSync.lastSuccessAt ? t('Synced from cursor.com %@', relativePast(new Date(cursorSync.lastSuccessAt))) : t('Not synced from cursor.com yet')}</span>
           </div>
         )
       )}
@@ -137,14 +138,14 @@ function DeviceBreakdown({ usage, currency }: { usage: CombinedUsage; currency: 
     <div className="device-breakdown">
       <div className="hero-note hero-note-muted">
         <MonitorIcon size={10} />
-        <span>{usage.combined.reachableCount} of {usage.combined.deviceCount} devices</span>
+        <span>{t('%1$lld of %2$lld devices', usage.combined.reachableCount, usage.combined.deviceCount)}</span>
       </div>
       {usage.perDevice.map(device => (
         <div key={device.id} className="device-row">
           <span className={`device-dot ${device.error ? 'is-error' : ''}`} />
-          <span className="device-name">{device.local ? `${device.name} · local` : device.name}</span>
+          <span className="device-name">{device.local ? t('%@ · local', device.name) : device.name}</span>
           <span className="device-cost">
-            {device.error ? 'Unavailable' : formatCurrency(device.cost, currency)}
+            {device.error ? t('Unavailable') : formatCurrency(device.cost, currency)}
           </span>
           <span className="device-tokens">{formatTokens(device.totalTokens)}</span>
         </div>

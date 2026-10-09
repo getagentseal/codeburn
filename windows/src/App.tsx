@@ -12,7 +12,8 @@ import {
   DEFAULT_SETTINGS, MENUBAR_PERIODS, MENUBAR_SUFFIX, cacheThemeAndAccent, nextTheme, subscribeSettings,
   writeSettings, type AppSettings, type ThemeChoice,
 } from './lib/appSettings'
-import { formatMessage, t, useI18nRevision } from './lib/i18n'
+import { t } from './i18n'
+import { formatMessage, t as menuT, useI18nRevision } from './lib/i18n'
 import { TRAY_BADGE_SUPPORTED } from './lib/platform'
 import { usageRefreshPlan } from './lib/refresh'
 import { EMPTY_QUOTA, refreshQuota, refreshQuotaIfDue, subscribeQuota, worstSeverity, type QuotaState } from './lib/quota'
@@ -492,15 +493,15 @@ export function App() {
         let text: string
         if (!trayCurrent) {
           text = settings.menubarPeriod === 'today'
-            ? t('Today · no usage yet')
-            : await formatMessage('%@ · no usage yet', [t(periodLabel)])
+            ? menuT('Today · no usage yet')
+            : await formatMessage('%@ · no usage yet', [menuT(periodLabel)])
         } else {
           const calls = trayCurrent.calls === 1
-            ? t('1 call')
+            ? menuT('1 call')
             : await formatMessage('%lld calls', [trayCurrent.calls])
           text = settings.menubarPeriod === 'today'
             ? await formatMessage('Today · %1$@ · %2$@', [figure, calls])
-            : `${t(periodLabel)} · ${figure} · ${calls}`
+            : `${menuT(periodLabel)} · ${figure} · ${calls}`
           if (trayShortfall) {
             text += ` · ${await formatMessage('%1$lld of %2$lld devices', [trayShortfall.reachable, trayShortfall.total])}`
           }
@@ -618,9 +619,9 @@ export function App() {
     && (payload.current?.calls ?? 0) === 0 && (payload.current?.sessions ?? 0) === 0
     && (payload.history?.daily?.length ?? 0) === 0
 
-  const label = daySelectionLabel(days) ?? PERIOD_LABELS[period]
+  const label = daySelectionLabel(days) ?? t(PERIOD_LABELS[period])
 
-  const footnote = [version ? `CodeBurn v${version}` : 'CodeBurn', lastUpdated ? `updated ${relativePast(lastUpdated)}` : null]
+  const footnote = [version ? t('CodeBurn v%@', version) : 'CodeBurn', lastUpdated ? t('updated %@', relativePast(lastUpdated)) : null]
     .filter(Boolean)
     .join(' · ')
 

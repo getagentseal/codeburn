@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 
 import { EMPTY_UPDATE, subscribeUpdate, type UpdateState } from '../lib/update'
 import { ArrowUpRightCircleIcon, CheckIcon, CopyIcon } from './Icons'
+import { t } from '../i18n/index'
 
 /// Port of CLIUpdateBanner in mac/.../Views/MenuBarContent.swift: a strip under the footer
 /// when the installed codeburn is behind the latest release. One way out of it now, the one
@@ -34,7 +35,7 @@ export function CLIUpdateBanner() {
       <button
         type="button"
         className="cli-banner-copy"
-        title="Copy the update command to the clipboard"
+        title={t('Copy the update command to the clipboard')}
         aria-label={`Copy ${command} to the clipboard`}
         onClick={copy}
       >

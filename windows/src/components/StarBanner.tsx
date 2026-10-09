@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { readSetting, writeSetting } from '../lib/settings'
 import { StarIcon, XIcon } from './Icons'
+import { t } from '../i18n/index'
 
 const GITHUB_URL = 'https://github.com/getagentseal/codeburn'
 
@@ -18,11 +19,11 @@ export function StarBanner() {
     <div className="star-banner">
       <StarIcon size={10} className="star-banner-icon" />
       <button type="button" className="star-banner-link" onClick={() => openUrl(GITHUB_URL)}>
-        <span>Enjoying CodeBurn?</span>{' '}
-        <span className="star-banner-cta">Star us on GitHub</span>
+        <span>{t('Enjoying CodeBurn?')}</span>{' '}
+        <span className="star-banner-cta">{t('Star us on GitHub')}</span>
       </button>
       <span className="star-banner-spacer" />
-      <button type="button" className="star-banner-close" onClick={dismiss} title="Hide this banner" aria-label="Hide this banner">
+      <button type="button" className="star-banner-close" onClick={dismiss} title={t('Hide this banner')} aria-label={t('Hide this banner')}>
         <XIcon size={9} />
       </button>
     </div>
