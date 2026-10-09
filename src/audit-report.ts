@@ -110,7 +110,7 @@ export async function aggregateAudit(projects: ProjectSummary[]): Promise<AuditR
           bucket.cacheReadDisplayed += cacheReadForCall
           bucket.attributedCostUSD += call.costUSD
           // Recompute per call through the same tier swap calculateCost applies
-          // (prompt tokens = input + cached input of THIS call), so a
+          // (prompt tokens = input + cache read + cache write of THIS call), so a
           // long-context request shows the rates that priced it while a bucket
           // of small calls never crosses the threshold on the sum. Fast-mode
           // and the 1-hour cache-write rate remain visible gaps on purpose.
@@ -119,7 +119,7 @@ export async function aggregateAudit(projects: ProjectSummary[]): Promise<AuditR
           const pricingModel = pricingModelAt(bucket.model, call.timestamp)
           const rates = pricingModel === bucket.model ? bucket.rates : getModelCosts(pricingModel)
           if (rates) {
-            const promptTokens = u.inputTokens + cacheReadForCall
+            const promptTokens = u.inputTokens + cacheReadForCall + u.cacheCreationInputTokens
             const tiered = tieredCostsFor(pricingModel, rates, promptTokens, bucket.provider)
             const outputForCall = billableOutputTokens(bucket.provider, u.outputTokens, u.reasoningTokens)
             bucket.recomputed.input += u.inputTokens * tiered.inputCostPerToken

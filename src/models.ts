@@ -206,7 +206,7 @@ export function tieredCostsFor(model: string, baseCosts: ModelCosts, promptToken
   const tier = provider !== undefined && TIERED_PRICING_PROVIDERS.has(provider)
     ? baseCosts.longContextTier
     : undefined
-  if (tier && promptTokens >= tier.thresholdTokens) {
+  if (tier && promptTokens > tier.thresholdTokens) {
     return {
       ...baseCosts,
       inputCostPerToken: tier.inputCostPerToken,
@@ -1540,7 +1540,7 @@ export function calculateCost(
   const safeOneHourCacheCreation = safe(oneHourCacheCreationTokens)
   const safeCacheCreation = Math.max(safe(cacheCreationTokens), safeOneHourCacheCreation)
   const safeFiveMinuteCacheCreation = Math.max(0, safeCacheCreation - safeOneHourCacheCreation)
-  const promptTokens = safe(inputTokens) + safe(cacheReadTokens)
+  const promptTokens = safe(inputTokens) + safe(cacheReadTokens) + safeCacheCreation
   const tieredCosts = tieredCostsFor(model, speed === 'flex' ? costs.flex ?? costs : costs, promptTokens, provider)
   const multiplier = speed === 'fast' ? tieredCosts.fastMultiplier : 1
 

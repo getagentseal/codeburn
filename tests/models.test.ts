@@ -180,15 +180,22 @@ describe('getModelCosts', () => {
       expect(getModelCosts('deepseek-v4-pro')?.longContextTier).toBeUndefined()
     })
 
-    it('applies the tier to every token at and after the threshold, and only then', () => {
-      // prompt tokens = input + cached input; below the threshold the base
-      // rates apply, at it the tier's rates price the WHOLE request.
+    it('applies the tier to every token above the threshold, and only then', () => {
+      // prompt tokens = input + cache read + cache write; up to and including
+      // the threshold the base rates apply, above it the tier's rates price
+      // the WHOLE request.
       const below = calculateCost('gpt-5.6', 271_999, 0, 0, 0, 0, 'standard', 0, 'codex')
       expect(below).toBeCloseTo(271_999 * 4e-6, 9)
       const at = calculateCost('gpt-5.6', 272_000, 0, 0, 0, 0, 'standard', 0, 'codex')
-      expect(at).toBeCloseTo(272_000 * 8e-6, 9)
-      const above = calculateCost('gpt-5.6', 271_000, 0, 0, 1_000, 0, 'standard', 0, 'codex')
-      expect(above).toBeCloseTo(271_000 * 8e-6 + 1_000 * 8e-7, 9)
+      expect(at).toBeCloseTo(272_000 * 4e-6, 9)
+      const over = calculateCost('gpt-5.6', 272_001, 0, 0, 0, 0, 'standard', 0, 'codex')
+      expect(over).toBeCloseTo(272_001 * 8e-6, 9)
+      const above = calculateCost('gpt-5.6', 271_001, 0, 0, 1_000, 0, 'standard', 0, 'codex')
+      expect(above).toBeCloseTo(271_001 * 8e-6 + 1_000 * 8e-7, 9)
+      // Cache-write tokens are prompt tokens too: 72k input + 200k cache read
+      // + 1 cache write crosses the threshold.
+      const withWrite = calculateCost('gpt-5.6', 72_000, 0, 1, 200_000, 0, 'standard', 0, 'codex')
+      expect(withWrite).toBeCloseTo(72_000 * 8e-6 + 1 * 1e-5 + 200_000 * 8e-7, 9)
       // The tier applies only where billing evidence exists for it: the same
       // call through a provider not in TIERED_PRICING_PROVIDERS (or none, the
       // default for every legacy caller) keeps the base rate.

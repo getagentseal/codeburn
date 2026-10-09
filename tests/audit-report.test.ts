@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 
 import { aggregateAudit } from '../src/audit-report.js'
+import { calculateCost } from '../src/models.js'
 import type {
   ProjectSummary,
   SessionSummary,
@@ -90,6 +91,13 @@ describe('aggregateAudit', () => {
     expect(row.cost.recomputedTotalUSD).toBeCloseTo(expected, 9)
     // attributed priced the same way at parse time, so the invariant holds.
     expect(row.attributedCostUSD).toBeCloseTo(expected, 9)
+  })
+
+  it('counts cache-write tokens toward the long-context threshold', async () => {
+    const usage = { inputTokens: 0, cachedInputTokens: 200_000, cacheCreationInputTokens: 80_000, outputTokens: 1_000 }
+    const cost = calculateCost('gpt-5.6-sol', 0, 1_000, 80_000, 200_000, 0, 'standard', 0, 'codex')
+    const rows = await aggregateAudit([makeProject([makeCall(usage, cost, 'gpt-5.6-sol', 'codex')])])
+    expect(rows[0]!.cost.recomputedTotalUSD).toBeCloseTo(cost, 12)
   })
 
   it('recomputes codex-auto-review per call date, matching the parse-time price', async () => {
