@@ -844,7 +844,7 @@ async function adoptOlderDailyCaches(): Promise<DailyCache> {
     base = migratedFrom(candidates[0]!.parsed as Parameters<typeof migratedFrom>[0])
     rest = candidates.slice(1)
   } else {
-    base = emptyCache()
+    base = emptyCache(candidates[0]!.parsed.savingsConfigHash)
   }
   let days = base.days
   for (const { parsed } of rest) {
@@ -1001,8 +1001,11 @@ function addSliceIntoDay(day: DailyEntry, provider: string, slice: ProviderDaySl
   // it pollutes every object in the process.
   const placeholder = Object.hasOwn(day.providers, provider) ? day.providers[provider] : undefined
   const placeholderSessions = placeholder?.sessions ?? 0
-  const merged = structuredClone(slice)
-  if (residual) {
+  // A residual over a fresh slice that carries data is content no surviving
+  // source explains, so it adds to that slice instead of replacing it.
+  const summed = residual && placeholder !== undefined && hasSliceData(placeholder)
+  const merged = summed ? addSliceInto(structuredClone(placeholder), slice) : structuredClone(slice)
+  if (residual && !summed) {
     // The subtraction removed the placeholder's sessions from this residual, so
     // every remaining session is distinct from the placeholder's - add, don't
     // max (max would clamp 1 + 1 to 1 and lose the source-gone session).
@@ -1058,6 +1061,7 @@ function addSliceIntoDay(day: DailyEntry, provider: string, slice: ProviderDaySl
     acc.sessions += residual ? num(p.sessions) : Math.max(0, num(p.sessions) - placeholderProjectSessions)
     setOwn(dayProjects, name, acc)
   }
+  if (summed) return
   // Placeholder-only projects (session counted fresh, calls landed elsewhere)
   // survive on the merged slice rather than being dropped by the clone above.
   const mergedProjects = merged.projects
@@ -1077,6 +1081,33 @@ function addSliceIntoDay(day: DailyEntry, provider: string, slice: ProviderDaySl
   } else if (placeholder?.projects) {
     merged.projects = structuredClone(placeholder.projects)
   }
+}
+
+function addSliceInto(target: ProviderDaySlice, add: ProviderDaySlice): ProviderDaySlice {
+  for (const key of ['calls', 'cost', 'savingsUSD', 'sessions', 'inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheWriteTokens', 'editTurns', 'oneShotTurns'] as const) {
+    target[key] = (target[key] ?? 0) + (add[key] ?? 0)
+  }
+  for (const [name, m] of Object.entries(add.models ?? {})) {
+    const models = (target.models ??= {})
+    const acc = Object.hasOwn(models, name) ? models[name]! : emptyModelStats()
+    for (const key of REMAINDER_KEYS) acc[key] += m[key] ?? 0
+    setOwn(models, name, acc)
+  }
+  for (const [cat, c] of Object.entries(add.categories ?? {})) {
+    const categories = (target.categories ??= {})
+    const acc = Object.hasOwn(categories, cat) ? categories[cat]! : { turns: 0, cost: 0, savingsUSD: 0, editTurns: 0, oneShotTurns: 0 }
+    for (const key of ['turns', 'cost', 'savingsUSD', 'editTurns', 'oneShotTurns'] as const) acc[key] += c[key] ?? 0
+    setOwn(categories, cat, acc)
+  }
+  for (const [name, p] of Object.entries(add.projects ?? {})) {
+    const projects = (target.projects ??= {})
+    const acc = Object.hasOwn(projects, name) ? projects[name]! : { cost: 0, calls: 0, savingsUSD: 0, sessions: 0 }
+    for (const key of ['cost', 'calls', 'savingsUSD', 'sessions'] as const) acc[key] += num(p[key])
+    if (!acc.path && p.path) acc.path = p.path
+    if (!acc.originKey && p.originKey) acc.originKey = p.originKey
+    setOwn(projects, name, acc)
+  }
+  return target
 }
 
 /// Assign via defineProperty so filesystem-derived keys like "__proto__" become

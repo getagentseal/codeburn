@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { rm } from 'fs/promises'
+import { mkdir, rm, writeFile } from 'fs/promises'
 import { existsSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
@@ -484,5 +484,59 @@ describe('fix round 1', () => {
     expect(m.models['shared-model']!.calls).toBe(1)
     // Reconciliation: day totals equal the sum of the surviving slices.
     expect(m.cost).toBeCloseTo(m.providers['B']!.cost, 5)
+  })
+})
+
+describe('tz re-derive after adopting an older-version cache', () => {
+  it('settles every live day on the fresh parse and keeps a sources-gone day once', async () => {
+    // Settled days (before the 7-day window) with uneven hourly activity, so
+    // the old-tz and machine-tz buckets of one date hold different call counts.
+    const calls: ReturnType<typeof makeCall>[] = []
+    for (let d = 1; d <= 6; d++) {
+      for (let h = 0; h < 24; h += 2) {
+        if ((d * 5 + h) % 3 === 0) continue
+        calls.push(makeCall(`2026-06-0${d}T${String(h).padStart(2, '0')}:15:00.000Z`, d + h / 10, 'claude'))
+      }
+    }
+    const fixture = calls.map(c => makeProject([c]))
+    const goneDay = day('2026-05-20', { claude: slice(77, 7) })
+    // One call on a live day whose transcript is gone: its residual must sit
+    // on top of the fresh slice, not replace it.
+    const oldTzDays = aggregateInTz(fixture, OLD_TZ)
+    const partial = oldTzDays.find(d => d.date === '2026-06-03')!
+    for (const holder of [partial, partial.providers['claude']!]) {
+      holder.calls += 1
+      holder.cost += 5
+    }
+    await mkdir(TMP_CACHE_ROOT, { recursive: true })
+    await writeFile(join(TMP_CACHE_ROOT, `daily-cache.v${DAILY_CACHE_VERSION - 1}.json`), JSON.stringify({
+      version: DAILY_CACHE_VERSION - 1,
+      savingsConfigHash: 'cfg-A',
+      tzKey: OLD_TZ,
+      lastComputedDate: '2026-06-14',
+      complete: true,
+      days: [goneDay, ...oldTzDays],
+    }), 'utf-8')
+
+    const out = await ensureCacheHydrated(
+      rangeAwareParse(fixture),
+      aggregateProjectsIntoDays,
+      'cfg-A',
+      () => true,
+      aggregateInTz,
+    )
+
+    const fresh = aggregateProjectsIntoDays(fixture).filter(d => d.calls > 0)
+    const byDate = new Map(out.days.map(d => [d.date, d]))
+    for (const f of fresh) {
+      const extra = f.date === '2026-06-03' ? 1 : 0
+      const got = byDate.get(f.date)!
+      expect(got.calls, f.date).toBe(f.calls + extra)
+      expect(got.cost, f.date).toBeCloseTo(f.cost + 5 * extra, 5)
+      expect(got.providers['claude']!.calls, f.date).toBe(got.calls)
+      expect(got.providers['claude']!.cost, f.date).toBeCloseTo(got.cost, 5)
+    }
+    expect(byDate.get('2026-05-20')).toMatchObject({ cost: 77, calls: 7 })
+    expect(out.days.reduce((s, d) => s + d.calls, 0)).toBe(calls.length + 1 + 7)
   })
 })
