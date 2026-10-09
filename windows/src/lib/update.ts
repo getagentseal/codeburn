@@ -14,7 +14,8 @@ import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { openUrl } from '@tauri-apps/plugin-opener'
 
-import { t } from './i18n'
+import { t } from '../i18n'
+import { t as menuT } from './i18n'
 import {
   EMPTY_CLI_UPDATE, applyEngineLine, desktopHandedOff, updateOffered, type CliUpdateState,
 } from './cliUpdate'
@@ -218,15 +219,15 @@ export function subscribeUpdate(listener: Listener): () => void {
 /// install the app no longer performs.
 export function badgeLabel(state: UpdateState): string {
   const status = state.status
-  if (state.cliUpdate.running) return t('Updating the CLI...')
-  if (status?.failureStage === 'check') return 'Update Check Failed'
+  if (state.cliUpdate.running) return menuT('Updating the CLI...')
+  if (status?.failureStage === 'check') return t('Update Check Failed')
   if (status?.updateAvailable && status.installRoute === 'oneClick') {
-    if (status.readyToInstall) return 'Restart to Update'
-    return state.downloading ? 'Downloading...' : 'Update Available'
+    if (status.readyToInstall) return t('Restart to Update')
+    return state.downloading ? t('Downloading...') : t('Update Available')
   }
-  if (status?.updateAvailable) return 'Download from GitHub'
-  if (status?.cliUpdateAvailable) return 'CLI Update Available'
-  return 'Update'
+  if (status?.updateAvailable) return t('Download from GitHub')
+  if (status?.cliUpdateAvailable) return t('CLI Update Available')
+  return t('Update')
 }
 
 /// UpdateChecker.updateHelpText: the whole story in the tooltip, since the pill has room for
@@ -235,29 +236,36 @@ export function helpText(state: UpdateState): string {
   const status = state.status
   if (status?.failureStage === 'check' && status.error) {
     return [
-      'CodeBurn could not check GitHub for updates.',
+      t('CodeBurn could not check GitHub for updates.'),
       status.error,
-      'Click to retry the update check.',
+      t('Click to retry the update check.'),
     ].join('\n\n')
   }
   if (status?.updateAvailable && status.installRoute === 'oneClick') {
-    const version = status.latestVersion ? `Version ${status.latestVersion}` : 'A newer version'
-    return status.readyToInstall
-      ? `${version} is downloaded. Click to restart into it.`
-      : `${version} is available. Click to download it.`
+    if (status.readyToInstall) {
+      return status.latestVersion
+        ? t('Version %@ is downloaded. Click to restart into it.', status.latestVersion)
+        : t('A newer version is downloaded. Click to restart into it.')
+    }
+    return status.latestVersion
+      ? t('Version %@ is available. Click to download it.', status.latestVersion)
+      : t('A newer version is available. Click to download it.')
   }
   if (status?.updateAvailable) {
-    const version = status.latestVersion ? `Version ${status.latestVersion}` : 'A newer version'
+    const lead = status.latestVersion
+      ? t('Version %@ is on GitHub. Click to open the release page.', status.latestVersion)
+      : t('A newer version is on GitHub. Click to open the release page.')
     return [
-      `${version} is on GitHub. Click to open the release page.`,
-      `These builds do not update themselves. Download the installer there, or run ${status.appUpdateCommand} in a terminal.`,
+      lead,
+      t('These builds do not update themselves. Download the installer there, or run %@ in a terminal.', status.appUpdateCommand),
     ].join('\n\n')
   }
   if (status?.cliUpdateAvailable) {
-    const version = status.latestCliVersion ?? 'A newer CLI'
-    return `CLI ${version} is available. Click to update it.`
+    return status.latestCliVersion
+      ? t('CLI %@ is available. Click to update it.', status.latestCliVersion)
+      : t('A newer CLI is available. Click to update it.')
   }
-  return 'Check GitHub for a newer release'
+  return t('Check GitHub for a newer release')
 }
 
 /// What a click on the badge does: a one-click update updates the CLI and downloads, then restarts; a manual one

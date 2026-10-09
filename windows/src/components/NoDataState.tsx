@@ -3,16 +3,17 @@
 /// fallback reads too, so the two surfaces cannot describe the same tool differently.
 
 import { WATCHED_TOOLS } from '../lib/watched'
+import { t } from '../i18n/index'
 
 export function NoDataState({ onRefresh }: { onRefresh: () => void }) {
   return (
     <section className="no-data">
-      <h2 className="no-data-title">No session data yet</h2>
+      <h2 className="no-data-title">{t('No session data yet')}</h2>
       <p>
         CodeBurn reads local session logs written by your AI coding tools. None of the
         supported tools have recorded a session on this machine yet.
       </p>
-      <p className="no-data-sub">Watched locations</p>
+      <p className="no-data-sub">{t('Watched locations')}</p>
       <ul>
         {WATCHED_TOOLS.map(t => (
           <li key={t.id}>
@@ -20,8 +21,8 @@ export function NoDataState({ onRefresh }: { onRefresh: () => void }) {
           </li>
         ))}
       </ul>
-      <p>Run one of those tools for a session, then refresh.</p>
-      <button type="button" className="btn" onClick={onRefresh}>Refresh now</button>
+      <p>{t('Run one of those tools for a session, then refresh.')}</p>
+      <button type="button" className="btn" onClick={onRefresh}>{t('Refresh now')}</button>
     </section>
   )
 }

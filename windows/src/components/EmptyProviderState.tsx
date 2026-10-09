@@ -1,4 +1,5 @@
 import type { Period } from './PeriodTabs'
+import { t } from '../i18n'
 import { PERIOD_PHRASES } from './PeriodTabs'
 import { TrayIcon } from './Icons'
 
@@ -11,7 +12,7 @@ export function EmptyProviderState({ label, period }: Props) {
   return (
     <div className="empty-provider">
       <TrayIcon size={26} className="empty-provider-icon" />
-      <div className="empty-provider-text">No {label} data for {PERIOD_PHRASES[period]}</div>
+      <div className="empty-provider-text">{t('No %1$@ data for %2$@', label, t(PERIOD_PHRASES[period]))}</div>
     </div>
   )
 }

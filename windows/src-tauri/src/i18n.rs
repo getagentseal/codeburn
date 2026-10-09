@@ -5,9 +5,9 @@
 //! not need the mac bundle beside it.
 //!
 //! `system` follows the Windows UI language list (`GetUserPreferredUILanguages`), not
-//! `GetUserDefaultLocaleName`, which telemetry already uses for a country code. Only
-//! Simplified Chinese is shipped: `zh-Hans`, `zh-CN` and `zh-SG` select zh-Hans, and
-//! `zh-Hant` / `zh-TW` / `zh-HK` stay on English.
+//! `GetUserDefaultLocaleName`, which telemetry already uses for a country code.
+//! Shipped UI languages match the desktop app: en, fr, ja, ko, zh-Hans (`zh-CN`) and
+//! zh-Hant (`zh-TW`, `zh-HK`).
 
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
@@ -15,18 +15,27 @@ use std::sync::OnceLock;
 use serde_json::Value;
 
 const EN_JSON: &str = include_str!("../locales/en.json");
+const FR_JSON: &str = include_str!("../locales/fr.json");
+const JA_JSON: &str = include_str!("../locales/ja.json");
+const KO_JSON: &str = include_str!("../locales/ko.json");
 const ZH_HANS_JSON: &str = include_str!("../locales/zh-Hans.json");
+const ZH_HANT_JSON: &str = include_str!("../locales/zh-Hant.json");
 
 struct Catalogs {
-    en: BTreeMap<String, String>,
-    zh_hans: BTreeMap<String, String>,
+    tables: BTreeMap<&'static str, BTreeMap<String, String>>,
 }
 
 fn catalogs() -> &'static Catalogs {
     static CATALOGS: OnceLock<Catalogs> = OnceLock::new();
-    CATALOGS.get_or_init(|| Catalogs {
-        en: parse_catalog(EN_JSON, "en"),
-        zh_hans: parse_catalog(ZH_HANS_JSON, "zh-Hans"),
+    CATALOGS.get_or_init(|| {
+        let mut tables = BTreeMap::new();
+        tables.insert("en", parse_catalog(EN_JSON, "en"));
+        tables.insert("fr", parse_catalog(FR_JSON, "fr"));
+        tables.insert("ja", parse_catalog(JA_JSON, "ja"));
+        tables.insert("ko", parse_catalog(KO_JSON, "ko"));
+        tables.insert("zh-Hans", parse_catalog(ZH_HANS_JSON, "zh-Hans"));
+        tables.insert("zh-Hant", parse_catalog(ZH_HANT_JSON, "zh-Hant"));
+        Catalogs { tables }
     })
 }
 
@@ -37,11 +46,11 @@ fn parse_catalog(raw: &str, name: &str) -> BTreeMap<String, String> {
 
 fn catalog_for(locale: &str) -> &'static BTreeMap<String, String> {
     let catalogs = catalogs();
-    if locale == "zh-Hans" {
-        &catalogs.zh_hans
-    } else {
-        &catalogs.en
-    }
+    catalogs
+        .tables
+        .get(locale)
+        .or_else(|| catalogs.tables.get("en"))
+        .expect("en catalog")
 }
 
 /// The sentence for `key` in the resolved language. An unknown key comes back unchanged,
@@ -70,7 +79,12 @@ pub fn format_message(key: &str, args: &[Value]) -> String {
 /// Shared config preference; only a missing language follows the system.
 pub fn normalize_preference(value: Option<&str>) -> &'static str {
     match value {
-        Some("zh-CN") => "zh-Hans",
+        Some("zh-CN") | Some("zh-Hans") => "zh-Hans",
+        Some("zh-TW") | Some("zh-HK") | Some("zh-Hant") => "zh-Hant",
+        Some("en") => "en",
+        Some("fr") => "fr",
+        Some("ja") => "ja",
+        Some("ko") => "ko",
         Some(_) => "en",
         None => "system",
     }
@@ -84,9 +98,17 @@ pub fn resolve_language<'a>(
 ) -> &'static str {
     match preference {
         "en" => "en",
+        "fr" => "fr",
+        "ja" => "ja",
+        "ko" => "ko",
         "zh-Hans" => "zh-Hans",
+        "zh-Hant" => "zh-Hant",
         _ => match first_ui_language(ui_languages) {
+            Some(tag) if is_traditional_chinese(tag) => "zh-Hant",
             Some(tag) if is_simplified_chinese(tag) => "zh-Hans",
+            Some(tag) if is_language(tag, "fr") => "fr",
+            Some(tag) if is_language(tag, "ja") => "ja",
+            Some(tag) if is_language(tag, "ko") => "ko",
             _ => "en",
         },
     }
@@ -99,12 +121,62 @@ fn first_ui_language<'a>(ui_languages: impl IntoIterator<Item = &'a str>) -> Opt
         .find(|tag| !tag.is_empty())
 }
 
-fn is_simplified_chinese(tag: &str) -> bool {
+fn normalized_tag(tag: &str) -> String {
     let head = tag.split(['.', '@']).next().unwrap_or(tag);
-    let normalized = head.replace('_', "-").to_ascii_lowercase();
+    head.replace('_', "-").to_ascii_lowercase()
+}
+
+fn is_simplified_chinese(tag: &str) -> bool {
+    let normalized = normalized_tag(tag);
     language_is(&normalized, "zh-hans")
         || language_is(&normalized, "zh-cn")
         || language_is(&normalized, "zh-sg")
+}
+
+fn is_traditional_chinese(tag: &str) -> bool {
+    let normalized = normalized_tag(tag);
+    language_is(&normalized, "zh-hant")
+        || language_is(&normalized, "zh-tw")
+        || language_is(&normalized, "zh-hk")
+        || language_is(&normalized, "zh-mo")
+}
+
+fn is_language(tag: &str, want: &str) -> bool {
+    let normalized = normalized_tag(tag);
+    language_is(&normalized, want)
+}
+
+/// The raw `language` value in config.json, or an empty string when it is absent.
+/// A change here is what a desktop-app language switch looks like to the tray.
+pub fn stored_language_key() -> String {
+    crate::config::read()
+        .get("language")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_owned()
+}
+
+#[derive(serde::Serialize)]
+pub struct LanguageState {
+    /// The desktop app's config value: `system` when the key is absent.
+    pub choice: String,
+    /// The catalog this process should render.
+    pub locale: String,
+}
+
+pub fn language_state() -> LanguageState {
+    let stored = stored_language_key();
+    let choice = match stored.as_str() {
+        "" => "system",
+        "zh-Hans" | "zh-CN" => "zh-CN",
+        "zh-Hant" | "zh-TW" | "zh-HK" => "zh-TW",
+        "en" | "fr" | "ja" | "ko" => stored.as_str(),
+        _ => "system",
+    };
+    LanguageState {
+        choice: choice.to_owned(),
+        locale: resolved_language(),
+    }
 }
 
 fn language_is(tag: &str, want: &str) -> bool {
@@ -369,22 +441,22 @@ mod tests {
 
     #[test]
     fn catalogs_share_every_key_and_placeholder() {
-        let en = &catalogs().en;
-        let zh = &catalogs().zh_hans;
-        assert_eq!(
-            en.keys().cloned().collect::<Vec<_>>(),
-            zh.keys().cloned().collect::<Vec<_>>(),
-            "en and zh-Hans must list the same keys"
-        );
-        for (key, english) in en {
-            let translated = zh
-                .get(key)
-                .unwrap_or_else(|| panic!("zh-Hans is missing {key}"));
+        let tables = &catalogs().tables;
+        let en = tables.get("en").expect("en");
+        for (name, table) in tables {
             assert_eq!(
-                placeholder_tokens(english),
-                placeholder_tokens(translated),
-                "{key}"
+                en.keys().cloned().collect::<Vec<_>>(),
+                table.keys().cloned().collect::<Vec<_>>(),
+                "en and {name} must list the same keys"
             );
+            for (key, english) in en {
+                let translated = table.get(key).unwrap_or_else(|| panic!("{name} is missing {key}"));
+                assert_eq!(
+                    placeholder_tokens(english),
+                    placeholder_tokens(translated),
+                    "{name} {key}"
+                );
+            }
         }
     }
 
@@ -412,20 +484,24 @@ mod tests {
         assert_eq!(resolve_language("system", ["zh-Hans"]), "zh-Hans");
         assert_eq!(resolve_language("system", ["zh-SG"]), "zh-Hans");
         assert_eq!(resolve_language("system", ["zh_CN.UTF-8"]), "zh-Hans");
-        assert_eq!(resolve_language("system", ["fr-FR"]), "en");
-        assert_eq!(resolve_language("system", ["zh-TW"]), "en");
-        assert_eq!(resolve_language("system", ["zh-HK"]), "en");
-        assert_eq!(resolve_language("system", ["zh-Hant"]), "en");
+        assert_eq!(resolve_language("system", ["zh-TW"]), "zh-Hant");
+        assert_eq!(resolve_language("system", ["zh-HK"]), "zh-Hant");
+        assert_eq!(resolve_language("system", ["zh-Hant"]), "zh-Hant");
+        assert_eq!(resolve_language("zh-Hant", ["en-US"]), "zh-Hant");
+        assert_eq!(resolve_language("system", ["fr-FR"]), "fr");
+        assert_eq!(resolve_language("system", ["ja-JP"]), "ja");
         assert_eq!(resolve_language("system", std::iter::empty()), "en");
     }
 
     #[test]
     fn shared_config_language_maps_zh_cn_and_defaults_only_when_missing() {
-        assert_eq!(normalize_preference(Some("zh-Hans")), "en");
+        assert_eq!(normalize_preference(Some("zh-Hans")), "zh-Hans");
         assert_eq!(normalize_preference(Some("en")), "en");
+        assert_eq!(normalize_preference(Some("fr")), "fr");
         assert_eq!(normalize_preference(Some("garbage")), "en");
         assert_eq!(normalize_preference(Some("zh-CN")), "zh-Hans");
-        assert_eq!(normalize_preference(Some("zh-TW")), "en");
+        assert_eq!(normalize_preference(Some("zh-TW")), "zh-Hant");
+        assert_eq!(normalize_preference(Some("zh-HK")), "zh-Hant");
         assert_eq!(normalize_preference(None), "system");
     }
 

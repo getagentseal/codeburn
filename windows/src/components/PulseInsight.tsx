@@ -3,6 +3,7 @@ import type { CurrencyState } from '../lib/currency'
 import { formatCompactCurrency } from '../lib/currency'
 import { formatSessionAveragePlaceholder, sessionCountIsExact } from '../lib/session-count-label'
 import { PencilLineIcon } from './Icons'
+import { t } from '../i18n/index'
 
 type Props = {
   payload: MenubarPayload
@@ -21,15 +22,15 @@ export function PulseInsight({ payload, currency }: Props) {
     <div className="pulse">
       <div className="pulse-tiles">
         <div className="pulse-tile">
-          <div className="pulse-label">Cache hit</div>
+          <div className="pulse-label">{t('Cache hit')}</div>
           <div className="pulse-value pulse-value-accent">{cacheText}</div>
         </div>
         <div className="pulse-tile">
-          <div className="pulse-label">1-shot</div>
+          <div className="pulse-label">{t('1-shot')}</div>
           <div className={`pulse-value ${oneShotRate == null ? '' : 'pulse-value-accent'}`}>{oneShotText}</div>
         </div>
         <div className="pulse-tile">
-          <div className="pulse-label">Cost / session</div>
+          <div className="pulse-label">{t('Cost / session')}</div>
           <div className="pulse-value">{costPerSession}</div>
         </div>
       </div>
@@ -53,7 +54,7 @@ function CostPerEdit({ payload, currency }: Props) {
   return (
     <div className="pulse-cpe">
       <PencilLineIcon size={9} />
-      <span className="pulse-cpe-label">Cost/edit</span>
+      <span className="pulse-cpe-label">{t('Cost/edit')}</span>
       <span className="pulse-cpe-figure pulse-cpe-best">{perEdit(best.costPerEdit, currency)}</span>
       <span className="pulse-cpe-model">{best.name}</span>
       {worst && worst.name !== best.name && (
