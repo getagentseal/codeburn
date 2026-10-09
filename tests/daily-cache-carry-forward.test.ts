@@ -449,22 +449,23 @@ describe('adoption union across older cache files', () => {
     expect(JSON.parse(await readFile(join(TMP_CACHE_ROOT, 'daily-cache.json.v9.bak'), 'utf-8'))).toEqual(JSON.parse(JSON.stringify(v9bak)))
   })
 
-  it('never mixes days from a file written under another timezone', async () => {
+  it('adopts the timezone of the top file and drops only other-zone files below it', async () => {
     const foreignTz = currentTzKey() === 'UTC' ? 'America/Los_Angeles' : 'UTC'
-    const local = {
+    const olderLocal = {
       version: 27, tzKey: currentTzKey(), complete: true, lastComputedDate: '2026-07-28',
-      days: [day('2026-07-27', { claude: slice(307.02, 900) })],
+      days: [day('2026-07-27', { claude: slice(307.02, 900) }), day('2026-07-20', { claude: slice(5, 2) })],
     }
-    const foreign = {
+    const newestForeign = {
       version: 28, tzKey: foreignTz, complete: true, lastComputedDate: '2026-07-28',
       days: [day('2026-07-27', { claude: slice(625.71, 1500) }), day('2026-07-28', { codex: slice(40, 30) })],
     }
-    await writeFile(join(TMP_CACHE_ROOT, 'daily-cache.v27.json'), JSON.stringify(local), 'utf-8')
-    await writeFile(join(TMP_CACHE_ROOT, 'daily-cache.v28.json'), JSON.stringify(foreign), 'utf-8')
+    await writeFile(join(TMP_CACHE_ROOT, 'daily-cache.v27.json'), JSON.stringify(olderLocal), 'utf-8')
+    await writeFile(join(TMP_CACHE_ROOT, 'daily-cache.v28.json'), JSON.stringify(newestForeign), 'utf-8')
     const cache = await loadDailyCache()
-    expect(cache.days).toHaveLength(1)
-    expect(cache.days[0]).toMatchObject({ date: '2026-07-27', cost: 307.02, calls: 900 })
-    expect(cache.tzKey).toBe(currentTzKey())
+    expect(cache.days.map(d => d.date)).toEqual(['2026-07-27', '2026-07-28'])
+    expect(cache.days[0]).toMatchObject({ cost: 625.71, calls: 1500 })
+    // Tagged with the zone it was bucketed in, so hydration re-buckets it.
+    expect(cache.tzKey).toBe(foreignTz)
   })
 
   it('adopts a foreign-timezone history whole and tagged when it is all there is', async () => {

@@ -831,13 +831,11 @@ async function adoptOlderDailyCaches(): Promise<DailyCache> {
   // A date is a local-midnight bucket, so two files written under different
   // timezones hold different hours under the same date and any per-slice union
   // of them counts the hours between the two midnights twice. Adopt one
-  // timezone only: the machine's when some file has it, else the top file's,
-  // and tag the result with the zone it was bucketed in. Files from before
-  // tzKey existed cannot be told apart and stay in.
-  const machineTz = currentTzKey()
-  const adoptTz = candidates.some(c => c.parsed.tzKey === machineTz)
-    ? machineTz
-    : candidates.find(c => c.parsed.tzKey !== undefined)?.parsed.tzKey ?? machineTz
+  // timezone only, the top file's, and tag the result with it so hydration
+  // re-buckets it if the machine's differs. Preferring the machine's dropped
+  // the richest file whenever an older one matched. Files from before tzKey
+  // existed cannot be told apart and stay in.
+  const adoptTz = candidates.find(c => c.parsed.tzKey !== undefined)?.parsed.tzKey ?? currentTzKey()
   candidates = candidates.filter(c => c.parsed.tzKey === undefined || c.parsed.tzKey === adoptTz)
 
   let base: DailyCache
