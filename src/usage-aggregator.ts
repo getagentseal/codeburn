@@ -1294,10 +1294,13 @@ function disambiguatedProjectName(
 /// cache days attach only when cache+live agree on exactly one known identity.
 /// Otherwise the pathless total stays at the legacy slug (unallocated) and is
 /// cache-authoritative for matching live rows of that slug: do not add those
-/// live costs again. A truly different live-only slug at a cwd still counts.
+/// live costs again. Without a day set, a different live-only slug still counts.
 ///
 /// Cost/savings stay per-contributor (cache ?? live) except for the
-/// unallocated matching-slug case above. Session *counts* are live unique IDs
+/// unallocated matching-slug case above. With a day set, money comes from the
+/// days alone: they are what the headline sums, and a live parse can resolve
+/// sealed calls to another identity (a deleted worktree, a bare cursor-agent
+/// label), which counted them twice. Session *counts* are live unique IDs
 /// when accounting is source-only; any cache row without identities is a
 /// lower bound (max of live unique and the max per-day tick, never a sum).
 /// Session details follow the same allocation: only matching sessions, never
@@ -1493,7 +1496,7 @@ export function buildPayloadProjects(
       const policy = policyFor(p.project, liveId)
       if (policy === 'suppress') continue
       const acc = take(p.project, p.projectPath, p.project)
-      if (policy === 'use-live') {
+      if (policy === 'use-live' && !cacheDays) {
         const c = contribOf(acc, p.project)
         c.liveCost += p.totalCostUSD
         c.liveSavings += p.totalSavingsUSD
@@ -1511,7 +1514,7 @@ export function buildPayloadProjects(
       const acc = take(p.project, p.projectPath, p.project)
       addSessionOnce(acc, s)
       const c = contribOf(acc, s.project)
-      if (policy === 'use-live') {
+      if (policy === 'use-live' && !cacheDays) {
         c.liveCost += s.totalCostUSD
         c.liveSavings += s.totalSavingsUSD
         c.liveSessions += 1

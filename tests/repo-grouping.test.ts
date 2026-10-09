@@ -118,7 +118,7 @@ describe('projects grouped by git repository', () => {
 
   it('keeps a deleted clone in its repository', () => {
     const { a1, a2 } = fixtures()
-    const days = aggregateProjectsIntoDays([live(a2, 3)])
+    const days = aggregateProjectsIntoDays([live(a2, 3), live(a1, 5)])
     expect(Object.values(days[0]!.projects!)[0]!.originKey).toBe('github.com/getagentseal/codeburn')
     saveGitOrigins()
 
@@ -133,6 +133,7 @@ describe('projects grouped by git repository', () => {
     const cached: DailyEntry = days[0]!
     // Fixture sessions have no turns, so give the day its spend by hand.
     Object.values(cached.projects!)[0]!.cost = 3
+    Object.values(cached.projects!)[1]!.cost = 5
     const rows = buildPayloadProjects([live(a1, 5)], [cached], homedir())
     expect(rows.map(r => [r.name, r.cost])).toEqual([['codeburn', 8]])
 
