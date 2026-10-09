@@ -3,6 +3,7 @@
 # One did exactly that in db018f7 and had to be removed again in c642787.
 node_modules
 dist/
+dist-*/
 *.tgz
 
 # OS
