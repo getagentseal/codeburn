@@ -26,10 +26,15 @@ describe('codexCreditRate', () => {
     expect(codexCreditRate('gpt-5.5-pro')).toBeNull()
   })
 
-  it('resolves the auto-review activity id to the same rate as GPT-5.5', () => {
-    expect(codexCreditRate('codex-auto-review')).toEqual(codexCreditRate('gpt-5.5'))
-    expect(codexCreditRate('codex-auto-review')).not.toBeNull()
-    expect(codexCreditRate('CODEX-AUTO-REVIEW')).toEqual(codexCreditRate('gpt-5.5'))
+  it('rates auto-review as GPT-5.4 before 30 Jul 2026', () => {
+    expect(codexCreditRate('codex-auto-review', '2026-07-29T23:59:59Z')).toEqual(codexCreditRate('gpt-5.4'))
+    expect(codexCreditRate('CODEX-AUTO-REVIEW', '2026-05-06T16:53:28Z')).toEqual(codexCreditRate('gpt-5.4'))
+  })
+
+  it('leaves auto-review unrated from 30 Jul 2026: no published GPT-5.6 Luna credit rate', () => {
+    expect(codexCreditRate('codex-auto-review', '2026-07-30T00:00:00Z')).toBeNull()
+    expect(codexCreditRate('codex-auto-review')).toBeNull()
+    expect(codexCreditRate('gpt-5.6-luna', '2026-05-06T16:53:28Z')).toBeNull()
   })
 })
 
@@ -60,7 +65,8 @@ describe('codexCredits', () => {
     expect(codexCredits('gpt-4o', { inputTokens: 1_000_000, cachedReadTokens: 0, outputTokens: 0 })).toBeNull()
   })
 
-  it('charges auto-review at the GPT-5.5 credit rate, not null', () => {
-    expect(codexCredits('codex-auto-review', { inputTokens: 1_000_000, cachedReadTokens: 0, outputTokens: 0 })).toBe(125)
+  it('charges pre-30-Jul auto-review at the GPT-5.4 credit rate', () => {
+    expect(codexCredits('codex-auto-review', { inputTokens: 1_000_000, cachedReadTokens: 0, outputTokens: 0 }, '2026-06-01T12:00:00Z')).toBe(62.5)
+    expect(codexCredits('codex-auto-review', { inputTokens: 1_000_000, cachedReadTokens: 0, outputTokens: 0 }, '2026-08-01T12:00:00Z')).toBeNull()
   })
 })

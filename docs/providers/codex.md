@@ -22,6 +22,18 @@ Archived sessions are stored in a flat directory and are included in usage repor
 
 The active-session discovery walk uses strict regex (`^\d{4}$`, `^\d{2}$`) on each path component.
 
+Reports also read the optional `session_index.jsonl` in each discovered Codex
+home (`CODEX_HOME`, launcher/billed homes and supported WSL homes). The newest
+valid `thread_name` for a session `id` supplies its display title, including
+archived sessions. `updated_at` orders names; ties and undated records use the
+last valid line. Names use the existing 200-character display bound and control
+character sanitization. Missing, unreadable, malformed or blank entries keep the
+existing title/ID fallback. Non-files and indexes over 64 MiB are ignored.
+
+Names are overlaid when returning a report, so renames appear even on memory or
+disk usage-cache hits. The index and cached usage are never rewritten by this
+lookup; session IDs, token counts and costs remain unchanged.
+
 ## Storage format
 
 JSONL. Validation of the first line is **structural**: it must parse as JSON, have `type === "session_meta"`, and carry a `payload` that is a plain object (not missing, not a scalar, not an array). Files that fail this check are silently skipped.

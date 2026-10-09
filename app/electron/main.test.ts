@@ -45,6 +45,7 @@ const CHANNELS = [
   'codeburn:getModels',
   'codeburn:getSessions',
   'codeburn:getSessionsContributions',
+  'codeburn:getSessionWhy',
   'codeburn:getCompareModels',
   'codeburn:getCompare',
   'codeburn:getPeriodCompare',
@@ -66,8 +67,11 @@ const CHANNELS = [
   'codeburn:getProjectFilter',
   'codeburn:setProjectFilter',
   'codeburn:getUnfilteredProjects',
+  'codeburn:setTransientProject',
   'codeburn:getLanguage',
   'codeburn:setLanguage',
+  'codeburn:getCursorSync',
+  'codeburn:setCursorSync',
   'codeburn:setCurrency',
   'codeburn:resetCurrency',
   'codeburn:addAlias',
@@ -84,6 +88,8 @@ const CHANNELS = [
   'codeburn:telemetryOnboarded',
   'codeburn:telemetryTrack',
   'codeburn:getUpdateStatus',
+  'codeburn:downloadUpdate',
+  'codeburn:installUpdate',
   'codeburn:companionStatus',
   'codeburn:companionInstall',
   'codeburn:companionOpen',
@@ -122,6 +128,7 @@ const ARGV_CASES: Array<{ channel: string; args: unknown[]; argv: string[] }> = 
   { channel: 'codeburn:getSessions', args: ['30days', 'claude', { from: '2026-07-01', to: '2026-07-11' }], argv: ['sessions', '--format', 'json', '--period', '30days', '--provider', 'claude', '--from', '2026-07-01', '--to', '2026-07-11'] },
   { channel: 'codeburn:getSessionsContributions', args: ['week', 'all'], argv: ['sessions', '--format', 'json', '--contributions', '--period', 'week'] },
   { channel: 'codeburn:getSessionsContributions', args: ['30days', 'claude', { from: '2026-07-01', to: '2026-07-11' }], argv: ['sessions', '--format', 'json', '--contributions', '--period', '30days', '--provider', 'claude', '--from', '2026-07-01', '--to', '2026-07-11'] },
+  { channel: 'codeburn:getSessionWhy', args: ['7f3c2a91-4be0'], argv: ['sessions', '--id', '7f3c2a91-4be0', '--why', '--format', 'json'] },
   { channel: 'codeburn:getCompareModels', args: ['month', 'codex'], argv: ['compare', '--format', 'json', '--period', 'month', '--provider', 'codex'] },
   { channel: 'codeburn:getCompare', args: ['month', 'all', 'model-a', 'model-b'], argv: ['compare', '--format', 'json', '--period', 'month', '--model-a', 'model-a', '--model-b', 'model-b'] },
   { channel: 'codeburn:getPeriodCompare', args: [{ from: '2026-07-01', to: '2026-07-07' }, { from: '2026-07-08', to: '2026-07-14' }, 'claude'], argv: ['compare-periods', '--format', 'json', '--from-a', '2026-07-01', '--to-a', '2026-07-07', '--from-b', '2026-07-08', '--to-b', '2026-07-14', '--provider', 'claude'] },
@@ -772,7 +779,7 @@ describe('createBridgeHandlers (telemetry wiring)', () => {
     }
     const handlers = createBridgeHandlers(failing)
     await handlers['codeburn:getSessions']!('week', 'all')
-    expect(telemetry.track).toHaveBeenCalledWith('cli_error', { cmd: 'sessions', kind: 'timeout' })
+    expect(telemetry.track).toHaveBeenCalledWith('cli_error', { cmd: 'sessions', kind: 'timeout', ms: '<1s' })
   })
 
   it('includes the resolution-stage detail for a not-found (self-diagnosing without a repro)', async () => {
@@ -784,7 +791,7 @@ describe('createBridgeHandlers (telemetry wiring)', () => {
     }
     const handlers = createBridgeHandlers(failing)
     await handlers['codeburn:getPlans']!('week')
-    expect(telemetry.track).toHaveBeenCalledWith('cli_error', { cmd: 'status', kind: 'not-found', detail: 'bundled-not-absolute' })
+    expect(telemetry.track).toHaveBeenCalledWith('cli_error', { cmd: 'status', kind: 'not-found', detail: 'bundled-not-absolute', ms: '<1s' })
   })
 
   it('never leaks a path or message into cli_error telemetry, even when the error carries one', async () => {
@@ -799,9 +806,50 @@ describe('createBridgeHandlers (telemetry wiring)', () => {
     const handlers = createBridgeHandlers(failing)
     await handlers['codeburn:getSessions']!('week', 'all')
     const props = telemetry.track.mock.calls.find(([name]) => name === 'cli_error')![1] as Record<string, unknown>
-    expect(props).toEqual({ cmd: 'sessions', kind: 'not-found', detail: 'spawn-error' })
+    expect(props).toEqual({ cmd: 'sessions', kind: 'not-found', detail: 'spawn-error', ms: '<1s' })
     expect(JSON.stringify(props)).not.toContain('secret')
     expect(JSON.stringify(props)).not.toContain('C:\\')
+  })
+
+  it('adds the exit code, a stderr reason label and a scoped provider, never the stderr or a project', async () => {
+    const telemetry = fakeTelemetry()
+    const handlers = createBridgeHandlers({
+      ...deps(telemetry),
+      spawnCli: vi.fn(async () => {
+        throw new CliError('nonzero', "EACCES: permission denied, open '/Users/alice/secret/a.jsonl'", undefined, '1')
+      }),
+    })
+    await handlers['codeburn:getSessions']!('week', 'codex')
+    await handlers['codeburn:getOverview']!('week', 'all')
+    const calls = telemetry.track.mock.calls.filter(([name]) => name === 'cli_error').map(([, props]) => props)
+    expect(calls).toEqual([
+      { cmd: 'sessions', kind: 'nonzero', ms: '<1s', exit: '1', reason: 'eacces', provider: 'codex' },
+      { cmd: 'status', kind: 'nonzero', ms: '<1s', exit: '1', reason: 'eacces' },
+    ])
+    expect(JSON.stringify(calls)).not.toContain('secret')
+  })
+
+  it('forwards valid providerIssues from the overview payload as provider_read_fail', async () => {
+    const telemetry = fakeTelemetry()
+    const handlers = createBridgeHandlers({
+      ...deps(telemetry),
+      spawnCli: vi.fn(async () => ({
+        current: { cost: 1 },
+        providerIssues: [
+          { provider: 'cursor', stage: 'locate', kind: 'eacces' },
+          { provider: 'codex', stage: 'parse', kind: 'malformed' },
+          { provider: '/Users/alice', stage: 'parse', kind: 'error' },
+          { provider: 'kiro', stage: 'empty', kind: 'error' },
+          { provider: 'zed', stage: 'parse', kind: 'EACCES: /Users/alice' },
+        ],
+      })),
+    })
+    await handlers['codeburn:getOverview']!('week', 'all')
+    const forwarded = telemetry.track.mock.calls.filter(([name]) => name === 'provider_read_fail').map(([, props]) => props)
+    expect(forwarded).toEqual([
+      { provider: 'cursor', stage: 'locate', kind: 'eacces' },
+      { provider: 'codex', stage: 'parse', kind: 'malformed' },
+    ])
   })
 })
 
@@ -927,6 +975,51 @@ describe('project filter', () => {
       await handlers['codeburn:getOverview']!('30days', 'all', undefined, undefined, undefined, 'combined')
       expect(calls[0]).toEqual(['status', '--format', 'menubar-json', '--period', '30days', '--no-timeline', '--no-optimize', '--scope', 'combined'])
     })
+  })
+
+  it('narrows every report to the top bar project without touching the saved filter', async () => {
+    await withFilterFile(async () => {
+      writeProjectFilter({ project: ['work'], exclude: ['scratch'] })
+      const { spawnCli, spawnCliAction, calls } = fakeSpawn()
+      const handlers = createBridgeHandlers(deps({ spawnCli, spawnCliAction, resolveCodeburnPath: () => '/bin/codeburn' }))
+      expect(await handlers['codeburn:setTransientProject']!('/Users/me/work/-app')).toEqual({ ok: true, value: undefined })
+      await handlers['codeburn:getSessions']!('week', 'all')
+      // The pick replaces the saved includes; the saved excludes still apply.
+      expect(calls[0]).toEqual(['sessions', '--format', 'json', '--period', 'week', '--project==/Users/me/work/-app', '--exclude=scratch'])
+      // A project pick is local data: combined is dropped like with any filter.
+      await handlers['codeburn:getOverview']!('30days', 'all', undefined, undefined, undefined, 'combined')
+      expect(calls[1]).toEqual(['status', '--format', 'menubar-json', '--period', '30days', '--no-timeline', '--no-optimize', '--project==/Users/me/work/-app', '--exclude=scratch'])
+      // Not project-scoped: plans, the Projects pane list, and exports.
+      await handlers['codeburn:getPlans']!('week')
+      expect(calls[2]).toEqual(['status', '--format', 'json', '--period', 'week'])
+      await handlers['codeburn:getUnfilteredProjects']!()
+      expect(calls[3]).toEqual(['report', '--format', 'json', '--period', 'lifetime'])
+      await handlers['codeburn:exportData']!('json', 'all', '/tmp/out')
+      expect(calls[4]).toEqual(['export', '-f', 'json', '-o', '/tmp/out', '--provider', 'all', '--project=work', '--exclude=scratch'])
+      expect(readProjectFilter()).toEqual({ project: ['work'], exclude: ['scratch'] })
+
+      await handlers['codeburn:setTransientProject']!(null)
+      await handlers['codeburn:getSessions']!('week', 'all')
+      expect(calls[5]).toEqual(['sessions', '--format', 'json', '--period', 'week', '--project=work', '--exclude=scratch'])
+    })
+  })
+
+  it('accepts the temporary-folders row for the top bar pick', async () => {
+    const { spawnCli, spawnCliAction, calls } = fakeSpawn()
+    const handlers = createBridgeHandlers(deps({ spawnCli, spawnCliAction, resolveCodeburnPath: () => '/bin/codeburn' }))
+    expect(await handlers['codeburn:setTransientProject']!('@temp')).toEqual({ ok: true, value: undefined })
+    await handlers['codeburn:getSessions']!('week', 'all')
+    expect(calls[0]).toEqual(['sessions', '--format', 'json', '--period', 'week', '--project==@temp'])
+  })
+
+  it('accepts only an absolute project path for the top bar pick', async () => {
+    const { spawnCli, spawnCliAction, calls } = fakeSpawn()
+    const handlers = createBridgeHandlers(deps({ spawnCli, spawnCliAction, resolveCodeburnPath: () => '/bin/codeburn' }))
+    for (const bad of ['app', '', '--all', '/a\0b', 42, undefined]) {
+      expect(await handlers['codeburn:setTransientProject']!(bad)).toMatchObject({ ok: false, error: { kind: 'bad-args' } })
+    }
+    await handlers['codeburn:getSessions']!('week', 'all')
+    expect(calls[0]).toEqual(['sessions', '--format', 'json', '--period', 'week'])
   })
 
   it('drops blanks and duplicates on write, but keeps encoded names starting with "-"', async () => {
@@ -1150,6 +1243,35 @@ describe('project filter', () => {
     } finally {
       if (previous === undefined) delete process.env.CODEBURN_APP_FILTER
       else process.env.CODEBURN_APP_FILTER = previous
+    }
+  })
+})
+
+describe('codeburn:setCursorSync', () => {
+  it('writes only the shared config cursorSync key, clearing it when on', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'cb-cursor-sync-'))
+    const previous = process.env.HOME
+    process.env.HOME = home
+    try {
+      const config = join(home, '.config', 'codeburn', 'config.json')
+      mkdirSync(dirname(config), { recursive: true })
+      writeFileSync(config, JSON.stringify({ language: 'fr', currency: { code: 'EUR' } }))
+      const handlers = createBridgeHandlers({ spawnCli: vi.fn(), spawnCliAction: vi.fn(), resolveCodeburnPath: () => null, getQuota: vi.fn(async () => []) })
+      expect(await handlers['codeburn:getCursorSync']!()).toEqual({ ok: true, value: true })
+      expect(await handlers['codeburn:setCursorSync']!(false)).toEqual({ ok: true, value: undefined })
+      expect(JSON.parse(fs.readFileSync(config, 'utf8'))).toEqual({ language: 'fr', currency: { code: 'EUR' }, cursorSync: false })
+      expect(await handlers['codeburn:getCursorSync']!()).toEqual({ ok: true, value: false })
+      await handlers['codeburn:setCursorSync']!(true)
+      expect(JSON.parse(fs.readFileSync(config, 'utf8'))).toEqual({ language: 'fr', currency: { code: 'EUR' } })
+      expect(await handlers['codeburn:setCursorSync']!('off')).toMatchObject({ ok: false })
+      for (const body of ['null', '[1,2]', '{ not json']) {
+        writeFileSync(config, body)
+        expect(await handlers['codeburn:setCursorSync']!(false)).toMatchObject({ ok: false })
+        expect(fs.readFileSync(config, 'utf8')).toBe(body)
+      }
+    } finally {
+      process.env.HOME = previous
+      rmSync(home, { recursive: true, force: true })
     }
   })
 })

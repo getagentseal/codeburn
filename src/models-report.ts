@@ -3,7 +3,7 @@ import stripAnsi from 'strip-ansi'
 
 import { behavioralCallWeight } from './behavioral-weight.js'
 import { codexCredits } from './codex-credits.js'
-import { formatCost, formatTokens } from './format.js'
+import { ESTIMATED_COST_LEGEND, formatCost, formatTokens, isEstimatedCost, markEstimated } from './format.js'
 import { billableOutputTokens, fallbackRawModelDisplayName, getModelRoute, getRouteById, getShortModelName, modelRowKey, resolveCanonicalModelId, routeSuffix, sanitizeModelForDisplay } from './models.js'
 import { classifyPeak, peakBillingKind } from './peak-hours.js'
 import { getProvider } from './providers/index.js'
@@ -26,6 +26,9 @@ export type ModelReportRow = {
   cacheReadTokens: number
   totalTokens: number
   costUSD: number
+  /// Portion of `costUSD` from calls flagged `isEstimated`. Never subtracted
+  /// from `costUSD`; `isEstimatedCost` decides whether the row is marked.
+  estimatedCostUSD: number
   savingsUSD: number
   savingsBaselineModel: string
   calls: number
@@ -95,6 +98,7 @@ type Bucket = {
   cacheWriteTokens: number
   cacheReadTokens: number
   costUSD: number
+  estimatedCostUSD: number
   savingsUSD: number
   savingsBaselineModel: string
   calls: number
@@ -107,6 +111,10 @@ type Bucket = {
   offPeakCostUSD: number
   peakCalls: number
   offPeakCalls: number
+  /// Codex credits summed per call (an alias's rate can depend on the call's
+  /// date); null until a call is rated. creditsUnrated marks any unrated call.
+  credits: number | null
+  creditsUnrated: boolean
 }
 
 type ModelKey = string
@@ -215,6 +223,7 @@ export async function aggregateModels(projects: ProjectSummary[], opts: Aggregat
               cacheWriteTokens: 0,
               cacheReadTokens: 0,
               costUSD: 0,
+              estimatedCostUSD: 0,
               savingsUSD: 0,
               savingsBaselineModel: '',
               calls: 0,
@@ -223,6 +232,8 @@ export async function aggregateModels(projects: ProjectSummary[], opts: Aggregat
               offPeakCostUSD: 0,
               peakCalls: 0,
               offPeakCalls: 0,
+              credits: null,
+              creditsUnrated: false,
             }
             buckets.set(key, bucket)
           }
@@ -235,7 +246,21 @@ export async function aggregateModels(projects: ProjectSummary[], opts: Aggregat
           // provider that fills both fields.
           bucket.cacheReadTokens += Math.max(call.usage.cacheReadInputTokens, call.usage.cachedInputTokens)
           bucket.costUSD += call.costUSD
+          if (call.isEstimated) bucket.estimatedCostUSD += call.costUSD
           bucket.savingsUSD += call.savingsUSD ?? 0
+          // outputTokens is the billable output (for Codex that includes
+          // reasoning, so nothing is added on top), and inputTokens is
+          // non-cached with the cache read holding cached input - exactly what
+          // the credit rates expect.
+          if (provider === 'codex') {
+            const credits = codexCredits(model, {
+              inputTokens: call.usage.inputTokens,
+              cachedReadTokens: Math.max(call.usage.cacheReadInputTokens, call.usage.cachedInputTokens),
+              outputTokens: billableOutputTokens(provider, call.usage.outputTokens, call.usage.reasoningTokens),
+            }, call.timestamp)
+            if (credits === null) bucket.creditsUnrated = true
+            else bucket.credits = (bucket.credits ?? 0) + credits
+          }
           if (!bucket.savingsBaselineModel && call.savingsBaselineModel) {
             bucket.savingsBaselineModel = call.savingsBaselineModel
           }
@@ -310,20 +335,10 @@ export async function aggregateModels(projects: ProjectSummary[], opts: Aggregat
     const resolvedKey = bucketKey(bucket.provider, canonicalId, null, bucket.category, bucket.agentType)
     const foldKey = `${bucket.provider} ${canonicalId}`
     const total = bucket.inputTokens + bucket.outputTokens + bucket.cacheWriteTokens + bucket.cacheReadTokens
-    // Credits are per raw id (aliases can have different rates). Sum the
-    // rated buckets and flag the row incomplete when any contributor is
+    // Sum the rated calls and flag the row incomplete when any contributor is
     // unrated — nulling the whole merge would zero a real menubar total.
-    // outputTokens is already the billable output (for Codex that includes
-    // reasoning, so nothing is added on top), and inputTokens is non-cached
-    // with cacheReadTokens holding cached input - exactly what the credit
-    // rates expect.
-    const bucketCredits = bucket.provider === 'codex'
-      ? codexCredits(bucket.model, {
-          inputTokens: bucket.inputTokens,
-          cachedReadTokens: bucket.cacheReadTokens,
-          outputTokens: bucket.outputTokens,
-        })
-      : null
+    const bucketCredits = bucket.credits
+    const bucketCreditsIncomplete = bucketCredits !== null && bucket.creditsUnrated
 
     const baselines = baselinesByKey.get(resolvedKey) ?? new Set<string>()
     if (bucket.savingsBaselineModel) baselines.add(bucket.savingsBaselineModel)
@@ -338,6 +353,7 @@ export async function aggregateModels(projects: ProjectSummary[], opts: Aggregat
       existing.cacheReadTokens += bucket.cacheReadTokens
       existing.totalTokens += total
       existing.costUSD += bucket.costUSD
+      existing.estimatedCostUSD += bucket.estimatedCostUSD
       existing.savingsUSD += bucket.savingsUSD
       existing.calls += bucket.calls
       mergePeakSplit(existing, bucket)
@@ -346,7 +362,7 @@ export async function aggregateModels(projects: ProjectSummary[], opts: Aggregat
       const existingRated = existing.credits !== null
       const incomingRated = bucketCredits !== null
       if (incomingRated) existing.credits = (existing.credits ?? 0) + bucketCredits
-      if (existingRated !== incomingRated) existing.creditsIncomplete = true
+      if (existingRated !== incomingRated || bucketCreditsIncomplete) existing.creditsIncomplete = true
     } else {
       rowsByKey.set(resolvedKey, {
         provider: bucket.provider,
@@ -362,11 +378,13 @@ export async function aggregateModels(projects: ProjectSummary[], opts: Aggregat
         cacheReadTokens: bucket.cacheReadTokens,
         totalTokens: total,
         costUSD: bucket.costUSD,
+        estimatedCostUSD: bucket.estimatedCostUSD,
         savingsUSD: bucket.savingsUSD,
         savingsBaselineModel: resolvedBaseline,
         calls: bucket.calls,
         rawModels: [bucket.model],
         credits: bucketCredits,
+        ...(bucketCreditsIncomplete ? { creditsIncomplete: true } : {}),
         ...peakSplitForRow(bucket),
       })
     }
@@ -680,7 +698,7 @@ export function renderTable(
       case 'cacheWrite': return formatTokens(row.cacheWriteTokens)
       case 'cacheRead':  return formatTokens(row.cacheReadTokens)
       case 'total':      return formatTokens(row.totalTokens)
-      case 'cost':       return formatCost(row.costUSD)
+      case 'cost':       return markEstimated(formatCost(row.costUSD), isEstimatedCost(row.costUSD, row.estimatedCostUSD))
       case 'saved':      return row.savingsUSD > 0 ? formatCost(row.savingsUSD) : chalk.dim('-')
       case 'peak':
         return (row.peakUSD != null || row.offPeakUSD != null) ? formatPeakSplit(row) : chalk.dim('-')
@@ -821,6 +839,8 @@ export function renderJson(rows: ModelReportRow[]): string {
       savingsBaselineModel: r.savingsBaselineModel,
       credits: r.credits,
       creditsIncomplete: r.creditsIncomplete === true,
+      estimatedCostUSD: r.estimatedCostUSD,
+      isEstimated: isEstimatedCost(r.costUSD, r.estimatedCostUSD),
       // Peak keys exist only on rows that carry a split: a report with no
       // DeepSeek/Z.ai first-party usage keeps its exact historical shape,
       // instead of five null keys on every row.
@@ -886,7 +906,7 @@ export function renderMarkdown(rows: ModelReportRow[], opts: { byTask?: boolean;
       formatTokens(row.cacheWriteTokens),
       formatTokens(row.cacheReadTokens),
       formatTokens(row.totalTokens),
-      formatCost(row.costUSD),
+      markEstimated(formatCost(row.costUSD), isEstimatedCost(row.costUSD, row.estimatedCostUSD)),
       row.savingsUSD > 0 ? formatCost(row.savingsUSD) : '-',
       ...(showPeak ? [formatPeakSplit(row)] : []),
     ]
@@ -924,6 +944,7 @@ export function renderMarkdown(rows: ModelReportRow[], opts: { byTask?: boolean;
     ]
     lines.push(`| ${totalCells.join(' | ')} |`)
   }
+  if (rows.some(r => isEstimatedCost(r.costUSD, r.estimatedCostUSD))) lines.push('', `_${ESTIMATED_COST_LEGEND}_`)
 
   return lines.join('\n')
 }

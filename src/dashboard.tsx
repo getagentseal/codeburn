@@ -4,7 +4,7 @@ import { EventEmitter } from 'node:events'
 import React, { Fragment, useState, useCallback, useEffect, useLayoutEffect, useMemo, useRef } from 'react'
 import { render, Box, Text, measureElement, useInput, useApp, useWindowSize, type DOMElement, type Instance, type RenderOptions } from 'ink'
 import { CATEGORY_LABELS, type DateRange, type ProjectSummary, type TaskCategory } from './types.js'
-import { formatCost, formatTokens, markEstimated, carriedCostNote, excludedGatewayNote } from './format.js'
+import { formatCost, formatTokens, markEstimated, carriedCostNote, excludedGatewayNote, isEstimatedCost, ESTIMATED_COST_LEGEND } from './format.js'
 import { maxOf } from './math-utils.js'
 import { formatSessionCount } from './session-count-label.js'
 import { aggregateModelEfficiency } from './model-efficiency.js'
@@ -14,7 +14,7 @@ import { aggregateModelTotals } from './model-breakdown.js'
 import { buildDurableOverviewFromNormalizedIndex, buildDurablePeriod, hydrateDailyCacheFromNormalizedProjects, type ExcludedGatewayTotals } from './usage-aggregator.js'
 import { loadDailyCache, type DailyCache } from './daily-cache.js'
 import { exitAfterCacheCleanup } from './session-cache.js'
-import { getAllProviders } from './providers/index.js'
+import { getAllProviders, safeDiscoverSessions } from './providers/index.js'
 import { classHeaderLine, classTotals, findingBasis, findingClass, scanAndDetect, type FindingClass, type WasteFinding, type WasteAction, type OptimizeResult } from './optimize.js'
 import { appliedFixGlyph, formatAppliedFix, type AppliedFix } from './act/types.js'
 import { aggregateFileChurn, buildCoachingNotes, computePricingCoverage, medianTimeToFirstEditMs, scanUserCorrections, worstOneShotCategory, type ReworkedFile } from './workflow-insights.js'
@@ -27,6 +27,8 @@ import { planDisplayName } from './plans.js'
 import { formatDayRangeLabel, getDateRange, parseDayFlag, PERIODS, PERIOD_LABELS, shiftDay, type Period } from './cli-date.js'
 import { BSU, patchStdoutForWindows } from './ink-win.js'
 import { startUserTimingGuard } from './user-timing-guard.js'
+import { folderNameOriginKey, isTemporaryProjectPath, linkedOriginKey, originRepoName, projectOriginKey, TEMPORARY_PROJECTS } from './git-origin.js'
+import { countSessions } from './session-output.js'
 
 type View = 'dashboard' | 'optimize' | 'compare'
 
@@ -604,7 +606,7 @@ function Overview({ projects, label, width, planUsages, durable }: { projects: P
   const totalCost = durable ? durable.cost : projects.reduce((s, p) => s + p.totalCostUSD, 0)
   const totalSavings = durable ? durable.savingsUSD : projects.reduce((s, p) => s + p.totalSavingsUSD, 0)
   const totalCalls = durable ? durable.calls : projects.reduce((s, p) => s + p.totalApiCalls, 0)
-  const totalSessions = durable ? durable.sessions : projects.reduce((s, p) => s + p.sessions.length, 0)
+  const totalSessions = durable ? durable.sessions : countSessions(projects)
   const allSessions = projects.flatMap(p => p.sessions)
   const totalInput = durable ? durable.inputTokens : allSessions.reduce((s, sess) => s + sess.totalInputTokens, 0)
   const totalOutput = durable ? durable.outputTokens : allSessions.reduce((s, sess) => s + sess.totalOutputTokens, 0)
@@ -778,7 +780,7 @@ export function getDashboardMaxWidth(projects: ProjectSummary[], budgets?: Map<s
     PANEL_CHROME + 10 + 1 + longest(labels) + metricCount * metricWidth
   const modelTotals = aggregateModelTotals(projects)
   const modelMetricWidth = maxOf(Object.values(modelTotals).map(model =>
-    markEstimated(formatCost(model.costUSD), model.estimatedCostUSD > 0).length
+    markEstimated(formatCost(model.costUSD), isEstimatedCost(model.costUSD, model.estimatedCostUSD)).length
   ), 7)
   const categoryLabels = sessions.flatMap(session => Object.keys(session.categoryBreakdown).map(category => CATEGORY_LABELS[category as TaskCategory] ?? category))
   const skillLabels = sessions.flatMap(session => Object.keys(session.skillBreakdown))
@@ -800,7 +802,29 @@ function getProjectBreakdownRowLimit(period: Period, dayMode = false): number {
   return dayMode ? 8 : period === 'all' || period === 'lifetime' || period === 'month' || period === '30days' ? 14 : 8
 }
 
-function ProjectBreakdown({ projects, pw, bw, budgets, rows = 14 }: { projects: ProjectSummary[]; pw: number; bw: number; budgets?: Map<string, ContextBudget>; rows?: number }) {
+/// One row per repository: clones and worktrees sharing an `origin` fold into
+/// the costliest of them, and every other temp-root folder into one row; any
+/// other checkout stays its own row.
+export function foldProjectsByRepository(projects: ProjectSummary[]): Array<ProjectSummary & { repo?: string }> {
+  const rows = new Map<string, ProjectSummary & { repo?: string }>()
+  projects.forEach((p, i) => {
+    const origin = linkedOriginKey(p.projectPath) ?? projectOriginKey(p.projectPath) ?? folderNameOriginKey(p.projectPath)
+    const temporary = !origin && isTemporaryProjectPath(p.projectPath)
+    const key = origin ?? (temporary ? TEMPORARY_PROJECTS : `\0${i}`)
+    const held = rows.get(key)
+    if (!held) {
+      rows.set(key, origin ? { ...p, repo: originRepoName(origin) } : temporary ? { ...p, repo: 'Temporary folders' } : p)
+      return
+    }
+    if (p.totalCostUSD > held.totalCostUSD) held.projectPath = p.projectPath
+    held.totalCostUSD += p.totalCostUSD
+    held.sessions = [...held.sessions, ...p.sessions]
+  })
+  return [...rows.values()].sort((a, b) => b.totalCostUSD - a.totalCostUSD)
+}
+
+function ProjectBreakdown({ projects: checkouts, pw, bw, budgets, rows = 14 }: { projects: ProjectSummary[]; pw: number; bw: number; budgets?: Map<string, ContextBudget>; rows?: number }) {
+  const projects = foldProjectsByRepository(checkouts)
   const maxCost = maxOf(projects.map(p => p.totalCostUSD), -Infinity)
   const hasBudgets = budgets && budgets.size > 0
   const headers = ['cost', 'avg/s', 'session', ...(hasBudgets ? ['overhead'] : [])]
@@ -828,7 +852,7 @@ function ProjectBreakdown({ projects, pw, bw, budgets, rows = 14 }: { projects: 
             key={`${project.project}-${i}`}
             panelWidth={pw}
             barWidth={projectBarWidth}
-            label={shortProject(project.projectPath, labelWidth)}
+            label={project.repo ? project.repo.slice(0, labelWidth) : shortProject(project.projectPath, labelWidth)}
             labelColor={DIM}
             bar={{ value: project.totalCostUSD, max: maxCost }}
             metrics={[
@@ -852,9 +876,9 @@ function ModelBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; pw: 
   // the same model merge into one row (see aggregateModelTotals).
   const modelTotals = aggregateModelTotals(projects)
   const modelEfficiency = aggregateModelEfficiency(projects)
-  const anyEstimated = Object.values(modelTotals).some(d => d.estimatedCostUSD > 0)
+  const anyEstimated = Object.values(modelTotals).some(d => isEstimatedCost(d.costUSD, d.estimatedCostUSD))
   const sorted = Object.entries(modelTotals).sort(([, a], [, b]) => b.costUSD - a.costUSD)
-  const costLabels = sorted.map(([, data]) => markEstimated(formatCost(data.costUSD), data.estimatedCostUSD > 0))
+  const costLabels = sorted.map(([, data]) => markEstimated(formatCost(data.costUSD), isEstimatedCost(data.costUSD, data.estimatedCostUSD)))
   // #1088: this column has zero width slack left at the standard 3-column
   // breakpoint (verified: widening the header even one character clips
   // 'cache'/'1-shot' and drops the value column entirely), so the header stays
@@ -918,7 +942,7 @@ function ModelBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; pw: 
         </Text>
       )}
       {anyEstimated && (
-        <Text dimColor wrap="truncate-end">~ estimated cost (priced from estimated tokens)</Text>
+        <Text dimColor wrap="truncate-end">{ESTIMATED_COST_LEGEND}</Text>
       )}
       <Text dimColor wrap="truncate-end">~ Effective Tok/s: generated tokens ÷ time the agent spent waiting on the model, tool execution excluded. Includes prefill, request assembly and reasoning. Not comparable to vendor decode-speed figures.</Text>
     </Panel>
@@ -1707,7 +1731,7 @@ export function InteractiveDashboard({ initialProjects, initialDailyHistoryProje
     let cancelled = false
     async function detect() {
       const found: string[] = []
-      for (const p of await getAllProviders()) { const s = await p.discoverSessions(); if (s.length > 0) found.push(p.name) }
+      for (const p of await getAllProviders()) { const s = await safeDiscoverSessions(p); if (s.length > 0) found.push(p.name) }
       if (!cancelled) setDetectedProviders(found)
     }
     detect()

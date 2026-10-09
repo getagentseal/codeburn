@@ -1,3 +1,7 @@
+/// `matchedByFolderName`: a deleted folder joined to this repository by its name
+/// alone (see folderNameOriginKey), not by git data.
+export type ProjectCheckout = { id: string; cost: number; matchedByFolderName?: boolean }
+
 /// Rollup of one time window (today / 7 days / 30 days / month / all) used as the canonical
 /// input to the menubar payload. Built inside the CLI and also consumed by the day-aggregator
 /// when hydrating per-day cache entries.
@@ -53,7 +57,9 @@ export type PeriodData = {
   /// current tables (#638): their calls contribute $0 to `cost`. Optional so
   /// PeriodData producers that predate the field keep compiling.
   unpricedModels?: Array<{ model: string; calls: number; tokens: number }>
-  projects?: Array<{ id?: string; name: string; cost: number; savingsUSD: number; sessions: number; sessionCountBasis?: SessionCountBasis; sessionDetails?: Array<{ cost: number; savingsUSD: number; calls: number; inputTokens: number; outputTokens: number; date: string; models: Array<{ name: string; cost: number; savingsUSD: number }>; sessionId?: string; provider?: string }> }>
+  /// `path` and `calls` are set by the durable builder; `checkouts` lists the
+  /// clones and worktrees folded into a repository row, when there are several.
+  projects?: Array<{ id?: string; name: string; path?: string; calls?: number; temporary?: boolean; checkouts?: ProjectCheckout[]; checkoutCount?: number; cost: number; savingsUSD: number; sessions: number; sessionCountBasis?: SessionCountBasis; sessionDetails?: Array<{ cost: number; savingsUSD: number; calls: number; inputTokens: number; outputTokens: number; date: string; models: Array<{ name: string; cost: number; savingsUSD: number }>; sessionId?: string; provider?: string }> }>
   modelEfficiency?: Array<{ name: string; costPerEdit: number | null; oneShotRate: number | null }>
   topSessions?: Array<{ project: string; cost: number; savingsUSD: number; calls: number; date: string; sessionId?: string; provider?: string; projectKey?: string }>
   /// Workflow-intelligence rollups (issue: workflow intelligence). Optional so
@@ -129,6 +135,8 @@ export type ProviderCost = {
    *  lacked the cache field, so `cacheReadTokens` is a partial sum that must
    *  be dropped rather than labelled complete. */
   cacheReadIncomplete?: boolean
+  /** Portion of `cost` priced from estimates (live parse only). Absent when zero. */
+  estimatedCostUSD?: number
 }
 import type { OptimizeResult } from './optimize.js'
 import { getCurrency } from './currency.js'
@@ -137,6 +145,7 @@ import { getShortModelName, modelRowKey } from './models.js'
 import type { ReworkedFile } from './workflow-insights.js'
 import type { PrRow, BranchRow } from './sessions-report.js'
 import type { LiveSessionsBlock } from './live-sessions.js'
+import type { CursorSyncStatus } from './cursor-sync.js'
 import { buildTelemetrySnapshot, type TelemetrySnapshot, type TelemetrySnapshotInput } from './telemetry-snapshot.js'
 import type { SessionCountBasis } from './session-count-label.js'
 
@@ -291,6 +300,9 @@ export type MenubarPayload = {
   /// window, with the context each is holding. Omitted when the producer did
   /// not compute it, so absence means "unknown", never "nothing is running".
   liveSessions?: LiveSessionsBlock
+  /// Add-only. Emitted only by `status --format menubar-json`, and only when
+  /// Cursor is on this machine or has synced before; absence means "no Cursor".
+  cursorSync?: CursorSyncStatus
   current: {
     label: string
     cost: number
@@ -379,6 +391,9 @@ export type MenubarPayload = {
       sessions?: number
       sessionCountBasis?: SessionCountBasis
       cacheReadTokens?: number
+      /// Add-only: portion of `cost` priced from estimates, from surviving
+      /// sessions only. Absent when nothing was estimated.
+      estimatedCostUSD?: number
     }>
     topProjects: Array<{
       /// Stable identity (abs cwd when known). Optional so older PeriodData
@@ -395,6 +410,13 @@ export type MenubarPayload = {
       /// How `sessions` was derived. Omitted on older producers. `identity` is
       /// an exact unique count from surviving source files; `partial` is a lower bound.
       sessionCountBasis?: SessionCountBasis
+      /// The checkouts (clones, worktrees) folded into this repository row, when
+      /// there is more than one.
+      checkouts?: ProjectCheckout[]
+      /// All checkouts folded in; `checkouts` lists the costliest 50.
+      checkoutCount?: number
+      /// The row for every temp-root folder outside a known repository.
+      temporary?: boolean
       sessionDetails: Array<{
         cost: number
         savingsUSD: number
@@ -682,6 +704,7 @@ function buildProviderDetails(providers: ProviderCost[]): MenubarPayload['curren
       ...(p.sessions === undefined ? {} : { sessions: p.sessions }),
       ...(p.sessionCountBasis ? { sessionCountBasis: p.sessionCountBasis } : {}),
       ...(p.cacheReadTokens === undefined || p.cacheReadIncomplete ? {} : { cacheReadTokens: p.cacheReadTokens }),
+      ...(p.estimatedCostUSD ? { estimatedCostUSD: p.estimatedCostUSD } : {}),
     }))
 }
 
@@ -705,6 +728,8 @@ function buildTopProjects(projects: PeriodData['projects']): MenubarPayload['cur
       sessions: p.sessions,
       avgCostPerSession: p.sessions > 0 ? p.cost / p.sessions : 0,
       ...(p.sessionCountBasis ? { sessionCountBasis: p.sessionCountBasis } : {}),
+      ...(p.checkouts ? { checkouts: p.checkouts, checkoutCount: p.checkoutCount } : {}),
+      ...(p.temporary ? { temporary: true } : {}),
       sessionDetails: (p.sessionDetails ?? []).map(s => ({
         cost: s.cost,
         savingsUSD: s.savingsUSD,

@@ -45,7 +45,7 @@ const DEFAULT_OFF_COUNTRIES: [&str; 32] = [
 
 /// Every event this app may send. An unknown name is dropped rather than forwarded, so a
 /// frontend typo cannot invent a metric.
-const EVENT_NAMES: [&str; 11] = [
+const EVENT_NAMES: [&str; 12] = [
     "app_open",
     "app_close",
     "popover_open",
@@ -57,6 +57,7 @@ const EVENT_NAMES: [&str; 11] = [
     "dock_provider_switch",
     "dock_drag_end",
     "usage_snapshot",
+    "update_result",
 ];
 
 const MAX_QUEUE: usize = 200;
@@ -1885,6 +1886,16 @@ mod tests {
         assert_eq!(queued.day, "2026-09-03");
         assert_eq!(queued.props.len(), 2);
         assert_eq!(queued.props.get("edge").unwrap(), "left");
+    }
+
+    #[test]
+    fn update_result_is_allowed_and_an_unknown_name_is_not() {
+        let telemetry = client(consented(ConsentSource::App), None);
+        telemetry.track_on("update_results", &Value::Null, "2026-09-03");
+        assert_eq!(telemetry.queue_len(), 0);
+        let props = serde_json::json!({ "from": "0.9.26", "to": "0.9.27", "outcome": "ok" });
+        telemetry.track_on("update_result", &props, "2026-09-03");
+        assert_eq!(telemetry.queue_len(), 1);
     }
 
     #[test]

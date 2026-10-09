@@ -8,6 +8,7 @@ import {
   CURSOR_CSV_HEADER,
   cursorImportPath,
   importCursorCsv,
+  importCursorCsvText,
   parseBoundary,
   parseCursorUsageCsv,
   removeCursorImport,
@@ -149,6 +150,89 @@ describe('importCursorCsv', () => {
   })
 })
 
+describe('importCursorCsvText as a sync', () => {
+  const from = base
+  const stored = async () => JSON.parse(await readFile(cursorImportPath(), 'utf-8')) as { ranges: unknown[]; events: Array<{ hash: string; cost: string; source?: string }> }
+
+  it('dedupes synced rows against a manual import and tags only new rows', async () => {
+    await importCursorCsv(csvPath)
+    const extra = { date: iso(3, 8), model: 'auto', input: 7 }
+    const s = await importCursorCsvText(csv([...ROWS, extra]), base + 30 * DAY, { from, to: base + 30 * DAY, source: 'sync' })
+    expect(s).toMatchObject({ changed: true, added: 1, skipped: 5, total: 6 })
+    const events = (await stored()).events
+    expect(events.filter(e => e.source === 'sync')).toHaveLength(1)
+    expect(events.filter(e => e.source === undefined)).toHaveLength(5)
+  })
+
+  it('a later sync replaces changed synced rows but never manually imported ones', async () => {
+    const manual = await writeCsv([{ date: iso(1, 3), model: 'auto', input: 11 }], 'manual.csv')
+    await importCursorCsv(manual)
+    await importCursorCsvText(csv(ROWS.slice(0, 2)), base + 30 * DAY, { from, to: base + 30 * DAY, source: 'sync' })
+    const repriced = { ...ROWS[1]!, cost: '$2.50' }
+    const s = await importCursorCsvText(csv([ROWS[0]!, repriced]), base + 30 * DAY, { from, to: base + 30 * DAY, source: 'sync' })
+    expect(s).toMatchObject({ changed: true, added: 1, skipped: 1, total: 3 })
+    const events = (await stored()).events
+    expect(events.map(e => e.cost).sort()).toEqual(['$2.50', 'Included', 'Included'])
+    expect(events.filter(e => e.source === undefined)).toHaveLength(1)
+
+    const again = await importCursorCsvText(csv([ROWS[0]!, repriced]), base + 30 * DAY, { from, to: base + 30 * DAY, source: 'sync' })
+    expect(again).toMatchObject({ changed: false, added: 0 })
+  })
+
+  it('covers the window start to the newest event, apart from manual coverage', async () => {
+    await importCursorCsv(csvPath)
+    const s = await importCursorCsvText(csv([{ date: iso(1, 9), model: 'auto', input: 3 }, { date: iso(4, 15), model: 'auto', input: 4 }]), base + 30 * DAY, { from, to: base + 30 * DAY, source: 'sync' })
+    expect(s!.coverage).toEqual({ start: new Date(from).toISOString(), end: iso(4, 15), inferred: false })
+    expect((await stored()).ranges).toEqual([
+      { start: `${dayOf(0)}T00:00:00.000Z`, end: `${dayOf(2)}T23:59:59.999Z` },
+      { start: new Date(from).toISOString(), end: iso(4, 15), source: 'sync' },
+    ])
+    expect(await importCursorCsvText(csv([]), base + 30 * DAY, { from, to: base + 30 * DAY, source: 'sync' })).toBeNull()
+  })
+
+  it('drops synced rows from before the window instead of failing', async () => {
+    const s = await importCursorCsvText(csv([{ date: iso(-1), model: 'auto', input: 1 }, { date: iso(0, 5), model: 'auto', input: 2 }]), base + DAY, { from, to: base + DAY, source: 'sync' })
+    expect(s).toMatchObject({ added: 1, total: 1, firstEvent: iso(0, 5) })
+    expect(await importCursorCsvText(csv([{ date: iso(-1), model: 'auto', input: 1 }]), base + DAY, { from, to: base + DAY, source: 'sync' })).toBeNull()
+  })
+
+  it('a manual import claims a row a sync stored first, so a later sync cannot delete it', async () => {
+    const row = { date: iso(1, 3), model: 'auto', input: 11 }
+    await importCursorCsvText(csv([row]), base + 30 * DAY, { from, to: base + 30 * DAY, source: 'sync', account: 'aaaa' })
+    const manual = await importCursorCsv(await writeCsv([row], 'manual.csv'))
+    expect(manual).toMatchObject({ changed: true, added: 0, skipped: 1, total: 1 })
+    expect((await stored()).events).toEqual([expect.not.objectContaining({ source: 'sync' })])
+    expect((await stored()).events[0]).not.toHaveProperty('account')
+
+    // Cursor revised the row: manual coverage wins, so only the manual row is priced.
+    await importCursorCsvText(csv([{ ...row, cost: '$0.10' }]), base + 30 * DAY, { from, to: base + 30 * DAY, source: 'sync', account: 'aaaa' })
+    expect((await stored()).events.map(e => [e.cost, e.source])).toEqual([['Included', undefined]])
+  })
+
+  it('a synced row after the manual coverage end is still added', async () => {
+    const saved = base + DAY + 6 * 3_600_000
+    const manual = await importCursorCsv(await writeCsv([{ date: iso(1, 3), model: 'auto', input: 11 }], 'manual.csv', saved))
+    expect(manual.coverage.end).toBe(new Date(saved).toISOString())
+    const s = await importCursorCsvText(csv([{ date: iso(1, 5), model: 'auto', input: 1 }, { date: iso(1, 7), model: 'auto', input: 2 }, { date: iso(2, 1), model: 'auto', input: 3 }]), base + 30 * DAY, { from, to: base + 30 * DAY, source: 'sync', account: 'aaaa' })
+    expect(s).toMatchObject({ added: 2, skipped: 1, total: 3 })
+    expect((await stored()).events.map(e => [e.date, e.source])).toEqual([[iso(1, 3), undefined], [iso(1, 7), 'sync'], [iso(2, 1), 'sync']])
+  })
+
+  it('keeps every account\'s synced rows and coverage apart; a sync replaces only its own account\'s rows', async () => {
+    const a = { date: iso(1, 9), model: 'auto', input: 3 }
+    await importCursorCsvText(csv([a]), base + 30 * DAY, { from, to: base + 30 * DAY, source: 'sync', account: 'aaaa' })
+    const b = { date: iso(4, 15), model: 'auto', input: 4 }
+    const s = await importCursorCsvText(csv([b]), base + 30 * DAY, { from, to: base + 30 * DAY, source: 'sync', account: 'bbbb' })
+    expect(s).toMatchObject({ changed: true, added: 1, total: 2 })
+    const after = await stored() as { ranges: unknown[]; events: Array<{ source?: string; account?: string }> }
+    expect(after.events.map(e => [e.source, e.account])).toEqual([['sync', 'aaaa'], ['sync', 'bbbb']])
+    expect(after.ranges).toEqual([
+      { start: new Date(from).toISOString(), end: iso(1, 9), source: 'sync', account: 'aaaa' },
+      { start: new Date(from).toISOString(), end: iso(4, 15), source: 'sync', account: 'bbbb' },
+    ])
+  })
+})
+
 describe('Cursor import through the report pipeline', () => {
   it('replaces local estimates inside coverage only, and removal restores them', async () => {
     await writeAgentTranscript('inside', base + DAY + 5 * 3_600_000)
@@ -183,6 +267,40 @@ describe('Cursor import through the report pipeline', () => {
     expect(await parse(whole)).toEqual(before)
   })
 
+  it('a synced export drops a CLI session it billed even when the transcript was written after its newest event', async () => {
+    // A `cursor-agent -p` run: one tagged prompt before the export's newest
+    // event, its transcript written after it.
+    const prompt = new Date(Date.parse(iso(2, 21)))
+    const tag = `${prompt.toLocaleString('en-US', { weekday: 'long', timeZone: 'UTC' })}, ${prompt.toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: 'UTC' })} (UTC)`
+    const dir = join(homedir(), '.cursor', 'projects', 'proj', 'agent-transcripts', 'aaaaaaaa-0000-4000-8000-000000000001')
+    await mkdir(dir, { recursive: true })
+    const path = join(dir, 'aaaaaaaa-0000-4000-8000-000000000001.jsonl')
+    const step = JSON.stringify({ role: 'assistant', message: { content: [{ type: 'text', text: 'x'.repeat(400) }] } })
+    await writeFile(path, [JSON.stringify({ role: 'user', message: { content: [{ type: 'text', text: `<timestamp>${tag}</timestamp>\n<user_query>redacted</user_query>` }] } }), step, step].join('\n') + '\n')
+    const written = Date.parse(iso(2, 23))
+    await utimes(path, written / 1000, written / 1000)
+    expect((await parse(whole))['cursor-agent']!.calls).toBe(2)
+
+    await importCursorCsvText(csv(ROWS), Date.now(), { from: base, source: 'sync', account: 'a' })
+    const after = await parse(whole)
+    expect(after['cursor-agent']).toBeUndefined()
+    expect(after['cursor']!.calls).toBe(4)
+  })
+
+  it('marks plan rows estimated only where the export names no real model', async () => {
+    await importCursorCsv(csvPath)
+    clearSessionCache()
+    const flags: Record<string, boolean> = {}
+    for (const p of await parseAllSessions(whole, 'all')) for (const s of p.sessions) for (const t of s.turns) for (const c of t.assistantCalls) flags[c.model] = c.isEstimated === true
+    expect(flags).toEqual({
+      'cursor-auto': true,
+      'claude-opus-5-thinking-high': false,
+      'grok-4.6-high': false,
+      'grok-bot-automation': true,
+      'composer-2.5-fast': false,
+    })
+  })
+
   it('the daily cache re-derives the covered days after an import and after removal', async () => {
     await writeAgentTranscript('inside', base + DAY + 5 * 3_600_000)
     await writeAgentTranscript('outside', base - 5 * DAY)
@@ -212,16 +330,54 @@ describe('Cursor import through the report pipeline', () => {
   })
 })
 
-describe('invalidateProviderDays', () => {
-  it('drops only the named providers on the named days and pulls the watermark back', async () => {
-    const day = (date: string): DailyEntry => ({
-      date, cost: 3, savingsUSD: 0, calls: 3, sessions: 2, inputTokens: 30, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0,
-      editTurns: 0, oneShotTurns: 0, models: {}, categories: {},
-      providers: {
-        cursor: { calls: 1, cost: 1, savingsUSD: 0, sessions: 1, inputTokens: 10 },
-        claude: { calls: 2, cost: 2, savingsUSD: 0, sessions: 1, inputTokens: 20 },
-      },
+describe('Cursor import coverage in a non-UTC zone', () => {
+  it.each(['America/Los_Angeles', 'Asia/Kolkata'])('%s: a local day is wholly imported and its neighbours keep their estimates', async (tz) => {
+    process.env.TZ = tz
+    const b = new Date(base)
+    const at = (dayOffset: number, hour: number, minute = 0) =>
+      new Date(b.getUTCFullYear(), b.getUTCMonth(), b.getUTCDate() + dayOffset, hour, minute).getTime()
+    const day = toDateString(new Date(at(0, 12)))
+
+    await writeAgentTranscript('prev-evening', at(-1, 20))
+    await writeAgentTranscript('same-day', at(0, 12))
+    await writeAgentTranscript('next-night', at(1, 1))
+    const path = await writeCsv([
+      { date: new Date(at(0, 0, 30)).toISOString(), model: 'auto', input: 100 },
+      { date: new Date(at(0, 23, 30)).toISOString(), model: 'auto', input: 200 },
+    ], 'tz.csv')
+
+    const s = await importCursorCsv(path)
+    expect([toDateString(new Date(s.coverage.start)), toDateString(new Date(s.coverage.end))]).toEqual([day, day])
+
+    clearSessionCache()
+    const perDay: Record<string, Record<string, number>> = {}
+    for (const p of await parseAllSessions(whole, 'all')) for (const ses of p.sessions) for (const t of ses.turns) for (const c of t.assistantCalls) {
+      const d = perDay[toDateString(new Date(c.timestamp))] ??= {}
+      d[c.provider] = (d[c.provider] ?? 0) + 1
+    }
+    expect(perDay).toEqual({
+      [toDateString(new Date(at(-1, 20)))]: { 'cursor-agent': 1 },
+      [day]: { cursor: 2 },
+      [toDateString(new Date(at(1, 1)))]: { 'cursor-agent': 1 },
     })
+
+    // The same day passed as --from/--to is the span inferred above.
+    const explicit = await importCursorCsv(path, { from: parseBoundary(day, 'from'), to: parseBoundary(day, 'to') })
+    expect(explicit).toMatchObject({ changed: false, coverage: { start: new Date(at(0, 0)).toISOString(), end: new Date(at(1, 0) - 1).toISOString() } })
+  })
+})
+
+describe('invalidateProviderDays', () => {
+  const day = (date: string): DailyEntry => ({
+    date, cost: 3, savingsUSD: 0, calls: 3, sessions: 2, inputTokens: 30, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0,
+    editTurns: 0, oneShotTurns: 0, models: {}, categories: {},
+    providers: {
+      cursor: { calls: 1, cost: 1, savingsUSD: 0, sessions: 1, inputTokens: 10 },
+      claude: { calls: 2, cost: 2, savingsUSD: 0, sessions: 1, inputTokens: 20 },
+    },
+  })
+
+  it('drops only the named providers on the named days and pulls the watermark back', async () => {
     await saveDailyCache({ ...emptyCache(), complete: true, lastComputedDate: dayOf(5), days: [day(dayOf(0)), day(dayOf(2)), day(dayOf(4))] })
     await invalidateProviderDays(['cursor'], dayOf(1), dayOf(3))
     const c = await loadDailyCache()
@@ -231,5 +387,14 @@ describe('invalidateProviderDays', () => {
       [dayOf(2), ['claude'], 2],
       [dayOf(4), ['cursor', 'claude'], 3],
     ])
+  })
+
+  it('reaches days held only by an older daily-cache file', async () => {
+    const dir = process.env['CODEBURN_CACHE_DIR']!
+    await mkdir(dir, { recursive: true })
+    await writeFile(join(dir, 'daily-cache.v60.json'), JSON.stringify({ ...emptyCache(), version: 60, complete: true, lastComputedDate: dayOf(5), days: [day(dayOf(2))] }))
+    await invalidateProviderDays(['cursor'], dayOf(1), dayOf(3))
+    const c = await loadDailyCache()
+    expect(c.days.map(d => [d.date, Object.keys(d.providers)])).toEqual([[dayOf(2), ['claude']]])
   })
 })

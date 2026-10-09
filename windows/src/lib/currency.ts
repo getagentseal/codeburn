@@ -51,6 +51,15 @@ export function formatCurrency(usdAmount: number, currency: CurrencyState): stri
 
 /// Compact form (no thousands separators) used in dense tables where the monospace font
 /// already gives visual grouping.
+export const ESTIMATED_COST_LEGEND = '~ estimated cost (priced from estimated tokens)'
+
+/// Same rule as the CLI (src/format.ts isEstimatedCost): `~` once the estimated
+/// portion is at least 1% of the figure, unless `shown` reads as zero.
+export function isEstimatedCost(cost: number, estimatedCostUSD: number | undefined, shown: string): boolean {
+  const estimated = estimatedCostUSD ?? 0
+  return estimated > 0 && estimated >= cost * 0.01 && /[1-9]/.test(shown)
+}
+
 export function formatCompactCurrency(usdAmount: number, currency: CurrencyState): string {
   const converted = usdAmount * currency.rate
   return `${currency.symbol}${converted.toFixed(2)}`

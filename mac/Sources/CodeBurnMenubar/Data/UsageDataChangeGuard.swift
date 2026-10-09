@@ -106,6 +106,8 @@ enum UsageDataChangeGuard {
         }
         let openClaudeRoot = expand(environment["CODEBURN_OPENCLAUDE_DIR"] ?? path(homeDirectory, ".openclaude"), homeDirectory: homeDirectory)
         add(path(openClaudeRoot, "projects"), scanFirstLevelDirectories: true)
+        let commandCodeRoot = expand(environment["CODEBURN_COMMANDCODE_DIR"] ?? path(homeDirectory, ".commandcode"), homeDirectory: homeDirectory)
+        add(path(commandCodeRoot, "projects"), scanFirstLevelDirectories: true)
         add(path(applicationSupport, "Open Design"), scanFirstLevelDirectories: false)
         add(path(homeDirectory, ".pi", "agent", "sessions"), scanFirstLevelDirectories: false)
         add(path(homeDirectory, ".omp", "agent", "sessions"), scanFirstLevelDirectories: false)

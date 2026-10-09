@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { cpuBucket, defaultEnabledFor, memBucket, Telemetry } from './telemetry'
+import { cliErrorReason, cpuBucket, defaultEnabledFor, durationBucket, EVENT_NAMES, memBucket, Telemetry } from './telemetry'
 
 let dir: string
 
@@ -274,6 +274,47 @@ describe('events', () => {
     expect(reloaded.status()).toMatchObject({ enabled: true, onboarded: true })
   })
 
+  it('sends provider_read_fail once per provider per local day, across restarts', () => {
+    let instant = new Date('2026-07-17T12:00:00')
+    const { telemetry } = make({ now: () => instant })
+    telemetry.completeOnboarding(true)
+    const before = telemetry.queueLength
+    telemetry.track('provider_read_fail', { provider: 'cursor', stage: 'locate', kind: 'eacces' })
+    telemetry.track('provider_read_fail', { provider: 'cursor', stage: 'locate', kind: 'eacces' })
+    telemetry.track('provider_read_fail', { provider: 'cursor', stage: 'parse', kind: 'malformed' })
+    telemetry.track('provider_read_fail', { provider: 'codex', stage: 'parse', kind: 'busy' })
+    expect(telemetry.queueLength).toBe(before + 3)
+
+    const reloaded = new Telemetry({ stateDir: dir, country: 'US', isPackaged: true, appVersion: '1', now: () => instant })
+    reloaded.track('provider_read_fail', { provider: 'cursor', stage: 'locate', kind: 'eacces' })
+    expect(reloaded.queueLength).toBe(0)
+    instant = new Date('2026-07-18T12:00:00')
+    reloaded.track('provider_read_fail', { provider: 'cursor', stage: 'locate', kind: 'eacces' })
+    expect(reloaded.queueLength).toBe(1)
+  })
+
+  it('settles a pending update once on the next launch: ok when newer, install_fail when unchanged, nothing when older', async () => {
+    for (const [running, expected] of [
+      ['0.9.27', [{ from: '0.9.26', to: '0.9.27', outcome: 'ok' }]],
+      ['0.9.26', [{ from: '0.9.26', to: '0.9.27', outcome: 'install_fail' }]],
+      ['0.9.28', [{ from: '0.9.26', to: '0.9.28', outcome: 'ok' }]],
+      ['0.9.25', []],
+    ] as const) {
+      const stateDir = join(dir, running)
+      const first = new Telemetry({ stateDir, country: 'US', isPackaged: true, appVersion: '0.9.26' })
+      first.completeOnboarding(true)
+      first.noteUpdateInstall('0.9.26', '0.9.27')
+      const { telemetry: next, posts } = make({ stateDir, appVersion: running })
+      next.settleUpdate(running)
+      next.settleUpdate(running)
+      await next.flush()
+      const events = (posts[0]?.body as { events: Array<{ name: string; props: unknown }> } | undefined)?.events ?? []
+      expect(events.filter(e => e.name === 'update_result').map(e => e.props))
+        .toEqual(expected)
+      expect(JSON.parse(readFileSync(join(stateDir, 'telemetry.v1.json'), 'utf-8')).pendingUpdate).toBeUndefined()
+    }
+  })
+
   it('evicts the oldest event so app_close survives a full queue', async () => {
     const { telemetry, posts } = make()
     telemetry.completeOnboarding(true)
@@ -424,5 +465,29 @@ describe('app_close resource usage', () => {
   it('omits every field it could not measure rather than sending zeros', async () => {
     const props = await closeWith({})
     expect(props).toEqual({ sessionMinutes: 10 })
+  })
+})
+
+describe('cli_error enrichment', () => {
+  it('buckets durations', () => {
+    expect([0, 999, 1000, 4999, 5000, 14_999, 15_000, 29_999, 30_000, 119_999, 120_000, NaN].map(durationBucket))
+      .toEqual(['<1s', '<1s', '1-5s', '1-5s', '5-15s', '5-15s', '15-30s', '15-30s', '30-120s', '30-120s', '120s+', '<1s'])
+  })
+
+  it('classifies stderr into a fixed label set', () => {
+    expect(cliErrorReason('FATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory')).toBe('oom')
+    expect(cliErrorReason('SqliteError: database is locked')).toBe('lock-busy')
+    expect(cliErrorReason("EACCES: permission denied, open '/Users/me/.claude/x.jsonl'")).toBe('eacces')
+    expect(cliErrorReason("ENOENT: no such file or directory, open '/Users/me/x'")).toBe('enoent')
+    expect(cliErrorReason('getaddrinfo ENOTFOUND api.example.com')).toBe('network')
+    expect(cliErrorReason('SyntaxError: Unexpected token } in JSON at position 4')).toBe('parse')
+    expect(cliErrorReason('codeburn serve exited')).toBe('serve')
+    expect(cliErrorReason('codeburn is shutting down')).toBe('shutdown')
+    expect(cliErrorReason('something else entirely at /Users/me/project')).toBe('other')
+  })
+
+  it('allows the new event names', () => {
+    expect(EVENT_NAMES.has('provider_read_fail')).toBe(true)
+    expect(EVENT_NAMES.has('update_result')).toBe(true)
   })
 })

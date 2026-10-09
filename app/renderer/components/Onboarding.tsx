@@ -4,7 +4,7 @@ import { createPortal } from 'react-dom'
 import { codeburn } from '../lib/ipc'
 import backdrop from '../assets/onboarding-bg.jpg'
 import flame from '../assets/onboarding-flame.png'
-import { version } from '../../package.json'
+import { displayVersion } from '../lib/platform'
 import { t } from '../i18n'
 
 const COLLECT_URL = 'https://www.codeburn.app/telemetry'
@@ -123,7 +123,7 @@ export function Onboarding({ defaultEnabled, onDone }: { defaultEnabled: boolean
         </div>
       </div>
 
-      <div className="onboard-version">v{version}</div>
+      <div className="onboard-version">v{displayVersion()}</div>
     </div>,
     document.body,
   )

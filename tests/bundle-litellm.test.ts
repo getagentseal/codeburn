@@ -141,3 +141,154 @@ it('adds context tiers without repricing base rows or losing exact-key carry-for
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+// #1616: Codex's Fast speed setting bills through OpenAI's priority tier, whose
+// rates LiteLLM publishes as `<rate>_priority` keys. Slot 5 (the fast
+// multiplier) derives from those when the row carries no
+// `provider_specific_entry.fast`, so the next routine snapshot refresh carries
+// the multiplier offline. Mirrors the live-path assertions in models.test.ts.
+it('derives the fast multiplier from priority rates without inventing one (#1616)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'codeburn-bundle-priority-'))
+  try {
+    mkdirSync(join(dir, 'scripts'))
+    mkdirSync(join(dir, 'src/data'), { recursive: true })
+    copyFileSync(fileURLToPath(new URL('../scripts/bundle-litellm.mjs', import.meta.url)), join(dir, 'scripts/bundle-litellm.mjs'))
+    writeFileSync(join(dir, 'src/data/litellm-snapshot.json'), '{}')
+    writeFileSync(join(dir, 'src/data/pricing-fallback.json'), '{}')
+    const row = (input: number, output: number, extra = {}) => ({
+      input_cost_per_token: input, output_cost_per_token: output, ...extra,
+    })
+    const source = {
+      // gpt-5.4 as quoted live: 2x on input, output and cache read.
+      'gpt-5.4': row(2.5e-6, 15e-6, {
+        cache_read_input_token_cost: 2.5e-7,
+        input_cost_per_token_priority: 5e-6,
+        output_cost_per_token_priority: 30e-6,
+        cache_read_input_token_cost_priority: 5e-7,
+      }),
+      // gpt-5.5 as quoted live: 2.5x on every published bucket.
+      'gpt-5.5': row(5e-6, 30e-6, {
+        cache_read_input_token_cost: 5e-7,
+        input_cost_per_token_priority: 1.25e-5,
+        output_cost_per_token_priority: 7.5e-5,
+        cache_read_input_token_cost_priority: 1.25e-6,
+      }),
+      // A tier without priority keys: OpenAI quotes no Fast long-context price.
+      'gpt-5.5-tiered': row(5e-6, 30e-6, {
+        input_cost_per_token_above_272k_tokens: 1e-5,
+        output_cost_per_token_above_272k_tokens: 4.5e-5,
+        input_cost_per_token_priority: 1.25e-5,
+        output_cost_per_token_priority: 7.5e-5,
+      }),
+      // A tier with agreeing priority keys inherits the base multiplier.
+      'gpt-5.6-tiered': row(4e-6, 20e-6, {
+        input_cost_per_token_above_272k_tokens: 8e-6,
+        output_cost_per_token_above_272k_tokens: 3e-5,
+        input_cost_per_token_priority: 8e-6,
+        output_cost_per_token_priority: 4e-5,
+        input_cost_per_token_above_272k_tokens_priority: 1.6e-5,
+        output_cost_per_token_above_272k_tokens_priority: 6e-5,
+      }),
+      // Division noise (1.7999999999999998) is rounded away.
+      'gemini-2.5-pro': row(1.25e-6, 1e-5, {
+        input_cost_per_token_priority: 2.25e-6,
+        output_cost_per_token_priority: 1.8e-5,
+      }),
+      // No priority keys at all: stays 1x (null slot).
+      'gpt-5-codex': row(1.25e-6, 1e-5, { cache_read_input_token_cost: 1.25e-7 }),
+      // azure/gpt-5.5 as quoted live: 2.5x base but 2x above 272k, so no single
+      // multiplier prices both regimes and none is guessed.
+      'azure/gpt-5.5': row(5e-6, 30e-6, {
+        cache_read_input_token_cost: 5e-7,
+        cache_read_input_token_cost_above_272k_tokens: 1e-6,
+        input_cost_per_token_priority: 1.25e-5,
+        output_cost_per_token_priority: 7.5e-5,
+        cache_read_input_token_cost_priority: 1.25e-6,
+        input_cost_per_token_above_272k_tokens_priority: 2e-5,
+        output_cost_per_token_above_272k_tokens_priority: 6e-5,
+        cache_read_input_token_cost_above_272k_tokens_priority: 2e-6,
+      }),
+      // Anthropic's explicit multiplier wins even when priority keys exist.
+      'claude-opus-4-8': row(5e-6, 25e-6, {
+        input_cost_per_token_priority: 1e-5,
+        output_cost_per_token_priority: 5e-5,
+        provider_specific_entry: { fast: 1.4 },
+      }),
+    }
+    writeFileSync(join(dir, 'source.json'), JSON.stringify(source))
+    const run = spawnSync(process.execPath, ['--input-type=module', '-e', `
+      import { readFileSync } from 'node:fs';
+      const source = JSON.parse(readFileSync('source.json', 'utf8'));
+      globalThis.fetch = async (url) => ({ ok: true, json: async () =>
+        url.includes('raw.githubusercontent.com') ? source : url.includes('models.dev') ? {} : { data: [] }
+      });
+      await import('./scripts/bundle-litellm.mjs');
+    `], { cwd: dir, encoding: 'utf8', timeout: 10_000 })
+    expect(run.status, run.stderr).toBe(0)
+    const snapshot = JSON.parse(readFileSync(join(dir, 'src/data/litellm-snapshot.json'), 'utf8'))
+    expect(snapshot['gpt-5.4']![4]).toBe(2)
+    expect(snapshot['gpt-5.5']![4]).toBe(2.5)
+    expect(snapshot['gpt-5.5-tiered']![4]).toBe(2.5)
+    expect(snapshot['gpt-5.5-tiered']![5].fast).toBe(1)
+    expect(snapshot['gpt-5.6-tiered']![4]).toBe(2)
+    expect(snapshot['gpt-5.6-tiered']![5]).not.toHaveProperty('fast')
+    expect(snapshot['gemini-2.5-pro']![4]).toBe(1.8)
+    expect(snapshot['gpt-5-codex']![4]).toBeNull()
+    expect(snapshot['azure/gpt-5.5']![4]).toBeNull()
+    expect(snapshot['claude-opus-4-8']![4]).toBe(1.4)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+it('gives a bare id the maker\'s price over a reseller\'s, and a priced reseller row over a $0 one', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'codeburn-bundle-maker-'))
+  try {
+    mkdirSync(join(dir, 'scripts'))
+    mkdirSync(join(dir, 'src/data'), { recursive: true })
+    copyFileSync(fileURLToPath(new URL('../scripts/bundle-litellm.mjs', import.meta.url)), join(dir, 'scripts/bundle-litellm.mjs'))
+    writeFileSync(join(dir, 'src/data/litellm-snapshot.json'), '{}')
+    writeFileSync(join(dir, 'src/data/pricing-fallback.json'), '{}')
+    const row = (input: number, output: number) => ({ input_cost_per_token: input, output_cost_per_token: output })
+    const source = {
+      'azure_ai/grok-x': row(1.25e-6, 6e-6),
+      'xai/grok-x': row(2e-6, 6e-6),
+      'xai/grok-y': row(2e-6, 6e-6),
+      'azure_ai/grok-y': row(1.25e-6, 6e-6),
+      'codestral/codestral-x': row(0, 0),
+      'mistral/codestral-x': row(0.3e-6, 0.9e-6),
+      'ollama/free-only': row(0, 0),
+      'deepinfra/gemma-free': row(0.15e-6, 0.6e-6),
+      'gemini/gemma-free': row(0, 0),
+      'azure_ai/resold': row(1e-6, 3e-6),
+      'fireworks_ai/resold': row(2e-6, 4e-6),
+      'openrouter/openai/sol': row(2e-6, 10e-6),
+      'perplexity/openai/sol': row(4e-6, 20e-6),
+    }
+    writeFileSync(join(dir, 'source.json'), JSON.stringify(source))
+    const run = spawnSync(process.execPath, ['--input-type=module', '-e', `
+      import { readFileSync } from 'node:fs';
+      const source = JSON.parse(readFileSync('source.json', 'utf8'));
+      globalThis.fetch = async (url) => ({ ok: true, json: async () =>
+        url.includes('raw.githubusercontent.com') ? source : url.includes('models.dev') ? {} : { data: [] }
+      });
+      await import('./scripts/bundle-litellm.mjs');
+    `], { cwd: dir, encoding: 'utf8', timeout: 10_000 })
+    expect(run.status, run.stderr).toBe(0)
+    const snapshot = JSON.parse(readFileSync(join(dir, 'src/data/litellm-snapshot.json'), 'utf8'))
+    expect(snapshot['grok-x']).toEqual([2e-6, 6e-6, null, null, null, null])
+    expect(snapshot['grok-y']).toEqual([2e-6, 6e-6, null, null, null, null])
+    expect(snapshot['azure_ai/grok-x']).toEqual([1.25e-6, 6e-6, null, null, null, null])
+    expect(snapshot['codestral-x']).toEqual([0.3e-6, 0.9e-6, null, null, null, null])
+    expect(snapshot['free-only']).toEqual([0, 0, null, null, null, null])
+    // The maker's own $0 is a real price (Gemma is free on Google's API).
+    expect(snapshot['gemma-free']).toEqual([0, 0, null, null, null, null])
+    expect(snapshot['resold']).toEqual([1e-6, 3e-6, null, null, null, null])
+    // A maker prefix in front of another vendor's path is a reseller row.
+    expect(snapshot['openai/sol']).toEqual([2e-6, 10e-6, null, null, null, null])
+    // The bare key keeps the position its first claimant gave it.
+    expect(Object.keys(snapshot).indexOf('grok-x')).toBe(Object.keys(snapshot).indexOf('azure_ai/grok-x') + 1)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})

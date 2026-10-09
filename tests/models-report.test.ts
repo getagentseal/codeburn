@@ -42,6 +42,7 @@ function makeCall(opts: {
   savingsUSD?: number
   savingsBaselineModel?: string
   timestamp?: string
+  isEstimated?: boolean
 }): ParsedApiCall {
   return {
     provider: opts.provider,
@@ -66,6 +67,7 @@ function makeCall(opts: {
     deduplicationKey: `${opts.provider}-${opts.model}-${opts.costUSD}-${opts.timestamp ?? 'default'}`,
     savingsUSD: opts.savingsUSD,
     savingsBaselineModel: opts.savingsBaselineModel,
+    ...(opts.isEstimated ? { isEstimated: true } : {}),
   }
 }
 
@@ -174,6 +176,19 @@ describe('aggregateModels', () => {
     expect(byKey['codex:gpt-5']!.credits).toBeNull()
     expect(byKey['claude:claude-sonnet-4-6']!.credits).toBeNull()
     expect(byKey['codex:gpt-5.5']!.creditsIncomplete).toBeFalsy()
+  })
+
+  it('rates auto-review credits per call date: gpt-5.4 before 30 Jul 2026, unrated after', async () => {
+    const rows = await aggregateModels([makeProject([
+      makeTurn('feature', [
+        makeCall({ provider: 'codex', model: 'codex-auto-review', output: 1_000_000, costUSD: 15, timestamp: '2026-07-29T23:00:00Z' }),
+        makeCall({ provider: 'codex', model: 'codex-auto-review', output: 1_000_000, costUSD: 1.2, timestamp: '2026-07-30T01:00:00Z' }),
+      ]),
+    ])])
+    expect(rows).toHaveLength(1)
+    // gpt-5.4 output is 375 credits/M; Luna has no published credit rate.
+    expect(rows[0]!.credits).toBeCloseTo(375, 6)
+    expect(rows[0]!.creditsIncomplete).toBe(true)
   })
 
   it('partial-sums Codex credits when a merge mixes rated and unrated ids', async () => {
@@ -605,6 +620,55 @@ describe('aggregateModels byAgent', () => {
     ])
     expect((await aggregateModels([project]))[0]!.agentType).toBeNull()
     expect((await aggregateModels([project], { byTask: true }))[0]!.agentType).toBeNull()
+  })
+})
+
+describe('estimated cost marker', () => {
+  async function rows() {
+    return aggregateModels([makeProject([
+      makeTurn('feature', [
+        makeCall({ provider: 'cursor', model: 'cursor-auto', costUSD: 6, isEstimated: true, timestamp: '2026-05-09T00:00:01.000Z' }),
+        makeCall({ provider: 'kimi-code', model: 'kimi-k3', costUSD: 3, timestamp: '2026-05-09T00:00:02.000Z' }),
+        makeCall({ provider: 'kimi-code', model: 'kimi-k3', costUSD: 1, isEstimated: true, timestamp: '2026-05-09T00:00:03.000Z' }),
+        makeCall({ provider: 'codex', model: 'gpt-5', costUSD: 2, timestamp: '2026-05-09T00:00:04.000Z' }),
+        makeCall({ provider: 'codex', model: 'gpt-5', costUSD: 0.001, isEstimated: true, timestamp: '2026-05-09T00:00:05.000Z' }),
+        makeCall({ provider: 'claude', model: 'claude-sonnet-4-6', costUSD: 1.5, timestamp: '2026-05-09T00:00:06.000Z' }),
+      ]),
+    ])])
+  }
+
+  it('carries the estimated portion per row without touching cost', async () => {
+    const byProvider = new Map((await rows()).map(r => [r.provider, r]))
+    expect(byProvider.get('cursor')).toMatchObject({ costUSD: 6, estimatedCostUSD: 6 })
+    expect(byProvider.get('kimi-code')).toMatchObject({ costUSD: 4, estimatedCostUSD: 1 })
+    expect(byProvider.get('codex')!.costUSD).toBeCloseTo(2.001, 9)
+    expect(byProvider.get('codex')!.estimatedCostUSD).toBeCloseTo(0.001, 9)
+    expect(byProvider.get('claude')).toMatchObject({ costUSD: 1.5, estimatedCostUSD: 0 })
+  })
+
+  it('marks fully and partly estimated rows in the table and leaves exact rows plain', async () => {
+    const plain = stripAnsi(renderTable(await rows(), { terminalWidth: 160 }))
+    const line = (provider: string) => plain.split('\n').find(l => l.includes(provider))!
+    expect(line('Cursor ')).toContain('~$6.00')
+    expect(line('Kimi')).toContain('~$4.00')
+    expect(line('Codex')).not.toContain('~')
+    expect(line('Claude')).not.toContain('~')
+    expect(plain.split('\n').find(l => l.includes('Total'))).not.toContain('~')
+  })
+
+  it('adds estimatedCostUSD and isEstimated to every JSON row', async () => {
+    const parsed = JSON.parse(renderJson(await rows())) as Array<{ provider: string; costUSD: number; estimatedCostUSD: number; isEstimated: boolean }>
+    const flags = Object.fromEntries(parsed.map(r => [r.provider, r.isEstimated]))
+    expect(flags).toEqual({ cursor: true, 'kimi-code': true, codex: false, claude: false })
+    expect(parsed.find(r => r.provider === 'kimi-code')!.estimatedCostUSD).toBe(1)
+  })
+
+  it('marks markdown rows and appends the legend only when a row is marked', async () => {
+    const md = renderMarkdown(await rows())
+    expect(md).toContain('~$6.00')
+    expect(md.trim().endsWith('_~ estimated cost (priced from estimated tokens)_')).toBe(true)
+    const exact = (await rows()).filter(r => r.provider === 'claude')
+    expect(renderMarkdown(exact)).not.toContain('estimated')
   })
 })
 

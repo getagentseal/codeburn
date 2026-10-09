@@ -108,8 +108,8 @@ export function dayFilters(date: string, ...more: string[]): InvestigationFilter
 export function providerFilters(provider: string): InvestigationFilters {
   return { ...EMPTY_FILTERS, providers: [provider] }
 }
-export function projectFilters(project: string): InvestigationFilters {
-  return { ...EMPTY_FILTERS, projects: [project] }
+export function projectFilters(...projects: string[]): InvestigationFilters {
+  return { ...EMPTY_FILTERS, projects }
 }
 export function modelFilters(models: string[]): InvestigationFilters {
   return { ...EMPTY_FILTERS, models }
@@ -274,7 +274,8 @@ export function contributeRow(row: SessionDrillRow, filters: InvestigationFilter
 function rowMatchesSessionDimensions(row: SessionDrillRow, filters: InvestigationFilters): boolean {
   return (filters.providers.length === 0 || filters.providers.includes(row.provider))
     && (filters.projects.length === 0 || filters.projects.some(project => rowMatchesProject(row, project)))
-    && (filters.sessions.length === 0 || filters.sessions.some(s => s.provider === row.provider && s.sessionId === row.sessionId))
+    && (filters.sessions.length === 0 || filters.sessions.some(s => s.provider === row.provider
+      && (s.sessionId === row.sessionId || (row.subagents ?? []).some(child => child.sessionId === s.sessionId))))
 }
 
 function canAttribute(row: SessionDrillRow, filters: InvestigationFilters): boolean {

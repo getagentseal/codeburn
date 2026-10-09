@@ -28,6 +28,10 @@ struct MenuBarContent: View {
                                 .padding(.horizontal, 14)
                                 .padding(.bottom, 6)
                         }
+                        if store.selectedProvider == .cursor || store.selectedProvider == .cursorAgent,
+                           let sync = store.payload.cursorSync?.line() {
+                            CursorSyncLine(text: sync.text, warn: sync.warn)
+                        }
                         Divider().opacity(0.5)
                         PeriodSegmentedControl()
                         ScopeSegmentedControl()
@@ -238,6 +242,23 @@ private struct ClaudeConfigPicker: View {
         .menuStyle(.borderlessButton)
         .fixedSize(horizontal: true, vertical: false)
         .help(L("Claude config"))
+    }
+}
+
+private struct CursorSyncLine: View {
+    let text: String
+    let warn: Bool
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: 11))
+            .foregroundStyle(warn
+                ? Color(quotaWarning: QuotaWarningPalette.foreground(.warning, colorScheme == .dark ? .dark : .light))
+                : Color.secondary.opacity(0.75))
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 14)
+            .padding(.bottom, 6)
     }
 }
 
@@ -604,26 +625,17 @@ struct CLIUpdateBanner: View {
     @Environment(UpdateChecker.self) private var updateChecker
 
     var body: some View {
-        if updateChecker.cliUpdateAvailable {
+        if let error = updateChecker.updateError, updateChecker.updateFailureStage != .check {
             HStack(spacing: 6) {
-                Image(systemName: "arrow.up.circle.fill")
+                Image(systemName: "exclamationmark.triangle.fill")
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(.blue)
 
-                Text(L("CLI %@ available", updateChecker.latestCliVersion ?? ""))
+                Text(error)
                     .font(.system(size: 10.5, weight: .medium))
                     .foregroundStyle(.primary)
-
-                Button {
-                    updateChecker.performFullUpdate()
-                } label: {
-                    Text(updateChecker.isUpdating ? L("Updating...") : L("Update now"))
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(.blue)
-                }
-                .buttonStyle(.plain)
-                .disabled(updateChecker.isUpdating)
-                .help(L("Update the CLI (and the menubar if one is available) automatically"))
+                    .lineLimit(3)
+                    .textSelection(.enabled)
 
                 Button {
                     NSPasteboard.general.clearContents()

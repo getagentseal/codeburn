@@ -3,9 +3,10 @@ import { mkdtemp } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
 import { getDateRange } from '../src/cli-date.js'
+import { __setTempRoots } from '../src/git-origin.js'
 import { currentTzKey, DAILY_CACHE_VERSION, toDateString, type DailyCache, type DailyEntry } from '../src/daily-cache.js'
 import { calculateCost, loadPricing } from '../src/models.js'
 import { computeSpendFlow } from '../src/spend-flow.js'
@@ -13,6 +14,10 @@ import type { ProjectSummary, SessionSummary } from '../src/types.js'
 import { buildMenubarPayloadForRange, buildPayloadProjects, getDailyCacheConfigHash } from '../src/usage-aggregator.js'
 
 vi.setConfig({ testTimeout: 30_000 })
+
+// The fixtures use /tmp as an ordinary parent folder, not as agent scratch space.
+beforeAll(() => __setTempRoots([]))
+afterAll(() => __setTempRoots(null))
 
 const emptyTokens = {
   inputTokens: 0,

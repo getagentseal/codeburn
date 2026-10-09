@@ -1,0 +1,4 @@
+dist/
+cli/
+.vscode-test/
+*.vsix

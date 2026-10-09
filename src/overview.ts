@@ -5,15 +5,17 @@ import { homedir } from 'os'
 import { CATEGORY_LABELS, type ProjectSummary, type TaskCategory } from './types.js'
 import { formatCost as baseCost, getCurrency } from './currency.js'
 import { findUnpricedModels, modelRowKey, unpricedModelHint } from './models.js'
-import { callBillableOutputTokens, sessionBillableOutputTokens, sessionModelBillableOutputTokens } from './session-output.js'
-import { markEstimated, excludedGatewayNote } from './format.js'
+import { callBillableOutputTokens, countSessions, sessionBillableOutputTokens, sessionModelBillableOutputTokens } from './session-output.js'
+import { markEstimated, excludedGatewayNote, isEstimatedCost, ESTIMATED_COST_LEGEND } from './format.js'
 import { AGGREGATE_ONLY_PROVIDER } from './parser.js'
 import { maxOf } from './math-utils.js'
 import { formatSessionCount, SESSION_COUNT_HELP, type SessionCountBasis } from './session-count-label.js'
+import { CURSOR_IMPORT_KEY_PREFIX } from './cursor-import.js'
 import { normalizeAbsProjectPathKey } from './parser.js'
 import { dateKey } from './day-aggregator.js'
 import type { DailyEntry } from './daily-cache.js'
 import type { BudgetStatus, BudgetTier } from './budget.js'
+import { folderNameOriginKey, isTemporaryProjectPath, linkedOriginKey, originRepoName, projectOriginKey, TEMPORARY_PROJECTS } from './git-origin.js'
 
 // Display-only helpers. The shared formatters omit thousands separators and
 // abbreviate; here we show full, comma-grouped numbers so the tables read like
@@ -72,6 +74,13 @@ type OverviewBudget = {
   status: BudgetStatus
   inProgress: boolean
 }
+
+// Local Cursor rows are priced from IDE composer bubbles, which never see the
+// context Cursor re-sends on every request, so their dollars are a local
+// estimate that can sit far below the dashboard bill (#1545). Imported events
+// are Cursor's own numbers; covered local rows are already dropped at serve
+// time, so any non-imported Cursor call that survives is an uncovered estimate.
+const CURSOR_LOCAL_PROVIDERS = new Set(['cursor', 'cursor-agent'])
 
 // Visible width, ignoring ANSI color codes, so padding stays aligned.
 function vlen(s: string): number {
@@ -147,22 +156,27 @@ export function renderOverview(
 
   let cost = 0, savings = 0, calls = 0, sessions = 0
   let inTok = 0, outTok = 0, cacheR = 0, cacheW = 0
+  let cursorLocalEstimateUSD = 0
   const byProvider = new Map<string, { cost: number; tokens: number }>()
   const byModel = new Map<string, { cost: number; calls: number; tokens: number; estimatedCost: number }>()
   const byCat = new Map<string, { cost: number; turns: number }>()
   const byTool = new Map<string, number>()
   const byDay = new Map<string, { cost: number; tokens: number; providers: Set<string> }>()
-  const byProject = new Map<string, { cost: number; sessions: number; sample: ProjectSummary }>()
+  const byProject = new Map<string, { cost: number; sessions: number; sample: ProjectSummary; repo?: string; byFolderName?: boolean }>()
 
+  sessions = countSessions(projects)
   for (const p of projects) {
     cost += p.totalCostUSD
     savings += p.totalSavingsUSD
     calls += p.totalApiCalls
-    sessions += p.sessions.length
-    const pkey = projectAggKey(p)
-    const pe = byProject.get(pkey) ?? { cost: 0, sessions: 0, sample: p }
+    const realOrigin = linkedOriginKey(p.projectPath) ?? projectOriginKey(p.projectPath)
+    const origin = realOrigin ?? folderNameOriginKey(p.projectPath)
+    const temporary = !origin && isTemporaryProjectPath(p.projectPath)
+    const pkey = origin ? `origin:${origin}` : temporary ? TEMPORARY_PROJECTS : projectAggKey(p)
+    const pe = byProject.get(pkey) ?? { cost: 0, sessions: 0, sample: p, ...(origin ? { repo: originRepoName(origin) } : temporary ? { repo: 'Temporary folders' } : {}) }
     pe.cost += p.totalCostUSD
     pe.sessions += p.sessions.length
+    if (origin && !realOrigin) pe.byFolderName = true
     byProject.set(pkey, pe)
     for (const s of p.sessions) {
       inTok += s.totalInputTokens
@@ -203,6 +217,10 @@ export function renderOverview(
           pv.cost += call.costUSD
           pv.tokens += tk
           byProvider.set(call.provider, pv)
+          if (CURSOR_LOCAL_PROVIDERS.has(call.provider)
+            && !(call.deduplicationKey ?? '').startsWith(CURSOR_IMPORT_KEY_PREFIX)) {
+            cursorLocalEstimateUSD += call.costUSD
+          }
           if (day) {
             const dd = byDay.get(day) ?? { cost: 0, tokens: 0, providers: new Set<string>() }
             dd.cost += call.costUSD
@@ -326,10 +344,10 @@ export function renderOverview(
     out.push(heading('Top models'))
     out.push(renderTable(c,
       [{ header: 'Model' }, { header: 'Cost', right: true }, { header: 'Calls', right: true }, { header: 'Tokens', right: true }],
-      modelRows.map(([m, v]) => [modelRowKey(m), markEstimated(formatCost(v.cost), v.estimatedCost > 0), formatCount(v.calls), formatTokens(v.tokens)]),
+      modelRows.map(([m, v]) => [modelRowKey(m), markEstimated(formatCost(v.cost), isEstimatedCost(v.cost, v.estimatedCost, formatCost(v.cost))), formatCount(v.calls), formatTokens(v.tokens)]),
     ))
-    if (modelRows.some(([, v]) => v.estimatedCost > 0)) {
-      out.push('  ' + c.dim('~ estimated cost (priced from estimated tokens)'))
+    if (modelRows.some(([, v]) => isEstimatedCost(v.cost, v.estimatedCost, formatCost(v.cost)))) {
+      out.push('  ' + c.dim(ESTIMATED_COST_LEGEND))
     }
     out.push('')
   }
@@ -356,8 +374,9 @@ export function renderOverview(
     out.push(heading('Top projects'))
     out.push(renderTable(c,
       [{ header: 'Project' }, { header: 'Cost', right: true }, { header: 'Sessions', right: true }],
-      projRows.map(([key, v]) => [disambiguatedProjectLabel(key, v.sample, basenameCounts), formatCost(v.cost), formatCount(v.sessions)]),
+      projRows.map(([key, v]) => [(v.repo ?? disambiguatedProjectLabel(key, v.sample, basenameCounts)) + (v.byFolderName ? ' *' : ''), formatCost(v.cost), formatCount(v.sessions)]),
     ))
+    if (projRows.some(([, v]) => v.byFolderName)) out.push(c.dim('* includes deleted folders matched by folder name'))
     out.push('')
   }
 
@@ -415,6 +434,15 @@ export function renderOverview(
 
   const gatewayNote = excludedGatewayNote(durable?.excludedGateway?.costUSD ?? 0)
   if (gatewayNote) out.push(c.dim(`  ${gatewayNote}`))
+
+  // #1545: say so when Cursor dollars in this period are local estimates
+  // rather than Cursor's bill, instead of letting the figure look exact.
+  if (cursorLocalEstimateUSD > 0) {
+    out.push(c.dim(
+      `  includes ${formatCost(cursorLocalEstimateUSD)} of Cursor priced from local files, not Cursor's bill — ` +
+      'codeburn import cursor <file.csv> replaces it with the dashboard\'s own totals',
+    ))
+  }
 
   return out.join('\n') + '\n'
 }

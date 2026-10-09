@@ -92,6 +92,14 @@ describe('aggregateAudit', () => {
     expect(row.attributedCostUSD).toBeCloseTo(expected, 9)
   })
 
+  it('recomputes codex-auto-review per call date, matching the parse-time price', async () => {
+    const before = { ...makeCall({ inputTokens: 1_000, outputTokens: 100 }, 1_000 * 2.5e-6 + 100 * 1.5e-5, 'codex-auto-review', 'codex'), timestamp: '2026-07-29T12:00:00Z' }
+    const after = { ...makeCall({ inputTokens: 1_000, outputTokens: 100 }, 1_000 * 2e-7 + 100 * 1.2e-6, 'codex-auto-review', 'codex'), timestamp: '2026-07-30T12:00:00Z', deduplicationKey: 'after' }
+    const rows = await aggregateAudit([makeProject([before, after])])
+    expect(rows).toHaveLength(1)
+    expect(rows[0]!.cost.recomputedTotalUSD).toBeCloseTo(rows[0]!.attributedCostUSD, 12)
+  })
+
   it('keeps raw fields and exposes codeburn normalizations', async () => {
     const anthropicCall = makeCall({ inputTokens: 100, outputTokens: 50, reasoningTokens: 10, cacheReadInputTokens: 200 }, 0.5)
     const openaiCall = makeCall({ inputTokens: 100, outputTokens: 50, cachedInputTokens: 300 }, 0.5)

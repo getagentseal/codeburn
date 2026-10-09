@@ -1,0 +1,22 @@
+{
+  "userStatus": {
+    "cascadeModelConfigData": {
+      "clientModelConfigs": [
+        {
+          "label": "Claude Opus 5.5 (Medium)",
+          "quotaInfo": {
+            "remainingFraction": 1,
+            "resetTime": "2026-10-07T03:04:50Z"
+          }
+        },
+        {
+          "label": "GPT-OSS 120B (Medium)",
+          "quotaInfo": {
+            "remainingFraction": 1,
+            "resetTime": "2026-10-07T03:04:50Z"
+          }
+        }
+      ]
+    }
+  }
+}

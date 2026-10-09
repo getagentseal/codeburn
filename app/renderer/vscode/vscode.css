@@ -1,0 +1,69 @@
+/* The desktop design tokens, re-pointed at the editor's theme so the dashboard
+   reads as part of VS Code (and of any fork's theme) in light, dark and high
+   contrast. CodeBurn keeps its own accent and its chart series colors. */
+:root[data-host='vscode'][data-theme] {
+  --canvas: var(--vscode-sideBar-background, var(--vscode-editor-background));
+  --side: var(--vscode-sideBar-background, var(--vscode-editor-background));
+  --page: var(--vscode-editor-background);
+  --bg: var(--vscode-editor-background);
+  --panel: var(--vscode-editor-background);
+  --card-inner: color-mix(in srgb, var(--vscode-foreground) 4%, var(--vscode-editor-background));
+  --phead: color-mix(in srgb, var(--vscode-foreground) 7%, var(--vscode-editor-background));
+  --card-shadow: none;
+  --card-inner-shadow: none;
+  --ink: var(--vscode-foreground);
+  --mut: var(--vscode-descriptionForeground);
+  --mut2: color-mix(in srgb, var(--vscode-descriptionForeground) 88%, var(--vscode-editor-background));
+  --line: var(--vscode-widget-border, color-mix(in srgb, var(--vscode-foreground) 12%, transparent));
+  --line2: color-mix(in srgb, var(--vscode-foreground) 7%, transparent);
+  --fill: var(--vscode-input-background, color-mix(in srgb, var(--vscode-foreground) 8%, transparent));
+  --hover: var(--vscode-list-hoverBackground);
+  --bar: color-mix(in srgb, var(--vscode-foreground) 12%, transparent);
+  --bar-hi: color-mix(in srgb, var(--vscode-foreground) 75%, transparent);
+  --btn-face: var(--vscode-button-secondaryBackground);
+  --btn-line: var(--vscode-button-border, transparent);
+  --nav-on: var(--vscode-list-inactiveSelectionBackground);
+  --nav-hover: var(--vscode-list-hoverBackground);
+  --nav-ink: var(--vscode-list-inactiveSelectionForeground, var(--vscode-foreground));
+  --tip-bg: var(--vscode-editorHoverWidget-background);
+  --tip-ink: var(--vscode-editorHoverWidget-foreground, var(--vscode-foreground));
+  --sans: var(--vscode-font-family);
+  --mono: var(--vscode-editor-font-family);
+}
+
+/* High contrast: every edge is the theme's contrast border, and the accent
+   becomes its active border so nothing relies on hue alone. */
+:root[data-host='vscode'][data-contrast='high'][data-theme] {
+  --line: var(--vscode-contrastBorder);
+  --line2: var(--vscode-contrastBorder);
+  --card-inner: var(--vscode-editor-background);
+  --phead: var(--vscode-editor-background);
+  --nav-on: transparent;
+  --hover: transparent;
+  --accent: var(--vscode-contrastActiveBorder, var(--vscode-focusBorder));
+  --accent-text: var(--vscode-textLink-foreground);
+}
+:root[data-host='vscode'][data-contrast='high'] :is(.card, .panel, .ni.on, .dropdown-trigger, .seg) {
+  outline: 1px solid var(--vscode-contrastBorder);
+}
+:root[data-host='vscode'][data-contrast='high'] .ni.on { outline-color: var(--vscode-contrastActiveBorder, var(--vscode-focusBorder)); }
+
+:root[data-host='vscode'] body { padding: 0; font-family: var(--sans); }
+:root[data-host='vscode'] #root { display: flex; }
+/* An editor tab is often narrower than the desktop window's 900px floor. */
+:root[data-host='vscode'] .win { flex: 1; min-width: 0; border-radius: 0; }
+:root[data-host='vscode'] .body { padding: var(--sp-5); }
+
+:root[data-host='vscode'] :is(button, [role='button'], [role='tab'], a, input, select, [tabindex]):focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: 1px;
+}
+
+/* The caption repeats the period and provider the bar's own controls show; an
+   editor tab rarely has room for both beside the workspace switch. */
+@media (max-width: 1400px) {
+  :root[data-host='vscode'] .bar .scope { display: none; }
+}
+/* Below the desktop's minimum window, the bar's controls take a second row
+   rather than running off the tab. */
+:root[data-host='vscode'] .bar { flex-wrap: wrap; row-gap: var(--sp-2); }

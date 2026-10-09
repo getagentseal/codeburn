@@ -1,7 +1,8 @@
-import type { DailyEntry, ProjectDayStats, ProviderDaySlice } from './daily-cache.js'
+import { projectDayKey, type DailyEntry, type ProjectDayStats, type ProviderDaySlice } from './daily-cache.js'
 import type { PeriodData } from './menubar-json.js'
-import { CATEGORY_LABELS, type ProjectSummary, type TaskCategory } from './types.js'
+import { CATEGORY_LABELS, type ProjectSummary, type SessionSummary, type TaskCategory } from './types.js'
 import { behavioralCallWeight, isBehavioralTurn } from './behavioral-weight.js'
+import { projectOriginKey } from './git-origin.js'
 import { billableOutputTokens, modelRowKey } from './models.js'
 
 function emptyEntry(date: string): DailyEntry {
@@ -67,28 +68,43 @@ export function aggregateProjectsIntoDays(projects: ProjectSummary[], dateKeyFn:
   }
   const ensureProject = (holder: { projects?: Record<string, ProjectDayStats> }, project: string, path?: string): ProjectDayStats => {
     const projects = (holder.projects ??= {})
+    const key = projectDayKey(project, path)
     // defineProperty so a project directory named "__proto__" becomes an own
     // key instead of mutating the prototype link.
-    let p = Object.hasOwn(projects, project) ? projects[project] : undefined
+    let p = Object.hasOwn(projects, key) ? projects[key] : undefined
     if (!p) {
-      p = { cost: 0, calls: 0, savingsUSD: 0, sessions: 0 }
-      Object.defineProperty(projects, project, { value: p, enumerable: true, writable: true, configurable: true })
+      const originKey = projectOriginKey(path)
+      p = { cost: 0, calls: 0, savingsUSD: 0, sessions: 0, ...(path ? { path } : {}), ...(originKey ? { originKey } : {}) }
+      Object.defineProperty(projects, key, { value: p, enumerable: true, writable: true, configurable: true })
     }
-    if (!p.path && path) p.path = path
     return p
+  }
+
+  // A session split across projects counts once per day and provider, on its
+  // earliest slice; each project it touched still counts it.
+  const splitHeads = new Map<string, SessionSummary>()
+  for (const project of projects) {
+    for (const session of project.sessions) {
+      if (!session.projectSplit) continue
+      const key = `${session.projectSplit.primaryProjectPath}\0${session.sessionId}`
+      const head = splitHeads.get(key)
+      if (!head || session.firstTimestamp < head.firstTimestamp) splitHeads.set(key, session)
+    }
   }
 
   for (const project of projects) {
     for (const session of project.sessions) {
       const sessionDate = dateKeyFn(session.firstTimestamp)
       const sessionDay = ensure(sessionDate)
-      sessionDay.sessions += 1
+      const countsOnce = !session.projectSplit
+        || splitHeads.get(`${session.projectSplit.primaryProjectPath}\0${session.sessionId}`) === session
+      if (countsOnce) sessionDay.sessions += 1
       ensureProject(sessionDay, session.project, project.projectPath).sessions += 1
       // A session belongs to exactly one provider; its calls all carry it.
       const sessionProvider = session.turns.flatMap(t => t.assistantCalls)[0]?.provider
       if (sessionProvider) {
         const slice = ensureSlice(sessionDay, sessionProvider)
-        slice.sessions! += 1
+        if (countsOnce) slice.sessions! += 1
         ensureProject(slice, session.project, project.projectPath).sessions += 1
       }
 

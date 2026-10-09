@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { Box, Text, render, useApp, useInput, useWindowSize } from 'ink'
 
-import { formatTokens } from './format.js'
+import { formatTokens, markEstimated } from './format.js'
 import { patchStdoutForWindows } from './ink-win.js'
 import { startUserTimingGuard } from './user-timing-guard.js'
 import {
@@ -105,7 +105,7 @@ function rowValue(row: SessionRow, key: Column['key']): string {
     case 'project': return cleanSessionProjectLabel(row.project)
     case 'provider': return row.provider
     case 'models': return sessionModelLabel(row.models)
-    case 'cost': return `$${row.cost.toFixed(2)}`
+    case 'cost': return markEstimated(`$${row.cost.toFixed(2)}`, row.isEstimated)
     case 'calls': return row.calls.toLocaleString('en-US')
     case 'turns': return row.turns.toLocaleString('en-US')
   }
@@ -135,8 +135,8 @@ function DetailPanel({ row, width }: { row: SessionRow; width: number }) {
       <Text bold>{truncate(sessionDisplayName(row), Math.max(30, width - 8))}</Text>
       <Text color={MUTED}>{truncate(context, Math.max(30, width - 8))}</Text>
       <Text>
-        <Text color={ORANGE} bold>${row.cost.toFixed(2)}</Text>
-        <Text color={MUTED}>{truncate(`  cost   ${metrics}`, Math.max(24, width - 18))}</Text>
+        <Text color={ORANGE} bold>{markEstimated(`$${row.cost.toFixed(2)}`, row.isEstimated)}</Text>
+        <Text color={MUTED}>{truncate(`  ${row.isEstimated ? 'estimated cost' : 'cost'}   ${metrics}`, Math.max(24, width - 18))}</Text>
       </Text>
     </Box>
   )

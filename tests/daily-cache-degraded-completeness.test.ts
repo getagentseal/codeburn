@@ -263,10 +263,10 @@ describe('daily cache: a residue-only day is re-derived, not served', () => {
       'cfg-A',
       () => true,
     )
-    // The watermark moved back to daysAgoStr(4), so the gap parse started on
-    // the residue day itself instead of skipping it forever.
+    // The watermark moved back to daysAgoStr(4), so the gap parse covers the
+    // residue day instead of skipping it forever.
     expect(ranges).toHaveLength(1)
-    expect(toDateString(ranges[0]!.start)).toBe(daysAgoStr(3))
+    expect(toDateString(ranges[0]!.start) <= daysAgoStr(3)).toBe(true)
     const healed = out.days.find(d => d.date === daysAgoStr(3))!
     expect(healed.providers['claude']).toMatchObject({ cost: 33, calls: 210 })
     expect(healed.cost).toBe(33)
@@ -277,22 +277,70 @@ describe('daily cache: a residue-only day is re-derived, not served', () => {
   })
 })
 
+describe('daily cache: sealing a day re-derives the still-settling ones', () => {
+  it('a day sealed before a late call or a re-price reads the same as a live parse of it', async () => {
+    // The field case: Oct 4 sealed at $376.71 / 5563 calls; a live parse of it
+    // later finds 5564 calls at a new price ($356.17). report --day used the
+    // live parse, history.daily the sealed day.
+    await seed({
+      lastComputedDate: daysAgoStr(2),
+      watermarkTrusted: true,
+      days: [day(daysAgoStr(10), { claude: slice(80, 700) }), day(daysAgoStr(4), { claude: slice(376.71, 5563) })],
+    })
+    const out = await ensureCacheHydrated(
+      async () => [],
+      () => [day(daysAgoStr(4), { claude: slice(356.17, 5564) }), day(daysAgoStr(1), { claude: slice(10, 50) })],
+      'cfg-A',
+      () => true,
+    )
+    expect(out.days.find(d => d.date === daysAgoStr(4))).toMatchObject({ cost: 356.17, calls: 5564 })
+    expect(out.days.find(d => d.date === daysAgoStr(1))).toMatchObject({ cost: 10 })
+    expect(out.days.find(d => d.date === daysAgoStr(10))).toMatchObject({ cost: 80, calls: 700 })
+  })
+})
+
+describe('daily cache: a re-derived sealed day never shrinks', () => {
+  it('keeps a sealed day whose fresh parse lost calls, re-prices one with the same calls', async () => {
+    await seed({
+      lastComputedDate: daysAgoStr(2),
+      watermarkTrusted: true,
+      days: [
+        day(daysAgoStr(4), { claude: slice(200, 1000) }),
+        day(daysAgoStr(3), { claude: slice(376.71, 5563) }),
+      ],
+    })
+    const out = await ensureCacheHydrated(
+      async () => [],
+      () => [
+        day(daysAgoStr(4), { claude: slice(15, 40) }),
+        day(daysAgoStr(3), { claude: slice(356.17, 5563) }),
+        day(daysAgoStr(1), { claude: slice(10, 50) }),
+      ],
+      'cfg-A',
+      () => true,
+    )
+    expect(out.days.find(d => d.date === daysAgoStr(4))).toMatchObject({ cost: 200, calls: 1000 })
+    expect(out.days.find(d => d.date === daysAgoStr(3))).toMatchObject({ cost: 356.17, calls: 5563 })
+    expect(out.days.find(d => d.date === daysAgoStr(1))).toMatchObject({ cost: 10 })
+  })
+})
+
 describe('daily cache: out-of-range residue days never reach the gap merge', () => {
   it('a straddling turn anchored before the gap leaves the cached day untouched', async () => {
     // Issue #1130: the gap range starts on D+1, but a turn anchored on day D
     // survives range slicing whole, so the aggregator emits a residue day for
     // D — outside the parsed range. Previously the merge guard had to defuse
     // it; now the range filter drops it before the merge runs at all.
-    const populatedD = day(daysAgoStr(4), { claude: slice(120, 900) })
-    await seed({ days: [VANISHED, populatedD] })
-    const before = (await loadDailyCache()).days.find(d => d.date === daysAgoStr(4))!
-    const residue = residueDay(daysAgoStr(4))
+    const populatedD = day(daysAgoStr(9), { claude: slice(120, 900) })
+    await seed({ days: [VANISHED, populatedD], lastComputedDate: daysAgoStr(9) })
+    const before = (await loadDailyCache()).days.find(d => d.date === daysAgoStr(9))!
+    const residue = residueDay(daysAgoStr(9))
     const inRange = day(daysAgoStr(2), { claude: slice(30, 300) })
     const out = await ensureCacheHydrated(noSessions, () => [residue, inRange], 'cfg-A', () => true)
     // Day D persisted untouched: no residue categories leaked in.
-    const kept = out.days.find(d => d.date === daysAgoStr(4))!
+    const kept = out.days.find(d => d.date === daysAgoStr(9))!
     expect(kept).toEqual(before)
-    expect(out.days.map(d => d.date)).toEqual([daysAgoStr(40), daysAgoStr(4), daysAgoStr(2)])
+    expect(out.days.map(d => d.date)).toEqual([daysAgoStr(40), daysAgoStr(9), daysAgoStr(2)])
     expect(out.lastComputedDate).toBe(daysAgoStr(1))
     expect(out.complete).toBe(true)
   })

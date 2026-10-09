@@ -311,6 +311,17 @@ describe('sessions spanning the A/B boundary', () => {
     expect(rows[0]!.identity).toContain('straddle-1')
   })
 
+  it('joins a split session whose primary project differs between the ranges', () => {
+    const slice = (cost: number, primaryProjectPath: string, primary: boolean): SessionSummary =>
+      ({ ...makeSession({ sessionId: 'moved-1', model: 'model-x', costUSD: cost, calls: 1 }), projectSplit: { primaryProject: primaryProjectPath, primaryProjectPath, primary } })
+    const projectsA = [makeProject('/home', [slice(30, '/home', true)]), makeProject('/app', [slice(10, '/home', false)])]
+    const projectsB = [makeProject('/home', [slice(5, '/app', false)]), makeProject('/app', [slice(50, '/app', true)])]
+    expect(diffSessions(projectsA, projectsB, 'model', 'model-x')).toMatchObject([{ sessionId: 'moved-1', costA: 40, costB: 55 }])
+    expect(diffSessions(projectsA, projectsB, 'project', '/home')).toMatchObject([{ sessionId: 'moved-1', costA: 30, costB: 5 }])
+    const unsplitA = [makeProject('/home', [makeSession({ sessionId: 'moved-1', model: 'model-x', costUSD: 30, calls: 1 })])]
+    expect(diffSessions(unsplitA, projectsB, 'project', '/home')).toMatchObject([{ sessionId: 'moved-1', costA: 30, costB: 5 }])
+  })
+
   it('drills by model across projects and by project across models', () => {
     const a = [makeProject('/w1', [makeSession({ sessionId: 's1', modelCosts: { 'm-a': { costUSD: 10, calls: 1 }, 'm-b': { costUSD: 5, calls: 1 } } })])]
     const b = [makeProject('/w2', [makeSession({ sessionId: 's2', modelCosts: { 'm-a': { costUSD: 25, calls: 2 } } })])]

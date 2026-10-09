@@ -1,12 +1,22 @@
 // Fixture-driven coverage for the ClinePass quota adapter, ported from the
 // menubar's ClinePassQuotaTests. The key is synthetic and every request goes
 // through the injected fetch.
+import { join } from 'node:path'
+
 import { describe, expect, it } from 'vitest'
 
-import { clinePassApiKey, decodeClinePassUsage, fetchClinePassQuota } from '../src/quota/clinepass.js'
+import {
+  clinePassApiKey, clineProvidersPath, decodeClinePassUsage, fetchClinePassQuota, parseClineProviders,
+} from '../src/quota/clinepass.js'
 
 const neverFetch = (() => { throw new Error('the test must not reach the network') }) as unknown as typeof fetch
 const SYNTHETIC_KEY = 'synthetic-clinepass-test-key'
+const noFile = async () => null
+const NOW = 1_800_000_000_000
+
+function providersFile(settings: unknown): string {
+  return JSON.stringify({ version: 1, providers: { cline: { settings }, anthropic: { settings: { apiKey: 'other-provider-key' } } } })
+}
 
 const successBody = {
   success: true,
@@ -32,8 +42,55 @@ describe('ClinePass credential discovery', () => {
   })
 
   it('reports disconnected with no key and never fetches', async () => {
-    const result = await fetchClinePassQuota({ env: {}, fetch: neverFetch })
+    const result = await fetchClinePassQuota({ env: {}, fetch: neverFetch, readFile: noFile })
     expect(result.quota.connection).toBe('disconnected')
+  })
+
+  it('follows Cline\'s settings path overrides', () => {
+    expect(clineProvidersPath({}, '/home/u')).toBe(join('/home/u', '.cline', 'data', 'settings', 'providers.json'))
+    expect(clineProvidersPath({ CLINE_DIR: '~/c' }, '/home/u')).toBe(join('/home/u', 'c', 'data', 'settings', 'providers.json'))
+    expect(clineProvidersPath({ CLINE_DIR: '/c', CLINE_DATA_DIR: '/d' }, '/home/u')).toBe(join('/d', 'settings', 'providers.json'))
+    expect(clineProvidersPath({ CLINE_DATA_DIR: '/d', CLINE_PROVIDER_SETTINGS_PATH: '/f.json' }, '/home/u')).toBe('/f.json')
+  })
+
+  it('prefers the OAuth access token, then apiKey, then auth.apiKey', () => {
+    expect(parseClineProviders(providersFile({ apiKey: 'k1', auth: { accessToken: 'workos:tok', apiKey: 'k2', expiresAt: NOW } })))
+      .toEqual({ token: 'workos:tok', oauth: true, expiresAt: NOW })
+    expect(parseClineProviders(providersFile({ auth: { accessToken: 'bare' } }))?.token).toBe('workos:bare')
+    expect(parseClineProviders(providersFile({ apiKey: 'k1', auth: { apiKey: 'k2' } }))).toEqual({ token: 'k1', oauth: false, expiresAt: null })
+    expect(parseClineProviders(providersFile({ auth: { apiKey: 'k2' } }))?.token).toBe('k2')
+    expect(parseClineProviders(providersFile({ provider: 'cline' }))).toBeNull()
+    expect(parseClineProviders(JSON.stringify({ providers: {} }))).toBeNull()
+  })
+
+  it('sends the Cline session token when no key is set, and a key wins over it', async () => {
+    const seen: string[] = []
+    const file = providersFile({ auth: { accessToken: 'workos:session-token', expiresAt: NOW + 60_000 } })
+    const fetchSpy = (async (_url: string, init: RequestInit) => {
+      seen.push((init.headers as Record<string, string>)['Authorization']!)
+      return jsonResponse(successBody)
+    }) as unknown as typeof fetch
+    const viaFile = await fetchClinePassQuota({ env: {}, fetch: fetchSpy, readFile: async () => file, now: () => NOW })
+    expect(viaFile.quota.connection).toBe('connected')
+    await fetchClinePassQuota({ env: { CLINE_API_KEY: SYNTHETIC_KEY }, fetch: fetchSpy, readFile: async () => file, now: () => NOW })
+    expect(seen).toEqual(['Bearer workos:session-token', `Bearer ${SYNTHETIC_KEY}`])
+  })
+
+  it('stops at an expired Cline session without fetching, as a retryable failure', async () => {
+    const file = providersFile({ auth: { accessToken: 'workos:old', expiresAt: NOW - 1 } })
+    const result = await fetchClinePassQuota({ env: {}, fetch: neverFetch, readFile: async () => file, now: () => NOW })
+    expect(result.quota.connection).toBe('transientFailure')
+    expect(result.quota.footerLines).toEqual(['Cline sign-in expired. Run cline to refresh it.'])
+  })
+
+  it('reads a rejected session token as an expired sign-in', async () => {
+    const file = providersFile({ auth: { accessToken: 'workos:revoked' } })
+    const result = await fetchClinePassQuota({
+      env: {}, readFile: async () => file, now: () => NOW,
+      fetch: (async () => jsonResponse({}, 401)) as unknown as typeof fetch,
+    })
+    expect(result.quota.connection).toBe('transientFailure')
+    expect(result.quota.footerLines).toEqual(['Cline sign-in expired. Run cline to refresh it.'])
   })
 })
 

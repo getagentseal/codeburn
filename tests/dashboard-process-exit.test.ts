@@ -120,17 +120,12 @@ async function startHydratingDashboard(): Promise<RunningDashboard> {
   const dashboard = { child, home, hydrationLock: join(cacheDir, 'hydrating.lock'), readOutput: () => output }
   running.push(dashboard)
   // The cold background index takes and releases the hydration lock once per
-  // phase, and its opening phases cover windows these 200-day-old sessions fall
-  // outside of, so the lock blinks for a few ms before the lifetime phase holds
-  // it for seconds. Returning on a blink hands back a process that has already
-  // let go, so require the lock to survive a settle.
+  // phase. The opening phases hold it briefly with gaps in between, so a lock
+  // seen then can be gone a moment later; only the lifetime phase, which parses
+  // these 200-day-old sessions, holds it for seconds. The banner names the phase
+  // and lifetime is last, so a lock seen after its label is lifetime's.
   await waitFor(
-    async () => {
-      if (!output.includes('progressive startup on')) return false
-      if (!await pathExists(dashboard.hydrationLock)) return false
-      await new Promise(resolve => setTimeout(resolve, 150))
-      return pathExists(dashboard.hydrationLock)
-    },
+    async () => output.includes('loading Lifetime') && pathExists(dashboard.hydrationLock),
     15_000,
     `dashboard never entered background hydration; output:\n${output.slice(-2_000)}`,
   )

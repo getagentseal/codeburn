@@ -25,7 +25,7 @@
     <a href="https://github.com/sponsors/iamtoruk"><img src="https://img.shields.io/badge/sponsor-♥-F97316?logo=github" alt="Sponsor" /></a>
 </p>
 
-<p align="center">If CodeBurn shows you something your bill never did, <a href="https://github.com/getagentseal/codeburn/stargazers">star the repo</a> so other developers find it, and consider <a href="https://github.com/sponsors/iamtoruk">sponsoring</a> to keep 41 integrations honest.</p>
+<p align="center">If CodeBurn shows you something your bill never did, <a href="https://github.com/getagentseal/codeburn/stargazers">star the repo</a> so other developers find it, and consider <a href="https://github.com/sponsors/iamtoruk">sponsoring</a> to keep 42 integrations honest.</p>
 
 <p align="center"><code>npx codeburn</code></p>
 
@@ -156,7 +156,7 @@ That registers a local MCP server over stdio. Your agent can then answer "where 
 
 It reads the same files on disk that the CLI reads. The server answers from that local data and makes no network call of its own, and project names are pseudonymized unless the agent asks for them.
 
-## Works with 41 tools
+## Works with 42 tools
 
 CodeBurn detects the tools you already use. There is nothing to configure and no folder to point it at. If a tool is installed and has sessions on disk, it shows up. Each logo links to that tool's page.
 
@@ -198,12 +198,12 @@ CodeBurn detects the tools you already use. There is nothing to configure and no
 </p>
 
 <details>
-<summary><strong>All 41 tools</strong></summary>
+<summary><strong>All 42 tools</strong></summary>
 
 Each page lists where that tool keeps its data, the format it uses, and the quirks CodeBurn works around.
 
 [Amp](docs/providers/amp.md) &middot; [Antigravity](docs/providers/antigravity.md) &middot; [Claude Code](docs/providers/claude.md) &middot; [Cline](docs/providers/cline.md) &middot; [Cline CLI](docs/providers/cline-cli.md) &middot; [Codebuff](docs/providers/codebuff.md) &middot; [Codex](docs/providers/codex.md) &middot;
-[CodeWhale](docs/providers/codewhale.md) &middot; [Copilot](docs/providers/copilot.md) &middot; [Crush](docs/providers/crush.md) &middot; [Cursor](docs/providers/cursor.md) &middot; [Cursor Agent](docs/providers/cursor-agent.md) &middot; [DeepSeek Harness](docs/providers/dsh.md) &middot;
+[CodeWhale](docs/providers/codewhale.md) &middot; [Command Code](docs/providers/command-code.md) &middot; [Copilot](docs/providers/copilot.md) &middot; [Crush](docs/providers/crush.md) &middot; [Cursor](docs/providers/cursor.md) &middot; [Cursor Agent](docs/providers/cursor-agent.md) &middot; [DeepSeek Harness](docs/providers/dsh.md) &middot;
 [Devin](docs/providers/devin.md) &middot; [Droid](docs/providers/droid.md) &middot; [Forge](docs/providers/forge.md) &middot; [Gemini CLI](docs/providers/gemini.md) &middot; [Goose](docs/providers/goose.md) &middot; [Grok Bot](docs/providers/grokbot.md) &middot;
 [Grok Build](docs/providers/grok.md) &middot; [Hermes Agent](docs/providers/hermes.md) &middot; [IBM Bob](docs/providers/ibm-bob.md) &middot; [KiloCode](docs/providers/kilo-code.md) &middot; [Kimi](docs/providers/kimi.md) &middot; [Kimi Code](docs/providers/kimicode.md) &middot;
 [Kiro](docs/providers/kiro.md) &middot; [LingTai TUI](docs/providers/lingtai-tui.md) &middot; [Mistral Vibe](docs/providers/mistral-vibe.md) &middot; [Mux](docs/providers/mux.md) &middot; [OMP](docs/providers/omp.md) &middot; [Open Design](docs/providers/open-design.md) &middot;
@@ -257,7 +257,7 @@ MIT licensed. Development happens in this repo.
   <img src="https://img.shields.io/badge/Salesforce-1f1f1f?style=flat" alt="Salesforce" />
 </p>
 
-<p align="center"><sub>Keeping 41 integrations working takes constant time. The tools underneath change often, and each change means a config path to follow or a stored format to relearn. Sponsorship pays for that work.</sub></p>
+<p align="center"><sub>Keeping 42 integrations working takes constant time. The tools underneath change often, and each change means a config path to follow or a stored format to relearn. Sponsorship pays for that work.</sub></p>
 
 <p align="center">
   <a href="https://github.com/sponsors/iamtoruk"><img src="https://img.shields.io/badge/Sponsor_CodeBurn-%E2%99%A5-F97316?style=for-the-badge&logo=github&labelColor=1a1a1a" alt="Sponsor CodeBurn" /></a>
@@ -280,6 +280,7 @@ MIT licensed. Development happens in this repo.
 | [How it works](docs/how-it-works.md) | Pricing, task categories, and where each tool keeps its data |
 | [Optimize](docs/optimize.md) | What is scanned, what `--apply` writes, how to read the grade |
 | [Menu bar and tray](docs/menubar.md) | macOS, Windows (including WSL), and the Linux GNOME extension |
+| [VS Code extension](docs/vscode.md) | Status bar, summary and dashboard in VS Code, Cursor, Windsurf, Antigravity and VSCodium |
 | [Plans and quota](docs/plans-and-quota.md) | Subscription tracking and live provider limits |
 | [Guard](docs/guard.md) | Budget caps for Claude Code |
 | [Web dashboard](docs/web.md) | The browser view, and combining usage across your devices |
@@ -361,7 +362,7 @@ The dollar figure is what your tokens would have cost at API rates. It is not an
 <details>
 <summary><strong>Is my plan the right size, or am I paying for capacity I never use?</strong></summary>
 
-Set what you pay for with `codeburn plan set claude-max`, or `claude-pro`, `cursor-pro`, `copilot-pro`, or `custom --monthly-usd 200 --provider codex`. The Plans page then shows spend this cycle against that budget with a pacing line, either On track or on pace to exceed with the projected figure and the date. After two or three cycles the pattern is clear. Consistently under a quarter of the plan means you are buying capacity you do not use, and consistently over means the cheaper plan is costing you. CodeBurn shows the share and the pace, and leaves the choice of plan to you.
+Set what you pay for with `codeburn plan set claude-max`, or `claude-pro`, `cursor-pro`, `copilot-pro`, `google-ai-pro`, or `custom --monthly-usd 200 --provider codex`. The Plans page then shows spend this cycle against that budget with a pacing line, either On track or on pace to exceed with the projected figure and the date. After two or three cycles the pattern is clear. Consistently under a quarter of the plan means you are buying capacity you do not use, and consistently over means the cheaper plan is costing you. CodeBurn shows the share and the pace, and leaves the choice of plan to you.
 
 </details>
 
@@ -414,7 +415,7 @@ From the tools the session used and the words in your own messages, with no mode
 <details>
 <summary><strong>On a subscription the dollars are an estimate. What is estimated and what is measured?</strong></summary>
 
-The tokens are measured for most tools. Claude Code, Codex, Gemini, Zed, OpenCode and others write real per-call input, output and cache counts into their own session files, and CodeBurn reads those rather than guessing. The price applied to them is published API pricing, so the dollar figure is arithmetic on measured tokens, not a guess about your bill. A few tools record no counts at all, so Cursor, Kiro and some Copilot sessions are estimated from content length, and those are marked estimated in the tables. `codeburn audit` prints a row per provider and model saying where every number came from.
+The tokens are measured for most tools. Claude Code, Codex, Gemini, Zed, OpenCode and others write real per-call input, output and cache counts into their own session files, and CodeBurn reads those rather than guessing. The price applied to them is published API pricing, so the dollar figure is arithmetic on measured tokens, not a guess about your bill. A few tools record no counts at all, so Cursor, Kiro and some Copilot sessions are estimated from content length, and those are marked estimated in the tables. Claude Code also bills some calls it does not write to its transcripts: some advisor calls, and subagent replies that keep only part of their usage. For those, CodeBurn can show less than Claude Code's own cost counter. `codeburn audit` prints a row per provider and model saying where every number came from.
 
 </details>
 
@@ -435,7 +436,7 @@ The daily numbers do not. CodeBurn keeps a durable daily history under `~/.cache
 <details>
 <summary><strong>What actually leaves my computer, and how can I check?</strong></summary>
 
-Model prices are fetched from LiteLLM and cached for 24 hours, so that call happens at most once a day. `codeburn quota` asks each provider you are signed in to how much of your plan is left, using the credential that tool already stores on your machine. If you set a non-USD currency, exchange rates come from Frankfurter, cached the same way. Commands that install something, such as `codeburn menubar`, reach GitHub releases, which is the point of them. Your prompts, your code, your file names and your project names are read on disk and never sent anywhere, and nothing else leaves unless you point CodeBurn at a destination yourself. It is not a proxy, so no traffic of yours passes through it. You can watch what does leave with a network monitor.
+Model prices are fetched from LiteLLM and cached for 24 hours, so that call happens at most once a day. `codeburn quota` asks each provider you are signed in to how much of your plan is left, using the credential that tool already stores on your machine. If you set a non-USD currency, exchange rates come from Frankfurter, cached the same way. If you use Cursor, CodeBurn downloads your own usage export from cursor.com with the Cursor app's login, at most about once an hour, so Cursor figures match your bill; nothing is uploaded, and `CODEBURN_CURSOR_SYNC=0` or `"cursorSync": false` in `~/.config/codeburn/config.json` turns it off. Commands that install something, such as `codeburn menubar`, reach GitHub releases, which is the point of them. Your prompts, your code, your file names and your project names are read on disk and never sent anywhere, and nothing else leaves unless you point CodeBurn at a destination yourself. It is not a proxy, so no traffic of yours passes through it. You can watch what does leave with a network monitor.
 
 </details>
 
@@ -458,7 +459,7 @@ Register the local MCP server with `claude mcp add codeburn -- npx -y codeburn m
 <details>
 <summary><strong>Why is this free, and what is going to cost money later?</strong></summary>
 
-CodeBurn is MIT licensed and all of it is in this repository: the CLI, the desktop app, the menu bar and tray apps, the GNOME extension. There is no account, no paid tier and no feature held back for one. It is free because it reads files you already have, which costs nothing to run. What it does cost is time, because 41 integrations sit on top of tools that change their config paths and data formats without warning. [Sponsorship](https://github.com/sponsors/iamtoruk) is what pays for keeping up with them.
+CodeBurn is MIT licensed and all of it is in this repository: the CLI, the desktop app, the menu bar and tray apps, the GNOME extension. There is no account, no paid tier and no feature held back for one. It is free because it reads files you already have, which costs nothing to run. What it does cost is time, because 42 integrations sit on top of tools that change their config paths and data formats without warning. [Sponsorship](https://github.com/sponsors/iamtoruk) is what pays for keeping up with them.
 
 </details>
 
@@ -502,7 +503,9 @@ The other events are name-only:
 | `app_open`, `app_close` | Session length in whole minutes |
 | `section_view` | Which section you opened (`overview`, `spend`, …) |
 | `cold_start` | Milliseconds to the first painted overview, and whether it timed out |
-| `cli_error` | Error kind and the command name, capped at 20 per kind per day |
+| `cli_error` | Error kind, the command name, how long it ran as a range (`<1s` to `120s+`), the exit code or signal, a reason label (`lock-busy`, `oom`, `eacces`, `enoent`, `network`, `parse`, `shutdown`, `serve`, `other`) picked on your machine from the error text, which is never sent, and the provider when the read was for one provider. Capped at 20 per kind per day |
+| `provider_read_fail` | A provider whose data could not be read: its name, the stage (`locate` or `parse`) and the error kind (`eacces`, `busy`, `enoent`, `malformed`, `error`). Once a day per provider, stage and kind |
+| `update_result` | How a one-click update went: the version before and after, and `ok`, `download_fail`, `verify_fail` or `install_fail`. Also sent by the macOS menu bar app and the Windows tray |
 | `optimize_apply` | The finding id you took a fix for (`unused-mcp`, `claude-md-too-long`, …) and the fix type |
 | `plan_set` | Provider and plan preset id |
 | `export` | Format (`csv` or `json`) and provider |

@@ -11,7 +11,7 @@ import { SectionSkeleton } from '../components/Skeleton'
 import { StackedBars } from '../components/StackedBars'
 import { StaleBanner } from '../components/StaleBanner'
 import { type Polled, usePolled } from '../hooks/usePolled'
-import { formatCount, formatUsd } from '../lib/format'
+import { formatCount, formatUsd, shortenProjectPath } from '../lib/format'
 import { codeburn } from '../lib/ipc'
 import { contiguousDailyWindow, dataStartKey, localDateKey } from '../lib/period'
 import { reportMemoKey } from '../lib/reportMemoKey'
@@ -225,29 +225,42 @@ function ProjectBreakdown({ projects, onInvestigate }: { projects: Project[]; on
         projects.map((project, i) => {
           const rowKey = projectRowKey(project, i)
           const open = expanded === rowKey
+          const name = project.temporary ? t('shell.project.temporary') : project.name
+          // Sessions filter by exact checkout ids, so only a complete list drills.
+          const drillable = (project.checkoutCount ?? 0) <= (project.checkouts?.length ?? 0)
           return (
             <Fragment key={rowKey}>
               <ListRow
                 no={String(i + 1).padStart(2, '0')}
-                title={project.name}
+                title={name}
                 sub={<span title={project.sessionCountBasis === 'identity' ? undefined : sessionCountHelp()}>{formatSessionCount(project.sessions, project.sessionCountBasis)}</span>}
                 value={formatUsd(project.cost)}
                 expanded={open}
                 onClick={() => setExpanded(current => current === rowKey ? null : rowKey)}
               />
               {open && (
-                <div className="spend-proj-detail" role="region" aria-label={t('spend.project.sessionsAria', { name: project.name })}>
+                <div className="spend-proj-detail" role="region" aria-label={t('spend.project.sessionsAria', { name })}>
                   {/* Drill-through entry: canonical project id (the same one the
                       session rows carry), so the destination matches exactly. */}
-                  {onInvestigate && (
+                  {onInvestigate && drillable && (
                     <button
                       className="ov-link spend-proj-drill"
                       type="button"
-                      onClick={() => onInvestigate({ filters: projectFilters(project.id || project.name) })}
+                      onClick={() => onInvestigate({ filters: projectFilters(...(project.checkouts?.map(c => c.id) ?? [project.id || project.name])) })}
                     >
                       {t('spend.project.viewSessions')}
                     </button>
                   )}
+                  {project.checkouts?.map(checkout => (
+                    <div className="spend-proj-session" key={checkout.id}>
+                      <span className="sps-date" />
+                      <span className="sps-model" title={checkout.id}>{shortenProjectPath(checkout.id, 2)}</span>
+                      <span className="sps-calls" title={checkout.matchedByFolderName ? t('spend.project.matchedByFolderNameTip') : undefined}>
+                        {checkout.matchedByFolderName ? t('spend.project.matchedByFolderName') : null}
+                      </span>
+                      <span className="sps-cost">{formatUsd(checkout.cost)}</span>
+                    </div>
+                  ))}
                   {project.sessionDetails.length ? (
                     project.sessionDetails.map((session, j) => (
                       <div className="spend-proj-session" key={`${session.date}-${j}`}>

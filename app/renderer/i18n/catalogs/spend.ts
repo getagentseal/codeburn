@@ -28,6 +28,8 @@ export const spend: SectionCatalog = {
     'spend.project.top': 'top {count}',
     'spend.project.sessionsAria': '{name} sessions',
     'spend.project.viewSessions': 'View sessions for this project →',
+    'spend.project.matchedByFolderName': 'matched by folder name',
+    'spend.project.matchedByFolderNameTip': 'Deleted folder, grouped with this repository by its name only',
     'spend.project.noDetail': 'No session detail for this project.',
     'spend.project.empty': 'No project spend in this range yet.',
 
@@ -106,6 +108,8 @@ export const spend: SectionCatalog = {
     'spend.project.top': 'top {count}',
     'spend.project.sessionsAria': 'Sessions de {name}',
     'spend.project.viewSessions': 'Voir les sessions de ce projet →',
+    'spend.project.matchedByFolderName': 'associé par nom de dossier',
+    'spend.project.matchedByFolderNameTip': 'Dossier supprimé, regroupé avec ce dépôt uniquement par son nom',
     'spend.project.noDetail': 'Aucun détail de session pour ce projet.',
     'spend.project.empty': 'Aucune dépense de projet sur cette période.',
 
@@ -184,6 +188,8 @@ export const spend: SectionCatalog = {
     'spend.project.top': '上位{count}件',
     'spend.project.sessionsAria': '{name}のセッション',
     'spend.project.viewSessions': 'このプロジェクトのセッションを表示 →',
+    'spend.project.matchedByFolderName': 'フォルダ名で一致',
+    'spend.project.matchedByFolderNameTip': '削除済みフォルダ。名前だけでこのリポジトリにまとめています',
     'spend.project.noDetail': 'このプロジェクトのセッション詳細はありません。',
     'spend.project.empty': 'この期間のプロジェクト支出はまだありません。',
 
@@ -262,6 +268,8 @@ export const spend: SectionCatalog = {
     'spend.project.top': '상위 {count}개',
     'spend.project.sessionsAria': '{name}의 세션',
     'spend.project.viewSessions': '이 프로젝트의 세션 보기 →',
+    'spend.project.matchedByFolderName': '폴더 이름으로 일치',
+    'spend.project.matchedByFolderNameTip': '삭제된 폴더로, 이름만으로 이 저장소에 묶었습니다',
     'spend.project.noDetail': '이 프로젝트의 세션 상세 정보가 없습니다.',
     'spend.project.empty': '이 기간의 프로젝트 지출이 아직 없습니다.',
 
@@ -340,6 +348,8 @@ export const spend: SectionCatalog = {
     'spend.project.top': '前 {count} 名',
     'spend.project.sessionsAria': '{name} 的会话',
     'spend.project.viewSessions': '查看此项目的会话 →',
+    'spend.project.matchedByFolderName': '按文件夹名称匹配',
+    'spend.project.matchedByFolderNameTip': '已删除的文件夹，仅按名称归入此仓库',
     'spend.project.noDetail': '此项目没有会话详情。',
     'spend.project.empty': '此期间尚无项目支出。',
 
@@ -418,6 +428,8 @@ export const spend: SectionCatalog = {
     'spend.project.top': '前 {count} 名',
     'spend.project.sessionsAria': '{name} 的工作階段',
     'spend.project.viewSessions': '查看此專案的工作階段 →',
+    'spend.project.matchedByFolderName': '依資料夾名稱比對',
+    'spend.project.matchedByFolderNameTip': '已刪除的資料夾，僅依名稱歸入此儲存庫',
     'spend.project.noDetail': '此專案沒有工作階段詳情。',
     'spend.project.empty': '此期間尚無專案支出。',
 

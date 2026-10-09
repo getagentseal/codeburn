@@ -11,7 +11,7 @@ import { StaleBanner } from '../components/StaleBanner'
 import { DUR, motionEnabled, useBarGrowIn } from '../lib/motion'
 import { useOptimizeSnapshot } from '../hooks/useOptimizeSnapshot'
 import { type Polled, usePolled } from '../hooks/usePolled'
-import { asOfLabel, formatCompact, formatCount, formatUsd, formatUsdWithCurrency } from '../lib/format'
+import { asOfLabel, formatCompact, formatCount, formatUsd, formatUsdWithCurrency, isEstimatedCost } from '../lib/format'
 import { Usd, sumTokens, tokensOf, useUsdPop } from '../components/Usd'
 import { codeburn } from '../lib/ipc'
 import {
@@ -42,6 +42,7 @@ import type {
 import type { OverviewHeadlineSnapshot } from '../lib/overviewSnapshot'
 import { formatCombinedSessionCount, formatSessionCount, sessionCountIsExact, combinedSessionCountHelp, sessionCountHelp } from '../lib/session-count-label'
 import { Icon } from '../components/icons'
+import { CursorSyncLine } from '../components/CursorSyncLine'
 import { localeTag, t } from '../i18n'
 
 export { localDateKey } from '../lib/period'
@@ -571,7 +572,10 @@ function buildModelIndex(data: MenubarPayload): Map<string, string> {
   for (const project of data.current.topProjects) {
     for (const session of project.sessionDetails) {
       const dominant = [...session.models].sort((a, b) => b.cost - a.cost)[0]
-      if (dominant) index.set(sessionModelKey(project.name, session.date, session.calls, session.cost), dominant.name)
+      if (!dominant) continue
+      index.set(sessionModelKey(project.name, session.date, session.calls, session.cost), dominant.name)
+      // A top session's cost and calls include its subagents, so match it by identity.
+      if (session.provider && session.sessionId) index.set(`${session.provider}\u0000${session.sessionId}`, dominant.name)
     }
   }
   return index
@@ -649,6 +653,8 @@ type AggregatedModel = {
   cacheReadTokens?: number
   // No column of its own; the cost cell's token popover reads it.
   cacheWriteTokens?: number
+  // Absent on the history.daily fallback, which carries no estimated split.
+  estimatedCostUSD?: number
 }
 
 /** Provider-filtered source: `current.topModels` is already period/range/provider-scoped by the CLI. */
@@ -662,6 +668,7 @@ function topModelsToAggregated(models: MenubarPayload['current']['topModels']): 
       ...(model.outputTokens === undefined ? {} : { outputTokens: model.outputTokens }),
       ...(model.cacheReadTokens === undefined ? {} : { cacheReadTokens: model.cacheReadTokens }),
       ...(model.cacheWriteTokens === undefined ? {} : { cacheWriteTokens: model.cacheWriteTokens }),
+      ...(model.estimatedCostUSD === undefined ? {} : { estimatedCostUSD: model.estimatedCostUSD }),
     }))
     .sort((a, b) => b.cost - a.cost)
 }
@@ -715,7 +722,7 @@ function ModelsTable({ models, onSelectModel }: { models: AggregatedModel[]; onS
               <td className="num mono">{model.inputTokens === undefined ? '—' : formatCompact(model.inputTokens)}</td>
               <td className="num mono">{model.outputTokens === undefined ? '—' : formatCompact(model.outputTokens)}</td>
               <td className="num mono">{model.cacheReadTokens === undefined ? '—' : formatCompact(model.cacheReadTokens)}</td>
-              <td className="num mono"><Usd value={model.cost} tokens={tokensOf(model)} /></td>
+              <td className="num mono"><Usd value={model.cost} tokens={tokensOf(model)} estimated={isEstimatedCost(model.cost, model.estimatedCostUSD)} /></td>
               <td className="num">{model.calls.toLocaleString('en-US')}</td>
             </tr>
           ))}
@@ -1195,6 +1202,7 @@ export function OverviewContent({
                   appear to collapse and recover; snap to the revalidated total. */}
               <CountUp value={heroCost} tokens={heroTokens} animateKey={animateKey} animate={!suppressHeroReplay} />
               <div className="ov-hero-sub" title={heroSessionHelp}>{formatCount(heroCalls, 'call')} · {heroSessionLabel}</div>
+              {(provider === 'cursor' || provider === 'cursor-agent') && <CursorSyncLine status={data.cursorSync} />}
               {combined
                 ? <CombinedDevices usage={combined} />
                 : (
@@ -1301,7 +1309,8 @@ export function OverviewContent({
             <div className="ov-panel-head"><Icon name="coins" /><h3>{t('overview.sessions.mostExpensive')}</h3><span className="r"><button className="ov-link" type="button" onClick={() => onNavigate?.('sessions')}>{t('overview.sessions.seeAll')}</button></span></div>
             <div className="ov-panel-body">
               {data.current.topSessions.length ? data.current.topSessions.map((session, index) => {
-                const model = modelIndex.get(sessionModelKey(session.project, session.date, session.calls, session.cost))
+                const model = (session.provider && session.sessionId ? modelIndex.get(`${session.provider}\u0000${session.sessionId}`) : undefined)
+                  ?? modelIndex.get(sessionModelKey(session.project, session.date, session.calls, session.cost))
                 const sub = [formatChartDate(session.date), model, formatCount(session.calls, 'call')].filter(Boolean).join(' · ')
                 return <ListRow key={`${session.project}-${session.date}-${index}`} no={String(index + 1).padStart(2, '0')} title={session.project} sub={sub} value={formatUsd(session.cost)} onClick={() => openSessionRow(session)} />
               }) : <EmptyNote>{t('overview.sessions.noSessions')}</EmptyNote>}

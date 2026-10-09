@@ -25,6 +25,8 @@ const bridge = {
   appLocale: process.env.__CODEBURN_APP_LOCALE__ ?? '',
   getLanguage: () => invoke('codeburn:getLanguage'),
   setLanguage: (language: string | null) => invoke('codeburn:setLanguage', language),
+  getCursorSync: () => invoke('codeburn:getCursorSync'),
+  setCursorSync: (enabled: boolean) => invoke('codeburn:setCursorSync', enabled),
   getQuota: (force?: boolean, disabled?: string[]) => invoke('codeburn:getQuota', force, disabled),
   getOverview: (period: string, provider: string, range?: DateRange, configSource?: string | null, background?: boolean, scope?: string) => invoke('codeburn:getOverview', period, provider, range, configSource, background, scope),
   getTimeline: (period: string, provider: string, range?: DateRange) => invoke('codeburn:getTimeline', period, provider, range),
@@ -33,6 +35,7 @@ const bridge = {
   getModels: (period: string, provider: string, byTask: boolean, range?: DateRange, background?: boolean) => invoke('codeburn:getModels', period, provider, byTask, range, background),
   getSessions: (period: string, provider: string, range?: DateRange, background?: boolean) => invoke('codeburn:getSessions', period, provider, range, background),
   getSessionsContributions: (period: string, provider: string, range?: DateRange, background?: boolean) => invoke('codeburn:getSessionsContributions', period, provider, range, background),
+  getSessionWhy: (id: string) => invoke('codeburn:getSessionWhy', id),
   getCompareModels: (period: string, provider: string, background?: boolean) => invoke('codeburn:getCompareModels', period, provider, background),
   getCompare: (period: string, provider: string, modelA: string, modelB: string) => invoke('codeburn:getCompare', period, provider, modelA, modelB),
   getPeriodCompare: (rangeA: DateRange, rangeB: DateRange, provider: string, background?: boolean) => invoke('codeburn:getPeriodCompare', rangeA, rangeB, provider, background),
@@ -66,6 +69,7 @@ const bridge = {
   getProjectFilter: () => invoke('codeburn:getProjectFilter'),
   setProjectFilter: (filter: { project: string[]; exclude: string[] }) => invoke('codeburn:setProjectFilter', filter),
   getUnfilteredProjects: () => invoke('codeburn:getUnfilteredProjects'),
+  setTransientProject: (projectPath: string | null) => invoke('codeburn:setTransientProject', projectPath),
   setPriceOverride: (model: string, rates: PriceRates) => invoke('codeburn:setPriceOverride', model, rates),
   removePriceOverride: (model: string) => invoke('codeburn:removePriceOverride', model),
   setCurrency: (code: string) => invoke('codeburn:setCurrency', code),
@@ -96,6 +100,8 @@ const bridge = {
     ipcRenderer.on('codeburn:update', listener)
     return () => { ipcRenderer.removeListener('codeburn:update', listener) }
   },
+  downloadUpdate: () => invoke('codeburn:downloadUpdate'),
+  installUpdate: () => invoke('codeburn:installUpdate'),
   // The bundled tray app and its Capacity Dock (Windows). Every setter answers with the
   // whole status, so the sidebar renders what took rather than what it asked for.
   companionStatus: () => invoke('codeburn:companionStatus'),

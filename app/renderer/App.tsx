@@ -11,9 +11,9 @@ import { ToastHost } from './components/ToastHost'
 import { UpdateBanner } from './components/UpdateBanner'
 import { rangeLabel, TopBar } from './components/TopBar'
 import { Window } from './components/Window'
-import { clearPolledMemo, hasPolledMemo, polledMemoTimestamp, primePolledMemo, usePolled, usePolledInFlight } from './hooks/usePolled'
+import { clearPolledMemo, hasPolledMemo, pausePolledPersistence, polledMemoTimestamp, primePolledMemo, usePolled, usePolledInFlight } from './hooks/usePolled'
 import { readDailyBudget } from './lib/budget'
-import { formatCompact, formatUsd, setActiveCurrency } from './lib/format'
+import { formatCompact, formatUsd, setActiveCurrency, shortenProjectPath } from './lib/format'
 import {
   EMPTY_FILTERS,
   filtersActive,
@@ -34,10 +34,11 @@ import {
 } from './lib/navHistory'
 import { motionClass } from './lib/motion'
 import { clearOverviewHeadlines, readOverviewHeadline, writeOverviewHeadline } from './lib/overviewSnapshot'
-import { codeburn } from './lib/ipc'
+import { codeburn, normalizeCliError } from './lib/ipc'
+import { showToast } from './lib/toast'
 import { effectiveLocale, isLocaleChoice, LocaleContext, setCurrentLocale, t, type Locale, type LocaleChoice } from './i18n'
 import { trackEvent } from './lib/track'
-import { isMacPlatform, isModifierChord, shortcutLabel } from './lib/platform'
+import { isIdeHost, isMacPlatform, isModifierChord, shortcutLabel } from './lib/platform'
 import { localDateKey, PERIOD_LABELS } from './lib/period'
 import { generationAt } from './lib/generation'
 import { detectedProviders as detectedProviderList, providerLabel, readDisabledProviders, type DetectedProvider } from './lib/providers'
@@ -56,6 +57,9 @@ import { SpendContent } from './sections/Spend'
 import { PluginsSection } from './sections/Plugins'
 import type { DateRange, MenubarPayload, ModelReportRow, Period, Scope } from './lib/types'
 import { Icon } from './components/icons'
+import { IdeScopePicker } from './components/IdeScopePicker'
+import { ProjectScopePicker, type TransientProject } from './components/ProjectScopePicker'
+import { projectVisible } from './lib/projectMatch'
 
 // Bucket raw dollar amounts before they leave the machine: telemetry carries
 // coarse ranges, never exact spend.
@@ -283,10 +287,17 @@ export function App() {
     () => ({ value: refreshValue, intervalMs: resolveCadenceMs(refreshValue, onBattery), setValue }),
     [refreshValue, onBattery, setValue],
   )
+  // Above the locale remount, so a language switch keeps the pick. A renderer
+  // reload keeps the main process, and with it the last pick, so clear it there
+  // before the first poll goes out.
+  const [transientProject, setTransientProject] = useState<TransientProject | null>(() => {
+    void codeburn.setTransientProject?.(null).catch(() => {})
+    return null
+  })
   return (
     <RefreshCadenceContext.Provider value={cadence}>
       <LocaleProvider>
-        <AppMain />
+        <AppMain transientProject={transientProject} onTransientProject={setTransientProject} />
       </LocaleProvider>
     </RefreshCadenceContext.Provider>
   )
@@ -349,7 +360,7 @@ function initialNavState(): NavState {
   }
 }
 
-function AppMain() {
+function AppMain({ transientProject, onTransientProject }: { transientProject: TransientProject | null; onTransientProject: (project: TransientProject | null) => void }) {
   const [nav, setNav] = useState<NavState>(initialNavState)
   const [history, setHistory] = useState<NavHistory>(EMPTY_NAV_HISTORY)
   // Mirrors for synchronous reads inside callbacks (commit/back/forward must
@@ -373,7 +384,7 @@ function AppMain() {
   const [projectFiltered, setProjectFiltered] = useState(initialProjectFiltered)
   // Combined reports unfiltered paired-device usage, so a project filter would
   // come back inside the aggregate. The filter wins, from the first poll.
-  const scope: Scope = projectFiltered ? 'local' : requestedScope
+  const scope: Scope = projectFiltered || transientProject ? 'local' : requestedScope
   // Rolls the shell once per local calendar day: the overview memo keys bake in
   // a today/month boundary, so midnight must produce a re-render — but ticking
   // a wall clock every second would re-render the whole tree for a label one
@@ -471,17 +482,17 @@ function AppMain() {
   // an as-yet-unwarmed period useful immediately. It is never presented as the
   // current answer: the full authoritative fetch starts normally behind it.
   const headlineSnapshot = useMemo(
-    () => customRange || scope !== 'local' ? null : readOverviewHeadline(activeOverviewKey),
-    [activeOverviewKey, customRange, scope, snapshotRevision],
+    () => customRange || scope !== 'local' || transientProject ? null : readOverviewHeadline(activeOverviewKey),
+    [activeOverviewKey, customRange, scope, snapshotRevision, transientProject],
   )
 
   useEffect(() => {
     // React renders once with the previous hook result before the dependency-
     // change effect clears or swaps it. Never persist that previous payload
     // beneath the newly selected period/provider key.
-    if (!overview.data || overview.dataKey !== activeOverviewKey || customRange || scope !== 'local') return
+    if (!overview.data || overview.dataKey !== activeOverviewKey || customRange || scope !== 'local' || transientProject) return
     writeOverviewHeadline(activeOverviewKey, overview.data, overview.lastSuccessAt ?? Date.now())
-  }, [activeOverviewKey, customRange, overview.data, overview.dataKey, overview.lastSuccessAt, scope])
+  }, [activeOverviewKey, customRange, overview.data, overview.dataKey, overview.lastSuccessAt, scope, transientProject])
 
   useEffect(() => {
     if (overview.data || !headlineSnapshot?.currency) return
@@ -540,7 +551,7 @@ function AppMain() {
   // and still emits without it if that fetch fails.
   const snapshotDayRef = useRef<string | null>(null)
   useEffect(() => {
-    if (!overview.data || provider !== 'all' || customRange || claudeConfigSource || scope !== 'local') return
+    if (!overview.data || provider !== 'all' || customRange || claudeConfigSource || scope !== 'local' || transientProject) return
     const today = localDateKey(new Date())
     if (snapshotDayRef.current === today) return
     snapshotDayRef.current = today
@@ -557,7 +568,7 @@ function AppMain() {
       } catch { /* degrade: emit the snapshot without per-model topCategory */ }
       trackEvent('usage_snapshot', usageSnapshotProps(payload, modelCategories))
     })()
-  }, [overview.data, provider, customRange, claudeConfigSource, scope, period])
+  }, [overview.data, provider, customRange, claudeConfigSource, scope, period, transientProject])
 
   useEffect(() => {
     let saved: string | null = null
@@ -634,7 +645,7 @@ function AppMain() {
   useEffect(() => {
     // Keep this first slice local-only; combined scope has its own remote-data
     // lifecycle and must not inherit local-corpus assumptions by accident.
-    if (!ready || overview.data == null || customRange || claudeConfigSource || scope !== 'local') return
+    if (!ready || overview.data == null || customRange || claudeConfigSource || scope !== 'local' || transientProject) return
     let cancelled = false
     // Pending hidden-window waiters, so teardown can release them instead of
     // leaving the sweep parked on a listener forever.
@@ -747,7 +758,7 @@ function AppMain() {
     // `overview.data == null` (a boolean) gates on first-resolution without
     // re-running every poll; the data content itself is intentionally not a dep.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ready, period, provider, warmProviderIds, customRange, claudeConfigSource, scope, snapshotRevision, overview.data == null])
+  }, [ready, period, provider, warmProviderIds, customRange, claudeConfigSource, scope, snapshotRevision, overview.data == null, transientProject])
 
   const refreshVisible = useCallback(() => {
     refreshOverview()
@@ -768,6 +779,15 @@ function AppMain() {
     setSnapshotRevision(revision => revision + 1)
     refreshVisible()
   }, [refreshVisible])
+
+  // Main first, so no fetch after the cache purge can run under the old scope.
+  const selectProject = useCallback((next: TransientProject | null) => {
+    void codeburn.setTransientProject?.(next?.path ?? null).then(() => {
+      pausePolledPersistence(next !== null)
+      onTransientProject(next)
+      onConfigMutated()
+    }).catch(err => showToast(normalizeCliError(err).message, 'error'))
+  }, [onConfigMutated, onTransientProject])
 
   const navigate = useCallback((next: Section, pane: SettingsPane = 'general') => {
     setSettingsPane(pane)
@@ -837,6 +857,17 @@ function AppMain() {
     return () => document.removeEventListener('keydown', onKeyDown)
   }, [refreshVisible, navigate, goBack, goForward])
 
+  useEffect(() => codeburn.onIdeCommand?.(command => {
+    if (command.refresh) refreshVisible()
+    const patch: Partial<NavState> = {}
+    if (command.section && NAV_SECTIONS.has(command.section)) patch.section = command.section as Section
+    if (command.period && isPeriod(command.period)) {
+      autoPeriod.current = false
+      Object.assign(patch, { period: command.period, range: null, visibleCount: INITIAL_VISIBLE })
+    }
+    if (Object.keys(patch).length > 0) commitNav(patch)
+  }), [commitNav, refreshVisible])
+
   const onPeriodChange = (value: string) => {
     if (isPeriod(value)) {
       autoPeriod.current = false
@@ -886,10 +917,12 @@ function AppMain() {
         if (active !== initialProjectFiltered()) clearPolledMemo()
         setProjectFiltered(active)
         persistProjectFiltered(active)
+        // The Projects pane hid the picked project: back to every project.
+        if (transientProject && !projectVisible(transientProject, filter)) selectProject(null)
       })
       .catch(() => { /* an older preload has no getProjectFilter to honour */ })
     return () => { cancelled = true }
-  }, [snapshotRevision, refreshToken, overview.data])
+  }, [snapshotRevision, refreshToken, overview.data, transientProject, selectProject])
 
   // Collapse the stored preference too, so clearing the filter later starts
   // from local instead of silently restoring a combined view.
@@ -925,7 +958,7 @@ function AppMain() {
   // "Combined" in place of the (forced-'all') provider label.
   const scopeCaption = scope === 'combined'
     ? `${customRange ? rangeLabel(customRange) : PERIOD_LABELS[period]} · ${t('shell.scope.combined')}`
-    : `${customRange ? rangeLabel(customRange) : PERIOD_LABELS[period]} · ${activeProviderLabel}${activeConfigLabel ? ` · ${activeConfigLabel}` : ''}`
+    : `${customRange ? rangeLabel(customRange) : PERIOD_LABELS[period]} · ${activeProviderLabel}${activeConfigLabel ? ` · ${activeConfigLabel}` : ''}${transientProject ? ` · ${transientProject.label ?? shortenProjectPath(transientProject.path, 2)}` : ''}`
   const refreshing = usePolledInFlight() || overview.switching || (!!headlineSnapshot && overview.loading)
   const selectedReportKeys = selectedReportMemoKeys(section, period, provider, customRange, activeOverviewKey)
   const selectedReportTimestamps = selectedReportKeys.map(polledMemoTimestamp)
@@ -942,6 +975,7 @@ function AppMain() {
     && !claudeConfigSource
     && provider === 'all'
     && !projectFiltered
+    && !transientProject
     && !!overview.data?.periodTotals
   const generationClock = headlineFromGeneration ? generationAt() : null
   const selectedLastSuccessAt = generationClock != null && (reportLastSuccessAt == null || generationClock > reportLastSuccessAt)
@@ -985,8 +1019,12 @@ function AppMain() {
               claudeConfigs={claudeConfigs}
               configSource={claudeConfigSource}
               onConfigSelect={onConfigSelect}
+              projectScope={codeburn.ideScope
+                ? <IdeScopePicker scope={codeburn.ideScope} />
+                : codeburn.setTransientProject ? <ProjectScopePicker value={transientProject} onSelect={selectProject} /> : undefined}
             />
-            <div className={motionClass('body', 'section-fade')}>
+            {/* A project switch remounts the section, so no panel keeps the last project's rows. */}
+            <div key={transientProject?.path ?? ''} className={motionClass('body', 'section-fade')}>
               {section === 'overview' ? (
                 <OverviewContent period={period} provider={provider} range={customRange} overview={overview} onNavigate={navigate} onInvestigate={investigate} ready={ready} scope={scope} configSource={claudeConfigSource} refreshToken={refreshToken} headlineSnapshot={headlineSnapshot} />
               ) : section === 'sessions' ? (
@@ -1016,7 +1054,7 @@ function AppMain() {
         </ErrorBoundary>
         {section !== 'settings' && (
           <Hint
-            items={[
+            items={isIdeHost() ? [] : [
               { k: shortcutLabel('1-9'), label: t('shell.hint.navigate') },
               { k: shortcutLabel(','), label: t('shell.nav.settings') },
               { k: shortcutLabel('R'), label: t('shell.action.refresh') },

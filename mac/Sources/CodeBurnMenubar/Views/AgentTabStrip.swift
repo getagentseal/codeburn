@@ -42,6 +42,7 @@ struct AgentTabStrip: View {
                                 AgentTab(
                                     filter: filter,
                                     cost: cost(for: filter),
+                                    isEstimated: isEstimated(filter),
                                     isActive: store.selectedProvider == filter,
                                     quota: store.quotaSummary(for: filter)
                                 ) {
@@ -145,6 +146,14 @@ struct AgentTabStrip: View {
         }
     }
 
+    private func isEstimated(_ filter: ProviderFilter) -> Bool {
+        guard filter != .all, let cost = cost(for: filter) else { return false }
+        let estimated = periodAll.current.providerDetails
+            .filter { filter.providerKeys.contains($0.id.lowercased()) || filter.providerKeys.contains($0.label.lowercased()) }
+            .reduce(0.0) { $0 + ($1.estimatedCostUSD ?? 0) }
+        return isEstimatedCost(cost, estimated, shown: cost.asCompactCurrency())
+    }
+
     private func cost(for filter: ProviderFilter) -> Double? {
         let data = periodAll
         if filter == .all { return data.current.cost }
@@ -223,6 +232,7 @@ struct AgentTabStrip: View {
 private struct AgentTab: View {
     let filter: ProviderFilter
     let cost: Double?
+    var isEstimated = false
     let isActive: Bool
     let quota: QuotaSummary?
     let onTap: () -> Void
@@ -255,7 +265,7 @@ private struct AgentTab: View {
                         .font(.system(size: 11.5, weight: .medium))
                         .tracking(-0.05)
                     if let cost, cost > 0 {
-                        Text(cost.asCompactCurrency())
+                        Text((isEstimated ? "~" : "") + cost.asCompactCurrency())
                             .font(.codeMono(size: 10.5, weight: .medium))
                             .foregroundStyle(isActive ? AnyShapeStyle(.white.opacity(0.8)) : AnyShapeStyle(.secondary))
                             .tracking(-0.2)

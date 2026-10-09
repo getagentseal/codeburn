@@ -5,7 +5,7 @@ import { tmpdir } from 'os'
 
 import { createCodexProvider } from '../../src/providers/codex.js'
 import { clearCodexMemCaches, CODEX_CACHE_VERSION, codexCacheFileName } from '../../src/codex-cache.js'
-import { calculateCost } from '../../src/models.js'
+import { calculateCost, parseLiteLLMEntry, restorePricingState, snapshotPricingState } from '../../src/models.js'
 import type { ParsedProviderCall } from '../../src/providers/types.js'
 
 let tmpDir: string
@@ -1405,6 +1405,123 @@ describe('codex provider - forked session dedupe', () => {
   })
 })
 
+describe('codex provider - fork replay masking against the parent rollout', () => {
+  const PARENT = '019e0000-0000-7000-8000-000000000001'
+  const CHILD = '019e0000-0000-7000-8000-000000000002'
+  const GRANDCHILD = '019e0000-0000-7000-8000-000000000003'
+  const rollout = (id: string, lines: string[]) =>
+    writeSession(tmpDir, '2026-04-14', `rollout-2026-04-14T10-00-00-${id}.jsonl`, lines)
+  const at = (s: string) => `2026-04-14T10:${s}Z`
+  type U = { input?: number; output?: number }
+  const cumulative: Record<string, U> = {}
+  // Each call advances that rollout's running total by its own usage.
+  const call = (rolloutId: string, ts: string, last: U) => {
+    const t = (cumulative[rolloutId] ??= { input: 0, output: 0 })
+    t.input! += last.input ?? 0
+    t.output! += last.output ?? 0
+    return tokenCount({ timestamp: at(ts), model: 'gpt-5.5', last, total: { input: t.input, output: t.output } })
+  }
+  const cost = (u: U) => calculateCost('gpt-5.5', u.input ?? 0, u.output ?? 0, 0, 0, 0, 'standard', 0, 'codex')
+
+  async function parseFile(path: string, seenKeys = new Set<string>()): Promise<ParsedProviderCall[]> {
+    const provider = createCodexProvider(tmpDir)
+    const calls: ParsedProviderCall[] = []
+    for await (const c of provider.createSessionParser({ path, project: 'test', provider: 'codex' }, seenKeys).parse()) calls.push(c)
+    return calls
+  }
+
+  beforeEach(() => {
+    for (const k of Object.keys(cumulative)) delete cumulative[k]
+  })
+
+  it('counts fork-only burst calls one by one through a parent -> child -> grandchild chain', async () => {
+    const p = [call(PARENT, '00:01', { input: 1_000 }), call(PARENT, '00:02', { input: 2_000 })]
+    cumulative[CHILD] = { ...cumulative[PARENT] }
+    const longContext: U = { input: 300_000, output: 100 }
+    const c = [
+      call(CHILD, '01:00.020', longContext),
+      call(CHILD, '01:00.030', { input: 500, output: 50 }),
+      call(CHILD, '01:30', { input: 700 }),
+    ]
+    cumulative[GRANDCHILD] = { ...cumulative[CHILD] }
+    const g = call(GRANDCHILD, '02:30', { input: 900 })
+    const retime = (line: string, ts: string) => line.replace(/"timestamp":"[^"]*"/, `"timestamp":"${at(ts)}"`)
+
+    const parentPath = await rollout(PARENT, [sessionMeta({ session_id: PARENT, model: 'gpt-5.5' }), ...p])
+    const childPath = await rollout(CHILD, [
+      sessionMeta({ session_id: CHILD, forked_from_id: PARENT, model: 'gpt-5.5', timestamp: at('01:00') }),
+      retime(p[0]!, '01:00.005'), retime(p[1]!, '01:00.010'),
+      ...c,
+    ])
+    const grandchildPath = await rollout(GRANDCHILD, [
+      sessionMeta({ session_id: GRANDCHILD, forked_from_id: CHILD, model: 'gpt-5.5', timestamp: at('02:00') }),
+      ...[...p, ...c].map((line, i) => retime(line, `02:00.${String(i + 1).padStart(3, '0')}`)),
+      g,
+    ])
+
+    const seen = new Set<string>()
+    const parent = await parseFile(parentPath, seen)
+    const child = await parseFile(childPath, seen)
+    const grandchild = await parseFile(grandchildPath, seen)
+
+    expect(parent.map(x => x.costUSD)).toEqual([cost({ input: 1_000 }), cost({ input: 2_000 })])
+    expect(child.map(x => x.costUSD)).toEqual([cost(longContext), cost({ input: 500, output: 50 }), cost({ input: 700 })])
+    expect(grandchild.map(x => x.costUSD)).toEqual([cost({ input: 900 })])
+    // The long-context tier applies to the one call that crossed it.
+    expect(child[0]!.costUSD).toBeGreaterThan(calculateCost('gpt-5.5', 300_000, 100, 0, 0, 0))
+  })
+
+  it('drops the whole burst when the parent rollout is not on disk', async () => {
+    const p = [call(PARENT, '00:01', { input: 1_000 })]
+    cumulative[CHILD] = { ...cumulative[PARENT] }
+    const childPath = await rollout(CHILD, [
+      sessionMeta({ session_id: CHILD, forked_from_id: PARENT, timestamp: at('01:00') }),
+      p[0]!.replace(at('00:01'), at('01:00.005')),
+      call(CHILD, '01:00.010', { input: 500 }),
+      call(CHILD, '01:30', { input: 700 }),
+    ])
+    expect((await parseFile(childPath)).map(x => x.inputTokens)).toEqual([700])
+  })
+
+  it('drops the whole burst when its first record is not in the parent', async () => {
+    await rollout(PARENT, [sessionMeta({ session_id: PARENT }), call(PARENT, '00:01', { input: 1_000 })])
+    cumulative[CHILD] = { input: 5, output: 0 }
+    const childPath = await rollout(CHILD, [
+      sessionMeta({ session_id: CHILD, forked_from_id: PARENT, timestamp: at('01:00') }),
+      call(CHILD, '01:00.005', { input: 500 }),
+      call(CHILD, '01:30', { input: 700 }),
+    ])
+    expect((await parseFile(childPath)).map(x => x.inputTokens)).toEqual([700])
+  })
+
+  it('does not mask with parent records written after the fork', async () => {
+    const p1 = call(PARENT, '00:01', { input: 1_000 })
+    cumulative[CHILD] = { ...cumulative[PARENT] }
+    const forkOnly = call(CHILD, '01:00.010', { input: 500 })
+    await rollout(PARENT, [sessionMeta({ session_id: PARENT }), p1, forkOnly.replace(at('01:00.010'), at('05:00'))])
+    const childPath = await rollout(CHILD, [
+      sessionMeta({ session_id: CHILD, forked_from_id: PARENT, timestamp: at('01:00') }),
+      p1.replace(at('00:01'), at('01:00.005')),
+      forkOnly,
+    ])
+    expect((await parseFile(childPath)).map(x => x.inputTokens)).toEqual([500])
+  })
+
+  it('masks replayed response records and counts a fork-only one once', async () => {
+    const record = (ts: string, responseId: string, input: number) =>
+      tokenUsageRecord({ timestamp: at(ts), responseId, usage: { input } })
+    const p = [record('00:01', 'resp-1', 1_000), tokenCount({ timestamp: at('00:01'), last: { input: 1_000 }, total: { input: 1_000 } })]
+    await rollout(PARENT, [sessionMeta({ session_id: PARENT }), ...p])
+    const childPath = await rollout(CHILD, [
+      sessionMeta({ session_id: CHILD, forked_from_id: PARENT, timestamp: at('01:00') }),
+      ...p.map(line => line.replace(at('00:01'), at('01:00.005'))),
+      record('01:00.010', 'resp-2', 500),
+      tokenCount({ timestamp: at('01:00.010'), last: { input: 500 }, total: { input: 1_500 } }),
+    ])
+    expect((await parseFile(childPath)).map(x => x.inputTokens)).toEqual([500])
+  })
+})
+
 describe('codex provider - token_usage_record accounting', () => {
   async function parseCalls(lines: string[]): Promise<ParsedProviderCall[]> {
     const filePath = await writeSession(tmpDir, '2026-09-27', 'rollout-usage-record.jsonl', lines)
@@ -1605,7 +1722,7 @@ describe('codex provider - token_usage_record accounting', () => {
 })
 
 describe('codex auto-review pricing (#1047)', () => {
-  it('prices an auto-review whose prompt crosses gpt-5.5\'s above-272k tier at the tier (#1076)', async () => {
+  it('prices a pre-30-Jul auto-review whose prompt crosses gpt-5.4\'s above-272k tier at the tier (#1076)', async () => {
     // End-to-end through the codex provider path: the gate is keyed on the
     // provider string threaded from codex.ts, so a typo there would leave the
     // call at base rates and fail this. 400k input puts the prompt well past
@@ -1625,16 +1742,16 @@ describe('codex auto-review pricing (#1047)', () => {
       calls.push(call)
     }
     expect(calls).toHaveLength(1)
-    // gpt-5.5 tier (bundled): input 1e-5, output 4.5e-5 - explicit arithmetic,
+    // gpt-5.4 tier (bundled): input 5e-6, output 2.25e-5 - explicit arithmetic,
     // not just self-consistency with calculateCost.
-    expect(calls[0]!.costUSD).toBeCloseTo(400_000 * 1e-5 + 1_000 * 4.5e-5, 12)
-    expect(calls[0]!.costUSD).toBe(calculateCost('gpt-5.5', 400_000, 1_000, 0, 0, 0, 'standard', 0, 'codex'))
+    expect(calls[0]!.costUSD).toBeCloseTo(400_000 * 5e-6 + 1_000 * 2.25e-5, 12)
+    expect(calls[0]!.costUSD).toBe(calculateCost('gpt-5.4', 400_000, 1_000, 0, 0, 0, 'standard', 0, 'codex'))
     // The same call without the codex provider stays at base rates (the
-    // refreshed bundle's gpt-5.5 base is 5e-6/3e-5) - the gate that keeps the
+    // bundle's gpt-5.4 base is 2.5e-6/1.5e-5) - the gate that keeps the
     // real Copilot billing of tests/parser.test.ts (c4) intact.
-    expect(calculateCost('gpt-5.5', 400_000, 1_000, 0, 0, 0)).toBeCloseTo(400_000 * 5e-6 + 1_000 * 3e-5, 12)
+    expect(calculateCost('gpt-5.4', 400_000, 1_000, 0, 0, 0)).toBeCloseTo(400_000 * 2.5e-6 + 1_000 * 1.5e-5, 12)
   })
-  it('parses auto-review as itself and prices it as GPT-5.5', async () => {
+  it('parses auto-review as itself and prices it as GPT-5.4 before 30 Jul 2026', async () => {
     const filePath = await writeSession(tmpDir, '2026-04-14', 'rollout-auto-review.jsonl', [
       sessionMeta({ session_id: 'sess-auto', model: 'codex-auto-review' }),
       userMessage('review the PR'),
@@ -1651,7 +1768,50 @@ describe('codex auto-review pricing (#1047)', () => {
     }
     expect(calls).toHaveLength(1)
     expect(calls[0]!.model).toBe('codex-auto-review')
-    expect(calls[0]!.costUSD).toBe(calculateCost('gpt-5.5', 1_000_000, 1_000_000, 0, 0, 0, 'standard', 0, 'codex'))
+    expect(calls[0]!.costUSD).toBe(calculateCost('gpt-5.4', 1_000_000, 1_000_000, 0, 0, 0, 'standard', 0, 'codex'))
+  })
+
+  it('prices auto-review from 30 Jul 2026 as GPT-5.6 Luna', async () => {
+    const filePath = await writeSession(tmpDir, '2026-07-30', 'rollout-auto-review-luna.jsonl', [
+      sessionMeta({ session_id: 'sess-auto-luna', model: 'codex-auto-review' }),
+      userMessage('review the PR'),
+      tokenCount({
+        timestamp: '2026-07-30T00:00:00Z',
+        last: { input: 100_000, output: 100_000 },
+        total: { total: 200_000 },
+      }),
+    ])
+    const provider = createCodexProvider(tmpDir)
+    const calls: ParsedProviderCall[] = []
+    for await (const call of provider.createSessionParser({ path: filePath, project: 'test', provider: 'codex' }, new Set()).parse()) {
+      calls.push(call)
+    }
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.model).toBe('codex-auto-review')
+    // Luna base (bundled): input 2e-7, output 1.2e-6.
+    expect(calls[0]!.costUSD).toBeCloseTo(100_000 * 2e-7 + 100_000 * 1.2e-6, 12)
+    expect(calls[0]!.costUSD).toBe(calculateCost('gpt-5.6-luna', 100_000, 100_000, 0, 0, 0, 'standard', 0, 'codex'))
+  })
+
+  it('prices a recorded gpt-5.6-luna as recorded, whatever the date', async () => {
+    const filePath = await writeSession(tmpDir, '2026-04-14', 'rollout-auto-review-recorded.jsonl', [
+      sessionMeta({ session_id: 'sess-auto-recorded', model: 'codex-auto-review' }),
+      JSON.stringify({ type: 'turn_context', timestamp: '2026-04-14T10:00:30Z', payload: { model: 'gpt-5.6-luna' } }),
+      userMessage('review the PR'),
+      tokenCount({
+        timestamp: '2026-04-14T10:01:00Z',
+        last: { input: 1_000_000, output: 1_000_000 },
+        total: { total: 2_000_000 },
+      }),
+    ])
+    const provider = createCodexProvider(tmpDir)
+    const calls: ParsedProviderCall[] = []
+    for await (const call of provider.createSessionParser({ path: filePath, project: 'test', provider: 'codex' }, new Set()).parse()) {
+      calls.push(call)
+    }
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.model).toBe('gpt-5.6-luna')
+    expect(calls[0]!.costUSD).toBe(calculateCost('gpt-5.6-luna', 1_000_000, 1_000_000, 0, 0, 0, 'standard', 0, 'codex'))
   })
 
   it('discards a warm v11 versioned $0 exact hit so unchanged rollouts reprice', async () => {
@@ -1698,7 +1858,7 @@ describe('codex auto-review pricing (#1047)', () => {
       }
       expect(calls).toHaveLength(1)
       expect(calls[0]!.costUSD).toBeGreaterThan(0)
-      expect(calls[0]!.costUSD).toBe(calculateCost('gpt-5.5', 1_000_000, 1_000_000, 0, 0, 0, 'standard', 0, 'codex'))
+      expect(calls[0]!.costUSD).toBe(calculateCost('gpt-5.4', 1_000_000, 1_000_000, 0, 0, 0, 'standard', 0, 'codex'))
     } finally {
       clearCodexMemCaches()
       if (prev === undefined) delete process.env['CODEBURN_CACHE_DIR']
@@ -1706,3 +1866,265 @@ describe('codex auto-review pricing (#1047)', () => {
     }
   })
 })
+
+// #1616: Codex's Fast speed setting bills through the priority service tier,
+// which the rollout records per thread settings change
+// (event_msg/thread_settings_applied -> payload.thread_settings.service_tier),
+// never per call. The setting covers every turn after it in file order.
+describe('codex provider - priority service tier (#1616)', () => {
+  // gpt-5.4 as quoted from LiteLLM's live table: 2.5e-6 in / 15e-6 out /
+  // 2.5e-7 cached read, with the priority tier exactly 2x on all three. The
+  // bundled snapshot cannot carry the derived multiplier until its next routine
+  // refresh, so install the live-parsed row for the duration of a test exactly
+  // as fetchAndCachePricing would.
+  const GPT54 = { input: 2.5e-6, output: 15e-6, cacheRead: 2.5e-7 }
+
+  async function withLiveGpt54<T>(run: () => Promise<T>): Promise<T> {
+    const snap = snapshotPricingState()
+    const pricing = new Map(snap.pricing)
+    const costs = parseLiteLLMEntry({
+      input_cost_per_token: GPT54.input,
+      output_cost_per_token: GPT54.output,
+      cache_read_input_token_cost: GPT54.cacheRead,
+      input_cost_per_token_priority: 5e-6,
+      output_cost_per_token_priority: 30e-6,
+      cache_read_input_token_cost_priority: 5e-7,
+    } as never)
+    if (costs) pricing.set('gpt-5.4', costs)
+    restorePricingState({ ...snap, pricing })
+    try {
+      return await run()
+    } finally {
+      restorePricingState(snap)
+    }
+  }
+
+  function threadSettings(tier: string | null, timestamp: string): string {
+    return JSON.stringify({
+      type: 'event_msg',
+      timestamp,
+      payload: {
+        type: 'thread_settings_applied',
+        // Older builds (and a settings record that predates the tier toggle)
+        // carry no service_tier at all; `null` here omits the key entirely.
+        thread_settings: {
+          model: 'gpt-5.4',
+          ...(tier === null ? {} : { service_tier: tier }),
+          cwd: '/Users/test/myproject',
+        },
+      },
+    })
+  }
+
+  async function parseCalls(lines: string[]): Promise<ParsedProviderCall[]> {
+    const filePath = await writeSession(tmpDir, '2026-09-28', 'rollout-tier.jsonl', lines)
+    const provider = createCodexProvider(tmpDir)
+    const calls: ParsedProviderCall[] = []
+    for await (const call of provider.createSessionParser({ path: filePath, project: 'test', provider: 'codex' }, new Set()).parse()) {
+      calls.push(call)
+    }
+    return calls
+  }
+
+  it('prices turns under service_tier "priority" at 2x and turns after a switch back at 1x', async () => {
+    // calculateCost must run inside the injected-pricing window too, so the
+    // reference values are captured alongside the parse.
+    const { calls, fastRef, standardRef } = await withLiveGpt54(async () => ({
+      calls: await parseCalls([
+        sessionMeta({ session_id: 'sess-tier', model: 'gpt-5.4', timestamp: '2026-09-28T10:00:00Z' }),
+        threadSettings('priority', '2026-09-28T10:00:01Z'),
+        userMessage('fast turn one', '2026-09-28T10:01:00Z'),
+        tokenCount({ timestamp: '2026-09-28T10:01:30Z', last: { input: 1000, cached: 200, output: 500 }, total: { input: 1000, cached: 200, output: 500, total: 1700 } }),
+        userMessage('fast turn two', '2026-09-28T10:02:00Z'),
+        tokenCount({ timestamp: '2026-09-28T10:02:30Z', last: { input: 1200, cached: 100, output: 400 }, total: { input: 2200, cached: 300, output: 900, total: 3400 } }),
+        threadSettings('default', '2026-09-28T10:03:00Z'),
+        userMessage('standard turn', '2026-09-28T10:04:00Z'),
+        tokenCount({ timestamp: '2026-09-28T10:04:30Z', last: { input: 1000, cached: 200, output: 500 }, total: { input: 3200, cached: 500, output: 1400, total: 5100 } }),
+      ]),
+      fastRef: calculateCost('gpt-5.4', 800, 500, 0, 200, 0, 'fast', 0, 'codex'),
+      standardRef: calculateCost('gpt-5.4', 800, 500, 0, 200, 0, 'standard', 0, 'codex'),
+    }))
+
+    expect(calls.map(call => call.speed)).toEqual(['fast', 'fast', 'standard'])
+
+    // Explicit arithmetic, not self-consistency with calculateCost: the first
+    // turn is 800 uncached input + 200 cached + 500 output, and the priority
+    // tier doubles every published rate.
+    const standard = 800 * GPT54.input + 200 * GPT54.cacheRead + 500 * GPT54.output
+    expect(calls[0]!.costUSD).toBeCloseTo(standard * 2, 12)
+    expect(calls[2]!.costUSD).toBeCloseTo(standard, 12)
+    expect(calls[0]!.costUSD).toBe(fastRef)
+    expect(calls[2]!.costUSD).toBe(standardRef)
+  })
+
+  it('accepts service_tier "fast" as an alias of "priority" (spec: a build may write the speed name)', async () => {
+    // The spec's acceptance clause: `"fast"` must bill like `"priority"`. A
+    // future "simplification" of speedForServiceTier to `tier === 'priority'`
+    // would silently drop the alias, so pin it with the same 2x arithmetic.
+    const { calls, fastRef } = await withLiveGpt54(async () => ({
+      calls: await parseCalls([
+        sessionMeta({ session_id: 'sess-tier-fast-alias', model: 'gpt-5.4', timestamp: '2026-09-28T10:00:00Z' }),
+        threadSettings('fast', '2026-09-28T10:00:01Z'),
+        userMessage('aliased fast turn', '2026-09-28T10:01:00Z'),
+        tokenCount({ timestamp: '2026-09-28T10:01:30Z', last: { input: 1000, cached: 200, output: 500 }, total: { input: 1000, cached: 200, output: 500, total: 1700 } }),
+      ]),
+      fastRef: calculateCost('gpt-5.4', 800, 500, 0, 200, 0, 'fast', 0, 'codex'),
+    }))
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.speed).toBe('fast')
+    const standard = 800 * GPT54.input + 200 * GPT54.cacheRead + 500 * GPT54.output
+    expect(calls[0]!.costUSD).toBeCloseTo(standard * 2, 12)
+    expect(calls[0]!.costUSD).toBe(fastRef)
+  })
+
+  it('treats a settings record with no service_tier as the default tier', async () => {
+    const calls = await parseCalls([
+      sessionMeta({ session_id: 'sess-no-tier', model: 'gpt-5.4', timestamp: '2026-09-28T10:00:00Z' }),
+      threadSettings(null, '2026-09-28T10:00:01Z'),
+      userMessage('plain turn', '2026-09-28T10:01:00Z'),
+      tokenCount({ timestamp: '2026-09-28T10:01:30Z', last: { input: 1000, cached: 200, output: 500 }, total: { input: 1000, cached: 200, output: 500, total: 1700 } }),
+    ])
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.speed).toBe('standard')
+  })
+
+  it('prices service_tier "flex" turns at the bundled flex rates, then priority at 2x', async () => {
+    const calls = await parseCalls([
+      sessionMeta({ session_id: 'sess-flex', model: 'gpt-5.4', timestamp: '2026-09-28T10:00:00Z' }),
+      threadSettings('flex', '2026-09-28T10:00:01Z'),
+      userMessage('flex turn', '2026-09-28T10:01:00Z'),
+      tokenCount({ timestamp: '2026-09-28T10:01:30Z', last: { input: 1000, cached: 200, output: 500 }, total: { input: 1000, cached: 200, output: 500, total: 1700 } }),
+      threadSettings('priority', '2026-09-28T10:02:00Z'),
+      userMessage('fast turn', '2026-09-28T10:03:00Z'),
+      tokenCount({ timestamp: '2026-09-28T10:03:30Z', last: { input: 1000, cached: 200, output: 500 }, total: { input: 2000, cached: 400, output: 1000, total: 3400 } }),
+    ])
+    expect(calls.map(call => call.speed)).toEqual(['flex', 'fast'])
+    // gpt-5.4 flex: $1.25 in, $0.13 cached, $7.50 out per 1M.
+    expect(calls[0]!.costUSD).toBeCloseTo(800 * 1.25e-6 + 200 * 1.3e-7 + 500 * 7.5e-6, 12)
+    expect(calls[1]!.costUSD).toBeCloseTo((800 * GPT54.input + 200 * GPT54.cacheRead + 500 * GPT54.output) * 2, 12)
+  })
+
+  it('prices a flex turn at standard when the model publishes no flex rates', async () => {
+    const calls = await parseCalls([
+      sessionMeta({ session_id: 'sess-flex-none', model: 'gpt-5.3-codex', timestamp: '2026-09-28T10:00:00Z' }),
+      threadSettings('flex', '2026-09-28T10:00:01Z'),
+      userMessage('flex turn', '2026-09-28T10:01:00Z'),
+      tokenCount({ timestamp: '2026-09-28T10:01:30Z', last: { input: 1000, cached: 200, output: 500 }, total: { input: 1000, cached: 200, output: 500, total: 1700 } }),
+    ])
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.speed).toBe('flex')
+    expect(calls[0]!.costUSD).toBeCloseTo(800 * 1.75e-6 + 200 * 1.75e-7 + 500 * 14e-6, 12)
+  })
+
+  it('marks gpt-reserve turns as estimated', async () => {
+    const calls = await parseCalls([
+      sessionMeta({ session_id: 'sess-reserve', model: 'gpt-reserve', timestamp: '2026-09-28T10:00:00Z' }),
+      userMessage('reserve turn', '2026-09-28T10:01:00Z'),
+      tokenCount({ timestamp: '2026-09-28T10:01:30Z', last: { input: 1000, cached: 200, output: 500 }, total: { input: 1000, cached: 200, output: 500, total: 1700 } }),
+    ])
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.model).toBe('gpt-reserve')
+    expect(calls[0]!.costIsEstimated).toBe(true)
+    expect(calls[0]!.costUSD).toBeGreaterThan(0)
+  })
+
+  it('reads service_tier out of an oversized thread_settings record', async () => {
+    // The compact head decoder handles rollout lines past the buffer
+    // threshold; service_tier sits early in the payload, so it must survive
+    // that path too. The padding sits in a later field, exactly where a fat
+    // permission profile or plugin list sits in a real record. The decoy
+    // same-name key in an EARLIER payload field pins the depth-aware scan: a
+    // naive first-match sweep of the head would read it as the tier, while
+    // the full-JSON path only ever reads thread_settings.service_tier.
+    const line = JSON.stringify({
+      type: 'event_msg',
+      timestamp: '2026-09-28T10:00:01Z',
+      payload: {
+        type: 'thread_settings_applied',
+        editor_context: { service_tier: 'default' },
+        thread_settings: {
+          model: 'gpt-5.4',
+          service_tier: 'priority',
+          cwd: '/Users/test/myproject',
+          permission_profile: 'x'.repeat(70 * 1024),
+        },
+      },
+    })
+    const calls = await parseCalls([
+      sessionMeta({ session_id: 'sess-big-tier', model: 'gpt-5.4', timestamp: '2026-09-28T10:00:00Z' }),
+      line,
+      userMessage('big settings turn', '2026-09-28T10:01:00Z'),
+      tokenCount({ timestamp: '2026-09-28T10:01:30Z', last: { input: 1000, cached: 200, output: 500 }, total: { input: 1000, cached: 200, output: 500, total: 1700 } }),
+    ])
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.speed).toBe('fast')
+  })
+
+  it('discards a warm v18 exact hit so priority turns reprice (#1075 pattern)', async () => {
+    const cacheDir = join(tmpDir, 'cache')
+    await mkdir(cacheDir, { recursive: true })
+    const prev = process.env['CODEBURN_CACHE_DIR']
+    process.env['CODEBURN_CACHE_DIR'] = cacheDir
+    try {
+      const filePath = await writeSession(tmpDir, '2026-09-28', 'rollout-stale-tier.jsonl', [
+        sessionMeta({ session_id: 'sess-stale-tier', model: 'gpt-5.4', timestamp: '2026-09-28T10:00:00Z' }),
+        threadSettings('priority', '2026-09-28T10:00:01Z'),
+        userMessage('fast turn', '2026-09-28T10:01:00Z'),
+        tokenCount({ timestamp: '2026-09-28T10:01:30Z', last: { input: 1000, cached: 200, output: 500 }, total: { input: 1000, cached: 200, output: 500, total: 1700 } }),
+      ])
+      const st = await stat(filePath)
+      // Main's #1618 already owns v18, and that file holds the pre-fix
+      // standard-rate cost (and speed) verbatim, so it must not be served.
+      expect(CODEX_CACHE_VERSION).toBeGreaterThan(18)
+      const standardCost = 800 * GPT54.input + 200 * GPT54.cacheRead + 500 * GPT54.output
+      await writeFile(join(cacheDir, codexCacheFileName(18)), JSON.stringify({
+        version: 18,
+        files: {
+          [filePath]: {
+            mtimeMs: st.mtimeMs,
+            sizeBytes: st.size,
+            project: 'test',
+            calls: [{
+              provider: 'codex',
+              model: 'gpt-5.4',
+              inputTokens: 800,
+              outputTokens: 500,
+              cacheCreationInputTokens: 0,
+              cacheReadInputTokens: 200,
+              cachedInputTokens: 200,
+              reasoningTokens: 0,
+              webSearchRequests: 0,
+              costUSD: standardCost,
+              tools: [],
+              bashCommands: [],
+              timestamp: '2026-09-28T10:01:30Z',
+              speed: 'standard',
+              deduplicationKey: 'stale-tier',
+            }],
+          },
+        },
+      }))
+      clearCodexMemCaches()
+
+      const calls = await withLiveGpt54(() => {
+        const provider = createCodexProvider(tmpDir)
+        const parsed: ParsedProviderCall[] = []
+        return (async () => {
+          for await (const call of provider.createSessionParser({ path: filePath, project: 'test', provider: 'codex' }, new Set()).parse()) {
+            parsed.push(call)
+          }
+          return parsed
+        })()
+      })
+      expect(calls).toHaveLength(1)
+      expect(calls[0]!.speed).toBe('fast')
+      expect(calls[0]!.costUSD).toBeCloseTo(standardCost * 2, 12)
+    } finally {
+      clearCodexMemCaches()
+      if (prev === undefined) delete process.env['CODEBURN_CACHE_DIR']
+      else process.env['CODEBURN_CACHE_DIR'] = prev
+    }
+  })
+})
+

@@ -2,12 +2,21 @@ import Foundation
 import Observation
 
 private let releasesAPI = "https://api.github.com/repos/getagentseal/codeburn/releases?per_page=20"
+// Written by release-menubar.yml after a mac-v* release is verified; the `codeburn menubar`
+// installer reads the same file, so the pill and the install agree on "latest".
+private let menubarFeedURL = "https://github.com/getagentseal/codeburn/releases/download/update-feeds/menubar-latest.json"
+private let menubarAssetURLPrefix = "https://github.com/getagentseal/codeburn/releases/download/mac-v"
 private let checkIntervalSeconds: TimeInterval = 2 * 24 * 60 * 60
 private let lastCheckKey = "UpdateChecker.lastCheckDate"
 private let cachedVersionKey = "UpdateChecker.latestVersion"
 private let cachedCliVersionKey = "UpdateChecker.latestCliVersion"
 private let lastNotifiedVersionsKey = "UpdateChecker.lastNotifiedVersions"
-private let updateTimeoutSeconds: UInt64 = 120
+// Written just before the installer runs, settled on the next launch: the installer
+// stops and relaunches this app, so nothing tracked in this process would survive.
+private let pendingUpdateKey = "UpdateChecker.pendingUpdate"
+// A global npm install on a slow link or a cold cache can run for minutes.
+private let cliUpdateTimeoutSeconds: UInt64 = 600
+private let menubarUpdateTimeoutSeconds: UInt64 = 300
 private let maxUpdateStderrBytes = 64 * 1024
 // The installer that scans `mac-v*` releases for the menubar zip (instead of
 // `/releases/latest`, which can resolve to a CLI release that carries no menubar
@@ -66,10 +75,54 @@ final class UpdateChecker {
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private let makeNotifier: () -> any UpdateNotifier
     @ObservationIgnored private var notifier: (any UpdateNotifier)?
+    @ObservationIgnored private let track: @MainActor (String, JSONValue) -> Void
 
-    init(defaults: UserDefaults = .standard, makeNotifier: @escaping () -> any UpdateNotifier = { SystemUpdateNotifier() }) {
+    init(
+        defaults: UserDefaults = .standard,
+        makeNotifier: @escaping () -> any UpdateNotifier = { SystemUpdateNotifier() },
+        track: @escaping @MainActor (String, JSONValue) -> Void = { Telemetry.shared.track($0, $1) }
+    ) {
         self.defaults = defaults
         self.makeNotifier = makeNotifier
+        self.track = track
+    }
+
+    private func trackUpdateResult(from: String, to: String, outcome: String) {
+        track("update_result", .object(["from": .string(from), "to": .string(to), "outcome": .string(outcome)]))
+    }
+
+    /// On launch: a newer version running means the last install landed, and `to` is what
+    /// runs; the old one still running means it did not. An older one is a manual
+    /// downgrade: the marker goes and nothing is sent.
+    func settlePendingUpdate(running: String? = nil) {
+        guard let pending = defaults.dictionary(forKey: pendingUpdateKey) as? [String: String],
+              let from = pending["from"], let to = pending["to"] else { return }
+        defaults.removeObject(forKey: pendingUpdateKey)
+        let now = AppVersion.normalize(running ?? currentVersion)
+        switch now.compare(from, options: .numeric) {
+        case .orderedDescending: trackUpdateResult(from: from, to: now, outcome: "ok")
+        case .orderedSame: trackUpdateResult(from: from, to: to, outcome: "install_fail")
+        case .orderedAscending: break
+        }
+    }
+
+    /// A failed `codeburn menubar --force`, sorted by the installer's own messages
+    /// (src/menubar-installer.ts) so the stderr itself never leaves the machine.
+    nonisolated static func updateFailureOutcome(stderr: String) -> String {
+        let text = stderr.lowercased()
+        let verify = ["checksum", "not signed", "notarized", "bundle id", "refusing"]
+        if verify.contains(where: text.contains) { return "verify_fail" }
+        if text.range(of: #"failed after \d+ attempts|http \d{3}|econn|etimedout|enotfound|network"#, options: .regularExpression) != nil {
+            return "download_fail"
+        }
+        return "install_fail"
+    }
+
+    private func failPendingUpdate(outcome: String) {
+        guard let pending = defaults.dictionary(forKey: pendingUpdateKey) as? [String: String],
+              let from = pending["from"], let to = pending["to"] else { return }
+        defaults.removeObject(forKey: pendingUpdateKey)
+        trackUpdateResult(from: from, to: to, outcome: outcome)
     }
 
     var latestVersion: String?
@@ -169,13 +222,17 @@ final class UpdateChecker {
                 throw UpdateCheckError.http(status)
             }
             let releases = try JSONDecoder().decode([GitHubRelease].self, from: data)
-            guard let resolved = Self.resolveLatestMenubarRelease(in: releases) else {
-                throw UpdateCheckError.missingMenubarAsset
+            let version: String
+            if let feedVersion = await Self.fetchFeedVersion() {
+                version = feedVersion
+            } else {
+                guard let resolved = Self.resolveLatestMenubarRelease(in: releases) else {
+                    throw UpdateCheckError.missingMenubarAsset
+                }
+                version = resolved.asset.name
+                    .replacingOccurrences(of: "CodeBurnMenubar-", with: "")
+                    .replacingOccurrences(of: ".zip", with: "")
             }
-
-            let version = resolved.asset.name
-                .replacingOccurrences(of: "CodeBurnMenubar-", with: "")
-                .replacingOccurrences(of: ".zip", with: "")
 
             let cliVersion = Self.resolveLatestCliVersion(in: releases)
 
@@ -220,6 +277,27 @@ final class UpdateChecker {
         case (nil, nil):
             return nil
         }
+    }
+
+    nonisolated static func fetchFeedVersion() async -> String? {
+        guard let url = URL(string: menubarFeedURL) else { return nil }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 30
+        request.setValue("codeburn-menubar-updater", forHTTPHeaderField: "User-Agent")
+        guard let (data, response) = try? await URLSession.shared.data(for: request),
+              (response as? HTTPURLResponse)?.statusCode == 200
+        else { return nil }
+        return menubarVersion(fromFeed: data)
+    }
+
+    /// Nil unless the feed names a version and points at that version's mac-v* release zip.
+    nonisolated static func menubarVersion(fromFeed data: Data) -> String? {
+        guard let feed = try? JSONDecoder().decode(MenubarFeed.self, from: data) else { return nil }
+        let version = AppVersion.normalize(feed.version)
+        guard !version.isEmpty,
+              feed.url == "\(menubarAssetURLPrefix)\(version)/CodeBurnMenubar-v\(version).zip"
+        else { return nil }
+        return "v\(version)"
     }
 
     nonisolated static func resolveLatestCliVersion(in releases: [GitHubRelease]) -> String? {
@@ -305,6 +383,30 @@ final class UpdateChecker {
         return nil
     }
 
+    /// The launcher the CodeBurn desktop app writes for the CLI it carries
+    /// (app/electron/mac-menubar.ts). Only a desktop app update moves it.
+    nonisolated static func isDesktopBundledCli(_ cliPath: String) -> Bool {
+        (cliPath as NSString).lastPathComponent == "codeburn-desktop-cli.sh"
+    }
+
+    /// `codeburn menubar --force` installs the menubar matching the CLI's own
+    /// version, so without a CLI update it only moves the app forward when the
+    /// CLI is already ahead of it.
+    nonisolated static func menubarInstallAdvances(installedCli: String?, app: String) -> Bool {
+        guard let installedCli else { return false }
+        let cli = AppVersion.normalize(installedCli)
+        let current = AppVersion.normalize(app)
+        guard !cli.isEmpty, !current.isEmpty, current != "dev" else { return false }
+        return cli.compare(current, options: .numeric) == .orderedDescending
+    }
+
+    nonisolated static func cliUpdateFailureMessage(stderr: String, status: Int32, manualCommand: String) -> String {
+        if stderr.contains("EACCES") || stderr.contains("EPERM") {
+            return L("npm does not have permission to update the global codeburn install. Run “%@” in Terminal, then try again.", manualCommand)
+        }
+        return stderr.isEmpty ? L("CLI update failed (exit %lld)", status) : stderr
+    }
+
     /// One click, both updates: the CLI first (so the new `menubar --force`
     /// installer runs from the version it ships with), then the app itself.
     /// Each stage surfaces its own error and stops the sequence.
@@ -313,20 +415,27 @@ final class UpdateChecker {
         guard !isUpdating else { return }
 
         if cliUpdateAvailable || cliTooOldForUpdate {
-            isUpdating = true
             updateError = nil
             updateFailureStage = nil
             let cliPath = CodeburnCLI.baseArgv().first ?? ""
-            guard let argv = Self.cliUpdateInvocation(cliPath: cliPath), let bin = argv.first else {
-                isUpdating = false
+            let bundled = Self.isDesktopBundledCli(cliPath)
+            guard !bundled, let argv = Self.cliUpdateInvocation(cliPath: cliPath), let bin = argv.first else {
+                if updateAvailable && !cliTooOldForUpdate
+                    && Self.menubarInstallAdvances(installedCli: installedCliVersion, app: currentVersion) {
+                    performUpdate()
+                    return
+                }
                 updateFailureStage = .cliUpdate
-                updateError = L(
-                "Could not find the package manager for %1$@. Run “%2$@” manually, then try again.",
-                cliPath.isEmpty ? L("the CLI") : cliPath,
-                cliUpdateCommand
-            )
+                updateError = bundled
+                    ? L("This codeburn CLI comes with the CodeBurn desktop app. Update the desktop app, then try again.")
+                    : L(
+                        "Could not find the package manager for %1$@. Run “%2$@” manually, then try again.",
+                        cliPath.isEmpty ? L("the CLI") : cliPath,
+                        cliUpdateCommand
+                    )
                 return
             }
+            isUpdating = true
             let process = Process()
             process.executableURL = URL(fileURLWithPath: bin)
             process.arguments = Array(argv.dropFirst())
@@ -336,7 +445,7 @@ final class UpdateChecker {
                     if status != 0 {
                         self.isUpdating = false
                         self.updateFailureStage = .cliUpdate
-                        self.updateError = stderr.isEmpty ? L("CLI update failed (exit %lld)", status) : stderr
+                        self.updateError = Self.cliUpdateFailureMessage(stderr: stderr, status: status, manualCommand: self.cliUpdateCommand)
                         NSLog("CodeBurn: CLI update failed (exit \(status)): \(stderr)")
                         return
                     }
@@ -366,9 +475,9 @@ final class UpdateChecker {
             errBuffer.append(chunk, limit: maxUpdateStderrBytes)
         }
         let timeoutTask = Task.detached(priority: .utility) {
-            try? await Task.sleep(nanoseconds: updateTimeoutSeconds * 1_000_000_000)
+            try? await Task.sleep(nanoseconds: cliUpdateTimeoutSeconds * 1_000_000_000)
             if process.isRunning {
-                NSLog("CodeBurn: update subprocess timed out after %llus - terminating", updateTimeoutSeconds)
+                NSLog("CodeBurn: update subprocess timed out after %llus - terminating", cliUpdateTimeoutSeconds)
                 process.terminate()
             }
         }
@@ -401,6 +510,15 @@ final class UpdateChecker {
         isUpdating = true
         updateError = nil
         updateFailureStage = nil
+        // `menubar --force` installs the CLI's own version, so that is the target; when it
+        // is not ahead of this app the run cannot move it, and there is nothing to settle.
+        if Self.menubarInstallAdvances(installedCli: installedCliVersion, app: currentVersion),
+           let installedCliVersion {
+            defaults.set(
+                ["from": AppVersion.normalize(currentVersion), "to": AppVersion.normalize(installedCliVersion)],
+                forKey: pendingUpdateKey
+            )
+        }
 
         let process = CodeburnCLI.makeProcess(subcommand: ["menubar", "--force"])
         let errPipe = Pipe()
@@ -414,9 +532,9 @@ final class UpdateChecker {
         }
 
         let timeoutTask = Task.detached(priority: .utility) {
-            try? await Task.sleep(nanoseconds: updateTimeoutSeconds * 1_000_000_000)
+            try? await Task.sleep(nanoseconds: menubarUpdateTimeoutSeconds * 1_000_000_000)
             if process.isRunning {
-                NSLog("CodeBurn: update subprocess timed out after %llus - terminating", updateTimeoutSeconds)
+                NSLog("CodeBurn: update subprocess timed out after %llus - terminating", menubarUpdateTimeoutSeconds)
                 process.terminate()
             }
         }
@@ -430,6 +548,7 @@ final class UpdateChecker {
                 guard let self else { return }
                 self.isUpdating = false
                 if proc.terminationStatus != 0 {
+                    self.failPendingUpdate(outcome: Self.updateFailureOutcome(stderr: stderr))
                     self.updateFailureStage = .menubarUpdate
                     self.updateError = stderr.isEmpty ? L("Update failed (exit %lld)", proc.terminationStatus) : stderr
                     NSLog("CodeBurn: update failed (exit \(proc.terminationStatus)): \(stderr)")
@@ -442,6 +561,7 @@ final class UpdateChecker {
         do {
             try process.run()
         } catch {
+            failPendingUpdate(outcome: "install_fail")
             isUpdating = false
             updateFailureStage = .menubarUpdate
             updateError = error.localizedDescription
@@ -475,6 +595,11 @@ enum UpdateCheckError: LocalizedError {
         case .missingMenubarAsset: L("No mac-v release with a menubar zip and checksum was found.")
         }
     }
+}
+
+struct MenubarFeed: Decodable {
+    let version: String
+    let url: String
 }
 
 struct GitHubRelease: Decodable {

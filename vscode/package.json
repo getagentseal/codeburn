@@ -1,0 +1,314 @@
+{
+  "name": "codeburn",
+  "displayName": "CodeBurn",
+  "description": "See where your AI coding spend goes, by project, model, session and pull request, without leaving the editor. Local only.",
+  "version": "1.0.0",
+  "publisher": "codeburn",
+  "license": "MIT",
+  "icon": "media/icon.png",
+  "galleryBanner": {
+    "color": "#15100D",
+    "theme": "dark"
+  },
+  "homepage": "https://github.com/getagentseal/codeburn#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/getagentseal/codeburn.git",
+    "directory": "vscode"
+  },
+  "bugs": {
+    "url": "https://github.com/getagentseal/codeburn/issues"
+  },
+  "categories": [
+    "Visualization",
+    "Other"
+  ],
+  "keywords": [
+    "ai",
+    "cost",
+    "tokens",
+    "usage",
+    "claude code",
+    "codex",
+    "cursor",
+    "copilot",
+    "spend",
+    "quota"
+  ],
+  "engines": {
+    "vscode": "^1.82.0"
+  },
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": true
+    },
+    "virtualWorkspaces": {
+      "supported": "limited",
+      "description": "%capabilities.virtualWorkspaces%"
+    }
+  },
+  "contributes": {
+    "commands": [
+      {
+        "command": "codeburn.openDashboard",
+        "title": "%command.openDashboard%",
+        "category": "CodeBurn",
+        "icon": "$(graph)"
+      },
+      {
+        "command": "codeburn.refresh",
+        "title": "%command.refresh%",
+        "category": "CodeBurn",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "codeburn.showToday",
+        "title": "%command.showToday%",
+        "category": "CodeBurn"
+      },
+      {
+        "command": "codeburn.showWorkspace",
+        "title": "%command.showWorkspace%",
+        "category": "CodeBurn",
+        "icon": "$(folder)"
+      },
+      {
+        "command": "codeburn.showAllProjects",
+        "title": "%command.showAllProjects%",
+        "category": "CodeBurn",
+        "icon": "$(folder-library)"
+      },
+      {
+        "command": "codeburn.openOptimize",
+        "title": "%command.openOptimize%",
+        "category": "CodeBurn"
+      },
+      {
+        "command": "codeburn.copySummary",
+        "title": "%command.copySummary%",
+        "category": "CodeBurn",
+        "icon": "$(copy)"
+      },
+      {
+        "command": "codeburn.openSettings",
+        "title": "%command.openSettings%",
+        "category": "CodeBurn",
+        "icon": "$(settings-gear)"
+      },
+      {
+        "command": "codeburn.starOnGitHub",
+        "title": "%command.starOnGitHub%",
+        "category": "CodeBurn",
+        "icon": "$(star-empty)"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "codeburn",
+          "title": "CodeBurn",
+          "icon": "media/activity.svg"
+        }
+      ]
+    },
+    "views": {
+      "codeburn": [
+        {
+          "type": "webview",
+          "id": "codeburn.summary",
+          "name": "%view.summary%",
+          "icon": "media/activity.svg"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "codeburn.refresh",
+          "when": "view == codeburn.summary",
+          "group": "navigation@1"
+        },
+        {
+          "command": "codeburn.openDashboard",
+          "when": "view == codeburn.summary",
+          "group": "navigation@2"
+        },
+        {
+          "command": "codeburn.copySummary",
+          "when": "view == codeburn.summary",
+          "group": "overflow@1"
+        },
+        {
+          "command": "codeburn.openSettings",
+          "when": "view == codeburn.summary",
+          "group": "overflow@2"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "codeburn.showAllProjects",
+          "when": "activeWebviewPanelId == codeburn.dashboard && codeburn.workspaceScope",
+          "group": "navigation@1"
+        },
+        {
+          "command": "codeburn.showWorkspace",
+          "when": "activeWebviewPanelId == codeburn.dashboard && !codeburn.workspaceScope && workspaceFolderCount > 0",
+          "group": "navigation@1"
+        },
+        {
+          "command": "codeburn.refresh",
+          "when": "activeWebviewPanelId == codeburn.dashboard",
+          "group": "navigation@2"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "codeburn.showWorkspace",
+          "when": "workspaceFolderCount > 0"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "CodeBurn",
+      "properties": {
+        "codeburn.workspaceOnly": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "%config.workspaceOnly%",
+          "order": 1
+        },
+        "codeburn.defaultPeriod": {
+          "type": "string",
+          "enum": [
+            "today",
+            "week",
+            "30days",
+            "month",
+            "all",
+            "lifetime"
+          ],
+          "enumDescriptions": [
+            "%config.period.today%",
+            "%config.period.week%",
+            "%config.period.30days%",
+            "%config.period.month%",
+            "%config.period.all%",
+            "%config.period.lifetime%"
+          ],
+          "default": "today",
+          "markdownDescription": "%config.defaultPeriod%",
+          "order": 2
+        },
+        "codeburn.refreshInterval": {
+          "type": "string",
+          "enum": [
+            "manual",
+            "30s",
+            "1m",
+            "3m",
+            "5m",
+            "10m"
+          ],
+          "default": "1m",
+          "markdownDescription": "%config.refreshInterval%",
+          "order": 3
+        },
+        "codeburn.statusBar.format": {
+          "type": "string",
+          "enum": [
+            "cost",
+            "costAndQuota",
+            "workspace",
+            "hidden"
+          ],
+          "enumDescriptions": [
+            "%config.statusBar.cost%",
+            "%config.statusBar.costAndQuota%",
+            "%config.statusBar.workspace%",
+            "%config.statusBar.hidden%"
+          ],
+          "default": "cost",
+          "markdownDescription": "%config.statusBar.format%",
+          "order": 4
+        },
+        "codeburn.currency": {
+          "type": "string",
+          "default": "",
+          "scope": "application",
+          "pattern": "^([A-Z]{3})?$",
+          "patternErrorMessage": "%config.currency.pattern%",
+          "markdownDescription": "%config.currency%",
+          "order": 5
+        },
+        "codeburn.provider": {
+          "scope": "application",
+          "type": "string",
+          "default": "all",
+          "pattern": "^[a-z0-9-]+$",
+          "markdownDescription": "%config.provider%",
+          "order": 6
+        },
+        "codeburn.quotaProviders": {
+          "scope": "application",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "claude",
+              "codex",
+              "gemini",
+              "copilot",
+              "antigravity",
+              "kimi",
+              "zcode",
+              "grokbot"
+            ]
+          },
+          "uniqueItems": true,
+          "default": [
+            "claude",
+            "codex",
+            "gemini",
+            "copilot",
+            "antigravity",
+            "kimi",
+            "zcode",
+            "grokbot"
+          ],
+          "markdownDescription": "%config.quotaProviders%",
+          "order": 7
+        },
+        "codeburn.nodePath": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "markdownDescription": "%config.nodePath%",
+          "order": 8
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "npm run build:webview && npm run build:host && npm run stage-cli",
+    "build:host": "node esbuild.mjs",
+    "build:webview": "npm --prefix ../app run build:vscode",
+    "stage-cli": "npm --prefix .. run build:cli && node scripts/stage-cli.mjs",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "test:smoke": "node test/smoke/run.mjs",
+    "package": "npm run build && vsce package --no-dependencies --baseImagesUrl https://raw.githubusercontent.com/getagentseal/codeburn/main/vscode"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.17",
+    "@types/vscode": "~1.82.0",
+    "@vscode/test-electron": "^3.1.0",
+    "@vscode/vsce": "^4.0.0",
+    "esbuild": "^0.25.0",
+    "typescript": "^5.8.0",
+    "vitest": "^3.2.4"
+  }
+}

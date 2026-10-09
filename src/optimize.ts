@@ -16,7 +16,7 @@ import { formatTokens } from './format.js'
 import { recommendModelDefault, type ModelDefaultRecommendation } from './act/model-defaults.js'
 import { appliedFixGlyph, formatAppliedFix, type AppliedFix } from './act/types.js'
 import { isUserStartedSession, userStartedProjects } from './session-population.js'
-import { inferSessionProvider, sessionBillableOutputTokens } from './session-output.js'
+import { countSessions, inferSessionProvider, sessionBillableOutputTokens } from './session-output.js'
 import { aggregateFileChurn, buildCoachingNotes, scanUserCorrections, medianTimeToFirstEditMs, worstOneShotCategory, type ReworkedFile } from './workflow-insights.js'
 
 // ============================================================================
@@ -2513,7 +2513,7 @@ export function detectUnusedMcp(
 
   if (unused.length === 0) return null
 
-  const totalSessions = projects.reduce((s, p) => s + p.sessions.length, 0)
+  const totalSessions = countSessions(projects)
   const schemaTokensPerSession = unused.length * TOOLS_PER_MCP_SERVER * TOKENS_PER_MCP_TOOL
   const tokensSaved = schemaTokensPerSession * Math.max(totalSessions, 1)
 
@@ -2866,7 +2866,7 @@ export function detectMcpAlwaysLoadHygiene(
   const versions = apiCalls.map(c => c.version).filter(v => v.length > 0)
   if (versions.length > 0 && versions.every(v => versionPredates(v, ALWAYSLOAD_MIN_VERSION))) return null
 
-  const totalSessions = projects.reduce((s, p) => s + p.sessions.length, 0)
+  const totalSessions = countSessions(projects)
   if (totalSessions === 0) return null
 
   const coverageByServer = new Map(mcpCoverage.map(c => [c.server, c]))
@@ -4006,14 +4006,14 @@ export function cacheKey(projects: ProjectSummary[], dateRange: DateRange | unde
   // stale findings when cost/tokens moved (e.g. a re-price) while call count
   // held - reachable in the long-lived menubar process within the 60s TTL.
   // Cost is scaled to whole micro-dollars so float jitter cannot thrash the key.
-  let calls = 0, cost = 0, savings = 0, proxied = 0, sessions = 0, sidechains = 0
+  let calls = 0, cost = 0, savings = 0, proxied = 0, sidechains = 0
+  const sessions = countSessions(projects)
   const sidechainIdentities: string[] = []
   for (const p of projects) {
     calls += p.totalApiCalls
     cost += p.totalCostUSD
     savings += p.totalSavingsUSD
     proxied += p.totalProxiedCostUSD
-    sessions += p.sessions.length
     for (const session of p.sessions) {
       if (session.isSidechain !== true) continue
       sidechains++

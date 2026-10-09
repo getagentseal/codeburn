@@ -19,6 +19,8 @@ import {
   recordAntigravityStatusLinePayload,
   shouldReparseAntigravitySource,
   normalizeAntigravityToolCall,
+  antigravityCacheFileName,
+  flushAntigravityCache,
 } from '../../src/providers/antigravity.js'
 import type { ParsedProviderCall } from '../../src/providers/types.js'
 import { classifyTurn } from '../../src/classifier.js'
@@ -596,8 +598,8 @@ describe('antigravity provider helpers', () => {
         provider: 'antigravity',
         model: 'gemini-3.1-pro-high',
         inputTokens: 30265,
-        outputTokens: 659,
-        reasoningTokens: 71,
+        outputTokens: 71,
+        reasoningTokens: 659,
         sessionId: fixture.conversationId,
         project: 'antigravity-cli',
       })
@@ -644,6 +646,116 @@ describe('antigravity provider helpers', () => {
       else process.env['CODEBURN_CACHE_DIR'] = previousCacheDir
       await rm(tempHome, { recursive: true, force: true })
     }
+  })
+
+  it('reads cache reads, thinking split and the placeholder model from standalone app gen_metadata', async () => {
+    if (!isSqliteAvailable()) return
+
+    await withTempAntigravityHome('codeburn-antigravity-standalone-', async (tempHome) => {
+      const fixture = JSON.parse(await readFile(
+        new URL('../fixtures/antigravity-standalone/gen-metadata.json', import.meta.url),
+        'utf-8',
+      )) as CurrentCliFixture
+      const conversationsDir = join(tempHome, '.gemini', 'antigravity', 'conversations')
+      await mkdir(conversationsDir, { recursive: true })
+      const dbPath = join(conversationsDir, `${fixture.conversationId}.db`)
+      createCurrentAntigravityCliDb(dbPath, fixture)
+
+      const calls = await collectAntigravityCalls({ path: dbPath, project: 'antigravity', provider: 'antigravity' })
+      const sum = (pick: (call: ParsedProviderCall) => number) => calls.reduce((total, call) => total + pick(call), 0)
+
+      expect(calls).toHaveLength(11)
+      expect(new Set(calls.map(call => call.model))).toEqual(new Set(['gemini-3.1-pro-high']))
+      expect(calls.every(call => call.costIsEstimated === true)).toBe(true)
+      expect(sum(call => call.inputTokens)).toBe(56038)
+      expect(sum(call => call.cacheReadInputTokens)).toBe(117202)
+      expect(sum(call => call.reasoningTokens)).toBe(1106)
+      expect(sum(call => call.outputTokens)).toBe(1158)
+      expect(calls[0]!.cacheReadInputTokens).toBe(0)
+      // gemini-3.1-pro-preview: $2/M input, $12/M output (thinking included), $0.20/M cache read.
+      expect(sum(call => call.costUSD)).toBeCloseTo(56038 * 2e-6 + 2264 * 12e-6 + 117202 * 0.2e-6, 9)
+    })
+  })
+
+  it('dates standalone rows without created_at from their first step', async () => {
+    if (!isSqliteAvailable()) return
+
+    await withTempAntigravityHome('codeburn-antigravity-step-time-', async (tempHome) => {
+      const fixture = JSON.parse(await readFile(
+        new URL('../fixtures/antigravity-standalone/gen-metadata.json', import.meta.url),
+        'utf-8',
+      )) as CurrentCliFixture
+      const conversationsDir = join(tempHome, '.gemini', 'antigravity', 'conversations')
+      await mkdir(conversationsDir, { recursive: true })
+      const dbPath = join(conversationsDir, `${fixture.conversationId}.db`)
+      createCurrentAntigravityCliDb(dbPath, { ...fixture, rows: fixture.rows.slice(0, 1) })
+      const { DatabaseSync: Database } = requireForTest('node:sqlite')
+      const db = new Database(dbPath) as TestDb
+      db.exec('CREATE TABLE steps (idx integer, metadata blob, PRIMARY KEY (idx))')
+      // Row 0 references steps 1 and 2; step 1 metadata #1 = Timestamp{1791307489s, 891504000ns}.
+      db.prepare('INSERT INTO steps (idx, metadata) VALUES (?, ?)').run(1, Buffer.from('0a0c08e1dd94d60610808b8da903', 'hex'))
+      db.close()
+
+      const calls = await collectAntigravityCalls({ path: dbPath, project: 'antigravity', provider: 'antigravity' })
+      expect(calls).toHaveLength(1)
+      expect(calls[0]!.timestamp).toBe(new Date(1791307489891).toISOString())
+    })
+  })
+
+  it('prices Gemini 3.1 Pro prompts from 200k tokens (input + cache read) at the long-context tier', async () => {
+    if (!isSqliteAvailable()) return
+
+    await withTempAntigravityHome('codeburn-antigravity-tier-', async (tempHome) => {
+      const conversationsDir = join(tempHome, '.gemini', 'antigravity', 'conversations')
+      await mkdir(conversationsDir, { recursive: true })
+      const dbPath = join(conversationsDir, 'fixture-tier.db')
+      createCurrentAntigravityCliDb(dbPath, {
+        conversationId: 'fixture-tier',
+        rows: [
+          // input 150,000 + cache read 60,000, output 1,000 (400 thinking + 600 response)
+          { idx: 0, hex: '0a6c18f807222c08f80710f0930918e80728e0d403301848900350d8045a14666978747572652d6c6f6e672d636f6e746578749a011267656d696e692d70726f2d64656661756c74a201230a0a6d6f64656c5f656e756d12154d4f44454c5f504c414345484f4c4445525f4d3136' },
+          // input 139,999 + cache read 60,000: one token under the threshold
+          { idx: 1, hex: '0a6a18f807222a08f80710dfc50818e80728e0d403301848900350d8045a12666978747572652d62656c6f772d746965729a011267656d696e692d70726f2d64656661756c74a201230a0a6d6f64656c5f656e756d12154d4f44454c5f504c414345484f4c4445525f4d3136' },
+        ],
+      })
+
+      const calls = await collectAntigravityCalls({ path: dbPath, project: 'antigravity', provider: 'antigravity' })
+      expect(calls).toHaveLength(2)
+      expect(calls[0]!.costUSD).toBeCloseTo(150000 * 4e-6 + 1000 * 18e-6 + 60000 * 0.4e-6, 9)
+      expect(calls[1]!.costUSD).toBeCloseTo(139999 * 2e-6 + 1000 * 12e-6 + 60000 * 0.2e-6, 9)
+    })
+  })
+
+  it('serves .pb cascades from the previous results cache while the server is down', async () => {
+    await withTempAntigravityHome('codeburn-antigravity-prev-cache-', async (tempHome) => {
+      const cacheDir = join(tempHome, 'cache')
+      // antigravity-cli: no CLI language server runs during tests, even where the app does.
+      const conversationsDir = join(tempHome, '.gemini', 'antigravity-cli', 'conversations')
+      await mkdir(conversationsDir, { recursive: true })
+      await mkdir(cacheDir, { recursive: true })
+      const pbPath = join(conversationsDir, 'fixture-pb.pb')
+      await writeFile(pbPath, 'opaque')
+      const previousCall = {
+        provider: 'antigravity', model: 'gemini-3.1-pro-high', inputTokens: 100, outputTokens: 10,
+        cacheCreationInputTokens: 0, cacheReadInputTokens: 0, cachedInputTokens: 0, reasoningTokens: 5,
+        webSearchRequests: 0, costUSD: 0.00038, tools: [], bashCommands: [], timestamp: '2026-05-22T08:19:07.000Z',
+        speed: 'standard', deduplicationKey: 'antigravity:fixture-pb:r1', userMessage: '', sessionId: 'fixture-pb',
+      }
+      const previousVersion = Number(antigravityCacheFileName().match(/\.v(\d+)\.json$/)![1]) - 1
+      await writeFile(join(cacheDir, antigravityCacheFileName(previousVersion)), JSON.stringify({
+        version: previousVersion,
+        cascades: { 'fixture-pb': { mtimeMs: 1, sizeBytes: 6, calls: [previousCall] } },
+      }))
+
+      const calls = await collectAntigravityCalls({ path: pbPath, project: 'antigravity-cli', provider: 'antigravity' })
+      expect(calls.map(call => call.deduplicationKey)).toEqual(['antigravity:fixture-pb:r1'])
+
+      await flushAntigravityCache(undefined, cacheDir)
+      const current = JSON.parse(await readFile(join(cacheDir, antigravityCacheFileName()), 'utf-8'))
+      expect(current.cascades['fixture-pb'].mtimeMs).toBe(-1)
+      expect(current.cascades['fixture-pb'].calls).toHaveLength(1)
+      expect(shouldReparseAntigravitySource(pbPath, 1)).toBe(true)
+    })
   })
 
   async function withTempAntigravityHome(prefix: string, fn: (tempHome: string) => Promise<void>): Promise<void> {

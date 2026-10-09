@@ -283,6 +283,32 @@ describe('Models', () => {
     expect(screen.getAllByText('est')).toHaveLength(1)
   })
 
+  it('marks fully and partly estimated rows with ~ from the CLI estimated portion, and leaves exact rows plain', async () => {
+    const base = rows[0]!
+    getModels.mockResolvedValue([
+      { ...base, provider: 'cursor', providerDisplayName: 'Cursor', model: 'cursor-auto', modelDisplayName: 'Cursor (auto)', costUSD: 579.13, savingsUSD: 0, estimatedCostUSD: 579.13 },
+      { ...base, provider: 'kimi-code', providerDisplayName: 'Kimi Code', model: 'kimi-k3', modelDisplayName: 'Kimi K3', costUSD: 177.51, savingsUSD: 0, estimatedCostUSD: 20 },
+      { ...base, provider: 'codex', providerDisplayName: 'Codex', model: 'gpt-5.6-terra', modelDisplayName: 'GPT-5.6 Terra', costUSD: 1.44, savingsUSD: 0, estimatedCostUSD: 0.004 },
+      { ...base, savingsUSD: 0, estimatedCostUSD: 0 },
+      { ...base, provider: 'codex', providerDisplayName: 'Codex', model: 'gpt-5.5', modelDisplayName: 'GPT-5.5', costUSD: 0.0002, savingsUSD: 0, estimatedCostUSD: 0.0002 },
+    ])
+
+    render(<Models period="30days" provider="all" />)
+
+    const full = await screen.findByText('~$579.13')
+    expect(screen.getByText('~$177.51')).toBeInTheDocument()
+    expect(screen.getByText('$1.44')).toBeInTheDocument()
+    expect(screen.getByText('$331.20')).toBeInTheDocument()
+    expect(screen.queryByText('~$1.44')).toBeNull()
+    expect(screen.queryByText('~$331.20')).toBeNull()
+    const costCells = [...document.querySelectorAll('[data-usd]')].map(el => el.textContent)
+    expect(costCells).toContain('$0.00')
+    expect(costCells).not.toContain('~$0.00')
+
+    fireEvent.mouseEnter(full)
+    expect(await screen.findByText('~ estimated cost (priced from estimated tokens)')).toBeInTheDocument()
+  })
+
   it('shows the audit empty state when there is nothing to audit', async () => {
     getModels.mockResolvedValue(rows)
     getAudit.mockResolvedValue([])

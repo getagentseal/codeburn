@@ -3,7 +3,9 @@ import { dateKey } from './day-aggregator.js'
 import { spendProjectIdentity } from './spend-flow.js'
 import type { ProjectSummary, SessionSummary } from './types.js'
 import { callBillableOutputTokens, inferSessionProvider, modelBreakdownKey } from './session-output.js'
+import { foldSubagentRows } from './sessions-report.js'
 import type { SessionRow } from './sessions-report.js'
+import type { WorkUnitResolution } from './work-units.js'
 
 /// One attributed slice of a session's in-range spend. Segments PARTITION the
 /// session: every call lands in exactly one segment (consecutive calls with the
@@ -185,5 +187,21 @@ export function withContributions(rows: SessionRow[], projects: ProjectSummary[]
       if (session.isSidechain) drill.isSidechain = true
     }
     return drill
+  })
+}
+
+/// The contributions report grouped like the default list (foldSubagentRows):
+/// a parent row's segments also carry its subagents' segments, so they still
+/// partition the folded row's cost. Subagent detail rows drop their own
+/// segments, which already live on the parent.
+export function foldContributionRows(rows: SessionDrillRow[], resolution: WorkUnitResolution): SessionDrillRow[] {
+  return foldSubagentRows(rows, resolution).map(row => {
+    if (!row.subagents) return row
+    const children = row.subagents as SessionDrillRow[]
+    return {
+      ...row,
+      ...(row.contributions ? { contributions: { segments: [row, ...children].flatMap(member => member.contributions?.segments ?? []) } } : {}),
+      subagents: children.map(({ contributions: _contributions, ...child }) => child),
+    }
   })
 }

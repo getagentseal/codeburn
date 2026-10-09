@@ -255,7 +255,7 @@ final class Telemetry {
     static let eventNames: Set<String> = [
         "app_open", "app_close", "popover_open", "settings_open", "update_click",
         "glance_open", "dock_enabled", "dock_disabled", "dock_provider_switch",
-        "dock_drag_end", "usage_snapshot",
+        "dock_drag_end", "usage_snapshot", "update_result",
     ]
 
     static let maxQueue = 200

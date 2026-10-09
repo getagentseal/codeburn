@@ -4,17 +4,20 @@ Anthropic Claude Code CLI and Claude Desktop's local agent mode.
 
 - **Source:** `src/providers/claude.ts`
 - **Loading:** eager (`src/providers/index.ts:1`)
-- **Test:** none directly. Coverage comes from `tests/parser-claude-cwd.test.ts`, `tests/parser-filter.test.ts`, and `tests/parser-mcp-inventory.test.ts`, which exercise `src/parser.ts` end-to-end against fixture session files.
+- **Test:** `tests/providers/claude-cowork-ledger.test.ts` and `tests/providers/claude-cowork-ledger-readonly.test.ts`, plus `tests/parser-claude-cwd.test.ts`, `tests/parser-filter.test.ts`, and `tests/parser-mcp-inventory.test.ts`.
 
 ## Where it reads from
 
 | Source | Path |
 |---|---|
 | Claude Code CLI | `$CLAUDE_CONFIG_DIR` if set, otherwise `~/.claude/projects/` |
-| Claude Desktop (macOS) | `~/Library/Application Support/Claude/local-agent-mode-sessions/` |
+| Claude Desktop (macOS, classic) | `~/Library/Application Support/Claude/local-agent-mode-sessions/` |
+| Claude Desktop (macOS, 3p/Cowork) | `~/Library/Application Support/Claude-3p/local-agent-mode-sessions/` |
 | Claude Desktop (Windows, classic) | `%APPDATA%/Claude/local-agent-mode-sessions/` |
 | Claude Desktop (Windows, MSIX) | `%LOCALAPPDATA%/Packages/<Claude package>/LocalCache/Roaming/Claude/local-agent-mode-sessions/` |
 | Claude Desktop (Linux) | `~/.config/Claude/local-agent-mode-sessions/` |
+
+From October 6, 2026, new Claude Cowork tasks on Pro and Max plans run in Anthropic's cloud instead of on your computer, so they no longer write local session files and CodeBurn can't price them. Tasks started on your computer before then are still read. Plan limits are unaffected: the Claude quota windows come from Anthropic's own usage figures, which include cloud Cowork. Claude Code runs locally and is tracked as before.
 
 For Desktop, `findDesktopProjectDirs` walks up to 8 levels deep looking for `projects/` subdirectories, skipping `node_modules` and `.git`.
 
@@ -22,7 +25,7 @@ Desktop session roots are resolved in this order:
 
 1. A non-empty `CODEBURN_DESKTOP_SESSIONS_DIR` overrides discovery and is the
    only returned root.
-2. macOS uses the single path shown above.
+2. macOS checks both the classic `Claude` path and the `Claude-3p` Cowork path.
 3. Windows always includes the classic path first. It then scans
    `%LOCALAPPDATA%/Packages` for package directories whose names start with
    `Claude_` or contain `.Claude_`, sorted by package name, and includes only
@@ -35,10 +38,25 @@ unreadable Windows package directories are ignored.
 ## Storage format
 
 JSONL, one event per line, per session file. Sessions live under `<project>/<sessionId>.jsonl`.
+Claude Desktop 3p also writes `usage-ledger/*.ndjson` records under its
+`local-agent-mode-sessions` root. Both `surface: "cowork"` and
+`surface: "code"` records are included and labeled `Claude Cowork` and
+`Claude Code`, respectively.
+
+A ledger record and a JSONL transcript can describe the same API call. The
+transcript call is kept, since it carries the project, tools, and turn
+classification, and a ledger call is dropped only when its model, token
+counts, and timestamp match a transcript call within 30 seconds. This keeps
+the request counted once while retaining it when the transcript is later
+deleted.
 
 ## Parser
 
-`createSessionParser` returns an empty async generator (`claude.ts:101-105`). Claude is a special case: `src/parser.ts` reads Claude JSONL files directly with full turn grouping, dedup of streaming message IDs, and MCP tool inventory extraction. The provider object exists only so `discoverSessions` can return Claude session sources alongside the others.
+`src/parser.ts` reads Claude JSONL files directly with full turn grouping,
+dedup of streaming message IDs, and MCP tool inventory extraction.
+`createSessionParser` reads the Desktop usage ledger, which is parsed through
+the shared provider cache so its records can be served independently of the
+transcript tree.
 
 Claude Code can record a message sent while it is working as an
 `attachment` entry with `attachment.type: "queued_command"` and
@@ -61,6 +79,13 @@ aggregate cache-write token total for reports, but prices the 1-hour portion at
 2x base input cost (1.6x the 5-minute cache-write rate exposed by LiteLLM).
 If the split fields are missing, the parser falls back to the legacy behavior
 and prices every cache write at the 5-minute rate.
+
+For Desktop ledger records, CodeBurn uses the shared CodeBurn pricing table
+and configured price overrides for known model ids. The recorded ledger cost
+is used only as a fallback when CodeBurn has no billable price for that model,
+so changing Claude Desktop pricing does not replace a CodeBurn estimate.
+The raw model id remains available to pricing; route variants such as
+`us.anthropic.…` and `global.anthropic.…` are not collapsed for billing.
 
 ## Bedrock sessions
 

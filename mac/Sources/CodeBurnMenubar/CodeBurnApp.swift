@@ -171,6 +171,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
         observeCapacityDockProviderSettingsRequests()
         setupUpdateNotifications()
         Telemetry.shared.start()
+        updateChecker.settlePendingUpdate()
         Task { await updateChecker.checkIfNeeded() }
     }
 

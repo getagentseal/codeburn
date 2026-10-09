@@ -121,14 +121,19 @@ export function copilotCreditSpend(projects: ProjectSummary[]): CopilotCreditSpe
     if (copilot.length === 0) return
     const primaryNano = copilot.filter(call => !call.supplementaryAccounting && isFiniteNanoAiu(call.nanoAiu))
     const suppNano = copilot.filter(call => call.supplementaryAccounting && isFiniteNanoAiu(call.nanoAiu))
-    // Store rows are supplementary and are the bill when the JSONL twin has
-    // no nanoAiu. If both sides carry nanoAiu, count the behavioral row only
-    // so a paired rollup cannot double the credits.
-    const counted = primaryNano.length > 0 && suppNano.length > 0 ? primaryNano : [...primaryNano, ...suppNano]
+    // Store rows are the bill whether paired (supplementary) or not. A rollup
+    // is counted only when nothing behavioral carries nanoAiu, so a paired
+    // rollup cannot double the credits.
+    const counted = primaryNano.length > 0
+      ? [...primaryNano, ...suppNano.filter(call => call.deduplicationKey.startsWith('copilot-store:'))]
+      : suppNano
     for (const call of counted) nanoSum += call.nanoAiu!
     const unrated = copilot.filter(call => !isFiniteNanoAiu(call.nanoAiu))
-    ratedCalls += copilot.length - unrated.length
-    unratedCalls += unrated.length
+    // Requests, not calls: a store row and its per-turn twin, or a rollup, are
+    // one request or none. A session with an exact figure is billed whole.
+    const requests = behavioralCallCount(copilot)
+    if (primaryNano.length > 0 || suppNano.length > 0) ratedCalls += requests
+    else unratedCalls += requests
     // A rated row's total_nano_aiu is the whole request's bill, twin tokens
     // included, so a session that carries any exact figure gets no estimate
     // stacked on top of it. Everything else is priced from tokens at listed
@@ -156,7 +161,7 @@ export function copilotCreditsNote(rated: number, unrated: number): string {
   if (unrated === 0) {
     return `All ${rated} Copilot requests in this period carry GitHub's exact credit figure, so spentCredits is complete.`
   }
-  return `${rated} of ${rated + unrated} Copilot requests carry GitHub's exact credit figure (Copilot CLI session-store rows are the only local source that has it). spentCredits counts only those; estimatedCredits adds the rest priced from tokens at listed API rates, which matched GitHub within about 15% on real Copilot CLI events; VS Code chat sessions record no cache split, so their estimate can land either side of the bill. percentUsed tracks estimatedCredits while any request is unrated.`
+  return `${rated} of ${rated + unrated} Copilot requests carry GitHub's exact credit figure (only Copilot CLI and VS Code agent-host sessions record it). spentCredits counts only those; estimatedCredits adds the rest priced from tokens at listed API rates, which matched GitHub within about 15% on real Copilot CLI events; VS Code chat sessions record no cache split, so their estimate can land either side of the bill. percentUsed tracks estimatedCredits while any request is unrated.`
 }
 
 export function projectMonthEnd(

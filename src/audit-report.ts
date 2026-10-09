@@ -1,5 +1,5 @@
 import { behavioralCallWeight } from './behavioral-weight.js'
-import { billableOutputTokens, cacheWriteCostPerToken, fallbackRawModelDisplayName, getModelCosts, getShortModelName, sanitizeModelForDisplay, tieredCostsFor, type ModelCosts } from './models.js'
+import { billableOutputTokens, cacheWriteCostPerToken, fallbackRawModelDisplayName, getModelCosts, getShortModelName, pricingModelAt, sanitizeModelForDisplay, tieredCostsFor, type ModelCosts } from './models.js'
 import { getProvider } from './providers/index.js'
 import { formatCost, formatTokens } from './format.js'
 import { renderTable, type TableColumn } from './text-table.js'
@@ -114,16 +114,20 @@ export async function aggregateAudit(projects: ProjectSummary[]): Promise<AuditR
           // long-context request shows the rates that priced it while a bucket
           // of small calls never crosses the threshold on the sum. Fast-mode
           // and the 1-hour cache-write rate remain visible gaps on purpose.
-          if (bucket.rates) {
+          // A dated alias (codex-auto-review) prices each call by its own date;
+          // the row's `rates` show the forward default.
+          const pricingModel = pricingModelAt(bucket.model, call.timestamp)
+          const rates = pricingModel === bucket.model ? bucket.rates : getModelCosts(pricingModel)
+          if (rates) {
             const promptTokens = u.inputTokens + cacheReadForCall
-            const tiered = tieredCostsFor(bucket.model, bucket.rates, promptTokens, bucket.provider)
+            const tiered = tieredCostsFor(pricingModel, rates, promptTokens, bucket.provider)
             const outputForCall = billableOutputTokens(bucket.provider, u.outputTokens, u.reasoningTokens)
             bucket.recomputed.input += u.inputTokens * tiered.inputCostPerToken
             bucket.recomputed.output += outputForCall * tiered.outputCostPerToken
-            bucket.recomputed.cacheWrite += u.cacheCreationInputTokens * cacheWriteCostPerToken(bucket.model, tiered)
+            bucket.recomputed.cacheWrite += u.cacheCreationInputTokens * cacheWriteCostPerToken(pricingModel, tiered)
             bucket.recomputed.cacheRead += cacheReadForCall * tiered.cacheReadCostPerToken
             // Web search never participates in a tier; keep it on the base row.
-            bucket.recomputed.webSearch += u.webSearchRequests * bucket.rates.webSearchCostPerRequest
+            bucket.recomputed.webSearch += u.webSearchRequests * rates.webSearchCostPerRequest
           }
           // Supplementary accounting calls keep their tokens and cost above but are not
           // distinct requests, so they add no call weight (see behavioral-weight.ts).

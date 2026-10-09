@@ -21,12 +21,14 @@
     "package:win:arm64": "npm run stage-cli && npm run stage-menubar && npm run build && cross-env ELECTRON_BUILDER_7Z_FILTER=BCJ electron-builder --win nsis --arm64",
     "package:store": "npm run stage-cli && npm run stage-menubar:store && npm run build && electron-builder --win appx --x64",
     "package:linux": "npm run stage-cli && npm run build && electron-builder --linux",
-    "package:snap": "npm run stage-cli && npm run build && electron-builder --linux snap --x64"
+    "package:snap": "npm run stage-cli && npm run build && electron-builder --linux snap --x64",
+    "build:vscode": "vite build --config vite.vscode.config.ts"
   },
   "dependencies": {
     "@fontsource-variable/inter": "^5.3.0",
     "@fontsource-variable/jetbrains-mono": "^5.3.0",
     "@gsap/react": "^2.1.2",
+    "electron-updater": "^6.8.9",
     "gsap": "^3.15.0",
     "lz-string": "^1.5.0",
     "react": "^19.3.0",
@@ -63,6 +65,12 @@
       "package.json"
     ],
     "afterPack": "./scripts/after-pack.cjs",
+    "publish": [
+      {
+        "provider": "generic",
+        "url": "https://github.com/getagentseal/codeburn/releases/download/update-feeds"
+      }
+    ],
     "mac": {
       "target": [
         {
@@ -84,6 +92,8 @@
       "icon": "build/icon.icns",
       "identity": "-",
       "hardenedRuntime": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
       "gatekeeperAssess": false,
       "extendInfo": {
         "NSDocumentsFolderUsageDescription": "CodeBurn reads your local AI coding tool session logs (Claude Code, Codex, Cursor, and others) to calculate your token usage and cost. Your data never leaves your machine.",
@@ -206,6 +216,7 @@
               "$HOME/.cline/data/tasks",
               "$HOME/.cline/data/sessions",
               "$HOME/.codewhale/sessions",
+              "$HOME/.commandcode/projects",
               "$HOME/.copilot/session-state",
               "$HOME/.copilot/session-store.db",
               "$HOME/.cursor/projects",

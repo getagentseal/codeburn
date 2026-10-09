@@ -11,7 +11,7 @@ import { SessionDrawer } from '../components/SessionDrawer'
 import { StaleBanner } from '../components/StaleBanner'
 import { Icon } from '../components/icons'
 import { usePolled } from '../hooks/usePolled'
-import { formatCompact, formatCount, formatDayShort, formatUsd, shortenProjectPath } from '../lib/format'
+import { formatCompact, formatCount, formatDayShort, formatUsd, isEstimatedCost, shortenProjectPath } from '../lib/format'
 import { Usd, tokensOf } from '../components/Usd'
 import { codeburn } from '../lib/ipc'
 import {
@@ -23,6 +23,7 @@ import {
   type InvestigationFilters,
 } from '../lib/investigation'
 import { reportMemoKey } from '../lib/reportMemoKey'
+import { hasSessionView, SessionView } from './SessionView'
 import type { DateRange, Period, SessionDrillRow, SessionRow } from '../lib/types'
 import { t } from '../i18n'
 
@@ -36,6 +37,13 @@ export type SessionSort = 'cost' | 'recent' | 'turns' | 'tokens'
  *  can reuse it), so drawer selection and history restore key on the triple. */
 export function sessionRowKey(row: Pick<SessionRow, 'provider' | 'project' | 'sessionId'>): string {
   return `${row.provider}\u0000${row.project}\u0000${row.sessionId}`
+}
+
+/** The row a saved key opens: the row itself, or the parent a subagent session
+ *  is folded into. */
+function rowForKey<T extends SessionRow>(rows: T[], key: string): T | undefined {
+  return rows.find(row => sessionRowKey(row) === key)
+    ?? rows.find(row => row.subagents?.some(child => sessionRowKey(child) === key))
 }
 
 /** The CLI's own display name for a provider id ("kimicode" -> "Kimi Code"),
@@ -225,6 +233,7 @@ export function Sessions({
       row.project,
       row.sessionId,
       row.models.join(' '),
+      ...(row.subagents ?? []).flatMap(child => [child.title ?? '', child.sessionId]),
     ].some(value => value.toLowerCase().includes(q)))
   }, [selection, q])
 
@@ -323,8 +332,7 @@ export function Sessions({
   // drawer closes rather than showing a session that no longer reconciles.
   useEffect(() => {
     if (!effectiveOpenSessionId || !report.data) return
-    const stillPresent = rows.some(row => sessionRowKey(row) === effectiveOpenSessionId)
-    if (!stillPresent) closeDrawer()
+    if (!rowForKey(rows, effectiveOpenSessionId)) closeDrawer()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [effectiveOpenSessionId, report.data, rows])
 
@@ -361,7 +369,13 @@ export function Sessions({
 
   const selectionCost = summary.cost
   const remaining = included.length - renderedRows
-  const openRow = effectiveOpenSessionId ? rows.find(row => sessionRowKey(row) === effectiveOpenSessionId) ?? null : null
+  const openRow = effectiveOpenSessionId ? rowForKey(rows, effectiveOpenSessionId) ?? null : null
+  const subagentCount = included.reduce((sum, entry) => sum + (entry.row.subagents?.length ?? 0), 0)
+  const subagentSuffix = subagentCount > 0 ? <> {t(`sessions.summary.subagents.${subagentCount === 1 ? 'one' : 'other'}`, { count: subagentCount.toLocaleString('en-US') })}</> : null
+
+  if (openRow && hasSessionView(openRow)) {
+    return <SessionView key={sessionRowKey(openRow)} row={openRow} filters={filters} medianCost={medianCost} onBack={closeDrawer} />
+  }
 
   return (
     <div className="sessions-list-view">
@@ -399,7 +413,7 @@ export function Sessions({
         {investigating
           ? (
               <>
-                {formatCount(included.length, 'session')} {t('sessions.summary.inSelection')} · <strong>{formatUsd(selectionCost)}</strong> {t('sessions.summary.inSelection')}
+                {formatCount(included.length, 'session')}{subagentSuffix} {t('sessions.summary.inSelection')} · <strong>{formatUsd(selectionCost)}</strong> {t('sessions.summary.inSelection')}
                 {summary.fullCost > selectionCost + 1e-9 && <> · {t('sessions.summary.fullCostOfSessions')} {formatUsd(summary.fullCost)}</>}
                 {summary.tokens > 0 && <> · {formatCompact(summary.tokens)} {t('sessions.summary.tokensInSelection')}</>}
                 {summary.unattributable > 0 && (
@@ -409,7 +423,7 @@ export function Sessions({
             )
           : (
               <>
-                {formatCount(included.length, 'session')} · {formatUsd(selectionCost)} · {formatCompact(summary.tokens)} {t('sessions.summary.tokens')}
+                {formatCount(included.length, 'session')}{subagentSuffix} · {formatUsd(selectionCost)} · {formatCompact(summary.tokens)} {t('sessions.summary.tokens')}
               </>
             )}
       </div>
@@ -444,7 +458,7 @@ export function Sessions({
                   <button
                     className="session-row"
                     type="button"
-                    aria-expanded={effectiveOpenSessionId === sessionRowKey(entry.entry.row)}
+                    aria-expanded={openRow === entry.entry.row}
                     onClick={event => {
                       lastOpenerRef.current = event.currentTarget
                       setInternalOpenSessionId(sessionRowKey(entry.entry.row))
@@ -455,7 +469,10 @@ export function Sessions({
                       <span className="session-chevron" aria-hidden="true"><Icon name="chevron-right" /></span>
                       <span className="session-project-copy">
                         <span className="session-title" title={entry.entry.row.title || undefined}>{entry.entry.row.title || shortenProjectPath(entry.entry.row.project)}</span>
-                        <span className="session-project">{entry.entry.row.sessionId.slice(0, 18)}</span>
+                        <span className="session-project">
+                          {entry.entry.row.sessionId.slice(0, 18)}
+                          {entry.entry.row.subagents?.length ? ` · ${t(`sessions.list.subagents.${entry.entry.row.subagents.length === 1 ? 'one' : 'other'}`, { count: entry.entry.row.subagents.length })}` : null}
+                        </span>
                       </span>
                     </span>
                     <span className="session-when">{formatDayShort(entry.entry.row.endedAt)}</span>
@@ -465,11 +482,11 @@ export function Sessions({
                       <span className="session-cost-split">
                         <strong>{formatUsd(entry.entry.cost)}</strong>
                         {entry.entry.cost < entry.entry.row.cost - 1e-9 && (
-                          <small title={t('sessions.list.fullCostTooltip')}> {t('sessions.list.ofConnector')} <Usd value={entry.entry.row.cost} tokens={tokensOf(entry.entry.row)} nested /></small>
+                          <small title={t('sessions.list.fullCostTooltip')}> {t('sessions.list.ofConnector')} <Usd value={entry.entry.row.cost} tokens={tokensOf(entry.entry.row)} nested estimated={isEstimatedCost(entry.entry.row.cost, entry.entry.row.estimatedCost)} /></small>
                         )}
                       </span>
                     ) : (
-                      <span><Usd value={entry.entry.row.cost} tokens={tokensOf(entry.entry.row)} nested /></span>
+                      <span><Usd value={entry.entry.row.cost} tokens={tokensOf(entry.entry.row)} nested estimated={isEstimatedCost(entry.entry.row.cost, entry.entry.row.estimatedCost)} /></span>
                     )}
                     <span>{formatCompact(rowTokens(entry.entry.row))}</span>
                   </button>
@@ -478,7 +495,7 @@ export function Sessions({
             </div>
           </div>
           <div className="sessions-more-caption">
-            {t('sessions.list.showingOf', { shown: renderedRows.toLocaleString('en-US'), total: included.length.toLocaleString('en-US') })}
+            {t(subagentCount > 0 ? 'sessions.list.showingOfTopLevel' : 'sessions.list.showingOf', { shown: renderedRows.toLocaleString('en-US'), total: included.length.toLocaleString('en-US') })}
           </div>
           {remaining > 0 && (
             <button className="sessions-more" type="button" onClick={() => setVisibleCount(visibleCount + STEP)}>
@@ -487,7 +504,7 @@ export function Sessions({
           )}
         </>
       )}
-      {openRow && (
+      {openRow && !hasSessionView(openRow) && (
         <SessionDrawer
           row={openRow}
           openKey={sessionRowKey(openRow)}

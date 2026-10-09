@@ -57,7 +57,18 @@ import { isWslUncPath } from './wsl.js'
 // v18: read response-level token_usage_record and ignore later token_count
 // twins. v17 entries miss interrupted/compaction usage and can include counts
 // now suppressed after the source handover, so they must reparse.
-export const CODEX_CACHE_VERSION = 18
+// v19: codex priority-tier pricing (#1616) - turns run under Codex's Fast
+// speed setting (thread_settings_applied service_tier "priority") now bill at
+// the priority rates. This file stores each call's costUSD and speed verbatim,
+// so v18 entries carry the standard-rate cost and must be re-derived.
+// v20: `codex-auto-review` prices by date (gpt-5.4 before 30 Jul 2026, GPT-5.6
+// Luna from then on) instead of gpt-5.5. Stored costUSD is the old price.
+// v21: service_tier "flex" bills at the published Flex rates (it billed at
+// standard), and `gpt-reserve` / `gpt-5.3-spark` price as GPT-5.6 Luna /
+// GPT-5.3 Codex Spark instead of $0. Stored costUSD and speed are the old ones.
+// v22: a fork's replay burst drops only records found in the parent rollout
+// and counts the rest. v21 entries dropped the whole burst.
+export const CODEX_CACHE_VERSION = 22
 export const CODEX_LEGACY_CACHE_FILE = 'codex-results.json'
 export function codexCacheFileName(version = CODEX_CACHE_VERSION): string {
   return `codex-results.v${version}.json`

@@ -12,6 +12,7 @@
 
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
+import { t } from './i18n'
 import { readSetting, writeSetting } from './settings'
 
 /// What the tray shows beside the flame. The mac's fifth choice, Credits (Codex), is not
@@ -55,11 +56,17 @@ export function nextTheme(current: ThemeChoice): ThemeChoice {
   return current === 'light' ? 'dark' : current === 'dark' ? 'system' : 'light'
 }
 
-export function themeCycleLabel(current: ThemeChoice): string {
+/// The English sentence `theme_menu_text` looks up in Rust. The footer and the tray item
+/// both name the theme the control moves to, so they have to share this key.
+export function themeMenuKey(current: ThemeChoice): string {
   const next = nextTheme(current)
   if (next === 'light') return 'Switch to Light Theme'
   if (next === 'dark') return 'Switch to Dark Theme'
   return 'Switch to System Theme'
+}
+
+export function themeCycleLabel(current: ThemeChoice): string {
+  return t(themeMenuKey(current))
 }
 
 /// UsageRefreshCadence. Auto is the adaptive default, manual never auto-spawns.

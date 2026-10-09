@@ -5,9 +5,9 @@ import { homedir } from 'os'
 import { createHash } from 'crypto'
 
 import type { Provider, ProbeRoot, SessionSource, SessionParser } from './types.js'
-import { getShortModelName } from '../models.js'
+import { calculateCost, getShortModelName } from '../models.js'
 import { readConfig } from '../config.js'
-import { FS_SCAN_CONCURRENCY, mapWithConcurrency } from '../fs-utils.js'
+import { FS_SCAN_CONCURRENCY, mapWithConcurrency, readSessionLines } from '../fs-utils.js'
 import { wslHomes } from '../wsl.js'
 
 export type ClaudeConfigSource = {
@@ -161,9 +161,16 @@ export function getDesktopSessionsDirs(): string[] {
 
   if (override) return cacheDesktopSessionsDirs(cacheKey, [override])
   if (platform === 'darwin') {
+    const appSupport = join(homedir(), 'Library', 'Application Support')
     return cacheDesktopSessionsDirs(
       cacheKey,
-      [join(homedir(), 'Library', 'Application Support', 'Claude', 'local-agent-mode-sessions')],
+      [
+        join(appSupport, 'Claude', 'local-agent-mode-sessions'),
+        // Current Claude Desktop 3p builds use a distinct Electron user-data
+        // directory for Cowork, while the Code surface continues to use the
+        // traditional ~/.claude project store.
+        join(appSupport, 'Claude-3p', 'local-agent-mode-sessions'),
+      ],
     )
   }
   if (platform === 'win32') {
@@ -233,6 +240,159 @@ async function findDesktopProjectDirs(base: string): Promise<string[]> {
   }
   await walk(base, 0)
   return results
+}
+
+async function findDesktopUsageLedgerFiles(base: string): Promise<string[]> {
+  const results: string[] = []
+
+  async function walk(dir: string, depth: number): Promise<void> {
+    if (depth > 8) return
+    const entries = await readdir(dir, { withFileTypes: true }).catch(() => [])
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue
+      if (entry.name === 'node_modules' || entry.name === '.git') continue
+
+      const full = join(dir, entry.name)
+      if (entry.name === 'usage-ledger') {
+        const ledgerEntries = await readdir(full, { withFileTypes: true }).catch(() => [])
+        for (const ledgerEntry of ledgerEntries) {
+          if (ledgerEntry.isFile() && ledgerEntry.name.endsWith('.ndjson')) {
+            results.push(join(full, ledgerEntry.name))
+          }
+        }
+        continue
+      }
+      await walk(full, depth + 1)
+    }
+  }
+
+  await walk(base, 0)
+  return results
+}
+
+type CoworkLedgerObject = Record<string, unknown>
+
+function ledgerObject(value: unknown): CoworkLedgerObject | null {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as CoworkLedgerObject
+    : null
+}
+
+function ledgerNumber(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  if (typeof value === 'string' && value.trim() !== '') {
+    const parsed = Number(value)
+    if (Number.isFinite(parsed)) return parsed
+  }
+  return undefined
+}
+
+function ledgerTimestamp(value: unknown): string | undefined {
+  const raw = ledgerNumber(value)
+  if (raw === undefined) return undefined
+  const milliseconds = raw >= 1_000_000_000_000 ? raw : raw * 1000
+  const date = new Date(milliseconds)
+  return Number.isNaN(date.getTime()) ? undefined : date.toISOString()
+}
+
+function createCoworkLedgerParser(
+  source: SessionSource,
+  seenKeys: Set<string>,
+): SessionParser {
+  return {
+    async *parse() {
+      if (source.sourceKind !== 'claude-desktop-ledger') return
+
+      let lineNumber = 0
+      for await (const rawLine of readSessionLines(source.path)) {
+        lineNumber++
+        let parsed: unknown
+        try {
+          parsed = JSON.parse(rawLine)
+        } catch {
+          // Cowork appends records while a turn is in flight. Ignore a torn
+          // final line; valid records elsewhere in the ledger remain usable.
+          continue
+        }
+
+        const record = ledgerObject(parsed)
+        const surface = record?.['surface']
+        if (!record || (surface !== 'cowork' && surface !== 'code')) continue
+
+        const sessionId = typeof record['sessionId'] === 'string' ? record['sessionId'] : ''
+        const timestamp = ledgerTimestamp(record['ts'])
+        if (!sessionId || !timestamp) continue
+
+        const models = ledgerObject(record['models'])
+        if (!models) continue
+
+        for (const [model, rawUsage] of Object.entries(models)) {
+          const usage = ledgerObject(rawUsage)
+          if (!usage) continue
+
+          const inputTokens = Math.max(0, ledgerNumber(usage['inputTokens']) ?? 0)
+          const outputTokens = Math.max(0, ledgerNumber(usage['outputTokens']) ?? 0)
+          const cacheReadInputTokens = Math.max(0, ledgerNumber(usage['cacheReadTokens']) ?? 0)
+          const cacheCreationInputTokens = Math.max(0, ledgerNumber(usage['cacheWriteTokens']) ?? 0)
+          const webSearchRequests = Math.max(0, ledgerNumber(usage['webSearchRequests']) ?? 0)
+          const recordedCost = ledgerNumber(ledgerObject(usage['cost'])?.['usd'])
+          const estimatedCost = calculateCost(
+            model,
+            inputTokens,
+            outputTokens,
+            cacheCreationInputTokens,
+            cacheReadInputTokens,
+            webSearchRequests,
+            'standard',
+            0,
+            'claude',
+          )
+
+          if (
+            inputTokens === 0 &&
+            outputTokens === 0 &&
+            cacheReadInputTokens === 0 &&
+            cacheCreationInputTokens === 0 &&
+            recordedCost === undefined
+          ) {
+            continue
+          }
+
+          const deduplicationKey = `claude-cowork-ledger:${source.path}:${sessionId}:${timestamp}:${model}`
+          if (seenKeys.has(deduplicationKey)) continue
+          seenKeys.add(deduplicationKey)
+
+          yield {
+            provider: 'claude',
+            model,
+            inputTokens,
+            outputTokens,
+            cacheCreationInputTokens,
+            cacheReadInputTokens,
+            cachedInputTokens: cacheReadInputTokens,
+            reasoningTokens: 0,
+            webSearchRequests,
+            // Keep the ledger's dollar amount only as a fallback for a model
+            // CodeBurn cannot price. Known models must use CodeBurn's pricing
+            // and overrides so cached usage can be repriced later.
+            costUSD: estimatedCost,
+            ...(recordedCost !== undefined ? { fallbackCostUSD: recordedCost } : {}),
+            tools: [],
+            bashCommands: [],
+            skills: [],
+            subagentTypes: [],
+            timestamp,
+            speed: 'standard',
+            deduplicationKey,
+            userMessage: '',
+            sessionId,
+            project: surface === 'code' ? 'Claude Code' : 'Claude Cowork',
+            turnId: `${timestamp}:${lineNumber}`,
+          }
+        }
+      }
+    },
+  }
 }
 
 // ── Cowork space resolution ────────────────────────────────────────────
@@ -430,14 +590,29 @@ export const claude: Provider = {
           sourceKind: 'claude-desktop',
         })
       }
+
+      // Current Claude Desktop Cowork builds also keep metered usage in a
+      // workspace-level usage-ledger/*.ndjson file. These records are separate
+      // from the Claude Code JSONL transcripts above and must be exposed as
+      // leaf sources so the generic provider cache can fingerprint and parse
+      // them incrementally.
+      for (const ledgerPath of await findDesktopUsageLedgerFiles(desktopBase)) {
+        sources.push({
+          path: ledgerPath,
+          project: 'Claude Cowork',
+          provider: 'claude',
+          sourceId: desktopSourceId,
+          sourceLabel: 'Claude Desktop',
+          sourcePath: desktopBase,
+          sourceKind: 'claude-desktop-ledger',
+        })
+      }
     }
 
     return sources
   },
 
-  createSessionParser(): SessionParser {
-    return {
-      async *parse() {},
-    }
+  createSessionParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
+    return createCoworkLedgerParser(source, seenKeys)
   },
 }

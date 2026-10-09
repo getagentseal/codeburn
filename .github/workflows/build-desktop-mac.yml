@@ -1,0 +1,105 @@
+name: Build macOS desktop
+
+# Builds, signs and notarizes the desktop app for arm64 and x64 in one electron-builder run,
+# so a single latest-mac.yml lists both zips. Read-only like the Windows installer workflow:
+# the release owner uploads the artifact to the desktop-v* release by hand.
+on:
+  push:
+    tags:
+      - 'desktop-v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  mac:
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22.13.0
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            app/package-lock.json
+
+      - name: Check tag matches the app version
+        if: github.ref_type == 'tag'
+        run: test "desktop-v$(node -p "require('./app/package.json').version")" = "$GITHUB_REF_NAME"
+
+      - name: Install dependencies
+        run: |
+          npm ci
+          npm ci --prefix app
+
+      - name: Check secrets and write notary key
+        env:
+          MACOS_CERT_P12_BASE64: ${{ secrets.MACOS_CERT_P12_BASE64 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          APPSTORE_API_KEY_P8_BASE64: ${{ secrets.APPSTORE_API_KEY_P8_BASE64 }}
+          APPSTORE_API_KEY_ID: ${{ secrets.APPSTORE_API_KEY_ID }}
+          APPSTORE_API_ISSUER_ID: ${{ secrets.APPSTORE_API_ISSUER_ID }}
+        run: |
+          for name in MACOS_CERT_P12_BASE64 MACOS_CERT_PASSWORD APPSTORE_API_KEY_P8_BASE64 APPSTORE_API_KEY_ID APPSTORE_API_ISSUER_ID; do
+            if [ -z "${!name}" ]; then echo "::error::secret $name is not set"; exit 1; fi
+          done
+          echo "$APPSTORE_API_KEY_P8_BASE64" | base64 --decode > "$RUNNER_TEMP/notary.p8"
+
+      - name: Build, sign and notarize
+        working-directory: app
+        env:
+          CSC_LINK: ${{ secrets.MACOS_CERT_P12_BASE64 }}
+          CSC_KEY_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          APPLE_API_KEY: ${{ runner.temp }}/notary.p8
+          APPLE_API_KEY_ID: ${{ secrets.APPSTORE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPSTORE_API_ISSUER_ID }}
+        run: |
+          npm run stage-cli
+          npm run build
+          npx electron-builder --mac --publish never \
+            -c.mac.identity="Resham Joshi (XRVP7P7F9M)" \
+            -c.mac.hardenedRuntime=true \
+            -c.dmg.sign=true
+
+      - name: Notarize and staple the dmgs
+        working-directory: app/release
+        env:
+          APPLE_API_KEY_ID: ${{ secrets.APPSTORE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPSTORE_API_ISSUER_ID }}
+        run: |
+          for dmg in CodeBurn-*.dmg; do
+            xcrun notarytool submit "$dmg" --key "$RUNNER_TEMP/notary.p8" --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER" --wait
+            xcrun stapler staple "$dmg"
+          done
+
+      - name: Verify signatures
+        working-directory: app/release
+        run: |
+          for app in mac-arm64/CodeBurn.app mac/CodeBurn.app; do
+            codesign --verify --deep --strict "$app"
+            spctl --assess --type execute --verbose "$app"
+          done
+          for dmg in CodeBurn-*.dmg; do xcrun stapler validate "$dmg"; done
+          grep -Eq 'url: CodeBurn-[0-9.]+-arm64-mac\.zip' latest-mac.yml
+          grep -Eq 'url: CodeBurn-[0-9.]+-mac\.zip' latest-mac.yml
+
+      - name: Remove notary key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/notary.p8"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: CodeBurn-macOS
+          path: |
+            app/release/CodeBurn-*.dmg
+            app/release/CodeBurn-*.dmg.blockmap
+            app/release/CodeBurn-*-mac.zip
+            app/release/CodeBurn-*-mac.zip.blockmap
+            app/release/latest-mac.yml
+          if-no-files-found: error
+          retention-days: 30

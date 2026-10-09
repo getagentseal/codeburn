@@ -208,7 +208,7 @@ describe('buildMenubarPayload', () => {
     const kimiK3 = payload.current.topModels.find(m => m.name === 'Kimi K3')!
     expect(kimiK3.cost).toBeCloseTo(2.5 + 0.5 + 1.2)
     expect(kimiK3.calls).toBe(78 + 2 + 40)
-    const k2 = payload.current.topModels.find(m => m.name === 'Kimi K2 Thinking')!
+    const k2 = payload.current.topModels.find(m => m.name === 'Kimi for Coding')!
     expect(k2.cost).toBeCloseTo(0.06)
     expect(payload.current.topModels.find(m => m.name === 'k3')).toBeUndefined()
     expect(payload.current.topModels.find(m => m.name === 'k3-agent')).toBeUndefined()

@@ -48,6 +48,8 @@ function verifyLiveRelease(tag, assetPath) {
     `codeburn-desktop-${version}.x86_64.rpm`,
     `CodeBurn-Setup-${version}.exe`,
     `CodeBurn-Setup-${version}.exe.blockmap`,
+    'latest-mac.yml',
+    'latest-linux.yml',
   ]
   for (const expected of required) {
     const count = assets.filter(asset => asset === expected).length

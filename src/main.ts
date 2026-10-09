@@ -7,28 +7,28 @@ import { cachedProjectIdentitiesForRange } from './daily-cache.js'
 import { reportUnmatchedProjectPatterns } from './project-filter-warnings.js'
 import { getVercelGatewayApiKey } from './providers/vercel-gateway.js'
 import { BILLING_FILTER_VALUES, ROUTE_FILTER_VALUES, filterProjectsByBillingRoute } from './billing-filter.js'
-import { AGGREGATE_ONLY_PROVIDER, aggregateOnlyCostUSD, excludesAggregateOnlyProviders, parseAllSessions, filterProjectsByName, filterProjectsByDateRange, clearSessionCache, setInteractiveScanUI, computeCorpusFingerprint, isSessionHydrationComplete, withLoadWindow } from './parser.js'
-import { allProviderNames, getAllProviders } from './providers/index.js'
+import { AGGREGATE_ONLY_PROVIDER, aggregateOnlyCostUSD, excludesAggregateOnlyProviders, parseAllSessions, filterProjectsByName, filterProjectsByDateRange, mergeProjectSplits, clearSessionCache, setInteractiveScanUI, computeCorpusFingerprint, isSessionHydrationComplete, startProgressKeepalive, stopProgressKeepalive, withLoadWindow, setExactProjectPaths } from './parser.js'
+import { allProviderNames, getAllProviders, safeDiscoverSessions } from './providers/index.js'
 import { getProvider } from './providers/index.js'
 import { getClaudeConfigDirs, getDesktopSessionsDirs } from './providers/claude.js'
 import { convertCost, formatCost } from './currency.js'
-import { excludedGatewayNote, formatTokens, renderStatusBar } from './format.js'
+import { ESTIMATED_COST_LEGEND, excludedGatewayNote, formatTokens, isEstimatedCost, renderStatusBar } from './format.js'
 import { toDateString } from './daily-cache.js'
 import { statusSnapshotSemanticKey } from './status-snapshot-semantic.js'
 import { dateKey } from './day-aggregator.js'
-import { inferSessionProvider } from './session-output.js'
+import { foldedSessionRows } from './sessions-report.js'
 import { behavioralCallWeight } from './behavioral-weight.js'
 import { CATEGORY_LABELS, type DateRange, type ProjectSummary, type TaskCategory } from './types.js'
 import type { AppliedFix } from './act/types.js'
 import { aggregateModelEfficiency } from './model-efficiency.js'
-import { buildPeriodData, buildMenubarPayloadForRange, buildDurablePeriod, getDailyCacheConfigHash, SERVE_HYDRATION_ENV, type DurablePeriod } from './usage-aggregator.js'
+import { buildPayloadProjects, buildPeriodData, buildMenubarPayloadForRange, buildDurablePeriod, getDailyCacheConfigHash, SERVE_HYDRATION_ENV, type DurablePeriod } from './usage-aggregator.js'
 import { aggregateProjectsIntoDays } from './day-aggregator.js'
 import { buildPeriodDiffReport, defaultSevenDayRanges, diffSessions, dayKeyToRange, historyBasis, localRangeInfo } from './period-diff.js'
 import { loadStatusSnapshot, saveStatusSnapshot } from './session-cache.js'
 import { renderDashboard } from './dashboard.js'
 import { renderOverview } from './overview.js'
 import { runWebDashboard } from './web-dashboard.js'
-import { hostname } from 'os'
+import { homedir, hostname } from 'os'
 import { runShareServer } from './sharing/share-run.js'
 import { addRemote, linkRemote, pullDevices, renderDevices, summarizeDeviceUsage } from './sharing/host.js'
 import { browse } from './sharing/discovery.js'
@@ -52,6 +52,7 @@ import {
   runAgyStatusLineHook,
   uninstallAntigravityStatusLineHook,
 } from './antigravity-statusline.js'
+import { getProjectLinksConfigHash, knownOriginKeys, originRepoName, projectLinkFolder, setProjectLinks } from './git-origin.js'
 import { clearPlan, readConfig, readPlan, readPlans, saveConfig, savePlan, getConfigFilePath, setIncludeGatewayInTotals, gatewayIncludedInTotals, type CodeburnConfig, type Plan, type PlanId, type PlanProvider } from './config.js'
 import { clampResetDay, copilotCreditsNote, getPlanUsageOrNull, getPlanUsages, type PlanUsage } from './plan-usage.js'
 import { getPresetPlan, isPlanId, isPlanProvider, PLAN_IDS, PLAN_PROVIDERS, planDisplayName } from './plans.js'
@@ -521,14 +522,30 @@ async function runJsonReport(period: Period, provider: string, project: string[]
   console.log(JSON.stringify(report, null, 2))
 }
 
+// Only for commands that show Cursor dollars; never mcp, doctor or audit,
+// which promise to stay offline. The keepalive beats through the download for
+// the app watchdogs; it is reference-counted, so the stop never silences a
+// beat serve armed around the whole request.
+async function syncCursor(provider: string): Promise<void> {
+  const { maybeSyncCursor } = await import('./cursor-sync.js')
+  startProgressKeepalive()
+  try {
+    await maybeSyncCursor({ provider })
+  } finally {
+    stopProgressKeepalive()
+  }
+}
+
 const program = new Command()
   .name('codeburn')
   .description('See where your AI coding tokens go - by task, tool, model, and project')
   .version(version)
   .option('--verbose', 'print warnings to stderr on read failures and skipped files')
   .option('--timezone <zone>', 'IANA timezone for date grouping (e.g. Asia/Tokyo, America/New_York)')
+  .option('--exact-project', 'A --project/--exclude path matches that folder only, not every checkout of its repository')
 
 program.hook('preAction', async (thisCommand) => {
+  setExactProjectPaths(thisCommand.opts<{ exactProject?: boolean }>().exactProject === true)
   const tz = thisCommand.opts<{ timezone?: string }>().timezone ?? process.env['CODEBURN_TZ']
   if (tz) {
     try {
@@ -546,6 +563,7 @@ program.hook('preAction', async (thisCommand) => {
   setFlatRateModels(config.flatRateModels ?? [])
   setFlatRateRemoved(config.flatRateModelsRemoved ?? [])
   setProxyPaths(config.proxyPaths ?? [])
+  setProjectLinks(config.projectLinks)
   setIncludeGatewayInTotals(config.includeGatewayInTotals === true)
   if (thisCommand.opts<{ verbose?: boolean }>().verbose) {
     process.env['CODEBURN_VERBOSE'] = '1'
@@ -614,17 +632,21 @@ function buildJsonReport(projects: ProjectSummary[], period: string, periodKey: 
       })
 
   const sessionCountBasis = durable.data.sessionCountBasis
-  const projectList = projects.map(p => ({
-    name: p.project,
-    path: p.projectPath,
-    cost: convertCost(p.totalCostUSD),
-    savings: convertCost(p.totalSavingsUSD),
-    ...(sessionCountIsExact(sessionCountBasis) && p.sessions.length > 0
-      ? { avgCostPerSession: convertCost(p.totalCostUSD / p.sessions.length) }
+  // Same durable day set as the headline, so a project's row is what selecting
+  // it reports (expired transcripts included), one row per repository.
+  const projectList = buildPayloadProjects(projects, durable.days, homedir()).map(p => ({
+    name: p.name,
+    path: p.path ?? p.id ?? p.name,
+    cost: convertCost(p.cost),
+    savings: convertCost(p.savingsUSD),
+    ...(sessionCountIsExact(p.sessionCountBasis) && p.sessions > 0
+      ? { avgCostPerSession: convertCost(p.cost / p.sessions) }
       : {}),
-    calls: p.totalApiCalls,
-    sessions: p.sessions.length,
-    ...(sessionCountBasis ? { sessionCountBasis } : {}),
+    calls: p.calls ?? 0,
+    sessions: p.sessions,
+    ...(p.sessionCountBasis ? { sessionCountBasis: p.sessionCountBasis } : {}),
+    ...(p.temporary ? { temporary: true } : {}),
+    ...(p.checkouts ? { checkouts: p.checkouts.map(c => ({ path: c.id, cost: convertCost(c.cost), ...(c.matchedByFolderName ? { matchedByFolderName: true } : {}) })), checkoutCount: p.checkoutCount } : {}),
   }))
 
   const modelMap: Record<string, { calls: number; cost: number; savings: number; estimatedCost: number; inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; baselineModel: string }> = {}
@@ -756,17 +778,17 @@ function buildJsonReport(projects: ProjectSummary[], period: string, periodKey: 
   const sortedMap = (m: Record<string, number>) =>
     Object.entries(m).sort(([, a], [, b]) => b - a).map(([name, calls]) => ({ name, calls }))
 
-  const topSessions = projects
-    .flatMap(p => p.sessions.map(s => ({
-      project: p.project,
-      sessionId: s.sessionId,
-      provider: inferSessionProvider(s),
-      projectKey: s.project || p.project,
-      date: s.firstTimestamp ? dateKey(s.firstTimestamp) : null,
-      cost: convertCost(s.totalCostUSD),
-      savings: convertCost(s.totalSavingsUSD),
-      calls: s.apiCalls,
-    })))
+  const topSessions = foldedSessionRows(mergeProjectSplits(projects))
+    .map(row => ({
+      project: row.summary.project,
+      sessionId: row.sessionId,
+      provider: row.provider,
+      projectKey: row.project,
+      date: row.startedAt ? dateKey(row.startedAt) : null,
+      cost: convertCost(row.cost),
+      savings: convertCost(row.savingsUSD),
+      calls: row.calls,
+    }))
     .sort((a, b) => (b.cost + b.savings) - (a.cost + a.savings))
     .slice(0, 5)
 
@@ -869,6 +891,7 @@ program
     }
 
     const period = toPeriod(opts.period)
+    await syncCursor(opts.provider)
     if (opts.format === 'json') {
       await loadPricing()
       if (daySelection || customRange) {
@@ -1043,6 +1066,7 @@ program
   .option('--no-color', 'Disable ANSI colors')
   .action(async (opts) => {
     assertProvider(opts.provider, 'overview')
+    await syncCursor(opts.provider)
     await loadPricing()
     let customRange: DateRange | null = null
     try {
@@ -1209,6 +1233,7 @@ program
     const pf = opts.provider
     const fp = (p: ProjectSummary[]) => filterProjectsByName(p, opts.project, opts.exclude)
     if (opts.format === 'menubar-json') {
+      await syncCursor(pf)
       const daysSelection = parseDaysFlag(opts.days)
       const customRange = daysSelection ? null : parseDateRangeFlags(opts.from, opts.to)
       const daySelection = parseDayFlag(opts.day)
@@ -1253,12 +1278,15 @@ program
         ...queryScope,
         days: daysSelection ? [...daysSelection.days].sort() : undefined,
         claudeSourceTopology,
+        // Changes what a --project path selects.
+        exactProject: program.opts<{ exactProject?: boolean }>().exactProject === true,
         // Mirrors parser.ts's cacheKey: pricing-affecting config must
         // invalidate this snapshot the same way it invalidates the
         // parse-level memo, or an edited alias/override/savings config keeps
         // serving costs priced under the old config until something
         // unrelated moves the corpus fingerprint.
         proxyPathsConfigHash: getProxyPathsConfigHash(),
+        projectLinksConfigHash: getProjectLinksConfigHash(),
         modelAliasesConfigHash: getModelAliasesConfigHash(),
         priceOverridesConfigHash: getPriceOverridesConfigHash(),
         localModelSavingsConfigHash: getLocalModelSavingsConfigHash(),
@@ -1372,7 +1400,17 @@ program
           // best-effort only: the local payload is still emitted below
         }
       }
-      console.log(JSON.stringify(payload))
+      // Attached last: the snapshot and the per-device payloads above must not
+      // carry this machine's sync status.
+      const { cursorSyncStatus } = await import('./cursor-sync.js')
+      const cursorSync = await cursorSyncStatus().catch(() => null)
+      const { providerIssues } = await import('./provider-issues.js')
+      const issues = providerIssues()
+      console.log(JSON.stringify({
+        ...payload,
+        ...(cursorSync ? { cursorSync } : {}),
+        ...(issues.length > 0 ? { providerIssues: issues } : {}),
+      }))
       return
     }
 
@@ -1439,6 +1477,7 @@ program
   .action(async (opts) => {
     assertFormat(opts.format, ['tui', 'json'], 'today')
     assertProvider(opts.provider, 'today')
+    await syncCursor(opts.provider)
     if (opts.format === 'json') {
       await runJsonReport('today', opts.provider, opts.project, opts.exclude)
       return
@@ -1457,6 +1496,7 @@ program
   .action(async (opts) => {
     assertFormat(opts.format, ['tui', 'json'], 'month')
     assertProvider(opts.provider, 'month')
+    await syncCursor(opts.provider)
     if (opts.format === 'json') {
       await runJsonReport('month', opts.provider, opts.project, opts.exclude)
       return
@@ -1627,11 +1667,12 @@ program
 
 program
   .command('import <tool> [file]')
-  .description('Replace local estimates with usage a tool exported itself. Supported: cursor (Export CSV at cursor.com/dashboard/usage)')
-  .option('--from <date>', 'Start of the exported range (date, ISO time or epoch ms). Default: the first event\'s UTC day')
-  .option('--to <date>', 'End of the exported range (date, ISO time or epoch ms). Default: the last event\'s UTC day')
+  .description('Replace local estimates with usage a tool exported itself. Supported: cursor (Export CSV at cursor.com/dashboard/usage, or --sync)')
+  .option('--from <date>', 'Start of the exported range (date, ISO time or epoch ms). Default: the first event\'s local day')
+  .option('--to <date>', 'End of the exported range (date, ISO time or epoch ms). Default: the last event\'s local day')
   .option('--remove', 'Delete the imported usage and go back to local estimates')
-  .action(async (tool: string, file: string | undefined, opts: { from?: string; to?: string; remove?: boolean }) => {
+  .option('--sync', 'Download the usage export from cursor.com now, with the Cursor app\'s login')
+  .action(async (tool: string, file: string | undefined, opts: { from?: string; to?: string; remove?: boolean; sync?: boolean }) => {
     if (tool !== 'cursor') {
       console.error(`\n  Unknown import "${tool}". Supported: cursor\n`)
       process.exitCode = 1
@@ -1652,17 +1693,31 @@ program
           return
         }
         await invalidate(ranges)
-        console.log('\n  Removed the Cursor import. Local Cursor estimates are back for the days it covered.\n')
+        console.log('\n  Removed the Cursor import. Local Cursor estimates are back for the days it covered.')
+        const { cursorSyncEnabled } = await import('./cursor-sync.js')
+        if (await cursorSyncEnabled()) console.log('  Automatic Cursor sync downloads it again within the hour; set "cursorSync": false in config.json or CODEBURN_CURSOR_SYNC=0 to stop it.')
+        console.log()
         return
       }
-      if (!file) throw new Error('give the path of the CSV exported at cursor.com/dashboard/usage')
-      const summary = await importCursorCsv(file, {
-        ...(opts.from ? { from: parseBoundary(opts.from, 'from') } : {}),
-        ...(opts.to ? { to: parseBoundary(opts.to, 'to') } : {}),
-      })
-      if (summary.changed) await invalidate([summary.coverage])
+      let summary
+      if (opts.sync) {
+        if (file || opts.from || opts.to) throw new Error('--sync takes no file, --from or --to')
+        const { maybeSyncCursor } = await import('./cursor-sync.js')
+        summary = await maybeSyncCursor({ force: true })
+        if (!summary) {
+          console.log('\n  Cursor sync: cursor.com holds no usage events for the sync window.\n')
+          return
+        }
+      } else {
+        if (!file) throw new Error('give the path of the CSV exported at cursor.com/dashboard/usage, or pass --sync')
+        summary = await importCursorCsv(file, {
+          ...(opts.from ? { from: parseBoundary(opts.from, 'from') } : {}),
+          ...(opts.to ? { to: parseBoundary(opts.to, 'to') } : {}),
+        })
+        if (summary.changed) await invalidate([summary.coverage])
+      }
       const pct = summary.tokens > 0 ? ` (${(summary.grokBotTokens / summary.tokens * 100).toFixed(1)}%)` : ''
-      console.log(`\n  Imported Cursor usage from ${file}`)
+      console.log(`\n  Imported Cursor usage from ${opts.sync ? 'cursor.com' : file}`)
       console.log(`  Events:   ${summary.added.toLocaleString()} added, ${summary.skipped.toLocaleString()} already imported (${summary.total.toLocaleString()} stored)`)
       console.log(`  Covers:   ${summary.coverage.start} to ${summary.coverage.end} UTC`)
       if (summary.coverage.inferred) console.log('            (range taken from the events; pass --from/--to from the export to set it)')
@@ -2030,6 +2085,82 @@ program
     await saveConfig(config)
     console.log(`\n  Proxy path saved: ${trimmed}`)
     console.log('  Sessions under it keep their full API-rate cost as the would-be figure; that amount is reported as subscription-covered (net out-of-pocket excludes it).')
+    console.log(`  Config: ${getConfigFilePath()}\n`)
+  })
+
+program
+  .command('project [action] [folder] [project]')
+  .description('Put a folder (and everything under it) in a repository project: project link <folder> <project>, project unlink <folder>, project links. <project> is the name shown in the project list (e.g. codeburn project link ~/crewroom crewroom).')
+  .option('--format <format>', 'Output format: text, json', 'text')
+  .action(async (action?: string, folder?: string, project?: string, opts?: { format?: string }) => {
+    const format = opts?.format ?? 'text'
+    assertFormat(format, ['text', 'json'], 'project')
+    const config = await readConfig()
+    const links = config.projectLinks && typeof config.projectLinks === 'object' ? { ...config.projectLinks } : {}
+    const sameFolder = (a: string, b: string) => normalizeProxyPath(projectLinkFolder(a)) === normalizeProxyPath(projectLinkFolder(b))
+
+    if (!action || action === 'links') {
+      if (format === 'json') {
+        console.log(JSON.stringify(Object.entries(links).map(([f, origin]) => ({ folder: f, project: originRepoName(origin), origin })), null, 2))
+        return
+      }
+      if (Object.keys(links).length === 0) {
+        console.log('\n  No project links.')
+        console.log('  Add one with: codeburn project link <folder> <project>\n')
+        return
+      }
+      console.log('\n  Project links:')
+      for (const [f, origin] of Object.entries(links)) console.log(`    ${f} -> ${originRepoName(origin)} (${origin})`)
+      console.log(`  Config: ${getConfigFilePath()}\n`)
+      return
+    }
+
+    if (action === 'unlink') {
+      const key = folder && Object.keys(links).find(f => sameFolder(f, folder))
+      if (!key) {
+        console.error(`\n  No project link for: ${folder ?? '(no folder given)'}\n`)
+        process.exitCode = 1
+        return
+      }
+      delete links[key]
+      config.projectLinks = Object.keys(links).length ? links : undefined
+      await saveConfig(config)
+      console.log(`\n  Removed project link: ${key}\n`)
+      return
+    }
+
+    if (action !== 'link' || !folder || !project) {
+      console.error('\n  Usage: codeburn project link <folder> <project> | project unlink <folder> | project links\n')
+      process.exitCode = 1
+      return
+    }
+    const target = projectLinkFolder(folder)
+    if (normalizeProxyPath(target) === '') {
+      console.error('\n  The filesystem root is too broad to link.\n')
+      process.exitCode = 1
+      return
+    }
+    // The names the project list shows for repository rows: "repo", or
+    // "org/repo" when two repositories share a name.
+    const wanted = project.trim().toLowerCase()
+    const origins = knownOriginKeys()
+    const matches = origins.filter(o => [o, o.split('/').slice(-2).join('/'), originRepoName(o)].includes(wanted))
+    if (matches.length !== 1) {
+      if (matches.length > 1) {
+        console.error(`\n  Several repositories are named "${project}": ${matches.map(o => o.split('/').slice(-2).join('/')).join(', ')}. Use one of those names.\n`)
+      } else {
+        const close = [...new Set(origins.map(originRepoName))].filter(n => n.includes(wanted) || wanted.includes(n)).sort().slice(0, 5)
+        console.error(`\n  No repository project named "${project}".${close.length ? ` Did you mean: ${close.join(', ')}?` : ''}`)
+        console.error('  A folder can join a project that is a git repository CodeBurn has seen.\n')
+      }
+      process.exitCode = 1
+      return
+    }
+    for (const f of Object.keys(links)) if (sameFolder(f, target)) delete links[f]
+    links[target] = matches[0]!
+    config.projectLinks = links
+    await saveConfig(config)
+    console.log(`\n  Linked ${target} -> ${originRepoName(matches[0]!)} (${matches[0]})`)
     console.log(`  Config: ${getConfigFilePath()}\n`)
   })
 
@@ -2508,7 +2639,7 @@ program
       const providers = await getAllProviders()
       const dirs: string[] = []
       for (const provider of providers) {
-        const sessions = await provider.discoverSessions()
+        const sessions = await safeDiscoverSessions(provider)
         for (const session of sessions) dirs.push(session.path)
       }
       const scope = opts.project.length > 0 || opts.exclude.length > 0 ? projectSessionIds(projects) : undefined
@@ -2860,6 +2991,7 @@ program
       process.stdout.write(renderMarkdown(renderRows, { byTask: !!opts.byTask, byAgent: !!opts.byAgent, showTotals: opts.totals !== false }) + '\n')
     } else if (fmt === 'table') {
       process.stdout.write(renderTable(renderRows, { byTask: !!opts.byTask, byAgent: !!opts.byAgent, showTotals: opts.totals !== false }) + '\n')
+      if (renderRows.some(r => isEstimatedCost(r.costUSD, r.estimatedCostUSD))) process.stdout.write(ESTIMATED_COST_LEGEND + '\n')
       if (renderRows.some(r => r.peakUSD != null || r.offPeakUSD != null)) {
         process.stdout.write('Peak / Off-peak: consumption shares of the list-rate cost — DeepSeek peak hours are Mon–Fri 01:00–04:00 and 06:00–10:00 UTC (excl. Chinese public holidays), GLM/Z.ai peak hours are Mon–Fri 14:00–18:00 Singapore time. The vendors discount off-peak usage on their own bills (DeepSeek USD at 0.5x, Z.ai plan credits at 0.5x); the split only shows where usage ran. First-party routes only (dsh, zcode).\n')
       }
@@ -2886,6 +3018,8 @@ program
   .option('--by-pr', 'Group spend by the pull requests each session referenced')
   .option('--by-work-unit', 'Group sessions into provider-recorded work units: one row per orchestration root with its delegated children folded beneath')
   .option('--contributions', 'JSON only: attach per-session contribution segments (day, category, branch, model, PR) to each row')
+  .option('--id <id>', 'With --why: the Claude Code session to explain')
+  .option('--why', 'Explain why one session cost what it did: findings, spend by prompt, steps (needs --id; Claude Code only)')
   .option('--no-pager', 'Print the complete table directly instead of opening the interactive browser')
   .option('--project <name>', 'Show only projects matching name (repeatable)', collect, [])
   .option('--exclude <name>', 'Exclude projects matching name (repeatable)', collect, [])
@@ -2894,6 +3028,16 @@ program
     assertFormat(opts.format, ['table', 'json'], 'sessions')
     assertRoute(opts.route, 'sessions')
     assertBilling(opts.billing, 'sessions')
+    if (opts.why || opts.id) {
+      if (!opts.why || !opts.id) {
+        process.stderr.write('codeburn sessions: --why and --id go together (codeburn sessions --id <id> --why).\n')
+        process.exit(1)
+      }
+      const { runSessionWhy } = await import('./session-why.js')
+      await loadPricing()
+      process.exitCode = await runSessionWhy(opts.id, opts.format)
+      return
+    }
     if (opts.byWorkUnit && (opts.route || opts.billing)) {
       process.stderr.write('codeburn sessions: --by-work-unit cannot be combined with --route or --billing.\n')
       process.exit(1)
@@ -2902,7 +3046,7 @@ program
       process.stderr.write('codeburn: --contributions requires plain --format json (no --by-pr/--by-work-unit)\n')
       process.exit(1)
     }
-    const { aggregateSessions, buildPrAttribution, renderJson, renderTable, renderWorkUnitJson, renderWorkUnitTable } = await import('./sessions-report.js')
+    const { aggregateSessions, buildPrAttribution, foldSubagentRows, renderJson, renderTable, renderWorkUnitJson, renderWorkUnitTable } = await import('./sessions-report.js')
     const wantsInteractive = opts.format === 'table' && !opts.byPr && !opts.byWorkUnit && opts.pager !== false && process.stdin.isTTY === true && process.stdout.isTTY === true
     if (wantsInteractive) setInteractiveScanUI()
     await loadPricing()
@@ -2922,10 +3066,10 @@ program
     const parsed = await parseAllSessions(range, opts.provider)
     await reportUnmatchedProjectPatterns(parsed, opts.project, opts.exclude, () => cachedProjectIdentitiesForRange(range))
     await reportExcludedGatewayCost(range, opts.provider)
-    const projects = filterProjectsByBillingRoute(
+    const projects = mergeProjectSplits(filterProjectsByBillingRoute(
       filterProjectsByName(parsed, opts.project, opts.exclude),
       { route: opts.route, billing: opts.billing },
-    )
+    ))
     if (opts.byPr) {
       const { rows: prRows, totals } = buildPrAttribution(projects)
       if (opts.format === 'json') {
@@ -2975,19 +3119,19 @@ program
       return
     }
     const rows = aggregateSessions(projects)
+    const { resolveWorkUnits } = await import('./work-units.js')
+    const { inferSessionProvider } = await import('./session-output.js')
+    const resolution = resolveWorkUnits(projects.flatMap(project => project.sessions.map(session => ({
+      sessionId: session.sessionId,
+      provider: inferSessionProvider(session),
+      lineage: session.lineage,
+    }))))
     if (opts.contributions) {
-      const { withContributions } = await import('./session-contributions.js')
-      process.stdout.write(JSON.stringify(withContributions(rows, projects), null, 2) + '\n')
+      const { foldContributionRows, withContributions } = await import('./session-contributions.js')
+      process.stdout.write(JSON.stringify(foldContributionRows(withContributions(rows, projects), resolution), null, 2) + '\n')
       return
     }
     if (opts.byWorkUnit) {
-      const { resolveWorkUnits } = await import('./work-units.js')
-      const { inferSessionProvider } = await import('./session-output.js')
-      const resolution = resolveWorkUnits(projects.flatMap(project => project.sessions.map(session => ({
-        sessionId: session.sessionId,
-        provider: inferSessionProvider(session),
-        lineage: session.lineage,
-      }))))
       if (opts.format === 'json') {
         process.stdout.write(renderWorkUnitJson(rows, resolution) + '\n')
         return
@@ -2995,17 +3139,18 @@ program
       process.stdout.write(renderWorkUnitTable(rows, resolution) + '\n')
       return
     }
+    const grouped = foldSubagentRows(rows, resolution)
     if (opts.format === 'json') {
-      process.stdout.write(renderJson(rows) + '\n')
+      process.stdout.write(renderJson(grouped) + '\n')
       return
     }
 
     if (wantsInteractive) {
       const { runSessionsTui } = await import('./sessions-tui.js')
-      await runSessionsTui(rows, { period: opts.from || opts.to ? formatDateRangeLabel(opts.from, opts.to) : opts.period, provider: opts.provider })
+      await runSessionsTui(grouped, { period: opts.from || opts.to ? formatDateRangeLabel(opts.from, opts.to) : opts.period, provider: opts.provider })
       return
     }
-    process.stdout.write(renderTable(rows) + '\n')
+    process.stdout.write(renderTable(grouped) + '\n')
   })
 
 program
@@ -3201,6 +3346,12 @@ if (process.argv[2] === 'serve') {
   // this child running as an orphan for as long as the machine is up.
   hardExit(0)
 } else {
+  // Beat for the app watchdogs from the first moment, not just inside a parse:
+  // a one-shot is also silent while it waits on another process's cold
+  // hydration lock or aggregates after the parse. Never stopped; the timer is
+  // unref'd and the process exits when the command does. Serve beats per
+  // request instead, so it must not take this.
+  startProgressKeepalive()
   const program = buildProgram()
   await registerLoadedPluginCommands(program)
   program.parse()

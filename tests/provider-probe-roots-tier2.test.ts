@@ -5,6 +5,7 @@ import { homedir } from 'os'
 import { createClineProvider, getClineDataPath } from '../src/providers/cline.js'
 import { createKiloCodeProvider } from '../src/providers/kilo-code.js'
 import { createAmpProvider } from '../src/providers/amp.js'
+import { createCommandCodeProvider } from '../src/providers/command-code.js'
 import { createGrokProvider } from '../src/providers/grok.js'
 import { createPiProvider, createOmpProvider } from '../src/providers/pi.js'
 import { createKimiProvider } from '../src/providers/kimi.js'
@@ -78,9 +79,11 @@ describe('probeRoots mirrors discovery resolution (Tier 2, batch 1)', () => {
   it('grok reports exactly its resolved sessions dir', async () => {
     expect(await createGrokProvider('/tmp/grok-a').probeRoots!()).toEqual([
       { path: '/tmp/grok-a', label: 'sessions' },
+      { path: join('/tmp', 'logs', 'unified.jsonl'), label: 'unified log' },
     ])
     expect(await createGrokProvider().probeRoots!()).toEqual([
       { path: join(homedir(), '.grok', 'sessions'), label: 'sessions' },
+      { path: join(homedir(), '.grok', 'logs', 'unified.jsonl'), label: 'unified log' },
     ])
   })
 
@@ -90,6 +93,15 @@ describe('probeRoots mirrors discovery resolution (Tier 2, batch 1)', () => {
     ])
     expect(await createAmpProvider().probeRoots!()).toEqual([
       { path: join(homedir(), '.local', 'share', 'amp', 'threads'), label: 'threads' },
+    ])
+  })
+
+  it('command-code reports exactly its projects dir', async () => {
+    expect(await createCommandCodeProvider('/tmp/cc-a').probeRoots!()).toEqual([
+      { path: '/tmp/cc-a', label: 'projects' },
+    ])
+    expect(await createCommandCodeProvider().probeRoots!()).toEqual([
+      { path: join(homedir(), '.commandcode', 'projects'), label: 'projects' },
     ])
   })
 

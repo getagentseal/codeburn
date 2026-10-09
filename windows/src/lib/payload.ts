@@ -49,6 +49,7 @@ export type MenubarPayload = {
       hasUsage?: boolean
       sessions?: number
       sessionCountBasis?: 'identity' | 'partial'
+      estimatedCostUSD?: number
     }>
   }
   optimize: {
@@ -63,6 +64,17 @@ export type MenubarPayload = {
   /// Claude config directories the CLI found. Emitted only when there is more than one,
   /// which is exactly when the picker is worth showing.
   claudeConfigs?: { selectedId?: string | null; options: ClaudeConfigOption[] }
+  /// Cursor's usage sync from cursor.com. Absent on older CLIs and whenever Cursor is not
+  /// on this machine. `error` is one of a few fixed messages, never server text.
+  cursorSync?: CursorSyncStatus
+}
+
+export type CursorSyncStatus = {
+  enabled: boolean
+  state: 'ok' | 'syncing-never' | 'error' | 'off' | 'no-login'
+  lastSuccessAt: string | null
+  errorCode?: 'login' | 'network' | 'export'
+  error?: string
 }
 
 export type ClaudeConfigOption = {
@@ -106,6 +118,8 @@ export type Model = {
   /// What this model would have cost at its paid baseline. Zero for every paid model.
   savingsUSD?: number
   calls: number
+  /// Portion of `cost` priced from estimates. Absent on older CLI payloads.
+  estimatedCostUSD?: number
 }
 
 export type LocalModelSavings = {

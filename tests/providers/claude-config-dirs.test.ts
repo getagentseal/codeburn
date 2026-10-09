@@ -326,7 +326,7 @@ describe('claude provider — Desktop sessions dir', () => {
     })
   })
 
-  it('returns one platform root on darwin and linux without including MSIX packages', async () => {
+  it('returns both macOS Desktop roots and one Linux root without including MSIX packages', async () => {
     const localAppData = join(tmpRoot, 'local-profile')
     await makeMsixSessionsDir(localAppData, 'Claude_crossplatform3b7j')
     process.env['LOCALAPPDATA'] = localAppData
@@ -334,6 +334,7 @@ describe('claude provider — Desktop sessions dir', () => {
     withPlatform('darwin', () => {
       expect(getDesktopSessionsDirs()).toEqual([
         resolve(join(homedir(), 'Library', 'Application Support', 'Claude', 'local-agent-mode-sessions')),
+        resolve(join(homedir(), 'Library', 'Application Support', 'Claude-3p', 'local-agent-mode-sessions')),
       ])
     })
     withPlatform('linux', () => {

@@ -1873,9 +1873,47 @@ private struct GenericProviderSettingsTab: View {
         Form {
             GenericProviderConnectionSections(provider: provider)
                 .id(provider.id)
+            if provider.id == "cursor" {
+                CursorSyncSettingsSection()
+            }
         }
         .formStyle(.grouped)
         .padding()
+    }
+}
+
+/// The CLI's `cursorSync` config switch, with the sync's last outcome under it.
+private struct CursorSyncSettingsSection: View {
+    @Environment(AppStore.self) private var store
+    @State private var enabled = CLICursorSyncConfig.load()
+    @State private var saveError: String?
+
+    private var envOff: Bool { CursorSyncStatus.envOff(configEnabled: enabled, status: store.payload.cursorSync) }
+
+    var body: some View {
+        Section {
+            Toggle(L("Sync Cursor usage from cursor.com"), isOn: Binding(
+                get: { enabled && !envOff },
+                set: { next in
+                    do {
+                        try CLICursorSyncConfig.persist(enabled: next)
+                        enabled = next
+                        saveError = nil
+                    } catch {
+                        NSLog("CodeBurn: failed to persist cursorSync config: \(error)")
+                        saveError = L("Couldn't save the setting: config.json is invalid or locked")
+                    }
+                }
+            ))
+            .disabled(envOff)
+        } footer: {
+            Text(footer)
+                .font(.system(size: 11))
+        }
+    }
+
+    private var footer: String {
+        saveError ?? CursorSyncStatus.settingsFooter(configEnabled: enabled, status: store.payload.cursorSync)
     }
 }
 

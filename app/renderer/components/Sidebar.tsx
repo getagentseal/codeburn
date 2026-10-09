@@ -1,8 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react'
 
-import { version } from '../../package.json'
 import { t } from '../i18n'
-import { isModifierChord, shortcutLabel } from '../lib/platform'
+import { displayVersion, isIdeHost, isModifierChord, shortcutLabel } from '../lib/platform'
 import { AboutModal } from './AboutModal'
 import { Icon } from './icons'
 
@@ -83,7 +82,7 @@ export function Sidebar({
             className="sb-collapse"
             aria-label={collapsed ? t('shell.sidebar.expand') : t('shell.sidebar.collapse')}
             aria-expanded={!collapsed}
-            data-tip={`${collapsed ? t('shell.sidebar.expand') : t('shell.sidebar.collapse')} ${shortcutLabel('B')}`}
+            data-tip={`${collapsed ? t('shell.sidebar.expand') : t('shell.sidebar.collapse')}${chord('B')}`}
             onClick={() => setCollapsed(value => !value)}
           >
             <Icon name={collapsed ? 'panel-left-open' : 'panel-left-close'} />
@@ -98,8 +97,8 @@ export function Sidebar({
                 className={item.id === active ? 'ni on' : 'ni'}
                 role="button"
                 aria-current={item.id === active ? 'page' : undefined}
-                data-tip={`${item.label} ${shortcutLabel(item.key)}`}
-                title={`${item.label} ${shortcutLabel(item.key)}`}
+                data-tip={`${item.label}${chord(item.key)}`}
+                title={`${item.label}${chord(item.key)}`}
                 tabIndex={0}
                 onClick={() => onNavigate(item.id)}
                 onKeyDown={e => {
@@ -120,13 +119,18 @@ export function Sidebar({
           <a className="about" href="#about" data-tip={t('shell.sidebar.about')} onClick={event => { event.preventDefault(); setAboutOpens(opens => opens + 1) }}>
             <Icon name="info" />
             <span className="ni-label">{t('shell.sidebar.about')}</span>
-            <span className="ver">v{version}</span>
+            <span className="ver">v{displayVersion()}</span>
           </a>
         </div>
       </nav>
       {aboutOpens > 0 ? <AboutModal openKey={String(aboutOpens)} onClose={() => setAboutOpens(0)} /> : null}
     </>
   )
+}
+
+/** The shortcut suffix for a tooltip; none in the IDE, which keeps those chords. */
+function chord(key: string): string {
+  return isIdeHost() ? '' : ` ${shortcutLabel(key)}`
 }
 
 const COLLAPSE_KEY = 'codeburn.sidebarCollapsed'

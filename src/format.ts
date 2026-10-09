@@ -11,9 +11,21 @@ export { formatCost }
 /// Prefix a formatted cost with the estimated marker (`~`) when the figure is
 /// priced from estimated tokens rather than metered. Keeps the marker identical
 /// across the report, overview, and MCP surfaces so a legend line can explain it
-/// once. `isEstimated` is typically `entry.estimatedCostUSD > 0`.
+/// once. `isEstimated` is typically `isEstimatedCost(entry.cost, entry.estimatedCostUSD)`.
 export function markEstimated(costStr: string, isEstimated: boolean): string {
   return isEstimated ? `~${costStr}` : costStr
+}
+
+export const ESTIMATED_COST_LEGEND = '~ estimated cost (priced from estimated tokens)'
+
+/// A row carries the estimated marker once its estimated portion is at least 1%
+/// of its cost: a handful of unmetered calls inside a metered row (a Codex turn
+/// with no token record) must not mark the whole row as a guess. `shown` is the
+/// amount as the surface prints it; a figure that reads as zero ("$0.00") gets
+/// no marker, since there is nothing visible to qualify.
+export function isEstimatedCost(costUSD: number, estimatedCostUSD: number | undefined, shown: string = formatCost(costUSD)): boolean {
+  const estimated = estimatedCostUSD ?? 0
+  return estimated > 0 && estimated >= costUSD * 0.01 && /[1-9]/.test(shown)
 }
 
 /// Shared wording for the durable-cache carry-forward footnote: some of a

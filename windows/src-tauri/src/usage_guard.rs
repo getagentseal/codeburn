@@ -303,6 +303,11 @@ fn roots() -> Vec<Root> {
             .unwrap_or_else(|| home.join(".openclaude"))
             .join("projects"),
     ));
+    roots.push(dir(
+        env_path("CODEBURN_COMMANDCODE_DIR")
+            .unwrap_or_else(|| home.join(".commandcode"))
+            .join("projects"),
+    ));
 
     roots.push(leaf(
         env_path("CODEWHALE_HOME").unwrap_or_else(|| home.join(".codewhale")),

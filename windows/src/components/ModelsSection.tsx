@@ -1,6 +1,6 @@
 import type { Model } from '../lib/payload'
 import type { CurrencyState } from '../lib/currency'
-import { formatCompactCurrency, formatTokens } from '../lib/currency'
+import { ESTIMATED_COST_LEGEND, formatCompactCurrency, formatTokens, isEstimatedCost } from '../lib/currency'
 import { CollapsibleSection } from './CollapsibleSection'
 import { FixedBar, COL_COST, COL_COUNT } from './ActivitySection'
 
@@ -39,7 +39,9 @@ export function ModelsSection({ models, inputTokens, outputTokens, cacheHitPerce
               counterfactual saving is text in its own column and is never added in. */}
           <FixedBar fraction={m.cost / maxCost} />
           <span className="row-name">{m.name}</span>
-          <span className="row-cost" style={{ minWidth: COL_COST }}>{formatCompactCurrency(m.cost, currency)}</span>
+          <span className="row-cost" style={{ minWidth: COL_COST }} title={isEstimatedCost(m.cost, m.estimatedCostUSD, formatCompactCurrency(m.cost, currency)) ? ESTIMATED_COST_LEGEND : undefined}>
+            {isEstimatedCost(m.cost, m.estimatedCostUSD, formatCompactCurrency(m.cost, currency)) ? '~' : ''}{formatCompactCurrency(m.cost, currency)}
+          </span>
           {showSavings && (
             <span
               className={`row-saved ${(m.savingsUSD ?? 0) > 0 ? 'row-saved-on' : ''}`}
@@ -59,6 +61,11 @@ export function ModelsSection({ models, inputTokens, outputTokens, cacheHitPerce
           <span className="tokens-value">{formatTokens(outputTokens)} out</span>
           <span className="tokens-sep">·</span>
           <span className="tokens-value">{Math.round(cacheHitPercent)}% cache hit</span>
+        </div>
+      )}
+      {models.some(m => isEstimatedCost(m.cost, m.estimatedCostUSD, formatCompactCurrency(m.cost, currency))) && (
+        <div className="tokens-line">
+          <span className="tokens-value">{ESTIMATED_COST_LEGEND}</span>
         </div>
       )}
       {/* The $0-cost rows below the table's floor never render as rows; without

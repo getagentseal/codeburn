@@ -1,11 +1,17 @@
-import type { CombinedUsage, MenubarPayload } from '../lib/payload'
+import type { CombinedUsage, CursorSyncStatus, MenubarPayload } from '../lib/payload'
 import type { CurrencyState } from '../lib/currency'
 import { formatCurrency, formatTokens } from '../lib/currency'
-import { prettyDate, todayKey } from '../lib/dates'
+import { prettyDate, relativePast, todayKey } from '../lib/dates'
 import { SectionCaption } from './CollapsibleSection'
 import { ArrowDownRight, ArrowUpRight, LeafIcon, MonitorIcon, WarningIcon } from './Icons'
 import type { DisplayMetric } from '../lib/appSettings'
 import { formatCombinedSessionCount, formatSessionCount, sessionCountIsExact, COMBINED_SESSION_COUNT_HELP, SESSION_COUNT_HELP } from '../lib/session-count-label'
+
+const CURSOR_SYNC_ERRORS: Record<string, string> = {
+  login: 'Cursor login expired, open Cursor to sign in again',
+  network: "Couldn't reach cursor.com, will retry",
+  export: "Couldn't read the usage export from cursor.com, will retry",
+}
 
 type Props = {
   payload: MenubarPayload | null
@@ -19,9 +25,11 @@ type Props = {
   metric: DisplayMetric
   /// True when the reader asked for every paired device, not just this one.
   combinedScope: boolean
+  /// Passed only on a Cursor tab.
+  cursorSync?: CursorSyncStatus
 }
 
-export function HeroSection({ payload, currency, periodLabel, isToday, dailyBudget, metric, combinedScope }: Props) {
+export function HeroSection({ payload, currency, periodLabel, isToday, dailyBudget, metric, combinedScope, cursorSync }: Props) {
   const todayLabel = prettyDate(todayKey())
   // Pulling the peers is best effort in the CLI, so combined scope can come back with local
   // totals and no `combined` block. The hero then reads as a plain local view, plus a note.
@@ -107,6 +115,18 @@ export function HeroSection({ payload, currency, periodLabel, isToday, dailyBudg
           <LeafIcon size={10} />
           <span>Saved {formatCurrency(savings, currency)} with local models</span>
         </div>
+      )}
+      {cursorSync && cursorSync.state !== 'off' && (
+        cursorSync.errorCode ? (
+          <div className="hero-note hero-note-caution">
+            <WarningIcon size={10} />
+            <span>{CURSOR_SYNC_ERRORS[cursorSync.errorCode] ?? CURSOR_SYNC_ERRORS.export}</span>
+          </div>
+        ) : (
+          <div className="hero-note hero-note-muted">
+            <span>{cursorSync.lastSuccessAt ? `Synced from cursor.com ${relativePast(new Date(cursorSync.lastSuccessAt))}` : 'Not synced from cursor.com yet'}</span>
+          </div>
+        )
       )}
     </section>
   )

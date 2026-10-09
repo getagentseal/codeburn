@@ -245,7 +245,8 @@ electron-builder writes to `app/release/` (gitignored, like `dist/`):
 - `CodeBurn-<version>-arm64.dmg`, `CodeBurn-<version>.dmg` — installer images
 - `CodeBurn-<version>-arm64-mac.zip`, `CodeBurn-<version>-mac.zip` — zipped `.app` bundles
 - `release/mac-arm64/CodeBurn.app`, `release/mac/CodeBurn.app` — the raw unpacked bundles (arm64 and x64 respectively)
-- `.blockmap` files alongside each zip/dmg (used by electron-builder's differential-update mechanism; unused since this app has no auto-updater yet)
+- `.blockmap` files alongside each zip/dmg (electron-updater uses the zip blockmaps for differential downloads)
+- `latest-mac.yml` — the update metadata for both zips, written because both arches build in one run (see "Auto-update" below)
 
 Both `dmg` and `zip` targets are built for both `arm64` and `x64` — four
 artifacts total, not a universal binary. This keeps each download roughly
@@ -265,10 +266,9 @@ separate `electron-builder.yml`):
   convention.
 - `productName: "CodeBurn"`.
 - `files`: only `dist/electron/**/*`, `dist/renderer/**/*`, and `package.json`.
-  The Electron main process has no npm runtime dependencies (only Node/Electron
-  builtins — see `app/electron/cli.ts` and `app/electron/quota/*.ts`), and the
-  renderer is a single Vite bundle, so the app's own `node_modules` does not
-  need to ship at all. (The *bundled CLI* has its own `node_modules`, added to
+  electron-builder still adds the production `dependencies` to `app.asar`; the
+  main process needs only `electron-updater` from them (the renderer is a single
+  Vite bundle). (The *bundled CLI* has its own `node_modules`, added to
   `Resources/cli/` by the `afterPack` hook — see "The bundled CLI" above.)
 - `afterPack: "./scripts/after-pack.cjs"` — copies the staged CLI bundle
   (`app/build/cli`) into `Contents/Resources/cli` after packaging and before
@@ -278,7 +278,7 @@ separate `electron-builder.yml`):
   with a broken/absent seal (`codesign --verify --deep --strict` fails with
   `code has no resources but signature indicates they must be present`, and
   Apple Silicon refuses to run it at all). `"-"` is the same ad-hoc identity
-  `mac/Scripts/package-app.sh` falls back to for the menubar app's local/CI
+  `mac/Scripts/package-app.sh` falls back to for the menubar app's local
   builds. This is the local/dev default; signed release builds pass the real
   Developer ID identity as a CLI override instead of changing this file (see
   "macOS code signing and notarization" below) — worth baking into `build.mac`
@@ -314,8 +314,9 @@ AppImage tooling on first run.
 `electron-builder --win` produces a single installer in `app/release/`:
 
 - **`CodeBurn-Setup-0.9.15.exe`** — the NSIS installer (the version number
-  tracks `package.json`). A `.exe.blockmap` is written alongside it
-  (differential-update metadata, unused — no auto-updater yet).
+  tracks `package.json`). A `.exe.blockmap` and `latest.yml` are written
+  alongside it; they stay unused while Windows auto-update is off (see
+  "Auto-update" below).
 
 Config (`build.win` + `build.nsis`):
 
@@ -374,11 +375,10 @@ artifact is affected: `package:win:arm64` is a local build today.
 **Distribution policy.** The Microsoft Store build (Store ID `9P0R4ZL5XMB8`) is
 the recommended Windows install. This NSIS setup `.exe` and the tray `.msi`
 under the `windows-v*` releases are a developer preview: unsigned, SmartScreen
-warns on first run, and neither route updates itself. The tray app still
-reports that a newer version exists and points at the GitHub release; taking it
-means re-running `codeburn menubar --force` or downloading the build by hand.
-One-click updating comes back once an Authenticode certificate signs the
-artifacts.
+warns on first run. The desktop installer does not update itself yet (see
+"Auto-update" below). The tray app installs a newer `.msi` in one click once
+its updater key is set (`RELEASING.md`); until then it points at the GitHub
+release and `codeburn menubar --force`.
 
 ### Microsoft Store (`package:store`)
 
@@ -458,7 +458,8 @@ Before publishing the GitHub Release, the release owner must download that
 workflow artifact and manually upload both Windows files along with the four
 macOS `.dmg`/`.zip` files, `CodeBurn-<version>.AppImage`,
 `codeburn-desktop_<version>_amd64.deb`, and
-`codeburn-desktop-<version>.x86_64.rpm`. Confirm the live release contains
+`codeburn-desktop-<version>.x86_64.rpm`, plus `latest-mac.yml` (from the
+`CodeBurn-macOS` artifact) and `latest-linux.yml` (from the Linux build). Confirm the live release contains
 every required platform asset before announcing it. The
 website's download links **pin that tag** in their URLs, so a release with a
 missing installer is broken even when another Windows distribution channel is
@@ -468,6 +469,24 @@ available. The Windows installer uses an explicit `nsis.artifactName` of
 Publishing the Release triggers a read-only live-asset check. If the files are
 uploaded afterward, rerun the workflow manually with `release_tag` set to the
 existing `desktop-v<version>` tag and require the verification job to pass.
+
+## Auto-update
+
+The app uses electron-updater with the `generic` provider pointed at the fixed
+`update-feeds` release (`build.publish` in `package.json`), not GitHub's
+`/releases/latest`, which the CLI, menubar, tray and desktop lines share. The
+`publish-update-feeds` job in `build-windows-installer.yml` rewrites the file
+names in `latest*.yml` to absolute `desktop-v<version>` URLs and uploads them
+there, after the live-asset check passes. Release order is in `RELEASING.md`.
+
+Who updates itself (`app/electron/auto-update.ts`):
+
+- macOS, signed release builds: Update, then Restart to update. Ad-hoc local
+  builds fail the Squirrel signature check and fall back to the download link.
+- Linux AppImage only (`APPIMAGE` is set). deb, rpm, snap and Flathub keep the
+  link banner or their store.
+- Windows NSIS: off behind `WINDOWS_AUTO_UPDATE` until a trust model is chosen
+  (`RELEASING.md`, "Windows NSIS auto-update"). The Store build never checks.
 
 ## Verifying a build
 
@@ -539,6 +558,16 @@ renderer fails to start:
   ```
   (repeat for the `x64` dmg).
 
+### CI build
+
+`.github/workflows/build-desktop-mac.yml` runs on every `desktop-v*` tag: it
+builds both arches in one run, signs with the Developer ID from
+`MACOS_CERT_P12_BASE64`, notarizes the apps and the dmgs with the App Store
+Connect API key, verifies them, and uploads a `CodeBurn-macOS` artifact
+(dmgs, zips, blockmaps, `latest-mac.yml`) for the release owner to attach.
+`build.mac` carries the entitlements; the workflow passes the identity and
+hardened runtime as overrides.
+
 ### Release builds vs. the committed config
 
 `app/package.json`'s committed `build.mac` still declares `identity: "-"`
@@ -561,11 +590,11 @@ settings into `build.mac` directly (falling back to ad-hoc only when no
 Developer ID identity is present in the keychain) would remove the risk of a
 release accidentally shipping unsigned.
 
-The menubar app (`mac/Scripts/package-app.sh`) picks up the same identity
-through its existing `CODESIGN_IDENTITY` environment variable — set
-`CODESIGN_IDENTITY="Resham Joshi (XRVP7P7F9M)"` before running it — and then
-needs the same notarize-and-staple pass as the dmg above, run against the
-built `.app` before it is zipped.
+The menubar app is signed, notarized and stapled in CI by
+`.github/workflows/release-menubar.yml` (see RELEASING.md for the secrets).
+For a local signed build, `mac/Scripts/package-app.sh` takes the identity in
+`CODESIGN_IDENTITY` and notarizes and staples the `.app` before zipping when
+`NOTARY_KEY_PATH`, `NOTARY_KEY_ID` and `NOTARY_ISSUER_ID` are also set.
 
 ### Ad-hoc is still the fallback
 

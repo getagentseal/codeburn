@@ -11,6 +11,7 @@ import type { ParseReuseValidation } from './parser.js'
 import { SERVE_HYDRATION_ENV } from './usage-aggregator.js'
 import { suppressProjectFilterWarnings } from './project-filter-warnings.js'
 import { isPathBlocked } from './sqlite.js'
+import { codexSessionIndexFingerprint } from './codex-session-index.js'
 
 // ---------------------------------------------------------------------------
 // codeburn serve --stdio: a resident query server for the desktop app.
@@ -435,13 +436,15 @@ async function runCaptured(
 /// memo hot, while any real change invalidates immediately. A missing config
 /// is a stable state; every other read failure fails closed (no memo reuse).
 async function getConfigFingerprint(): Promise<string | null> {
+  const names = await codexSessionIndexFingerprint()
+  if (names === null) return null
   const path = getConfigFilePath()
   try {
     const content = await readFile(path)
     const digest = createHash('sha256').update(content).digest('hex')
-    return `${path}\u0000sha256:${digest}`
+    return `${path}\u0000sha256:${digest}\u0000codex-names:${names}`
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return `${path}\u0000missing`
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return `${path}\u0000missing\u0000codex-names:${names}`
     return null
   }
 }

@@ -18,10 +18,18 @@ struct CapacityDockConnectionActionTests {
 
     @Test("API-only providers route the dock action to credential entry")
     func apiCredentialActionTitle() {
-        let provider = CapacityDockProvider(rawValue: "clinepass")!
+        let provider = CapacityDockProvider(rawValue: "openrouter")!
         #expect(CapacityDockConnectionAction.reconnect.title(for: provider) == "Add API Key")
         #expect(ProviderConnectionGuidance.dockInstruction(for: provider) ==
             "Add an API key or token in Provider Settings.")
+    }
+
+    @Test("ClinePass reconnects through the Cline sign-in, with a key as the alternative")
+    func clinePassActionTitle() {
+        let provider = CapacityDockProvider(rawValue: "clinepass")!
+        #expect(CapacityDockConnectionAction.reconnect.title(for: provider) == CapacityDockConnectionAction.reconnect.title)
+        #expect(ProviderConnectionGuidance.dockInstruction(for: provider) ==
+            "Sign in with Cline, or enter a ClinePass API key below, then click Retry.")
     }
 
     @Test("active and automatically recovering states do not offer a connection action")

@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { writeFileAtomic } from './tray-settings'
+import { compareSemver } from './updates'
 
 // Anonymous, consent-gated product telemetry for the desktop app ONLY.
 // Runs entirely in the Electron main process. Like cli.ts, this module must
@@ -62,6 +63,35 @@ export function memBucket(mb: number): string {
   return '3k+'
 }
 
+/// How long a failed CLI read ran before it failed.
+/// Buckets: `<1s`, `1-5s`, `5-15s`, `15-30s`, `30-120s`, `120s+`.
+export function durationBucket(ms: number): string {
+  if (!Number.isFinite(ms) || ms < 1000) return '<1s'
+  if (ms < 5000) return '1-5s'
+  if (ms < 15_000) return '5-15s'
+  if (ms < 30_000) return '15-30s'
+  if (ms < 120_000) return '30-120s'
+  return '120s+'
+}
+
+const CLI_ERROR_REASONS: Array<[string, RegExp]> = [
+  ['oom', /heap out of memory|ENOMEM|allocation failed/i],
+  ['lock-busy', /SQLITE_BUSY|SQLITE_LOCKED|database (?:is |table is )?locked|refresh lock|EBUSY/i],
+  ['eacces', /EACCES|EPERM|permission denied|operation not permitted/i],
+  ['enoent', /ENOENT|no such file/i],
+  ['network', /ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|fetch failed|socket hang up/i],
+  ['parse', /SyntaxError|Unexpected token|Unexpected end of JSON|not valid JSON/i],
+  ['shutdown', /shutting down|cancelled/i],
+  ['serve', /serve (?:exited|not running|write failed|request failed)/i],
+]
+
+/// Sorts a failed CLI read's message (stderr, which can carry a path) into a
+/// small enum here, so only the label leaves the machine.
+export function cliErrorReason(message: string): string {
+  for (const [reason, pattern] of CLI_ERROR_REASONS) if (pattern.test(message)) return reason
+  return 'other'
+}
+
 export const EVENT_NAMES = new Set([
   'app_open',
   'app_close',
@@ -76,6 +106,9 @@ export const EVENT_NAMES = new Set([
   'export',
   'compare_view',
   'settings_change',
+  // Enums only: a provider id, a stage and an error kind; a version pair and an outcome.
+  'provider_read_fail',
+  'update_result',
 ])
 
 /// A few seconds of wall time is too short a base for a percent: one burst of startup work
@@ -117,6 +150,8 @@ type PersistedState = {
   lastSnapshotDay?: string
   cliErrorDay?: string
   cliErrorCounts?: Record<string, number>
+  /** Written just before an update installs, settled on the next launch. */
+  pendingUpdate?: { from: string; to: string }
 }
 
 /** The slice of Electron's ProcessMetric this module reads. Injected, because
@@ -250,6 +285,9 @@ export class Telemetry {
           onboardedAt: typeof raw.onboardedAt === 'string' ? raw.onboardedAt : undefined,
           lastSnapshotDay: typeof raw.lastSnapshotDay === 'string' ? raw.lastSnapshotDay : undefined,
           ...loadCliErrorBudget(raw.cliErrorDay, raw.cliErrorCounts),
+          ...(typeof raw.pendingUpdate?.from === 'string' && typeof raw.pendingUpdate.to === 'string'
+            ? { pendingUpdate: { from: raw.pendingUpdate.from, to: raw.pendingUpdate.to } }
+            : {}),
         }
       }
     } catch { /* first run or unreadable — start fresh */ }
@@ -319,19 +357,43 @@ export class Telemetry {
       this.queue.shift()
     }
     const sanitizedProps = sanitizeProps(props)
-    if (name === 'cli_error') {
+    const budgetKey = name === 'cli_error' ? String(sanitizedProps.kind ?? '')
+      : name === 'provider_read_fail'
+        ? `provider:${String(sanitizedProps.provider ?? '')}:${String(sanitizedProps.stage ?? '')}:${String(sanitizedProps.kind ?? '')}`
+      : name === 'update_result' ? `update:${String(sanitizedProps.outcome ?? '')}`
+      : null
+    if (budgetKey !== null) {
       if (this.state.cliErrorDay !== day) {
         this.state.cliErrorDay = day
         this.state.cliErrorCounts = Object.create(null) as Record<string, number>
       }
       const counts = this.state.cliErrorCounts ?? (this.state.cliErrorCounts = Object.create(null) as Record<string, number>)
-      const kind = typeof sanitizedProps.kind === 'string' ? sanitizedProps.kind : ''
-      const count = Object.prototype.hasOwnProperty.call(counts, kind) ? counts[kind]! : 0
-      if (count >= MAX_CLI_ERRORS_PER_KIND_PER_DAY) return
-      counts[kind] = count + 1
+      const cap = name === 'provider_read_fail' ? 1 : MAX_CLI_ERRORS_PER_KIND_PER_DAY
+      const count = Object.prototype.hasOwnProperty.call(counts, budgetKey) ? counts[budgetKey]! : 0
+      if (count >= cap) return
+      counts[budgetKey] = count + 1
       this.save()
     }
     this.queue.push({ name, day, props: sanitizedProps })
+  }
+
+  /** Remembers the update about to install, so the next launch can tell whether it landed. */
+  noteUpdateInstall(from: string, to: string): void {
+    this.state.pendingUpdate = { from, to }
+    this.save()
+  }
+
+  /** On launch: a newer version running means the install landed, and `to` is what runs;
+   *  the old one still running means it did not. An older one is a manual downgrade: the
+   *  marker goes and nothing is sent. */
+  settleUpdate(currentVersion: string): void {
+    const pending = this.state.pendingUpdate
+    if (!pending) return
+    delete this.state.pendingUpdate
+    this.save()
+    const order = compareSemver(currentVersion, pending.from)
+    if (order > 0) this.track('update_result', { from: pending.from, to: currentVersion, outcome: 'ok' })
+    else if (order === 0) this.track('update_result', { from: pending.from, to: pending.to, outcome: 'install_fail' })
   }
 
   /** One cheap read of how heavy this app run is. Called on the existing flush

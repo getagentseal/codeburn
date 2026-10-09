@@ -2,7 +2,7 @@ import { readdir, stat } from 'fs/promises'
 import { basename, dirname, join } from 'path'
 import { homedir } from 'os'
 
-import { FS_SCAN_CONCURRENCY, mapWithConcurrency, readSessionFile } from '../fs-utils.js'
+import { FS_SCAN_CONCURRENCY, mapWithConcurrency, readSessionFile, readSessionLines } from '../fs-utils.js'
 import { calculateCost, getModelCosts, getShortModelName } from '../models.js'
 import { extractBashCommands } from '../bash-utils.js'
 import type { ProbeRoot, Provider, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
@@ -21,6 +21,13 @@ import type { ProbeRoot, Provider, SessionSource, SessionParser, ParsedProviderC
 // `signals.json.contextTokensUsed` and the running `_meta.totalTokens` curve; for
 // those we retain the old compaction-aware estimate and mark its cost estimated.
 // `costUsdTicks` is deliberately ignored because its scale is not documented.
+//
+// <grok-home>/logs/unified.jsonl outlives the session dirs and logs every
+// inference as `shell.turn.inference_done` (prompt_tokens includes
+// cached_prompt_tokens, completion_tokens includes reasoning_tokens). A session
+// with records there is read from the log, one call per request so the
+// long-context tier applies per request; its session dir is then skipped. Session
+// dirs only count for sessions the log no longer holds (rotated or truncated).
 
 const toolNameMap: Record<string, string> = {
   bash: 'Bash',
@@ -370,13 +377,16 @@ function hasPositiveTotals(totals: GrokTokenTotals): boolean {
     || totals.reasoning > 0
 }
 
-function createParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
+function createParser(source: SessionSource, seenKeys: Set<string>, unifiedLogPath: string): SessionParser {
   return {
     async *parse(): AsyncGenerator<ParsedProviderCall> {
       const dir = dirname(source.path)
       const summary = await readJson<GrokSummary>(join(dir, 'summary.json'))
+      if (!summary) return
+      const logged = await loggedSessionIds(unifiedLogPath)
+      if (logged.has(summary.info?.id ?? basename(dir)) || logged.has(basename(dir))) return
       const updates = await readSessionFile(source.path)
-      if (!summary || updates === null) return
+      if (updates === null) return
 
       const signals = await readJson<GrokSignals>(join(dir, 'signals.json'))
       const existingModel =
@@ -448,6 +458,151 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
   }
 }
 
+type UnifiedLogLine = {
+  msg?: unknown
+  sid?: unknown
+  pid?: unknown
+  ts?: unknown
+  ctx?: Record<string, unknown>
+}
+
+function inferenceUsage(record: UnifiedLogLine): { sid: string; ts: string; prompt: number; cached: number; completion: number; reasoning: number } | null {
+  const { sid, ts, ctx } = record
+  if (record.msg !== 'shell.turn.inference_done' || typeof sid !== 'string' || !sid || typeof ts !== 'string' || !isRecord(ctx)) return null
+  const prompt = finiteNonNegative(ctx['prompt_tokens'])
+  const completion = finiteNonNegative(ctx['completion_tokens'])
+  if (prompt === undefined || completion === undefined || (prompt === 0 && completion === 0)) return null
+  return {
+    sid,
+    ts,
+    prompt,
+    cached: Math.min(finiteNonNegative(ctx['cached_prompt_tokens']) ?? 0, prompt),
+    completion,
+    reasoning: Math.min(finiteNonNegative(ctx['reasoning_tokens']) ?? 0, completion),
+  }
+}
+
+let loggedSessions: { key: string; sids: Promise<Set<string>> } | undefined
+
+async function readLoggedSessionIds(path: string): Promise<Set<string>> {
+  const sids = new Set<string>()
+  for await (const line of readSessionLines(path)) {
+    if (!line.includes('shell.turn.inference_done')) continue
+    try {
+      const usage = inferenceUsage(JSON.parse(line) as UnifiedLogLine)
+      if (usage) sids.add(usage.sid)
+    } catch {
+      continue
+    }
+  }
+  return sids
+}
+
+// Every session dir asks; read the log once per version of it.
+async function loggedSessionIds(path: string): Promise<Set<string>> {
+  const st = await stat(path).catch(() => null)
+  if (!st) return new Set()
+  const key = `${path}:${st.size}:${st.mtimeMs}`
+  if (loggedSessions?.key !== key) loggedSessions = { key, sids: readLoggedSessionIds(path) }
+  return loggedSessions.sids
+}
+
+// createParser skips a session dir the log holds; its summary, tools and
+// commands ride on that session's first logged call instead.
+async function readSessionDirInfo(dir: string | undefined) {
+  const summary = dir ? await readJson<GrokSummary>(join(dir, 'summary.json')) : null
+  const updates = dir ? await readSessionFile(join(dir, 'updates.jsonl')) : null
+  const parsed = updates === null ? null : parseUpdates(updates)
+  return {
+    model: summary?.current_model_id,
+    cwd: summary?.info?.cwd,
+    userMessage: summary?.session_summary ?? summary?.generated_title ?? '',
+    tools: parsed?.tools ?? [],
+    bashCommands: parsed?.bashCommands ?? [],
+    subagentTypes: parsed?.subagentTypes ?? [],
+  }
+}
+
+function createUnifiedLogParser(source: SessionSource, seenKeys: Set<string>, sessionsDir: string): SessionParser {
+  return {
+    async *parse(): AsyncGenerator<ParsedProviderCall> {
+      const models = new Map<string, string>()
+      const pidModels = new Map<unknown, string>()
+      const cwds = new Map<string, string>()
+      const sessionDirs = new Map((await discoverSessions(sessionsDir)).map(s => [basename(dirname(s.path)), dirname(s.path)]))
+      const dirInfo = new Map<string, Awaited<ReturnType<typeof readSessionDirInfo>>>()
+
+      for await (const line of readSessionLines(source.path)) {
+        let record: UnifiedLogLine
+        try {
+          record = JSON.parse(line) as UnifiedLogLine
+        } catch {
+          continue
+        }
+        const sid = record.sid
+        const ctx = record.ctx
+        if (!isRecord(ctx)) continue
+        // A process announces its model before a session that predates the log
+        // file's first line can name one.
+        if (record.msg === 'model catalog: notifying clients' && typeof ctx['current_model_id'] === 'string') {
+          pidModels.set(record.pid, ctx['current_model_id'])
+          continue
+        }
+        if (typeof sid !== 'string' || !sid) continue
+
+        if (record.msg === 'model changed' && typeof ctx['model'] === 'string') {
+          models.set(sid, ctx['model'])
+          continue
+        }
+        if (record.msg === 'session created' && typeof ctx['cwd'] === 'string') {
+          cwds.set(sid, ctx['cwd'])
+          continue
+        }
+        const usage = inferenceUsage(record)
+        if (!usage) continue
+        const { prompt, cached, completion, reasoning } = usage
+
+        const deduplicationKey = `grok:unified:${sid}:${usage.ts}:${String(ctx['loop_index'] ?? 1)}`
+        if (seenKeys.has(deduplicationKey)) continue
+        seenKeys.add(deduplicationKey)
+
+        let info = dirInfo.get(sid)
+        const first = !info
+        if (!info) {
+          info = await readSessionDirInfo(sessionDirs.get(sid))
+          dirInfo.set(sid, info)
+        }
+        const namedModel = models.get(sid) ?? pidModels.get(record.pid) ?? info.model
+        const model = namedModel ?? 'grok-build'
+        const cwd = cwds.get(sid) ?? info.cwd
+        yield {
+          provider: source.provider,
+          model,
+          inputTokens: prompt - cached,
+          outputTokens: completion - reasoning,
+          cacheCreationInputTokens: 0,
+          cacheReadInputTokens: cached,
+          cachedInputTokens: cached,
+          reasoningTokens: reasoning,
+          webSearchRequests: 0,
+          costUSD: calculateCost(model, prompt - cached, completion, 0, cached, 0),
+          costIsEstimated: namedModel === undefined,
+          tools: first ? info.tools : [],
+          bashCommands: first ? info.bashCommands : [],
+          subagentTypes: first ? info.subagentTypes : [],
+          timestamp: usage.ts,
+          speed: 'standard',
+          deduplicationKey,
+          userMessage: first ? info.userMessage : '',
+          sessionId: sid,
+          project: cwd ? basename(cwd) : source.project,
+          projectPath: cwd,
+        }
+      }
+    },
+  }
+}
+
 async function discoverSessions(sessionsDir: string): Promise<SessionSource[]> {
   const sources: SessionSource[] = []
 
@@ -486,13 +641,14 @@ async function discoverSessions(sessionsDir: string): Promise<SessionSource[]> {
 
 export function createGrokProvider(sessionsDir?: string): Provider {
   const dir = sessionsDir ?? defaultSessionsDir()
+  const unifiedLogPath = join(dirname(dir), 'logs', 'unified.jsonl')
 
   return {
     name: 'grok',
     displayName: 'Grok Build',
 
     async probeRoots(): Promise<ProbeRoot[]> {
-      return [{ path: dir, label: 'sessions' }]
+      return [{ path: dir, label: 'sessions' }, { path: unifiedLogPath, label: 'unified log' }]
     },
 
     modelDisplayName(model: string): string {
@@ -505,11 +661,16 @@ export function createGrokProvider(sessionsDir?: string): Provider {
     },
 
     async discoverSessions(): Promise<SessionSource[]> {
-      return discoverSessions(dir)
+      const sources = await discoverSessions(dir)
+      if (await stat(unifiedLogPath).catch(() => null)) {
+        sources.push({ path: unifiedLogPath, project: 'grok', provider: 'grok' })
+      }
+      return sources
     },
 
     createSessionParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
-      return createParser(source, seenKeys)
+      if (source.path === unifiedLogPath) return createUnifiedLogParser(source, seenKeys, dir)
+      return createParser(source, seenKeys, unifiedLogPath)
     },
   }
 }

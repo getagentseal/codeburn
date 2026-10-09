@@ -28,6 +28,9 @@ export type ModelCosts = {
   /// rate; a slot the source omitted keeps the base. Optional: absent on
   /// models without a published tier and on tuples predating the extension.
   longContextTier?: LongContextTier
+  /// The Flex service tier's rates (LiteLLM `<rate>_flex`), priced instead of
+  /// these when a call runs under Flex. Absent: Flex bills at standard.
+  flex?: ModelCosts
 }
 
 /** Long-context pricing tier, e.g. OpenAI's above-272k or Anthropic's
@@ -39,6 +42,8 @@ export type LongContextTier = {
   outputCostPerToken: number
   cacheWriteCostPerToken?: number
   cacheReadCostPerToken?: number
+  /// Replaces the base fastMultiplier above the threshold; absent inherits it.
+  fastMultiplier?: number
 }
 
 /// Providers whose reported `reasoningTokens` are a SUBSET of `outputTokens`
@@ -47,9 +52,9 @@ export type LongContextTier = {
 /// total), and Anthropic folds thinking into output the same way, so summing
 /// the two double-counts both the cost and the displayed output tokens. Copilot
 /// is the same case: its per-request token_details_json prices input/cache/output
-/// and nothing else, and its supplementary store-row/shutdown calls carry
-/// reasoningTokens with outputTokens 0 while the per-turn assistant.message call
-/// bills the full output, so adding reasoning on top bills it twice.
+/// and nothing else, and its store-row/shutdown calls carry reasoningTokens
+/// beside an output count that already includes them, so adding reasoning on
+/// top bills it twice.
 /// DSH TokenUsage includes reasoning in output too; see the pinned contract:
 /// https://github.com/deepseek-ai/deepseek-harness/blob/c291e7961a515f6d7af9304e7fd1d257929aef26/docs/subsystems/llm-streaming.md#tokenusage
 const REASONING_INCLUDED_IN_OUTPUT = new Set(['claude', 'codex', 'copilot', 'dsh'])
@@ -76,13 +81,14 @@ type LiteLLMEntry = {
   provider_specific_entry?: { fast?: number }
 }
 
-// [input, output, cacheWrite, cacheRead, fastMultiplier, longContextTier?].
+// [input, output, cacheWrite, cacheRead, fastMultiplier, longContextTier?, flex?].
 // The trailing fast multiplier is carried straight from LiteLLM's
 // provider_specific_entry.fast so new models pick it up automatically — no
 // hand-maintained per-model table. The optional sixth slot carries the
-// vendor's long-context tier; older bundles without it parse unchanged.
-type SnapshotTier = { threshold: number, input: number, output: number, cacheWrite: number | null, cacheRead: number | null }
-type SnapshotEntry = [number, number, number | null, number | null, (number | null)?, (SnapshotTier | null)?]
+// vendor's long-context tier; older bundles without it parse unchanged. The
+// optional seventh is the Flex tier's own tuple, present only where published.
+type SnapshotTier = { threshold: number, input: number, output: number, cacheWrite: number | null, cacheRead: number | null, fast?: number }
+type SnapshotEntry = [number, number, number | null, number | null, (number | null)?, (SnapshotTier | null)?, (SnapshotEntry | null)?]
 
 const LITELLM_URL = 'https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json'
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000
@@ -95,7 +101,13 @@ const CACHE_TTL_MS = 24 * 60 * 60 * 1000
 // the on-disk LiteLLM cache, not just the on-disk cache itself.
 // 4: calculateCost bills an implicit cache-write rate as input for non-Anthropic models.
 // 5: longContextTier rides ModelCosts, so a cached costs object is tier-aware (#1076).
-export const CACHE_SCHEMA_VERSION = 5
+// 6: fastMultiplier is now derived from LiteLLM's `<rate>_priority` keys when the
+// source publishes no `provider_specific_entry.fast` (#1616), so a cached costs
+// object can carry a multiplier the pre-fix fetch left at 1.
+// 7: ModelCosts carries the Flex tier's rates (`flex`), read from `<rate>_flex`.
+// 8: a bare id takes the maker's row over a reseller's, and a reseller's priced
+// row over a reseller's $0 one, so a cached map can still hold azure_ai's rate under `grok-4.6`.
+export const CACHE_SCHEMA_VERSION = 8
 const WEB_SEARCH_COST = 0.01
 const ONE_HOUR_CACHE_WRITE_MULTIPLIER_FROM_FIVE_MINUTE_RATE = 1.6
 
@@ -105,11 +117,23 @@ const ONE_HOUR_CACHE_WRITE_MULTIPLIER_FROM_FIVE_MINUTE_RATE = 1.6
 // output, $0.20 cache read; composer-1.5: $3.50/$17.50/$0.35; composer-1:
 // $1.25/$10/$0.125. Cursor publishes no separate cache-write rate for these,
 // so cache write uses the input rate.
+// deepseek-v3.2: DeepSeek's last published price was $0.28 miss / $0.028 hit /
+// $0.42 output; LiteLLM's deepseek/deepseek-v3.2 row says $0.40 output while its
+// own deepseek-chat row says $0.42. Drop once upstream corrects it.
+// swe-2: Cognition's list price at docs.devin.ai/desktop/models, $3 input, $15
+// output, $0.30 cache read per 1M, no cache-write rate. Plan promotions (free on
+// self-serve until 15 Oct 2026, 75% off for enterprise until 31 Dec 2026) are
+// left out, as they depend on the plan.
 const BUILTIN_PRICE_OVERRIDES: Record<string, SnapshotEntry> = {
+  'deepseek-v3.2': [0.28e-6, 0.42e-6, null, 0.028e-6],
+  'swe-2': [3e-6, 15e-6, null, 0.3e-6],
   'composer-2.5': [0.5e-6, 2.5e-6, 0.5e-6, 0.2e-6],
   'composer-2': [0.5e-6, 2.5e-6, 0.5e-6, 0.2e-6],
   'composer-1.5': [3.5e-6, 17.5e-6, 3.5e-6, 0.35e-6],
   'composer-1': [1.25e-6, 10e-6, 1.25e-6, 0.125e-6],
+  // Moonshot's published rate (platform.kimi.ai/docs/pricing/chat): $1.90 miss,
+  // $0.38 hit, $8.00 output. LiteLLM only carries a reseller row for it.
+  'kimi-k2.7-code-highspeed': [1.9e-6, 8e-6, null, 0.38e-6],
 }
 
 // Assemble a ModelCosts, applying the cache-cost heuristics (write = 1.25x
@@ -123,6 +147,7 @@ function buildCosts(
   cacheRead: number | null | undefined,
   fast: number | null | undefined,
   tier?: SnapshotTier | null,
+  flex?: SnapshotEntry | null,
 ): ModelCosts {
   return {
     inputCostPerToken: input,
@@ -138,7 +163,9 @@ function buildCosts(
       outputCostPerToken: tier.output,
       ...(tier.cacheWrite !== null ? { cacheWriteCostPerToken: tier.cacheWrite } : {}),
       ...(tier.cacheRead !== null ? { cacheReadCostPerToken: tier.cacheRead } : {}),
+      ...(tier.fast !== undefined ? { fastMultiplier: tier.fast } : {}),
     } } : {}),
+    ...(flex ? { flex: tupleToCosts(flex) } : {}),
   }
 }
 // For grok-4.6, prompt tokens mean input tokens plus cached input tokens for a
@@ -160,7 +187,9 @@ const GROK_4_6_HIGH_PROMPT_COSTS = buildCosts(4e-6, 12e-6, null, 1e-6, null)
 // codex sites and the parser.ts central recompute pass it; the Claude journal
 // paths and the copilot residual path do not, so a newly added provider whose
 // calls flow through those sites would silently stay tierless).
-export const TIERED_PRICING_PROVIDERS: ReadonlySet<string> = new Set(['codex'])
+// antigravity has no per-token bill of its own; its cost is the Gemini API
+// equivalent, and the Gemini API bills the above-200k tier per request.
+export const TIERED_PRICING_PROVIDERS: ReadonlySet<string> = new Set(['codex', 'antigravity'])
 
 // Swap in the vendor's high tier when a request's prompt crosses the published
 // threshold. A user-set priceOverride wins over any tier: the override row
@@ -184,6 +213,7 @@ export function tieredCostsFor(model: string, baseCosts: ModelCosts, promptToken
       outputCostPerToken: tier.outputCostPerToken,
       ...(tier.cacheWriteCostPerToken !== undefined ? { cacheWriteCostPerToken: tier.cacheWriteCostPerToken } : {}),
       ...(tier.cacheReadCostPerToken !== undefined ? { cacheReadCostPerToken: tier.cacheReadCostPerToken } : {}),
+      ...(tier.fastMultiplier !== undefined ? { fastMultiplier: tier.fastMultiplier } : {}),
     }
   }
   return baseCosts
@@ -191,8 +221,8 @@ export function tieredCostsFor(model: string, baseCosts: ModelCosts, promptToken
 
 
 function tupleToCosts(raw: SnapshotEntry): ModelCosts {
-  const [input, output, cacheWrite, cacheRead, fast, tier] = raw
-  return buildCosts(input, output, cacheWrite, cacheRead, fast, tier)
+  const [input, output, cacheWrite, cacheRead, fast, tier, flex] = raw
+  return buildCosts(input, output, cacheWrite, cacheRead, fast, tier, flex)
 }
 
 function applyBuiltinPriceOverrides(pricing: Map<string, ModelCosts>): Map<string, ModelCosts> {
@@ -282,6 +312,52 @@ function safePerTokenRate(n: number | undefined): number | null {
 // because the bundler is a standalone .mjs script.
 const TIER_KEY_RE = /^(input_cost_per_token|output_cost_per_token|cache_read_input_token_cost|cache_creation_input_token_cost)_above_(\d+)k_tokens$/
 
+// OpenAI bills its priority processing tier through explicit `<rate>_priority`
+// keys sat beside the standard ones (input/output/cache-read/cache-write, plus
+// the `_above_<n>k_tokens_priority` variants for gpt-5.6's long-context tier).
+// Codex's Fast speed setting runs on that tier (#1616), so those keys are where
+// its multiplier comes from — LiteLLM publishes none as a
+// `provider_specific_entry.fast` for OpenAI models. Derived, never invented:
+// only a ratio the source publishes for EVERY bucket it prices is used, so a
+// model with no priority keys (gpt-5-codex, gpt-5.1-codex) or one whose ratios
+// disagree between buckets (azure/gpt-5.5: 2.5x base, 2x above 272k) stays at
+// 1x. Where the tier publishes priority rates they join the same agreement
+// check, so the one multiplier prices both regimes (gpt-5.6). Where it publishes
+// none (gpt-5.4, gpt-5.5) OpenAI quotes no Fast long-context price, so the tier
+// carries fast 1 and stays at its standard rates rather than a guessed product.
+// `provider_specific_entry.fast` (Anthropic's own multiplier) always wins where
+// the source ships one and is left to cover the tier as before.
+const PRIORITY_KEY_SUFFIX = '_priority'
+// Generous bound: the largest ratio any vendor actually publishes is 2.5x, so
+// anything past this is a corrupted or hostile upstream row, not a price.
+const MAX_DERIVED_FAST_MULTIPLIER = 100
+
+function priorityMultiplierOf(entry: LiteLLMEntry): number | null {
+  const record = entry as Record<string, unknown>
+  const ratios: number[] = []
+  let inputRatio: number | undefined
+  let outputRatio: number | undefined
+  for (const [key, value] of Object.entries(record)) {
+    if (!key.endsWith(PRIORITY_KEY_SUFFIX)) continue
+    const base = record[key.slice(0, -PRIORITY_KEY_SUFFIX.length)]
+    if (typeof value !== 'number' || typeof base !== 'number') continue
+    if (!Number.isFinite(value) || !Number.isFinite(base) || value <= 0 || base <= 0) continue
+    const ratio = value / base
+    if (key === 'input_cost_per_token_priority') inputRatio = ratio
+    else if (key === 'output_cost_per_token_priority') outputRatio = ratio
+    ratios.push(ratio)
+  }
+  // No priority input AND output rate means there is no priority price to
+  // scale the bill by, whatever stray priority keys the row carries.
+  if (inputRatio === undefined || outputRatio === undefined) return null
+  // "Within rounding": published ratios agree exactly in the JSON but can pick
+  // up a few ulps in the division (2.5 vs 2.4999999999999996), so compare
+  // relatively rather than for bitwise equality.
+  const agreed = ratios.every(r => Math.abs(r - inputRatio!) <= 1e-9 * Math.max(r, inputRatio!))
+  // Rounded to 4 decimals so division noise (1.7999999999999998) never ships.
+  return agreed && inputRatio <= MAX_DERIVED_FAST_MULTIPLIER ? Math.round(inputRatio * 1e4) / 1e4 : null
+}
+
 function tierOfLiteLLMEntry(entry: LiteLLMEntry): SnapshotTier | null {
   // Rates are read ONLY from the largest threshold a model carries, mirroring
   // scripts/bundle-litellm.mjs tierOf, so a two-tier entry can never mix a
@@ -308,6 +384,34 @@ function tierOfLiteLLMEntry(entry: LiteLLMEntry): SnapshotTier | null {
   }
 }
 
+// OpenAI's Flex processing tier (Codex service_tier "flex") ships as explicit
+// `<rate>_flex` keys, `_above_<n>k_tokens_flex` for the long-context tier.
+// Read as rates, not one ratio: gpt-5.4's flex cache read is $0.13/M, not half
+// of $0.25/M, so a priority-style agreement check would drop it. Without both
+// input and output flex rates the row has no Flex price and Flex bills at
+// standard; any other bucket without a flex rate keeps its standard rate.
+// Mirrored in scripts/bundle-litellm.mjs flexOf.
+const FLEX_KEY_SUFFIX = '_flex'
+
+function flexOf(entry: LiteLLMEntry, cacheWrite: number | null, cacheRead: number | null, tier: SnapshotTier | null): SnapshotEntry | null {
+  const record = entry as Record<string, unknown>
+  const rate = (key: string) => {
+    const value = record[key + FLEX_KEY_SUFFIX]
+    return typeof value === 'number' ? safePerTokenRate(value) : null
+  }
+  const input = rate('input_cost_per_token')
+  const output = rate('output_cost_per_token')
+  if (input === null || output === null) return null
+  const above = (key: string) => `${key}_above_${tier!.threshold / 1000}k_tokens`
+  return [input, output, rate('cache_creation_input_token_cost') ?? cacheWrite, rate('cache_read_input_token_cost') ?? cacheRead, null, tier ? {
+    threshold: tier.threshold,
+    input: rate(above('input_cost_per_token')) ?? tier.input,
+    output: rate(above('output_cost_per_token')) ?? tier.output,
+    cacheWrite: rate(above('cache_creation_input_token_cost')) ?? tier.cacheWrite,
+    cacheRead: rate(above('cache_read_input_token_cost')) ?? tier.cacheRead,
+  } : null]
+}
+
 export function parseLiteLLMEntry(entry: LiteLLMEntry): ModelCosts | null {
   // The live LiteLLM map is remote JSON; a null (or non-object) value for a
   // model would make the field reads below throw and abort the whole pricing
@@ -316,13 +420,22 @@ export function parseLiteLLMEntry(entry: LiteLLMEntry): ModelCosts | null {
   const inputCost = safePerTokenRate(entry.input_cost_per_token)
   const outputCost = safePerTokenRate(entry.output_cost_per_token)
   if (inputCost === null || outputCost === null) return null
+  const explicitFast = entry.provider_specific_entry?.fast
+  const priorityFast = explicitFast == null ? priorityMultiplierOf(entry) : null
+  const tier = tierOfLiteLLMEntry(entry)
+  if (tier && priorityFast !== null && !Object.keys(entry).some(k => k.endsWith(`_above_${tier.threshold / 1000}k_tokens${PRIORITY_KEY_SUFFIX}`))) {
+    tier.fast = 1
+  }
+  const cacheWrite = safePerTokenRate(entry.cache_creation_input_token_cost)
+  const cacheRead = safePerTokenRate(entry.cache_read_input_token_cost)
   return buildCosts(
     inputCost,
     outputCost,
-    safePerTokenRate(entry.cache_creation_input_token_cost),
-    safePerTokenRate(entry.cache_read_input_token_cost),
-    entry.provider_specific_entry?.fast,
-    tierOfLiteLLMEntry(entry),
+    cacheWrite,
+    cacheRead,
+    explicitFast ?? priorityFast,
+    tier,
+    flexOf(entry, cacheWrite, cacheRead, tier),
   )
 }
 
@@ -336,6 +449,14 @@ export function parseLiteLLMEntry(entry: LiteLLMEntry): ModelCosts | null {
 // this module has no other way to signal that across a fresh CLI process.
 let livePricingTimestamp: number | null = null
 
+const MAKER_PREFIXES: ReadonlySet<string> = new Set([
+  'xai', 'mistral', 'cohere', 'anthropic', 'openai', 'gemini', 'deepseek', 'moonshot',
+  'zai', 'minimax', 'ai21', 'perplexity', 'dashscope', 'meta_llama', 'xiaomi_mimo',
+])
+// Two segments only: `perplexity/openai/gpt-5.6-sol` is Perplexity reselling.
+const isMakerRow = (name: string) => name.split('/').length === 2 && MAKER_PREFIXES.has(name.split('/')[0]!)
+const isFreeRow = (c: ModelCosts) => c.inputCostPerToken === 0 && c.outputCostPerToken === 0
+
 async function fetchAndCachePricing(): Promise<Map<string, ModelCosts>> {
   // Bounded: runs on every CLI invocation (the menubar shells out and blocks on
   // it). Without a timeout a half-open network after wake-from-sleep makes
@@ -346,15 +467,29 @@ async function fetchAndCachePricing(): Promise<Map<string, ModelCosts>> {
   const data = await response.json() as Record<string, LiteLLMEntry>
   const pricing = new Map<string, ModelCosts>()
 
+  const parsed: [string, ModelCosts][] = []
   for (const [name, entry] of Object.entries(data)) {
     const costs = parseLiteLLMEntry(entry)
-    if (!costs) continue
-    pricing.set(name, costs)
-    // Also index by stripped name so lookups work without provider prefix:
-    // 'anthropic/claude-opus-4-6' is also queryable as 'claude-opus-4-6'.
-    // First write wins so direct-provider entries take precedence over re-hosters.
+    if (costs) parsed.push([name, costs])
+  }
+  // Also index by stripped name so lookups work without provider prefix:
+  // 'anthropic/claude-opus-4-6' is also queryable as 'claude-opus-4-6'. A
+  // direct entry of that name always wins; otherwise the maker's own row beats
+  // a reseller's whatever the JSON order, even at $0, and among resellers a
+  // $0/$0 row yields to any priced one. Mirrors scripts/bundle-litellm.mjs.
+  const bareClaims = new Map<string, ModelCosts>()
+  const makerClaimed = new Set<string>()
+  for (const [name, costs] of [...parsed.filter(([n]) => isMakerRow(n)), ...parsed.filter(([n]) => !isMakerRow(n))]) {
     const stripped = name.replace(/^[^/]+\//, '')
-    if (stripped !== name && !pricing.has(stripped)) pricing.set(stripped, costs)
+    if (stripped === name) continue
+    const prev = bareClaims.get(stripped)
+    if (!prev || (!makerClaimed.has(stripped) && isFreeRow(prev) && !isFreeRow(costs))) bareClaims.set(stripped, costs)
+    if (isMakerRow(name)) makerClaimed.add(stripped)
+  }
+  for (const [name, costs] of parsed) {
+    pricing.set(name, costs)
+    const stripped = name.replace(/^[^/]+\//, '')
+    if (stripped !== name && !pricing.has(stripped)) pricing.set(stripped, bareClaims.get(stripped)!)
   }
 
   const timestamp = Date.now()
@@ -487,16 +622,23 @@ const BUILTIN_ALIASES: Record<string, string> = {
   'openclaw-auto':                 'claude-sonnet-4-5',
   'warp-auto-efficient':           'gpt-5.3-codex',
   'warp-auto-powerful':            'claude-opus-4-6',
-  // Codex activity ids are product surfaces, not subscription SKUs and not
-  // LiteLLM rows. OpenAI's tracker (openai/codex#32224) says auto review
-  // consumes normal model usage. Public evidence: review_model defaults to
-  // the session model; GPT-5.5 is the currently recommended review model.
-  // Price as that existing bundled row. Do not invent a rate. Do not treat
-  // the id as honestly $0 — it draws from the same credit pool. Display
-  // stays on autoModelNames (same class as cursor-auto / copilot-openai-auto).
-  // Only alias ids observed in Codex source / real rollouts. Do not infer
-  // `codex-code-review` from the activity name "code review".
-  'codex-auto-review':             'gpt-5.5',
+  // `codex-auto-review` is a server-routed alias: rollouts record it in
+  // turn_context.model and nothing on disk names the real model. OpenAI moved
+  // auto review from GPT-5.4 to GPT-5.6 Luna on 30 Jul 2026 (announcement:
+  // "major price drop for 5.6 Terra and Luna"). This row is the forward
+  // default; pricingModelAt prices calls before 2026-07-30T00:00Z as gpt-5.4.
+  // A rollout that records the real model (API-key auth writes gpt-5.6-luna)
+  // is priced as recorded. Display stays on autoModelNames.
+  'codex-auto-review':             'gpt-5.6-luna',
+  // Luna Reserve: the quota Codex falls back to once ordinary usage runs out
+  // (openai/codex#42372, LUNA_RESERVE_MODEL in codex-rs/tui/src/model_catalog.rs).
+  // The backend picks the real model and rollouts don't record it. GPT-5.6 Luna
+  // was the client fallback until 22 Sep 2026 (then GPT-6 Luna, half the
+  // price), so this is an upper-bound estimate and the codex parser marks it so.
+  'gpt-reserve':                   'gpt-5.6-luna',
+  // Short spelling of the only 5.3 Spark model (openai/codex uses it as a
+  // config model id in codex-rs/app-server/tests/suite/v2/config_rpc.rs).
+  'gpt-5.3-spark':                 'gpt-5.3-codex-spark',
   'grok-build':                    'grok-build-0.1',
   // Grok Bot's desktop app serves opaque `sand-*` aliases and records no model
   // id at all, so there is nothing truthful to price it by. It is xAI's own
@@ -537,8 +679,14 @@ const BUILTIN_ALIASES: Record<string, string> = {
   'orcarouter/fusion-flash':       'openai/gpt-oss-120b',
   'orcarouter/fusion-mini':        'openai/gpt-oss-120b',
   'kimi-auto':                     'kimi-k2-thinking',
-  'kimi-code':                     'kimi-k2-thinking',
-  'kimi-for-coding':               'kimi-k2-thinking',
+  // `kimi-for-coding` is Kimi Code's moving alias; `kimi-code` is kimi-cli's
+  // spelling of the same SKU. pricingModelAt prices older calls by the model
+  // the alias served then. K2.8 Preview (11 Sep 2026 on) has no Open Platform
+  // price, so it stays on K2.7 Code's.
+  'kimi-code':                     'kimi-k2.7-code',
+  'kimi-for-coding':               'kimi-k2.7-code',
+  // HighSpeed has been K2.7 Code HighSpeed since it launched on 9 Jul 2026.
+  'kimi-for-coding-highspeed':     'kimi-k2.7-code-highspeed',
   // Kimi Code wires report the bare `k3` id in llm.request.model; without an
   // alias those calls priced at $0 and the provider looked absent in the UI.
   'k3':                            'kimi-k3',
@@ -734,7 +882,7 @@ export function calculateLocalModelSavings(
   cacheCreationTokens: number,
   cacheReadTokens: number,
   webSearchRequests: number,
-  speed: 'standard' | 'fast' = 'standard',
+  speed: 'standard' | 'fast' | 'flex' = 'standard',
   oneHourCacheCreationTokens = 0,
 ): { savingsUSD: number; baselineModel: string } | null {
   const baseline = getLocalSavingsBaseline(rawModel)
@@ -850,7 +998,6 @@ export function isBuiltInFlatRateModel(model: string): boolean {
   if (
     leaf === 'auto'
     || leaf === 'auto-genius'
-    || leaf === 'kimi-for-coding-highspeed'
   ) return true
   if (leaf.startsWith('grok-composer-')) return true
   if (leaf.startsWith('warp-auto-')) return true
@@ -1104,6 +1251,42 @@ function stripKnownPricingVariantSuffix(model: string): string | null {
   return null
 }
 
+const AUTO_REVIEW_LUNA_FROM = Date.parse('2026-07-30T00:00:00Z')
+// kimi-cli labelled the alias "powered by kimi-k2.5" from 27 Jan 2026 (1.2) and
+// dropped that on 13 Apr 2026 (#1860) as K2.6 rolled out; Kimi Code's What's
+// New dates K2.7 Code to 12 Jun 2026. What it served before K2.5 is unsourced,
+// so those calls keep the K2 Thinking rate they always had.
+const KIMI_CODING_K2_5_FROM = Date.parse('2026-01-27T00:00:00Z')
+const KIMI_CODING_K2_6_FROM = Date.parse('2026-04-13T00:00:00Z')
+const KIMI_CODING_K2_7_FROM = Date.parse('2026-06-12T00:00:00Z')
+const KIMI_CODING_K2_8_FROM = Date.parse('2026-09-11T00:00:00Z')
+
+/// The model a call is priced by. Only `codex-auto-review` and the Kimi Code
+/// alias depend on the call's date (see BUILTIN_ALIASES); a user alias for
+/// them still wins, and a missing or unparseable timestamp keeps the forward
+/// default.
+export function pricingModelAt(model: string, timestamp: string | undefined): string {
+  const id = model.toLowerCase()
+  if (id !== 'codex-auto-review' && id !== 'kimi-for-coding' && id !== 'kimi-code') return model
+  if (Object.hasOwn(userAliases, model) || userPriceOverrides.has(model)) return model
+  const at = Date.parse(timestamp ?? '')
+  if (id === 'codex-auto-review') return at < AUTO_REVIEW_LUNA_FROM ? 'gpt-5.4' : model
+  if (at < KIMI_CODING_K2_5_FROM) return 'kimi-k2-thinking'
+  if (at < KIMI_CODING_K2_6_FROM) return 'kimi-k2.5'
+  return at < KIMI_CODING_K2_7_FROM ? 'kimi-k2.6' : model
+}
+
+/// True when pricingModelAt stands in for a model with no published rate:
+/// Kimi Code's alias served K2.8 Preview from 11 Sep 2026, priced as K2.7 Code.
+/// A missing or unparseable timestamp gets the forward default, so it counts.
+export function isStandInPricedAt(model: string, timestamp: string | undefined): boolean {
+  const id = model.toLowerCase()
+  if (id !== 'kimi-for-coding' && id !== 'kimi-code') return false
+  if (Object.hasOwn(userAliases, model) || userPriceOverrides.has(model)) return false
+  const at = Date.parse(timestamp ?? '')
+  return !(at < KIMI_CODING_K2_8_FROM)
+}
+
 export function getModelCosts(model: string): ModelCosts | null {
   // Try with provider prefix preserved (azure/gpt-5.4, openrouter/anthropic/claude-opus-4.6)
   const withPrefix = model.replace(/@.*$/, '').replace(/-\d{8}$/, '')
@@ -1333,7 +1516,7 @@ export function calculateCost(
   cacheCreationTokens: number,
   cacheReadTokens: number,
   webSearchRequests: number,
-  speed: 'standard' | 'fast' = 'standard',
+  speed: 'standard' | 'fast' | 'flex' = 'standard',
   oneHourCacheCreationTokens = 0,
   provider?: string,
 ): number {
@@ -1358,7 +1541,7 @@ export function calculateCost(
   const safeCacheCreation = Math.max(safe(cacheCreationTokens), safeOneHourCacheCreation)
   const safeFiveMinuteCacheCreation = Math.max(0, safeCacheCreation - safeOneHourCacheCreation)
   const promptTokens = safe(inputTokens) + safe(cacheReadTokens)
-  const tieredCosts = tieredCostsFor(model, costs, promptTokens, provider)
+  const tieredCosts = tieredCostsFor(model, speed === 'flex' ? costs.flex ?? costs : costs, promptTokens, provider)
   const multiplier = speed === 'fast' ? tieredCosts.fastMultiplier : 1
 
   // Clamp negative inputs to 0. A corrupt JSONL that emits a negative token
@@ -1399,7 +1582,10 @@ const autoModelNames: Record<string, string> = {
   'openclaw-auto': 'OpenClaw (auto)',
   'qwen-auto': 'Qwen (auto)',
   'kimi-auto': 'Kimi (auto)',
+  'kimi-for-coding': 'Kimi for Coding',
+  'kimi-for-coding-highspeed': 'Kimi for Coding HighSpeed',
   'codex-auto-review': 'Codex Auto Review',
+  'gpt-reserve': 'Luna Reserve',
 }
 
 const SHORT_NAMES: Record<string, string> = {

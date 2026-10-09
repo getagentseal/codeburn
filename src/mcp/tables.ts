@@ -1,10 +1,10 @@
-import { formatCost, formatTokens, markEstimated } from '../format.js'
+import { ESTIMATED_COST_LEGEND, formatCost, formatTokens, isEstimatedCost, markEstimated } from '../format.js'
 import type { MenubarPayload } from '../menubar-json.js'
 import { unpricedModelHint } from '../models.js'
 import { formatSessionCount } from '../session-count-label.js'
 
-const ESTIMATED_LEGEND = '_~ estimated cost (priced from estimated tokens)_'
-const isEstimated = (m: { estimatedCostUSD?: number }) => (m.estimatedCostUSD ?? 0) > 0
+const ESTIMATED_LEGEND = `_${ESTIMATED_COST_LEGEND}_`
+const isEstimated = (m: { cost: number; estimatedCostUSD?: number }) => isEstimatedCost(m.cost, m.estimatedCostUSD)
 
 export type BreakdownBy = 'project' | 'model' | 'task' | 'provider'
 

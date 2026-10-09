@@ -3,7 +3,7 @@ import { homedir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
 
 import { extractBashCommands } from '../bash-utils.js'
-import { calculateCost } from '../models.js'
+import { calculateCost, pricingModelAt } from '../models.js'
 import { FS_SCAN_CONCURRENCY, mapWithConcurrency } from '../fs-utils.js'
 import type { ParsedProviderCall, ProbeRoot, Provider, SessionParser, SessionSource } from './types.js'
 
@@ -168,11 +168,12 @@ async function discoverSources(root: string): Promise<SessionSource[]> {
 
   const agents = (await mapWithConcurrency(sessionDirs, FS_SCAN_CONCURRENCY, async sd => {
     const state = await readState(sd.sessionDir)
-    const project = projectFromWorkDir(state.workDir ?? '', sd.workDirKey)
+    const workDir = state.workDir ?? state.cwd
+    const project = projectFromWorkDir(workDir ?? '', sd.workDirKey)
     const agentsDir = join(sd.sessionDir, 'agents')
     return (await directoryEntries(agentsDir))
       .filter(e => e.isDirectory())
-      .map(e => ({ agentName: e.name, wirePath: join(agentsDir, e.name, 'wire.jsonl'), project, workDir: state.workDir }))
+      .map(e => ({ agentName: e.name, wirePath: join(agentsDir, e.name, 'wire.jsonl'), project, workDir }))
   })).flat()
 
   const present = await mapWithConcurrency(agents, FS_SCAN_CONCURRENCY, a => isFile(a.wirePath))
@@ -285,7 +286,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
       const agentId = source.sourceId || agentIdForWire(source.path)
       const state = await readState(sessionDir)
       const fallbackTimestamp = timestampIso(state.updatedAt) || timestampIso(state.createdAt)
-      const projectPath = state.workDir || source.sourcePath
+      const projectPath = state.workDir || state.cwd || source.sourcePath
       const aliasModels = new Map<string, string>()
       const prompts = new Map<string, string>()
       let currentPrompt = ''
@@ -377,7 +378,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
           reasoningTokens: 0,
           webSearchRequests: 0,
           costUSD: calculateCost(
-            realModel,
+            pricingModelAt(realModel, timestamp),
             inputTokens,
             outputTokens,
             cacheCreationInputTokens,

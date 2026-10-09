@@ -3,6 +3,7 @@ import { claude } from './claude.js'
 import { cline } from './cline.js'
 import { clineCli } from './cline-cli.js'
 import { codewhale } from './codewhale.js'
+import { commandCode } from './command-code.js'
 import { codebuff } from './codebuff.js'
 import { codex } from './codex.js'
 import { copilot } from './copilot.js'
@@ -29,6 +30,7 @@ import { zerostack } from './zerostack.js'
 import { grok } from './grok.js'
 import { grokbot } from './grokbot.js'
 import { isBlockedDatabaseError } from '../sqlite.js'
+import { clearProviderIssue, recordProviderIssue } from '../provider-issues.js'
 import type { Provider, SessionSource } from './types.js'
 
 let antigravityProvider: Provider | null = null
@@ -195,7 +197,7 @@ async function loadZed(): Promise<Provider | null> {
   }
 }
 
-const coreProviders: Provider[] = [claude, cline, clineCli, codewhale, codebuff, codex, copilot, devin, droid, dsh, gemini, hermes, ibmBob, kiloCode, kiro, kimi, kimicode, lingtaiTui, mistralVibe, mux, openclaw, openclaude, openDesign, pi, omp, qwen, quickdesk, zerostack, grok, grokbot, amp]
+const coreProviders: Provider[] = [claude, cline, clineCli, codewhale, codebuff, codex, copilot, devin, droid, dsh, gemini, hermes, ibmBob, kiloCode, kiro, kimi, kimicode, lingtaiTui, mistralVibe, mux, openclaw, openclaude, openDesign, pi, omp, qwen, quickdesk, zerostack, grok, grokbot, amp, commandCode]
 
 // Lazily loaded providers, listed by name so --provider validation works even
 // when an optional module fails to load. Must stay in sync with getAllProviders.
@@ -265,8 +267,11 @@ export const providers = coreProviders
 const warnedDiscoveryFailures = new Set<string>()
 async function discoverOne(provider: Provider): Promise<{ sources: SessionSource[]; failed: boolean }> {
   try {
-    return { sources: await provider.discoverSessions(), failed: false }
+    const sources = await provider.discoverSessions()
+    clearProviderIssue(provider.name, 'locate')
+    return { sources, failed: false }
   } catch (err) {
+    recordProviderIssue(provider.name, 'locate', err)
     // An error that already explained itself on stderr does not need a second,
     // vaguer line.
     if (!warnedDiscoveryFailures.has(provider.name) && !isBlockedDatabaseError(err)) {

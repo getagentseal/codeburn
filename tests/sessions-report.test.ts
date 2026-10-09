@@ -93,7 +93,31 @@ describe('sessions JSON emitter', () => {
       startedAt: '2026-07-10T10:00:00.000Z',
       endedAt: '2026-07-10T10:05:00.000Z',
       durationMs: 300_000,
+      estimatedCost: 0,
+      isEstimated: false,
     }])
+  })
+
+  it('marks an estimated session row and explains the marker under the table', () => {
+    const project = makeProject()
+    project.sessions[0]!.totalEstimatedCostUSD = 0.12
+    const rows = aggregateSessions([project])
+    expect(rows[0]).toMatchObject({ cost: 0.12, estimatedCost: 0.12, isEstimated: true })
+    const output = renderTable(rows, { terminalWidth: 120 })
+    expect(output).toContain('~$0.12')
+    expect(output.split('\n').at(-1)).toBe('~ estimated cost (priced from estimated tokens)')
+    expect(renderTable(aggregateSessions([makeProject()]), { terminalWidth: 120 })).not.toContain('estimated')
+  })
+
+  it('does not mark a fully estimated session whose cost prints as $0.00', () => {
+    const project = makeProject()
+    project.sessions[0]!.totalCostUSD = 0.0003
+    project.sessions[0]!.totalEstimatedCostUSD = 0.0003
+    const rows = aggregateSessions([project])
+    expect(rows[0]).toMatchObject({ estimatedCost: 0.0003, isEstimated: false })
+    const output = renderTable(rows, { terminalWidth: 120 })
+    expect(output).toContain('$0.00')
+    expect(output).not.toContain('~')
   })
 
   it('renders a simple table', () => {

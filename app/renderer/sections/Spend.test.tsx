@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { render, screen, within } from '@testing-library/react'
+import { fireEvent, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -544,6 +544,30 @@ describe('Spend', () => {
     expect(screen.getByText('At least 3 sessions')).toBeInTheDocument()
     expect(screen.getByTitle('Older session logs may be unavailable.')).toBeInTheDocument()
     expect(screen.queryByText(/^3 sessions$/)).not.toBeInTheDocument()
+  })
+
+  it('lists the checkouts of a repository row and drills into all of them', async () => {
+    const payload = makePayload(new Date())
+    payload.current.topProjects = [{
+      id: '/w/codeburn',
+      name: 'codeburn',
+      cost: 9,
+      savingsUSD: 0,
+      sessions: 2,
+      sessionCountBasis: 'identity',
+      checkouts: [{ id: '/w/codeburn', cost: 6 }, { id: '/w/codeburn-fix', cost: 2, matchedByFolderName: true }, { id: '/tmp/scratch/clone-3', cost: 1 }],
+      sessionDetails: [],
+    }]
+    getSpendFlow.mockResolvedValue(makeFlow())
+    const onInvestigate = vi.fn()
+
+    render(<SpendContent period="week" provider="all" overview={polled(payload)} onInvestigate={onInvestigate} />)
+
+    fireEvent.click(await screen.findByRole('button', { name: /codeburn/ }))
+    expect(screen.getByTitle('/tmp/scratch/clone-3')).toBeInTheDocument()
+    expect(screen.getAllByText('matched by folder name')).toHaveLength(1)
+    fireEvent.click(screen.getByRole('button', { name: /View sessions/ }))
+    expect(onInvestigate).toHaveBeenCalledWith({ filters: expect.objectContaining({ projects: ['/w/codeburn', '/w/codeburn-fix', '/tmp/scratch/clone-3'] }) })
   })
 
   it('keeps an exact source-only count unqualified', async () => {

@@ -834,7 +834,9 @@ type UserMessageData = {
 type AssistantMessageData = {
   messageId: string
   model?: string       // present in newer copilot-agent format
-  outputTokens: number
+  // Absent from CLI 1.0.8x and the VS Code agent host; their output only
+  // reaches the session.shutdown rollup.
+  outputTokens?: number
   interactionId?: string
   toolRequests?: ToolRequest[]
 }
@@ -859,7 +861,7 @@ type ShutdownModelUsage = {
 }
 
 type SessionShutdownData = {
-  modelMetrics?: Record<string, { usage?: ShutdownModelUsage }>
+  modelMetrics?: Record<string, { usage?: ShutdownModelUsage; totalNanoAiu?: number }>
   sessionStartTime?: number
 }
 
@@ -1441,8 +1443,11 @@ function createJsonlParser(
       // occurrence (`:n`): re-parses of a growing file append only the new
       // leg, and each leg lands on its own timestamp. Discovery only yields
       // `<sid>/events.jsonl`, so two journals cannot share a session id.
-      const prevShutdownUsage = new Map<string, ShutdownModelUsage>()
+      const prevShutdownUsage = new Map<string, Required<ShutdownModelUsage> & { nanoAiu: number }>()
       const shutdownCountByModel = new Map<string, number>()
+      // Whether this leg's assistant.message events carried outputTokens. When
+      // none did, the rollup is the only record of output and must carry it.
+      let legHasPerTurnOutput = false
 
       for (const line of lines) {
         let event: CopilotEvent
@@ -1536,6 +1541,8 @@ function createJsonlParser(
           // events lack; output is excluded so the assistant.message output
           // (and its cost) is not double-counted. Combined with the per-turn
           // output cost, this yields the full, CLI-measured session cost.
+          // CLI 1.0.8x and the VS Code agent host write no per-turn output,
+          // so for their legs the rollup carries output too.
           if (isTranscript) continue
           // When session-store.db holds per-request usage rows for this
           // session, those rows are authoritative for input/cache: written
@@ -1575,12 +1582,14 @@ function createJsonlParser(
             const usage = metrics['usage']
             if (!isRecord(usage)) continue
 
-            const cumulative: Required<ShutdownModelUsage> = {
+            const hasNanoAiu = typeof metrics['totalNanoAiu'] === 'number'
+            const cumulative = {
               inputTokens: numberOrZero(usage['inputTokens']),
               outputTokens: numberOrZero(usage['outputTokens']),
               cacheReadTokens: numberOrZero(usage['cacheReadTokens']),
               cacheWriteTokens: numberOrZero(usage['cacheWriteTokens']),
               reasoningTokens: numberOrZero(usage['reasoningTokens']),
+              nanoAiu: numberOrZero(metrics['totalNanoAiu']),
             }
             const prevRaw = prevShutdownUsage.get(model)
             prevShutdownUsage.set(model, cumulative)
@@ -1606,8 +1615,12 @@ function createJsonlParser(
 
             // This leg's contribution: cumulative minus the previous rollup.
             // The clamp guards any remaining non-monotonic field.
-            const delta = (k: keyof ShutdownModelUsage): number =>
+            const delta = (k: keyof typeof cumulative): number =>
               Math.max(0, cumulative[k] - numberOrZero(prev?.[k]))
+            const outputTokens = legHasPerTurnOutput ? 0 : delta('outputTokens')
+            const nanoAiu = hasNanoAiu
+              ? Math.max(0, cumulative.nanoAiu - (prevRaw && cumulative.nanoAiu >= prevRaw.nanoAiu ? prevRaw.nanoAiu : 0))
+              : undefined
             const cacheReadTokens = delta('cacheReadTokens')
             const cacheWriteTokens = delta('cacheWriteTokens')
             const reasoningTokens = delta('reasoningTokens')
@@ -1621,8 +1634,8 @@ function createJsonlParser(
             )
 
             // Nothing this call would add over the per-turn events, so skip it
-            // to avoid an empty $0 row (output is intentionally excluded).
-            if (inputTokens === 0 && cacheReadTokens === 0 && cacheWriteTokens === 0 && reasoningTokens === 0) continue
+            // to avoid an empty $0 row.
+            if (inputTokens === 0 && outputTokens === 0 && cacheReadTokens === 0 && cacheWriteTokens === 0 && reasoningTokens === 0 && !nanoAiu) continue
 
             const dedupKey = `copilot:${sessionId}:shutdown:${model}:${n}`
             if (seenKeys.has(dedupKey)) continue
@@ -1630,14 +1643,14 @@ function createJsonlParser(
 
             // Tokens are real counts written by the CLI, so this cost is
             // measured, not char-estimated: costIsEstimated is false.
-            const costUSD = calculateCost(model, inputTokens, 0, cacheWriteTokens, cacheReadTokens, 0)
+            const costUSD = calculateCost(model, inputTokens, outputTokens, cacheWriteTokens, cacheReadTokens, 0)
 
             yield {
               provider: 'copilot',
               sessionId,
               model,
               inputTokens,
-              outputTokens: 0,
+              outputTokens,
               cacheCreationInputTokens: cacheWriteTokens,
               cacheReadInputTokens: cacheReadTokens,
               cachedInputTokens: 0,
@@ -1652,21 +1665,26 @@ function createJsonlParser(
               deduplicationKey: dedupKey,
               userMessage: '',
               ...(lastCompactionTs ? { compactedAt: lastCompactionTs } : {}),
+              ...(nanoAiu !== undefined ? { nanoAiu } : {}),
             }
           }
+          legHasPerTurnOutput = false
           continue
         }
 
         if (event.type === 'assistant.message') {
           const msgData = event.data as AssistantMessageData
           const { messageId, model: msgModel, outputTokens = 0 } = msgData
+          const hasOutputField = typeof msgData.outputTokens === 'number'
+          if (hasOutputField) legHasPerTurnOutput = true
           const rawRequests = (msgData as { toolRequests?: unknown }).toolRequests
           const toolRequests = coerceToolRequests(rawRequests)
 
           // model may be carried per-message in newer copilot-agent format
           if (msgModel) currentModel = msgModel
-          // Regular JSONL: skip zero-token messages; transcripts don't have tokens
-          if (!isTranscript && outputTokens === 0) continue
+          // Older CLIs: skip zero-token messages. A message with no outputTokens
+          // field still counts as a request; its tokens arrive with the rollup.
+          if (!isTranscript && hasOutputField && outputTokens === 0) continue
           if (!currentModel) continue
 
           const dedupKey = `copilot:${sessionId}:${messageId}`
@@ -1720,10 +1738,10 @@ function createJsonlParser(
             reasoningTokens: 0,
             webSearchRequests: 0,
             costUSD,
-            // Only transcripts reach here with no token count: their usage is
-            // unknown, not zero. A counted output is measured; the shutdown
-            // rollup or store rows carry the input.
-            ...(outputTokens === 0 ? { costIsEstimated: true } : {}),
+            // A transcript with no token count has unknown usage, not zero. A
+            // counted output is measured; the shutdown rollup or store rows
+            // carry the input (and, for tokenless CLI messages, the output).
+            ...(isTranscript && outputTokens === 0 ? { costIsEstimated: true } : {}),
             tools,
             bashCommands,
             skills: skills.length > 0 ? skills : undefined,
@@ -2731,16 +2749,14 @@ function createOtelParser(
 // parseProviderSources replaces the covered (session, model) rollup calls
 // with the rows plus a residual for anything the rollup carried beyond them.
 //
-// The emitted calls mirror the shutdown-call contract exactly: input/cache/
-// reasoning only, output 0 — per-turn output (and its tools/userMessage
-// metadata) stays owned by the events.jsonl assistant.message calls, so
-// emitting output here would double-count it. The ONE exception is the
-// `initiator='compaction'` row: that request is the CLI summarizing its own
-// context, it has no assistant.message anywhere in events.jsonl, and nothing
-// else in the journal carries its output — so leaving it at 0 simply loses
-// those tokens (measured: a matched 30-session corpus reconciled to the
-// store's own row totals within -3,085 tokens, exactly one compaction row's
-// output). It is counted here because here is the only place it exists.
+// Each emitted call carries the row's own output_tokens. Older CLIs ALSO write
+// per-turn outputTokens on assistant.message, so where a row pairs with a
+// per-turn call that carries output, the serve-time reconciliation in
+// parseProviderSources serves the row with output 0 (decided there because
+// only the full serve set knows both sides). CLI 1.0.8x and ACP hosts write no
+// per-turn output, and an ACP session often never writes session.shutdown, so
+// the row is the only record of that output. The `initiator='compaction'` row
+// never pairs: it has no assistant.message anywhere in events.jsonl.
 // The per-request billing
 // metadata (total_nano_aiu, request_multiplier) is captured onto the cached
 // calls but not priced or displayed — that design is upstream #890; the
@@ -2781,10 +2797,9 @@ const SESSION_STORE_USAGE_SELECT = `SELECT ${SESSION_STORE_USAGE_COLUMNS}${SESSI
 // way back — the columns arrived in different CLI releases and a single
 // all-or-nothing enrichment would lose the older one.
 //
-// `output_tokens` rides on the SAME rung as `initiator` deliberately: it is
-// only ever read for a row the label identifies as a compaction, so a store
-// too old to have the label has no use for it either and must not be pushed
-// down another fallback rung for it.
+// `output_tokens` rides on the SAME rung as `initiator`: both arrived after the
+// billing columns, and a store without them serves rows with output 0, leaving
+// output to the per-turn calls and the rollup residual as before.
 const SESSION_STORE_USAGE_SELECTS = [
   `SELECT ${SESSION_STORE_USAGE_COLUMNS},
        e.total_nano_aiu, e.request_multiplier, e.initiator, e.output_tokens${SESSION_STORE_USAGE_FROM}`,
@@ -2945,10 +2960,7 @@ function createSessionStoreParser(
             numberOrZero(row.input_tokens) - cacheReadTokens - cacheWriteTokens
           )
 
-          // A compaction row's output has no assistant.message to own it, so
-          // this row is the only place it can be counted. Every other row's
-          // output IS owned by a per-turn call and stays excluded here.
-          const outputTokens = row.initiator === 'compaction' ? numberOrZero(row.output_tokens) : 0
+          const outputTokens = numberOrZero(row.output_tokens)
 
           // Nothing this call would add over the per-turn events, so skip it to
           // avoid an empty $0 row.
@@ -2988,10 +3000,8 @@ function createSessionStoreParser(
           // metadata only, never as a cost line: it is a SUBSET of the row's
           // output_tokens (the row's own token_details_json prices exactly
           // input/cache_read/cache_write/output, no reasoning entry), and
-          // output — reasoning included — is billed by the per-turn
-          // assistant.message call. Pricing reasoning here would double-count.
-          // `outputTokens` is non-zero only for the compaction row, whose
-          // output no per-turn call bills, so it is priced exactly once.
+          // output — reasoning included — is billed once, on whichever call
+          // owns it (see the header). Pricing reasoning here would double-count.
           const costUSD = calculateCost(model, inputTokens, outputTokens, cacheWriteTokens, cacheReadTokens, 0)
 
           yield {

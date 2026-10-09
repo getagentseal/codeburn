@@ -31,7 +31,7 @@ describe('codeburn status counts a session that spans days', () => {
   it('one real session spanning two days is one period project session', async () => {
     const home = await mkdtemp(join(tmpdir(), 'codeburn-session-across-days-'))
     try {
-      const cwd = '/tmp/same-session-project'
+      const cwd = '/work/same-session-project'
       const sessionId = 'same-actual-session'
       const projectDir = join(home, '.claude', 'projects', 'project-a')
       await mkdir(projectDir, { recursive: true })

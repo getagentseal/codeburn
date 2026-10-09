@@ -1,8 +1,8 @@
 use std::fs;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -19,10 +19,6 @@ fn codeburn_config_dir() -> PathBuf {
 
 fn config_path() -> PathBuf {
     codeburn_config_dir().join("config.json")
-}
-
-fn lock_path() -> PathBuf {
-    codeburn_config_dir().join(".config.lock")
 }
 
 impl CurrencyConfig {
@@ -66,19 +62,26 @@ pub fn read() -> serde_json::Map<String, serde_json::Value> {
 pub fn update(
     mutate: impl FnOnce(&mut serde_json::Map<String, serde_json::Value>),
 ) -> Result<serde_json::Map<String, serde_json::Value>> {
-    fs::create_dir_all(codeburn_config_dir())
-        .with_context(|| "failed to create ~/.config/codeburn")?;
+    update_in(&codeburn_config_dir(), mutate)
+}
+
+fn update_in(
+    dir: &Path,
+    mutate: impl FnOnce(&mut serde_json::Map<String, serde_json::Value>),
+) -> Result<serde_json::Map<String, serde_json::Value>> {
+    fs::create_dir_all(dir).with_context(|| "failed to create ~/.config/codeburn")?;
 
     #[cfg(unix)]
-    let _lock = unix_lock::acquire()?;
+    let _lock = unix_lock::acquire(&dir.join(".config.lock"))?;
     #[cfg(windows)]
-    let _lock = windows_lock::acquire()?;
+    let _lock = windows_lock::acquire(dir.join(".config.lock"))?;
 
-    let mut disk = read();
+    let path = dir.join("config.json");
+    let mut disk = read_for_update(&path)?;
     mutate(&mut disk);
 
     let serialized = serde_json::to_vec_pretty(&disk)?;
-    let tmp = config_path().with_extension("tmp");
+    let tmp = path.with_extension("tmp");
     {
         let mut file = fs::OpenOptions::new()
             .create(true)
@@ -88,8 +91,21 @@ pub fn update(
         file.write_all(&serialized)?;
         file.flush()?;
     }
-    fs::rename(&tmp, config_path())?;
+    fs::rename(&tmp, &path)?;
     Ok(disk)
+}
+
+/// Unlike `read`, a file that is there but unreadable or not a JSON object is an error: a
+/// write built on an empty map would replace every key the user had.
+fn read_for_update(path: &Path) -> Result<serde_json::Map<String, serde_json::Value>> {
+    match fs::read(path) {
+        Ok(bytes) => match serde_json::from_slice::<serde_json::Value>(&bytes) {
+            Ok(serde_json::Value::Object(map)) => Ok(map),
+            _ => Err(anyhow!("~/.config/codeburn/config.json is not valid JSON; fix or remove it")),
+        },
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(serde_json::Map::new()),
+        Err(err) => Err(err).with_context(|| "failed to read ~/.config/codeburn/config.json"),
+    }
 }
 
 #[cfg(unix)]
@@ -102,14 +118,14 @@ mod unix_lock {
         _file: fs::File,
     }
 
-    pub fn acquire() -> Result<Guard> {
+    pub fn acquire(path: &std::path::Path) -> Result<Guard> {
         let file = fs::OpenOptions::new()
             .create(true)
             .read(true)
             .write(true)
             // A lock file only ever needs to exist; its contents are irrelevant.
             .truncate(false)
-            .open(super::lock_path())
+            .open(path)
             .with_context(|| "failed to open config lock")?;
 
         let fd = file.as_raw_fd();
@@ -164,8 +180,7 @@ mod windows_lock {
         }
     }
 
-    pub fn acquire() -> Result<Guard> {
-        let path = super::lock_path();
+    pub fn acquire(path: PathBuf) -> Result<Guard> {
         for _ in 0..MAX_RETRIES {
             match fs::OpenOptions::new().write(true).create_new(true).open(&path) {
                 Ok(file) => {
@@ -195,5 +210,47 @@ mod windows_lock {
             .and_then(|t| SystemTime::now().duration_since(t).ok())
             .map(|age| age.as_secs() > STALE_LOCK_SECS)
             .unwrap_or(false)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("codeburn-config-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn update_leaves_a_corrupt_config_untouched() {
+        let dir = temp_dir("corrupt");
+        for body in [&b"{ not json"[..], b"[1, 2]", b"null"] {
+            fs::write(dir.join("config.json"), body).unwrap();
+            let err = update_in(&dir, |obj| {
+                obj.insert("cursorSync".into(), serde_json::Value::Bool(false));
+            })
+            .unwrap_err();
+            assert!(err.to_string().contains("not valid JSON"), "{err}");
+            assert_eq!(fs::read(dir.join("config.json")).unwrap(), body);
+        }
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn update_starts_fresh_without_a_config_and_keeps_other_keys() {
+        let dir = temp_dir("fresh");
+        update_in(&dir, |obj| {
+            obj.insert("language".into(), serde_json::json!("fr"));
+        })
+        .unwrap();
+        let disk = update_in(&dir, |obj| {
+            obj.insert("cursorSync".into(), serde_json::Value::Bool(false));
+        })
+        .unwrap();
+        assert_eq!(serde_json::Value::Object(disk), serde_json::json!({ "language": "fr", "cursorSync": false }));
+        fs::remove_dir_all(&dir).unwrap();
     }
 }

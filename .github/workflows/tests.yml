@@ -107,3 +107,50 @@ jobs:
         run: npm test
       - name: Build
         run: npm run build
+
+  # The VS Code extension (publisher.name codeburn.codeburn): its host code, the
+  # renderer's webview build, the bundled CLI, a packaged .vsix, and a smoke run
+  # in a real VS Code under xvfb against a fixture home.
+  vscode:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.13.0
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            app/package-lock.json
+            vscode/package-lock.json
+      - run: npm ci
+      - name: Install the renderer
+        run: npm ci
+        working-directory: app
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+      - name: Install the extension
+        run: npm ci
+        working-directory: vscode
+      - name: Typecheck
+        run: npm run typecheck
+        working-directory: vscode
+      - name: Unit tests
+        run: npm test
+        working-directory: vscode
+      - name: Webview bridge tests
+        run: npx vitest run renderer/vscode renderer/i18n
+        working-directory: app
+      - name: Build and package
+        run: npm run package
+        working-directory: vscode
+      - name: Smoke test in VS Code
+        run: xvfb-run -a npm run test:smoke
+        working-directory: vscode
+      - uses: actions/upload-artifact@v6
+        with:
+          name: codeburn-vscode
+          path: vscode/*.vsix
+          if-no-files-found: error

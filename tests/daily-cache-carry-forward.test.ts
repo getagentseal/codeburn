@@ -449,6 +449,46 @@ describe('adoption union across older cache files', () => {
     expect(JSON.parse(await readFile(join(TMP_CACHE_ROOT, 'daily-cache.json.v9.bak'), 'utf-8'))).toEqual(JSON.parse(JSON.stringify(v9bak)))
   })
 
+  it('never mixes days from a file written under another timezone', async () => {
+    const foreignTz = currentTzKey() === 'UTC' ? 'America/Los_Angeles' : 'UTC'
+    const local = {
+      version: 27, tzKey: currentTzKey(), complete: true, lastComputedDate: '2026-07-28',
+      days: [day('2026-07-27', { claude: slice(307.02, 900) })],
+    }
+    const foreign = {
+      version: 28, tzKey: foreignTz, complete: true, lastComputedDate: '2026-07-28',
+      days: [day('2026-07-27', { claude: slice(625.71, 1500) }), day('2026-07-28', { codex: slice(40, 30) })],
+    }
+    await writeFile(join(TMP_CACHE_ROOT, 'daily-cache.v27.json'), JSON.stringify(local), 'utf-8')
+    await writeFile(join(TMP_CACHE_ROOT, 'daily-cache.v28.json'), JSON.stringify(foreign), 'utf-8')
+    const cache = await loadDailyCache()
+    expect(cache.days).toHaveLength(1)
+    expect(cache.days[0]).toMatchObject({ date: '2026-07-27', cost: 307.02, calls: 900 })
+    expect(cache.tzKey).toBe(currentTzKey())
+  })
+
+  it('adopts a foreign-timezone history whole and tagged when it is all there is', async () => {
+    const foreignTz = currentTzKey() === 'UTC' ? 'America/Los_Angeles' : 'UTC'
+    const onlyFile = {
+      version: 28, tzKey: foreignTz, complete: true, lastComputedDate: '2026-07-28',
+      days: [day('2026-07-27', { claude: slice(625.71, 1500) })],
+    }
+    await writeFile(join(TMP_CACHE_ROOT, 'daily-cache.v28.json'), JSON.stringify(onlyFile), 'utf-8')
+    const cache = await loadDailyCache()
+    expect(cache.days[0]).toMatchObject({ date: '2026-07-27', cost: 625.71 })
+    // Tagged with the zone it was bucketed in, so hydration re-buckets it.
+    expect(cache.tzKey).toBe(foreignTz)
+  })
+
+  it('a file finalized by a complete parse outranks a newer interrupted one', async () => {
+    const complete = { version: 27, complete: true, days: [day('2026-07-27', { claude: slice(300, 900) })] }
+    const interrupted = { version: 28, complete: false, days: [day('2026-07-27', { claude: slice(20, 40) })] }
+    await writeFile(join(TMP_CACHE_ROOT, 'daily-cache.v27.json'), JSON.stringify(complete), 'utf-8')
+    await writeFile(join(TMP_CACHE_ROOT, 'daily-cache.v28.json'), JSON.stringify(interrupted), 'utf-8')
+    const cache = await loadDailyCache()
+    expect(cache.days[0]).toMatchObject({ cost: 300, calls: 900 })
+  })
+
   it('skips malformed candidates without failing the adoption', async () => {
     const good = {
       version: 12,
@@ -796,7 +836,7 @@ describe('#946: a migration re-derives copilot instead of carrying it', () => {
     expect(out.pendingRederive).toBeUndefined()
   })
 
-  it('does not re-open Copilot re-derivation for a cache already past its contract change', async () => {
+  it('re-opens Copilot re-derivation once its contract moves past the cache (v56)', async () => {
     await writeFile(
       join(TMP_CACHE_ROOT, `daily-cache.v${PRE_ROUTE_CONTRACT_VERSION}.json`),
       JSON.stringify({
@@ -812,9 +852,9 @@ describe('#946: a migration re-derives copilot instead of carrying it', () => {
     )
 
     const loaded = await loadDailyCache()
-    // From v32, Codex, Hermes, and Devin are owed re-derivation; dsh's v32
-    // contract is already satisfied.
-    expect(loaded.pendingRederive).toEqual(['codex', 'hermes', 'devin'])
+    // From v32, Copilot (v56), Codex, Hermes, Devin, Cursor Agent (v58) and Antigravity (v59) are owed
+    // re-derivation; dsh's v32 contract is already satisfied.
+    expect(loaded.pendingRederive).toEqual(['copilot', 'codex', 'hermes', 'devin', 'cursor-agent', 'antigravity', 'grok', 'cursor'])
   })
 
   it('preserves an older cache pending repair while adding a newer provider repair', async () => {
@@ -834,7 +874,7 @@ describe('#946: a migration re-derives copilot instead of carrying it', () => {
     )
 
     const loaded = await loadDailyCache()
-    expect(loaded.pendingRederive).toEqual(['copilot', 'codex', 'hermes', 'devin'])
+    expect(loaded.pendingRederive).toEqual(['copilot', 'codex', 'hermes', 'devin', 'cursor-agent', 'antigravity', 'grok', 'cursor'])
   })
 
   it('still carries the slice whole when the sources are gone (never-lose, #1033)', async () => {
@@ -868,7 +908,7 @@ describe('#946: a migration re-derives copilot instead of carrying it', () => {
   it('a PARTIAL parse does not spend the entitlement', async () => {
     await seedOlderCache([day(settled, { copilot: PRE_STORE })])
     const partial = await ensureCacheHydrated(noSessions, () => [], 'cfg-A', () => false)
-    expect(partial.pendingRederive).toEqual(['copilot', 'codex', 'hermes', 'dsh', 'devin'])
+    expect(partial.pendingRederive).toEqual(['copilot', 'codex', 'hermes', 'dsh', 'devin', 'cursor-agent', 'antigravity', 'grok', 'cursor'])
     // The next COMPLETE run still gets to re-derive.
     const out = await ensureCacheHydrated(noSessions, () => [day(settled, { copilot: STORE_BACKED })], 'cfg-A')
     expect(out.days.find(d => d.date === settled)!.providers['copilot'])

@@ -298,6 +298,20 @@ describe('notFoundStage (non-sensitive telemetry enum for a not-found)', () => {
     expect(notFoundStage()).toBe('bundled-missing')
   })
 
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('reports bundled-denied when the bundled CLI exists but cannot be stat-ed', () => {
+    delete process.env.CODEBURN_BIN
+    const locked = join(dir, 'locked')
+    mkdirSync(locked)
+    writeFileSync(join(locked, 'launch.js'), '')
+    chmodSync(locked, 0o000)
+    process.env.CODEBURN_BUNDLED_CLI = join(locked, 'launch.js')
+    try {
+      expect(notFoundStage()).toBe('bundled-denied')
+    } finally {
+      chmodSync(locked, 0o755)
+    }
+  })
+
   it('reports bin-not-absolute for a relative CODEBURN_BIN override', () => {
     process.env.CODEBURN_BIN = 'relative/codeburn'
     delete process.env.CODEBURN_BUNDLED_CLI
@@ -329,6 +343,22 @@ describe('spawnSpecFor (bundled CLI runs via Electron-as-node)', () => {
     // PATH is still augmented (the bundle's own dir leads), harmless for a CLI
     // that itself shells out during pairing/sync.
     expect((spec.env.PATH ?? '').split(delimiter)[0]).toBe('/res/cli/dist')
+  })
+
+  it('runs the bundle with CODEBURN_NODE_BIN instead, as plain Node, when a host names one', () => {
+    const saved = process.env.CODEBURN_NODE_BIN
+    process.env.CODEBURN_NODE_BIN = '/usr/local/bin/node'
+    try {
+      const spec = spawnSpecFor({ kind: 'bundled', entry: '/res/cli/dist/launch.js' }, ['serve', '--stdio'])
+      expect(spec.bin).toBe('/usr/local/bin/node')
+      expect(spec.args).toEqual(['/res/cli/dist/launch.js', 'serve', '--stdio'])
+      expect(spec.env.ELECTRON_RUN_AS_NODE).toBeUndefined()
+      process.env.CODEBURN_NODE_BIN = 'node'
+      expect(spawnSpecFor({ kind: 'bundled', entry: '/res/cli/dist/launch.js' }, []).bin).toBe(process.execPath)
+    } finally {
+      if (saved === undefined) delete process.env.CODEBURN_NODE_BIN
+      else process.env.CODEBURN_NODE_BIN = saved
+    }
   })
 
   it('spawns an external CLI directly, with no run-as-node flag', () => {
@@ -444,7 +474,7 @@ describe('spawnCli', () => {
 
   it('rejects with kind "nonzero" on a non-zero exit', async () => {
     fakeBin('fail.js', 'process.stderr.write("boom"); process.exit(2)')
-    await expect(spawnCli(['status'])).rejects.toMatchObject({ kind: 'nonzero' } satisfies Partial<CliError>)
+    await expect(spawnCli(['status'])).rejects.toMatchObject({ kind: 'nonzero', exit: '2' } satisfies Partial<CliError>)
   })
 
   it('rejects with kind "bad-json" on non-JSON stdout', async () => {
@@ -1237,6 +1267,33 @@ describe('resident serve single-flight', { timeout: 30_000 }, () => {
 
     expect(readMaybe(startsFile)).toBe('sss')
     expect(readMaybe(oneShotsFile)).toBe('oooo')
+  })
+
+  it('keeps restarting a resident that answers between watchdog kills', async () => {
+    const startsFile = join(dir, 'serve-starts')
+    fakeBin(
+      'answers-then-hangs-resident.js',
+      `const fs = require('node:fs'); const readline = require('node:readline');
+       if (process.argv[2] === 'serve') {
+         fs.appendFileSync(${JSON.stringify(startsFile)}, 's');
+         const rl = readline.createInterface({ input: process.stdin });
+         rl.once('line', line => {
+           const request = JSON.parse(line);
+           process.stdout.write(JSON.stringify({ id: request.id, ok: true, output: JSON.stringify({ via: 'serve' }) }) + '\\n');
+         });
+         setInterval(() => {}, 1000);
+       } else {
+         process.stdout.write(JSON.stringify({ via: 'spawn' }));
+       }`,
+    )
+    startServe()
+
+    // Each generation answers once, then goes silent and is killed by the
+    // watchdog. Those kills must not add up across healthy answers.
+    for (let attempt = 0; attempt < 10 && readMaybe(startsFile).length < 4; attempt += 1) {
+      await spawnCli(['status', '--attempt', String(attempt)], { timeoutMs: 300 })
+    }
+    expect(readMaybe(startsFile).length).toBeGreaterThanOrEqual(4)
   })
 
   it('does not spawn a one-shot fallback after killAll destroys serve', async () => {

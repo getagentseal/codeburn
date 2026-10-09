@@ -14,6 +14,7 @@ import { common } from './catalogs/common'
 import { settings } from './catalogs/settings'
 import { overview } from './catalogs/overview'
 import { sessions } from './catalogs/sessions'
+import { sessionView } from './catalogs/sessionView'
 import { plans } from './catalogs/plans'
 import { plugins } from './catalogs/plugins'
 import { models } from './catalogs/models'
@@ -23,12 +24,14 @@ import { spend } from './catalogs/spend'
 import { onboarding } from './catalogs/onboarding'
 import { shell } from './catalogs/shell'
 import { shared } from './catalogs/shared'
+import { ide } from './catalogs/ide'
 
 const SECTIONS: SectionCatalog[] = [
   common,
   settings,
   overview,
   sessions,
+  sessionView,
   plans,
   plugins,
   models,
@@ -38,6 +41,7 @@ const SECTIONS: SectionCatalog[] = [
   onboarding,
   shell,
   shared,
+  ide,
 ]
 
 function merge(pick: (s: SectionCatalog) => Record<string, string>): Record<string, string> {
