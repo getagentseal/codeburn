@@ -1820,7 +1820,14 @@ export async function ensureCacheHydrated(
       // transcript cleaned up or a partial provider sync looks the same.
       const settleStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - SETTLE_DAYS)
       const gapRange: DateRange = { start: settleStart < gapStart ? settleStart : gapStart, end: yesterdayEnd }
-      const gapProjects = await parseSessions(gapRange)
+      // A re-derived window starts on a day sealed together with the day before
+      // it, which already holds any turn crossing that midnight. Parse from that
+      // day so the turn stays whole there instead of being cut and its later
+      // part counted again on the window start.
+      const parseStart = settleStart < gapStart
+        ? new Date(now.getFullYear(), now.getMonth(), now.getDate() - SETTLE_DAYS - 1)
+        : gapStart
+      const gapProjects = await parseSessions({ start: parseStart, end: yesterdayEnd })
       const gapDays = daysInRange(aggregateDays(gapProjects), gapRange)
       const parseWasComplete = sessionComplete()
       const priorWatermark = c.lastComputedDate
