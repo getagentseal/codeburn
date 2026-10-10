@@ -532,7 +532,7 @@ struct CapacityDockProviderQuotaServiceTests {
         #expect(!store.capacityDockProvidersLoading.contains(provider.id))
     }
 
-    @Test("a quiet probe connects a signed-in provider and leaves a signed-out one untouched")
+    @Test("a quiet probe connects a signed-in provider, leaves a signed-out one untouched, and records other failures")
     func quietProbe() async throws {
         let provider = try #require(CapacityDockProvider(rawValue: "cursor"))
         let (defaults, suiteName) = TestDefaults.make("CodeBurnMenubarTests.DockQuota.\(#function)")
@@ -563,6 +563,11 @@ struct CapacityDockProviderQuotaServiceTests {
         #expect(signedOut.capacityDockQuotaSummary(for: provider) == nil)
         #expect(signedOut.capacityDockProviderErrors[provider.id] == nil)
         #expect(!signedOut.capacityDockProvidersLoading.contains(provider.id))
+
+        let failing = store { throw CursorSubscriptionService.FetchError.network }
+        await failing.refreshCapacityDockProvider(provider, quiet: true)
+        #expect(failing.capacityDockProviderErrors[provider.id] != nil)
+        #expect(failing.capacityDockProviderTransientFailures.contains(provider.id))
     }
 
     @Test("clearing an override keeps the pane probe; Disconnect stops it until Connect")

@@ -154,6 +154,8 @@ enum CapacityDockProviderFetchFailureDisposition: Equatable, Sendable {
 struct CapacityDockProviderFetchFailure: LocalizedError, Equatable, Sendable {
     let message: String
     let disposition: CapacityDockProviderFetchFailureDisposition
+    /// No credentials or local app data at all, as opposed to a failed check.
+    var notSignedIn = false
 
     init(message: String, disposition: CapacityDockProviderFetchFailureDisposition) {
         self.message = message
@@ -163,6 +165,20 @@ struct CapacityDockProviderFetchFailure: LocalizedError, Equatable, Sendable {
     init(error: Error) {
         message = error.localizedDescription
         disposition = Self.disposition(for: error)
+        switch error {
+        case ClinePassSubscriptionService.FetchError.noCredentials,
+             CommandCodeSubscriptionService.FetchError.noCredentials,
+             CursorSubscriptionService.FetchError.noCredentials,
+             DevinSubscriptionService.FetchError.noCache,
+             GrokBuildSubscriptionService.FetchError.noCredentials,
+             GrokBotSubscriptionService.FetchError.noCredentials,
+             GrokBotSubscriptionService.FetchError.notInstalled,
+             ZaiSubscriptionService.FetchError.noCredentials,
+             ZcodeSubscriptionService.FetchError.noCredentials:
+            notSignedIn = true
+        default:
+            break
+        }
     }
 
     var errorDescription: String? { message }

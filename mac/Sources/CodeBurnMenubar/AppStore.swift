@@ -2509,9 +2509,10 @@ final class AppStore {
         }
     }
 
-    /// `quiet` probes without recording a failure, so a provider that is simply
-    /// not signed in stays "Not connected" instead of "Reconnect required". It
-    /// skips a provider the user disconnected until they connect it again.
+    /// `quiet` records nothing when the provider is simply not signed in, so it
+    /// stays "Not connected" instead of "Reconnect required"; any other failure
+    /// is recorded as usual. It skips a provider the user disconnected until
+    /// they connect it again.
     func refreshCapacityDockProvider(_ provider: CapacityDockProvider, quiet: Bool = false) async {
         guard provider.legacyFilter == nil,
               provider.catalogEntry.hasLiveCodeBurnQuotaAdapter,
@@ -2538,7 +2539,8 @@ final class AppStore {
             capacityDockProviderErrors[provider.id] = nil
             capacityDockProviderTransientFailures.remove(provider.id)
         } catch {
-            guard capacityDockProviderRefreshGenerations[provider.id, default: 0] == generation, !quiet else {
+            guard capacityDockProviderRefreshGenerations[provider.id, default: 0] == generation,
+                  !(quiet && (error as? CapacityDockProviderFetchFailure)?.notSignedIn == true) else {
                 return
             }
             capacityDockProviderErrors[provider.id] = sanitizeForUI(error.localizedDescription)
