@@ -5,7 +5,8 @@
 //     the window's cap; resetAt is epoch ms, 0 while no window is open.
 //     credits.{monthlyCredits,purchasedCredits,freeCredits}: USD remaining.
 // - GET https://api.commandcode.ai/alpha/billing/subscriptions
-//     data.planId for the plan label; optional, a failure only drops the label.
+//     data.{planId,status,currentPeriodEnd} for the plan label and the monthly
+//     window; optional, a failure only drops both.
 //
 // Credential: the CLI's own ~/.commandcode/auth.json `apiKey`, read-only.
 // The API refuses requests without a User-Agent, so one is always sent.
@@ -20,6 +21,11 @@ const EXPIRED_FOOTER = ['Command Code session expired. Sign in with the Command 
 const RATE_LIMITED_FOOTER = ['Command Code rate-limited the quota request.']
 const UNAVAILABLE_FOOTER = ['Command Code is temporarily unavailable.']
 const PARSE_FOOTER = ['Command Code quota response was malformed.']
+// Command Code's API gives no monthly cap, so the plan price comes from this table.
+const PLAN_MONTHLY_USD: Record<string, number> = {
+  'individual-go': 10, 'individual-go-v1': 10, 'individual-goat': 70, 'individual-pro': 30, 'individual-pro-v1': 80,
+  'individual-provider': 15, 'individual-max': 150, 'individual-ultra': 300, 'teams-pro': 40,
+}
 
 export type CommandCodeDeps = {
   fetch: typeof fetch
@@ -73,8 +79,25 @@ function creditsNote(raw: unknown): string | null {
   return `Credits left: ${shown.map(part => `$${part.value.toFixed(2)} ${part.name}`).join(', ')}`
 }
 
-/** `null` when neither window is readable. */
-export function decodeCommandCodeCredits(body: unknown, planId?: unknown): QuotaProvider | null {
+export type CommandCodeSubscription = { planId?: unknown; status?: unknown; currentPeriodEnd?: unknown }
+
+/** Monthly credits used of the plan price; purchased and free credits are not part of the plan. */
+function monthlyWindow(credits: unknown, subscription: CommandCodeSubscription): QuotaWindow | null {
+  if (subscription.status !== 'active' || typeof subscription.planId !== 'string') return null
+  const plan = Object.hasOwn(PLAN_MONTHLY_USD, subscription.planId) ? PLAN_MONTHLY_USD[subscription.planId]! : null
+  const left = credits && typeof credits === 'object' ? num((credits as Record<string, unknown>)['monthlyCredits']) : null
+  if (plan === null || left === null) return null
+  const pool = Math.max(plan, left)
+  const end = typeof subscription.currentPeriodEnd === 'string' ? Date.parse(subscription.currentPeriodEnd) : NaN
+  return {
+    label: 'Monthly',
+    percent: fraction((pool - left) / pool * 100)!,
+    resetsAt: Number.isFinite(end) ? new Date(end).toISOString() : null,
+  }
+}
+
+/** `null` when neither the 5-hour nor the weekly window is readable. */
+export function decodeCommandCodeCredits(body: unknown, subscription: CommandCodeSubscription = {}): QuotaProvider | null {
   if (!body || typeof body !== 'object') return null
   const root = body as Record<string, unknown>
   const limits = root['windowLimits'] && typeof root['windowLimits'] === 'object'
@@ -82,14 +105,15 @@ export function decodeCommandCodeCredits(body: unknown, planId?: unknown): Quota
     : {}
   const fiveHour = windowOf('5-hour', limits['fiveHour'])
   const weekly = windowOf('Weekly', limits['weekly'])
-  const details = [fiveHour, weekly].filter((row): row is QuotaWindow => row !== null)
-  if (details.length === 0) return null
+  if (!fiveHour && !weekly) return null
+  const details = [fiveHour, weekly, monthlyWindow(root['credits'], subscription)]
+    .filter((row): row is QuotaWindow => row !== null)
   const note = creditsNote(root['credits'])
   return {
     provider: 'commandcode', connection: 'connected',
     primary: weekly ?? fiveHour!,
     details,
-    planLabel: commandCodePlanLabel(planId),
+    planLabel: commandCodePlanLabel(subscription.planId),
     footerLines: note ? [note] : [],
     ...(note ? { notes: [note] } : {}),
   }
@@ -128,10 +152,10 @@ export async function fetchCommandCodeQuota(options: Partial<CommandCodeDeps> & 
     if (credits.status >= 500) return { quota: empty('transientFailure', UNAVAILABLE_FOOTER) }
     if (!credits.ok) return { quota: empty('transientFailure', PARSE_FOOTER) }
     // Never log either body - they carry account data.
-    const planId = subscription?.ok
-      ? await subscription.json().then(body => (body as { data?: { planId?: unknown } })?.data?.planId, () => undefined)
+    const plan = subscription?.ok
+      ? await subscription.json().then(body => (body as { data?: CommandCodeSubscription })?.data, () => undefined)
       : undefined
-    const quota = decodeCommandCodeCredits(await credits.json(), planId)
+    const quota = decodeCommandCodeCredits(await credits.json(), plan && typeof plan === 'object' ? plan : {})
     return { quota: quota ?? empty('transientFailure', PARSE_FOOTER) }
   } catch (error) {
     console.warn(`Command Code quota unavailable: ${sanitizeError(error)}`)

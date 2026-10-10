@@ -4,12 +4,23 @@ import Foundation
 /// Command Code CLI keeps in ~/.commandcode/auth.json (read-only, never logged).
 /// GET /alpha/billing/credits carries the 5-hour and weekly windows as USD
 /// credits used of a cap (resetAt epoch ms, 0 while no window is open) plus
-/// the remaining credits; GET /alpha/billing/subscriptions carries the plan id.
-/// Mirrors src/quota/commandcode.ts.
+/// the remaining credits; GET /alpha/billing/subscriptions carries the plan id,
+/// status and period end. Mirrors src/quota/commandcode.ts.
 enum CommandCodeSubscriptionService {
     static let creditsURL = URL(string: "https://api.commandcode.ai/alpha/billing/credits")!
     static let subscriptionsURL = URL(string: "https://api.commandcode.ai/alpha/billing/subscriptions")!
     private static let timeoutSeconds: TimeInterval = 15
+    // Command Code's API gives no monthly cap, so the plan price comes from this table.
+    static let planMonthlyUSD: [String: Double] = [
+        "individual-go": 10, "individual-go-v1": 10, "individual-goat": 70, "individual-pro": 30, "individual-pro-v1": 80,
+        "individual-provider": 15, "individual-max": 150, "individual-ultra": 300, "teams-pro": 40,
+    ]
+
+    struct Subscription: Equatable, Sendable {
+        var planID: String?
+        var status: String?
+        var currentPeriodEnd: String?
+    }
 
     enum FetchError: Error, Equatable, LocalizedError, Sendable {
         case noCredentials
@@ -117,29 +128,34 @@ enum CommandCodeSubscriptionService {
         default: throw FetchError.parseFailure
         }
 
-        var planID: String?
+        var plan = Subscription()
         if let (body, http) = await subscription, http.statusCode == 200,
-           let root = try? JSONSerialization.jsonObject(with: body) as? [String: Any] {
-            planID = (root["data"] as? [String: Any])?["planId"] as? String
+           let root = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
+           let row = root["data"] as? [String: Any] {
+            plan = Subscription(
+                planID: row["planId"] as? String,
+                status: row["status"] as? String,
+                currentPeriodEnd: row["currentPeriodEnd"] as? String
+            )
         }
-        return try decode(data, planID: planID)
+        return try decode(data, subscription: plan)
     }
 
-    static func decode(_ data: Data, planID: String? = nil) throws -> QuotaSummary {
+    static func decode(_ data: Data, subscription: Subscription = Subscription()) throws -> QuotaSummary {
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw FetchError.parseFailure
         }
         let limits = root["windowLimits"] as? [String: Any] ?? [:]
         let fiveHour = window("5-hour", limits["fiveHour"])
         let weekly = window("Weekly", limits["weekly"])
-        let details = [fiveHour, weekly].compactMap { $0 }
-        guard !details.isEmpty else { throw FetchError.parseFailure }
+        guard fiveHour != nil || weekly != nil else { throw FetchError.parseFailure }
+        let details = [fiveHour, weekly, monthlyWindow(root["credits"], subscription)].compactMap { $0 }
         return QuotaSummary(
             providerFilter: .all,
             connection: .connected,
             primary: weekly ?? fiveHour,
             details: details,
-            planLabel: planLabel(planID),
+            planLabel: planLabel(subscription.planID),
             footerLines: creditsLine(root["credits"]).map { [$0] } ?? []
         )
     }
@@ -162,6 +178,27 @@ enum CommandCodeSubscriptionService {
             percent: min(1, max(0, used / cap)),
             resetsAt: resetAt > 0 ? Date(timeIntervalSince1970: resetAt / 1000) : nil
         )
+    }
+
+    /// Monthly credits used of the plan price; purchased and free credits are not part of the plan.
+    private static func monthlyWindow(_ credits: Any?, _ subscription: Subscription) -> QuotaSummary.Window? {
+        guard subscription.status == "active",
+              let planID = subscription.planID, let plan = planMonthlyUSD[planID],
+              let left = number((credits as? [String: Any])?["monthlyCredits"]) else { return nil }
+        let pool = max(plan, left)
+        return QuotaSummary.Window(
+            label: "Monthly",
+            percent: min(1, max(0, (pool - left) / pool)),
+            resetsAt: subscription.currentPeriodEnd.flatMap(parseDate)
+        )
+    }
+
+    private static func parseDate(_ raw: String) -> Date? {
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = iso.date(from: raw) { return date }
+        iso.formatOptions = [.withInternetDateTime]
+        return iso.date(from: raw)
     }
 
     private static func creditsLine(_ raw: Any?) -> String? {

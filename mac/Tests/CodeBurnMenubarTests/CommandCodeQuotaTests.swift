@@ -16,7 +16,7 @@ struct CommandCodeQuotaTests {
        "fiveHour":{"used":0.75,"cap":3,"exceeded":false,"resetAt":0},
        "weekly":{"used":6.0293354601,"cap":6,"exceeded":true,"resetAt":1791653049551}}}
     """
-    nonisolated private static let subscriptionBody = #"{"success":true,"data":{"status":"active","planId":"individual-go-v1"}}"#
+    nonisolated private static let subscriptionBody = #"{"success":true,"data":{"status":"active","planId":"individual-go-v1","currentPeriodEnd":"2026-11-01T10:38:29.000Z"}}"#
 
     nonisolated private static func response(_ request: URLRequest, _ status: Int) -> HTTPURLResponse {
         HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: nil)!
@@ -43,10 +43,13 @@ struct CommandCodeQuotaTests {
             let body = request.url == CommandCodeSubscriptionService.creditsURL ? Self.creditsBody : Self.subscriptionBody
             return (Data(body.utf8), Self.response(request, 200))
         })
-        #expect(summary.details.map(\.label) == ["5-hour", "Weekly"])
-        #expect(summary.details.map(\.percent) == [0.25, 1])
+        #expect(summary.details.map(\.label) == ["5-hour", "Weekly", "Monthly"])
+        #expect(summary.details[0].percent == 0.25)
+        #expect(summary.details[1].percent == 1)
+        #expect(abs(summary.details[2].percent - 0.6029) < 0.0001)
         #expect(summary.details[0].resetsAt == nil)
         #expect(summary.details[1].resetsAt == Date(timeIntervalSince1970: 1_791_653_049.551))
+        #expect(summary.details[2].resetsAt == Date(timeIntervalSince1970: 1_793_529_509))
         #expect(summary.primary?.label == "Weekly")
         #expect(summary.planLabel == "Go")
         #expect(summary.footerLines == ["Credits left: $3.97 monthly"])
@@ -55,6 +58,23 @@ struct CommandCodeQuotaTests {
             #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer synthetic-commandcode-key")
             #expect(request.value(forHTTPHeaderField: "User-Agent") == "CodeBurn")
         }
+    }
+
+    @Test("the monthly window needs an active subscription on a known plan")
+    func monthlyNeedsKnownActivePlan() throws {
+        let body = Data(Self.creditsBody.utf8)
+        let known = CommandCodeSubscriptionService.Subscription(
+            planID: "individual-go-v1", status: "active", currentPeriodEnd: "2026-11-01T10:38:29Z")
+        let go = try CommandCodeSubscriptionService.decode(body, subscription: known)
+        #expect(go.details.last?.label == "Monthly")
+        #expect(go.details.last?.resetsAt == Date(timeIntervalSince1970: 1_793_529_509))
+        #expect(go.primary?.label == "Weekly")
+        var unknown = known
+        unknown.planID = "individual-mystery"
+        #expect(try CommandCodeSubscriptionService.decode(body, subscription: unknown).details.map(\.label) == ["5-hour", "Weekly"])
+        var inactive = known
+        inactive.status = "canceled"
+        #expect(try CommandCodeSubscriptionService.decode(body, subscription: inactive).details.map(\.label) == ["5-hour", "Weekly"])
     }
 
     @Test("a failed subscription call only drops the plan label")
