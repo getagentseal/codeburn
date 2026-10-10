@@ -256,3 +256,102 @@ describe('session why: PR work', () => {
     expect(why.prWork.reviewCost).toBeCloseTo(['agent-aR1694', 'agent-aR1712', 'agent-aR1729'].reduce((n, id) => n + sessionCost(id), 0), 12)
   })
 })
+
+// The 10 Oct 2026 #1732 case: one call opens two PRs (pr-link only for the last,
+// a draft), then later runs carry that tag while they build and push another
+// branch whose PR is opened afterwards with a literal --head.
+describe('push evidence beats the carried pr-link', () => {
+  const S2 = '33333333-3333-4333-8333-333333333333'
+  const l2 = (o: Record<string, unknown>) => JSON.stringify({ sessionId: S2, cwd: CWD, ...o }) + '\n'
+  const u2 = (ts: string, content: unknown, extra: Record<string, unknown> = {}) => l2({ type: 'user', timestamp: ts, message: { role: 'user', content }, ...extra })
+  const a2 = (ts: string, tools: Tool[], model = 'claude-opus-4-8', extra: Record<string, unknown> = {}) => l2({
+    type: 'assistant', timestamp: ts, ...extra,
+    message: { id: `m${msg++}`, type: 'message', role: 'assistant', model, content: tools.map((t, i) => ({ type: 'tool_use', id: t.id ?? `tu${msg}_${i}`, name: t.name, input: t.input })), usage: { input_tokens: 1000, output_tokens: 500 } },
+  })
+  const link2 = (ts: string, n: number) => l2({ type: 'pr-link', timestamp: ts, prUrl: PR(n) })
+  const result2 = (ts: string, id: string, agentId: string) => u2(ts, [{ type: 'tool_result', tool_use_id: id, content: 'done' }], { toolUseResult: { status: 'completed', agentId, content: 'done' } })
+  const runs2: Array<{ agentId: string; spawnId: string; description: string; at: string; tools: Array<[string, Tool[]]> }> = [
+    { agentId: 'aResearch', spawnId: 'toolu_research', description: 'Research PR view: one-shot, reviews', at: '2026-10-10T16:30:48.000Z',
+      tools: [['2026-10-10T16:35:00.000Z', [bash('grep -c pr-link ~/.claude/projects/x.jsonl')]]] },
+    { agentId: 'aBuild', spawnId: 'toolu_build', description: 'Build desktop PR card', at: '2026-10-10T17:36:09.000Z',
+      tools: [
+        ['2026-10-10T17:40:00.000Z', [bash('git checkout -q -b feat/pr-insights-ui origin/main')]],
+        ['2026-10-10T18:11:48.000Z', [bash('git commit -qam "feat(pr): card" && git push -q -u origin feat/pr-insights-ui 2>&1 | tail -1')]],
+        ['2026-10-10T18:16:24.000Z', [bash('git push -q 2>&1 | tail -1')]],
+      ] },
+  ]
+
+  beforeEach(async () => {
+    const projDir = join(configDir, 'projects', 'prins-1732')
+    const subDir = join(projDir, S2, 'subagents')
+    await mkdir(subDir, { recursive: true })
+    await writeFile(join(projDir, `${S2}.jsonl`), [
+      u2('2026-10-10T15:17:00.000Z', 'open the ci fix and the release bump'),
+      a2('2026-10-10T15:18:42.000Z', [bash('cd $C && git push -q origin HEAD:release/0.9.26 && gh pr create -R getagentseal/codeburn --base main --head fix/ci-p12-rewrap --title "ci(mac): cert" --body-file /tmp/cifix.md 2>&1 | tail -1 && gh pr create -R getagentseal/codeburn --base main --head release/0.9.26 --draft --title "chore: bump to 0.9.26" --body-file /tmp/rel.md 2>&1 | tail -1')]),
+      link2('2026-10-10T15:18:48.000Z', 1732),
+      u2('2026-10-10T16:30:00.000Z', 'research the PR view'),
+      a2('2026-10-10T16:30:46.000Z', [spawn('toolu_research', runs2[0]!.description)]),
+      result2('2026-10-10T16:47:29.000Z', 'toolu_research', 'aResearch'),
+      link2('2026-10-10T16:47:30.000Z', 1732),
+      u2('2026-10-10T17:35:00.000Z', 'build the card'),
+      a2('2026-10-10T17:35:48.000Z', [spawn('toolu_build', runs2[1]!.description)]),
+      result2('2026-10-10T18:17:40.000Z', 'toolu_build', 'aBuild'),
+      link2('2026-10-10T18:17:41.000Z', 1732),
+      u2('2026-10-10T19:22:00.000Z', 'open the PR'),
+      a2('2026-10-10T19:22:39.000Z', [bash('gh pr create -R getagentseal/codeburn --base main --head feat/pr-insights-ui --title "feat(pr): card" --body-file /tmp/pri.md')]),
+      link2('2026-10-10T19:22:41.000Z', 1733),
+      u2('2026-10-10T19:41:00.000Z', 'rebase the release branch'),
+      a2('2026-10-10T19:41:52.000Z', [bash('cd $C && git push -q --force-with-lease origin release/0.9.26 && gh pr reopen 1732 -R getagentseal/codeburn')]),
+      // Still tagged #1733 here: the push to release/0.9.26 re-points this turn only.
+      u2('2026-10-10T20:29:00.000Z', 'what next'),
+      a2('2026-10-10T20:29:10.000Z', [bash('ls')]),
+      link2('2026-10-10T20:29:11.000Z', 1732),
+    ].join(''))
+    for (const r of runs2) {
+      const side = { isSidechain: true, agentId: r.agentId }
+      await writeFile(join(subDir, `agent-${r.agentId}.jsonl`), [
+        u2(r.at, 'do the task', side),
+        ...r.tools.map(([ts, tools]) => a2(ts, tools, 'claude-opus-4-8', side)),
+      ].join(''))
+      await writeFile(join(subDir, `agent-${r.agentId}.meta.json`), JSON.stringify({ agentType: 'general-purpose', description: r.description, toolUseId: r.spawnId }))
+    }
+    clearSessionCache()
+    projects = await parseAllSessions({ start: new Date('2026-10-10T00:00:00Z'), end: new Date('2026-10-10T23:59:59Z') }, 'claude')
+  })
+
+  const s2Turns = (from: string, to: string) => projects.flatMap(p => p.sessions).find(s => s.sessionId === S2)!
+    .turns.filter(t => t.timestamp >= from && t.timestamp < to).reduce((s, t) => s + t.assistantCalls.reduce((n, c) => n + c.costUSD, 0), 0)
+
+  it('moves the run that pushed the new PR head there and keeps the research run on the tag, marked carried', () => {
+    const { rows, totals } = buildPrAttribution(projects)
+    const row = (n: number) => rows.find(r => r.url === PR(n))
+    expect(row(1731)).toBeUndefined()
+    const r1732 = row(1732)!
+    const r1733 = row(1733)!
+    expect(r1733.cost).toBeCloseTo(sessionCost('agent-aBuild') + s2Turns('2026-10-10T19:22', '2026-10-10T19:41'), 9)
+    expect(r1732.cost).toBeCloseTo(sessionCost('agent-aResearch') + s2Turns('2026-10-10T15:17', '2026-10-10T19:22') + s2Turns('2026-10-10T19:41', '2026-10-10T21:00'), 9)
+    // The open turn and the push to its head are evidence for #1732; the rest is the tag.
+    expect(r1732.carriedUSD).toBeCloseTo(sessionCost('agent-aResearch') + s2Turns('2026-10-10T16:30', '2026-10-10T19:22') + s2Turns('2026-10-10T20:29', '2026-10-10T21:00'), 9)
+    expect(r1733.carriedUSD).toBe(0)
+    expect(r1732.runList.map(r => [r.kind, r.description, r.link])).toEqual([
+      ['session', null, 'opened'],
+      ['session', null, 'carried'],
+      ['subagent', 'Research PR view: one-shot, reviews', 'carried'],
+      ['session', null, 'gh-pr'],
+    ])
+    expect(r1733.runList.map(r => [r.kind, r.description, r.link])).toEqual([
+      ['subagent', 'Build desktop PR card', 'pushed-head'],
+      ['session', null, 'opened'],
+    ])
+    for (const r of rows) expect(r.runList.reduce((n, x) => n + x.costUSD, 0)).toBeCloseTo(r.cost, 9)
+    // Reopened, still a draft (no gh pr ready).
+    expect(r1732.state).toBe('draft')
+    expect(r1732.openedAt).toBe('2026-10-10T15:18:42.000Z')
+    expect(r1732.followUpRounds).toBe(1)
+    expect(r1732.followUpAt).toEqual(['2026-10-10T19:41:52.000Z'])
+    expect(r1733.state).toBeNull()
+    // The build run's pushes came before #1733 opened: not follow-ups.
+    expect(r1733.oneShot).toBe(true)
+    expect(rows.reduce((s, r) => s + r.cost, 0)).toBeCloseTo(totals.attributedCost, 9)
+  })
+})

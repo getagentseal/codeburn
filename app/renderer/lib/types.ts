@@ -371,6 +371,10 @@ export type MenubarPayload = {
         mergedAt?: string | null
         timeToMergeMs?: number | null
         costSplit?: { buildUSD: number; reviewUSD: number; fixesUSD: number }
+        carriedUSD?: number
+        runList?: Array<{ kind: 'session' | 'subagent'; description: string | null; model: string | null; costUSD: number; at: string; link: 'named' | 'pushed-head' | 'gh-pr' | 'opened' | 'carried' }>
+        state?: 'open' | 'draft' | 'merged' | 'closed' | null
+        followUpAt?: string[]
       }>
       distinctCost: number
       distinctSessions: number

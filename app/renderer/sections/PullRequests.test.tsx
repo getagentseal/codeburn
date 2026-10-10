@@ -372,75 +372,83 @@ describe('PullRequests', () => {
   })
 
   describe('local PR facts', () => {
-    const base = { savingsUSD: 0, sessions: 1, calls: 10, firstStarted: '2026-10-08T10:00:00Z', lastEnded: '2026-10-08T12:00:00Z', models: ['Opus 5.5'], categories: [{ name: 'Coding', cost: 1 }], linkEvidence: 'explicit' as const, openedAt: null, followUpPushes: 0, reviewCostUSD: 0, mergedAt: null, timeToMergeMs: null }
+    const base = { savingsUSD: 0, sessions: 1, calls: 10, firstStarted: '2026-10-08T10:00:00Z', lastEnded: '2026-10-08T12:00:00Z', models: ['Opus 5.5'], categories: [{ name: 'Coding', cost: 1 }], linkEvidence: 'explicit' as const, openedAt: null, followUpPushes: 0, reviewCostUSD: 0, mergedAt: null, timeToMergeMs: null, carriedUSD: 0, runList: [], state: null, followUpAt: [] }
     const pr = (n: number) => ({ url: `https://github.com/o/r/pull/${n}`, label: `o/r#${n}` })
     const ROWS: PrPayload['rows'] = [
-      { ...base, ...pr(1), cost: 11.16, runs: 3, openedAt: '2026-10-08T10:00:00Z', followUpRounds: 0, oneShot: true, reviewRuns: [], mergedAt: '2026-10-08T10:11:00Z', timeToMergeMs: 660_000, costSplit: { buildUSD: 11.16, reviewUSD: 0, fixesUSD: 0 } },
-      { ...base, ...pr(2), cost: 14.11, runs: 4, followUpRounds: 1, followUpPushes: 1, oneShot: null, reviewRuns: [{ kind: 'agent', label: 'general-purpose', model: 'Opus 5.5', costUSD: 1.4, at: '2026-10-10T08:56:00Z', evidence: 'reads-pr' }], reviewCostUSD: 1.4, mergedAt: '2026-10-10T09:34:00Z', costSplit: { buildUSD: 0, reviewUSD: 1.4, fixesUSD: 12.71 } },
-      { ...base, ...pr(3), cost: 4.45, runs: 1, linkEvidence: 'pr-link-only', followUpRounds: null, oneShot: null, reviewRuns: [], costSplit: { buildUSD: 4.45, reviewUSD: 0, fixesUSD: 0 } },
+      { ...base, ...pr(1), cost: 11.16, runs: 3, openedAt: '2026-10-08T10:00:00Z', followUpRounds: 0, oneShot: true, reviewRuns: [], mergedAt: '2026-10-08T10:11:00Z', timeToMergeMs: 660_000, state: 'merged', costSplit: { buildUSD: 11.16, reviewUSD: 0, fixesUSD: 0 } },
+      { ...base, ...pr(2), cost: 14.11, runs: 4, followUpRounds: 1, followUpPushes: 1, oneShot: null, reviewRuns: [{ kind: 'agent', label: 'general-purpose', model: 'Opus 5.5', costUSD: 1.4, at: '2026-10-10T08:56:00Z', evidence: 'reads-pr' }], reviewCostUSD: 1.4, mergedAt: '2026-10-10T09:34:00Z', followUpAt: ['2026-10-10T09:15:00Z'], costSplit: { buildUSD: 0, reviewUSD: 1.4, fixesUSD: 12.71 } },
+      { ...base, ...pr(3), cost: 4.45, runs: 1, linkEvidence: 'pr-link-only', followUpRounds: null, oneShot: null, reviewRuns: [], carriedUSD: 4.45, costSplit: { buildUSD: 4.45, reviewUSD: 0, fixesUSD: 0 } },
       { ...base, ...pr(4), cost: 9, runs: 6, openedAt: '2026-10-08T10:00:00Z', followUpRounds: 2, followUpPushes: 5, oneShot: false, reviewRuns: [
         { kind: 'agent', label: 'general-purpose', model: 'Sonnet 5.5', costUSD: 0.5, at: '2026-10-08T10:30:00Z', evidence: 'reads-pr' },
         { kind: 'you', label: 'approve', model: 'Opus 5.5', costUSD: 0.25, at: '2026-10-08T11:30:00Z', evidence: 'gh-pr-review' },
       ], reviewCostUSD: 0.75, costSplit: { buildUSD: 6, reviewUSD: 0.75, fixesUSD: 2.25 } },
+      // The #1732 shape: a draft opened here with its head a shell variable, no
+      // review, most spend only carried by the session's pr-link tag.
+      { ...base, ...pr(5), cost: 30.62, runs: 9, openedAt: '2026-10-10T15:18:39Z', followUpRounds: null, oneShot: null, reviewRuns: [], state: 'draft', carriedUSD: 27.97,
+        categories: ['Coding', 'Exploration', 'Debugging', 'Testing', 'Planning', 'Git ops', 'Docs'].map((name, i) => ({ name, cost: [19.6, 3.06, 2.5, 2, 1.5, 1, 0.96][i]! })),
+        runList: [
+          { kind: 'session', description: null, model: 'Opus 5.5', costUSD: 0.62, at: '2026-10-10T15:17:17Z', link: 'opened' },
+          { kind: 'session', description: null, model: 'Opus 5.5', costUSD: 1.6, at: '2026-10-10T15:32:00Z', link: 'gh-pr' },
+          { kind: 'subagent', description: 'Create release/0.9.26 version branch', model: 'Sonnet 5.5', costUSD: 0.43, at: '2026-10-10T14:24:00Z', link: 'pushed-head' },
+          { kind: 'subagent', description: 'Research PR view: one-shot, reviews', model: 'Opus 5.5', costUSD: 27.97, at: '2026-10-10T16:30:48Z', link: 'carried' },
+        ],
+        costSplit: { buildUSD: 30.62, reviewUSD: 0, fixesUSD: 0 } },
+      { ...base, ...pr(6), cost: 10, runs: 2, followUpRounds: null, oneShot: null, reviewRuns: [], state: 'closed', carriedUSD: 0.4, costSplit: { buildUSD: 10, reviewUSD: 0, fixesUSD: 0 } },
     ]
-    const payload = { rows: ROWS, distinctCost: 38.72, distinctSessions: 1, attributedCost: 38.72, unattributedCost: 0 }
+    const payload = { rows: ROWS, distinctCost: 79.34, distinctSessions: 1, attributedCost: 79.34, unattributedCost: 0 }
 
     async function card(n: number): Promise<HTMLElement> {
       return (await screen.findByRole('link', { name: `o/r#${n}` })).closest('article') as HTMLElement
     }
+    async function opened(n: number): Promise<HTMLElement> {
+      const el = await card(n)
+      await userEvent.click(rowForLink(within(el).getByRole('link')))
+      return el
+    }
     const facts = (el: HTMLElement) => [...el.querySelectorAll('.pr-card-facts span')].map(s => s.textContent)
-
-    it('one shot, merge time and the run count', async () => {
+    const tableRows = (region: HTMLElement) => [...region.querySelectorAll('tr')].map(r => [...r.querySelectorAll('td')].map(td => td.textContent))
+    const render6 = () => {
       getOverview.mockResolvedValue(makePayload(payload))
       render(<PullRequests period="lifetime" provider="all" />)
+    }
+
+    it('merged on its day, one shot, no review run found, and the run count', async () => {
+      render6()
       const el = await card(1)
-      expect(facts(el)).toEqual(['One shot', 'Merged 11m after open'])
+      expect(facts(el)).toEqual([`Merged ${formatDayShort('2026-10-08T10:11:00Z')}`, 'One shot', 'No review run found'])
       expect(el).toHaveTextContent('3 runs')
       expect(el).not.toHaveTextContent('1 session')
     })
 
-    it('a PR opened elsewhere: your follow-ups, the review run, no merge time without an open', async () => {
-      getOverview.mockResolvedValue(makePayload(payload))
-      render(<PullRequests period="lifetime" provider="all" />)
+    it('a PR opened elsewhere: merged, your follow-ups, the review run', async () => {
+      render6()
       const el = await card(2)
-      expect(facts(el)).toEqual(['Reviewed by Opus 5.5 run ($1.40)', 'Your follow-ups: 1'])
+      expect(facts(el)).toEqual([`Merged ${formatDayShort('2026-10-10T09:34:00Z')}`, 'Your follow-ups: 1', 'Reviewed by Opus 5.5 run ($1.40)'])
       expect(el).not.toHaveTextContent('One shot')
-      expect(el).not.toHaveTextContent('Merged')
     })
 
-    it('omits unknowns and says pr-link only, never stale or no review', async () => {
-      getOverview.mockResolvedValue(makePayload(payload))
-      render(<PullRequests period="lifetime" provider="all" />)
+    it('the #24 shape: states every unknown, the carried spend and pr-link only', async () => {
+      render6()
       const el = await card(3)
-      expect(facts(el)).toEqual(['Linked by pr-link only'])
+      expect(facts(el)).toEqual(['Follow-ups: not tracked', 'No review run found', '$4.45 carried from session tag', 'Linked by pr-link only'])
       expect(el).toHaveTextContent('1 run')
-      expect(el.textContent).not.toMatch(/stale|review|follow-up|one shot/i)
+      expect(el.textContent).not.toMatch(/stale|one shot/i)
     })
 
     it('several review runs and counted rounds', async () => {
-      getOverview.mockResolvedValue(makePayload(payload))
-      render(<PullRequests period="lifetime" provider="all" />)
-      expect(facts(await card(4))).toEqual(['2 review runs ($0.75)', '2 follow-up rounds'])
+      render6()
+      expect(facts(await card(4))).toEqual(['2 follow-up rounds', '2 review runs ($0.75)'])
     })
 
-    it('splits the spend by phase, summing to the cost, and lists the review runs', async () => {
-      getOverview.mockResolvedValue(makePayload(payload))
-      render(<PullRequests period="lifetime" provider="all" />)
-      const el = await card(4)
-      await userEvent.click(rowForLink(within(el).getByRole('link')))
-      const region = within(el).getByRole('region', { name: 'o/r#4 spend by phase' })
-      const rows = [...region.querySelectorAll('.pr-cat')].map(r => r.textContent)
-      expect(rows).toEqual(['Building$6.00', 'Review runs$0.75', 'After first review$2.25', 'general-purposeSonnet 5.5$0.50', 'Your review (approve)Opus 5.5$0.25'])
-      const split = ROWS[3]!.costSplit!
-      expect(split.buildUSD + split.reviewUSD + split.fixesUSD).toBeCloseTo(ROWS[3]!.cost, 10)
+    it('the #1732 shape: draft, follow-ups not tracked, no review, carried', async () => {
+      render6()
+      const el = await card(5)
+      expect(facts(el)).toEqual(['Open · draft', 'Follow-ups: not tracked', 'No review run found', '$27.97 carried from session tag'])
     })
 
-    it('shows no phase split when no review run was seen', async () => {
-      getOverview.mockResolvedValue(makePayload(payload))
-      render(<PullRequests period="lifetime" provider="all" />)
-      const el = await card(1)
-      await userEvent.click(rowForLink(within(el).getByRole('link')))
-      expect(within(el).queryByRole('region', { name: 'o/r#1 spend by phase' })).toBeNull()
+    it('closed, and no carried note under the threshold', async () => {
+      render6()
+      expect(facts(await card(6))).toEqual(['Closed', 'Follow-ups: not tracked', 'No review run found'])
     })
 
     it('an older payload without the fields keeps the session count and no facts line', async () => {
@@ -449,6 +457,49 @@ describe('PullRequests', () => {
       const el = (await screen.findByRole('link', { name: 'getagentseal/codeburn#780' })).closest('article') as HTMLElement
       expect(el).toHaveTextContent('3 sessions')
       expect(el.querySelector('.pr-card-facts')).toBeNull()
+      await userEvent.click(rowForLink(within(el).getByRole('link')))
+      expect(within(el).queryByRole('region', { name: /timeline|runs|by phase/i })).toBeNull()
+    })
+
+    it('expands to timeline, runs with their reasons, cost by phase, and a top-5 work table', async () => {
+      render6()
+      const el = await opened(5)
+      const regions = [...el.querySelectorAll('[role="region"]')].map(r => r.getAttribute('aria-label'))
+      expect(regions).toEqual(['o/r#5 timeline', 'o/r#5 runs', 'o/r#5 spend by phase', 'o/r#5 cost breakdown'])
+      expect(tableRows(within(el).getByRole('region', { name: 'o/r#5 timeline' })).map(r => r[0])).toEqual(['Opened'])
+      const runs = within(el).getByRole('region', { name: 'o/r#5 runs' })
+      expect(tableRows(runs)).toEqual([
+        ['Main session', 'opened it', 'Opus 5.5', '$0.62'],
+        ['Main session', 'ran gh on this PR', 'Opus 5.5', '$1.60'],
+        ['Create release/0.9.26 version branch', "pushed this PR's branch", 'Sonnet 5.5', '$0.43'],
+        ['Research PR view: one-shot, reviews', 'carried from session tag', 'Opus 5.5', '$27.97'],
+      ])
+      expect(runs).toHaveTextContent('$27.97 carried from session tag')
+      expect(tableRows(within(el).getByRole('region', { name: 'o/r#5 spend by phase' }))).toEqual([
+        ['Building', '$30.62', '100%'], ['Review runs', '$0.00', '0%'], ['After first review', '$0.00', '0%'],
+      ])
+      expect(tableRows(within(el).getByRole('region', { name: 'o/r#5 cost breakdown' }))).toEqual([
+        ['Coding', '$19.60', '64%'], ['Exploration', '$3.06', '10%'], ['Debugging', '$2.50', '8%'], ['Testing', '$2.00', '7%'], ['Planning', '$1.50', '5%'], ['Other', '$1.96', '6%'],
+      ])
+      expect(el.querySelector('.pr-cat-bar')).toBeNull()
+    })
+
+    it('puts follow-up rounds, the first review and the merge on the timeline, and splits by phase', async () => {
+      render6()
+      const el = await opened(2)
+      expect(tableRows(within(el).getByRole('region', { name: 'o/r#2 timeline' })).map(r => r[0])).toEqual(['First review', 'Follow-up round 1', 'Merged'])
+      const el4 = await opened(4)
+      const split = ROWS[3]!.costSplit!
+      expect(tableRows(within(el4).getByRole('region', { name: 'o/r#4 spend by phase' }))).toEqual([
+        ['Building', '$6.00', '67%'], ['Review runs', '$0.75', '8%'], ['After first review', '$2.25', '25%'],
+      ])
+      expect(split.buildUSD + split.reviewUSD + split.fixesUSD).toBeCloseTo(ROWS[3]!.cost, 10)
+    })
+
+    it('says when no open, review or merge was seen', async () => {
+      render6()
+      const el = await opened(3)
+      expect(within(el).getByRole('region', { name: 'o/r#3 timeline' })).toHaveTextContent('No open, review or merge seen here.')
     })
   })
 })

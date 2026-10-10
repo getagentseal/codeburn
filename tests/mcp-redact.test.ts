@@ -40,6 +40,7 @@ function payload(): MenubarPayload {
           cost: 4, savingsUSD: 0, sessions: 1, calls: 8,
           firstStarted: '2026-06-01T10:00:00.000Z', lastEnded: '2026-06-01T12:00:00.000Z',
           approx: false, models: ['Opus'],
+          runList: [{ kind: 'subagent', description: 'Fix secret-client/repo#42 on feat/secret', model: 'Opus', costUSD: 4, at: '2026-06-01T10:00:00.000Z', link: 'named' }],
         }],
         distinctCost: 4, distinctSessions: 1, attributedCost: 4, unattributedCost: 0,
       },
@@ -119,6 +120,7 @@ describe('redact', () => {
     expect(row.calls).toBe(8)
     expect(JSON.stringify(out)).not.toContain('github.com/secret-client/repo')
     expect(JSON.stringify(out)).not.toContain('secret-client/repo#42')
+    expect(row.runList).toEqual([{ kind: 'subagent', description: null, model: 'Opus', costUSD: 4, at: '2026-06-01T10:00:00.000Z', link: 'named' }])
   })
   it('gives the same PR the same pseudonym across calls, distinct from other PRs', () => {
     const first = redactProjectNames(payload(), false).current.pullRequests!.rows[0]!.url

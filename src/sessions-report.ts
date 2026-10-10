@@ -4,7 +4,7 @@ import { flatString } from './content-utils.js'
 import { ESTIMATED_COST_LEGEND, isEstimatedCost, markEstimated } from './format.js'
 import { modelRowKey } from './models.js'
 import { maxOf } from './math-utils.js'
-import { callCommands, createHead, ghPrCommands, isCommit, isPush, namedPr, namedPrNumber, prNumbersIn, pushes, readPrNumbers, readsCode, reviewVerdict, rounds, type NamedPr } from './pr-signals.js'
+import { callCommands, createHead, ghPrCommands, isCommit, namedPr, namedPrNumber, prNumbersIn, pushes, readPrNumbers, readsCode, reviewVerdict, roundStarts, type NamedPr } from './pr-signals.js'
 import { inferSessionProvider, sessionBillableOutputTokens } from './session-output.js'
 import { CATEGORY_LABELS } from './types.js'
 import type { ProjectSummary, SessionSummary, TaskCategory } from './types.js'
@@ -473,6 +473,30 @@ export type PrRow = {
   /// `cost` split by phase, summing exactly to `cost`: review = reviewCostUSD,
   /// fixes = everything else from the first review on, build = the rest.
   costSplit: { buildUSD: number; reviewUSD: number; fixesUSD: number }
+  /// Part of `cost` from turns and runs with no evidence of their own: only the
+  /// session's carried pr-link tag (or a legacy even split) put them here.
+  carriedUSD: number
+  /// Every contribution to `cost`, by time: a session's turns grouped by why they
+  /// count here, and each folded run. Costs sum to `cost`.
+  runList: PrRun[]
+  /// Latest state local commands show: a `--draft` open, then `gh pr
+  /// merge/close/ready/reopen` naming this PR. null: none seen.
+  state: 'open' | 'draft' | 'merged' | 'closed' | null
+  /// Start of each follow-up round counted in `followUpRounds`.
+  followUpAt: string[]
+}
+
+/// Why a run counts toward a PR: its description named it, it pushed the PR's
+/// head branch, a command named the PR, it opened it, or only the carried tag.
+export type PrRunLink = 'named' | 'pushed-head' | 'gh-pr' | 'opened' | 'carried'
+
+export type PrRun = {
+  kind: 'session' | 'subagent'
+  description: string | null
+  model: string | null
+  costUSD: number
+  at: string
+  link: PrRunLink
 }
 
 export type PrReviewRun = {
@@ -587,6 +611,10 @@ export type ChildFold = {
   readsCode: boolean
   readPrs: Set<number>
   prNumbers: Set<number>
+  /// Branches the subtree pushed (a bare push counts for the branch its session
+  /// last pushed by name).
+  branches: Set<string>
+  description: string
 }
 
 function parseMs(ts: string | undefined): number {
@@ -752,13 +780,19 @@ function buildChildFold(child: SessionSummary, index: Map<string, SessionSummary
   let reads = false
   const readPrs = new Set<number>()
   const prNumbers = new Set<number>()
+  const branches = new Set<string>()
+  let upstream: string | undefined
   for (const turn of child.turns) {
     let turnCost = 0
     for (const call of turn.assistantCalls) {
       turnCost += call.costUSD
       if (call.model) addToMap(models, call.model, call.costUSD)
       if (scanCommands) for (const cmd of callCommands(call)) {
-        if (isPush(cmd)) pushed = true
+        for (const named of pushes(cmd)) {
+          pushed = true
+          if (named.length) upstream = named.at(-1)
+          for (const b of named.length ? named : upstream ? [upstream] : []) branches.add(b)
+        }
         if (isCommit(cmd)) committed = true
         if (readsCode(cmd)) reads = true
         for (const n of readPrNumbers(cmd)) readPrs.add(n)
@@ -777,7 +811,7 @@ function buildChildFold(child: SessionSummary, index: Map<string, SessionSummary
     named: namedPr(description),
     ...(child.agentType ? { agentType: child.agentType } : {}),
     mentioned: namedPrNumber(description),
-    pushed, committed, readsCode: reads, readPrs, prNumbers,
+    pushed, committed, readsCode: reads, readPrs, prNumbers, branches, description,
   }
   for (const gc of index.get(providerSessionKey(child)) ?? []) {
     // Skip a descendant whose id is ambiguous (two conflicting records share it):
@@ -791,6 +825,7 @@ function buildChildFold(child: SessionSummary, index: Map<string, SessionSummary
     fold.readsCode ||= gcf.readsCode
     for (const n of gcf.readPrs) fold.readPrs.add(n)
     for (const n of gcf.prNumbers) fold.prNumbers.add(n)
+    for (const b of gcf.branches) fold.branches.add(b)
     for (const [m, c] of gcf.models) addToMap(fold.models, m, c)
     for (const [cat, c] of gcf.categories) addToMap(fold.categories, cat, c)
     if (gcf.firstTs && (!fold.firstTs || gcf.firstTs < fold.firstTs)) fold.firstTs = gcf.firstTs
@@ -937,14 +972,15 @@ export function resolveSubagentAttribution(projects: ProjectSummary[], scanComma
 /// touching several PRs); calls are split by largest-remainder so they stay whole.
 /// Each contribution also records the models of its calls and the turn's task
 /// category, both weighted by the same split share. Turns before the first
-/// reference land in `unattributed` (genuine session overhead).
+/// reference land in `unattributed` (genuine session overhead). `repoint` may
+/// swap one attributed turn's set (push evidence) without changing the carry.
 ///
 /// Legacy fallback: a session whose transcript already expired keeps its
 /// session-level `prLinks` but has NO per-turn `prRefs`. With no turn boundaries
 /// to attribute by, split the whole session evenly across its prLinks, mark every
 /// portion `approx`, and carry the session's model union (its calls still name
 /// their models) but NO category breakdown, since none can be honestly assigned.
-export function attributeSessionPrSpend(session: AttributableSession): SessionPrAttribution {
+export function attributeSessionPrSpend(session: AttributableSession, repoint?: (turnIndex: number, carried: string[]) => string[]): SessionPrAttribution {
   const perUrl = new Map<string, PrContribution>()
   const unattributed = { cost: 0, calls: 0, savingsUSD: 0 }
 
@@ -974,16 +1010,17 @@ export function attributeSessionPrSpend(session: AttributableSession): SessionPr
 
   let current: string[] | null = session.prRefsAtRangeStart?.length ? session.prRefsAtRangeStart : null
   const turnPrs: Array<string[] | null> = []
-  for (const turn of session.turns) {
+  for (const [i, turn] of session.turns.entries()) {
     if (turn.prRefs?.length) current = turn.prRefs
-    turnPrs.push(current)
+    const prs = current && repoint ? repoint(i, current) : current
+    turnPrs.push(prs)
     const cost = turn.assistantCalls.reduce((s, c) => s + c.costUSD, 0)
     const calls = behavioralCallCount(turn.assistantCalls)
     const savings = turn.assistantCalls.reduce((s, c) => s + (c.savingsUSD ?? 0), 0)
     // Cost/savings keep every call, so a supplementary-only turn (calls === 0)
     // still attributes its spend here — only a genuinely empty turn is skipped.
     if (cost === 0 && calls === 0 && savings === 0) continue
-    if (current === null) {
+    if (prs === null) {
       unattributed.cost += cost
       unattributed.calls += calls
       unattributed.savingsUSD += savings
@@ -993,11 +1030,11 @@ export function attributeSessionPrSpend(session: AttributableSession): SessionPr
     for (const call of turn.assistantCalls) {
       if (call.model) addToMap(modelCostInTurn, call.model, call.costUSD)
     }
-    const share = 1 / current.length
-    const callAlloc = allocateEven(calls, current.length)
+    const share = 1 / prs.length
+    const callAlloc = allocateEven(calls, prs.length)
     const startTs = turnStartTs(turn)
     const endTs = turn.assistantCalls.at(-1)?.timestamp || startTs
-    current.forEach((url, i) => {
+    prs.forEach((url, i) => {
       const e = ensureContribution(perUrl, url)
       if (startTs && (!e.firstTs || startTs < e.firstTs)) e.firstTs = startTs
       if (endTs > e.lastTs) e.lastTs = endTs
@@ -1040,6 +1077,29 @@ export function buildPrAttribution(projects: ProjectSummary[]): PrAttribution {
     let s = signals.get(url)
     if (!s) signals.set(url, s = { spend: [], openedMs: NaN, explicit: false, reviews: [] })
     return s
+  }
+  // Opens first: a run can push branch B before B's PR is opened, possibly by
+  // another session, so every head must be known before attributing.
+  const linked = projects.flatMap(p => p.sessions.filter(s => s.prLinks?.length))
+  const turnCmds = new Map<SessionSummary, TurnCommands[]>()
+  for (const session of linked) {
+    const tc = turnCommands(session)
+    turnCmds.set(session, tc)
+    matchSessionCreates(session, tc, sig)
+  }
+  // ponytail: a head branch reused by two PRs maps to neither.
+  const heads = new Map<string, string | null>()
+  for (const [url, s] of signals) if (s.head) heads.set(s.head, heads.has(s.head) && heads.get(s.head) !== url ? null : url)
+  // Push evidence: the PRs (in the carried set's repo) whose head these branches are.
+  const headPrs = (branches: Iterable<string>, carried: string[]): string[] | null => {
+    if (!heads.size) return null
+    const repos = new Set(carried.map(u => prParts(u)?.repo))
+    const out = new Set<string>()
+    for (const b of branches) {
+      const u = heads.get(b)
+      if (u && repos.has(prParts(u)?.repo)) out.add(u)
+    }
+    return out.size ? [...out] : null
   }
   let attributedCost = 0
   let unattributedCost = 0
@@ -1092,7 +1152,8 @@ export function buildPrAttribution(projects: ProjectSummary[]): PrAttribution {
       subagentSessions += rc.fold.foldedSessions
       if (!rc.prSet?.length) { unattributedCost += rc.fold.cost; continue }
       attributedCost += rc.fold.cost
-      const prs = rc.prSet
+      const namedOne = rc.fold.named !== null && rc.fold.named !== 'multi'
+      const prs = (!namedOne && headPrs(rc.fold.branches, rc.prSet)) || rc.prSet
       const share = 1 / prs.length
       const callAlloc = allocateEven(rc.fold.calls, prs.length)
       prs.forEach((url, i) => {
@@ -1112,12 +1173,15 @@ export function buildPrAttribution(projects: ProjectSummary[]): PrAttribution {
       if (!session.prLinks?.length) continue
       sessions += 1
       const sessionKey = rowSessionKey(session)
-      const { perUrl, unattributed, turnPrs } = attributeSessionPrSpend(session)
+      const tc = turnCmds.get(session)!
+      const { perUrl, unattributed, turnPrs } = attributeSessionPrSpend(session, (i, carried) =>
+        (tc[i]!.pushed.length && headPrs(tc[i]!.pushed, carried)) || carried)
       for (const [url, c] of perUrl) {
         attributedCost += c.cost
         addTo(url, sessionKey, c.firstTs || session.firstTimestamp, c.lastTs || session.lastTimestamp, c.cost, c.savingsUSD, c.calls, c.approx, c.models, c.categories)
+        if (c.approx) sig(url).spend.push({ ms: parseMs(session.firstTimestamp), cost: c.cost, review: false, legacy: true, run: { kind: 'session', key: sessionKey, description: null, models: c.models, at: session.firstTimestamp, link: 'carried' } })
       }
-      turnSignals(session, turnPrs, sig)
+      turnSignals(session, sessionKey, tc, turnPrs, sig)
       unattributedCost += unattributed.cost
       foldChildren(session)
     }
@@ -1179,11 +1243,15 @@ export function buildPrAttribution(projects: ProjectSummary[]): PrAttribution {
   return { rows, totals: { cost: attributedCost + unattributedCost, sessions, subagentSessions, attributedCost, unattributedCost } }
 }
 
+type SpendRun = { kind: 'session' | 'subagent'; key: string; description: string | null; models: Map<string, number>; at: string; link: PrRunLink }
+
 type PrSignals = {
-  /// Each attributed share with its start time; `review` marks review spend.
-  spend: Array<{ ms: number; cost: number; review: boolean }>
+  /// Each attributed share with its start time and run; `review` marks review
+  /// spend, `legacy` an even-split share with no turn data.
+  spend: Array<{ ms: number; cost: number; review: boolean; legacy?: boolean; run: SpendRun }>
   openedMs: number
   head?: string
+  draft?: boolean
   explicit: boolean
   reviews: PrReviewRun[]
 }
@@ -1213,7 +1281,11 @@ function foldSignals(s: PrSignals, url: string, fold: ChildFold, share: number, 
   const pr = prParts(url)
   const readThis = !!pr && single && fold.named !== 'multi' && (fold.readPrs.has(pr.number) || (fold.mentioned === pr.number && fold.readsCode))
   const review = readThis && !fold.committed && !fold.pushed
-  s.spend.push({ ms: parseMs(fold.firstTs), cost, review })
+  const link: PrRunLink = pr && fold.mentioned === pr.number ? 'named'
+    : s.head && fold.branches.has(s.head) ? 'pushed-head'
+    : pr && fold.prNumbers.has(pr.number) ? 'gh-pr'
+    : 'carried'
+  s.spend.push({ ms: parseMs(fold.firstTs), cost, review, run: { kind: 'subagent', key: fold.agentId, description: fold.description || null, models: fold.models, at: fold.firstTs, link } })
   if (review) s.reviews.push({ kind: 'agent', label: fold.agentType ?? 'subagent', model: topModel(fold.models), costUSD: cost, at: fold.firstTs, evidence: 'reads-pr' })
   if (pr && (fold.prNumbers.has(pr.number) || fold.mentioned === pr.number)) s.explicit = true
 }
@@ -1221,51 +1293,69 @@ function foldSignals(s: PrSignals, url: string, fold: ChildFold, share: number, 
 // Pair each `gh pr create` in a turn with a PR first referenced in that turn
 // (its pr-link lands there): per repo, creates in call order against the new PR
 // numbers ascending, since GitHub numbers grow. A retried create for the same
-// head keeps only the last one.
+// head keeps only the last one. One call opening several PRs gets a pr-link for
+// the last one only.
 function matchCreates(cmds: Array<{ cmd: string; ms: number }>, fresh: string[], sig: (url: string) => PrSignals): void {
-  const creates = new Map<string, { ms: number; repo?: string; head?: string }>()
+  const creates = new Map<string, { ms: number; repo?: string; head?: string; draft: boolean }>()
   cmds.forEach(c => ghPrCommands(c.cmd).forEach((g, j) => {
     if (g.verb !== 'create') return
     const head = createHead(g.args)
-    creates.set(head ?? `${c.ms}:${j}`, { ms: c.ms, ...(g.repo ? { repo: g.repo } : {}), ...(head ? { head } : {}) })
+    creates.set(head ?? `${c.ms}:${j}`, { ms: c.ms, ...(g.repo ? { repo: g.repo } : {}), ...(head ? { head } : {}), draft: /(?:^|\s)(?:--draft|-d)(?=\s|$)/.test(g.args) })
   }))
   if (!creates.size) return
-  const byRepo = new Map<string, Array<{ ms: number; head?: string }>>()
+  const byRepo = new Map<string, Array<{ ms: number; head?: string; draft: boolean }>>()
   for (const c of creates.values()) byRepo.set(c.repo ?? '', [...(byRepo.get(c.repo ?? '') ?? []), c])
   let unclaimed = [...fresh].sort((a, b) => (prParts(a)?.number ?? 0) - (prParts(b)?.number ?? 0))
   for (const repo of [...byRepo.keys()].sort().reverse()) {
     const cs = byRepo.get(repo)!.sort((a, b) => a.ms - b.ms)
     const us = unclaimed.filter(u => !repo || prParts(u)?.repo === repo)
-    if (us.length !== cs.length) continue
-    cs.forEach((c, k) => {
+    const paired = us.length === cs.length ? cs : us.length === 1 ? cs.slice(-1) : null
+    if (!paired) continue
+    paired.forEach((c, k) => {
       const s = sig(us[k]!)
-      if (Number.isNaN(s.openedMs) || c.ms < s.openedMs) { s.openedMs = c.ms; s.head = c.head }
+      if (Number.isNaN(s.openedMs) || c.ms < s.openedMs) { s.openedMs = c.ms; s.head = c.head; s.draft = c.draft }
       s.explicit = true
     })
     unclaimed = unclaimed.filter(u => !us.includes(u))
   }
 }
 
-// Walk a parent's turns with the PR set each was attributed to: opens, the
-// share of spend each PR carried, and `gh pr review <n>` posted for it.
-function turnSignals(session: SessionSummary, turnPrs: Array<string[] | null>, sig: (url: string) => PrSignals): void {
-  const seen = new Set(session.prRefsAtRangeStart ?? [])
-  session.turns.forEach((turn, i) => {
+type TurnCommands = { cmds: Array<{ cmd: string; ms: number }>; pushed: string[] }
+
+// Each turn's commands, and the branches it pushed by name (a top-level session
+// moves between checkouts too freely to resolve a bare push).
+function turnCommands(session: SessionSummary): TurnCommands[] {
+  return session.turns.map(turn => {
     const cmds = turn.assistantCalls.flatMap(call => {
       const list = callCommands(call)
       if (!list.length) return []
       const ms = parseMs(call.timestamp)
       return list.map(cmd => ({ cmd, ms }))
     })
+    return { cmds, pushed: cmds.flatMap(c => pushes(c.cmd).flat()) }
+  })
+}
+
+function matchSessionCreates(session: SessionSummary, tc: TurnCommands[], sig: (url: string) => PrSignals): void {
+  const seen = new Set(session.prRefsAtRangeStart ?? [])
+  session.turns.forEach((turn, i) => {
     const fresh = (turn.prRefs ?? []).filter(u => !seen.has(u))
     for (const u of fresh) seen.add(u)
-    if (fresh.length) matchCreates(cmds, fresh, sig)
+    if (fresh.length) matchCreates(tc[i]!.cmds, fresh, sig)
+  })
+}
+
+// Walk a parent's turns with the PR set each was attributed to: the share of
+// spend each PR carried, why it counts there, and `gh pr review <n>` posted for it.
+function turnSignals(session: SessionSummary, sessionKey: string, tc: TurnCommands[], turnPrs: Array<string[] | null>, sig: (url: string) => PrSignals): void {
+  session.turns.forEach((turn, i) => {
     const prs = turnPrs[i]
     if (!prs) return
     const cost = turn.assistantCalls.reduce((n, c) => n + c.costUSD, 0)
     if (cost === 0 && behavioralCallCount(turn.assistantCalls) === 0) return
     const share = cost / prs.length
     const at = turnStartTs(turn)
+    const { cmds, pushed } = tc[i]!
     const gh = cmds.flatMap(c => ghPrCommands(c.cmd))
     const named = new Set(cmds.flatMap(c => [...prNumbersIn(c.cmd)]))
     const models = new Map<string, number>()
@@ -1274,23 +1364,32 @@ function turnSignals(session: SessionSummary, turnPrs: Array<string[] | null>, s
       const s = sig(url)
       const pr = prParts(url)
       const posted = pr ? gh.find(g => g.verb === 'review' && g.number === pr.number && (!g.repo || g.repo === pr.repo)) : undefined
-      s.spend.push({ ms: parseMs(at), cost: share, review: !!posted })
+      const mentioned = mentionsUrl(turn.userMessage, url)
+      const namesPr = !!pr && named.has(pr.number)
+      const link: PrRunLink = cmds.some(c => c.ms === s.openedMs) ? 'opened'
+        : namesPr || posted ? 'gh-pr'
+        : s.head && pushed.includes(s.head) ? 'pushed-head'
+        : mentioned ? 'named'
+        : 'carried'
+      s.spend.push({ ms: parseMs(at), cost: share, review: !!posted, run: { kind: 'session', key: sessionKey, description: null, models, at, link } })
       if (posted) s.reviews.push({ kind: 'you', label: reviewVerdict(posted.args), model: topModel(models), costUSD: share, at, evidence: 'gh-pr-review' })
-      if (!s.explicit && ((pr && named.has(pr.number)) || mentionsUrl(turn.userMessage, url))) s.explicit = true
+      if (namesPr || mentioned) s.explicit = true
     }
   })
 }
 
 type PrCommandScan = {
   pushes: Array<{ ms: number; branches: string[]; mentioned: number | null }>
-  merges: Array<{ ms: number; number: number; repo?: string }>
+  events: Array<{ ms: number; number: number; repo?: string; verb: 'merge' | 'close' | 'ready' | 'reopen' }>
 }
 
-// Every push and merge in range, from every session. A bare `git push` in a
-// subagent run pushes the branch it last pushed by name; a top-level session
-// moves between checkouts too freely to assume that.
+const STATE_EVENTS = new Set(['merge', 'close', 'ready', 'reopen'])
+
+// Every push and state change (merge, close, ready, reopen) in range, from every
+// session. A bare `git push` in a subagent run pushes the branch it last pushed
+// by name; a top-level session moves between checkouts too freely to assume that.
 function scanPrCommands(projects: ProjectSummary[]): PrCommandScan {
-  const out: PrCommandScan = { pushes: [], merges: [] }
+  const out: PrCommandScan = { pushes: [], events: [] }
   for (const project of projects) for (const session of project.sessions) {
     const side = !!session.isSidechain
     let mentioned: number | null | undefined
@@ -1307,7 +1406,7 @@ function scanPrCommands(projects: ProjectSummary[]): PrCommandScan {
           out.pushes.push({ ms, branches: branches.length ? branches : upstream ? [upstream] : [], mentioned: mentioned ?? null })
         }
         for (const g of ghPrCommands(cmd)) {
-          if (g.verb === 'merge' && g.number !== undefined) out.merges.push({ ms, number: g.number, ...(g.repo ? { repo: g.repo } : {}) })
+          if (STATE_EVENTS.has(g.verb) && g.number !== undefined) out.events.push({ ms, number: g.number, ...(g.repo ? { repo: g.repo } : {}), verb: g.verb as PrCommandScan['events'][number]['verb'] })
         }
       }
     }
@@ -1315,11 +1414,35 @@ function scanPrCommands(projects: ProjectSummary[]): PrCommandScan {
   return out
 }
 
+// One runList entry per folded run, and per session and link reason.
+function runList(spend: PrSignals['spend']): PrRun[] {
+  const out: Array<PrRun & { models: Map<string, number> }> = []
+  const bySession = new Map<string, PrRun & { models: Map<string, number> }>()
+  for (const x of spend) {
+    const { key, models, ...run } = x.run
+    const k = `${key}${KEY_SEP}${run.link}`
+    const hit = run.kind === 'session' ? bySession.get(k) : undefined
+    if (hit) {
+      hit.costUSD += x.cost
+      if (run.at && (!hit.at || run.at < hit.at)) hit.at = run.at
+      for (const [m, c] of models) addToMap(hit.models, m, c)
+      continue
+    }
+    const entry = { ...run, model: null, costUSD: x.cost, models: new Map(models) }
+    if (run.kind === 'session') bySession.set(k, entry)
+    out.push(entry)
+  }
+  return out
+    .sort((a, b) => a.at.localeCompare(b.at))
+    .map(({ models, ...run }) => ({ ...run, model: topModel(models) }))
+}
+
 // ponytail: a bare PR number (a merge, or a run's description) is matched
 // against this report's rows only; two rows with that number in different repos
 // leave it unmatched.
 function rowSignals(url: string, s: PrSignals | undefined, cost: number, scan: PrCommandScan, byNumber: Map<number, string[]>): Pick<PrRow,
-  'linkEvidence' | 'openedAt' | 'followUpRounds' | 'followUpPushes' | 'oneShot' | 'reviewRuns' | 'reviewCostUSD' | 'mergedAt' | 'timeToMergeMs' | 'costSplit'> {
+  'linkEvidence' | 'openedAt' | 'followUpRounds' | 'followUpPushes' | 'oneShot' | 'reviewRuns' | 'reviewCostUSD' | 'mergedAt' | 'timeToMergeMs' | 'costSplit'
+  | 'carriedUSD' | 'runList' | 'state' | 'followUpAt'> {
   const pr = prParts(url)
   const isRow = (number: number, repo?: string): boolean => {
     const hits = (byNumber.get(number) ?? []).filter(u => !repo || prParts(u)!.repo === repo)
@@ -1333,15 +1456,26 @@ function rowSignals(url: string, s: PrSignals | undefined, cost: number, scan: P
     .filter(p => (s?.head && p.branches.includes(s.head)) || (pr && p.mentioned === pr.number && isRow(pr.number)))
     .map(p => p.ms)
     .filter(ms => opened === null || ms > opened)
-  const followUpRounds = tracked || pushMs.length ? rounds(pushMs) : null
-  const merged = Math.min(Infinity, ...scan.merges.filter(m => isRow(m.number, m.repo) && (opened === null || m.ms >= opened)).map(m => m.ms))
+  const starts = tracked || pushMs.length ? roundStarts(pushMs) : null
+  const followUpRounds = starts ? starts.length : null
+  const events = scan.events.filter(e => isRow(e.number, e.repo) && (opened === null || e.ms >= opened))
+  const merged = Math.min(Infinity, ...events.filter(e => e.verb === 'merge').map(e => e.ms))
   const mergedMs = Number.isFinite(merged) ? merged : null
-  const reviewSpend = (s?.spend ?? []).filter(x => x.review)
+  // A plain open says nothing about now (a merge by script is not seen), so
+  // only a draft open counts; a reopened draft stays a draft until `gh pr ready`.
+  let draft = opened !== null && !!s?.draft
+  let state: PrRow['state'] = draft ? 'draft' : null
+  for (const e of [...events].sort((a, b) => a.ms - b.ms)) {
+    if (e.verb === 'ready') draft = false
+    state = e.verb === 'merge' ? 'merged' : e.verb === 'close' ? 'closed' : draft ? 'draft' : 'open'
+  }
+  const spend = s?.spend ?? []
+  const reviewSpend = spend.filter(x => x.review)
   const firstReview = Math.min(...reviewSpend.map(x => x.ms))
   const reviewUSD = reviewSpend.reduce((n, x) => n + x.cost, 0)
-  const fixesUSD = (s?.spend ?? []).filter(x => !x.review && x.ms >= firstReview).reduce((n, x) => n + x.cost, 0)
+  const fixesUSD = spend.filter(x => !x.review && !x.legacy && x.ms >= firstReview).reduce((n, x) => n + x.cost, 0)
   return {
-    linkEvidence: !s?.spend.length ? null : s.explicit || mergedMs !== null ? 'explicit' : 'pr-link-only',
+    linkEvidence: !spend.some(x => !x.legacy) ? null : s!.explicit || mergedMs !== null ? 'explicit' : 'pr-link-only',
     openedAt: opened === null ? null : new Date(opened).toISOString(),
     followUpRounds,
     followUpPushes: pushMs.length,
@@ -1351,6 +1485,10 @@ function rowSignals(url: string, s: PrSignals | undefined, cost: number, scan: P
     mergedAt: mergedMs === null ? null : new Date(mergedMs).toISOString(),
     timeToMergeMs: opened !== null && mergedMs !== null && mergedMs > opened ? mergedMs - opened : null,
     costSplit: { buildUSD: cost - reviewUSD - fixesUSD, reviewUSD, fixesUSD },
+    carriedUSD: spend.filter(x => x.run.link === 'carried').reduce((n, x) => n + x.cost, 0),
+    runList: runList(spend),
+    state,
+    followUpAt: (starts ?? []).map(ms => new Date(ms).toISOString()),
   }
 }
 

@@ -15,7 +15,7 @@ import { prFilters } from '../lib/investigation'
 import { rangeLabel } from '../components/TopBar'
 import type { InvestigateRequest } from './Overview'
 import { Icon } from '../components/icons'
-import { t } from '../i18n'
+import { localeTag, t } from '../i18n'
 
 type PullRequests = NonNullable<MenubarPayload['current']['pullRequests']>
 type PrRow = PullRequests['rows'][number]
@@ -29,20 +29,63 @@ function spanLabel(firstStarted: string, lastEnded: string): string {
   return start === end ? start : `${start} - ${end}`
 }
 
-// Facts read from local commands. An unknown is left out, never shown as a negative.
+// Facts read from local commands. Each one states its unknown instead of
+// disappearing; a field an older CLI does not send stays out.
 function prFacts(pr: PrRow): string[] {
   const facts: string[] = []
-  const reviews = pr.reviewRuns ?? []
-  const only = reviews.length === 1 ? reviews[0]! : null
-  if (only?.kind === 'you') facts.push(t('pullRequests.facts.reviewedByYou', { amount: formatUsd(only.costUSD) }))
-  else if (only?.model) facts.push(t('pullRequests.facts.reviewedBy', { model: only.model, amount: formatUsd(only.costUSD) }))
-  else if (reviews.length) facts.push(t(`pullRequests.facts.reviewRuns.${reviews.length === 1 ? 'one' : 'other'}`, { count: reviews.length, amount: formatUsd(pr.reviewCostUSD ?? 0) }))
+  if (pr.state === 'merged' || (!pr.state && pr.mergedAt)) facts.push(pr.mergedAt ? t('pullRequests.facts.mergedOn', { date: formatDayShort(pr.mergedAt) }) : t('pullRequests.facts.status.merged'))
+  else if (pr.state) facts.push(t(`pullRequests.facts.status.${pr.state}`))
   const rounds = pr.followUpRounds ?? null
   if (pr.oneShot === true) facts.push(t('pullRequests.facts.oneShot'))
   else if (pr.oneShot === false && rounds !== null) facts.push(t(`pullRequests.facts.rounds.${rounds === 1 ? 'one' : 'other'}`, { count: rounds }))
   else if (rounds !== null) facts.push(t('pullRequests.facts.yourFollowUps', { count: rounds }))
-  if (pr.timeToMergeMs != null) facts.push(t('pullRequests.facts.merged', { duration: formatDuration(pr.timeToMergeMs) }))
+  else if (pr.oneShot !== undefined) facts.push(t('pullRequests.facts.notTracked'))
+  const reviews = pr.reviewRuns
+  const only = reviews?.length === 1 ? reviews[0]! : null
+  if (only?.kind === 'you') facts.push(t('pullRequests.facts.reviewedByYou', { amount: formatUsd(only.costUSD) }))
+  else if (only?.model) facts.push(t('pullRequests.facts.reviewedBy', { model: only.model, amount: formatUsd(only.costUSD) }))
+  else if (reviews?.length) facts.push(t(`pullRequests.facts.reviewRuns.${reviews.length === 1 ? 'one' : 'other'}`, { count: reviews.length, amount: formatUsd(pr.reviewCostUSD ?? 0) }))
+  else if (reviews) facts.push(t('pullRequests.facts.noReview'))
   return facts
+}
+
+function carriedNote(pr: PrRow): string | null {
+  const carried = pr.carriedUSD ?? 0
+  return carried > 0 && carried >= Math.max(0.5, pr.cost * 0.2) ? t('pullRequests.facts.carried', { amount: formatUsd(carried) }) : null
+}
+
+function timeLabel(iso: string): string {
+  const d = new Date(iso)
+  return Number.isNaN(d.getTime()) ? '—' : d.toLocaleString(localeTag(), { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+}
+
+function timeline(pr: PrRow): Array<{ label: string; at: string; note?: string }> {
+  const events: Array<{ label: string; at: string; note?: string }> = []
+  if (pr.openedAt) events.push({ label: t('pullRequests.timeline.opened'), at: pr.openedAt })
+  const firstReview = pr.reviewRuns?.[0]?.at
+  if (firstReview) events.push({ label: t('pullRequests.timeline.firstReview'), at: firstReview })
+  pr.followUpAt?.forEach((at, i) => events.push({ label: t('pullRequests.timeline.round', { count: i + 1 }), at }))
+  if (pr.mergedAt) events.push({ label: t('pullRequests.timeline.merged'), at: pr.mergedAt, ...(pr.timeToMergeMs != null ? { note: t('pullRequests.timeline.afterOpen', { duration: formatDuration(pr.timeToMergeMs) }) } : {}) })
+  return events.sort((a, b) => a.at.localeCompare(b.at))
+}
+
+const share = (cost: number, total: number): string => `${total > 0 ? Math.round(cost / total * 100) : 0}%`
+
+// Label, amount and share of the PR's cost, in the app's plain table style.
+function CostTable({ rows, total }: { rows: Array<{ key: string; label: string; cost: number }>; total: number }) {
+  return (
+    <table className="pr-table">
+      <tbody>
+        {rows.map(row => (
+          <tr key={row.key}>
+            <td>{row.label}</td>
+            <td>{formatUsd(row.cost)}</td>
+            <td className="pr-share">{share(row.cost, total)}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
 }
 
 function ModelChips({ models }: { models: string[] }) {
@@ -233,17 +276,8 @@ function PrTable({ pullRequests, onInvestigate }: { pullRequests: PullRequests; 
 function PrRowView({ pr, expanded, onToggle, onInvestigate }: { pr: PrRow; expanded: boolean; onToggle: () => void; onInvestigate?: (request: InvestigateRequest) => void }) {
   const models = pr.models ?? []
   const categories = pr.categories ?? []
-  const catMax = categories.length ? Math.max(...categories.map(cat => cat.cost)) : 0
   const facts = prFacts(pr)
-  const reviews = pr.reviewRuns ?? []
-  const split = pr.costSplit && reviews.length > 0
-    ? [
-        { key: 'build', cost: Math.max(0, pr.costSplit.buildUSD) },
-        { key: 'review', cost: pr.costSplit.reviewUSD },
-        { key: 'after', cost: pr.costSplit.fixesUSD },
-      ]
-    : []
-  const splitMax = Math.max(0, ...split.map(part => part.cost))
+  const carried = carriedNote(pr)
 
   return (
     <article className={expanded ? 'pr-card is-open' : 'pr-card'}>
@@ -266,9 +300,10 @@ function PrRowView({ pr, expanded, onToggle, onInvestigate }: { pr: PrRow; expan
               <span>{pr.runs !== undefined ? formatCount(pr.runs, 'run') : formatCount(pr.sessions, 'session')}</span>
               <span>{formatCount(pr.calls, 'call')}</span>
             </div>
-            {(facts.length > 0 || pr.linkEvidence === 'pr-link-only') && (
+            {(facts.length > 0 || carried || pr.linkEvidence === 'pr-link-only') && (
               <div className="pr-card-meta pr-card-facts">
                 {facts.map(fact => <span key={fact}>{fact}</span>)}
+                {carried && <span title={t('pullRequests.facts.carriedTitle')}>{carried}</span>}
                 {pr.linkEvidence === 'pr-link-only' && <span title={t('pullRequests.facts.prLinkOnlyTitle')}>{t('pullRequests.facts.prLinkOnly')}</span>}
               </div>
             )}
@@ -284,77 +319,96 @@ function PrRowView({ pr, expanded, onToggle, onInvestigate }: { pr: PrRow; expan
         </div>
         <span className="pr-chevron" aria-hidden="true"><Icon name="chevron-right" /></span>
       </div>
-      {expanded && (
-        <div className="pr-detail-cell">
-            {/* Drill-through entry: a control of its own, never the row. The row
-                is a toggle, so hanging the investigation off it would cost the
-                expansion; this opens the sessions that composed the PR while the
-                row stays exactly as the reader left it. The PR URL is the
-                aggregation key of the by-PR report, so it selects at the
-                destination without a lookup. */}
-            {onInvestigate && (
-              <button
-                className="ov-link pr-drill"
-                type="button"
-                title={t('pullRequests.drill.viewSessionsTitle', { label: pr.label })}
-                onClick={() => onInvestigate({ filters: prFilters(pr.url) })}
-              >
-                {t('pullRequests.drill.viewSessionsButton')}
-              </button>
-            )}
-            {categories.length > 0 ? (
-              <div className="pr-detail" role="region" aria-label={t('pullRequests.card.costBreakdownAria', { label: pr.label })}>
-                <div className="pr-detail-head">
-                  <span>{t('pullRequests.card.workBreakdownTitle')}</span>
-                  <strong>{t('pullRequests.card.workBreakdownTotal', { amount: formatUsd(pr.cost) })}</strong>
-                </div>
-                <div className="pr-cats">
-                  {categories.map(cat => (
-                    <div className="pr-cat" key={cat.name}>
-                      <span className="pr-cat-name">{cat.name}</span>
-                      <div className="pr-cat-bar" aria-hidden="true">
-                        <span style={{ width: `${catMax > 0 ? cat.cost / catMax * 100 : 0}%` }} />
-                      </div>
-                      <strong>{formatUsd(cat.cost)}</strong>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ) : (
-              <p className="pr-cat-empty">{t('pullRequests.card.noPerTurnDetail')}</p>
-            )}
-            {split.length > 0 && (
-              <div className="pr-detail pr-split" role="region" aria-label={t('pullRequests.split.aria', { label: pr.label })}>
-                <div className="pr-detail-head">
-                  <span>{t('pullRequests.split.title')}</span>
-                </div>
-                <div className="pr-cats">
-                  {split.map(part => (
-                    <div className="pr-cat" key={part.key}>
-                      <span className="pr-cat-name">{t(`pullRequests.split.${part.key}`)}</span>
-                      <div className="pr-cat-bar" aria-hidden="true">
-                        <span style={{ width: `${splitMax > 0 ? part.cost / splitMax * 100 : 0}%` }} />
-                      </div>
-                      <strong>{formatUsd(part.cost)}</strong>
-                    </div>
-                  ))}
-                </div>
-                <div className="pr-detail-head pr-reviews-head">
-                  <span>{t('pullRequests.split.review')}</span>
-                </div>
-                <div className="pr-cats">
-                  {reviews.map((run, i) => (
-                    <div className="pr-cat" key={i}>
-                      <span className="pr-cat-name">{run.kind === 'you' ? t('pullRequests.reviews.you', { verdict: run.label }) : run.label}</span>
-                      <span className="pr-cat-name">{run.model ?? ''}</span>
-                      <strong>{formatUsd(run.costUSD)}</strong>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-        </div>
-      )}
+      {expanded && <PrDetail pr={pr} categories={categories} onInvestigate={onInvestigate} />}
     </article>
+  )
+}
+
+function PrDetail({ pr, categories, onInvestigate }: { pr: PrRow; categories: NonNullable<PrRow['categories']>; onInvestigate?: (request: InvestigateRequest) => void }) {
+  const events = timeline(pr)
+  const carried = carriedNote(pr)
+  const runs = pr.runList ?? []
+  const split = pr.costSplit
+  const top = categories.slice(0, 5)
+  const rest = categories.slice(5).reduce((sum, cat) => sum + cat.cost, 0)
+  const work = [
+    ...top.map(cat => ({ key: cat.name, label: cat.name, cost: cat.cost })),
+    ...(rest > 0 ? [{ key: 'other', label: t('pullRequests.work.other'), cost: rest }] : []),
+  ]
+  return (
+    <div className="pr-detail-cell">
+      <div className="pr-detail-grid">
+        {pr.openedAt !== undefined && (
+          <div className="pr-detail" role="region" aria-label={t('pullRequests.timeline.aria', { label: pr.label })}>
+            <div className="pr-detail-head"><span>{t('pullRequests.timeline.title')}</span></div>
+            {events.length > 0 ? (
+              <table className="pr-table">
+                <tbody>
+                  {events.map(event => (
+                    <tr key={`${event.label}-${event.at}`}>
+                      <td>{event.label}</td>
+                      <td>{timeLabel(event.at)}{event.note ? ` · ${event.note}` : ''}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            ) : <p className="pr-cat-empty">{t('pullRequests.timeline.none')}</p>}
+          </div>
+        )}
+        {runs.length > 0 && (
+          <div className="pr-detail" role="region" aria-label={t('pullRequests.runs.aria', { label: pr.label })}>
+            <div className="pr-detail-head">
+              <span>{t('pullRequests.runs.title')}</span>
+              {carried && <strong>{carried}</strong>}
+            </div>
+            <table className="pr-table pr-runs">
+              <tbody>
+                {runs.map((run, i) => (
+                  <tr key={i}>
+                    <td title={run.description ?? undefined}>{run.description ?? t(run.kind === 'session' ? 'pullRequests.runs.mainSession' : 'pullRequests.runs.agentRun')}</td>
+                    <td className="pr-run-why">{t(`pullRequests.runs.link.${run.link}`)}</td>
+                    <td>{run.model ?? ''}</td>
+                    <td>{formatUsd(run.costUSD)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        {split && (
+          <div className="pr-detail" role="region" aria-label={t('pullRequests.split.aria', { label: pr.label })}>
+            <div className="pr-detail-head"><span>{t('pullRequests.split.title')}</span></div>
+            <CostTable total={pr.cost} rows={[
+              { key: 'build', label: t('pullRequests.split.build'), cost: Math.max(0, split.buildUSD) },
+              { key: 'review', label: t('pullRequests.split.review'), cost: split.reviewUSD },
+              { key: 'after', label: t('pullRequests.split.after'), cost: split.fixesUSD },
+            ]} />
+          </div>
+        )}
+        <div className="pr-detail" role="region" aria-label={t('pullRequests.card.costBreakdownAria', { label: pr.label })}>
+          <div className="pr-detail-head">
+            <span>{t('pullRequests.card.workBreakdownTitle')}</span>
+            <strong>{t('pullRequests.card.workBreakdownTotal', { amount: formatUsd(pr.cost) })}</strong>
+          </div>
+          {work.length > 0 ? <CostTable rows={work} total={pr.cost} /> : <p className="pr-cat-empty">{t('pullRequests.card.noPerTurnDetail')}</p>}
+        </div>
+      </div>
+      {/* Drill-through entry: a control of its own, never the row. The row
+          is a toggle, so hanging the investigation off it would cost the
+          expansion; this opens the sessions that composed the PR while the
+          row stays exactly as the reader left it. The PR URL is the
+          aggregation key of the by-PR report, so it selects at the
+          destination without a lookup. */}
+      {onInvestigate && (
+        <button
+          className="ov-link pr-drill"
+          type="button"
+          title={t('pullRequests.drill.viewSessionsTitle', { label: pr.label })}
+          onClick={() => onInvestigate({ filters: prFilters(pr.url) })}
+        >
+          {t('pullRequests.drill.viewSessionsButton')}
+        </button>
+      )}
+    </div>
   )
 }
