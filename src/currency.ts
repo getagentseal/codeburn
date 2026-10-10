@@ -87,7 +87,7 @@ async function fetchRate(code: string): Promise<number> {
   return rate
 }
 
-async function loadCachedRate(code: string): Promise<number | null> {
+async function loadCachedRate(code: string, maxAgeMs = CACHE_TTL_MS): Promise<number | null> {
   try {
     const raw = await readFile(getRateCachePath(), 'utf-8')
     const cached = JSON.parse(raw) as Partial<{ timestamp: number; code: string; rate: number }>
@@ -95,7 +95,7 @@ async function loadCachedRate(code: string): Promise<number | null> {
     // Infinity and break downstream math silently.
     if (typeof cached.code !== 'string' || cached.code !== code) return null
     if (typeof cached.timestamp !== 'number' || !Number.isFinite(cached.timestamp)) return null
-    if (Date.now() - cached.timestamp > CACHE_TTL_MS) return null
+    if (Date.now() - cached.timestamp > maxAgeMs) return null
     if (!isValidRate(cached.rate)) return null
     return cached.rate
   } catch {
@@ -108,7 +108,9 @@ async function cacheRate(code: string, rate: number): Promise<void> {
   await writeFile(getRateCachePath(), JSON.stringify({ timestamp: Date.now(), code, rate }))
 }
 
-async function getExchangeRate(code: string): Promise<number> {
+// null means no usable rate: callers must show USD rather than pair a foreign
+// symbol with an unconverted amount.
+async function getExchangeRate(code: string): Promise<number | null> {
   if (code === 'USD') return 1
 
   const cached = await loadCachedRate(code)
@@ -117,13 +119,13 @@ async function getExchangeRate(code: string): Promise<number> {
   // Test-only escape hatch, set for the whole suite in
   // tests/setup/env-isolation.ts: skip the live Frankfurter fetch so a real FX
   // move can't shift assertions. Same fallback an unreachable network gets.
-  if (process.env['CODEBURN_FX_NO_FETCH']) return 1
+  if (process.env['CODEBURN_FX_NO_FETCH']) return loadCachedRate(code, Infinity)
 
   let rate: number
   try {
     rate = await fetchRate(code)
   } catch {
-    return 1
+    return loadCachedRate(code, Infinity)
   }
   // Persist the rate, but never let a cache-write failure (disk full, no
   // permissions, etc.) cause us to return the USD-equivalent fallback.
@@ -146,6 +148,10 @@ export async function loadCurrency(): Promise<void> {
 
   const code = config.currency.code.toUpperCase()
   const rate = await getExchangeRate(code)
+  if (rate === null) {
+    active = USD
+    return
+  }
   const symbol = config.currency.symbol ?? resolveSymbol(code)
 
   active = { code, rate, symbol }
@@ -161,6 +167,10 @@ export async function switchCurrency(code: string): Promise<void> {
     return
   }
   const rate = await getExchangeRate(code)
+  if (rate === null) {
+    active = USD
+    return
+  }
   const symbol = resolveSymbol(code)
   active = { code, rate, symbol }
 }

@@ -1657,7 +1657,14 @@ program
     await saveConfig(config)
 
     await loadCurrency()
-    const { rate, symbol } = getCurrency()
+    const { code: activeCode, rate, symbol } = getCurrency()
+
+    if (activeCode !== upperCode) {
+      console.log(`\n  Currency set to ${upperCode}, but no exchange rate is available yet (offline?).`)
+      console.log(`  Showing USD until a rate can be fetched.`)
+      console.log(`  Config saved to ${getConfigFilePath()}\n`)
+      return
+    }
 
     console.log(`\n  Currency set to ${upperCode}.`)
     console.log(`  Symbol: ${symbol}`)
