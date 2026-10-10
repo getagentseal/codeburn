@@ -216,3 +216,11 @@ describe('classifyTurn — retry detection via toolSequence', () => {
     expect(c.retries).toBe(0)
   })
 })
+
+describe('classifyTurn — provider edit tool names', () => {
+  it('counts Devin and cursor-agent edit tools as edits', () => {
+    for (const tool of ['edit', 'write', 'cursor:strreplace', 'cursor:write']) {
+      expect(classifyTurn(makeTurn([makeCall({ tools: [tool] })])).hasEdits).toBe(true)
+    }
+  })
+})

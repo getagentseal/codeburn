@@ -295,11 +295,11 @@ describe('optimize sidechain population (issue #974)', () => {
     const projects = [project([
       session('parent', {
         totalCostUSD: 1,
-        bashBreakdown: { 'git commit -m shipped': { calls: 1 } },
+        bashBreakdown: { git: { calls: 1 } },
       }),
       sidechain('agent-child', {
         totalCostUSD: 2,
-        bashBreakdown: { 'git commit -m irrelevant': { calls: 1 } },
+        bashBreakdown: { git: { calls: 1 } },
       }),
     ])]
     const log = vi.spyOn(console, 'log').mockImplementation(() => undefined)

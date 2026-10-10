@@ -299,6 +299,12 @@ describe('Kimi Code provider', () => {
     expect(calls).toHaveLength(1)
     expect(calls[0]!.tools).toEqual(['Write', 'Read', 'Bash', 'Grep'])
     expect(calls[0]!.bashCommands).toEqual(['npm', 'git'])
+    expect(calls[0]!.toolSequence).toEqual([
+      [{ tool: 'Write', file: 'notes.txt' }],
+      [{ tool: 'Read', file: 'notes.txt' }],
+      [{ tool: 'Bash', command: 'npm test && git status' }],
+      [{ tool: 'Grep' }],
+    ])
     expect(calls[0]!.model).toBe('glm-5.2')
     expect(calls[0]!.costUSD).toBeGreaterThan(0)
   })
@@ -320,6 +326,7 @@ describe('Kimi Code provider', () => {
     expect(calls).toHaveLength(1)
     expect(calls[0]!.tools).toEqual([])
     expect(calls[0]!.bashCommands).toEqual([])
+    expect(calls[0]!.toolSequence).toBeUndefined()
   })
 
   it('keeps multiple turns in one session and attributes each prompt and model', async () => {

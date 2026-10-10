@@ -6,6 +6,7 @@ import { extractBashCommands } from '../bash-utils.js'
 import { calculateCost, pricingModelAt } from '../models.js'
 import { FS_SCAN_CONCURRENCY, mapWithConcurrency } from '../fs-utils.js'
 import type { ParsedProviderCall, ProbeRoot, Provider, SessionParser, SessionSource } from './types.js'
+import type { ToolCall } from '../types.js'
 
 type JsonObject = Record<string, unknown>
 
@@ -249,7 +250,7 @@ function inputText(value: unknown): string {
     .join('\n')
 }
 
-function toolDetails(value: unknown): { name: string; bashCommands: string[] } | null {
+function toolDetails(value: unknown): { name: string; bashCommands: string[]; step: ToolCall } | null {
   const event = asObject(value)
   if (!event || stringValue(event['type']) !== 'tool.call') return null
   const rawName = stringValue(event['name'])
@@ -265,9 +266,14 @@ function toolDetails(value: unknown): { name: string; bashCommands: string[] } |
     }
   }
   const command = stringValue(args?.['command'])
+  const path = stringValue(args?.['path'])
+  const step: ToolCall = { tool: name }
+  if (path) step.file = path
+  if (command) step.command = command
   return {
     name,
     bashCommands: name === 'Bash' && command ? extractBashCommands(command) : [],
+    step,
   }
 }
 
@@ -293,6 +299,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
       let currentRequest: RequestContext | null = null
       let pendingTools: string[] = []
       let pendingBashCommands: string[] = []
+      let pendingToolSequence: ToolCall[][] = []
       let usageOrdinal = 0
 
       const lines = contents.split(/\r?\n/)
@@ -312,6 +319,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
         if (type === 'turn.prompt') {
           pendingTools = []
           pendingBashCommands = []
+          pendingToolSequence = []
           currentPrompt = inputText(record['input'])
           continue
         }
@@ -336,6 +344,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
           if (tool) {
             pendingTools.push(tool.name)
             pendingBashCommands.push(...tool.bashCommands)
+            pendingToolSequence.push([tool.step])
           }
           continue
         }
@@ -355,6 +364,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
         if (!timestamp) {
           pendingTools = []
           pendingBashCommands = []
+          pendingToolSequence = []
           continue
         }
 
@@ -363,6 +373,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
         if (seenKeys.has(deduplicationKey)) {
           pendingTools = []
           pendingBashCommands = []
+          pendingToolSequence = []
           continue
         }
         seenKeys.add(deduplicationKey)
@@ -388,6 +399,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
           costIsEstimated: true,
           tools: pendingTools,
           bashCommands: pendingBashCommands,
+          toolSequence: pendingToolSequence.length > 0 ? pendingToolSequence : undefined,
           timestamp,
           speed: 'standard',
           deduplicationKey,
@@ -400,6 +412,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
 
         pendingTools = []
         pendingBashCommands = []
+        pendingToolSequence = []
       }
     },
   }

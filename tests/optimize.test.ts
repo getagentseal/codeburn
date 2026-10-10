@@ -89,7 +89,8 @@ function projectWithSessions(costs: number[], project = 'app'): ProjectSummary {
 function projectWithDeliveredSessions(costs: number[], project = 'app'): ProjectSummary {
   const summary = projectWithSessions(costs, project)
   for (const session of summary.sessions) {
-    session.bashBreakdown = { 'git commit -m test': { calls: 1 } }
+    session.bashBreakdown = { git: { calls: 1 } }
+    session.turns = [shellTurn('git commit -m test')]
   }
   return summary
 }
@@ -659,6 +660,29 @@ function lowWorthTurn(overrides: Partial<LowWorthTurn> = {}): LowWorthTurn {
   }
 }
 
+// Parsers key bashBreakdown by base command (`git`); the full command text
+// lives only in each call's tool sequence.
+function shellTurn(command: string): LowWorthTurn {
+  return lowWorthTurn({
+    assistantCalls: [reliabilityCall({ tools: ['Bash'], toolSequence: [[{ tool: 'Bash', command }]] })],
+  })
+}
+
+function deliverySession(command: string): TestSession {
+  return lowWorthSession(8, 0, { turns: [shellTurn(command)], bashBreakdown: { [command.split(' ')[0]!]: { calls: 1 } } })
+}
+
+function editStepsTurn(steps: string[], retries: number): LowWorthTurn {
+  return lowWorthTurn({
+    hasEdits: true,
+    retries,
+    assistantCalls: [reliabilityCall({
+      tools: [...new Set(steps)],
+      toolSequence: steps.map(tool => [tool === 'Bash' ? { tool, command: 'npm test' } : { tool, file: '/tmp/a.ts' }]),
+    })],
+  })
+}
+
 function lowWorthSession(cost: number, i: number, overrides: Partial<TestSession> = {}, project = 'app'): TestSession {
   const tokens = Math.round(cost * 1000)
   return {
@@ -738,15 +762,14 @@ describe('detectLowWorthSessions', () => {
   })
 
   it('estimates recoverable tokens by retry fraction for sessions with edits', () => {
-    // 4 turns, 2 retries spread across 2 edits, 0 one-shot edits → trips the
-    // 'no one-shot edit turns' reason. totalTurns=4, fraction=2/4=0.5,
-    // sessionTokenTotal=8K, so recoverable savings ceiling is 4K — half the
-    // session, not the full ceiling that no-edit sessions get.
+    // 2 retries over 4 edit steps, 0 one-shot edits → trips the 'no one-shot
+    // edit turns' reason. fraction=2/4=0.5. Billable output comes from the
+    // calls (0 here), so sessionTokenTotal is the 4K input and the estimate 2K.
     const project = projectWithLowWorthSessions([
       lowWorthSession(4, 0, {
         turns: [
-          lowWorthTurn({ hasEdits: true, retries: 1 }),
-          lowWorthTurn({ hasEdits: true, retries: 1 }),
+          editStepsTurn(['Edit', 'Bash', 'Edit'], 1),
+          editStepsTurn(['Edit', 'Bash', 'Edit'], 1),
           lowWorthTurn({ hasEdits: false }),
           lowWorthTurn({ hasEdits: false }),
         ],
@@ -754,7 +777,20 @@ describe('detectLowWorthSessions', () => {
     ])
     const finding = detectLowWorthSessions([project])
     expect(finding).not.toBeNull()
-    expect(finding!.tokensSaved).toBe(4_000)
+    expect(finding!.tokensSaved).toBe(2_000)
+  })
+
+  it('divides retries by edit steps, not user prompts', () => {
+    // One prompt, an edit-test-fix loop: 3 retries over 6 edit steps. Per
+    // prompt this claimed the whole 4K session (3/1 capped at 1).
+    const project = projectWithLowWorthSessions([
+      lowWorthSession(4, 0, {
+        turns: [editStepsTurn(['Edit', 'Edit', 'Edit', 'Bash', 'Edit', 'Edit', 'Edit'], 3)],
+      }),
+    ])
+    const finding = detectLowWorthSessions([project])
+    expect(finding!.explanation).toContain('3 retries')
+    expect(finding!.tokensSaved).toBe(2_000)
   })
 
   it('uses the bounded recovery fraction for no-edit sessions', () => {
@@ -795,42 +831,33 @@ describe('detectLowWorthSessions', () => {
   })
 
   it('skips sessions with a git delivery command', () => {
-    const project = projectWithLowWorthSessions([
-      lowWorthSession(8, 0, {
-        turns: [lowWorthTurn({ hasEdits: false })],
-        bashBreakdown: { 'cd /tmp/app && git commit -m "ship fix"': { calls: 1 } },
-      }),
-    ])
+    const project = projectWithLowWorthSessions([deliverySession('cd /tmp/app && git commit -m "ship fix"')])
     expect(detectLowWorthSessions([project])).toBeNull()
   })
 
   it('skips sessions with gh pr create', () => {
-    const project = projectWithLowWorthSessions([
-      lowWorthSession(8, 0, {
-        turns: [lowWorthTurn({ hasEdits: false })],
-        bashBreakdown: { 'gh pr create --fill': { calls: 1 } },
-      }),
-    ])
+    const project = projectWithLowWorthSessions([deliverySession('gh pr create --fill')])
     expect(detectLowWorthSessions([project])).toBeNull()
   })
 
+  it('skips sessions that commit through git global options or on a later line', () => {
+    for (const command of [
+      'git -C /tmp/app commit -m "ship fix"',
+      'git add -A && git -c user.name=dev -c user.email=dev@example.com commit -qm "ship fix"',
+      'npm test\ngit push -u origin fix/ship',
+      'for p in 1 2; do gh pr merge $p --squash; done',
+    ]) {
+      expect(detectLowWorthSessions([projectWithLowWorthSessions([deliverySession(command)])])).toBeNull()
+    }
+  })
+
   it('does not treat read-only git commands as delivery', () => {
-    const project = projectWithLowWorthSessions([
-      lowWorthSession(8, 0, {
-        turns: [lowWorthTurn({ hasEdits: false })],
-        bashBreakdown: { 'git tag -l': { calls: 1 } },
-      }),
-    ])
+    const project = projectWithLowWorthSessions([deliverySession('git tag -l')])
     expect(detectLowWorthSessions([project])).not.toBeNull()
   })
 
   it('does not treat dry-run git commands as delivery', () => {
-    const project = projectWithLowWorthSessions([
-      lowWorthSession(8, 0, {
-        turns: [lowWorthTurn({ hasEdits: false })],
-        bashBreakdown: { 'git push --dry-run origin main': { calls: 1 } },
-      }),
-    ])
+    const project = projectWithLowWorthSessions([deliverySession('git push --dry-run origin main')])
     expect(detectLowWorthSessions([project])).not.toBeNull()
   })
 
@@ -838,22 +865,12 @@ describe('detectLowWorthSessions', () => {
     // Regex must match `git commit` only, not `git commit-tree` /
     // `git commit-graph`. Without the (?:\s|$|--) lookahead this would be a
     // false positive and the session would silently skip detection.
-    const project = projectWithLowWorthSessions([
-      lowWorthSession(8, 0, {
-        turns: [lowWorthTurn({ hasEdits: false })],
-        bashBreakdown: { 'git commit-tree HEAD^{tree}': { calls: 1 } },
-      }),
-    ])
+    const project = projectWithLowWorthSessions([deliverySession('git commit-tree HEAD^{tree}')])
     expect(detectLowWorthSessions([project])).not.toBeNull()
   })
 
   it('still treats `git commit --amend` as a delivery command', () => {
-    const project = projectWithLowWorthSessions([
-      lowWorthSession(8, 0, {
-        turns: [lowWorthTurn({ hasEdits: false })],
-        bashBreakdown: { 'git commit --amend --no-edit': { calls: 1 } },
-      }),
-    ])
+    const project = projectWithLowWorthSessions([deliverySession('git commit --amend --no-edit')])
     expect(detectLowWorthSessions([project])).toBeNull()
   })
 

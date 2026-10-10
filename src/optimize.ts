@@ -7,6 +7,7 @@ import { basename, join } from 'path'
 import { homedir } from 'os'
 
 import { isReadShapedBashCommand } from './bash-utils.js'
+import { EDIT_TOOLS } from './classifier.js'
 import { readSessionLines, readSessionFileSync } from './fs-utils.js'
 import { discoverAllSessions, providerDisplayName } from './providers/index.js'
 import { parseJsonlLine, shouldSkipLine } from './parser.js'
@@ -3455,15 +3456,26 @@ function formatContextRatio(ratio: number): string {
 
 // Use (\s|$|--) instead of \b after commit/push so `git commit-tree` and
 // `git commit-graph` are not treated as deliveries. The `--` clause keeps
-// `git commit --amend` matching as a real delivery command.
+// `git commit --amend` matching as a real delivery command. Git's global
+// options (`git -C dir commit`, `git -c user.name=x commit`) may sit between
+// `git` and the subcommand.
 const DELIVERY_COMMAND_PATTERNS = [
-  /(?:^|[;&|]\s*)git\s+(?:commit|push)(?=\s|$|--)(?![^;&|]*--dry-run)/,
-  /(?:^|[;&|]\s*)gh\s+pr\s+(?:create|merge)(?=\s|$|--)(?![^;&|]*--dry-run)/,
+  /(?:^|[;&|(\n]\s*|\b(?:do|then)\s+)git(?:\s+-[Cc]\s+\S+|\s+--[\w-]+(?:=\S+)?)*\s+(?:commit|push)(?=\s|$|--)(?![^;&|\n]*--dry-run)/,
+  /(?:^|[;&|(\n]\s*|\b(?:do|then)\s+)gh\s+pr\s+(?:create|merge)(?=\s|$|--)(?![^;&|\n]*--dry-run)/,
 ]
 
+// bashBreakdown keys are base command names (`git`), so delivery is read from
+// the full command text each call keeps in its tool sequence.
 function sessionDeliveryCommand(session: ProjectSummary['sessions'][number]): string | null {
-  const commands = Object.keys(session.bashBreakdown)
-  return commands.find(command => DELIVERY_COMMAND_PATTERNS.some(pattern => pattern.test(command))) ?? null
+  for (const turn of session.turns) {
+    for (const call of turn.assistantCalls) {
+      for (const tool of call.toolSequence?.flat() ?? []) {
+        const command = tool.command
+        if (command && DELIVERY_COMMAND_PATTERNS.some(pattern => pattern.test(command))) return command
+      }
+    }
+  }
+  return null
 }
 
 function hasCategoryBreakdownData(session: ProjectSummary['sessions'][number]): boolean {
@@ -3497,11 +3509,16 @@ function sessionRetryCount(session: ProjectSummary['sessions'][number]): number 
   return session.turns.reduce((sum, turn) => sum + turn.retries, 0)
 }
 
-function sessionTotalTurns(session: ProjectSummary['sessions'][number]): number {
-  if (hasCategoryBreakdownData(session)) {
-    return Object.values(session.categoryBreakdown).reduce((sum, c) => sum + c.turns, 0)
+// Counted the way the classifier counts retries: one per edit tool call.
+function sessionEditSteps(session: ProjectSummary['sessions'][number]): number {
+  let steps = 0
+  for (const turn of session.turns) {
+    for (const call of turn.assistantCalls) {
+      const tools = call.toolSequence?.length ? call.toolSequence.flat().map(t => t.tool) : call.tools
+      steps += tools.filter(tool => EDIT_TOOLS.has(tool)).length
+    }
   }
-  return session.turns.length
+  return steps
 }
 
 // Token-savings estimate for a low-worth candidate. Two regimes:
@@ -3511,8 +3528,8 @@ function sessionTotalTurns(session: ProjectSummary['sessions'][number]): number 
 //   - Sessions with edits but with retries / no one-shot: only the retry
 //     fraction is counted as recoverable. Edits may still have been useful;
 //     we credit the model with that and only flag the retry overhead.
-// Ratio is bounded to [0, 1] so retry-heavy sessions with weird turn counts
-// can't claim more than the full session token total.
+// A retry is a re-edit, so the fraction is retries over edit steps, not over
+// user prompts (an agent loop can make dozens of edits per prompt).
 function estimateLowWorthRecoverableTokens(
   session: ProjectSummary['sessions'][number],
   editTurns: number,
@@ -3520,9 +3537,9 @@ function estimateLowWorthRecoverableTokens(
 ): number {
   const tokens = sessionTokenTotal(session)
   if (editTurns === 0) return Math.round(tokens * WORTH_IT_NO_EDIT_RECOVERY_FRACTION)
-  const totalTurns = sessionTotalTurns(session)
-  if (totalTurns === 0) return 0
-  const fraction = Math.min(1, Math.max(0, retries / totalTurns))
+  const editSteps = sessionEditSteps(session)
+  if (editSteps === 0) return 0
+  const fraction = Math.min(1, Math.max(0, retries / editSteps))
   return Math.round(tokens * fraction)
 }
 
