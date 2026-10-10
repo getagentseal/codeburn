@@ -143,6 +143,16 @@ async function invalidate(ranges: CoverageRange[]): Promise<void> {
 
 class Skip extends Error {}
 
+type ImportRunner = <T>(apply: () => Promise<T>) => Promise<T>
+let deferredImportRunner: ImportRunner | null = null
+
+/// Where a `deferImport` sync applies its download: a one-shot run once its
+/// command is done, serve between two requests, so no parse sees the store
+/// change under it. Without a runner the download applies at once.
+export function setCursorImportRunner(runner: ImportRunner | null): void {
+  deferredImportRunner = runner
+}
+
 /// Silent unless `force`: a skipped or failed sync returns null and keeps the
 /// stored usage, and `force` (`codeburn import cursor --sync`) turns every skip
 /// and failure into an error and ignores the throttle, backoff and off switch.
@@ -153,7 +163,7 @@ class Skip extends Error {}
 /// downloaded once. A `provider` filter that leaves out every Cursor provider
 /// skips the sync. Earlier accounts' synced usage stays, and a new account's window
 /// starts after their coverage so no stretch of local usage is replaced twice.
-export async function maybeSyncCursor(opts: { force?: boolean; now?: number; fetchImpl?: typeof fetch; provider?: string } = {}): Promise<CursorImportSummary | null> {
+export async function maybeSyncCursor(opts: { force?: boolean; now?: number; fetchImpl?: typeof fetch; provider?: string; deferImport?: boolean } = {}): Promise<CursorImportSummary | null> {
   if (opts.provider !== undefined && opts.provider !== 'all' && !replacedProviders().includes(opts.provider)) return null
   const force = opts.force === true
   const now = opts.now ?? Date.now()
@@ -214,8 +224,13 @@ export async function maybeSyncCursor(opts: { force?: boolean; now?: number; fet
       throw new Skip(lastError)
     }
     if (!res.ok) throw new Error(`Cursor returned HTTP ${res.status} for the usage export`)
-    const summary = await importCursorCsvText(await res.text(), now, { from, to: now, source: 'sync', account })
-    if (summary?.changed) await invalidate([{ start: new Date(from).toISOString(), end: new Date(now).toISOString() }])
+    const text = await res.text()
+    const apply = async () => {
+      const imported = await importCursorCsvText(text, now, { from, to: now, source: 'sync', account })
+      if (imported?.changed) await invalidate([{ start: new Date(from).toISOString(), end: new Date(now).toISOString() }])
+      return imported
+    }
+    const summary = opts.deferImport && deferredImportRunner ? await deferredImportRunner(apply) : await apply()
     const newest = Math.max(state.through?.[account] ?? -Infinity, summary ? Date.parse(summary.lastEvent) : localDayStart(now))
     await writeState({ ...attempt, lastSuccessAt: now, through: { ...state.through, [account]: newest } })
     return summary

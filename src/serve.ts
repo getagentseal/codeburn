@@ -734,6 +734,22 @@ export async function runStdioServe(buildProgram: () => Command): Promise<void> 
   // Strict serialization: each request chains on the previous one.
   let queue: Promise<void> = Promise.resolve()
 
+  // A Cursor sync a request left running applies its download between two
+  // requests, and nothing derived before it is served again. The import store
+  // sits under no watched root, so the watchers would not notice it.
+  const { setCursorImportRunner } = await import('./cursor-sync.js')
+  const { clearSessionCache } = await import('./parser.js')
+  setCursorImportRunner(apply => {
+    const applied = queue.then(async () => {
+      const result = await apply()
+      outputMemo.clear()
+      clearSessionCache()
+      return result
+    })
+    queue = applied.then(() => undefined, () => undefined)
+    return applied
+  })
+
   // Progressive cold start (#1110). Ids of requests received but not yet
   // answered, so work that holds the queue can heartbeat them.
   const awaiting = new Set<string | number>()
