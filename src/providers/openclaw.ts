@@ -245,12 +245,17 @@ function getOpenClawDirs(): string[] {
       // lookup cannot provide a home. Apply the same rule without aborting.
     }
   }
-  osHome ??= process.cwd()
   const expandHome = (path: string, home: string): string => resolve(path.replace(/^~(?=$|[\\/])/, () => home))
   // OpenClaw resolves state overrides against its effective home. Trim before
   // expanding so a quoted "~/state" works just like its own path resolver.
   const configuredHome = normalizeHomeDir(process.env['OPENCLAW_HOME'])
-  const home = configuredHome ? expandHome(configuredHome, osHome) : resolve(osHome)
+  let effectiveHome = configuredHome ?? osHome
+  if (configuredHome && /^~(?=$|[\\/])/.test(configuredHome)) {
+    // An unresolved tilde override has no effective home. OpenClaw falls back
+    // to cwd itself, rather than expanding the remaining suffix under cwd.
+    effectiveHome = osHome ? expandHome(configuredHome, osHome) : undefined
+  }
+  const home = resolve(effectiveHome ?? process.cwd())
   const stateDir = process.env['OPENCLAW_STATE_DIR']?.trim()
   const roots = [
     ...(stateDir ? [join(expandHome(stateDir, home), 'agents')] : []),
