@@ -36,6 +36,9 @@ const RED = '#F55B5B'
 
 export const AVG_TOKENS_PER_READ = 600
 export const TOKENS_PER_MCP_TOOL = 400
+// A deferred MCP tool sits in the prompt as its name line only (measured
+// median 32 chars), not its schema.
+export const TOKENS_PER_DEFERRED_MCP_TOOL = 9
 export const TOOLS_PER_MCP_SERVER = 5
 export const TOKENS_PER_AGENT_DEF = 80
 export const TOKENS_PER_SKILL_DEF = 80
@@ -1786,7 +1789,7 @@ function estimateMcpSchemaCostAttributed(
         const toolCount = typeof unused === 'number'
           ? Math.min(unused, inventoryCounts.get(server) ?? 0)
           : [...new Set(unused ?? [])].reduce((count, fqn) => count + (inventory.has(fqn) ? 1 : 0), 0)
-        if (toolCount > 0) loaded.push({ server, schemaTokens: toolCount * TOKENS_PER_MCP_TOOL })
+        if (toolCount > 0) loaded.push({ server, schemaTokens: toolCount * TOKENS_PER_DEFERRED_MCP_TOOL })
       }
       if (loaded.length === 0) continue
 
@@ -1796,8 +1799,10 @@ function estimateMcpSchemaCostAttributed(
           // call. Charge it once, then attribute the capped amount in
           // proportion to each server's unused schema. This conserves the
           // combined total and makes any local-only subset additive.
-          addBucket(loaded, call.usage.cacheCreationInputTokens, 'cacheWriteTokens')
-          addBucket(loaded, call.usage.cacheReadInputTokens, 'cacheReadTokens')
+          // The tool lines sit in the prefix: a call that read cache read
+          // them; only a call with no cache read wrote them.
+          if (call.usage.cacheReadInputTokens > 0) addBucket(loaded, call.usage.cacheReadInputTokens, 'cacheReadTokens')
+          else addBucket(loaded, call.usage.cacheCreationInputTokens, 'cacheWriteTokens')
         }
       }
     }
@@ -1952,7 +1957,7 @@ export function detectMcpToolCoverage(
     id: 'mcp-low-coverage',
     title: `${flagged.length} MCP server${flagged.length === 1 ? '' : 's'} with low tool coverage`,
     explanation:
-      `Schema for unused tools is loaded into the system prompt every session and ` +
+      `Each unused tool adds a deferred name line to every session's prompt, ` +
       `carried in the cached prefix on every turn. ` +
       `${lines.join('; ')}.${connectorGuidance}${ambiguousGuidance}`,
     impact,
@@ -2037,17 +2042,16 @@ function estimateMcpProfileColdSchemaCost(
       for (const [server, toolsAvailable] of serverToolCounts) {
         if (!coldProjectKeysByServer.get(server)?.has(projectKey)) continue
         if (!sessionLoadedMcpServer(session, server)) continue
-        schemaTokens += toolsAvailable * TOKENS_PER_MCP_TOOL
+        schemaTokens += toolsAvailable * TOKENS_PER_DEFERRED_MCP_TOOL
       }
       if (schemaTokens === 0) continue
 
       for (const turn of session.turns) {
         for (const call of turn.assistantCalls) {
-          if (call.usage.cacheCreationInputTokens > 0) {
-            cacheWriteTokens += Math.min(schemaTokens, call.usage.cacheCreationInputTokens)
-          }
           if (call.usage.cacheReadInputTokens > 0) {
             cacheReadTokens += Math.min(schemaTokens, call.usage.cacheReadInputTokens)
+          } else if (call.usage.cacheCreationInputTokens > 0) {
+            cacheWriteTokens += Math.min(schemaTokens, call.usage.cacheCreationInputTokens)
           }
         }
       }
@@ -2197,7 +2201,7 @@ export function detectMcpProfileAdvisor(
     title: `${candidates.length} MCP server${candidates.length === 1 ? '' : 's'} should be project-scoped`,
     explanation:
       `These MCP servers look useful in a small set of projects but are loaded into other projects where they are not invoked. ` +
-      `Project-scoping them keeps the hot-project workflow while avoiding schema overhead elsewhere. ${lines.join('; ')}${extra}.`,
+      `Project-scoping them keeps the hot-project workflow while avoiding their tool lines elsewhere. ${lines.join('; ')}${extra}.`,
     impact,
     tokensSaved,
     fix: {

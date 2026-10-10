@@ -204,26 +204,25 @@ describe('estimateMcpSchemaCost', () => {
       turns,
       mcpBreakdown: { svc: { calls: 0 } },
     })]
-    // 30 unused tools * 400 token estimate = 12_000 schema tokens
-    // cap by call cache buckets so we never overclaim
+    // 30 deferred tools * 9 token name lines = 270 tokens
     const cost = estimateMcpSchemaCost(30, [project(sessions)], 'svc')
-    expect(cost.cacheWriteTokens).toBe(12_000) // capped by 50k creation, 12k schema fits
-    expect(cost.cacheReadTokens).toBe(24_000)  // 12k + 12k across two ongoing turns
+    expect(cost.cacheWriteTokens).toBe(270)
+    expect(cost.cacheReadTokens).toBe(540)  // 270 + 270 across two ongoing turns
     // effective = write * 1.25 + read * 0.10 (cache pricing)
-    expect(cost.effectiveInputTokens).toBeCloseTo(12_000 * 1.25 + 24_000 * 0.10, 5)
+    expect(cost.effectiveInputTokens).toBeCloseTo(270 * 1.25 + 540 * 0.10, 5)
   })
 
   it('caps by available cache bucket so we never overclaim', () => {
-    const turns = [makeTurn([makeCall({ cacheCreation: 1_000 })])]
+    const turns = [makeTurn([makeCall({ cacheCreation: 100 })])]
     const sessions = [makeSession({
       inventory: Array.from({ length: 30 }, (_, i) => `mcp__svc__t${i}`),
       turns,
       mcpBreakdown: { svc: { calls: 0 } },
     })]
-    // 30*400 = 12k schema tokens, but the call only had 1k cache-creation,
-    // so we should not claim more than 1k of overhead for that turn.
+    // 30*9 = 270 tokens, but the call only had 100 cache-creation,
+    // so we should not claim more than 100 of overhead for that turn.
     const cost = estimateMcpSchemaCost(30, [project(sessions)], 'svc')
-    expect(cost.cacheWriteTokens).toBe(1_000)
+    expect(cost.cacheWriteTokens).toBe(100)
   })
 
   it('returns zero when no unused tools', () => {
@@ -235,10 +234,10 @@ describe('estimateMcpSchemaCost', () => {
     expect(cost).toEqual({ cacheWriteTokens: 0, cacheReadTokens: 0, effectiveInputTokens: 0 })
   })
 
-  it('counts cache write AND cache read on the same call', () => {
-    // A long session can have a cache rebuild mid-stream where one call
-    // reports both buckets. The estimator must charge both, not skip the
-    // read because of the write.
+  it('charges a call that read the cached prefix once, as a read', () => {
+    // Agent loops write new tool output on nearly every call, so a cache
+    // write next to a cache read is not a prefix rebuild: the tool lines
+    // were read, not written again.
     const turns = [makeTurn([
       makeCall({ cacheCreation: 50_000, cacheRead: 30_000 }),
     ])]
@@ -248,8 +247,8 @@ describe('estimateMcpSchemaCost', () => {
       mcpBreakdown: { svc: { calls: 0 } },
     })]
     const cost = estimateMcpSchemaCost(30, [project(sessions)], 'svc')
-    expect(cost.cacheWriteTokens).toBe(12_000) // capped at 50k creation
-    expect(cost.cacheReadTokens).toBe(12_000)  // capped at 30k read
+    expect(cost.cacheWriteTokens).toBe(0)
+    expect(cost.cacheReadTokens).toBe(270)
   })
 
   it('counts every cache rebuild, not just the first one', () => {
@@ -267,8 +266,8 @@ describe('estimateMcpSchemaCost', () => {
       mcpBreakdown: { svc: { calls: 0 } },
     })]
     const cost = estimateMcpSchemaCost(30, [project(sessions)], 'svc')
-    expect(cost.cacheWriteTokens).toBe(24_000) // both rebuilds counted
-    expect(cost.cacheReadTokens).toBe(12_000)
+    expect(cost.cacheWriteTokens).toBe(540) // both rebuilds counted
+    expect(cost.cacheReadTokens).toBe(270)
   })
 
   it('skips sessions where the server was never loaded', () => {
@@ -299,22 +298,22 @@ describe('estimateMcpSchemaCost', () => {
   })
 
   it('caps combined unused-schema budget across multiple flagged servers', () => {
-    // Two flagged servers, each with 30 unused tools (12k schema each =
-    // 24k combined). One call has a 50k cache-creation bucket. The
-    // combined cap means total write tokens reported is min(24k, 50k) =
-    // 24k, not 24k + 24k = 48k.
+    // Two flagged servers, each with 30 unused tools (270 tokens each =
+    // 540 combined). One call has a 300 cache-creation bucket. The
+    // combined cap means total write tokens reported is min(540, 300) =
+    // 300, not min(270, 300) per server = 540.
     const inventory = [
       ...Array.from({ length: 30 }, (_, i) => `mcp__a__t${i}`),
       ...Array.from({ length: 30 }, (_, i) => `mcp__b__t${i}`),
     ]
-    const turns = [makeTurn([makeCall({ cacheCreation: 50_000 })])]
+    const turns = [makeTurn([makeCall({ cacheCreation: 300 })])]
     const sessions = [makeSession({ inventory, turns })]
     const cost = estimateMcpSchemaCost(
       { a: 30, b: 30 },
       [project(sessions)],
       ['a', 'b'],
     )
-    expect(cost.cacheWriteTokens).toBe(24_000)
+    expect(cost.cacheWriteTokens).toBe(300)
   })
 
   it('does not count a duplicated server identifier twice', () => {
@@ -330,8 +329,8 @@ describe('estimateMcpSchemaCost', () => {
       ['svc', 'svc'],
     )
 
-    expect(cost.cacheWriteTokens).toBe(8_000)
-    expect(cost.effectiveInputTokens).toBe(10_000)
+    expect(cost.cacheWriteTokens).toBe(180)
+    expect(cost.effectiveInputTokens).toBe(225)
   })
 
   it('still works with the single-server signature (backward compat)', () => {
@@ -341,7 +340,7 @@ describe('estimateMcpSchemaCost', () => {
       turns,
     })]
     const cost = estimateMcpSchemaCost(30, [project(sessions)], 'svc')
-    expect(cost.cacheWriteTokens).toBe(12_000)
+    expect(cost.cacheWriteTokens).toBe(270)
   })
 })
 
@@ -366,7 +365,7 @@ describe('detectMcpToolCoverage', () => {
     const finding = detectMcpToolCoverage([project(sessions)])
 
     expect(finding).not.toBeNull()
-    expect(finding!.tokensSaved).toBe(20_000)
+    expect(finding!.tokensSaved).toBe(450)
     // Keep the transcript namespace as evidence, but name the connector the
     // way users actually see it in /mcp and claude.ai Settings.
     expect(finding!.explanation).toContain(server)
@@ -460,12 +459,12 @@ describe('detectMcpToolCoverage', () => {
 
     const finding = detectMcpToolCoverage([project(sessions)], coverage)
 
-    // 5*400 and 20*400, each at 1.25x cache-write pricing.
-    expect(finding).toMatchObject({ tokensSaved: 12_500 })
-    expect(finding!.applyTokensSavedByServer?.filesystem).toBe(12_500)
+    // 5*9 and 20*9 name-line tokens, each at 1.25x cache-write pricing.
+    expect(finding).toMatchObject({ tokensSaved: 281 })
+    expect(finding!.applyTokensSavedByServer?.filesystem).toBe(281.25)
   })
 
-  it('conserves simultaneous cache-write and cache-read buckets with fractional shares', () => {
+  it('conserves a capped cache-read bucket with fractional shares', () => {
     const inventory = [
       ...Array.from({ length: 15 }, (_, i) => `mcp__filesystem__t${i}`),
       ...Array.from({ length: 11 }, (_, i) => `mcp__claude_ai_Slack__t${i}`),
@@ -485,11 +484,13 @@ describe('detectMcpToolCoverage', () => {
     const sessions = ['a', 'b'].map(sessionId => makeSession({
       sessionId,
       inventory: sessionInventory,
-      turns: [makeTurn([makeCall({ cacheCreation: 5_001, cacheRead: 3_333 })])],
+      turns: [makeTurn([makeCall({ cacheCreation: 5_001, cacheRead: 101 })])],
     }))
 
     const finding = detectMcpToolCoverage([project(sessions)], coverage)!
-    const total = 2 * (5_001 * 1.25 + 3_333 * 0.10)
+    // 26 tools * 9 = 234 tokens, capped at the 101-token read; the call read
+    // the prefix, so its cache write is new content, not the tool lines.
+    const total = 2 * 101 * 0.10
     const local = total * (15 / 26)
 
     expect(finding.tokensSaved).toBe(Math.round(total))
@@ -584,10 +585,10 @@ describe('detectMcpToolCoverage', () => {
     const finding = detectMcpToolCoverage([project(sessions)])
 
     expect(finding).not.toBeNull()
-    // The finding describes both opportunities: 40 unused tool schemas across
-    // two sessions = 40K effective tokens. The automatic mutation owns only
-    // the 20 local schemas = 20K; the connector portion remains manual.
-    expect(finding).toMatchObject({ tokensSaved: 40_000, applyTokensSaved: 20_000 })
+    // The finding describes both opportunities: 40 unused tool lines across
+    // two sessions = 900 effective tokens. The automatic mutation owns only
+    // the 20 local lines = 450; the connector portion remains manual.
+    expect(finding).toMatchObject({ tokensSaved: 900, applyTokensSaved: 450 })
     expect(finding!.explanation).toContain('claude_ai_Slack')
     expect(finding!.explanation).toContain('/mcp')
     expect(finding!.explanation).toContain('claude.ai Settings > Connectors')
@@ -606,14 +607,14 @@ describe('detectMcpToolCoverage', () => {
     const sessions = ['a', 'b'].map(sessionId => makeSession({
       sessionId,
       inventory,
-      turns: [makeTurn([makeCall({ cacheCreation: 10_000 })])],
+      turns: [makeTurn([makeCall({ cacheCreation: 200 })])],
     }))
 
     const finding = detectMcpToolCoverage([project(sessions)])
 
-    // Each call's 10K cache bucket is shared evenly by two 8K schemas.
-    // Total: 2 * 10K * 1.25 = 25K. The local mutation owns half.
-    expect(finding).toMatchObject({ tokensSaved: 25_000, applyTokensSaved: 12_500 })
+    // Each call's 200-token cache bucket is shared evenly by two 180-token
+    // tool lists. Total: 2 * 200 * 1.25 = 500. The local mutation owns half.
+    expect(finding).toMatchObject({ tokensSaved: 500, applyTokensSaved: 250 })
   })
 
   it('charges only the flagged servers actually loaded in each session', () => {
@@ -627,9 +628,9 @@ describe('detectMcpToolCoverage', () => {
 
     const finding = detectMcpToolCoverage([project(sessions)])
 
-    // Four sessions each load one 8K schema. The combined finding must not
-    // charge both schemas to every session merely because both are flagged.
-    expect(finding).toMatchObject({ tokensSaved: 40_000, applyTokensSaved: 20_000 })
+    // Four sessions each load one 180-token tool list. The combined finding
+    // must not charge both to every session merely because both are flagged.
+    expect(finding).toMatchObject({ tokensSaved: 900, applyTokensSaved: 450 })
   })
 
   it('disambiguates a claude.ai connector from a similarly named local server', () => {
@@ -656,17 +657,15 @@ describe('detectMcpToolCoverage', () => {
   })
 
   it('escalates impact to high when token waste crosses the threshold', () => {
-    const inventory = Array.from({ length: 60 }, (_, i) => `mcp__big__t${i}`)
-    // 60 tools * 400 tokens = 24k schema. With many sessions and large
-    // cache-creation buckets, total effective tokens easily clear 200k.
+    const inventory = Array.from({ length: 200 }, (_, i) => `mcp__big__t${i}`)
+    // 200 tools * 9 tokens = 1,800 per call: one write (2,250 effective) and
+    // 100 reads (18,000 effective) is ~20k per session, so ten sessions clear
+    // the 200k high-impact threshold.
     const turns = [makeTurn([
       makeCall({ tools: ['mcp__big__t0'], cacheCreation: 50_000 }),
-      makeCall({ cacheRead: 60_000 }),
-      makeCall({ cacheRead: 60_000 }),
+      ...Array.from({ length: 100 }, () => makeCall({ cacheRead: 60_000 })),
     ])]
-    // Need enough sessions so the per-session ~28.8k effective tokens
-    // (24k write + 48k read × 0.10) sum past the 200k high-impact threshold.
-    const sessions = Array.from({ length: 8 }, (_, i) =>
+    const sessions = Array.from({ length: 10 }, (_, i) =>
       makeSession({ sessionId: `s${i}`, inventory, turns, mcpBreakdown: { big: { calls: 1 } } }),
     )
     const finding = detectMcpToolCoverage([project(sessions)])
@@ -759,7 +758,7 @@ describe('detectMcpProfileAdvisor', () => {
     expect(finding!.explanation).toContain('/tmp/api')
     expect(finding!.explanation).toContain('/tmp/web')
     expect(finding!.explanation).toContain('/tmp/docs')
-    expect(finding!.tokensSaved).toBe(4000)
+    expect(finding!.tokensSaved).toBe(90)
     expect(finding!.fix.type).toBe('paste')
     if (finding!.fix.type === 'paste') {
       expect(finding!.fix.destination).toBe('prompt')
@@ -870,14 +869,14 @@ describe('detectMcpProfileAdvisor', () => {
       projectNamed('web', [
         makeSession({
           inventory,
-          turns: [makeTurn([makeCall({ cacheCreation: 2_000 })])],
+          turns: [makeTurn([makeCall({ cacheCreation: 50 })])],
           mcpBreakdown: { github: { calls: 0 }, slack: { calls: 0 } },
         }),
       ]),
       projectNamed('docs', [
         makeSession({
           inventory,
-          turns: [makeTurn([makeCall({ cacheCreation: 2_000 })])],
+          turns: [makeTurn([makeCall({ cacheCreation: 50 })])],
           mcpBreakdown: { github: { calls: 0 }, slack: { calls: 0 } },
         }),
       ]),
@@ -888,7 +887,9 @@ describe('detectMcpProfileAdvisor', () => {
     expect(finding!.title).toContain('2 MCP servers')
     expect(finding!.explanation).toContain('github')
     expect(finding!.explanation).toContain('slack')
-    expect(finding!.tokensSaved).toBe(5000)
+    // 2 * 36 tool-line tokens capped once at the 50-token bucket, per cold
+    // session: 2 * 50 * 1.25.
+    expect(finding!.tokensSaved).toBe(125)
   })
 
   it('requires at least three loaded projects before recommending a profile', () => {
@@ -981,8 +982,8 @@ describe('connector findings and finding class', () => {
 
     expect(finding).not.toBeNull()
     expect(findingClass(finding!)).toBe('fix')
-    expect(finding).toMatchObject({ tokensSaved: 40_000, applyTokensSaved: 20_000 })
-    expect(classTotals([finding!], 0.00002).fix).toEqual({ tokensSaved: 20_000, savingsUSD: 0.4, count: 1 })
+    expect(finding).toMatchObject({ tokensSaved: 900, applyTokensSaved: 450 })
+    expect(classTotals([finding!], 0.00002).fix).toEqual({ tokensSaved: 450, savingsUSD: expect.closeTo(0.009, 10), count: 1 })
   })
 
   it("leaves a local-only finding's subtotal at its full estimate", () => {
@@ -1007,9 +1008,9 @@ describe('connector findings and finding class', () => {
 
     const finding = detectMcpToolCoverage([project(sessions)])
 
-    expect(finding).toMatchObject({ tokensSaved: 40_000 })
+    expect(finding).toMatchObject({ tokensSaved: 900 })
     expect(finding!.applyTokensSaved).toBeUndefined()
-    expect(classTotals([finding!], 0.00002).fix.tokensSaved).toBe(40_000)
+    expect(classTotals([finding!], 0.00002).fix.tokensSaved).toBe(900)
   })
 
   it('treats a claude_ai_* name owned by local config as a local server', () => {
@@ -1069,7 +1070,7 @@ describe('connector findings and finding class', () => {
     // Both are local: the removal owns both entries and nothing is deferred.
     expect(finding!.apply).toEqual({ kind: 'mcp-remove', servers: ['filesystem', 'claude_ai_Slack'] })
     expect(finding!.applyTokensSaved).toBeUndefined()
-    expect(classTotals([finding!], 0.00002).fix.tokensSaved).toBe(40_000)
+    expect(classTotals([finding!], 0.00002).fix.tokensSaved).toBe(900)
     expect(finding!.explanation).not.toContain('is a claude.ai connector namespace')
     expect(finding!.manualFollowUp?.text)
       .toBe('If you also use a claude.ai connector named claude_ai_Slack, manage it with /mcp or in claude.ai Settings > Connectors.')
