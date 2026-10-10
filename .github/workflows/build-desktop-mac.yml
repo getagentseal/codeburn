@@ -48,12 +48,25 @@ jobs:
             if [ -z "${!name}" ]; then echo "::error::secret $name is not set"; exit 1; fi
           done
           echo "$APPSTORE_API_KEY_P8_BASE64" | base64 --decode > "$RUNNER_TEMP/notary.p8"
+          # Keychain Access exports a legacy p12 (RC2-40, sha1 MAC, 1 iteration) that the
+          # runner's `security import` rejects as a wrong password; rewrap it in a form it reads.
+          umask 077
+          openssl3="$(brew --prefix openssl@3)/bin/openssl"
+          base64 --decode <<< "$MACOS_CERT_P12_BASE64" > "$RUNNER_TEMP/cert-in.p12"
+          "$openssl3" pkcs12 -legacy -in "$RUNNER_TEMP/cert-in.p12" -passin env:MACOS_CERT_PASSWORD -nodes -out "$RUNNER_TEMP/cert.pem"
+          export csc_password="$(openssl rand -hex 24)"
+          echo "::add-mask::$csc_password"
+          "$openssl3" pkcs12 -export -legacy -in "$RUNNER_TEMP/cert.pem" -out "$RUNNER_TEMP/signing.p12" -passout env:csc_password \
+            -keypbe PBE-SHA1-3DES -certpbe PBE-SHA1-3DES -macalg sha1 -iter 2048
+          rm -f "$RUNNER_TEMP/cert-in.p12" "$RUNNER_TEMP/cert.pem"
+          {
+            echo "CSC_LINK=$RUNNER_TEMP/signing.p12"
+            echo "CSC_KEY_PASSWORD=$csc_password"
+          } >> "$GITHUB_ENV"
 
       - name: Build, sign and notarize
         working-directory: app
         env:
-          CSC_LINK: ${{ secrets.MACOS_CERT_P12_BASE64 }}
-          CSC_KEY_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
           APPLE_API_KEY: ${{ runner.temp }}/notary.p8
           APPLE_API_KEY_ID: ${{ secrets.APPSTORE_API_KEY_ID }}
           APPLE_API_ISSUER: ${{ secrets.APPSTORE_API_ISSUER_ID }}
@@ -89,7 +102,7 @@ jobs:
 
       - name: Remove notary key
         if: always()
-        run: rm -f "$RUNNER_TEMP/notary.p8"
+        run: rm -f "$RUNNER_TEMP/notary.p8" "$RUNNER_TEMP/signing.p12"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v6
