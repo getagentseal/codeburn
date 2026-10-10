@@ -33,7 +33,7 @@ const user = (sid: string, cwd: string, ts: Date) => JSON.stringify({
 })
 const assistant = (sid: string, id: string, cwd: string, ts: Date, input: number) => JSON.stringify({
   type: 'assistant', sessionId: sid, timestamp: ts.toISOString(), cwd,
-  message: { id, type: 'message', role: 'assistant', model: 'claude-sonnet-4-5', content: [], usage: { input_tokens: input, output_tokens: 0 } },
+  message: { id, type: 'message', role: 'assistant', model: 'claude-sonnet-4-6', content: [], usage: { input_tokens: input, output_tokens: 0 } },
 })
 
 async function writeClaudeSession(sid: string, cwd: string, lines: string[], mtime: Date): Promise<void> {

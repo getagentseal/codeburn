@@ -65,7 +65,7 @@ function assistantLine(sessionId: string, timestamp: string): string {
       id: `msg-${sessionId}`,
       type: 'message',
       role: 'assistant',
-      model: 'claude-sonnet-4-5',
+      model: 'claude-sonnet-4-6',
       content: [{ type: 'text', text: 'done' }],
       usage: {
         input_tokens: 1_000_000,

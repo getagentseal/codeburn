@@ -1518,6 +1518,7 @@ export function parseApiCall(entry: JournalEntry, toolResultMeta?: Map<string, T
     tokens.webSearchRequests,
     usage.speed ?? 'standard',
     cacheCreation.oneHourTokens,
+    'claude',
   )
 
   const bashCmds = extractBashCommandsFromContent(contentBlocks)
@@ -1630,6 +1631,7 @@ export function parseAdvisorCalls(entry: JournalEntry): ParsedApiCall[] {
       tokens.webSearchRequests,
       speed,
       cacheCreation.oneHourTokens,
+      'claude',
     )
 
     calls.push(applyLocalModelSavings({

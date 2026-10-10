@@ -33,7 +33,7 @@ const user = (ts: Date) => JSON.stringify({
 })
 const assistant = (id: string, ts: Date, input: number) => JSON.stringify({
   type: 'assistant', sessionId: 's1', timestamp: ts.toISOString(), cwd: CWD,
-  message: { id, type: 'message', role: 'assistant', model: 'claude-sonnet-4-5', content: [], usage: { input_tokens: input, output_tokens: 0 } },
+  message: { id, type: 'message', role: 'assistant', model: 'claude-sonnet-4-6', content: [], usage: { input_tokens: input, output_tokens: 0 } },
 })
 
 const catCost = (d: DailyEntry | undefined) => Object.values(d?.categories ?? {}).reduce((s, c) => s + c.cost, 0)
