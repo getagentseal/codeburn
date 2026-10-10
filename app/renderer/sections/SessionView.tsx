@@ -12,7 +12,7 @@ import { formatAxisMoney, niceTicks } from '../lib/chartAxis'
 import { formatCompact, formatDayLong, formatUsd, formatUsdDifference, shortenProjectPath } from '../lib/format'
 import type { InvestigationFilters } from '../lib/investigation'
 import { codeburn, normalizeCliError } from '../lib/ipc'
-import type { CliError, SessionDrillRow, SessionWhy, WhyFinding, WhyParts, WhyStep, WhyTokens, WhyTurn } from '../lib/types'
+import type { CliError, SessionDrillRow, SessionWhy, WhyFinding, WhyParts, WhyPrWork, WhyStep, WhyTokens, WhyTurn } from '../lib/types'
 
 /** Claude Code main sessions are `<uuid>.jsonl`; `--why` resolves only those. */
 const CLAUDE_SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -439,6 +439,40 @@ function TurnDetail({ turn, findings, why, openStep, onStep }: { turn: WhyTurn; 
   )
 }
 
+const prLabel = (url: string) => url.replace(/^https:\/\/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+).*$/, '$1/$2#$3')
+
+function PrWorkPanel({ work }: { work: WhyPrWork }) {
+  return (
+    <Panel title={t('sessions.why.pr.title')} right={work.reviewCost > 0 ? t('sessions.why.pr.reviewTotal', { amount: formatUsd(work.reviewCost) }) : undefined} className="sv-findings sv-prwork">
+      {work.opened.map(pr => (
+        <div key={pr.url} className="sv-fd info">
+          <div className="sv-fd-body">
+            <div className="sv-fd-title"><span>{t('sessions.why.pr.opened', { pr: prLabel(pr.url) })}</span></div>
+            {pr.followUpRounds !== null && (
+              <p className="sv-fd-line">{pr.followUpRounds === 0 ? t('sessions.why.pr.noFollowUps') : t('sessions.why.pr.followUps', { rounds: pr.followUpRounds, pushes: pr.followUpPushes })}</p>
+            )}
+          </div>
+          <span />
+          <span />
+        </div>
+      ))}
+      {work.reviewRuns.map(run => {
+        const line = [run.models.join(', '), run.pr !== null ? `#${run.pr}` : ''].filter(Boolean).join(' · ')
+        return (
+          <div key={run.helperId} className="sv-fd info">
+            <div className="sv-fd-body">
+              <div className="sv-fd-title"><span>{run.description || t('sessions.why.pr.reviewRun')}</span></div>
+              {line && <p className="sv-fd-line">{line}</p>}
+            </div>
+            <div className="sv-fd-num"><b>{formatUsd(run.cost)}</b></div>
+            <span />
+          </div>
+        )
+      })}
+    </Panel>
+  )
+}
+
 export function SessionView({ row, filters, medianCost, onBack }: {
   row: SessionDrillRow
   filters: InvestigationFilters
@@ -571,6 +605,8 @@ export function SessionView({ row, filters, medianCost, onBack }: {
           <li>{t('sessions.why.rules.reconcile')}</li>
         </ul>
       </details>
+
+      {why.prWork && (why.prWork.opened.length > 0 || why.prWork.reviewRuns.length > 0) && <PrWorkPanel work={why.prWork} />}
 
       <Panel title={t('sessions.why.chart.title')} right={t('sessions.why.chart.hint')}>
         <SpendChart why={why} flagged={new Set(byTurn.keys())} selected={openTurn} onSelect={turn => open(turn)} />

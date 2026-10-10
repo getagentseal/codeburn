@@ -98,6 +98,35 @@ describe('SessionView', () => {
     expect(container.querySelectorAll('.sv-bar')).toHaveLength(4)
   })
 
+  it('shows PR work: PRs opened here with follow-ups and review runs with cost', async () => {
+    getSessionWhy.mockResolvedValue({ ...payload, prWork: {
+      opened: [
+        { url: 'https://github.com/o/r/pull/12', at: '2026-10-02T08:12:00.000Z', head: 'feat/a', followUpRounds: 2, followUpPushes: 3 },
+        { url: 'https://github.com/o/r/pull/13', at: '2026-10-02T08:14:00.000Z', head: 'feat/b', followUpRounds: 0, followUpPushes: 0 },
+        { url: 'https://github.com/o/r/pull/14', at: '2026-10-02T08:15:00.000Z', head: null, followUpRounds: null, followUpPushes: 0 },
+      ],
+      reviewRuns: [{ helperId: 'h1', description: 'Review PR 12', models: ['Opus 5.5'], cost: 1.4, pr: 12 }],
+      reviewCost: 1.4,
+    } })
+    const { container } = render(<SessionView row={row} filters={EMPTY_FILTERS} onBack={() => {}} />)
+    await screen.findByText('PR work')
+    const block = container.querySelector('.sv-prwork') as HTMLElement
+    expect(block).toHaveTextContent('review runs $1.40')
+    expect([...block.querySelectorAll('.sv-fd')].map(r => r.textContent)).toEqual([
+      'Opened o/r#12Follow-up rounds: 2, pushes: 3',
+      'Opened o/r#13No pushes after it was opened',
+      'Opened o/r#14',
+      'Review PR 12Opus 5.5 · #12$1.40',
+    ])
+  })
+
+  it('has no PR work block when the session did none', async () => {
+    getSessionWhy.mockResolvedValue({ ...payload, prWork: { opened: [], reviewRuns: [], reviewCost: 0 } })
+    render(<SessionView row={row} filters={EMPTY_FILTERS} onBack={() => {}} />)
+    await screen.findByText('Worth a look')
+    expect(screen.queryByText('PR work')).toBeNull()
+  })
+
   it('says so when the list row covers only part of the session', async () => {
     getSessionWhy.mockResolvedValue(payload)
     render(<SessionView row={{ ...row, cost: 1.25 }} filters={EMPTY_FILTERS} onBack={() => {}} />)

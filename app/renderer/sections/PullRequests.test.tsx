@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -369,5 +369,86 @@ describe('PullRequests', () => {
 
     expect(await screen.findByText(/No sessions in Aug 20 – 22 mentioned a pull request URL/)).toBeInTheDocument()
     expect(screen.queryByText(/Last 30 days/)).toBeNull()
+  })
+
+  describe('local PR facts', () => {
+    const base = { savingsUSD: 0, sessions: 1, calls: 10, firstStarted: '2026-10-08T10:00:00Z', lastEnded: '2026-10-08T12:00:00Z', models: ['Opus 5.5'], categories: [{ name: 'Coding', cost: 1 }], linkEvidence: 'explicit' as const, openedAt: null, followUpPushes: 0, reviewCostUSD: 0, mergedAt: null, timeToMergeMs: null }
+    const pr = (n: number) => ({ url: `https://github.com/o/r/pull/${n}`, label: `o/r#${n}` })
+    const ROWS: PrPayload['rows'] = [
+      { ...base, ...pr(1), cost: 11.16, runs: 3, openedAt: '2026-10-08T10:00:00Z', followUpRounds: 0, oneShot: true, reviewRuns: [], mergedAt: '2026-10-08T10:11:00Z', timeToMergeMs: 660_000, costSplit: { buildUSD: 11.16, reviewUSD: 0, fixesUSD: 0 } },
+      { ...base, ...pr(2), cost: 14.11, runs: 4, followUpRounds: 1, followUpPushes: 1, oneShot: null, reviewRuns: [{ kind: 'agent', label: 'general-purpose', model: 'Opus 5.5', costUSD: 1.4, at: '2026-10-10T08:56:00Z', evidence: 'reads-pr' }], reviewCostUSD: 1.4, mergedAt: '2026-10-10T09:34:00Z', costSplit: { buildUSD: 0, reviewUSD: 1.4, fixesUSD: 12.71 } },
+      { ...base, ...pr(3), cost: 4.45, runs: 1, linkEvidence: 'pr-link-only', followUpRounds: null, oneShot: null, reviewRuns: [], costSplit: { buildUSD: 4.45, reviewUSD: 0, fixesUSD: 0 } },
+      { ...base, ...pr(4), cost: 9, runs: 6, openedAt: '2026-10-08T10:00:00Z', followUpRounds: 2, followUpPushes: 5, oneShot: false, reviewRuns: [
+        { kind: 'agent', label: 'general-purpose', model: 'Sonnet 5.5', costUSD: 0.5, at: '2026-10-08T10:30:00Z', evidence: 'reads-pr' },
+        { kind: 'you', label: 'approve', model: 'Opus 5.5', costUSD: 0.25, at: '2026-10-08T11:30:00Z', evidence: 'gh-pr-review' },
+      ], reviewCostUSD: 0.75, costSplit: { buildUSD: 6, reviewUSD: 0.75, fixesUSD: 2.25 } },
+    ]
+    const payload = { rows: ROWS, distinctCost: 38.72, distinctSessions: 1, attributedCost: 38.72, unattributedCost: 0 }
+
+    async function card(n: number): Promise<HTMLElement> {
+      return (await screen.findByRole('link', { name: `o/r#${n}` })).closest('article') as HTMLElement
+    }
+    const facts = (el: HTMLElement) => [...el.querySelectorAll('.pr-card-facts span')].map(s => s.textContent)
+
+    it('one shot, merge time and the run count', async () => {
+      getOverview.mockResolvedValue(makePayload(payload))
+      render(<PullRequests period="lifetime" provider="all" />)
+      const el = await card(1)
+      expect(facts(el)).toEqual(['One shot', 'Merged 11m after open'])
+      expect(el).toHaveTextContent('3 runs')
+      expect(el).not.toHaveTextContent('1 session')
+    })
+
+    it('a PR opened elsewhere: your follow-ups, the review run, no merge time without an open', async () => {
+      getOverview.mockResolvedValue(makePayload(payload))
+      render(<PullRequests period="lifetime" provider="all" />)
+      const el = await card(2)
+      expect(facts(el)).toEqual(['Reviewed by Opus 5.5 run ($1.40)', 'Your follow-ups: 1'])
+      expect(el).not.toHaveTextContent('One shot')
+      expect(el).not.toHaveTextContent('Merged')
+    })
+
+    it('omits unknowns and says pr-link only, never stale or no review', async () => {
+      getOverview.mockResolvedValue(makePayload(payload))
+      render(<PullRequests period="lifetime" provider="all" />)
+      const el = await card(3)
+      expect(facts(el)).toEqual(['Linked by pr-link only'])
+      expect(el).toHaveTextContent('1 run')
+      expect(el.textContent).not.toMatch(/stale|review|follow-up|one shot/i)
+    })
+
+    it('several review runs and counted rounds', async () => {
+      getOverview.mockResolvedValue(makePayload(payload))
+      render(<PullRequests period="lifetime" provider="all" />)
+      expect(facts(await card(4))).toEqual(['2 review runs ($0.75)', '2 follow-up rounds'])
+    })
+
+    it('splits the spend by phase, summing to the cost, and lists the review runs', async () => {
+      getOverview.mockResolvedValue(makePayload(payload))
+      render(<PullRequests period="lifetime" provider="all" />)
+      const el = await card(4)
+      await userEvent.click(rowForLink(within(el).getByRole('link')))
+      const region = within(el).getByRole('region', { name: 'o/r#4 spend by phase' })
+      const rows = [...region.querySelectorAll('.pr-cat')].map(r => r.textContent)
+      expect(rows).toEqual(['Building$6.00', 'Review runs$0.75', 'After first review$2.25', 'general-purposeSonnet 5.5$0.50', 'Your review (approve)Opus 5.5$0.25'])
+      const split = ROWS[3]!.costSplit!
+      expect(split.buildUSD + split.reviewUSD + split.fixesUSD).toBeCloseTo(ROWS[3]!.cost, 10)
+    })
+
+    it('shows no phase split when no review run was seen', async () => {
+      getOverview.mockResolvedValue(makePayload(payload))
+      render(<PullRequests period="lifetime" provider="all" />)
+      const el = await card(1)
+      await userEvent.click(rowForLink(within(el).getByRole('link')))
+      expect(within(el).queryByRole('region', { name: 'o/r#1 spend by phase' })).toBeNull()
+    })
+
+    it('an older payload without the fields keeps the session count and no facts line', async () => {
+      getOverview.mockResolvedValue(makePayload(SAMPLE))
+      render(<PullRequests period="lifetime" provider="all" />)
+      const el = (await screen.findByRole('link', { name: 'getagentseal/codeburn#780' })).closest('article') as HTMLElement
+      expect(el).toHaveTextContent('3 sessions')
+      expect(el.querySelector('.pr-card-facts')).toBeNull()
+    })
   })
 })

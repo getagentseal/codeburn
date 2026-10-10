@@ -863,6 +863,8 @@ td:first-child { font-size: var(--fs-body); font-weight: var(--fw-medium); }
 .pr-cat-name { overflow: hidden; color: var(--mut); font-size: var(--fs-body); font-weight: var(--fw-medium); text-overflow: ellipsis; white-space: nowrap; }
 .pr-cat > strong { color: var(--ink); font-family: var(--mono); font-size: var(--fs-meta); font-variant-numeric: tabular-nums; text-align: right; }
 .pr-cat-empty { margin: 0; color: var(--mut2); font-size: var(--fs-meta); }
+.pr-split { margin-top: var(--sp-4); }
+.pr-reviews-head { margin-top: 14px; }
 .pr-footnote { margin: 14px 2px 2px; color: var(--mut); font-size: var(--fs-meta); line-height: 1.55; }
 .pr-unattributed { margin: 4px 2px 2px; color: var(--mut2); font-size: var(--fs-meta); font-variant-numeric: tabular-nums; }
 @media (max-width: 1040px) {

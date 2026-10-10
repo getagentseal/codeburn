@@ -2647,6 +2647,7 @@ async function scanProjectDirs(
       if (cachedFile.isSidechain) {
         session.isSidechain = true
         if (cachedFile.parentSessionId) session.parentSessionId = cachedFile.parentSessionId
+        session.agentMetaPath = filePath.replace(/\.jsonl$/, '.meta.json')
         session.agentId = sessionId.startsWith('agent-') ? sessionId.slice('agent-'.length) : sessionId
       }
       // Parent linkage maps (only present on sessions that spawned subagents).
@@ -5540,7 +5541,7 @@ export function correlateCrossProviderPrSessions(projects: ProjectSummary[]): vo
     if (bucket) bucket.push(s)
     else unlinkedByAgentId.set(s.agentId, [s])
   }
-  for (const resolved of resolveSubagentAttribution(mergeProjectSplits(projects)).values()) {
+  for (const resolved of resolveSubagentAttribution(mergeProjectSplits(projects), false).values()) {
     for (const child of resolved) {
       // A multi-PR spawn set is valid for folding the child's own cost, but is
       // too broad to identify which PR an independently saved nested review was

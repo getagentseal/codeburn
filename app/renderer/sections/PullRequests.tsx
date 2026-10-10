@@ -7,7 +7,7 @@ import { Panel } from '../components/Panel'
 import { SectionSkeleton } from '../components/Skeleton'
 import { StaleBanner } from '../components/StaleBanner'
 import { type Polled, usePolled } from '../hooks/usePolled'
-import { formatCount, formatDayShort, formatUsd } from '../lib/format'
+import { formatCount, formatDayShort, formatDuration, formatUsd } from '../lib/format'
 import { codeburn } from '../lib/ipc'
 import { PERIOD_LABELS } from '../lib/period'
 import type { CliError, DateRange, MenubarPayload, Period } from '../lib/types'
@@ -27,6 +27,22 @@ function spanLabel(firstStarted: string, lastEnded: string): string {
   const end = formatDayShort(lastEnded)
   if (start === '—' && end === '—') return '—'
   return start === end ? start : `${start} - ${end}`
+}
+
+// Facts read from local commands. An unknown is left out, never shown as a negative.
+function prFacts(pr: PrRow): string[] {
+  const facts: string[] = []
+  const reviews = pr.reviewRuns ?? []
+  const only = reviews.length === 1 ? reviews[0]! : null
+  if (only?.kind === 'you') facts.push(t('pullRequests.facts.reviewedByYou', { amount: formatUsd(only.costUSD) }))
+  else if (only?.model) facts.push(t('pullRequests.facts.reviewedBy', { model: only.model, amount: formatUsd(only.costUSD) }))
+  else if (reviews.length) facts.push(t(`pullRequests.facts.reviewRuns.${reviews.length === 1 ? 'one' : 'other'}`, { count: reviews.length, amount: formatUsd(pr.reviewCostUSD ?? 0) }))
+  const rounds = pr.followUpRounds ?? null
+  if (pr.oneShot === true) facts.push(t('pullRequests.facts.oneShot'))
+  else if (pr.oneShot === false && rounds !== null) facts.push(t(`pullRequests.facts.rounds.${rounds === 1 ? 'one' : 'other'}`, { count: rounds }))
+  else if (rounds !== null) facts.push(t('pullRequests.facts.yourFollowUps', { count: rounds }))
+  if (pr.timeToMergeMs != null) facts.push(t('pullRequests.facts.merged', { duration: formatDuration(pr.timeToMergeMs) }))
+  return facts
 }
 
 function ModelChips({ models }: { models: string[] }) {
@@ -218,6 +234,16 @@ function PrRowView({ pr, expanded, onToggle, onInvestigate }: { pr: PrRow; expan
   const models = pr.models ?? []
   const categories = pr.categories ?? []
   const catMax = categories.length ? Math.max(...categories.map(cat => cat.cost)) : 0
+  const facts = prFacts(pr)
+  const reviews = pr.reviewRuns ?? []
+  const split = pr.costSplit && reviews.length > 0
+    ? [
+        { key: 'build', cost: Math.max(0, pr.costSplit.buildUSD) },
+        { key: 'review', cost: pr.costSplit.reviewUSD },
+        { key: 'after', cost: pr.costSplit.fixesUSD },
+      ]
+    : []
+  const splitMax = Math.max(0, ...split.map(part => part.cost))
 
   return (
     <article className={expanded ? 'pr-card is-open' : 'pr-card'}>
@@ -237,9 +263,15 @@ function PrRowView({ pr, expanded, onToggle, onInvestigate }: { pr: PrRow; expan
             <a className="pr-link" href={pr.url} title={pr.url} onClick={event => openPr(event, pr.url)}>{pr.label}</a>
             <div className="pr-card-meta">
               <span>{spanLabel(pr.firstStarted, pr.lastEnded)}</span>
-              <span>{formatCount(pr.sessions, 'session')}</span>
+              <span>{pr.runs !== undefined ? formatCount(pr.runs, 'run') : formatCount(pr.sessions, 'session')}</span>
               <span>{formatCount(pr.calls, 'call')}</span>
             </div>
+            {(facts.length > 0 || pr.linkEvidence === 'pr-link-only') && (
+              <div className="pr-card-meta pr-card-facts">
+                {facts.map(fact => <span key={fact}>{fact}</span>)}
+                {pr.linkEvidence === 'pr-link-only' && <span title={t('pullRequests.facts.prLinkOnlyTitle')}>{t('pullRequests.facts.prLinkOnly')}</span>}
+              </div>
+            )}
           </div>
         </div>
         <div className="pr-card-models">
@@ -290,6 +322,36 @@ function PrRowView({ pr, expanded, onToggle, onInvestigate }: { pr: PrRow; expan
               </div>
             ) : (
               <p className="pr-cat-empty">{t('pullRequests.card.noPerTurnDetail')}</p>
+            )}
+            {split.length > 0 && (
+              <div className="pr-detail pr-split" role="region" aria-label={t('pullRequests.split.aria', { label: pr.label })}>
+                <div className="pr-detail-head">
+                  <span>{t('pullRequests.split.title')}</span>
+                </div>
+                <div className="pr-cats">
+                  {split.map(part => (
+                    <div className="pr-cat" key={part.key}>
+                      <span className="pr-cat-name">{t(`pullRequests.split.${part.key}`)}</span>
+                      <div className="pr-cat-bar" aria-hidden="true">
+                        <span style={{ width: `${splitMax > 0 ? part.cost / splitMax * 100 : 0}%` }} />
+                      </div>
+                      <strong>{formatUsd(part.cost)}</strong>
+                    </div>
+                  ))}
+                </div>
+                <div className="pr-detail-head pr-reviews-head">
+                  <span>{t('pullRequests.split.review')}</span>
+                </div>
+                <div className="pr-cats">
+                  {reviews.map((run, i) => (
+                    <div className="pr-cat" key={i}>
+                      <span className="pr-cat-name">{run.kind === 'you' ? t('pullRequests.reviews.you', { verdict: run.label }) : run.label}</span>
+                      <span className="pr-cat-name">{run.model ?? ''}</span>
+                      <strong>{formatUsd(run.costUSD)}</strong>
+                    </div>
+                  ))}
+                </div>
+              </div>
             )}
         </div>
       )}

@@ -359,6 +359,18 @@ export type MenubarPayload = {
         approx?: boolean
         models?: string[]
         categories?: Array<{ name: string; cost: number }>
+        // Local PR signals (src/sessions-report.ts PrRow); older CLIs omit them.
+        runs?: number
+        linkEvidence?: 'explicit' | 'pr-link-only' | null
+        openedAt?: string | null
+        followUpRounds?: number | null
+        followUpPushes?: number
+        oneShot?: boolean | null
+        reviewRuns?: Array<{ kind: 'agent' | 'you'; label: string; model: string | null; costUSD: number; at: string; evidence: 'reads-pr' | 'gh-pr-review' }>
+        reviewCostUSD?: number
+        mergedAt?: string | null
+        timeToMergeMs?: number | null
+        costSplit?: { buildUSD: number; reviewUSD: number; fixesUSD: number }
       }>
       distinctCost: number
       distinctSessions: number
@@ -812,6 +824,12 @@ export type SessionWhy = {
   findings: WhyFinding[]
   rules: WhyRules
   detailsOmitted: boolean
+  prWork?: WhyPrWork
+}
+export type WhyPrWork = {
+  opened: Array<{ url: string; at: string; head: string | null; followUpRounds: number | null; followUpPushes: number }>
+  reviewRuns: Array<{ helperId: string; description: string; models: string[]; cost: number; pr: number | null }>
+  reviewCost: number
 }
 
 // ————— src/compare-stats.ts —————

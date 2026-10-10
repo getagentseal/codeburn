@@ -13,6 +13,7 @@ import {
   parseJsonlLine,
   type ToolResultMeta,
 } from './parser.js'
+import { callCommands, createHead, ghPrCommands, isCommit, namedPrNumber, pushes, readPrNumbers, readsCode, rounds } from './pr-signals.js'
 import { estimateTokensFromChars } from './token-estimate.js'
 import type { JournalEntry, ParsedApiCall } from './types.js'
 
@@ -81,6 +82,18 @@ export type WhyFinding = Base & (
   | { kind: 'idle'; timeMs: number; endedBy: 'prompt' | 'tool' | 'message' | 'helper' }
   | { kind: 'slowCall'; timeMs: number; model: string; outputTokens: number }
 )
+/// PR work seen in this session and its helpers, from commands and their
+/// results. `opened`: each `gh pr create` whose output printed a PR URL, with
+/// follow-up pushes after it (naming its --head branch, or from a helper whose
+/// description names that PR) in 10-minute rounds; rounds is null when the head
+/// branch is unknown. `reviewRuns`: helpers that read a PR (gh pr
+/// view/diff/checkout/review, or git diff under a description naming one) and
+/// made no commit or push. Failed pushes count: only the command is read.
+export type WhyPrWork = {
+  opened: Array<{ url: string; at: string; head: string | null; followUpRounds: number | null; followUpPushes: number }>
+  reviewRuns: Array<{ helperId: string; description: string; models: string[]; cost: number; pr: number | null }>
+  reviewCost: number
+}
 export type SessionWhy = {
   sessionId: string
   title: string
@@ -99,6 +112,7 @@ export type SessionWhy = {
   findings: WhyFinding[]
   rules: typeof WHY_RULES
   detailsOmitted: boolean
+  prWork: WhyPrWork
 }
 
 // ── redaction and caps ──────────────────────────────────────────────────
@@ -292,7 +306,7 @@ async function readTranscript(filePath: string): Promise<Read> {
 
 // ── helpers (sub-agent transcripts) ─────────────────────────────────────
 
-type HelperRun = WhyHelper & { toolUseId: string; startTs: number; callList: ParsedApiCall[]; spawnIds: string[] }
+type HelperRun = WhyHelper & { toolUseId: string; startTs: number; callList: ParsedApiCall[]; spawnIds: string[]; opens: PrOpen[]; mentioned: number | null }
 
 async function jsonlUnder(dir: string, out: string[] = []): Promise<string[]> {
   for (const e of await readdir(dir, { withFileTypes: true }).catch(() => [])) {
@@ -325,6 +339,8 @@ async function readHelpers(sessionFile: string, spawnLinks: Record<string, strin
       startTs: Math.min(...read.calls.map(c => ms(c.timestamp)).filter(Number.isFinite)),
       callList: read.calls,
       spawnIds: read.spawnIds,
+      opens: prOpens(read),
+      mentioned: namedPrNumber(typeof meta.description === 'string' ? meta.description : ''),
     })
   }
   return helpers
@@ -545,7 +561,57 @@ export async function buildSessionWhy(filePath: string): Promise<SessionWhy> {
     findings,
     rules: WHY_RULES,
     detailsOmitted,
+    prWork: buildPrWork(read, helpers),
   }
+}
+
+// ── PR work ─────────────────────────────────────────────────────────────
+
+type PrOpen = { url: string; at: number; head: string | null }
+const PR_URL = /https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/(\d+)/
+
+function prOpens(read: Read): PrOpen[] {
+  const out: PrOpen[] = []
+  for (const m of read.msgs.values()) for (const tu of m.toolUses) {
+    const creates = tu.name === 'Bash' ? ghPrCommands(str(tu.input['command'])).filter(g => g.verb === 'create') : []
+    if (!creates.length) continue
+    // A loop prints one URL per PR it opened; the --head is only known for one.
+    const urls = (read.results.get(tu.id)?.text ?? '').split('\n').filter(l => !/already exists/i.test(l)).map(l => PR_URL.exec(l)?.[0]).filter((u): u is string => !!u)
+    const head = urls.length === 1 && creates.length === 1 ? createHead(creates[0]!.args) ?? null : null
+    for (const url of new Set(urls)) out.push({ url, at: tu.ts, head })
+  }
+  return out
+}
+
+// A bare `git push` in a helper pushes the branch it last pushed by name; the
+// session itself moves between checkouts too freely to assume that.
+function pushEvents(calls: ParsedApiCall[], inherit: boolean): Array<{ ms: number; branches: string[] }> {
+  const out: Array<{ ms: number; branches: string[] }> = []
+  let upstream: string | undefined
+  for (const c of calls) for (const cmd of callCommands(c)) for (const branches of pushes(cmd)) {
+    if (inherit && branches.length) upstream = branches.at(-1)
+    out.push({ ms: ms(c.timestamp), branches: branches.length ? branches : inherit && upstream ? [upstream] : [] })
+  }
+  return out
+}
+
+function buildPrWork(read: Read, helpers: HelperRun[]): WhyPrWork {
+  const opens = new Map<string, PrOpen>()
+  for (const o of [...prOpens(read), ...helpers.flatMap(h => h.opens)]) if (!opens.has(o.url) || o.at < opens.get(o.url)!.at) opens.set(o.url, o)
+  const all = [...pushEvents(read.calls, false).map(p => ({ ...p, mentioned: null as number | null })), ...helpers.flatMap(h => pushEvents(h.callList, true).map(p => ({ ...p, mentioned: h.mentioned })))]
+  const opened = [...opens.values()].sort((a, b) => a.at - b.at).map(o => {
+    const number = Number(PR_URL.exec(o.url)![1])
+    const mine = all.filter(p => p.ms > o.at && ((o.head && p.branches.includes(o.head)) || p.mentioned === number)).map(p => p.ms)
+    return { url: o.url, at: new Date(o.at).toISOString(), head: o.head, followUpRounds: o.head || mine.length ? rounds(mine) : null, followUpPushes: mine.length }
+  })
+  const reviewRuns = helpers.flatMap(h => {
+    const cmds = h.callList.flatMap(c => callCommands(c))
+    if (cmds.some(c => isCommit(c) || pushes(c).length)) return []
+    const read = [...new Set(cmds.flatMap(readPrNumbers))]
+    if (!read.length && !(h.mentioned !== null && cmds.some(readsCode))) return []
+    return [{ helperId: h.id, description: h.description, models: h.models, cost: h.cost, pr: h.mentioned ?? (read.length === 1 ? read[0]! : null) }]
+  })
+  return { opened, reviewRuns, reviewCost: reviewRuns.reduce((n, r) => n + r.cost, 0) }
 }
 
 function publicHelper(h: HelperRun | WhyHelper): WhyHelper {
