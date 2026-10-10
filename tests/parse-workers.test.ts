@@ -6,10 +6,17 @@ import { createHash } from 'node:crypto'
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { loadCodexParentReplay } from '../src/codex-fork-replay.js'
 import { decideParseWorkers, ParseWorkerPool, parseFilesInOrder, type ClaudeWorkerParse } from '../src/parse-workers.js'
 import { clearSessionCache, parseAllSessions, parseClaudeFileFull } from '../src/parser.js'
 import { parseCodexFileFull, type CodexFullParse } from '../src/providers/codex.js'
 import type { SessionSource } from '../src/providers/types.js'
+
+// Pass-through, so the test can see a worker's fork-parent lookup land on this thread.
+vi.mock('../src/codex-fork-replay.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/codex-fork-replay.js')>()
+  return { ...actual, loadCodexParentReplay: vi.fn(actual.loadCodexParentReplay) }
+})
 
 // Two full cold CLI parses of a multi-hundred-file corpus, plus in-process parses
 // that spawn real threads.
@@ -479,6 +486,48 @@ describe('ParseWorkerPool', () => {
     expect(worker).toEqual(JSON.parse(JSON.stringify(serial)))
     // The decode itself must never have touched the codex cache file.
     expect(await codexResults(join(home, '.cache', 'codeburn'))).toBeNull()
+  })
+
+  // Every thread used to index and read a fork's parent rollout itself; the
+  // lookup now runs once on this thread, and the masking must not change.
+  it('resolves a fork parent on the parent thread and masks the burst as the serial path does', async () => {
+    const parentId = '019e0000-0000-7000-8000-0000000000aa'
+    const codexHome = join(home, '.codex')
+    const meta = (id: string, timestamp: string, forked?: string) => JSON.stringify({
+      type: 'session_meta', timestamp,
+      payload: { cwd: '/tmp/cxf', originator: 'codex-cli', session_id: id, model: 'gpt-5.3-codex', ...(forked ? { forked_from_id: forked } : {}) },
+    })
+    const tokens = (timestamp: string, input: number, total: number) => JSON.stringify({
+      type: 'event_msg', timestamp,
+      payload: { type: 'token_count', info: { last_token_usage: { input_tokens: input, total_tokens: input }, total_token_usage: { input_tokens: total, total_tokens: total } } },
+    })
+    await writeCodexRollout(codexHome, '04', `2026-05-04T09-00-00-${parentId}`, [meta(parentId, '2026-05-04T09:00:00.000Z'), tokens('2026-05-04T09:00:01.000Z', 1000, 1000)].join('\n') + '\n')
+    const sources: SessionSource[] = []
+    for (const n of [1, 2]) {
+      const path = await writeCodexRollout(codexHome, '04', `fork-${n}`, [
+        meta(`fork-${n}`, '2026-05-04T10:00:00.000Z', parentId),
+        tokens('2026-05-04T10:00:00.005Z', 1000, 1000),
+        // Inside the replay burst but absent from the parent: counted only when the parent was found.
+        tokens('2026-05-04T10:00:00.010Z', 500, 1500),
+        tokens('2026-05-04T10:00:30.000Z', 700, 2200),
+      ].join('\n') + '\n')
+      sources.push({ provider: 'codex', path, project: 'tmp-cxf' })
+    }
+
+    vi.mocked(loadCodexParentReplay).mockClear()
+    const pool = new ParseWorkerPool(2)
+    const results = []
+    for await (const r of parseFilesInOrder<CodexFullParse & { keys: string[] }>(pool, sources.map(source => ({ kind: 'codex' as const, source })))) results.push(r)
+    await pool.close()
+    expect(vi.mocked(loadCodexParentReplay)).toHaveBeenCalledTimes(2)
+
+    for (const [i, source] of sources.entries()) {
+      const r = results[i]!
+      if (!r.ok || !r.parsed) throw new Error('expected a parsed result')
+      const { keys: _keys, path: _path, ...worker } = r.parsed
+      expect(worker.calls.map(c => c.inputTokens)).toEqual([500, 700])
+      expect(worker).toEqual(JSON.parse(JSON.stringify(await parseCodexFileFull(source, new Set()))))
+    }
   })
 
   // The resident `serve` child parses over and over in one process; a thread

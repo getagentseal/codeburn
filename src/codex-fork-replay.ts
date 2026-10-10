@@ -126,6 +126,14 @@ async function readParentUsage(path: string): Promise<Array<[number, string]>> {
   return records
 }
 
+type ParentReplayLoader = (forkPath: string, parentId: string, forkedAtMs: number) => Promise<Set<string> | null>
+let parentReplayRequest: ParentReplayLoader | null = null
+
+/** A parse worker hands the lookup to the parent thread, so each parent is indexed and read once, not once per worker. */
+export function routeCodexParentReplay(request: ParentReplayLoader): void {
+  parentReplayRequest = request
+}
+
 /**
  * Usage identities the parent rollout recorded up to the fork, read from the
  * parent's raw file (its own copied history included, so a chain resolves one
@@ -133,6 +141,7 @@ async function readParentUsage(path: string): Promise<Array<[number, string]>> {
  * caller then drops the whole replay burst.
  */
 export async function loadCodexParentReplay(forkPath: string, parentId: string, forkedAtMs: number): Promise<Set<string> | null> {
+  if (parentReplayRequest) return parentReplayRequest(forkPath, parentId, forkedAtMs)
   const home = codexHomeOf(forkPath)
   const path = home ? findRollout(home, parentId) : undefined
   if (!path || path === forkPath) return null

@@ -1,5 +1,6 @@
 import { availableParallelism, totalmem } from 'os'
-import { Worker } from 'worker_threads'
+import { MessageChannel, Worker, type MessagePort } from 'worker_threads'
+import { loadCodexParentReplay } from './codex-fork-replay.js'
 import { snapshotPricingState } from './models.js'
 import type { ClaudeFileParse } from './parser.js'
 import type { SessionSource } from './providers/types.js'
@@ -123,11 +124,25 @@ type Task = { job: ParseJob; resolve: (r: ParseWorkerResult<unknown>) => void }
 
 type WorkerMessage = { json?: string | null; error?: string }
 
+export type ParentReplayRequest = { id: number; args: Parameters<typeof loadCodexParentReplay> }
+export type ParentReplayReply = { id: number; ids?: Set<string> | null; error?: string }
+
+function serveParentReplay(port: MessagePort): void {
+  port.on('message', ({ id, args }: ParentReplayRequest) => {
+    loadCodexParentReplay(...args).then(
+      ids => port.postMessage({ id, ids } satisfies ParentReplayReply),
+      (err: unknown) => port.postMessage({ id, error: err instanceof Error ? err.message : String(err) } satisfies ParentReplayReply),
+    )
+  })
+  port.unref()
+}
+
 export class ParseWorkerPool {
   private readonly workers: Worker[] = []
   private readonly idle: Worker[] = []
   private readonly inflight = new Map<Worker, Task>()
   private readonly queue: Task[] = []
+  private readonly replayPorts: MessagePort[] = []
   private closed = false
 
   constructor(size: number) {
@@ -135,7 +150,10 @@ export class ParseWorkerPool {
     const workerData = { pricing: snapshotPricingState() }
     try {
       for (let i = 0; i < size; i++) {
-        const worker = new Worker(boot.source, { eval: boot.eval, workerData })
+        const { port1, port2 } = new MessageChannel()
+        serveParentReplay(port1)
+        this.replayPorts.push(port1)
+        const worker = new Worker(boot.source, { eval: boot.eval, workerData: { ...workerData, replayPort: port2 }, transferList: [port2] })
         worker.on('message', (msg: WorkerMessage) => this.settle(worker, msg))
         worker.on('error', (err: Error) => this.settle(worker, { error: err.message }, true))
         worker.on('exit', () => this.drop(worker))
@@ -144,6 +162,7 @@ export class ParseWorkerPool {
       }
     } catch (err) {
       for (const w of this.workers) void w.terminate()
+      for (const p of this.replayPorts) p.close()
       this.workers.length = 0
       this.idle.length = 0
       throw err
@@ -174,6 +193,7 @@ export class ParseWorkerPool {
     this.queue.length = 0
     for (const task of pending) task.resolve({ ok: false, error: 'parse worker pool closed' })
     await Promise.all(this.workers.map(w => w.terminate()))
+    for (const p of this.replayPorts) p.close()
     this.workers.length = 0
     this.idle.length = 0
     this.inflight.clear()
