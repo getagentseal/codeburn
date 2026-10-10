@@ -79,10 +79,13 @@ beforeEach(async () => {
     FAKE_CURSOR_CSV: join(root, 'usage.csv'),
   }
   delete env['CODEBURN_CURSOR_SYNC']
+  // The in-process sync reads this too; a shell that disables sync must not hang the test.
+  vi.stubEnv('CODEBURN_CURSOR_SYNC', '')
   process.env['CODEBURN_CACHE_DIR'] = join(root, 'cache')
 })
 
 afterEach(async () => {
+  vi.unstubAllEnvs()
   setCursorImportRunner(null)
   await rm(root, { recursive: true, force: true })
 })
