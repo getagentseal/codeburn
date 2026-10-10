@@ -256,6 +256,7 @@ final class AppStore {
         (CapacityDockProvider) -> Void = {
             CapacityDockPreferences.removeProvider($0)
         }
+    @ObservationIgnored var capacityDockDefaults: UserDefaults = .standard
     @ObservationIgnored var copilotQuotaRuntime: CopilotQuotaRuntime
 
     init(copilotQuotaRuntime: CopilotQuotaRuntime = .live) {
@@ -2492,6 +2493,7 @@ final class AppStore {
         // silently reconnected by the next scheduled refresh, undoing the
         // user's explicit disconnect.
         capacityDockProviderDeselector(provider)
+        ProviderExplicitDisconnect.mark(provider.id, defaults: capacityDockDefaults)
     }
 
     func connectCapacityDockProvider(_ provider: CapacityDockProvider) async {
@@ -2499,17 +2501,20 @@ final class AppStore {
             await connectQuotaProvider(filter)
             return
         }
+        ProviderExplicitDisconnect.clear(provider.id, defaults: capacityDockDefaults)
         await CapacityDockProviderRefreshInteraction.userInitiated {
             await refreshCapacityDockProvider(provider)
         }
     }
 
     /// `quiet` probes without recording a failure, so a provider that is simply
-    /// not signed in stays "Not connected" instead of "Reconnect required".
+    /// not signed in stays "Not connected" instead of "Reconnect required". It
+    /// skips a provider the user disconnected until they connect it again.
     func refreshCapacityDockProvider(_ provider: CapacityDockProvider, quiet: Bool = false) async {
         guard provider.legacyFilter == nil,
               provider.catalogEntry.hasLiveCodeBurnQuotaAdapter,
-              !capacityDockProvidersLoading.contains(provider.id) else { return }
+              !capacityDockProvidersLoading.contains(provider.id),
+              !(quiet && ProviderExplicitDisconnect.isSet(provider.id, defaults: capacityDockDefaults)) else { return }
         let generation = capacityDockProviderRefreshGenerations[provider.id, default: 0]
         capacityDockProvidersLoading.insert(provider.id)
         defer {

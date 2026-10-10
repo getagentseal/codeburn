@@ -331,7 +331,7 @@ enum CapacityDockPreferences {
         // ZCode app would otherwise seed two rings reporting the same numbers.
         // The deliberately configured Z.ai credential wins; pinning ZCode in
         // Settings always shows it regardless.
-        var seeded = connected
+        var seeded = connected.filter { !ProviderExplicitDisconnect.isSet($0.id, defaults: defaults) }
         if seeded.contains(where: { $0.id == "zai" }) {
             seeded.removeAll { $0.id == "zcode" }
         }

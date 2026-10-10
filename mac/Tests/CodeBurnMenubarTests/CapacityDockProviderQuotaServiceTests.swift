@@ -500,6 +500,9 @@ struct CapacityDockProviderQuotaServiceTests {
         let provider = try #require(CapacityDockProvider(rawValue: "clinepass"))
         let gate = AdapterGate()
         let store = AppStore()
+        let (defaults, suiteName) = TestDefaults.make("CodeBurnMenubarTests.DockQuota.\(#function)")
+        defer { TestDefaults.forget(suiteName) }
+        store.capacityDockDefaults = defaults
         store.capacityDockCredentialLoader = { _ in
             CapacityDockProviderCredential(sourceMode: "api", apiKey: "synthetic")
         }
@@ -532,8 +535,11 @@ struct CapacityDockProviderQuotaServiceTests {
     @Test("a quiet probe connects a signed-in provider and leaves a signed-out one untouched")
     func quietProbe() async throws {
         let provider = try #require(CapacityDockProvider(rawValue: "cursor"))
+        let (defaults, suiteName) = TestDefaults.make("CodeBurnMenubarTests.DockQuota.\(#function)")
+        defer { TestDefaults.forget(suiteName) }
         func store(_ refreshCursor: @escaping @Sendable () async throws -> QuotaSummary) -> AppStore {
             let store = AppStore()
+            store.capacityDockDefaults = defaults
             store.capacityDockCredentialLoader = { _ in CapacityDockProviderCredential() }
             store.capacityDockProviderQuotaService = CapacityDockProviderQuotaService(dependencies: .init(
                 refreshClinePass: { _ in throw CancellationError() },
@@ -559,6 +565,56 @@ struct CapacityDockProviderQuotaServiceTests {
         #expect(!signedOut.capacityDockProvidersLoading.contains(provider.id))
     }
 
+    @Test("after Disconnect the pane probe stays off until the user clicks Connect")
+    func explicitDisconnectBlocksQuietProbe() async throws {
+        let provider = try #require(CapacityDockProvider(rawValue: "cursor"))
+        let (defaults, suiteName) = TestDefaults.make("CodeBurnMenubarTests.DockQuota.\(#function)")
+        defer { TestDefaults.forget(suiteName) }
+        let fetches = FetchCounter()
+        let store = AppStore()
+        store.capacityDockDefaults = defaults
+        store.capacityDockCredentialLoader = { _ in CapacityDockProviderCredential() }
+        store.capacityDockCredentialRemover = { _ in }
+        store.capacityDockProviderDeselector = { _ in }
+        store.capacityDockProviderQuotaService = CapacityDockProviderQuotaService(dependencies: .init(
+            refreshClinePass: { _ in throw CancellationError() },
+            refreshCommandCode: Self.unusedCommandCode,
+            refreshCursor: {
+                fetches.increment()
+                return Self.summary(percent: 0.4)
+            },
+            refreshDevin: Self.unusedDevin,
+            refreshGrok: Self.unusedGrok,
+            refreshGrokBot: Self.unusedGrokBot,
+            refreshZai: Self.unusedZai,
+            refreshZcode: Self.unusedZcode
+        ))
+
+        await store.refreshCapacityDockProvider(provider, quiet: true)
+        #expect(store.capacityDockProviderIsConnected(provider))
+
+        try await store.disconnectCapacityDockProvider(provider)
+        await store.refreshCapacityDockProvider(provider, quiet: true)
+        #expect(fetches.count == 1)
+        #expect(store.capacityDockQuotaSummary(for: provider) == nil)
+
+        CapacityDockPreferences.autoSeedFromConnected([.claude, provider], defaults: defaults)
+        #expect(!CapacityDockPreferences.load(defaults: defaults).selectedProviders.contains(provider))
+
+        await store.connectCapacityDockProvider(provider)
+        #expect(fetches.count == 2)
+        #expect(store.capacityDockProviderIsConnected(provider))
+        await store.refreshCapacityDockProvider(provider, quiet: true)
+        #expect(fetches.count == 3)
+    }
+
+    private final class FetchCounter: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value = 0
+        var count: Int { lock.withLock { value } }
+        func increment() { lock.withLock { value += 1 } }
+    }
+
     @Test("failed credential deletion preserves connection state and surfaces the error")
     func failedDisconnectDoesNotPretendToSucceed() async throws {
         let provider = try #require(CapacityDockProvider(rawValue: "clinepass"))
@@ -582,6 +638,9 @@ struct CapacityDockProviderQuotaServiceTests {
     func disconnectDeselectsFromDock() async throws {
         let provider = try #require(CapacityDockProvider(rawValue: "cursor"))
         let store = AppStore()
+        let (defaults, suiteName) = TestDefaults.make("CodeBurnMenubarTests.DockQuota.\(#function)")
+        defer { TestDefaults.forget(suiteName) }
+        store.capacityDockDefaults = defaults
         store.capacityDockCredentialRemover = { _ in }
         var deselected: [CapacityDockProvider] = []
         store.capacityDockProviderDeselector = { deselected.append($0) }
