@@ -2,6 +2,7 @@ import { behavioralCallCount, behavioralTurnCount } from './behavioral-weight.js
 import { ESTIMATED_COST_LEGEND, isEstimatedCost, markEstimated } from './format.js'
 import { modelRowKey } from './models.js'
 import { maxOf } from './math-utils.js'
+import { namedPr, type NamedPr } from './pr-signals.js'
 import { inferSessionProvider, sessionBillableOutputTokens } from './session-output.js'
 import { CATEGORY_LABELS } from './types.js'
 import type { ProjectSummary, SessionSummary, TaskCategory } from './types.js'
@@ -507,6 +508,9 @@ export type ChildFold = {
   models: Map<string, number>
   categories: Map<string, number>
   foldedSessions: number
+  /// The PR the top child's Agent description names (see `namedPr`). A single named PR in
+  /// the parent's repo outranks the carried-forward PR when the fold resolves.
+  named: NamedPr | 'multi' | null
 }
 
 function parseMs(ts: string | undefined): number {
@@ -662,6 +666,7 @@ function buildChildFold(child: SessionSummary, index: Map<string, SessionSummary
     spawnAtMs: parseMs(child.firstTimestamp),
     firstTs: child.firstTimestamp, lastTs: child.lastTimestamp,
     models, categories, foldedSessions: 1,
+    named: namedPr(child.agentDescription ?? ''),
   }
   for (const gc of index.get(providerSessionKey(child)) ?? []) {
     // Skip a descendant whose id is ambiguous (two conflicting records share it):
@@ -709,7 +714,7 @@ function resolveChild(parent: SessionSummary, fold: ChildFold): ResolvedChild {
   const spawnId = parent.agentSpawnLinks?.[fold.agentId]
   if (spawnId !== undefined && parent.spawnPrSets && Object.prototype.hasOwnProperty.call(parent.spawnPrSets, spawnId)) {
     const prs = parent.spawnPrSets[spawnId]!
-    return { fold, prSet: prs.length ? prs : null, unlinked: false }
+    return { fold, prSet: prs.length ? namedPrSet(prs, fold.named) : null, unlinked: false }
   }
   const ms = fold.spawnAtMs
   if (Number.isNaN(ms)) return { fold, prSet: null, unlinked: true }
@@ -734,7 +739,23 @@ function resolveChild(parent: SessionSummary, fold: ChildFold): ResolvedChild {
     if (tMs <= ms) { if (turn.prRefs?.length) current = turn.prRefs }
     else break
   }
-  return { fold, prSet: current, unlinked: false }
+  return { fold, prSet: current ? namedPrSet(current, fold.named) : null, unlinked: false }
+}
+
+// A run whose prompt names one PR belongs to that PR, not to whatever PR the
+// parent's last pr-link happened to carry (a review of #1729 spawned while the
+// parent carried a stale #24). Only re-points spend that already had a PR, and
+// only within the carried PR's repo (or the exact URL the prompt gave), so
+// attributed totals never change.
+function namedPrSet(carried: string[], named: NamedPr | 'multi' | null): string[] {
+  if (!named || named === 'multi') return carried
+  const repos = new Set(carried.map(url => {
+    const m = GITHUB_PR_RE.exec(url)
+    return m ? `${m[1]}/${m[2]}` : ''
+  }))
+  const repo = named.repo ?? (repos.size === 1 ? [...repos][0] : '')
+  if (!repo) return carried
+  return [`https://github.com/${repo}/pull/${named.number}`]
 }
 
 /// Resolve every folded child to its parent's PR set, once. Keyed by the parent's

@@ -274,6 +274,9 @@ export type SessionSummary = {
   // (`workflow-subagent`, `Explore`, `general-purpose`, …); undefined for
   // ordinary sessions. Drives the Claude-scoped agent-type breakdown.
   agentType?: string
+  /// Claude Code only: a subagent's Agent `description` from its `.meta.json`
+  /// ("Review PR 1729 Claude quota dir"). Read at report time, never cached.
+  agentDescription?: string
   /// OMP nested-agent file stem. Kept separate from Claude's agentType metadata.
   agentName?: string
   /// OMP nested-agent session-header timestamp.
