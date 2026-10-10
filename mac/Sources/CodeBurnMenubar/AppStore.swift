@@ -2504,7 +2504,9 @@ final class AppStore {
         }
     }
 
-    func refreshCapacityDockProvider(_ provider: CapacityDockProvider) async {
+    /// `quiet` probes without recording a failure, so a provider that is simply
+    /// not signed in stays "Not connected" instead of "Reconnect required".
+    func refreshCapacityDockProvider(_ provider: CapacityDockProvider, quiet: Bool = false) async {
         guard provider.legacyFilter == nil,
               provider.catalogEntry.hasLiveCodeBurnQuotaAdapter,
               !capacityDockProvidersLoading.contains(provider.id) else { return }
@@ -2529,7 +2531,7 @@ final class AppStore {
             capacityDockProviderErrors[provider.id] = nil
             capacityDockProviderTransientFailures.remove(provider.id)
         } catch {
-            guard capacityDockProviderRefreshGenerations[provider.id, default: 0] == generation else {
+            guard capacityDockProviderRefreshGenerations[provider.id, default: 0] == generation, !quiet else {
                 return
             }
             capacityDockProviderErrors[provider.id] = sanitizeForUI(error.localizedDescription)

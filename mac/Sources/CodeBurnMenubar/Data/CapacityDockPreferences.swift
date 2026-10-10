@@ -318,6 +318,8 @@ enum CapacityDockPreferences {
 
     /// Until the user manually edits the dock set, mirror the connected
     /// subscriptions (capped) so a fresh install shows what's actually active.
+    /// Providers already in the dock keep their slot and order; a newly
+    /// connected one only fills a free slot, so it never pushes another out.
     /// No-ops once `manualSelectionKey` latches or the set already matches.
     static func autoSeedFromConnected(
         _ connected: [CapacityDockProvider],
@@ -333,9 +335,11 @@ enum CapacityDockPreferences {
         if seeded.contains(where: { $0.id == "zai" }) {
             seeded.removeAll { $0.id == "zcode" }
         }
-        let desired = supportedProviders
+        let kept = (defaults.stringArray(forKey: selectedProvidersKey) ?? [])
+            .compactMap(CapacityDockProvider.init(rawValue:))
             .filter(seeded.contains)
-            .prefix(maxAutoProviders)
+        let added = supportedProviders.filter { seeded.contains($0) && !kept.contains($0) }
+        let desired = (kept + added).prefix(maxAutoProviders)
         let desiredIDs = desired.map(\.rawValue)
         guard !desiredIDs.isEmpty else { return }  // nothing active yet — wait
         guard defaults.stringArray(forKey: selectedProvidersKey) != desiredIDs else { return }

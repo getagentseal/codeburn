@@ -180,6 +180,29 @@ struct CapacityDockPreferencesTests {
         #expect(snapshot.selectedProviders.count == 5)
     }
 
+    @Test("auto-seed keeps the current dock and preferred card when another provider connects")
+    func autoSeedKeepsCurrentSelection() throws {
+        let (defaults, suiteName) = defaults()
+        defer { TestDefaults.forget(suiteName) }
+        let devin = try #require(CapacityDockProvider(rawValue: "devin"))
+        let commandcode = try #require(CapacityDockProvider(rawValue: "commandcode"))
+        let cursor = try #require(CapacityDockProvider(rawValue: "cursor"))
+        let current: [CapacityDockProvider] = [.claude, .antigravity, .copilot, devin, commandcode]
+        defaults.set(current.map(\.rawValue), forKey: CapacityDockPreferences.selectedProvidersKey)
+        CapacityDockPreferences.setPreferredProvider(commandcode, defaults: defaults)
+
+        CapacityDockPreferences.autoSeedFromConnected(current + [cursor], defaults: defaults)
+
+        let snapshot = CapacityDockPreferences.load(defaults: defaults)
+        #expect(snapshot.selectedProviders == current)
+        #expect(snapshot.preferredProvider == commandcode)
+
+        CapacityDockPreferences.autoSeedFromConnected([.claude, .copilot, devin, commandcode, cursor], defaults: defaults)
+
+        let refilled = CapacityDockPreferences.load(defaults: defaults).selectedProviders
+        #expect(Set(refilled) == [.claude, .copilot, devin, commandcode, cursor])
+    }
+
     @Test("auto-seed no-ops once the user has manually chosen providers")
     func autoSeedRespectsManualLatch() {
         let (defaults, suiteName) = defaults()

@@ -2095,6 +2095,9 @@ private struct GenericProviderConnectionSections: View {
         }
         .task(id: provider.id) {
             await reloadEditor()
+            if hasLiveAdapter, summary == nil, !requiresExplicitCredential {
+                await store.refreshCapacityDockProvider(provider, quiet: true)
+            }
         }
     }
 

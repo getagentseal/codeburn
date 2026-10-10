@@ -529,6 +529,36 @@ struct CapacityDockProviderQuotaServiceTests {
         #expect(!store.capacityDockProvidersLoading.contains(provider.id))
     }
 
+    @Test("a quiet probe connects a signed-in provider and leaves a signed-out one untouched")
+    func quietProbe() async throws {
+        let provider = try #require(CapacityDockProvider(rawValue: "cursor"))
+        func store(_ refreshCursor: @escaping @Sendable () async throws -> QuotaSummary) -> AppStore {
+            let store = AppStore()
+            store.capacityDockCredentialLoader = { _ in CapacityDockProviderCredential() }
+            store.capacityDockProviderQuotaService = CapacityDockProviderQuotaService(dependencies: .init(
+                refreshClinePass: { _ in throw CancellationError() },
+                refreshCommandCode: Self.unusedCommandCode,
+                refreshCursor: refreshCursor,
+                refreshDevin: Self.unusedDevin,
+                refreshGrok: Self.unusedGrok,
+                refreshGrokBot: Self.unusedGrokBot,
+                refreshZai: Self.unusedZai,
+                refreshZcode: Self.unusedZcode
+            ))
+            return store
+        }
+
+        let signedIn = store { Self.summary(percent: 0.4) }
+        await signedIn.refreshCapacityDockProvider(provider, quiet: true)
+        #expect(signedIn.capacityDockQuotaSummary(for: provider)?.connection == .connected)
+
+        let signedOut = store { throw CursorSubscriptionService.FetchError.noCredentials }
+        await signedOut.refreshCapacityDockProvider(provider, quiet: true)
+        #expect(signedOut.capacityDockQuotaSummary(for: provider) == nil)
+        #expect(signedOut.capacityDockProviderErrors[provider.id] == nil)
+        #expect(!signedOut.capacityDockProvidersLoading.contains(provider.id))
+    }
+
     @Test("failed credential deletion preserves connection state and surfaces the error")
     func failedDisconnectDoesNotPretendToSucceed() async throws {
         let provider = try #require(CapacityDockProvider(rawValue: "clinepass"))
