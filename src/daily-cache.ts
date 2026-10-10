@@ -1863,6 +1863,19 @@ export async function ensureCacheHydrated(
         }
       }
       const pendingRederive = c.pendingRederive?.length ? new Set(c.pendingRederive) : undefined
+      // v73 moved Cursor IDE chat transcripts from cursor-agent to cursor. A day
+      // the fresh parse explains with a cursor slice and no cursor-agent slice
+      // is that move, not pruned history, so the old cursor-agent slice goes.
+      if (parseWasComplete && pendingRederive?.has('cursor-agent')) {
+        const freshProviders = new Map(freshDays.map(d => [d.date, d.providers]))
+        carriedBaseline = carriedBaseline.flatMap(day => {
+          const fresh = freshProviders.get(day.date)
+          if (!day.providers['cursor-agent'] || !fresh || fresh['cursor-agent'] || !fresh['cursor'] || !hasSliceData(fresh['cursor'])) return [day]
+          const copy = structuredClone(day)
+          subtractSliceFromDay(copy, 'cursor-agent', copy.providers['cursor-agent'])
+          return hasPositiveDayContent(copy) ? [copy] : []
+        })
+      }
       // Without the subtraction an old-zone slice is never a partial survivor
       // of the fresh one, so the guard would swap a shifted day back in.
       const merged = parseWasComplete

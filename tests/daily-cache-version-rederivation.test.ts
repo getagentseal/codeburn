@@ -156,3 +156,48 @@ describe('daily-cache adoption of a v30 file written under a different accountin
     expect(loaded.pendingRederive).toContain('dsh')
   })
 })
+
+describe('cursor-agent re-derive after Cursor IDE chats moved to cursor (v73)', () => {
+  function withSlices(date: string, providers: Record<string, number>): DailyEntry {
+    const entry = day(date, 0)
+    entry.providers = {}
+    entry.models = {}
+    entry.calls = 0
+    for (const [name, cost] of Object.entries(providers)) {
+      entry.providers[name] = { ...day(date, cost).providers.grok! }
+      entry.cost += cost
+      entry.calls += 1
+    }
+    return entry
+  }
+
+  it('drops the old cursor-agent slice only where the fresh parse has a cursor slice instead', async () => {
+    const moved = toDateString(new Date(Date.now() - 7 * 24 * 60 * 60 * 1000))
+    const pruned = toDateString(new Date(Date.now() - 8 * 24 * 60 * 60 * 1000))
+    const yesterday = toDateString(new Date(Date.now() - 24 * 60 * 60 * 1000))
+    await writeFile(join(cacheRoot, 'daily-cache.v72.json'), JSON.stringify({
+      version: 72,
+      savingsConfigHash: 'cfg',
+      tzKey: currentTzKey(),
+      lastComputedDate: yesterday,
+      days: [withSlices(moved, { 'cursor-agent': 5, claude: 1 }), withSlices(pruned, { 'cursor-agent': 3, claude: 1 })],
+      complete: true,
+      watermarkTrusted: true,
+    }))
+
+    const hydrated = await ensureCacheHydrated(
+      async () => [],
+      () => [withSlices(moved, { cursor: 2, claude: 1 }), withSlices(pruned, { claude: 1 })],
+      'cfg',
+      () => true,
+    )
+
+    const movedDay = hydrated.days.find(entry => entry.date === moved)!
+    expect(movedDay.providers['cursor-agent']).toBeUndefined()
+    expect(movedDay.providers.cursor?.cost).toBe(2)
+    expect(movedDay.cost).toBe(3)
+    const prunedDay = hydrated.days.find(entry => entry.date === pruned)!
+    expect(prunedDay.providers['cursor-agent']?.cost).toBe(3)
+    expect(prunedDay.cost).toBe(4)
+  })
+})
