@@ -47,7 +47,7 @@ The SQLite source path carries the session id after the database path (`<db>:<se
 Parsed sessions use the shared session cache. `OPENCLAW_STATE_DIR`,
 `OPENCLAW_HOME`, and their home fallback variables are fingerprinted so changing
 the selected roots invalidates that provider's entries. The `state-dir-v1` parser
-revision and daily cache v74 backfill
+revision and daily cache v75 backfill
 surviving history that earlier versions missed. Archived daily totals continue to
 be carried forward when their source logs are unavailable. The daily cache also
 records OpenClaw's discovery fingerprint after a complete backfill. Changing
