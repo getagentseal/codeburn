@@ -925,6 +925,15 @@ describe('user aliases via setModelAliases', () => {
     setModelAliases({})
     expect(getModelCosts('anthropic--claude-4.6-opus')).toEqual(getModelCosts('claude-opus-4-6'))
   })
+
+  it('a display name looked up before an alias change follows the new aliases', () => {
+    setModelAliases({})
+    expect(getShortModelName('gpt-4o')).toBe('GPT-4o')
+    setModelAliases({ 'gpt-4o': 'claude-opus-4-6' })
+    expect(getShortModelName('gpt-4o')).toBe('Opus 4.6')
+    setModelAliases({})
+    expect(getShortModelName('gpt-4o')).toBe('GPT-4o')
+  })
 })
 
 describe('implicit cache-write rate', () => {

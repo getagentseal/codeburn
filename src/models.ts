@@ -529,6 +529,7 @@ function setPricingCache(pricing: Map<string, ModelCosts>): void {
   sortedPricingKeys = null
   lowercasePricingIndex = null
   knownNamespaces = null
+  shortNameMemo.clear()
 }
 
 export async function loadPricing(): Promise<void> {
@@ -777,6 +778,7 @@ let lowercasePriceOverrideIndex: Map<string, ModelCosts> | null = null
 // User aliases take precedence over built-ins.
 export function setModelAliases(aliases: Record<string, string>): void {
   userAliases = aliases
+  shortNameMemo.clear()
 }
 
 function priceOverrideRatePerToken(usdPerMillion: number | undefined): number | null {
@@ -1759,9 +1761,20 @@ export function modelKeyMatches(model: string, key: string): boolean {
   return new RegExp(`(?<![\\w.-])${escaped}(?=$|-)`).test(model)
 }
 
+// Reports re-derive the display name of every cached call; the answer depends
+// only on the aliases and the pricing namespaces, which clear it when they change.
+const shortNameMemo = new Map<string, string>()
+const SHORT_NAME_MEMO_MAX = 10_000
+
 // Public API stays unary so Array.map/forEach cannot feed index as cycle state.
 export function getShortModelName(model: string): string {
-  return shortModelName(model, new Set())
+  let name = shortNameMemo.get(model)
+  if (name === undefined) {
+    name = shortModelName(model, new Set())
+    if (shortNameMemo.size >= SHORT_NAME_MEMO_MAX) shortNameMemo.clear()
+    shortNameMemo.set(model, name)
+  }
+  return name
 }
 
 // --- Billing routes ---------------------------------------------------------
