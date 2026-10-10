@@ -58,6 +58,50 @@ describe('OpenClaw discovery cache invalidation', () => {
     }
   })
 
+  it('refreshes finalized history after a same-version state-root change without losing archived usage', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'openclaw-finalized-root-'))
+    try {
+      vi.stubEnv('CODEBURN_CACHE_DIR', join(root, 'cache'))
+      const first = join(root, 'first')
+      const second = join(root, 'second')
+      const timestamp = new Date(Date.now() - 30 * 86400000).toISOString()
+      const date = toDateString(new Date(timestamp))
+      await seed(first, 'first', 100, timestamp)
+      await seed(second, 'second', 200, timestamp)
+      vi.stubEnv('OPENCLAW_STATE_DIR', first)
+      let includeArchivedUsage = true
+      const parse = async () => {
+        const projects = await parseAllSessions(undefined, 'openclaw')
+        if (!includeArchivedUsage) return projects
+        const archived = structuredClone(projects)
+        for (const project of archived) for (const session of project.sessions) for (const turn of session.turns) for (const call of turn.assistantCalls) {
+          call.provider = 'claude'
+          call.usage.inputTokens = 50
+          call.costUSD = 0.02
+        }
+        return [...projects, ...archived]
+      }
+      const initial = await ensureCacheHydrated(parse, aggregateProjectsIntoDays)
+      expect(initial.complete).toBe(true)
+      expect(initial.days.find(day => day.date === date)).toMatchObject({ calls: 2, inputTokens: 150 })
+
+      includeArchivedUsage = false
+      vi.stubEnv('OPENCLAW_STATE_DIR', second)
+      clearSessionCache()
+      const refreshed = await ensureCacheHydrated(parse, aggregateProjectsIntoDays)
+      const day = refreshed.days.find(day => day.date === date)!
+      expect(day).toMatchObject({ calls: 2, inputTokens: 250, outputTokens: 40 })
+      expect(day.providers.openclaw).toMatchObject({ calls: 1, inputTokens: 200, cost: 0.01 })
+      expect(day.providers.claude).toMatchObject({ calls: 1, inputTokens: 50, cost: 0.02 })
+      const warmParse = vi.fn(parse)
+      await ensureCacheHydrated(warmParse, aggregateProjectsIntoDays)
+      expect(warmParse).not.toHaveBeenCalled()
+    } finally {
+      clearSessionCache()
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it.each([51, 73])('backfills relocated history from a finalized v%i daily cache and retains archived usage', async version => {
     const root = await mkdtemp(join(tmpdir(), 'openclaw-daily-backfill-'))
     try {
