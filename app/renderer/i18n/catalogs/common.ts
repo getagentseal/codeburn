@@ -51,6 +51,8 @@ export const common: SectionCatalog = {
     'common.subject.optimize': 'optimize findings',
     'common.asOf': 'as of {time}',
     'common.asOfDate': 'as of {date}, {time}',
+    'common.count.run.one': '{count} run',
+    'common.count.run.other': '{count} runs',
   },
   fr: {
     'common.period.today': "Aujourd'hui",
@@ -99,6 +101,8 @@ export const common: SectionCatalog = {
     'common.subject.optimize': 'les résultats d\'optimisation',
     'common.asOf': 'relevé à {time}',
     'common.asOfDate': 'relevé le {date} à {time}',
+    'common.count.run.one': '{count} exécution',
+    'common.count.run.other': '{count} exécutions',
   },
   ja: {
     'common.period.today': '今日',
@@ -147,6 +151,8 @@ export const common: SectionCatalog = {
     'common.subject.optimize': '最適化の分析結果',
     'common.asOf': '{time} 時点',
     'common.asOfDate': '{date} {time} 時点',
+    'common.count.run.one': '{count} 件の実行',
+    'common.count.run.other': '{count} 件の実行',
   },
   ko: {
     'common.period.today': '오늘',
@@ -195,6 +201,8 @@ export const common: SectionCatalog = {
     'common.subject.optimize': '최적화 결과',
     'common.asOf': '{time} 기준',
     'common.asOfDate': '{date} {time} 기준',
+    'common.count.run.one': '실행 {count}건',
+    'common.count.run.other': '실행 {count}건',
   },
   zhCN: {
     'common.period.today': '今天',
@@ -243,6 +251,8 @@ export const common: SectionCatalog = {
     'common.subject.optimize': '优化发现',
     'common.asOf': '截至 {time}',
     'common.asOfDate': '截至 {date} {time}',
+    'common.count.run.one': '{count} 次运行',
+    'common.count.run.other': '{count} 次运行',
   },
   zhTW: {
     'common.period.today': '今天',
@@ -291,5 +301,7 @@ export const common: SectionCatalog = {
     'common.subject.optimize': '最佳化發現',
     'common.asOf': '截至 {time}',
     'common.asOfDate': '截至 {date} {time}',
+    'common.count.run.one': '{count} 次執行',
+    'common.count.run.other': '{count} 次執行',
   },
 }
