@@ -161,11 +161,28 @@ struct CapacityDockProviderFetchFailure: LocalizedError, Equatable, Sendable {
     }
 
     init(error: Error) {
+        switch error {
+        case ClinePassSubscriptionService.FetchError.noCredentials,
+             CommandCodeSubscriptionService.FetchError.noCredentials,
+             CursorSubscriptionService.FetchError.noCredentials,
+             DevinSubscriptionService.FetchError.noCache,
+             GrokBuildSubscriptionService.FetchError.noCredentials,
+             GrokBotSubscriptionService.FetchError.noCredentials,
+             GrokBotSubscriptionService.FetchError.notInstalled,
+             ZaiSubscriptionService.FetchError.noCredentials,
+             ZcodeSubscriptionService.FetchError.noCredentials:
+            notSignedIn = true
+        default:
+            break
+        }
         message = error.localizedDescription
         disposition = Self.disposition(for: error)
     }
 
     var errorDescription: String? { message }
+
+    /// No credentials or local app data at all, as opposed to a failed check.
+    var notSignedIn = false
 
     static func disposition(for error: Error) -> CapacityDockProviderFetchFailureDisposition {
         if let failure = error as? CapacityDockProviderFetchFailure {

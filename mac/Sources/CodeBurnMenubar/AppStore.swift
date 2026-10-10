@@ -256,6 +256,7 @@ final class AppStore {
         (CapacityDockProvider) -> Void = {
             CapacityDockPreferences.removeProvider($0)
         }
+    @ObservationIgnored var capacityDockDefaults: UserDefaults = .standard
     @ObservationIgnored var copilotQuotaRuntime: CopilotQuotaRuntime
 
     init(copilotQuotaRuntime: CopilotQuotaRuntime = .live) {
@@ -2460,7 +2461,9 @@ final class AppStore {
         capacityDockProviderTransientFailures.remove(provider.id)
     }
 
-    func disconnectCapacityDockProvider(_ provider: CapacityDockProvider) async throws {
+    /// `explicit` is the Disconnect action. Clearing an override only returns
+    /// the provider to automatic discovery, so it leaves the opt-out unset.
+    func disconnectCapacityDockProvider(_ provider: CapacityDockProvider, explicit: Bool = false) async throws {
         if let filter = provider.legacyFilter {
             switch filter {
             case .claude: disconnectSubscription()
@@ -2492,6 +2495,7 @@ final class AppStore {
         // silently reconnected by the next scheduled refresh, undoing the
         // user's explicit disconnect.
         capacityDockProviderDeselector(provider)
+        if explicit { ProviderExplicitDisconnect.mark(provider.id, defaults: capacityDockDefaults) }
     }
 
     func connectCapacityDockProvider(_ provider: CapacityDockProvider) async {
@@ -2499,15 +2503,21 @@ final class AppStore {
             await connectQuotaProvider(filter)
             return
         }
+        ProviderExplicitDisconnect.clear(provider.id, defaults: capacityDockDefaults)
         await CapacityDockProviderRefreshInteraction.userInitiated {
             await refreshCapacityDockProvider(provider)
         }
     }
 
-    func refreshCapacityDockProvider(_ provider: CapacityDockProvider) async {
+    /// `quiet` records nothing when the provider is simply not signed in, so it
+    /// stays "Not connected" instead of "Reconnect required"; any other failure
+    /// is recorded as usual. It skips a provider the user disconnected until
+    /// they connect it again.
+    func refreshCapacityDockProvider(_ provider: CapacityDockProvider, quiet: Bool = false) async {
         guard provider.legacyFilter == nil,
               provider.catalogEntry.hasLiveCodeBurnQuotaAdapter,
-              !capacityDockProvidersLoading.contains(provider.id) else { return }
+              !capacityDockProvidersLoading.contains(provider.id),
+              !(quiet && ProviderExplicitDisconnect.isSet(provider.id, defaults: capacityDockDefaults)) else { return }
         let generation = capacityDockProviderRefreshGenerations[provider.id, default: 0]
         capacityDockProvidersLoading.insert(provider.id)
         defer {
@@ -2529,7 +2539,8 @@ final class AppStore {
             capacityDockProviderErrors[provider.id] = nil
             capacityDockProviderTransientFailures.remove(provider.id)
         } catch {
-            guard capacityDockProviderRefreshGenerations[provider.id, default: 0] == generation else {
+            guard capacityDockProviderRefreshGenerations[provider.id, default: 0] == generation,
+                  !(quiet && (error as? CapacityDockProviderFetchFailure)?.notSignedIn == true) else {
                 return
             }
             capacityDockProviderErrors[provider.id] = sanitizeForUI(error.localizedDescription)

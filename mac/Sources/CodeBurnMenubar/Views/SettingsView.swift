@@ -1983,7 +1983,7 @@ private struct GenericProviderConnectionSections: View {
                         Button(L("Disconnect"), role: .destructive) {
                             Task {
                                 do {
-                                    try await store.disconnectCapacityDockProvider(provider)
+                                    try await store.disconnectCapacityDockProvider(provider, explicit: true)
                                     editor = .load(
                                         providerID: provider.id,
                                         stored: CapacityDockProviderCredential()
@@ -2095,6 +2095,9 @@ private struct GenericProviderConnectionSections: View {
         }
         .task(id: provider.id) {
             await reloadEditor()
+            if hasLiveAdapter, summary == nil, !requiresExplicitCredential {
+                await store.refreshCapacityDockProvider(provider, quiet: true)
+            }
         }
     }
 

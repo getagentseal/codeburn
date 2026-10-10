@@ -1,22 +1,40 @@
 import Foundation
 
-/// Persisted opt-out for live Copilot quota tracking after an explicit
-/// Disconnect. Credentials stay untouched; this flag only stops automatic
-/// discovery from bringing quota tracking back on the next refresh or relaunch.
-/// Absent key is false, so first-use autodiscovery is unchanged.
+/// Persisted opt-out for live quota tracking after an explicit Disconnect.
+/// Credentials stay untouched; this flag only stops automatic discovery from
+/// bringing quota tracking back on the next refresh or relaunch, until the user
+/// connects again. Absent key is false, so first-use autodiscovery is unchanged.
+enum ProviderExplicitDisconnect {
+    static func defaultsKey(_ providerID: String) -> String {
+        "codeburn.\(providerID).explicitlyDisconnected"
+    }
+
+    static func isSet(_ providerID: String, defaults: UserDefaults = .standard) -> Bool {
+        defaults.bool(forKey: defaultsKey(providerID))
+    }
+
+    static func mark(_ providerID: String, defaults: UserDefaults = .standard) {
+        defaults.set(true, forKey: defaultsKey(providerID))
+    }
+
+    static func clear(_ providerID: String, defaults: UserDefaults = .standard) {
+        defaults.removeObject(forKey: defaultsKey(providerID))
+    }
+}
+
 enum CopilotExplicitDisconnect {
-    static let defaultsKey = "codeburn.copilot.explicitlyDisconnected"
+    static let defaultsKey = ProviderExplicitDisconnect.defaultsKey("copilot")
 
     static func isSet(defaults: UserDefaults = .standard) -> Bool {
-        defaults.bool(forKey: defaultsKey)
+        ProviderExplicitDisconnect.isSet("copilot", defaults: defaults)
     }
 
     static func mark(defaults: UserDefaults = .standard) {
-        defaults.set(true, forKey: defaultsKey)
+        ProviderExplicitDisconnect.mark("copilot", defaults: defaults)
     }
 
     static func clear(defaults: UserDefaults = .standard) {
-        defaults.removeObject(forKey: defaultsKey)
+        ProviderExplicitDisconnect.clear("copilot", defaults: defaults)
     }
 }
 
