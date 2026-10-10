@@ -11,6 +11,7 @@ import { ProviderGlyph } from './providerIcons'
 import { GeneralPane } from './settings/GeneralPane'
 import { ProviderPane } from './settings/ProviderPane'
 import { AboutPane } from './settings/AboutPane'
+import { t } from './i18n'
 
 /// The System Settings shell from mac/.../Views/SettingsView.swift: a fixed sidebar with a
 /// provider search, General and About, then one row per provider that has a live quota
@@ -86,10 +87,10 @@ export function Settings() {
   }, [providers, search])
 
   const paneTitle = pane === 'general'
-    ? 'General'
+    ? t('General')
     : pane === 'about'
-      ? 'About'
-      : providers.find(p => p.id === pane)?.name ?? 'Settings'
+      ? t('About')
+      : providers.find(p => p.id === pane)?.name ?? t('Settings')
 
   // The mac names the window after the visible pane; so does this one.
   useEffect(() => {
@@ -108,13 +109,13 @@ export function Settings() {
 
   return (
     <div className="stg">
-      <nav className="stg-sidebar" aria-label="Settings sections">
+      <nav className="stg-sidebar" aria-label={t('Settings sections')}>
         <div className="stg-search">
           <input
             type="search"
             className="stg-search-field"
-            placeholder="Search providers"
-            aria-label="Search providers"
+            placeholder={t('Search providers')}
+            aria-label={t('Search providers')}
             value={search}
             onChange={e => setSearch(e.target.value)}
           />
@@ -123,7 +124,7 @@ export function Settings() {
         <ul className="stg-list">
           <li>
             <SidebarRow
-              label="General"
+              label={t('General')}
               selected={selected === 'general'}
               onSelect={() => choose('general')}
               icon={<span className="stg-chip stg-chip-general" aria-hidden="true">CB</span>}
@@ -131,7 +132,7 @@ export function Settings() {
           </li>
           <li>
             <SidebarRow
-              label="About"
+              label={t('About')}
               selected={selected === 'about'}
               onSelect={() => choose('about')}
               icon={<span className="stg-chip stg-chip-about" aria-hidden="true">i</span>}
@@ -140,8 +141,8 @@ export function Settings() {
         </ul>
 
         <div className="stg-list-header">
-          <span>Providers</span>
-          <span className="stg-list-count">{connectedCount} on</span>
+          <span>{t('Providers')}</span>
+          <span className="stg-list-count">{t('%lld on', connectedCount)}</span>
         </div>
         <ul className="stg-list">
           {filtered.map(provider => (
@@ -152,11 +153,11 @@ export function Settings() {
                 dimmed={!isConnected(provider.id)}
                 onSelect={() => choose(provider.id)}
                 icon={<span className="stg-glyph"><ProviderGlyph id={provider.id} size={15} /></span>}
-                trailing={isConnected(provider.id) ? <span className="stg-dot" aria-label="Connected" /> : null}
+                trailing={isConnected(provider.id) ? <span className="stg-dot" aria-label={t('Connected')} /> : null}
               />
             </li>
           ))}
-          {filtered.length === 0 && <li className="stg-list-empty">No provider matches that.</li>}
+          {filtered.length === 0 && <li className="stg-list-empty">{t('No provider matches that.')}</li>}
         </ul>
       </nav>
 

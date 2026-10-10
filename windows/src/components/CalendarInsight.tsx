@@ -3,6 +3,7 @@ import type { DailyEntry } from '../lib/payload'
 import type { CurrencyState } from '../lib/currency'
 import { formatCompactCurrency, formatCurrency, formatTokens } from '../lib/currency'
 import { addDays, formatDateKey, monthDay, prettyDate, startOfDay } from '../lib/dates'
+import { t } from '../i18n/index'
 
 /// Port of ContributionHeatmapInsight in mac/.../Views/HeatmapSection.swift: a GitHub-style
 /// grid of the last N weeks, one column per week, Monday at the top. The week count is
@@ -137,7 +138,7 @@ export function CalendarInsight({ days, currency }: { days: DailyEntry[]; curren
     <div className="calendar-insight" ref={grid}>
       <div className="insight-header">
         <div>
-          <div className="insight-sublabel">Daily activity</div>
+          <div className="insight-sublabel">{t('Daily activity')}</div>
           <div className="insight-hero">{formatCurrency(stats.total, currency)}</div>
         </div>
         <div className="heat-active">{stats.activeDays} active days</div>
@@ -149,7 +150,7 @@ export function CalendarInsight({ days, currency }: { days: DailyEntry[]; curren
         </div>
         {/* The cells are painted squares, so the day each one stands for lives in its
             label. A bare span carries no role for that label to attach to, hence role="img". */}
-        <div className="heat-weeks" role="group" aria-label="Daily spend" onMouseLeave={() => setHovered(null)}>
+        <div className="heat-weeks" role="group" aria-label={t('Daily spend')} onMouseLeave={() => setHovered(null)}>
           {weeks.map(week => (
             <div key={week.start} className="heat-week">
               {week.days.map(day => (
@@ -173,11 +174,11 @@ export function CalendarInsight({ days, currency }: { days: DailyEntry[]; curren
           <div className="heat-detail-value">{detailValue(hoveredDay, currency)}</div>
         </div>
         <div className="heat-detail-metric">
-          <div className="heat-detail-label">Calls</div>
+          <div className="heat-detail-label">{t('Calls')}</div>
           <div className="heat-detail-num">{hoveredDay && !hoveredDay.isFuture ? hoveredDay.calls : '-'}</div>
         </div>
         <div className="heat-detail-metric">
-          <div className="heat-detail-label">Tokens</div>
+          <div className="heat-detail-label">{t('Tokens')}</div>
           <div className="heat-detail-num">
             {hoveredDay && !hoveredDay.isFuture ? formatTokens(hoveredDay.tokens) : '-'}
           </div>
@@ -186,17 +187,17 @@ export function CalendarInsight({ days, currency }: { days: DailyEntry[]; curren
 
       <div className="mini-stats">
         <div className="mini-stat">
-          <div className="mini-stat-label">Peak day</div>
+          <div className="mini-stat-label">{t('Peak day')}</div>
           <div className="mini-stat-value">
             {stats.peak ? `${formatCompactCurrency(stats.peak.cost, currency)} on ${monthDay(stats.peak.date)}` : '-'}
           </div>
         </div>
         <div className="mini-stat">
-          <div className="mini-stat-label">Avg active</div>
+          <div className="mini-stat-label">{t('Avg active')}</div>
           <div className="mini-stat-value">{formatCompactCurrency(stats.avgActive, currency)}</div>
         </div>
         <div className="mini-stat">
-          <div className="mini-stat-label">Streak</div>
+          <div className="mini-stat-label">{t('Streak')}</div>
           <div className="mini-stat-value">{stats.streak}d</div>
         </div>
       </div>
@@ -215,14 +216,14 @@ function cellClass(day: Day, isHovered: boolean): string {
 }
 
 function detailValue(day: Day | null, currency: CurrencyState): string {
-  if (!day) return 'Hover a day'
-  if (day.isFuture) return 'Future day'
-  if (day.cost <= 0 && day.calls === 0) return 'No tracked usage'
+  if (!day) return t('Hover a day')
+  if (day.isFuture) return t('Future day')
+  if (day.cost <= 0 && day.calls === 0) return t('No tracked usage')
   return formatCompactCurrency(day.cost, currency)
 }
 
 function helpText(day: Day, currency: CurrencyState): string {
-  if (day.isFuture) return `${prettyDate(day.date)}: future day`
-  if (day.cost <= 0 && day.calls === 0) return `${prettyDate(day.date)}: no tracked usage`
-  return `${prettyDate(day.date)}: ${formatCompactCurrency(day.cost, currency)}, ${day.calls} calls, ${formatTokens(day.tokens)} tokens`
+  if (day.isFuture) return t('%@: future day', prettyDate(day.date))
+  if (day.cost <= 0 && day.calls === 0) return t('%@: no tracked usage', prettyDate(day.date))
+  return t('%1$@: %2$@, %3$lld calls, %4$@ tokens', prettyDate(day.date), formatCompactCurrency(day.cost, currency), day.calls, formatTokens(day.tokens))
 }

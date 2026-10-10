@@ -1,3 +1,4 @@
+import { t } from '../i18n'
 export type InsightMode = 'plan' | 'trend' | 'forecast' | 'calendar' | 'pulse' | 'stats' | 'optimize'
 
 export const INSIGHT_LABELS: Record<InsightMode, string> = {
@@ -27,7 +28,7 @@ type Props = {
 
 export function InsightPills({ selected, onSelect, modes }: Props) {
   return (
-    <div className="insight-pills" role="tablist" aria-label="Insight">
+    <div className="insight-pills" role="tablist" aria-label={t('Insight')}>
       {modes.map(m => (
         <button
           key={m}
@@ -39,7 +40,7 @@ export function InsightPills({ selected, onSelect, modes }: Props) {
           className={`insight-pill ${selected === m ? 'insight-pill-active' : ''}`}
           onClick={() => onSelect(m)}
         >
-          {INSIGHT_LABELS[m]}
+          {t(INSIGHT_LABELS[m])}
         </button>
       ))}
     </div>

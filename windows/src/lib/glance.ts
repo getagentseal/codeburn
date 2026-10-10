@@ -8,6 +8,7 @@
 
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
+import { t } from '../i18n'
 import { USD, formatCurrency } from './currency'
 
 export type LiveSession = {
@@ -108,8 +109,9 @@ export function sessionsForSource(glance: Glance, sourceId: string): LiveSession
 }
 
 export function runningLabel(count: number): string {
-  if (count === 0) return 'none running'
-  return count === 1 ? '1 running' : `${count} running`
+  if (count === 0) return t('none running')
+  if (count === 1) return t('1 running')
+  return t('%lld running', count)
 }
 
 /// The mac's asCompactTokens with its lowercased thousands: 182k beside the uppercase M and B.

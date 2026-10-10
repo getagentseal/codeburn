@@ -145,7 +145,7 @@ export function parseSettings(raw: Record<string, unknown>): AppSettings {
     trayBadge: typeof raw.trayBadge === 'boolean' ? raw.trayBadge : DEFAULT_SETTINGS.trayBadge,
     usageRefreshSeconds: oneOfNumber(raw.usageRefreshSeconds, USAGE_CADENCES.map(c => c.id), DEFAULT_SETTINGS.usageRefreshSeconds),
     quotaCadenceSeconds: oneOfNumber(raw.quotaCadenceSeconds, QUOTA_CADENCES.map(c => c.id), DEFAULT_SETTINGS.quotaCadenceSeconds),
-    terminal: oneOf(raw.terminal, TERMINALS.map(t => t.id), DEFAULT_SETTINGS.terminal),
+    terminal: oneOf(raw.terminal, TERMINALS.map(term => term.id), DEFAULT_SETTINGS.terminal),
   }
 }
 

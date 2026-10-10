@@ -171,6 +171,25 @@ pub fn run() {
             // made, and the decision is the desktop app's whenever that app is installed.
             // `track` is silent until this has run, so it comes before anything that reports.
             telemetry::init(app.package_info().version.to_string());
+            // The desktop app writes `language` into config.json without telling this
+            // process. A one-second poll is what makes that change show up in the tray
+            // while it is already running.
+            {
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    let mut seen = crate::i18n::stored_language_key();
+                    loop {
+                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                        let next = crate::i18n::stored_language_key();
+                        if next == seen {
+                            continue;
+                        }
+                        seen = next;
+                        crate::sync_localized_menu_items();
+                        let _ = handle.emit("codeburn://language-changed", ());
+                    }
+                });
+            }
             telemetry::track("app_open", serde_json::Value::Null);
             update::settle_pending_update(&app.package_info().version.to_string());
             tauri::async_runtime::spawn(async {
@@ -286,6 +305,8 @@ pub fn run() {
             commands::settings_load,
             commands::settings_patch,
             commands::i18n_catalog,
+            commands::language_state,
+            commands::set_language_choice,
             commands::i18n_format,
             commands::terminals,
             commands::claude_config_dirs,
@@ -1411,6 +1432,31 @@ mod commands {
     #[tauri::command]
     pub fn i18n_format(key: String, args: Vec<serde_json::Value>) -> String {
         crate::i18n::format_message(&key, &args)
+    }
+
+    #[tauri::command]
+    pub fn language_state() -> crate::i18n::LanguageState {
+        crate::i18n::language_state()
+    }
+
+    /// Writes the same `language` key the desktop app writes. `system` clears it.
+    #[tauri::command]
+    pub fn set_language_choice(app: AppHandle, choice: String) -> Result<(), String> {
+        const ALLOWED: [&str; 7] = ["system", "en", "fr", "ja", "ko", "zh-CN", "zh-TW"];
+        if !ALLOWED.contains(&choice.as_str()) {
+            return Err("unsupported language".into());
+        }
+        crate::config::update(|map| {
+            if choice == "system" {
+                map.remove("language");
+            } else {
+                map.insert("language".into(), serde_json::Value::String(choice.clone()));
+            }
+        })
+        .map_err(|err| err.to_string())?;
+        crate::sync_localized_menu_items();
+        let _ = app.emit("codeburn://language-changed", ());
+        Ok(())
     }
 
     /// The consoles the settings window offers, each marked with whether it is on this
