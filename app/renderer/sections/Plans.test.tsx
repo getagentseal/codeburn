@@ -130,17 +130,17 @@ describe('Plans', () => {
     expect(screen.queryByText('API usage')).not.toBeInTheDocument()
   })
 
-  it('keeps manual budget overage and clamped-track behavior', async () => {
+  it('keeps custom budget overage and clamped-track behavior', async () => {
     getPlans.mockResolvedValue({
       ...baseStatus,
       plans: {
-        grok: { ...claudePlan, id: 'supergrok', provider: 'grok' },
+        grok: { ...claudePlan, id: 'custom', provider: 'grok' },
       },
     })
 
     const { container } = render(<Plans period="30days" />)
 
-    expect(await screen.findByText('SuperGrok')).toBeInTheDocument()
+    expect(await screen.findByText('Custom plan')).toBeInTheDocument()
     expect(screen.getByText('$230.00 · 115% · $30.00 over')).toBeInTheDocument()
     const fill = container.querySelector('[data-testid="plan-track-grok"] i')
     expect(fill).toHaveStyle({ width: '100%' })
@@ -148,12 +148,33 @@ describe('Plans', () => {
     expect(screen.getByText('On pace to exceed; projected $254.00 by Jul 14')).toHaveClass('pace', 'hot')
   })
 
+  it('words a flat subscription past its price as API value, never as overage', async () => {
+    getPlans.mockResolvedValue({
+      ...baseStatus,
+      plans: {
+        grok: { ...claudePlan, id: 'supergrok', provider: 'grok', budget: 30, spent: 408, percentUsed: 1360, projectedMonthEnd: 450 },
+      },
+    })
+
+    const { container } = render(<Plans period="30days" />)
+
+    expect(await screen.findByText('SuperGrok')).toBeInTheDocument()
+    expect(screen.getByText("$408.00 · 13.6x your plan's price in API value")).toBeInTheDocument()
+    const fill = container.querySelector('[data-testid="plan-track-grok"] i')
+    expect(fill).toHaveStyle({ width: '100%' })
+    expect(fill).not.toHaveClass('over')
+    const pace = screen.getByText('Projected $450.00 in API value by Jul 14')
+    expect(pace).toHaveClass('pace')
+    expect(pace).not.toHaveClass('hot')
+    expect(container.querySelector('.plan-card')).not.toHaveTextContent(/over|exceed/)
+  })
+
   it('renders near status as an amber non-exceeding projection when below budget', async () => {
     getPlans.mockResolvedValue({
       ...baseStatus,
       plans: {
         grok: {
-          id: 'supergrok-heavy',
+          id: 'custom',
           provider: 'grok',
           budget: 300,
           spent: 255,

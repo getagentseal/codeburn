@@ -350,15 +350,23 @@ function QuotaMeter({ window }: { window: QuotaWindow }) {
   )
 }
 
+// Preset plans are flat subscriptions: usage past the price is API value
+// received, not a bill. Only a custom plan is a cap the user set.
+function isSubscription(plan: JsonPlanSummary): boolean {
+  return plan.id !== 'custom'
+}
+
 function PlanPanel({ plan }: { plan: JsonPlanSummary }) {
   const hasBudget = plan.budget > 0
   const displayPercent = Math.min(100, Math.max(0, plan.percentUsed))
   const over = plan.status === 'over' || plan.percentUsed > 100
-  const trackClass = hasBudget ? (over ? 'over' : undefined) : 'mut'
+  const trackClass = hasBudget ? (over && !isSubscription(plan) ? 'over' : undefined) : 'mut'
   const overage = Math.max(0, plan.spent - plan.budget)
   const right = hasBudget
     ? overage > 0
-      ? t('plans.card.spentPercentOver', { spent: formatConverted(plan.spent), percent: fmtPct(plan.percentUsed), overage: formatConverted(overage) })
+      ? isSubscription(plan)
+        ? t('plans.card.spentValueMultiple', { spent: formatConverted(plan.spent), multiple: (plan.percentUsed / 100).toLocaleString(localeTag(), { minimumFractionDigits: 1, maximumFractionDigits: 1 }) })
+        : t('plans.card.spentPercentOver', { spent: formatConverted(plan.spent), percent: fmtPct(plan.percentUsed), overage: formatConverted(overage) })
       : t('plans.card.spentPercent', { spent: formatConverted(plan.spent), percent: fmtPct(plan.percentUsed) })
     : t('plans.card.spentThisCycle', { spent: formatConverted(plan.spent) })
   const detail = hasBudget
@@ -383,6 +391,9 @@ function PlanPanel({ plan }: { plan: JsonPlanSummary }) {
 function PaceLine({ plan }: { plan: JsonPlanSummary }) {
   const end = cycleEndDate(plan)
   const endLabel = end ? formatShortDate(end) : t('plans.date.unknown')
+  if (isSubscription(plan) && (plan.status !== 'under' || plan.projectedMonthEnd > plan.budget)) {
+    return <div className="pace">{t('plans.pace.value', { projected: formatConverted(plan.projectedMonthEnd), date: endLabel })}</div>
+  }
   if (plan.status === 'over' || plan.projectedMonthEnd > plan.budget) {
     return (
       <div className="pace hot">
