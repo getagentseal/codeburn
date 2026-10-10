@@ -2,7 +2,7 @@
   "name": "codeburn",
   "displayName": "CodeBurn",
   "description": "See where your AI coding spend goes, by project, model, session and pull request, without leaving the editor. Local only.",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "publisher": "codeburn",
   "license": "MIT",
   "icon": "media/icon.png",
