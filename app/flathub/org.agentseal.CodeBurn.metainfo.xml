@@ -20,7 +20,7 @@
       machine.
     </p>
     <ul>
-      <li>Works with 40 tools: Claude Code, Codex, Cursor, Copilot, Gemini, Kimi Code, Qwen, and more</li>
+      <li>Works with 42 tools: Claude Code, Codex, Cursor, Copilot, Gemini, Kimi Code, Qwen, and more</li>
       <li>Overview with spend, streaks, activity heatmap, and an efficiency score</li>
       <li>Every session listed with its cost, models, turns, and tokens</li>
       <li>Pull request attribution: what each PR cost to build</li>
@@ -45,6 +45,7 @@
     <category>Utility</category>
   </categories>
   <releases>
+    <release version="0.9.26" date="2026-10-11"/>
     <release version="0.9.25" date="2026-09-21"/>
     <release version="0.9.24" date="2026-09-04"/>
     <release version="0.9.23" date="2026-08-29"/>

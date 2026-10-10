@@ -511,7 +511,7 @@ dependencies = [
 
 [[package]]
 name = "codeburn-menubar"
-version = "0.9.25"
+version = "0.9.26"
 dependencies = [
  "anyhow",
  "dirs 5.0.1",
