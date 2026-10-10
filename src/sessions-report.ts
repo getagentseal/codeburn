@@ -1,4 +1,6 @@
+import { readFileSync, statSync } from 'fs'
 import { behavioralCallCount, behavioralTurnCount } from './behavioral-weight.js'
+import { flatString } from './content-utils.js'
 import { ESTIMATED_COST_LEGEND, isEstimatedCost, markEstimated } from './format.js'
 import { modelRowKey } from './models.js'
 import { maxOf } from './math-utils.js'
@@ -716,13 +718,32 @@ export function buildSubagentIndex(projects: ProjectSummary[]): Map<string, Sess
   return index
 }
 
+// Read on demand rather than at parse: only folded runs and runs that push need
+// it. Keyed by mtime so a long-lived `serve` re-reads only a changed sidecar.
+const agentDescriptions = new Map<string, { mtimeMs: number; description: string }>()
+function agentDescriptionOf(session: SessionSummary): string {
+  const path = session.agentMetaPath
+  if (!path) return ''
+  try {
+    const { mtimeMs } = statSync(path)
+    const hit = agentDescriptions.get(path)
+    if (hit?.mtimeMs === mtimeMs) return hit.description
+    const d = (JSON.parse(readFileSync(path, 'utf8')) as { description?: unknown }).description
+    const description = typeof d === 'string' && d.trim() ? flatString(d.trim().slice(0, 200)) : ''
+    agentDescriptions.set(path, { mtimeMs, description })
+    return description
+  } catch {
+    return ''
+  }
+}
+
 // Aggregate a child session and its non-self-linking descendants, depth-first.
 // `claimed` is ONE set per parent resolution (shared across all direct children),
 // so a descendant reachable through two paths (duplicate/diamond ids) folds
 // exactly once and a parent-link cycle terminates. A self-linking descendant is
 // skipped: it attributes standalone. `spawnAtMs` stays the TOP child's, since the
 // whole subtree resolves against the top parent.
-function buildChildFold(child: SessionSummary, index: Map<string, SessionSummary[]>, claimed: Set<string>, ambiguous: Set<string>): ChildFold {
+function buildChildFold(child: SessionSummary, index: Map<string, SessionSummary[]>, claimed: Set<string>, ambiguous: Set<string>, scanCommands: boolean): ChildFold {
   claimed.add(child.sessionId)
   const models = new Map<string, number>()
   const categories = new Map<string, number>()
@@ -736,7 +757,7 @@ function buildChildFold(child: SessionSummary, index: Map<string, SessionSummary
     for (const call of turn.assistantCalls) {
       turnCost += call.costUSD
       if (call.model) addToMap(models, call.model, call.costUSD)
-      for (const cmd of callCommands(call)) {
+      if (scanCommands) for (const cmd of callCommands(call)) {
         if (isPush(cmd)) pushed = true
         if (isCommit(cmd)) committed = true
         if (readsCode(cmd)) reads = true
@@ -746,22 +767,23 @@ function buildChildFold(child: SessionSummary, index: Map<string, SessionSummary
     }
     if (turn.category) addToMap(categories, turn.category, turnCost)
   }
+  const description = agentDescriptionOf(child)
   const fold: ChildFold = {
     agentId: child.agentId ?? child.sessionId,
     cost: child.totalCostUSD, calls: child.apiCalls, savingsUSD: child.totalSavingsUSD,
     spawnAtMs: parseMs(child.firstTimestamp),
     firstTs: child.firstTimestamp, lastTs: child.lastTimestamp,
     models, categories, foldedSessions: 1,
-    named: namedPr(child.agentDescription ?? ''),
+    named: namedPr(description),
     ...(child.agentType ? { agentType: child.agentType } : {}),
-    mentioned: namedPrNumber(child.agentDescription ?? ''),
+    mentioned: namedPrNumber(description),
     pushed, committed, readsCode: reads, readPrs, prNumbers,
   }
   for (const gc of index.get(providerSessionKey(child)) ?? []) {
     // Skip a descendant whose id is ambiguous (two conflicting records share it):
     // fold neither, consistent with the parent-level rule.
     if (claimed.has(gc.sessionId) || selfLinks(gc) || ambiguous.has(providerSessionKey(gc))) continue
-    const gcf = buildChildFold(gc, index, claimed, ambiguous)
+    const gcf = buildChildFold(gc, index, claimed, ambiguous, scanCommands)
     fold.cost += gcf.cost; fold.calls += gcf.calls; fold.savingsUSD += gcf.savingsUSD
     fold.foldedSessions += gcf.foldedSessions
     fold.pushed ||= gcf.pushed
@@ -859,7 +881,9 @@ function namedPrSet(carried: string[], named: NamedPr | 'multi' | null): string[
 /// (deterministic skip, stays standalone): correctness over coverage.
 export type SubagentAttribution = Map<string, ResolvedChild[]>
 
-export function resolveSubagentAttribution(projects: ProjectSummary[]): SubagentAttribution {
+/// `scanCommands: false` skips the per-call PR signals (pushed, readPrs, ...) for
+/// callers that only need each child's PR set.
+export function resolveSubagentAttribution(projects: ProjectSummary[], scanCommands = true): SubagentAttribution {
   const index = buildSubagentIndex(projects)
   // A provider+sessionId key is AMBIGUOUS when it is carried by more than one
   // DISTINCT record (different fingerprint) across ALL candidate sessions and
@@ -893,7 +917,7 @@ export function resolveSubagentAttribution(projects: ProjectSummary[]): Subagent
     const resolved: ResolvedChild[] = []
     for (const child of direct) {
       if (claimed.has(child.sessionId) || selfLinks(child) || ambiguous.has(providerSessionKey(child))) continue
-      resolved.push(resolveChild(parent, buildChildFold(child, index, claimed, ambiguous)))
+      resolved.push(resolveChild(parent, buildChildFold(child, index, claimed, ambiguous, scanCommands)))
     }
     if (resolved.length) out.set(k, resolved)
   }
@@ -1269,7 +1293,7 @@ function scanPrCommands(projects: ProjectSummary[]): PrCommandScan {
   const out: PrCommandScan = { pushes: [], merges: [] }
   for (const project of projects) for (const session of project.sessions) {
     const side = !!session.isSidechain
-    const mentioned = side ? namedPrNumber(session.agentDescription ?? '') : null
+    let mentioned: number | null | undefined
     let upstream: string | undefined
     for (const turn of session.turns) for (const call of turn.assistantCalls) {
       const cmds = callCommands(call)
@@ -1278,8 +1302,9 @@ function scanPrCommands(projects: ProjectSummary[]): PrCommandScan {
       if (Number.isNaN(ms)) continue
       for (const cmd of cmds) {
         for (const branches of pushes(cmd)) {
+          if (side && mentioned === undefined) mentioned = namedPrNumber(agentDescriptionOf(session))
           if (side && branches.length) upstream = branches.at(-1)
-          out.pushes.push({ ms, branches: branches.length ? branches : upstream ? [upstream] : [], mentioned })
+          out.pushes.push({ ms, branches: branches.length ? branches : upstream ? [upstream] : [], mentioned: mentioned ?? null })
         }
         for (const g of ghPrCommands(cmd)) {
           if (g.verb === 'merge' && g.number !== undefined) out.merges.push({ ms, number: g.number, ...(g.repo ? { repo: g.repo } : {}) })

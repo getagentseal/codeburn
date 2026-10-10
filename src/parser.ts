@@ -2120,21 +2120,6 @@ export async function readAgentType(filePath: string): Promise<string | undefine
   return /[\\/]subagents[\\/]workflows[\\/]/.test(filePath) ? 'workflow-subagent' : undefined
 }
 
-// The subagent's Agent `description` ("Review PR 1729 ..."), read at report time
-// rather than cached so existing caches need no re-parse. The sidecar is
-// written once at spawn, so one read per path per process.
-const agentDescriptions = new Map<string, string | undefined>()
-async function readAgentDescription(filePath: string): Promise<string | undefined> {
-  if (agentDescriptions.has(filePath)) return agentDescriptions.get(filePath)
-  let description: string | undefined
-  try {
-    const d = (JSON.parse(await readFile(filePath.replace(/\.jsonl$/, '.meta.json'), 'utf8')) as { description?: unknown }).description
-    if (typeof d === 'string' && d.trim()) description = flatString(d.trim().slice(0, 200))
-  } catch { /* missing or unreadable meta */ }
-  agentDescriptions.set(filePath, description)
-  return description
-}
-
 async function scanProjectDirs(
   dirs: Array<{ path: string; name: string; source?: SessionSourceMetadata }>,
   seenMsgIds: Set<string>,
@@ -2640,14 +2625,12 @@ async function scanProjectDirs(
       ? normalizeProjectPathKey(cachedFile.canonicalCwd)
       : `slug:${dirName}`
     const fileProject: CallProject = { key: projectKey, path: projectPath, name: projectName }
-    const agentDescription = cachedFile.isSidechain ? await readAgentDescription(filePath) : undefined
     const mcpInv = cachedFile.mcpInventory.length > 0 ? cachedFile.mcpInventory : undefined
     const decorate = (session: SessionSummary): SessionSummary => {
       if (cachedFile.workingDirectory && !isCoworkSession(cachedFile.workingDirectory, filePath)) {
         session.workingDirectory = cachedFile.workingDirectory
       }
       session.agentType = cachedFile.agentType
-      if (agentDescription) session.agentDescription = agentDescription
       if (everHadBranch) session.everHadBranch = true
       const observedPrLinks = new Set(classifiedTurns.flatMap(turn => turn.prRefs ?? []))
       for (const link of cachedFile.prLinks ?? []) observedPrLinks.add(link)
@@ -2664,6 +2647,7 @@ async function scanProjectDirs(
       if (cachedFile.isSidechain) {
         session.isSidechain = true
         if (cachedFile.parentSessionId) session.parentSessionId = cachedFile.parentSessionId
+        session.agentMetaPath = filePath.replace(/\.jsonl$/, '.meta.json')
         session.agentId = sessionId.startsWith('agent-') ? sessionId.slice('agent-'.length) : sessionId
       }
       // Parent linkage maps (only present on sessions that spawned subagents).
@@ -5557,7 +5541,7 @@ export function correlateCrossProviderPrSessions(projects: ProjectSummary[]): vo
     if (bucket) bucket.push(s)
     else unlinkedByAgentId.set(s.agentId, [s])
   }
-  for (const resolved of resolveSubagentAttribution(mergeProjectSplits(projects)).values()) {
+  for (const resolved of resolveSubagentAttribution(mergeProjectSplits(projects), false).values()) {
     for (const child of resolved) {
       // A multi-PR spawn set is valid for folding the child's own cost, but is
       // too broad to identify which PR an independently saved nested review was

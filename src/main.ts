@@ -3133,7 +3133,8 @@ program
       const subagentNote = subagentSessions > 0
         ? ` + ${subagentSessions} folded-in subagent run${subagentSessions === 1 ? '' : 's'}`
         : ''
-      process.stdout.write(table + `\nRows sum to $${shownAttributed.toFixed(2)} attributed across ${sessions} PR-linked session${sessions === 1 ? '' : 's'}${subagentNote}. $${unattributedCost.toFixed(2)} of that spend was not tied to a specific PR.${approxNote}\n`)
+      const runs = sessions + subagentSessions
+      process.stdout.write(table + `\nRows sum to $${shownAttributed.toFixed(2)} attributed across ${runs} run${runs === 1 ? '' : 's'} (${sessions} PR-linked session${sessions === 1 ? '' : 's'}${subagentNote}). $${unattributedCost.toFixed(2)} of that spend was not tied to a specific PR.${approxNote}\n`)
       return
     }
     const rows = aggregateSessions(projects)
