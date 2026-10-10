@@ -4,7 +4,7 @@ import { listen } from '@tauri-apps/api/event'
 
 import type { MenubarPayload } from './lib/payload'
 import type { CurrencyState } from './lib/currency'
-import { USD, formatCurrency, formatTokens, trayBadgeText } from './lib/currency'
+import { USD, formatCurrency, formatTokens, isEstimatedCost, trayBadgeText } from './lib/currency'
 import { PayloadCache, sameSelection, selectionKey, type Selection } from './lib/cache'
 import { relativePast } from './lib/dates'
 import { applyTheme, readSetting, writeSetting } from './lib/settings'
@@ -423,9 +423,11 @@ export function App() {
   const isTokenMetric = settings.metric === 'tokens' || settings.metric === 'totalTokens'
   // The 16 px badge bitmap has room for about four glyphs, so the mac's up/down token pair
   // cannot fit; both token metrics show the total there and the hero carries the split.
+  const trayEstimated = trayCombined === null && trayCost !== null
+    && isEstimatedCost(trayCost, (trayCurrent?.providerDetails ?? []).reduce((sum, d) => sum + (d.estimatedCostUSD ?? 0), 0), formatCurrency(trayCost, currency))
   const trayFigure = isTokenMetric
     ? (trayTokens === null ? null : `${formatTokens(trayTokens)} tok`)
-    : (trayCost === null ? null : formatCurrency(trayCost, currency))
+    : (trayCost === null ? null : `${trayEstimated ? '~' : ''}${formatCurrency(trayCost, currency)}`)
   // Combined scope with a paired device that did not report this cycle: the figure is short
   // of what these machines actually spent, and the mac says so beside its title with a dimmed
   // "reachable/total". A 16 px bitmap has no room for that, so the badge is drawn dimmed and

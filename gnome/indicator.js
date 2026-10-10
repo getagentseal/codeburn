@@ -99,6 +99,13 @@ function formatCost(value, currency, rate = 1, exact = false) {
   return `${symbol}${parts.join('.')}`;
 }
 
+// Same rule as the CLI (src/format.ts isEstimatedCost): `~` once the estimated
+// portion is at least 1% of the figure, unless `shown` reads as zero.
+function isEstimatedCost(cost, estimatedCostUSD, shown) {
+  const estimated = Number(estimatedCostUSD) || 0;
+  return estimated > 0 && estimated >= cost * 0.01 && /[1-9]/.test(shown);
+}
+
 function formatTokensCompact(n) {
   const v = Number(n) || 0;
   if (v >= 1_000_000_000) return `${(v / 1_000_000_000).toFixed(1)}B`;
@@ -795,7 +802,10 @@ class CodeBurnIndicator extends PanelMenu.Button {
 
     this._panelLabel.set_text(this._fmt(cost));
     this._heroLabel.set_text(combined ? `Combined · ${current.label || ''}` : (current.label || ''));
-    this._heroAmount.set_text(this._fmt(cost));
+    // Combined totals carry no estimated split, so only a local figure is marked.
+    const estimated = !combined && current === payload?.current
+      && isEstimatedCost(cost, (current.providerDetails ?? []).reduce((sum, d) => sum + numberValue(d?.estimatedCostUSD), 0), this._fmt(cost));
+    this._heroAmount.set_text(`${estimated ? '~' : ''}${this._fmt(cost)}`);
 
     const calls = Number(combined?.calls ?? current.calls ?? 0);
     const sessions = Number(combined?.sessions ?? current.sessions ?? 0);

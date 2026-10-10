@@ -11,7 +11,7 @@ import { StaleBanner } from '../components/StaleBanner'
 import { DUR, motionEnabled, useBarGrowIn } from '../lib/motion'
 import { useOptimizeSnapshot } from '../hooks/useOptimizeSnapshot'
 import { type Polled, usePolled } from '../hooks/usePolled'
-import { asOfLabel, formatCompact, formatCount, formatUsd, formatUsdWithCurrency, isEstimatedCost } from '../lib/format'
+import { asOfLabel, estimatedPortion, formatCompact, formatCount, formatUsd, formatUsdWithCurrency, isEstimatedCost } from '../lib/format'
 import { Usd, sumTokens, tokensOf, useUsdPop } from '../components/Usd'
 import { codeburn } from '../lib/ipc'
 import {
@@ -598,8 +598,9 @@ function streakDays(daily: DailyHistoryEntry[], now: Date): number {
  * changes (a user action), but never on the 30s poll: a value that arrives
  * under the same `animateKey` snaps in place instead of re-animating.
  */
-function CountUp({ value, tokens, animateKey, animate = true }: { value: number; tokens?: ReturnType<typeof tokensOf>; animateKey: string; animate?: boolean }) {
-  const pop = useUsdPop<HTMLDivElement>(tokens)
+function CountUp({ value, tokens, animateKey, animate = true, estimated = false }: { value: number; tokens?: ReturnType<typeof tokensOf>; animateKey: string; animate?: boolean; estimated?: boolean }) {
+  const pop = useUsdPop<HTMLDivElement>(tokens, false, estimated)
+  const mark = estimated ? '~' : ''
   const ref = pop.ref
   const keyRef = useRef<string | null>(null)
 
@@ -609,7 +610,7 @@ function CountUp({ value, tokens, animateKey, animate = true }: { value: number;
     const keyChanged = keyRef.current !== animateKey
     keyRef.current = animateKey
     if (!animate || !keyChanged || !motionEnabled()) {
-      element.textContent = formatUsd(value)
+      element.textContent = mark + formatUsd(value)
       return
     }
     const counter = { n: 0 }
@@ -617,14 +618,14 @@ function CountUp({ value, tokens, animateKey, animate = true }: { value: number;
       n: value,
       duration: 0.7,
       ease: 'power2.out',
-      onUpdate: () => { element.textContent = formatUsd(counter.n) },
+      onUpdate: () => { element.textContent = mark + formatUsd(counter.n) },
     })
     return () => { tween.kill() }
-  }, [value, animateKey, animate])
+  }, [value, animateKey, animate, mark])
 
   return (
     <>
-      <div ref={ref} className="ov-hero-num" data-countup={value} data-countup-animation={animate ? 'enabled' : 'suppressed'} {...pop.props}>{formatUsd(value)}</div>
+      <div ref={ref} className="ov-hero-num" data-countup={value} data-countup-animation={animate ? 'enabled' : 'suppressed'} {...pop.props}>{mark}{formatUsd(value)}</div>
       {pop.pop}
     </>
   )
@@ -1098,6 +1099,10 @@ export function OverviewContent({
   const useGeneration = headline != null && genModels != null
   const heroCost = combined ? combined.combined.cost : useGeneration ? headline.cost : data.current.cost
   const heroCalls = combined ? combined.combined.calls : useGeneration ? headline.calls : data.current.calls
+  // The combined aggregate carries no estimated split, so it is never marked.
+  const heroEstimated = !combined && isEstimatedCost(heroCost, useGeneration
+    ? genModels.reduce((sum, model) => sum + (model.estimatedCostUSD ?? 0), 0)
+    : estimatedPortion(data.current))
   const heroSessions = combined ? combined.combined.sessions : data.current.sessions
   const heroSessionLabel = combined
     ? formatCombinedSessionCount()
@@ -1200,7 +1205,7 @@ export function OverviewContent({
               {/* A returning launch already showed a truthful persisted headline.
                   Replaying the live hero from $0 on handoff makes that exact value
                   appear to collapse and recover; snap to the revalidated total. */}
-              <CountUp value={heroCost} tokens={heroTokens} animateKey={animateKey} animate={!suppressHeroReplay} />
+              <CountUp value={heroCost} tokens={heroTokens} animateKey={animateKey} animate={!suppressHeroReplay} estimated={heroEstimated} />
               <div className="ov-hero-sub" title={heroSessionHelp}>{formatCount(heroCalls, 'call')} · {heroSessionLabel}</div>
               {(provider === 'cursor' || provider === 'cursor-agent') && <CursorSyncLine status={data.cursorSync} />}
               {combined

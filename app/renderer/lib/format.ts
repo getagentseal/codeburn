@@ -1,4 +1,5 @@
 import { localeTag, t } from '../i18n'
+import type { MenubarPayload } from './types'
 
 export type ActiveCurrency = { code: string; symbol: string; rate: number }
 
@@ -22,6 +23,16 @@ export function formatUsd(n: number): string {
 export function isEstimatedCost(cost: number, estimatedCost: number | undefined): boolean {
   const estimated = estimatedCost ?? 0
   return estimated > 0 && estimated >= cost * 0.01 && /[1-9]/.test(formatUsd(cost))
+}
+
+/** The estimated share of a payload's total: the provider split carries it on
+ *  current CLIs; the model split is the fallback for a CLI that predates that. */
+export function estimatedPortion(current: MenubarPayload['current']): number {
+  const providers = current.providerDetails?.filter(row => !row.excludedFromTotal)
+  if (providers?.some(row => row.estimatedCostUSD !== undefined)) {
+    return providers.reduce((sum, row) => sum + (row.estimatedCostUSD ?? 0), 0)
+  }
+  return (current.topModels ?? []).reduce((sum, row) => sum + (row.estimatedCostUSD ?? 0), 0)
 }
 
 /** Raw-USD input formatted against an explicit payload currency. This keeps a

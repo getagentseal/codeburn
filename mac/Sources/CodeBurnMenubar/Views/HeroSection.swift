@@ -104,7 +104,11 @@ struct HeroSection: View {
             if total >= 1_000 { return String(format: "%.0fK tok", total / 1_000) }
             return String(format: "%.0f tok", total)
         }
-        return totals.cost.asCurrency()
+        let shown = totals.cost.asCurrency()
+        // The combined aggregate carries no estimated split, so it is never marked.
+        guard combinedUsage == nil else { return shown }
+        let estimated = store.payload.current.providerDetails.reduce(0.0) { $0 + ($1.estimatedCostUSD ?? 0) }
+        return (isEstimatedCost(totals.cost, estimated, shown: shown) ? "~" : "") + shown
     }
 
     private var combinedUsage: CombinedUsage? {

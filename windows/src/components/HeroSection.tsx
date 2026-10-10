@@ -1,6 +1,6 @@
 import type { CombinedUsage, CursorSyncStatus, MenubarPayload } from '../lib/payload'
 import type { CurrencyState } from '../lib/currency'
-import { formatCurrency, formatTokens } from '../lib/currency'
+import { formatCurrency, formatTokens, isEstimatedCost } from '../lib/currency'
 import { prettyDate, relativePast, todayKey } from '../lib/dates'
 import { SectionCaption } from './CollapsibleSection'
 import { ArrowDownRight, ArrowUpRight, LeafIcon, MonitorIcon, WarningIcon } from './Icons'
@@ -50,9 +50,12 @@ export function HeroSection({ payload, currency, periodLabel, isToday, dailyBudg
   // Both token metrics put the total in the headline, as the mac's heroText does; only the
   // Tokens metric replaces calls and sessions with the up and down split.
   const isTokenMetric = metric === 'tokens' || metric === 'totalTokens'
+  const shownCost = formatCurrency(cost, currency)
+  // The combined aggregate carries no estimated split, so it is never marked.
+  const estimated = !totals && isEstimatedCost(cost, (payload?.current.providerDetails ?? []).reduce((sum, d) => sum + (d.estimatedCostUSD ?? 0), 0), shownCost)
   const headline = isTokenMetric
     ? `${formatTokens(inputTokens + outputTokens)} tok`
-    : formatCurrency(cost, currency)
+    : `${estimated ? '~' : ''}${shownCost}`
 
   const label = payload?.current.label || periodLabel
   const caption = combined ? `Combined · ${label}` : isToday ? `Today · ${todayLabel}` : label

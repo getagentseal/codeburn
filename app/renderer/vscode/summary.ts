@@ -1,5 +1,5 @@
 import { t } from '../i18n'
-import { formatCount, formatResetTime, formatUsd, isEstimatedCost, setActiveCurrency, type ActiveCurrency } from '../lib/format'
+import { estimatedPortion, formatCount, formatResetTime, formatUsd, isEstimatedCost, setActiveCurrency, type ActiveCurrency } from '../lib/format'
 import { PROVIDER_NAMES } from '../lib/providers'
 import type { MenubarPayload, ProviderName, QuotaProvider } from '../lib/types'
 
@@ -23,16 +23,6 @@ export type Summary = {
 }
 
 const USD: ActiveCurrency = { code: 'USD', symbol: '$', rate: 1 }
-
-/** The estimated share of a payload's total: the provider split carries it on
- *  current CLIs; the model split is the fallback for a CLI that predates that. */
-function estimatedPortion(current: MenubarPayload['current']): number {
-  const providers = current.providerDetails?.filter(row => !row.excludedFromTotal)
-  if (providers?.some(row => row.estimatedCostUSD !== undefined)) {
-    return providers.reduce((sum, row) => sum + (row.estimatedCostUSD ?? 0), 0)
-  }
-  return (current.topModels ?? []).reduce((sum, row) => sum + (row.estimatedCostUSD ?? 0), 0)
-}
 
 /** The #1657 rule, as every other surface applies it. Needs the payload's currency active. */
 export function figureOf(payload: MenubarPayload): Figure {

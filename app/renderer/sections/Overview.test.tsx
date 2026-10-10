@@ -322,6 +322,23 @@ describe('Overview', () => {
     expect(ticks.at(-1)).toHaveTextContent(now.toLocaleString('en-US', { month: 'short', day: 'numeric' }))
   })
 
+  it.each([
+    ['marks', 12.4, '~$312.40'],
+    ['does not mark', 2, '$312.40'],
+  ])('%s the hero total by the shared 1%% estimated rule', async (_label, estimatedCostUSD, shown) => {
+    const payload = makePayload(new Date())
+    payload.current.providerDetails = [
+      { id: 'claude', label: 'Claude', cost: 300 - estimatedCostUSD },
+      { id: 'cursor', label: 'Cursor', cost: 12.4 + estimatedCostUSD, estimatedCostUSD },
+      { id: 'gateway', label: 'Gateway', cost: 50, estimatedCostUSD: 50, excludedFromTotal: true },
+    ]
+    getOverview.mockResolvedValue(payload)
+
+    const { container } = render(<Overview period="30days" provider="all" />)
+
+    await waitFor(() => expect(container.querySelector('.ov-hero-num')).toHaveTextContent(new RegExp(`^${shown.replace(/[$.]/g, '\\$&')}$`)))
+  })
+
   it('keeps weekday labels, and month labels on one row at least three columns apart', async () => {
     const now = new Date()
     getOverview.mockResolvedValue(makePayload(now))
