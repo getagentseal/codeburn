@@ -1411,13 +1411,14 @@ struct CapacityDockDetailView: View {
                 .font(.system(size: 10))
                 .foregroundStyle(Color.capacityDockText.opacity(0.52))
         case .stale:
-            Text(store.quotaRefreshIsInFlight(for: provider)
-                ? L("Last known usage · refreshing")
-                : L("Last known usage"))
+            Text(store.capacityDockProviderStatusTitles[provider.id].map { "\(L("Last known usage")) · \($0)" }
+                ?? (store.quotaRefreshIsInFlight(for: provider)
+                    ? L("Last known usage · refreshing")
+                    : L("Last known usage")))
                 .font(.system(size: 10))
                 .foregroundStyle(.yellow.opacity(0.82))
         case .transientFailure:
-            Text(L("Last known usage · retrying"))
+            Text(store.capacityDockProviderStatusTitles[provider.id] ?? L("Last known usage · retrying"))
                 .font(.system(size: 10))
                 .foregroundStyle(.orange.opacity(0.86))
         case .disconnected:

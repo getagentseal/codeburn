@@ -40,6 +40,12 @@ enum ClinePassSubscriptionService {
 
         var isTerminal: Bool { classification == .terminalAuth }
 
+        /// Replaces the generic "Retrying" status where a retry alone cannot help.
+        var statusTitle: String? {
+            if case .signInExpired = self { return L("Cline login expired") }
+            return nil
+        }
+
         var errorDescription: String? {
             switch self {
             case .noCredentials:

@@ -218,6 +218,7 @@ final class AppStore {
     /// `ProviderConnectionCatalog`.
     var capacityDockProviderSummaries: [String: QuotaSummary] = [:]
     var capacityDockProviderErrors: [String: String] = [:]
+    var capacityDockProviderStatusTitles: [String: String] = [:]
     var capacityDockProvidersLoading: Set<String> = []
     var capacityDockProviderTransientFailures: Set<String> = []
     private var capacityDockProviderRefreshGenerations: [String: UInt64] = [:]
@@ -2456,6 +2457,7 @@ final class AppStore {
         capacityDockProviderRefreshGenerations[provider.id, default: 0] &+= 1
         capacityDockProviderSummaries[provider.id] = nil
         capacityDockProviderErrors[provider.id] = nil
+        capacityDockProviderStatusTitles[provider.id] = nil
         capacityDockProvidersLoading.remove(provider.id)
         capacityDockProviderTransientFailures.remove(provider.id)
     }
@@ -2485,6 +2487,7 @@ final class AppStore {
         }
         capacityDockProviderSummaries[provider.id] = nil
         capacityDockProviderErrors[provider.id] = nil
+        capacityDockProviderStatusTitles[provider.id] = nil
         capacityDockProvidersLoading.remove(provider.id)
         capacityDockProviderTransientFailures.remove(provider.id)
         // Drop the provider from the persisted dock selection too. A
@@ -2527,12 +2530,14 @@ final class AppStore {
             }
             capacityDockProviderSummaries[provider.id] = summary
             capacityDockProviderErrors[provider.id] = nil
+            capacityDockProviderStatusTitles[provider.id] = nil
             capacityDockProviderTransientFailures.remove(provider.id)
         } catch {
             guard capacityDockProviderRefreshGenerations[provider.id, default: 0] == generation else {
                 return
             }
             capacityDockProviderErrors[provider.id] = sanitizeForUI(error.localizedDescription)
+            capacityDockProviderStatusTitles[provider.id] = (error as? CapacityDockProviderFetchFailure)?.statusTitle
             if let failure = error as? CapacityDockProviderFetchFailure,
                failure.disposition == .transient {
                 capacityDockProviderTransientFailures.insert(provider.id)

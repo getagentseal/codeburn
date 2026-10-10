@@ -2105,8 +2105,10 @@ private struct GenericProviderConnectionSections: View {
         switch summary.connection {
         case .connected: return L("Connected")
         case .loading: return L("Connecting…")
-        case .stale: return store.quotaRefreshIsInFlight(for: provider) ? L("Refreshing…") : L("Connected")
-        case .transientFailure: return L("Retrying")
+        case .stale:
+            if let title = store.capacityDockProviderStatusTitles[provider.id] { return title }
+            return store.quotaRefreshIsInFlight(for: provider) ? L("Refreshing…") : L("Connected")
+        case .transientFailure: return store.capacityDockProviderStatusTitles[provider.id] ?? L("Retrying")
         case .terminalFailure: return L("Reconnect required")
         case .disconnected: return L("Not connected")
         }

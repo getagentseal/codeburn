@@ -607,6 +607,7 @@
 "This credential predates a live CodeBurn quota adapter and is not treated as a connection." = "此凭证早于 CodeBurn 的实时配额适配器，不会被视为一个连接。";
 "Quota adapter not available" = "配额适配器不可用";
 "Retrying" = "正在重试";
+"Cline login expired" = "Cline 登录已过期";
 "%@ is catalogued, but CodeBurn cannot fetch its live quota yet." = "%@ 已收录，但 CodeBurn 还无法获取其实时配额。";
 "Live quota is available to Capacity Dock." = "实时配额已可供容量 Dock 使用。";
 "Waiting for quota data." = "正在等待配额数据。";

@@ -608,6 +608,7 @@
 "This credential predates a live CodeBurn quota adapter and is not treated as a connection." = "이 자격 증명은 실시간 CodeBurn 할당량 어댑터보다 이전의 것이라 연결로 처리되지 않습니다.";
 "Quota adapter not available" = "할당량 어댑터 사용 불가";
 "Retrying" = "재시도 중";
+"Cline login expired" = "Cline 로그인 만료됨";
 "%@ is catalogued, but CodeBurn cannot fetch its live quota yet." = "%@은(는) 등록되어 있지만 CodeBurn이 아직 실시간 할당량을 가져올 수 없습니다.";
 "Live quota is available to Capacity Dock." = "캐퍼시티 독에서 실시간 할당량을 사용할 수 있습니다.";
 "Waiting for quota data." = "할당량 데이터를 기다리는 중입니다.";

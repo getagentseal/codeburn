@@ -154,6 +154,8 @@ enum CapacityDockProviderFetchFailureDisposition: Equatable, Sendable {
 struct CapacityDockProviderFetchFailure: LocalizedError, Equatable, Sendable {
     let message: String
     let disposition: CapacityDockProviderFetchFailureDisposition
+    /// A short status shown instead of the generic one for this failure.
+    var statusTitle: String?
 
     init(message: String, disposition: CapacityDockProviderFetchFailureDisposition) {
         self.message = message
@@ -163,6 +165,7 @@ struct CapacityDockProviderFetchFailure: LocalizedError, Equatable, Sendable {
     init(error: Error) {
         message = error.localizedDescription
         disposition = Self.disposition(for: error)
+        statusTitle = (error as? ClinePassSubscriptionService.FetchError)?.statusTitle
     }
 
     var errorDescription: String? { message }
