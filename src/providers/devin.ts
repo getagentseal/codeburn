@@ -649,7 +649,13 @@ class DevinDbSessionParser implements SessionParser {
         const rows = db.query<MessageNodeRow>(
           `SELECT node_id, parent_node_id,
                   json_extract(chat_message, '$.role') AS role,
-                  json_extract(chat_message, '$.metadata') AS metadata,
+                  CASE WHEN json_type(chat_message, '$.metadata') = 'object'
+                       THEN json_object(
+                         'created_at', chat_message -> '$.metadata.created_at',
+                         'generation_model', chat_message -> '$.metadata.generation_model',
+                         'is_user_input', chat_message -> '$.metadata.is_user_input',
+                         'request_id', chat_message -> '$.metadata.request_id',
+                         'metrics', chat_message -> '$.metadata.metrics') END AS metadata,
                   (SELECT json_group_array(json_extract(value, '$.name'))
                      FROM json_each(chat_message, '$.tool_calls')) AS tool_names,
                   CASE WHEN json_extract(chat_message, '$.role') = 'user'
