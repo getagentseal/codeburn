@@ -86,7 +86,7 @@ function rethrowBusy(err: unknown): void {
   if (isSqliteBusyError(err)) throw err
 }
 
-function getCursorDbPath(): string {
+export function getCursorDbPath(): string {
   return join(getEditorDataDir('Cursor', homedir(), process.platform), 'User', 'globalStorage', 'state.vscdb')
 }
 

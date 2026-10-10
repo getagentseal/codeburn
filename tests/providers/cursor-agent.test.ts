@@ -576,6 +576,33 @@ skipUnlessSqlite('cursor-agent store.db sessions', () => {
     expect(sources.map(s => s.path)).toEqual([transcriptPath])
   })
 
+  it('leaves transcripts and stores of Cursor IDE chats to the cursor provider', async () => {
+    const baseDir = await makeBaseDir()
+    const ideId = 'aaaaaaaa-1111-4222-8333-444444444444'
+    const subId = 'bbbbbbbb-1111-4222-8333-444444444444'
+    const cliId = 'cccccccc-1111-4222-8333-444444444444'
+    const ideDbPath = join(baseDir, 'state.vscdb')
+    withTestDb(ideDbPath, (db) => {
+      db.exec('CREATE TABLE cursorDiskKV (key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB)')
+      const insert = db.prepare('INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)')
+      for (const id of [ideId, subId, STORE_AGENT_ID]) insert.run(`composerData:${id}`, '{}')
+      insert.run(`bubbleId:${ideId}:x`, '{}')
+    })
+    await makeStore(baseDir, { roots: [[SYSTEM_MSG, PROMPT_MSG, STEP_TWO]] })
+    const transcripts = join(baseDir, 'projects', 'proj', 'agent-transcripts')
+    const line = JSON.stringify({ role: 'user', message: { content: [{ type: 'text', text: '<user_query>hi</user_query>' }] } })
+    await mkdir(join(transcripts, ideId, 'subagents'), { recursive: true })
+    await mkdir(join(transcripts, cliId), { recursive: true })
+    await writeFile(join(transcripts, ideId, `${ideId}.jsonl`), line)
+    await writeFile(join(transcripts, ideId, 'subagents', `${subId}.jsonl`), line)
+    const cliPath = join(transcripts, cliId, `${cliId}.jsonl`)
+    await writeFile(cliPath, line)
+
+    const sources = await createCursorAgentProvider(baseDir, ideDbPath).discoverSessions()
+    expect(sources.map(s => s.path)).toEqual([cliPath])
+    expect(await createCursorAgentProvider(baseDir, join(baseDir, 'missing.vscdb')).discoverSessions()).toHaveLength(4)
+  })
+
   it('keeps messages Cursor summarized out of the latest root', async () => {
     const baseDir = await makeBaseDir()
     const summary = { role: 'user', content: [{ type: 'text', text: '[Previous conversation summary] ...' }] }

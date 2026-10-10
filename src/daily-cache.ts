@@ -350,7 +350,10 @@ import type { DateRange, ProjectSummary } from './types.js'
 // cursor-agent (or Grok Bot, when the import holds its rows) slice, so the
 // merge carried the old one on top of the imported rows. Adoption and the
 // complete re-derive now drop those slices; the bump repairs carried days.
-export const DAILY_CACHE_VERSION = 72
+// v73: cursor-agent skips agent transcripts of Cursor IDE chats, which the
+// cursor provider already counts from the IDE database. Those calls leave
+// cursor-agent, so it joins PENDING_REDERIVE_PROVIDER_VERSIONS at 73.
+export const DAILY_CACHE_VERSION = 73
 const MIN_SUPPORTED_VERSION = 28
 
 /// Providers whose per-day CALL COUNT means something different at
@@ -392,7 +395,8 @@ const PENDING_REDERIVE_PROVIDER_VERSIONS: Readonly<Record<string, number>> = {
   // on the session's last-activity day; sessions.db dates each request.
   devin: 46,
   // 58: transcript turns moved from the session's last write to prompt time.
-  'cursor-agent': 58,
+  // 73: transcripts of Cursor IDE chats are left to the cursor provider.
+  'cursor-agent': 73,
   // 59: standalone rows without created_at moved from the file mtime to the
   // first step's time.
   antigravity: 59,

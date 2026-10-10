@@ -446,7 +446,9 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // ~/.cursor/chats/*/*/store.db.
   // prompt-time-v1: transcript turns take their prompt's <timestamp> tag, not
   // the session's last write.
-  'cursor-agent': 'workspaceless-transcript-v1-full-turn-accounting-v2-store-db-v1-est-cost-prompt-time-v1',
+  // ide-composer-skip-v1: transcripts of Cursor IDE chats are not read; the
+  // cursor provider counts those chats.
+  'cursor-agent': 'workspaceless-transcript-v1-full-turn-accounting-v2-store-db-v1-est-cost-prompt-time-v1-ide-composer-skip-v1',
   // source-provenance-v1 (#944): CLI sessions were misread as VS Code
   // transcripts (both carry producer 'copilot-agent'), skipping the shutdown
   // input/cache rollup; this bump re-parses them so the missing tokens land.

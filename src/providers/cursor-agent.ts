@@ -5,9 +5,10 @@ import { join, basename, dirname } from 'path'
 import { homedir } from 'os'
 
 import { calculateCost, getShortModelName } from '../models.js'
-import { blobToText, openDatabase, type SqliteDatabase } from '../sqlite.js'
+import { blobToText, isSqliteAvailable, isSqliteBusyError, openDatabase, type SqliteDatabase } from '../sqlite.js'
 import { normalizeContentBlocks } from '../content-utils.js'
 import { estimateTokensFromChars } from '../token-estimate.js'
+import { getCursorDbPath } from './cursor.js'
 import type {
   Provider,
   SessionSource,
@@ -732,6 +733,32 @@ async function appendStoreSources(
   }
 }
 
+// Cursor IDE agent-mode chats also write agent transcripts, but the `cursor`
+// provider already counts them from the IDE's own record (composerData plus
+// per-bubble rows), which carries the model, per-turn times and Cursor's
+// context meter. Their ids match, so those transcripts are left to it.
+function loadIdeComposerIds(ideDbPath: string): Set<string> {
+  const ids = new Set<string>()
+  if (!existsSync(ideDbPath) || !isSqliteAvailable()) return ids
+  let db: SqliteDatabase | null = null
+  try {
+    db = openDatabase(ideDbPath)
+    const rows = db.query<{ id: string }>(
+      "SELECT substr(key, length('composerData:') + 1) AS id FROM cursorDiskKV WHERE key >= 'composerData:' AND key < 'composerData;'",
+    )
+    for (const row of rows) ids.add(row.id)
+  } catch (err) {
+    if (isSqliteBusyError(err)) throw err
+  } finally {
+    db?.close()
+  }
+  return ids
+}
+
+function sourceSessionId(source: SessionSource): string {
+  return basename(source.path) === STORE_DB_NAME ? basename(dirname(source.path)) : toConversationId(source.path)
+}
+
 function createParser(
   source: SessionSource,
   seenKeys: Set<string>,
@@ -842,7 +869,7 @@ function createParser(
   }
 }
 
-export function createCursorAgentProvider(baseDirOverride?: string): Provider {
+export function createCursorAgentProvider(baseDirOverride?: string, ideDbPathOverride?: string): Provider {
   const baseDir = getCursorAgentBaseDir(baseDirOverride)
   const projectsDir = getProjectsDir(baseDir)
   const chatsDir = getChatsDir(baseDir)
@@ -892,7 +919,8 @@ export function createCursorAgentProvider(baseDirOverride?: string): Provider {
 
       const transcriptIds = new Set(sources.map(s => toConversationId(s.path)))
       await appendStoreSources(chatsDir, transcriptIds, sources)
-      return sources
+      const ideIds = loadIdeComposerIds(ideDbPathOverride ?? getCursorDbPath())
+      return ideIds.size === 0 ? sources : sources.filter(s => !ideIds.has(sourceSessionId(s)))
     },
 
     createSessionParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
