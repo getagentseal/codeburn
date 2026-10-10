@@ -2461,7 +2461,9 @@ final class AppStore {
         capacityDockProviderTransientFailures.remove(provider.id)
     }
 
-    func disconnectCapacityDockProvider(_ provider: CapacityDockProvider) async throws {
+    /// `explicit` is the Disconnect action. Clearing an override only returns
+    /// the provider to automatic discovery, so it leaves the opt-out unset.
+    func disconnectCapacityDockProvider(_ provider: CapacityDockProvider, explicit: Bool = false) async throws {
         if let filter = provider.legacyFilter {
             switch filter {
             case .claude: disconnectSubscription()
@@ -2493,7 +2495,7 @@ final class AppStore {
         // silently reconnected by the next scheduled refresh, undoing the
         // user's explicit disconnect.
         capacityDockProviderDeselector(provider)
-        ProviderExplicitDisconnect.mark(provider.id, defaults: capacityDockDefaults)
+        if explicit { ProviderExplicitDisconnect.mark(provider.id, defaults: capacityDockDefaults) }
     }
 
     func connectCapacityDockProvider(_ provider: CapacityDockProvider) async {

@@ -565,7 +565,7 @@ struct CapacityDockProviderQuotaServiceTests {
         #expect(!signedOut.capacityDockProvidersLoading.contains(provider.id))
     }
 
-    @Test("after Disconnect the pane probe stays off until the user clicks Connect")
+    @Test("clearing an override keeps the pane probe; Disconnect stops it until Connect")
     func explicitDisconnectBlocksQuietProbe() async throws {
         let provider = try #require(CapacityDockProvider(rawValue: "cursor"))
         let (defaults, suiteName) = TestDefaults.make("CodeBurnMenubarTests.DockQuota.\(#function)")
@@ -594,18 +594,25 @@ struct CapacityDockProviderQuotaServiceTests {
         #expect(store.capacityDockProviderIsConnected(provider))
 
         try await store.disconnectCapacityDockProvider(provider)
+        #expect(!ProviderExplicitDisconnect.isSet(provider.id, defaults: defaults))
         await store.refreshCapacityDockProvider(provider, quiet: true)
-        #expect(fetches.count == 1)
+        #expect(fetches.count == 2)
+        #expect(store.capacityDockProviderIsConnected(provider))
+
+        try await store.disconnectCapacityDockProvider(provider, explicit: true)
+        #expect(ProviderExplicitDisconnect.isSet(provider.id, defaults: defaults))
+        await store.refreshCapacityDockProvider(provider, quiet: true)
+        #expect(fetches.count == 2)
         #expect(store.capacityDockQuotaSummary(for: provider) == nil)
 
         CapacityDockPreferences.autoSeedFromConnected([.claude, provider], defaults: defaults)
         #expect(!CapacityDockPreferences.load(defaults: defaults).selectedProviders.contains(provider))
 
         await store.connectCapacityDockProvider(provider)
-        #expect(fetches.count == 2)
+        #expect(fetches.count == 3)
         #expect(store.capacityDockProviderIsConnected(provider))
         await store.refreshCapacityDockProvider(provider, quiet: true)
-        #expect(fetches.count == 3)
+        #expect(fetches.count == 4)
     }
 
     private final class FetchCounter: @unchecked Sendable {
