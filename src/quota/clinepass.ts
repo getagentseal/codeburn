@@ -11,13 +11,13 @@
 import os from 'node:os'
 import path from 'node:path'
 
+import { compactAge } from './codex.js'
 import { quotaRequestSignal, readSecureFile, sanitizeError } from './security.js'
 import type { QuotaProvider, QuotaWindow } from './types.js'
 
 const USAGE_ENDPOINT = 'https://api.cline.bot/api/v1/users/me/plan/usage-limits'
 const API_KEY_VARS = ['CLINEPASS_API_KEY', 'CLINE_API_KEY'] as const
 const REJECTED_FOOTER = ['ClinePass rejected this API key.']
-const EXPIRED_FOOTER = ['Cline sign-in expired. Run cline to refresh it.']
 const RATE_LIMITED_FOOTER = ['ClinePass rate-limited the quota request.']
 const UNAVAILABLE_FOOTER = ['ClinePass is temporarily unavailable.']
 const PARSE_FOOTER = ['ClinePass quota response was malformed.']
@@ -34,6 +34,11 @@ export type ClinePassDeps = {
 
 function defaultDeps(): ClinePassDeps {
   return { fetch: globalThis.fetch, env: process.env, readFile: readSecureFile, homeDir: os.homedir(), now: Date.now }
+}
+
+function clineExpiredFooter(expiresAt: number | null, now: number): string[] {
+  const age = expiresAt !== null && expiresAt <= now ? ` ${compactAge(expiresAt, now)}` : ''
+  return [`Cline login expired${age}. Send a message in Cline or run \`cline auth cline\`, then press Retry.`]
 }
 
 function empty(connection: QuotaProvider['connection'], footerLines: string[] = []): QuotaProvider {
@@ -147,14 +152,18 @@ export async function fetchClinePassQuota(options: Partial<ClinePassDeps> & { si
     // Not terminal: running cline refreshes the session file this only reads,
     // so the next scheduled read recovers on its own.
     if (credential.oauth && credential.expiresAt !== null && credential.expiresAt <= deps.now()) {
-      return { quota: empty('transientFailure', EXPIRED_FOOTER) }
+      return { quota: empty('transientFailure', clineExpiredFooter(credential.expiresAt, deps.now())) }
     }
     const response = await deps.fetch(USAGE_ENDPOINT, {
       method: 'GET', signal: quotaRequestSignal(options.signal),
       headers: { Accept: 'application/json', Authorization: `Bearer ${credential.token}`, 'User-Agent': 'CodeBurn' },
     })
     if (response.status === 401 || response.status === 403) {
-      return { quota: credential.oauth ? empty('transientFailure', EXPIRED_FOOTER) : empty('terminalFailure', REJECTED_FOOTER) }
+      return {
+        quota: credential.oauth
+          ? empty('transientFailure', clineExpiredFooter(credential.expiresAt, deps.now()))
+          : empty('terminalFailure', REJECTED_FOOTER),
+      }
     }
     if (response.status === 429) {
       const raw = response.headers.get('Retry-After')

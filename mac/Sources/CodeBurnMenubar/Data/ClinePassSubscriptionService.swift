@@ -12,7 +12,8 @@ enum ClinePassSubscriptionService {
     enum FetchError: Error, Equatable, LocalizedError, Sendable {
         case noCredentials
         case authenticationRejected
-        case signInExpired
+        /// `age` is how long ago the saved login expired, when the file says.
+        case signInExpired(age: String?)
         case rateLimited
         case providerUnavailable
         case parseFailure
@@ -45,8 +46,9 @@ enum ClinePassSubscriptionService {
                 return "Sign in with Cline, or enter a ClinePass API key, then click Retry."
             case .authenticationRejected:
                 return "ClinePass rejected this API key."
-            case .signInExpired:
-                return "Cline sign-in expired. Run cline to refresh it."
+            case let .signInExpired(age):
+                let ago = age.map { " \($0)" } ?? ""
+                return "Cline login expired\(ago). Send a message in Cline or run `cline auth cline`, then press Retry."
             case .rateLimited:
                 return "ClinePass rate-limited the quota request."
             case .providerUnavailable:
@@ -150,8 +152,12 @@ enum ClinePassSubscriptionService {
             }
             credential = ambient
         }
-        if credential.isOAuth, let expiresAt = credential.expiresAt, expiresAt <= deps.now() {
-            throw FetchError.signInExpired
+        let now = deps.now()
+        let expiredAge = credential.expiresAt.flatMap {
+            $0 <= now ? CodexBankedResetPresentation.compactAge(of: $0, now: now) : nil
+        }
+        if credential.isOAuth, let expiredAge {
+            throw FetchError.signInExpired(age: expiredAge)
         }
 
         var request = URLRequest(url: usageURL)
@@ -174,7 +180,7 @@ enum ClinePassSubscriptionService {
         case 200:
             break
         case 401, 403:
-            throw credential.isOAuth ? FetchError.signInExpired : FetchError.authenticationRejected
+            throw credential.isOAuth ? FetchError.signInExpired(age: expiredAge) : FetchError.authenticationRejected
         case 429:
             throw FetchError.rateLimited
         case 500...599:

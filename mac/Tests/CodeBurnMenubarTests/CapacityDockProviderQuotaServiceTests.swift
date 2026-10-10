@@ -271,7 +271,7 @@ struct CapacityDockProviderQuotaServiceTests {
     func clinePassExpiredSignInIsTransient() async throws {
         let provider = try #require(CapacityDockProvider(rawValue: "clinepass"))
         let cases: [(ClinePassSubscriptionService.FetchError, CapacityDockProviderFetchFailureDisposition)] = [
-            (.signInExpired, .transient),
+            (.signInExpired(age: "3h ago"), .transient),
             (.authenticationRejected, .terminal),
             (.noCredentials, .terminal),
         ]
