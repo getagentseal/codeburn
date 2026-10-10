@@ -154,17 +154,16 @@ export function toCommandProvider(id: ProviderName, name: string, quota: QuotaPr
   }
 }
 
-/** Reads one config directory's own quota from its `<dir>/.credentials.json`. The macOS
- *  Keychain fallback stays reserved for the default ~/.claude, so non-default directories
- *  read as disconnected on macOS (fine today: the dock is Windows/Linux only). WSL
- *  credential aggregation is off because every WSL home is its own config source. */
+/** Reads one config directory's own quota from its `<dir>/.credentials.json`, falling back
+ *  on macOS to that directory's own Keychain item (Claude Code suffixes the service with a
+ *  hash of CLAUDE_CONFIG_DIR). WSL credential aggregation is off because every WSL home is
+ *  its own config source. */
 function readClaudeProfile(source: ClaudeConfigSource, signal: AbortSignal): Promise<QuotaProvider> {
-  const isDefault = path.resolve(source.path) === path.resolve(path.join(os.homedir(), '.claude'))
   return fetchClaudeQuota({
     signal,
-    credentialPath: path.join(source.path, '.credentials.json'),
+    configDir: source.path,
     wslCredentialPaths: () => [],
-    allowKeychain: isDefault,
+    allowKeychain: true,
   }).then(result => result.quota)
 }
 

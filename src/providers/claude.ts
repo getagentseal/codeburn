@@ -97,7 +97,7 @@ export async function getClaudeConfigDirs(): Promise<string[]> {
   return dedupeResolved([...await configuredClaudeConfigDirs(), ...wsl])
 }
 
-async function configuredClaudeConfigDirs(): Promise<string[]> {
+export async function configuredClaudeConfigDirs(): Promise<string[]> {
   const multi = process.env['CLAUDE_CONFIG_DIRS']
   if (multi !== undefined && multi !== '') {
     const dirs = multi
