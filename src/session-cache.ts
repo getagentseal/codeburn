@@ -9,6 +9,7 @@ import { acquireCacheRefreshLock, releaseOwnedRefreshLocksForExit } from './cach
 import { parseBillingMode, type BillingMode } from './models.js'
 import type { ToolCall } from './types.js'
 import { isWslUncPath } from './wsl.js'
+import { getOpenClawDirs } from './openclaw-paths.js'
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -315,6 +316,7 @@ export const PROVIDER_ENV_VARS: Record<string, string[]> = {
   'cursor-agent': ['XDG_DATA_HOME'],
   'open-design': ['CODEBURN_OPEN_DESIGN_DIR', 'APPDATA'],
   openclaude: ['CODEBURN_OPENCLAUDE_DIR'],
+  openclaw: ['OPENCLAW_STATE_DIR', 'OPENCLAW_HOME', 'HOME', 'USERPROFILE', 'PREFIX', 'ANDROID_DATA'],
   opencode: ['XDG_DATA_HOME', 'OPENCODE_DATA_DIR', 'OPENCODE_DB_PREFIX'],
   goose: ['XDG_DATA_HOME', 'GOOSE_PATH_ROOT'],
   grok: ['GROK_HOME'],
@@ -522,7 +524,7 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // sqlite-store-v1: id-less dedup keys now carry an occurrence index
   // (`h:<hash>:<n>`) instead of the bare payload hash; cached turns hold the
   // old keys, so without this bump they would suppress the re-parsed calls.
-  openclaw: 'reported-cost-v1-sqlite-store-v1',
+  openclaw: 'reported-cost-v1-sqlite-store-v1-state-dir-v1',
   // sessions-db-v1: usage now comes from sessions.db message_nodes, one
   // source per session keyed by request_id; transcripts are read only when the
   // database is unusable. The legacy metadata.metrics path no longer carves
@@ -1034,6 +1036,10 @@ export function computeEnvFingerprint(provider: string): string {
   const parts = vars.map(v => `${v}=${process.env[v] ?? ''}`)
   const parseVersion = PROVIDER_PARSE_VERSIONS[provider]
   if (parseVersion) parts.push(`parser=${parseVersion}`)
+  // Relative overrides and the no-home fallback resolve from cwd. Hash the
+  // actual roots so changing cwd invalidates OpenClaw without invalidating
+  // absolute-root installations on every launch from another project.
+  if (provider === 'openclaw') parts.push(`roots=${JSON.stringify(getOpenClawDirs())}`)
   return createHash('sha256').update(parts.join('\0')).digest('hex').slice(0, 16)
 }
 

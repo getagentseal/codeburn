@@ -1,6 +1,6 @@
 import { readdir, readFile, stat } from 'fs/promises'
 import { basename, join } from 'path'
-import { homedir } from 'os'
+import { getOpenClawDirs } from '../openclaw-paths.js'
 import { createHash } from 'node:crypto'
 import zlib from 'zlib'
 
@@ -219,16 +219,6 @@ async function* finalizeCalls(
       sessionId,
     }
   }
-}
-
-function getOpenClawDirs(): string[] {
-  const home = homedir()
-  return [
-    join(home, '.openclaw', 'agents'),
-    join(home, '.clawdbot', 'agents'),
-    join(home, '.moltbot', 'agents'),
-    join(home, '.moldbot', 'agents'),
-  ]
 }
 
 function extractTools(content: Array<{ type?: string; name?: string; arguments?: Record<string, unknown> }> | undefined): { tools: string[]; bashCommands: string[] } {

@@ -7,6 +7,7 @@ import { getCodeburnCacheDir, RETIRED_PROVIDER_NAMES } from './cache-dir.js'
 import { sweepSupersededCacheFiles } from './cache-sweep.js'
 import { coverageFor, coversLocalDay, loadCursorImport } from './cursor-import.js'
 import { projectOriginKey } from './git-origin.js'
+import { computeEnvFingerprint } from './session-cache.js'
 import type { ProjectFilterTarget } from './parser.js'
 import type { DateRange, ProjectSummary } from './types.js'
 
@@ -357,7 +358,9 @@ import type { DateRange, ProjectSummary } from './types.js'
 // instead of dropped, Gemini 3.8 Flash placeholders get their own ids and
 // Gemini 3 Flash -a/-d rows are priced. Calls and cost only rise, so no
 // PENDING_REDERIVE_PROVIDER_VERSIONS entry is needed.
-export const DAILY_CACHE_VERSION = 74
+// v75: discover OpenClaw's configured state directory and effective home.
+// Finalized days may have omitted those sessions before the root override fix.
+export const DAILY_CACHE_VERSION = 75
 const MIN_SUPPORTED_VERSION = 28
 
 /// Providers whose per-day CALL COUNT means something different at
@@ -509,6 +512,9 @@ export type DailyCache = {
   /// hash mismatches and `ensureCacheHydrated` re-derives available history,
   /// then carries forward slices whose sources are gone.
   savingsConfigHash: string
+  /// OpenClaw discovery roots used by the last complete history backfill.
+  /// A root change re-derives available history while preserving absent slices.
+  openclawEnvFingerprint?: string
   /// IANA local timezone the days were bucketed under (day boundaries are
   /// local-time). If the machine's timezone changes, previously-cached days are
   /// bucketed against the wrong midnight, so a mismatch forces a full re-hydrate
@@ -753,12 +759,13 @@ function pendingRederiveFor(fromVersion: number, parsed: unknown): string[] | un
   return pending.size > 0 ? [...pending] : undefined
 }
 
-function migratedFrom(parsed: { version: number; lastComputedDate: string | null; savingsConfigHash?: string; tzKey?: string; days: Record<string, unknown>[]; complete?: boolean; watermarkTrusted?: boolean }): DailyCache {
+function migratedFrom(parsed: { version: number; lastComputedDate: string | null; savingsConfigHash?: string; tzKey?: string; days: Record<string, unknown>[]; complete?: boolean; watermarkTrusted?: boolean; openclawEnvFingerprint?: unknown }): DailyCache {
   const pendingRederive = pendingRederiveFor(parsed.version, parsed)
   return {
     ...(pendingRederive ? { pendingRederive } : {}),
     version: DAILY_CACHE_VERSION,
     savingsConfigHash: parsed.savingsConfigHash ?? '',
+    ...(typeof parsed.openclawEnvFingerprint === 'string' ? { openclawEnvFingerprint: parsed.openclawEnvFingerprint } : {}),
     tzKey: parsed.tzKey,
     lastComputedDate: typeof parsed.lastComputedDate === 'string' && DATE_KEY_RE.test(parsed.lastComputedDate)
       ? parsed.lastComputedDate
@@ -957,6 +964,7 @@ export function addNewDays(cache: DailyCache, incoming: DailyEntry[], newestDate
   return {
     version: DAILY_CACHE_VERSION,
     savingsConfigHash: cache.savingsConfigHash,
+    ...(cache.openclawEnvFingerprint !== undefined ? { openclawEnvFingerprint: cache.openclawEnvFingerprint } : {}),
     tzKey: cache.tzKey,
     lastComputedDate: nextLast,
     days: applyRetention(merged, newestDate),
@@ -1785,7 +1793,7 @@ export async function ensureCacheHydrated(
       c = { ...c, lastComputedDate: toDateString(pulledBack) }
     }
 
-    // Three reasons to re-derive the whole retention window:
+    // Four reasons to re-derive the whole retention window:
     //  1. Savings config changed — cached `savingsUSD` totals are stale.
     //  2. The cache was never finalized against a COMPLETE session parse (an old
     //     pre-marker cache, an adoption from older cache files, or one frozen
@@ -1794,6 +1802,8 @@ export async function ensureCacheHydrated(
     //     TZ change mis-buckets every cached day. Only invalidate when a tzKey is
     //     present and differs (a cache written before this field, or a test
     //     fixture, has none → left alone rather than force a spurious rebuild).
+    //  4. OpenClaw's selected roots changed since the last complete backfill.
+    //     Session-cache invalidation alone cannot revisit finalized days.
     //
     // Re-derive, NOT discard. Session files are ephemeral; a cached day whose
     // sources are gone exists nowhere else, so the old days stay as a baseline
@@ -1803,7 +1813,9 @@ export async function ensureCacheHydrated(
     // into permanently lost history.
     const tzKey = currentTzKey()
     const tzChanged = c.tzKey !== undefined && c.tzKey !== tzKey
-    if (c.savingsConfigHash !== savingsConfigHash || c.complete !== true || tzChanged) {
+    const openclawEnvFingerprint = computeEnvFingerprint('openclaw')
+    const openclawEnvChanged = c.openclawEnvFingerprint !== undefined && c.openclawEnvFingerprint !== openclawEnvFingerprint
+    if (c.savingsConfigHash !== savingsConfigHash || c.complete !== true || tzChanged || openclawEnvChanged) {
       const baseline = c.days
       const priorWatermark = c.lastComputedDate
       const backfillStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - BACKFILL_DAYS)
@@ -1897,6 +1909,7 @@ export async function ensureCacheHydrated(
         version: DAILY_CACHE_VERSION,
         savingsConfigHash,
         tzKey,
+        ...(parseWasComplete ? { openclawEnvFingerprint } : c.openclawEnvFingerprint !== undefined ? { openclawEnvFingerprint: c.openclawEnvFingerprint } : {}),
         // Spent: this re-derivation was the one the migration owed those
         // providers. A PARTIAL parse never got to use it (its fresh data only
         // filled gaps), so the entitlement is kept for the next complete run.
@@ -1971,7 +1984,7 @@ export async function ensureCacheHydrated(
       // the same reason as the re-derive path above: a partial parse cannot
       // vouch for the days it never read, and gapStart is the only thing that
       // will ever bring them back.
-      c = { ...c, days: applyRetention(merged, yesterdayStr), lastComputedDate: parseWasComplete ? yesterdayStr : priorWatermark, complete: parseWasComplete, watermarkTrusted: parseWasComplete }
+      c = { ...c, ...(parseWasComplete ? { openclawEnvFingerprint } : {}), days: applyRetention(merged, yesterdayStr), lastComputedDate: parseWasComplete ? yesterdayStr : priorWatermark, complete: parseWasComplete, watermarkTrusted: parseWasComplete }
       await saveDailyCache(c)
     } else if (c.complete !== true && sessionComplete()) {
       // No gap to fill (already current through yesterday) but not yet marked —
