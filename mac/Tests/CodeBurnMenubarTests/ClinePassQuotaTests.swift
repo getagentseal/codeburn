@@ -102,7 +102,7 @@ final class ClinePassQuotaTests: XCTestCase {
         let recorder = RequestRecorder()
         let deps = Self.makeDeps(
             recorder: recorder,
-            ambient: .init(token: "workos:old", isOAuth: true, expiresAt: Date(timeIntervalSince1970: 1_799_999_999))
+            ambient: .init(token: "workos:old", isOAuth: true, expiresAt: Date(timeIntervalSince1970: 1_800_000_000 - 3 * 3600))
         ) { request in
             (Self.successBody.data(using: .utf8)!, Self.httpResponse(request, status: 200))
         }
@@ -110,8 +110,10 @@ final class ClinePassQuotaTests: XCTestCase {
             _ = try await ClinePassSubscriptionService.refresh(apiKey: nil, deps: deps)
             XCTFail("Expected an expired sign-in")
         } catch {
-            XCTAssertEqual(error as? ClinePassSubscriptionService.FetchError, .signInExpired)
-            XCTAssertEqual(error.localizedDescription, "Cline sign-in expired. Run cline to refresh it.")
+            XCTAssertEqual(error as? ClinePassSubscriptionService.FetchError, .signInExpired(age: "3h ago"))
+            XCTAssertEqual(
+                error.localizedDescription,
+                "Cline login expired 3h ago. Send a message in Cline or run `cline auth cline`; CodeBurn picks up the new login on its next refresh.")
             XCTAssertEqual((error as? ClinePassSubscriptionService.FetchError)?.classification, .transient)
         }
         XCTAssertTrue(recorder.requests.isEmpty)
@@ -129,7 +131,10 @@ final class ClinePassQuotaTests: XCTestCase {
             _ = try await ClinePassSubscriptionService.refresh(apiKey: nil, deps: rejected)
             XCTFail("Expected an expired sign-in")
         } catch {
-            XCTAssertEqual(error as? ClinePassSubscriptionService.FetchError, .signInExpired)
+            XCTAssertEqual(error as? ClinePassSubscriptionService.FetchError, .signInExpired(age: nil))
+            XCTAssertEqual(
+                error.localizedDescription,
+                "Cline login expired. Send a message in Cline or run `cline auth cline`; CodeBurn picks up the new login on its next refresh.")
         }
         let none = Self.makeDeps(recorder: recorder) { request in
             (Data("{}".utf8), Self.httpResponse(request, status: 200))

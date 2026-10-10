@@ -271,7 +271,7 @@ struct CapacityDockProviderQuotaServiceTests {
     func clinePassExpiredSignInIsTransient() async throws {
         let provider = try #require(CapacityDockProvider(rawValue: "clinepass"))
         let cases: [(ClinePassSubscriptionService.FetchError, CapacityDockProviderFetchFailureDisposition)] = [
-            (.signInExpired, .transient),
+            (.signInExpired(age: "3h ago"), .transient),
             (.authenticationRejected, .terminal),
             (.noCredentials, .terminal),
         ]
@@ -493,6 +493,51 @@ struct CapacityDockProviderQuotaServiceTests {
                 #expect(failure.message == error.localizedDescription)
             }
         }
+    }
+
+    @Test("an expired Cline login sets a status title, keeps the last quota, and a success clears it")
+    func clineExpiredStatusTitle() async throws {
+        let provider = try #require(CapacityDockProvider(rawValue: "clinepass"))
+        let expired = ExpiryToggle()
+        let store = AppStore()
+        store.capacityDockCredentialLoader = { _ in CapacityDockProviderCredential() }
+        store.capacityDockProviderQuotaService = CapacityDockProviderQuotaService(dependencies: .init(
+            refreshClinePass: { _ in
+                if expired.isOn { throw ClinePassSubscriptionService.FetchError.signInExpired(age: "3h ago") }
+                return Self.summary(percent: 0.3)
+            },
+            refreshCommandCode: Self.unusedCommandCode,
+            refreshCursor: Self.unusedCursor,
+            refreshDevin: Self.unusedDevin,
+            refreshGrok: Self.unusedGrok,
+            refreshGrokBot: Self.unusedGrokBot,
+            refreshZai: Self.unusedZai,
+            refreshZcode: Self.unusedZcode
+        ))
+
+        expired.isOn = true
+        await store.refreshCapacityDockProvider(provider)
+        #expect(store.capacityDockProviderStatusTitles[provider.id] == "Cline login expired")
+        #expect(store.capacityDockQuotaSummary(for: provider)?.connection == .transientFailure)
+        #expect(store.capacityDockProviderErrors[provider.id]
+            == "Cline login expired 3h ago. Send a message in Cline or run `cline auth cline`, then press Retry.")
+
+        expired.isOn = false
+        await store.refreshCapacityDockProvider(provider)
+        #expect(store.capacityDockProviderStatusTitles[provider.id] == nil)
+
+        expired.isOn = true
+        await store.refreshCapacityDockProvider(provider)
+        #expect(store.capacityDockProviderStatusTitles[provider.id] == "Cline login expired")
+        let kept = store.capacityDockQuotaSummary(for: provider)
+        #expect(kept?.connection == .stale)
+        #expect(kept?.primary?.percent == 0.3)
+        #expect(store.capacityDockProviderErrors[provider.id]
+            == "Cline login expired 3h ago. Send a message in Cline or run `cline auth cline`; CodeBurn picks up the new login on its next refresh.")
+    }
+
+    private final class ExpiryToggle: @unchecked Sendable {
+        var isOn = false
     }
 
     @Test("disconnect invalidates an in-flight provider refresh")

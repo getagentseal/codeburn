@@ -615,6 +615,7 @@
 "This credential predates a live CodeBurn quota adapter and is not treated as a connection." = "This credential predates a live CodeBurn quota adapter and is not treated as a connection.";
 "Quota adapter not available" = "Quota adapter not available";
 "Retrying" = "Retrying";
+"Cline login expired" = "Cline login expired";
 "%@ is catalogued, but CodeBurn cannot fetch its live quota yet." = "%@ is catalogued, but CodeBurn cannot fetch its live quota yet.";
 "Live quota is available to Capacity Dock." = "Live quota is available to Capacity Dock.";
 "Waiting for quota data." = "Waiting for quota data.";

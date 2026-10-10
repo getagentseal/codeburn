@@ -218,6 +218,7 @@ final class AppStore {
     /// `ProviderConnectionCatalog`.
     var capacityDockProviderSummaries: [String: QuotaSummary] = [:]
     var capacityDockProviderErrors: [String: String] = [:]
+    var capacityDockProviderStatusTitles: [String: String] = [:]
     var capacityDockProvidersLoading: Set<String> = []
     var capacityDockProviderTransientFailures: Set<String> = []
     private var capacityDockProviderRefreshGenerations: [String: UInt64] = [:]
@@ -2457,6 +2458,7 @@ final class AppStore {
         capacityDockProviderRefreshGenerations[provider.id, default: 0] &+= 1
         capacityDockProviderSummaries[provider.id] = nil
         capacityDockProviderErrors[provider.id] = nil
+        capacityDockProviderStatusTitles[provider.id] = nil
         capacityDockProvidersLoading.remove(provider.id)
         capacityDockProviderTransientFailures.remove(provider.id)
     }
@@ -2488,6 +2490,7 @@ final class AppStore {
         }
         capacityDockProviderSummaries[provider.id] = nil
         capacityDockProviderErrors[provider.id] = nil
+        capacityDockProviderStatusTitles[provider.id] = nil
         capacityDockProvidersLoading.remove(provider.id)
         capacityDockProviderTransientFailures.remove(provider.id)
         // Drop the provider from the persisted dock selection too. A
@@ -2537,13 +2540,20 @@ final class AppStore {
             }
             capacityDockProviderSummaries[provider.id] = summary
             capacityDockProviderErrors[provider.id] = nil
+            capacityDockProviderStatusTitles[provider.id] = nil
             capacityDockProviderTransientFailures.remove(provider.id)
         } catch {
             guard capacityDockProviderRefreshGenerations[provider.id, default: 0] == generation,
                   !(quiet && (error as? CapacityDockProviderFetchFailure)?.notSignedIn == true) else {
                 return
             }
-            capacityDockProviderErrors[provider.id] = sanitizeForUI(error.localizedDescription)
+            let failure = error as? CapacityDockProviderFetchFailure
+            // Without a last quota the pane offers Retry; with one it shows Disconnect.
+            let retryShown = capacityDockProviderSummaries[provider.id] == nil
+            capacityDockProviderErrors[provider.id] = sanitizeForUI(
+                (retryShown ? failure?.retryMessage : nil) ?? error.localizedDescription
+            )
+            capacityDockProviderStatusTitles[provider.id] = failure?.statusTitle
             if let failure = error as? CapacityDockProviderFetchFailure,
                failure.disposition == .transient {
                 capacityDockProviderTransientFailures.insert(provider.id)

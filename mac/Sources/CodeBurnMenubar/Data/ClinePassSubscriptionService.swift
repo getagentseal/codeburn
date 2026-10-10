@@ -12,7 +12,8 @@ enum ClinePassSubscriptionService {
     enum FetchError: Error, Equatable, LocalizedError, Sendable {
         case noCredentials
         case authenticationRejected
-        case signInExpired
+        /// `age` is how long ago the saved login expired, when the file says.
+        case signInExpired(age: String?)
         case rateLimited
         case providerUnavailable
         case parseFailure
@@ -39,14 +40,30 @@ enum ClinePassSubscriptionService {
 
         var isTerminal: Bool { classification == .terminalAuth }
 
+        /// Replaces the generic "Retrying" status where a retry alone cannot help.
+        var statusTitle: String? {
+            if case .signInExpired = self { return L("Cline login expired") }
+            return nil
+        }
+
+        /// The same guidance for where a Retry button is on screen.
+        var retryMessage: String? {
+            guard case let .signInExpired(age) = self else { return nil }
+            return "\(expiredPrefix(age)) Send a message in Cline or run `cline auth cline`, then press Retry."
+        }
+
+        private func expiredPrefix(_ age: String?) -> String {
+            "Cline login expired\(age.map { " \($0)" } ?? "")."
+        }
+
         var errorDescription: String? {
             switch self {
             case .noCredentials:
                 return "Sign in with Cline, or enter a ClinePass API key, then click Retry."
             case .authenticationRejected:
                 return "ClinePass rejected this API key."
-            case .signInExpired:
-                return "Cline sign-in expired. Run cline to refresh it."
+            case let .signInExpired(age):
+                return "\(expiredPrefix(age)) Send a message in Cline or run `cline auth cline`; CodeBurn picks up the new login on its next refresh."
             case .rateLimited:
                 return "ClinePass rate-limited the quota request."
             case .providerUnavailable:
@@ -150,8 +167,12 @@ enum ClinePassSubscriptionService {
             }
             credential = ambient
         }
-        if credential.isOAuth, let expiresAt = credential.expiresAt, expiresAt <= deps.now() {
-            throw FetchError.signInExpired
+        let now = deps.now()
+        let expiredAge = credential.expiresAt.flatMap {
+            $0 <= now ? CodexBankedResetPresentation.compactAge(of: $0, now: now) : nil
+        }
+        if credential.isOAuth, let expiredAge {
+            throw FetchError.signInExpired(age: expiredAge)
         }
 
         var request = URLRequest(url: usageURL)
@@ -174,7 +195,7 @@ enum ClinePassSubscriptionService {
         case 200:
             break
         case 401, 403:
-            throw credential.isOAuth ? FetchError.signInExpired : FetchError.authenticationRejected
+            throw credential.isOAuth ? FetchError.signInExpired(age: expiredAge) : FetchError.authenticationRejected
         case 429:
             throw FetchError.rateLimited
         case 500...599:

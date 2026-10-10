@@ -608,6 +608,7 @@
 "This credential predates a live CodeBurn quota adapter and is not treated as a connection." = "この認証情報はCodeBurnのリアルタイムクォータアダプターより前のものであり、接続としては扱われません。";
 "Quota adapter not available" = "クォータアダプター未対応";
 "Retrying" = "再試行中";
+"Cline login expired" = "Clineのログインの有効期限切れ";
 "%@ is catalogued, but CodeBurn cannot fetch its live quota yet." = "%@は登録されていますが、CodeBurnはまだそのリアルタイムクォータを取得できません。";
 "Live quota is available to Capacity Dock." = "リアルタイムのクォータを容量ドックで利用できます。";
 "Waiting for quota data." = "クォータデータを待機中です。";
