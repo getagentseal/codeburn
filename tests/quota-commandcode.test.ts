@@ -25,7 +25,7 @@ function jsonResponse(body: unknown, status = 200): Response {
 
 describe('Command Code quota decoding', () => {
   it('maps the 5-hour and weekly windows as used of cap, clamped', () => {
-    const quota = decodeCommandCodeCredits(creditsBody, 'individual-go-v1')
+    const quota = decodeCommandCodeCredits(creditsBody, { planId: 'individual-go-v1' })
     expect(quota?.connection).toBe('connected')
     expect(quota?.details).toEqual([
       { label: '5-hour', percent: 0.25, resetsAt: null },
@@ -34,6 +34,33 @@ describe('Command Code quota decoding', () => {
     expect(quota?.primary?.label).toBe('Weekly')
     expect(quota?.planLabel).toBe('Go')
     expect(quota?.notes).toEqual(['Credits left: $3.97 monthly'])
+  })
+
+  it('adds the monthly window from the plan price for an active known plan', () => {
+    const body = { ...creditsBody, windowLimits: { ...creditsBody.windowLimits, fiveHour: { used: 0, cap: 3, exceeded: false, resetAt: 0 } } }
+    const quota = decodeCommandCodeCredits(body, subscriptionBody.data)
+    expect(quota?.details.map(row => [row.label, row.resetsAt])).toEqual([
+      ['5-hour', null],
+      ['Weekly', '2026-10-10T17:24:09.551Z'],
+      ['Monthly', new Date('2026-11-01T10:38:29.000Z').toISOString()],
+    ])
+    expect(quota?.details[0]!.percent).toBe(0)
+    expect(quota?.details[1]!.percent).toBe(1)
+    expect(quota?.details[2]!.percent).toBeCloseTo(0.6029, 4)
+    expect(quota?.primary?.label).toBe('Weekly')
+  })
+
+  it('leaves out the monthly window for an unknown plan or an inactive subscription', () => {
+    const labels = (subscription: object) => decodeCommandCodeCredits(creditsBody, subscription)?.details.map(row => row.label)
+    expect(labels({ ...subscriptionBody.data, planId: 'individual-mystery' })).toEqual(['5-hour', 'Weekly'])
+    expect(labels({ ...subscriptionBody.data, planId: 'toString' })).toEqual(['5-hour', 'Weekly'])
+    expect(labels({ ...subscriptionBody.data, status: 'canceled' })).toEqual(['5-hour', 'Weekly'])
+    expect(labels({})).toEqual(['5-hour', 'Weekly'])
+  })
+
+  it('uses the larger of plan price and credits left as the pool', () => {
+    const body = { ...creditsBody, credits: { monthlyCredits: 12 } }
+    expect(decodeCommandCodeCredits(body, subscriptionBody.data)?.details[2]).toMatchObject({ label: 'Monthly', percent: 0 })
   })
 
   it('skips an unreadable window and rejects a body with none', () => {
@@ -70,6 +97,7 @@ describe('Command Code quota fetch', () => {
     })
     expect(result.quota.connection).toBe('connected')
     expect(result.quota.planLabel).toBe('Go')
+    expect(result.quota.details.map(row => row.label)).toEqual(['5-hour', 'Weekly', 'Monthly'])
     expect(seen.map(row => row.url).sort()).toEqual([
       'https://api.commandcode.ai/alpha/billing/credits',
       'https://api.commandcode.ai/alpha/billing/subscriptions',
@@ -87,6 +115,7 @@ describe('Command Code quota fetch', () => {
     })
     expect(result.quota.connection).toBe('connected')
     expect(result.quota.planLabel).toBeNull()
+    expect(result.quota.details.map(row => row.label)).toEqual(['5-hour', 'Weekly'])
   })
 
   it('maps HTTP failures', async () => {
