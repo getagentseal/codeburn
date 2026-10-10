@@ -50,19 +50,31 @@ jobs:
           echo "$APPSTORE_API_KEY_P8_BASE64" | base64 --decode > "$RUNNER_TEMP/notary.p8"
           # Keychain Access exports a legacy p12 (RC2-40, sha1 MAC, 1 iteration) that the
           # runner's `security import` rejects as a wrong password; rewrap it in a form it reads.
+          # electron-builder's own temporary keychain fails to unlock on this runner, so import
+          # into our keychain (as release-menubar.yml does) and let it find the identity there.
           umask 077
           openssl3="$(brew --prefix openssl@3)/bin/openssl"
-          base64 --decode <<< "$MACOS_CERT_P12_BASE64" > "$RUNNER_TEMP/cert-in.p12"
-          "$openssl3" pkcs12 -legacy -in "$RUNNER_TEMP/cert-in.p12" -passin env:MACOS_CERT_PASSWORD -nodes -out "$RUNNER_TEMP/cert.pem"
-          export csc_password="$(openssl rand -hex 24)"
-          echo "::add-mask::$csc_password"
-          "$openssl3" pkcs12 -export -legacy -in "$RUNNER_TEMP/cert.pem" -out "$RUNNER_TEMP/signing.p12" -passout env:csc_password \
+          cert="$RUNNER_TEMP/signing.p12"
+          keychain="$RUNNER_TEMP/codeburn-signing.keychain-db"
+          base64 --decode <<< "$MACOS_CERT_P12_BASE64" > "$cert.in"
+          "$openssl3" pkcs12 -legacy -in "$cert.in" -passin env:MACOS_CERT_PASSWORD -nodes -out "$cert.pem"
+          export cert_password="$(openssl rand -hex 24)"
+          echo "::add-mask::$cert_password"
+          "$openssl3" pkcs12 -export -legacy -in "$cert.pem" -out "$cert" -passout env:cert_password \
             -keypbe PBE-SHA1-3DES -certpbe PBE-SHA1-3DES -macalg sha1 -iter 2048
-          rm -f "$RUNNER_TEMP/cert-in.p12" "$RUNNER_TEMP/cert.pem"
-          {
-            echo "CSC_LINK=$RUNNER_TEMP/signing.p12"
-            echo "CSC_KEY_PASSWORD=$csc_password"
-          } >> "$GITHUB_ENV"
+          rm -f "$cert.in" "$cert.pem"
+          keychain_password="$(openssl rand -hex 24)"
+          echo "::add-mask::$keychain_password"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$cert" -k "$keychain" -P "$cert_password" -f pkcs12 -T /usr/bin/codesign -T /usr/bin/security
+          rm -f "$cert"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain" > /dev/null
+          # shellcheck disable=SC2046
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          security find-identity -v -p codesigning "$keychain" | grep -q 'Developer ID Application: .*(XRVP7P7F9M)' \
+            || { echo "::error::No Developer ID Application identity for team XRVP7P7F9M in MACOS_CERT_P12_BASE64."; exit 1; }
 
       - name: Build, sign and notarize
         working-directory: app
@@ -73,7 +85,7 @@ jobs:
         run: |
           npm run stage-cli
           npm run build
-          npx electron-builder --mac --publish never \
+          CSC_IDENTITY_AUTO_DISCOVERY=true npx electron-builder --mac --publish never \
             -c.mac.identity="Resham Joshi (XRVP7P7F9M)" \
             -c.mac.hardenedRuntime=true \
             -c.dmg.sign=true
@@ -102,7 +114,9 @@ jobs:
 
       - name: Remove notary key
         if: always()
-        run: rm -f "$RUNNER_TEMP/notary.p8" "$RUNNER_TEMP/signing.p12"
+        run: |
+          rm -f "$RUNNER_TEMP/notary.p8"
+          security delete-keychain "$RUNNER_TEMP/codeburn-signing.keychain-db" 2>/dev/null || true
 
       - name: Upload artifact
         uses: actions/upload-artifact@v6
