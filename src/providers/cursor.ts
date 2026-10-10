@@ -942,12 +942,13 @@ function parseBubbles(
   return { calls: results }
 }
 
+// Always the full lookback, never the requested range: the session cache keys
+// this parse on the DB fingerprint alone and serves it to every later range.
 function createParser(
   source: SessionSource,
   seenKeys: Set<string>,
-  dateRange?: DateRange,
 ): SessionParser {
-  const timeFloor = getCursorTimeFloor(dateRange)
+  const timeFloor = getCursorTimeFloor()
 
   return {
     async *parse(): AsyncGenerator<ParsedProviderCall> {
@@ -1085,8 +1086,8 @@ export function createCursorProvider(dbPathOverride?: string): Provider {
       return [...sources, ...imported]
     },
 
-    createSessionParser(source: SessionSource, seenKeys: Set<string>, dateRange?: DateRange): SessionParser {
-      return importSourceParser(source, seenKeys, 'cursor') ?? createParser(source, seenKeys, dateRange)
+    createSessionParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
+      return importSourceParser(source, seenKeys, 'cursor') ?? createParser(source, seenKeys)
     },
   }
 }

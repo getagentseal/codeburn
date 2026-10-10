@@ -435,7 +435,8 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // re-parse to keep the recorded session cost.
   crush: 'reported-cost-v1',
   // import-guess-est-v1: synced Auto rows with no dollar amount are estimated.
-  cursor: 'composer-anchored-crediting-v1-est-cost-import-guess-est-v1',
+  // full-lookback-v1: a cached parse could be cut at a narrow request's start.
+  cursor: 'composer-anchored-crediting-v1-est-cost-import-guess-est-v1-full-lookback-v1',
   // full-turn-accounting: every assistant message counts as a turn
   // (previously only the first after each user message survived), tool_use
   // inputs join the output text, and input tokens use the full user text
