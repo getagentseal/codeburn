@@ -194,7 +194,7 @@ function ClassicCompare({
           }}
         />
       </div>
-      {modelA && modelB && modelA !== modelB && (
+      {modelA && modelB && modelA !== modelB && modelRows.some(row => row.model === modelA) && modelRows.some(row => row.model === modelB) && (
         <CompareReport
           period={period}
           provider={provider}
@@ -432,11 +432,15 @@ function CohortCompare({
     })
   }, [facets.data])
 
+  // facets.data is masked to the current period/provider, so this keeps the
+  // previous selection from being requested before the effect above resets it
+  // (the CLI exits 1 on a model it cannot find).
+  const listed = (model: string | null) => !!model && !!facets.data?.models.some(row => row.model === model)
   const report = usePolled<CohortComparisonReport>(
     () => codeburn.getCompareCohort(period, provider, modelA ?? '', modelB ?? '', range ?? undefined, project ? [project] : undefined, category || undefined),
     [period, provider, modelA, modelB, range?.from, range?.to, project, category, refreshToken],
     {
-      enabled: ready && !!modelA && !!modelB && modelA !== modelB,
+      enabled: ready && listed(modelA) && listed(modelB) && modelA !== modelB,
       memoKey: reportMemoKey('cohort-v2', period, provider, range, JSON.stringify([modelA, modelB, project, category])),
     },
   )

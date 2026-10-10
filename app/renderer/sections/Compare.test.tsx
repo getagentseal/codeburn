@@ -3,6 +3,7 @@ import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { __resetPolledMemo } from '../hooks/usePolled'
 import type { CohortComparisonReport, CompareJsonReport, ModelStats } from '../lib/types'
 import { Compare } from './Compare'
 
@@ -160,6 +161,21 @@ describe('Compare', () => {
 
     expect(await screen.findByText('Compare uses the selected period, custom dates are not supported yet.')).toBeInTheDocument()
     expect(mocks.getCompareModels).toHaveBeenCalledWith('30days', 'all')
+  })
+
+  it('never requests the previous pair against a period whose models do not include it', async () => {
+    __resetPolledMemo()
+    const haiku = { ...modelA, model: 'Haiku 5' }
+    const gpt = { ...modelB, model: 'GPT-6' }
+    mocks.getCompareModels.mockImplementation(async period => period === 'today' ? [haiku, gpt] : [modelA, modelB])
+    mocks.getCompare.mockResolvedValue(report)
+    const { rerender } = render(<Compare period="30days" provider="all" />)
+    await waitFor(() => expect(mocks.getCompare).toHaveBeenCalledWith('30days', 'all', 'Opus 4.8', 'Sonnet 5'))
+
+    rerender(<Compare period="today" provider="all" />)
+    await waitFor(() => expect(mocks.getCompare).toHaveBeenCalledWith('today', 'all', 'Haiku 5', 'GPT-6'))
+    const stale = mocks.getCompare.mock.calls.filter(([period, , a, b]) => period === 'today' && (a === 'Opus 4.8' || b === 'Sonnet 5'))
+    expect(stale).toEqual([])
   })
 
   it('renders the need-two-models note without requesting a report', async () => {
@@ -332,6 +348,23 @@ describe('Compare cohorts mode', () => {
       filters: expect.objectContaining({ sessions: [{ provider: 'claude', sessionId: 's2' }] }),
       sessionId: 'claude\u0000/work/kit\u0000s2',
     })
+  })
+
+  it('never requests the previous pair against a period whose models do not include it', async () => {
+    __resetPolledMemo()
+    const haiku = { ...modelA, model: 'Haiku 5' }
+    const gpt = { ...modelB, model: 'GPT-6' }
+    mocks.getCompareCohortModels.mockImplementation(async period =>
+      period === 'today' ? { ...facets, models: [haiku, gpt] } : facets)
+    const user = userEvent.setup()
+    const { rerender } = render(<Compare period="30days" provider="all" />)
+    await user.click(await screen.findByRole('tab', { name: 'Cohorts' }))
+    await waitFor(() => expect(mocks.getCompareCohort).toHaveBeenCalledWith('30days', 'all', 'Opus 4.8', 'Sonnet 5', undefined, undefined, undefined))
+
+    rerender(<Compare period="today" provider="all" />)
+    await waitFor(() => expect(mocks.getCompareCohort).toHaveBeenCalledWith('today', 'all', 'Haiku 5', 'GPT-6', undefined, undefined, undefined))
+    const stale = mocks.getCompareCohort.mock.calls.filter(([period, , a, b]) => period === 'today' && (a === 'Opus 4.8' || b === 'Sonnet 5'))
+    expect(stale).toEqual([])
   })
 
   it('returns to the classic comparison unchanged', async () => {
