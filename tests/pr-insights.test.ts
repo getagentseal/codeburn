@@ -6,6 +6,7 @@ import { tmpdir } from 'os'
 import { parseAllSessions, clearSessionCache } from '../src/parser.js'
 import { loadPricing } from '../src/models.js'
 import { buildPrAttribution } from '../src/sessions-report.js'
+import { createHead, ghPrCommands, isPush, namedPr, pushes, rounds } from '../src/pr-signals.js'
 import type { ProjectSummary } from '../src/types.js'
 
 // One orchestrator session in the shape Claude Code writes it: pr-link entries,
@@ -87,7 +88,7 @@ async function writeTranscripts(): Promise<void> {
     asst('2026-10-10T07:00:05.000Z', [bash('git status')]),
     // #1694: pushed and opened here.
     user('2026-10-10T08:00:00.000Z', 'ship the tooltip fix'),
-    asst('2026-10-10T08:00:05.000Z', [bash('git push -u origin fix/tooltip && gh pr create --fill')]),
+    asst('2026-10-10T08:00:05.000Z', [bash('git push -u origin fix/tooltip && gh pr create -R getagentseal/codeburn --base main --head fix/tooltip --title "fix(menubar): tooltip" --body-file /tmp/b.md')]),
     prLink('2026-10-10T08:00:20.000Z', 1694),
     user('2026-10-10T08:29:00.000Z', 'get it reviewed'),
     asst('2026-10-10T08:29:30.000Z', [spawn(c('aR1694').spawnId, c('aR1694').description)]),
@@ -96,6 +97,9 @@ async function writeTranscripts(): Promise<void> {
     asst('2026-10-10T08:59:30.000Z', [spawn(c('aF1694').spawnId, c('aF1694').description)]),
     spawnResult('2026-10-10T09:10:00.000Z', c('aF1694').spawnId, 'aF1694'),
     user('2026-10-10T09:30:00.000Z', 'merge it'),
+    // A push naming the PR's head counts; a bare push from the top-level
+    // session (it may be in any checkout) does not.
+    asst('2026-10-10T09:30:01.000Z', [bash('git push origin fix/tooltip'), bash('cd ../other && git push')]),
     asst('2026-10-10T09:30:05.000Z', [bash('gh pr merge 1694 --squash --admin')]),
     // A stale pr-link for an old closed PR; nothing here names 24.
     user('2026-10-10T10:00:00.000Z', 'review the open contributor PRs'),
@@ -168,5 +172,74 @@ describe('PR dates and runs come from the attributed work, not the session', () 
     expect(row(1694).runs).toBe(3)
     expect(row(24).runs).toBe(2)
     expect(row(1729).runs).toBe(1)
+  })
+})
+
+describe('local PR signals', () => {
+  const turnCost = (from: string, to: string) => projects.flatMap(p => p.sessions).find(s => s.sessionId === PARENT)!
+    .turns.filter(t => t.timestamp >= from && t.timestamp < to).reduce((s, t) => s + t.assistantCalls.reduce((n, c) => n + c.costUSD, 0), 0)
+
+  it('reads open, follow-up rounds, review, merge and the cost split for a PR opened here', () => {
+    const r = buildPrAttribution(projects).rows.find(x => x.url === PR(1694))!
+    expect(r.openedAt).toBe('2026-10-10T08:00:05.000Z')
+    // The push in the create command itself is not a follow-up; the fix run's two
+    // pushes three minutes apart are one round, the push to fix/tooltip at 09:30
+    // a second.
+    expect(r.followUpPushes).toBe(3)
+    expect(r.followUpRounds).toBe(2)
+    expect(r.oneShot).toBe(false)
+    expect(r.reviewRuns).toEqual([{ kind: 'agent', label: 'general-purpose', model: 'Opus 4.8', costUSD: sessionCost('agent-aR1694'), at: '2026-10-10T08:31:00.000Z', evidence: 'reads-pr' }])
+    expect(r.reviewCostUSD).toBeCloseTo(sessionCost('agent-aR1694'), 12)
+    expect(r.mergedAt).toBe('2026-10-10T09:30:05.000Z')
+    expect(r.timeToMergeMs).toBe(90 * 60 * 1000)
+    expect(r.linkEvidence).toBe('explicit')
+    const { buildUSD, reviewUSD, fixesUSD } = r.costSplit
+    expect(buildUSD + reviewUSD + fixesUSD).toBeCloseTo(r.cost, 12)
+    expect(buildUSD).toBeCloseTo(turnCost('2026-10-10T08:00', '2026-10-10T08:30'), 12)
+    expect(fixesUSD).toBeCloseTo(sessionCost('agent-aF1694') + turnCost('2026-10-10T08:59', '2026-10-10T10:00'), 12)
+  })
+
+  it('never calls a PR one shot when its open was not seen, and flags a pr-link-only row', () => {
+    const rows = buildPrAttribution(projects).rows
+    const r24 = rows.find(x => x.url === PR(24))!
+    expect(r24.linkEvidence).toBe('pr-link-only')
+    expect(r24.openedAt).toBeNull()
+    expect(r24.oneShot).toBeNull()
+    // The multi-PR fix run folds here by carry but its push is not this PR's round.
+    expect(r24.followUpRounds).toBeNull()
+    expect(r24.reviewRuns).toEqual([])
+    expect(r24.mergedAt).toBeNull()
+    expect(r24.timeToMergeMs).toBeNull()
+    expect(r24.costSplit).toEqual({ buildUSD: r24.cost, reviewUSD: 0, fixesUSD: 0 })
+    const r1729 = rows.find(x => x.url === PR(1729))!
+    expect(r1729.oneShot).toBeNull()
+    expect(r1729.followUpRounds).toBeNull()
+    expect(r1729.linkEvidence).toBe('explicit')
+    expect(r1729.reviewRuns.map(x => x.evidence)).toEqual(['reads-pr'])
+    expect(r1729.reviewCostUSD).toBeCloseTo(r1729.cost, 12)
+  })
+})
+
+describe('pr-signals command reading', () => {
+  it('reads the PR a gh pr command names, ignoring quoted text', () => {
+    expect(ghPrCommands('cd /x && gh pr review 1483 --request-changes -b "fix the 12 nits" && gh pr merge -R getagentseal/codeburn 1490 --squash'))
+      .toMatchObject([{ verb: 'review', number: 1483 }, { verb: 'merge', number: 1490, repo: 'getagentseal/codeburn' }])
+    expect(ghPrCommands('gh pr merge https://github.com/o/r/pull/7 --admin')).toMatchObject([{ verb: 'merge', number: 7, repo: 'o/r' }])
+    expect(ghPrCommands('gh pr list --limit 50')[0]!.number).toBeUndefined()
+    expect(isPush('git -C /tmp/wt push --force-with-lease')).toBe(true)
+    expect(isPush('git stash push -m wip')).toBe(false)
+    expect(pushes('git push -q origin feat/x 2>&1 | tail -2; git push contributor HEAD:refs/heads/fix/y')).toEqual([['feat/x'], ['fix/y']])
+    expect(pushes('git push -q origin --delete feat/old')).toEqual([])
+    // Text being written (a script, a test) is not a command that ran.
+    expect(ghPrCommands("asst('x', [bash('gh pr merge 1694 --squash')])")).toEqual([])
+    expect(createHead(ghPrCommands('gh pr create -R o/r --head "$br" --title "$t"')[0]!.args)).toBeUndefined()
+    expect(rounds([0, 5 * 60_000, 9 * 60_000, 30 * 60_000])).toBe(2)
+  })
+
+  it('names one PR only from a PR prefix or URL', () => {
+    expect(namedPr('Review PR 1729 Claude quota dir')).toEqual({ number: 1729 })
+    expect(namedPr('Apply review fixes to PRs 1689-1692')).toBe('multi')
+    expect(namedPr('Review core library worker #22')).toBeNull()
+    expect(namedPr('Scope-check PR 1478 and PR 1476')).toBe('multi')
   })
 })
