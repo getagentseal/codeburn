@@ -37,7 +37,9 @@ import { DAILY_CACHE_VERSION } from './daily-cache.js'
 // v11: Copilot OTel trace-level tool/skill/bash metadata is now attributed
 // once per trace, so older snapshots can carry per-span-duplicated skill/tool
 // turns and cost for otherwise identical period queries.
-export const STATUS_SNAPSHOT_RENDER_VERSION = 11
+// v12: pullRequests rows carry carriedUSD, runList, state and followUpAt, and
+// push evidence moves spend between rows; an older snapshot shows the old card.
+export const STATUS_SNAPSHOT_RENDER_VERSION = 12
 
 /// The semantic key recorded on every status snapshot. A snapshot whose stored
 /// key differs (an older render revision, or a different daily-cache version)

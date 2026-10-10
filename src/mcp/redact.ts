@@ -107,6 +107,8 @@ export function redactProjectNames(payload: MenubarPayload, includeNames: boolea
                 ...row,
                 url: prPseudonym(row.url),
                 label: prPseudonym(row.url),
+                // Run descriptions are free prompt text (branch names, URLs).
+                runList: row.runList?.map(run => ({ ...run, description: null })),
               })),
             },
           }

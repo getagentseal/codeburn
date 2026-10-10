@@ -113,16 +113,18 @@ export function reviewVerdict(args: string): 'approve' | 'request-changes' | 'co
 
 export const FOLLOW_UP_GAP_MS = 10 * 60 * 1000
 
-/// Pushes more than 10 minutes apart start a new follow-up round.
-export function rounds(pushMs: number[]): number {
-  let n = 0
+/// Start of each follow-up round: pushes more than 10 minutes apart start a new one.
+export function roundStarts(pushMs: number[]): number[] {
+  const out: number[] = []
   let last = -Infinity
   for (const ms of [...pushMs].sort((a, b) => a - b)) {
-    if (ms - last > FOLLOW_UP_GAP_MS) n++
+    if (ms - last > FOLLOW_UP_GAP_MS) out.push(ms)
     last = ms
   }
-  return n
+  return out
 }
+
+export const rounds = (pushMs: number[]): number => roundStarts(pushMs).length
 
 export function callCommands(call: { toolSequence?: Array<Array<{ command?: string }>> }): string[] {
   const out: string[] = []
