@@ -32,16 +32,16 @@
 <p align="center"><sub>To keep it: <code>npm install -g codeburn</code> or <code>brew install codeburn</code>. Needs Node.js 22.13+.</sub></p>
 
 <p align="center">
-  <a href="https://github.com/getagentseal/codeburn/releases/download/desktop-v0.9.25/CodeBurn-0.9.25-arm64.dmg"><img src="https://img.shields.io/badge/macOS-Apple_Silicon-F97316?logo=apple&logoColor=white" alt="Download CodeBurn for macOS (Apple Silicon)" /></a>
-  <a href="https://github.com/getagentseal/codeburn/releases/download/desktop-v0.9.25/CodeBurn-0.9.25.dmg"><img src="https://img.shields.io/badge/macOS-Intel-F97316?logo=apple&logoColor=white" alt="Download CodeBurn for macOS (Intel)" /></a>
+  <a href="https://github.com/getagentseal/codeburn/releases/download/desktop-v0.9.26/CodeBurn-0.9.26-arm64.dmg"><img src="https://img.shields.io/badge/macOS-Apple_Silicon-F97316?logo=apple&logoColor=white" alt="Download CodeBurn for macOS (Apple Silicon)" /></a>
+  <a href="https://github.com/getagentseal/codeburn/releases/download/desktop-v0.9.26/CodeBurn-0.9.26.dmg"><img src="https://img.shields.io/badge/macOS-Intel-F97316?logo=apple&logoColor=white" alt="Download CodeBurn for macOS (Intel)" /></a>
   <a href="https://apps.microsoft.com/detail/9P0R4ZL5XMB8"><img src="https://img.shields.io/badge/Windows-Microsoft_Store-F97316?logo=microsoft&logoColor=white" alt="Get CodeBurn from the Microsoft Store" /></a>
-  <a href="https://github.com/getagentseal/codeburn/releases/download/desktop-v0.9.25/CodeBurn-Setup-0.9.25.exe"><img src="https://img.shields.io/badge/Windows-.exe-F97316?logo=windows&logoColor=white" alt="Download the CodeBurn Windows installer (.exe)" /></a>
-  <a href="https://github.com/getagentseal/codeburn/releases/download/desktop-v0.9.25/codeburn-desktop_0.9.25_amd64.deb"><img src="https://img.shields.io/badge/Linux-.deb-F97316?logo=debian&logoColor=white" alt="Download CodeBurn for Linux (.deb)" /></a>
-  <a href="https://github.com/getagentseal/codeburn/releases/download/desktop-v0.9.25/codeburn-desktop-0.9.25.x86_64.rpm"><img src="https://img.shields.io/badge/Linux-.rpm-F97316?logo=redhat&logoColor=white" alt="Download CodeBurn for Linux (.rpm)" /></a>
-  <a href="https://github.com/getagentseal/codeburn/releases/download/desktop-v0.9.25/CodeBurn-0.9.25.AppImage"><img src="https://img.shields.io/badge/Linux-AppImage-F97316?logo=linux&logoColor=white" alt="Download CodeBurn for Linux (AppImage)" /></a>
+  <a href="https://github.com/getagentseal/codeburn/releases/download/desktop-v0.9.26/CodeBurn-Setup-0.9.26.exe"><img src="https://img.shields.io/badge/Windows-.exe-F97316?logo=windows&logoColor=white" alt="Download the CodeBurn Windows installer (.exe)" /></a>
+  <a href="https://github.com/getagentseal/codeburn/releases/download/desktop-v0.9.26/codeburn-desktop_0.9.26_amd64.deb"><img src="https://img.shields.io/badge/Linux-.deb-F97316?logo=debian&logoColor=white" alt="Download CodeBurn for Linux (.deb)" /></a>
+  <a href="https://github.com/getagentseal/codeburn/releases/download/desktop-v0.9.26/codeburn-desktop-0.9.26.x86_64.rpm"><img src="https://img.shields.io/badge/Linux-.rpm-F97316?logo=redhat&logoColor=white" alt="Download CodeBurn for Linux (.rpm)" /></a>
+  <a href="https://github.com/getagentseal/codeburn/releases/download/desktop-v0.9.26/CodeBurn-0.9.26.AppImage"><img src="https://img.shields.io/badge/Linux-AppImage-F97316?logo=linux&logoColor=white" alt="Download CodeBurn for Linux (AppImage)" /></a>
 </p>
 
-<p align="center"><sub>Desktop app 0.9.25. The macOS builds are signed with a Developer ID and notarized by Apple.</sub></p>
+<p align="center"><sub>Desktop app 0.9.26. The macOS builds are signed with a Developer ID and notarized by Apple.</sub></p>
 
 ## The problem
 
@@ -142,7 +142,7 @@ codeburn menubar
 
 On Linux the same view lives in the top panel, as a GNOME Shell extension.
 
-The desktop app runs on Windows. Install it from the [Microsoft Store](https://apps.microsoft.com/detail/9P0R4ZL5XMB8), which is the recommended way and keeps itself up to date, or take the [direct installer](https://github.com/getagentseal/codeburn/releases/download/desktop-v0.9.25/CodeBurn-Setup-0.9.25.exe). The Windows tray app shows today's cost next to the clock, the same way the macOS menu bar does, and clicking it opens the same popover. The Capacity Dock is there too, from the tray menu or the app's Plugins page. If you run your agents inside WSL, CodeBurn reads the distro's home directory as well as your Windows profile, so sessions you ran in Linux are counted without you installing anything twice.
+The desktop app runs on Windows. Install it from the [Microsoft Store](https://apps.microsoft.com/detail/9P0R4ZL5XMB8), which is the recommended way and keeps itself up to date, or take the [direct installer](https://github.com/getagentseal/codeburn/releases/download/desktop-v0.9.26/CodeBurn-Setup-0.9.26.exe). The Windows tray app shows today's cost next to the clock, the same way the macOS menu bar does, and clicking it opens the same popover. The Capacity Dock is there too, from the tray menu or the app's Plugins page. If you run your agents inside WSL, CodeBurn reads the distro's home directory as well as your Windows profile, so sessions you ran in Linux are counted without you installing anything twice.
 
 Setup for all three platforms, including WSL, is in [Menu bar and tray](docs/menubar.md).
 
