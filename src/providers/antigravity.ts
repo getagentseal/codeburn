@@ -50,7 +50,7 @@ function conversationRoots(): readonly AntigravityConversationRoot[] {
     },
   ]
 }
-const CACHE_VERSION = 8
+const CACHE_VERSION = 9
 export const ANTIGRAVITY_CACHE_VERSION = CACHE_VERSION
 export const ANTIGRAVITY_LEGACY_CACHE_FILE = 'antigravity-results.json'
 export function antigravityCacheFileName(version = CACHE_VERSION): string {
@@ -320,7 +320,8 @@ function parseAntigravityServerCandidates(lines: string[]): ServerCandidate[] {
 // resolved at all (see antigravitySqliteModel).
 const MODEL_PLACEHOLDER_PATTERN = /^MODEL_PLACEHOLDER_/
 
-function dropPlaceholderModelId(model: string): string {
+export function dropPlaceholderModelId(model: string | undefined): string {
+  if (!model) return 'unknown'
   return MODEL_PLACEHOLDER_PATTERN.test(model) ? 'unknown' : model
 }
 
@@ -684,9 +685,12 @@ async function getModelMap(server: ServerInfo): Promise<ModelMap> {
 // Strip Antigravity-specific suffixes so the pricing DB can match
 const PRICING_ALIASES: Record<string, string> = {
   'gemini-pro': 'gemini-3.1-pro',
+  'gemini-3-flash-a': 'gemini-3-flash-preview',
+  'gemini-3-flash-d': 'gemini-3-flash-preview',
 }
 
-function normalizePricingModel(model: string): string {
+export function normalizePricingModel(model: string | undefined): string {
+  if (!model) return 'unknown'
   const stripped = model.replace(/-(high|medium|low|agent)$/, '')
   return PRICING_ALIASES[stripped] ?? stripped
 }
@@ -819,6 +823,9 @@ const PLACEHOLDER_MODELS: Record<string, string> = {
   MODEL_PLACEHOLDER_M36: 'gemini-3.1-pro-low',
   MODEL_PLACEHOLDER_M84: 'gemini-3.5-flash-high',
   MODEL_PLACEHOLDER_M18: 'gemini-3-flash',
+  MODEL_PLACEHOLDER_M318: 'gemini-3.8-flash-high',
+  MODEL_PLACEHOLDER_M319: 'gemini-3.8-flash-medium',
+  MODEL_PLACEHOLDER_M320: 'gemini-3.8-flash-low',
   MODEL_PLACEHOLDER_M35: 'claude-sonnet-4-6',
   MODEL_PLACEHOLDER_M26: 'claude-opus-4-6-thinking',
 }
@@ -1185,7 +1192,7 @@ export function antigravityCascadeIdFromPath(path: string): string {
   return basename(path).replace(/\.(pb|db)$/i, '')
 }
 
-function buildCallsFromGeneratorMetadata(
+export function buildCallsFromGeneratorMetadata(
   cascadeId: string,
   metadata: GeneratorMetadata[],
   modelMap: ModelMap,
@@ -1209,7 +1216,8 @@ function buildCallsFromGeneratorMetadata(
     const responseId = usage.responseId || String(i)
     const dedupKey = `antigravity:${cascadeId}:${responseId}`
 
-    const model = dropPlaceholderModelId(modelMap[usage.model] ?? usage.model)
+    const rawModel = usage.model || entry.chatModel?.model || ''
+    const model = dropPlaceholderModelId(modelMap[rawModel] ?? rawModel)
     const pricingModel = normalizePricingModel(model)
     const timestamp = entry.chatModel?.chatStartMetadata?.createdAt ?? ''
     const costUSD = calculateCost(pricingModel, inputTokens, responseTokens + thinkingTokens, cacheWriteTokens, cacheReadTokens, 0, 'standard', 0, 'antigravity')
@@ -1739,6 +1747,10 @@ const modelDisplayNames: Record<string, string> = {
   'Gemini 3.5 Flash (High)': 'Gemini 3.5 Flash',
   'Gemini 3.5 Flash (Medium)': 'Gemini 3.5 Flash',
   'Gemini 3.5 Flash (Low)': 'Gemini 3.5 Flash',
+  'gemini-3.8-flash': 'Gemini 3.8 Flash',
+  'gemini-3.8-flash-high': 'Gemini 3.8 Flash',
+  'gemini-3.8-flash-medium': 'Gemini 3.8 Flash',
+  'gemini-3.8-flash-low': 'Gemini 3.8 Flash',
   'gemini-3.1-flash-image': 'Gemini 3.1 Flash',
   'gemini-3.1-flash-lite': 'Gemini 3.1 Flash Lite',
   'claude-opus-4-6-thinking': 'Opus 4.6',

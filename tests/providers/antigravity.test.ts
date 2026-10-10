@@ -21,6 +21,9 @@ import {
   normalizeAntigravityToolCall,
   antigravityCacheFileName,
   flushAntigravityCache,
+  dropPlaceholderModelId,
+  normalizePricingModel,
+  buildCallsFromGeneratorMetadata,
 } from '../../src/providers/antigravity.js'
 import type { ParsedProviderCall } from '../../src/providers/types.js'
 import { classifyTurn } from '../../src/classifier.js'
@@ -677,6 +680,44 @@ describe('antigravity provider helpers', () => {
     })
   })
 
+  it('resolves the Gemini 3.8 Flash placeholders from standalone app gen_metadata', async () => {
+    if (!isSqliteAvailable()) return
+
+    await withTempAntigravityHome('codeburn-antigravity-38-flash-', async (tempHome) => {
+      const fixture = JSON.parse(await readFile(
+        new URL('../fixtures/antigravity-standalone/gen-metadata.json', import.meta.url),
+        'utf-8',
+      )) as CurrentCliFixture
+      const conversationsDir = join(tempHome, '.gemini', 'antigravity', 'conversations')
+      await mkdir(conversationsDir, { recursive: true })
+      // Swap row 0's model_enum M16 for a three-digit enum; the chatModel and pair lengths grow by one byte.
+      const withEnum = (enumNumber: string) => fixture.rows[0]!.hex
+        .replace('0a8103', '0a8203')
+        .replace(
+          'a201230a0a6d6f64656c5f656e756d12154d4f44454c5f504c414345484f4c4445525f4d3136',
+          'a201240a0a6d6f64656c5f656e756d12164d4f44454c5f504c414345484f4c4445525f4d' + Buffer.from(enumNumber).toString('hex'),
+        )
+
+      for (const [enumNumber, model] of [['318', 'gemini-3.8-flash-high'], ['319', 'gemini-3.8-flash-medium'], ['320', 'gemini-3.8-flash-low']]) {
+        const dbPath = join(conversationsDir, `fixture-m${enumNumber}.db`)
+        createCurrentAntigravityCliDb(dbPath, { conversationId: `fixture-m${enumNumber}`, rows: [{ idx: 0, hex: withEnum(enumNumber!) }] })
+
+        const calls = await collectAntigravityCalls({ path: dbPath, project: 'antigravity', provider: 'antigravity' })
+        expect(calls).toHaveLength(1)
+        const call = calls[0]!
+        expect(call.model).toBe(model)
+        expect(call.costIsEstimated).toBe(true)
+        expect(createAntigravityProvider().modelDisplayName(call.model)).toBe('Gemini 3.8 Flash')
+        // gemini-3.8-flash: $0.75/M input, $3.75/M output (thinking included), $0.075/M cache read.
+        expect(call.inputTokens).toBeGreaterThan(0)
+        expect(call.costUSD).toBeCloseTo(
+          call.inputTokens * 0.75e-6 + (call.outputTokens + call.reasoningTokens) * 3.75e-6 + call.cacheReadInputTokens * 0.075e-6,
+          12,
+        )
+      }
+    })
+  })
+
   it('dates standalone rows without created_at from their first step', async () => {
     if (!isSqliteAvailable()) return
 
@@ -756,6 +797,63 @@ describe('antigravity provider helpers', () => {
       expect(current.cascades['fixture-pb'].calls).toHaveLength(1)
       expect(shouldReparseAntigravitySource(pbPath, 1)).toBe(true)
     })
+  })
+
+  it('safely drops placeholder model IDs and falls back to unknown on empty or undefined inputs', () => {
+    expect(dropPlaceholderModelId(undefined)).toBe('unknown')
+    expect(dropPlaceholderModelId('')).toBe('unknown')
+    expect(dropPlaceholderModelId('MODEL_PLACEHOLDER_M16')).toBe('unknown')
+    expect(dropPlaceholderModelId('MODEL_PLACEHOLDER_UNKNOWN')).toBe('unknown')
+    expect(dropPlaceholderModelId('gemini-3.1-pro-high')).toBe('gemini-3.1-pro-high')
+  })
+
+  it('normalizes pricing models defensively, mapping truncated suffixes and pricing aliases', () => {
+    expect(normalizePricingModel(undefined)).toBe('unknown')
+    expect(normalizePricingModel('')).toBe('unknown')
+    expect(normalizePricingModel('gemini-pro')).toBe('gemini-3.1-pro')
+    expect(normalizePricingModel('gemini-pro-agent')).toBe('gemini-3.1-pro')
+    expect(normalizePricingModel('gemini-3-flash-a')).toBe('gemini-3-flash-preview')
+    expect(normalizePricingModel('gemini-3-flash-d')).toBe('gemini-3-flash-preview')
+    expect(normalizePricingModel('gemini-3.8-flash-high')).toBe('gemini-3.8-flash')
+    expect(normalizePricingModel('gemini-3.8-flash-low')).toBe('gemini-3.8-flash')
+  })
+
+  it('builds calls from generator metadata with fallback to chatModel.model when usage.model is omitted', () => {
+    const metadata = [
+      {
+        chatModel: {
+          model: 'MODEL_PLACEHOLDER_M8',
+          chatStartMetadata: { createdAt: '2025-12-01T10:00:00.000Z' },
+          usage: {
+            // usage.model is omitted/undefined in legacy Language Server RPC
+            inputTokens: '150',
+            outputTokens: '45',
+            responseOutputTokens: '45',
+          },
+        },
+      },
+      {
+        chatModel: {
+          // both usage.model and chatModel.model are omitted
+          chatStartMetadata: { createdAt: '2025-12-01T10:05:00.000Z' },
+          usage: {
+            inputTokens: '100',
+            outputTokens: '20',
+            responseOutputTokens: '20',
+          },
+        },
+      },
+    ]
+
+    const modelMap = {
+      MODEL_PLACEHOLDER_M8: 'gemini-pro',
+    }
+
+    const calls = buildCallsFromGeneratorMetadata('test-cascade', metadata, modelMap)
+    expect(calls).toHaveLength(2)
+    expect(calls[0]!.model).toBe('gemini-pro')
+    expect(calls[0]!.costUSD).toBeGreaterThan(0)
+    expect(calls[1]!.model).toBe('unknown')
   })
 
   async function withTempAntigravityHome(prefix: string, fn: (tempHome: string) => Promise<void>): Promise<void> {

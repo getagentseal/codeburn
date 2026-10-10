@@ -614,7 +614,10 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // cache-read-v1-est-cost: gen_metadata and RPC usage now carry cache-read
   // tokens, fields 9/10 read as thinking/response (they were swapped), and
   // placeholder-only models are priced and flagged costIsEstimated.
-  antigravity: 'worktree-project-grouping-v7-cache-read-v1-est-cost',
+  // model-fallback-v1: gen_metadata without usage.model falls back to
+  // chatModel.model instead of dropping the session, Gemini 3.8 Flash
+  // placeholders resolve, and Gemini 3 Flash -a/-d rows are priced.
+  antigravity: 'worktree-project-grouping-v7-cache-read-v1-est-cost-model-fallback-v1',
   // pr-attribution-v1: the parser now reads the `message`/`part` tables for
   // per-turn user prompt text and the GitHub PR URLs it references. Cached
   // ZCode sessions hold empty userMessage turns and no session prLinks, so

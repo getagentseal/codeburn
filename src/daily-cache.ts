@@ -353,7 +353,11 @@ import type { DateRange, ProjectSummary } from './types.js'
 // v73: cursor-agent skips agent transcripts of Cursor IDE chats, which the
 // cursor provider already counts from the IDE database. Those calls leave
 // cursor-agent, so it joins PENDING_REDERIVE_PROVIDER_VERSIONS at 73.
-export const DAILY_CACHE_VERSION = 73
+// v74: Antigravity sessions whose gen_metadata lacks usage.model are parsed
+// instead of dropped, Gemini 3.8 Flash placeholders get their own ids and
+// Gemini 3 Flash -a/-d rows are priced. Calls and cost only rise, so no
+// PENDING_REDERIVE_PROVIDER_VERSIONS entry is needed.
+export const DAILY_CACHE_VERSION = 74
 const MIN_SUPPORTED_VERSION = 28
 
 /// Providers whose per-day CALL COUNT means something different at
