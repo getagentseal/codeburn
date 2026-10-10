@@ -255,4 +255,12 @@ describe('host device flow', () => {
     expect(summary.perDevice[0]).toMatchObject({ cacheCreateTokens: 7, cacheReadTokens: 42 })
     expect(summary.combined).toMatchObject({ cacheCreateTokens: 7, cacheReadTokens: 42 })
   })
+
+  it('groups thousands in the integer part of costs only', () => {
+    const device = (id: string, cost: number): DeviceUsage => ({ id, name: id, local: id === 'a', payload: { current: { cost, calls: 1, sessions: 1, inputTokens: 1, outputTokens: 1 } } })
+    const text = renderDevices([device('a', 0.0028), device('b', 1234567)])
+    expect(text).toContain('$0.0028')
+    expect(text).not.toContain('$0.0,028')
+    expect(text).toContain('$1,234,567.00')
+  })
 })

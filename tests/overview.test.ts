@@ -390,4 +390,15 @@ describe('renderOverview #1260 residuals', () => {
     expect(top).toContain('$1.00')
     expect(top).not.toContain('$11.00')
   })
+
+  it('groups thousands in the integer part only', () => {
+    const render = (cost: number) => renderOverview([makeProject({
+      project: 'p', projectPath: '/Users/test/p', cost, calls: 1, model: 'claude-opus-4-8', provider: 'claude',
+      tokens: { input: 1, output: 1, cacheR: 0, cacheW: 0 },
+    })], { label: 'June 2026', color: false })
+    expect(render(0.0028)).toContain('$0.0028')
+    expect(render(0.0028)).not.toContain('$0.0,028')
+    expect(render(1234.5678)).toContain('$1,234.57')
+    expect(render(1234567)).toContain('$1,234,567.00')
+  })
 })

@@ -21,7 +21,7 @@ import { folderNameOriginKey, isTemporaryProjectPath, linkedOriginKey, originRep
 // abbreviate; here we show full, comma-grouped numbers so the tables read like
 // a precise statement. Aggregation uses raw numbers; these only affect render.
 function formatCost(usd: number): string {
-  return baseCost(usd).replace(/(\d)(?=(\d{3})+(\.|$))/g, '$1,')
+  return baseCost(usd).replace(/(?<!\.\d*)(\d)(?=(\d{3})+(\.|$))/g, '$1,')
 }
 function formatDisplayCost(amount: number): string {
   const { rate } = getCurrency()
