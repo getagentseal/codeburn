@@ -861,4 +861,15 @@ describe('OpenClaw state directory discovery', () => {
     homeResolver.throws = true
     expect((await createOpenClawProvider().probeRoots!())[0].path).toBe(join(process.cwd(), '.openclaw', 'agents'))
   })
+
+  it.each(['~', '~/service', '~\\service'])('falls back to cwd when OPENCLAW_HOME %j has no home to expand', async value => {
+    vi.stubEnv('HOME', '')
+    vi.stubEnv('USERPROFILE', '')
+    vi.stubEnv('OPENCLAW_HOME', value)
+    homeResolver.throws = true
+    const provider = createOpenClawProvider()
+    expect((await provider.probeRoots!())[0].path).toBe(join(process.cwd(), '.openclaw', 'agents'))
+    vi.stubEnv('OPENCLAW_STATE_DIR', '~/relocated')
+    expect((await provider.probeRoots!())[0].path).toBe(join(process.cwd(), 'relocated', 'agents'))
+  })
 })

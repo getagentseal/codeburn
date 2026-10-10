@@ -58,7 +58,7 @@ describe('OpenClaw discovery cache invalidation', () => {
     }
   })
 
-  it('backfills relocated history from a finalized v51 daily cache and retains archived usage', async () => {
+  it.each([51, 73])('backfills relocated history from a finalized v%i daily cache and retains archived usage', async version => {
     const root = await mkdtemp(join(tmpdir(), 'openclaw-daily-backfill-'))
     try {
       const cache = join(root, 'cache')
@@ -80,8 +80,8 @@ describe('OpenClaw discovery cache invalidation', () => {
         call.costUSD = 0.02
       }
       await mkdir(cache, { recursive: true })
-      await writeFile(join(cache, 'daily-cache.v51.json'), JSON.stringify({
-        version: 51, savingsConfigHash: '', tzKey: currentTzKey(),
+      await writeFile(join(cache, `daily-cache.v${version}.json`), JSON.stringify({
+        version, savingsConfigHash: '', tzKey: currentTzKey(),
         lastComputedDate: toDateString(new Date(Date.now() - 86400000)),
         days: aggregateProjectsIntoDays(archived), complete: true, watermarkTrusted: true,
       }))
