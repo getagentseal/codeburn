@@ -9,6 +9,7 @@ import { acquireCacheRefreshLock, releaseOwnedRefreshLocksForExit } from './cach
 import { parseBillingMode, type BillingMode } from './models.js'
 import type { ToolCall } from './types.js'
 import { isWslUncPath } from './wsl.js'
+import { getOpenClawDirs } from './openclaw-paths.js'
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -1035,6 +1036,10 @@ export function computeEnvFingerprint(provider: string): string {
   const parts = vars.map(v => `${v}=${process.env[v] ?? ''}`)
   const parseVersion = PROVIDER_PARSE_VERSIONS[provider]
   if (parseVersion) parts.push(`parser=${parseVersion}`)
+  // Relative overrides and the no-home fallback resolve from cwd. Hash the
+  // actual roots so changing cwd invalidates OpenClaw without invalidating
+  // absolute-root installations on every launch from another project.
+  if (provider === 'openclaw') parts.push(`roots=${JSON.stringify(getOpenClawDirs())}`)
   return createHash('sha256').update(parts.join('\0')).digest('hex').slice(0, 16)
 }
 

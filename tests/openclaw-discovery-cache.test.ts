@@ -58,17 +58,26 @@ describe('OpenClaw discovery cache invalidation', () => {
     }
   })
 
-  it('refreshes finalized history after a same-version state-root change without losing archived usage', async () => {
+  it.each(['OPENCLAW_STATE_DIR', 'OPENCLAW_HOME', 'cwd'])('refreshes finalized history after a same-version root change (%s) without losing archived usage', async rootSetting => {
     const root = await mkdtemp(join(tmpdir(), 'openclaw-finalized-root-'))
+    let cwd: ReturnType<typeof vi.spyOn> | undefined
     try {
       vi.stubEnv('CODEBURN_CACHE_DIR', join(root, 'cache'))
       const first = join(root, 'first')
       const second = join(root, 'second')
       const timestamp = new Date(Date.now() - 30 * 86400000).toISOString()
       const date = toDateString(new Date(timestamp))
-      await seed(first, 'first', 100, timestamp)
-      await seed(second, 'second', 200, timestamp)
-      vi.stubEnv('OPENCLAW_STATE_DIR', first)
+      const state = (base: string) => rootSetting === 'OPENCLAW_HOME' ? join(base, '.openclaw') : rootSetting === 'cwd' ? join(base, 'relative-state') : base
+      await seed(state(first), 'first', 100, timestamp)
+      await seed(state(second), 'second', 200, timestamp)
+      const selectRoot = (base: string) => {
+        if (rootSetting === 'cwd') {
+          vi.stubEnv('OPENCLAW_STATE_DIR', 'relative-state')
+          if (!cwd) cwd = vi.spyOn(process, 'cwd')
+          cwd.mockReturnValue(base)
+        } else vi.stubEnv(rootSetting, base)
+      }
+      selectRoot(first)
       let includeArchivedUsage = true
       const parse = async () => {
         const projects = await parseAllSessions(undefined, 'openclaw')
@@ -86,8 +95,11 @@ describe('OpenClaw discovery cache invalidation', () => {
       expect(initial.days.find(day => day.date === date)).toMatchObject({ calls: 2, inputTokens: 150 })
 
       includeArchivedUsage = false
-      vi.stubEnv('OPENCLAW_STATE_DIR', second)
+      selectRoot(second)
       clearSessionCache()
+      const partial = await ensureCacheHydrated(parse, aggregateProjectsIntoDays, '', () => false)
+      expect(partial.complete).toBe(false)
+      expect(partial.days.find(day => day.date === date)).toMatchObject({ calls: 2, inputTokens: 150 })
       const refreshed = await ensureCacheHydrated(parse, aggregateProjectsIntoDays)
       const day = refreshed.days.find(day => day.date === date)!
       expect(day).toMatchObject({ calls: 2, inputTokens: 250, outputTokens: 40 })
@@ -97,6 +109,7 @@ describe('OpenClaw discovery cache invalidation', () => {
       await ensureCacheHydrated(warmParse, aggregateProjectsIntoDays)
       expect(warmParse).not.toHaveBeenCalled()
     } finally {
+      cwd?.mockRestore()
       clearSessionCache()
       await rm(root, { recursive: true, force: true })
     }

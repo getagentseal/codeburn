@@ -49,7 +49,10 @@ Parsed sessions use the shared session cache. `OPENCLAW_STATE_DIR`,
 the selected roots invalidates that provider's entries. The `state-dir-v1` parser
 revision and daily cache v74 backfill
 surviving history that earlier versions missed. Archived daily totals continue to
-be carried forward when their source logs are unavailable.
+be carried forward when their source logs are unavailable. The daily cache also
+records OpenClaw's discovery fingerprint after a complete backfill. Changing
+roots revisits finalized days, while an interrupted parse retains the previous
+fingerprint and retries the backfill on the next hydration.
 
 ## Deduplication
 
