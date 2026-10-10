@@ -46,6 +46,16 @@ enum ClinePassSubscriptionService {
             return nil
         }
 
+        /// The same guidance for where a Retry button is on screen.
+        var retryMessage: String? {
+            guard case let .signInExpired(age) = self else { return nil }
+            return "\(expiredPrefix(age)) Send a message in Cline or run `cline auth cline`, then press Retry."
+        }
+
+        private func expiredPrefix(_ age: String?) -> String {
+            "Cline login expired\(age.map { " \($0)" } ?? "")."
+        }
+
         var errorDescription: String? {
             switch self {
             case .noCredentials:
@@ -53,8 +63,7 @@ enum ClinePassSubscriptionService {
             case .authenticationRejected:
                 return "ClinePass rejected this API key."
             case let .signInExpired(age):
-                let ago = age.map { " \($0)" } ?? ""
-                return "Cline login expired\(ago). Send a message in Cline or run `cline auth cline`, then press Retry."
+                return "\(expiredPrefix(age)) Send a message in Cline or run `cline auth cline`; CodeBurn picks up the new login on its next refresh."
             case .rateLimited:
                 return "ClinePass rate-limited the quota request."
             case .providerUnavailable:

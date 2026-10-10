@@ -2536,8 +2536,13 @@ final class AppStore {
             guard capacityDockProviderRefreshGenerations[provider.id, default: 0] == generation else {
                 return
             }
-            capacityDockProviderErrors[provider.id] = sanitizeForUI(error.localizedDescription)
-            capacityDockProviderStatusTitles[provider.id] = (error as? CapacityDockProviderFetchFailure)?.statusTitle
+            let failure = error as? CapacityDockProviderFetchFailure
+            // Without a last quota the pane offers Retry; with one it shows Disconnect.
+            let retryShown = capacityDockProviderSummaries[provider.id] == nil
+            capacityDockProviderErrors[provider.id] = sanitizeForUI(
+                (retryShown ? failure?.retryMessage : nil) ?? error.localizedDescription
+            )
+            capacityDockProviderStatusTitles[provider.id] = failure?.statusTitle
             if let failure = error as? CapacityDockProviderFetchFailure,
                failure.disposition == .transient {
                 capacityDockProviderTransientFailures.insert(provider.id)

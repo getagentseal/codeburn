@@ -519,6 +519,8 @@ struct CapacityDockProviderQuotaServiceTests {
         await store.refreshCapacityDockProvider(provider)
         #expect(store.capacityDockProviderStatusTitles[provider.id] == "Cline login expired")
         #expect(store.capacityDockQuotaSummary(for: provider)?.connection == .transientFailure)
+        #expect(store.capacityDockProviderErrors[provider.id]
+            == "Cline login expired 3h ago. Send a message in Cline or run `cline auth cline`, then press Retry.")
 
         expired.isOn = false
         await store.refreshCapacityDockProvider(provider)
@@ -530,6 +532,8 @@ struct CapacityDockProviderQuotaServiceTests {
         let kept = store.capacityDockQuotaSummary(for: provider)
         #expect(kept?.connection == .stale)
         #expect(kept?.primary?.percent == 0.3)
+        #expect(store.capacityDockProviderErrors[provider.id]
+            == "Cline login expired 3h ago. Send a message in Cline or run `cline auth cline`; CodeBurn picks up the new login on its next refresh.")
     }
 
     private final class ExpiryToggle: @unchecked Sendable {

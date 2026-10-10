@@ -113,7 +113,7 @@ final class ClinePassQuotaTests: XCTestCase {
             XCTAssertEqual(error as? ClinePassSubscriptionService.FetchError, .signInExpired(age: "3h ago"))
             XCTAssertEqual(
                 error.localizedDescription,
-                "Cline login expired 3h ago. Send a message in Cline or run `cline auth cline`, then press Retry.")
+                "Cline login expired 3h ago. Send a message in Cline or run `cline auth cline`; CodeBurn picks up the new login on its next refresh.")
             XCTAssertEqual((error as? ClinePassSubscriptionService.FetchError)?.classification, .transient)
         }
         XCTAssertTrue(recorder.requests.isEmpty)
@@ -134,7 +134,7 @@ final class ClinePassQuotaTests: XCTestCase {
             XCTAssertEqual(error as? ClinePassSubscriptionService.FetchError, .signInExpired(age: nil))
             XCTAssertEqual(
                 error.localizedDescription,
-                "Cline login expired. Send a message in Cline or run `cline auth cline`, then press Retry.")
+                "Cline login expired. Send a message in Cline or run `cline auth cline`; CodeBurn picks up the new login on its next refresh.")
         }
         let none = Self.makeDeps(recorder: recorder) { request in
             (Data("{}".utf8), Self.httpResponse(request, status: 200))

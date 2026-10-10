@@ -80,7 +80,7 @@ describe('ClinePass credential discovery', () => {
     const file = providersFile({ auth: { accessToken: 'workos:old', expiresAt: NOW - 3 * 3_600_000 } })
     const result = await fetchClinePassQuota({ env: {}, fetch: neverFetch, readFile: async () => file, now: () => NOW })
     expect(result.quota.connection).toBe('transientFailure')
-    expect(result.quota.footerLines).toEqual(['Cline login expired 3h ago. Send a message in Cline or run `cline auth cline`, then press Retry.'])
+    expect(result.quota.footerLines).toEqual(['Cline login expired 3h ago. Send a message in Cline or run `cline auth cline`; CodeBurn picks up the new login on its next refresh.'])
   })
 
   it('reads a rejected session token as an expired sign-in', async () => {
@@ -90,7 +90,7 @@ describe('ClinePass credential discovery', () => {
       fetch: (async () => jsonResponse({}, 401)) as unknown as typeof fetch,
     })
     expect(result.quota.connection).toBe('transientFailure')
-    expect(result.quota.footerLines).toEqual(['Cline login expired. Send a message in Cline or run `cline auth cline`, then press Retry.'])
+    expect(result.quota.footerLines).toEqual(['Cline login expired. Send a message in Cline or run `cline auth cline`; CodeBurn picks up the new login on its next refresh.'])
   })
 })
 

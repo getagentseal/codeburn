@@ -38,7 +38,7 @@ function defaultDeps(): ClinePassDeps {
 
 function clineExpiredFooter(expiresAt: number | null, now: number): string[] {
   const age = expiresAt !== null && expiresAt <= now ? ` ${compactAge(expiresAt, now)}` : ''
-  return [`Cline login expired${age}. Send a message in Cline or run \`cline auth cline\`, then press Retry.`]
+  return [`Cline login expired${age}. Send a message in Cline or run \`cline auth cline\`; CodeBurn picks up the new login on its next refresh.`]
 }
 
 function empty(connection: QuotaProvider['connection'], footerLines: string[] = []): QuotaProvider {
