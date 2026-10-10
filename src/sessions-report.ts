@@ -410,8 +410,13 @@ export type PrRow = {
   savingsUSD: number
   sessions: number
   calls: number
+  /// Start of the first and end of the last turn (or folded run) attributed to
+  /// this PR. Legacy approx shares fall back to their session's span.
   firstStarted: string
   lastEnded: string
+  /// Agent runs that put spend on this PR: contributing parent sessions plus
+  /// the subagent runs folded into it. `sessions` stays the parent count.
+  runs: number
   /// True when any contributing session used the legacy even-split fallback
   /// (session-level prLinks but no surviving per-turn refs), so this row's share
   /// is an approximation rather than genuine turn-level attribution.
@@ -438,6 +443,9 @@ export type PrContribution = {
   cost: number; calls: number; savingsUSD: number; approx: boolean
   models: Map<string, number>
   categories: Map<string, number>
+  /// Span of the turns attributed here; empty on legacy approx shares.
+  firstTs: string
+  lastTs: string
 }
 
 /// A single session's PR-attributed spend: `perUrl` is the turn-level split
@@ -451,7 +459,7 @@ export type SessionPrAttribution = {
 // Minimal structural shape a SessionSummary satisfies, so the state machine is
 // unit-testable without constructing a full session fixture.
 type AttributableSession = {
-  turns: Array<{ prRefs?: string[]; category?: string; assistantCalls: Array<{ costUSD: number; savingsUSD?: number; model?: string; supplementaryAccounting?: boolean }> }>
+  turns: Array<{ prRefs?: string[]; category?: string; timestamp?: string; assistantCalls: Array<{ costUSD: number; savingsUSD?: number; model?: string; supplementaryAccounting?: boolean; timestamp?: string }> }>
   prLinks?: string[]
   totalCostUSD: number
   apiCalls: number
@@ -470,7 +478,7 @@ function addToMap(m: Map<string, number>, key: string, value: number): void {
 function ensureContribution(map: Map<string, PrContribution>, url: string): PrContribution {
   let e = map.get(url)
   if (!e) {
-    e = { cost: 0, calls: 0, savingsUSD: 0, approx: false, models: new Map(), categories: new Map() }
+    e = { cost: 0, calls: 0, savingsUSD: 0, approx: false, models: new Map(), categories: new Map(), firstTs: '', lastTs: '' }
     map.set(url, e)
   }
   return e
@@ -875,8 +883,12 @@ export function attributeSessionPrSpend(session: AttributableSession): SessionPr
     }
     const share = 1 / current.length
     const callAlloc = allocateEven(calls, current.length)
+    const startTs = turnStartTs(turn)
+    const endTs = turn.assistantCalls.at(-1)?.timestamp || startTs
     current.forEach((url, i) => {
       const e = ensureContribution(perUrl, url)
+      if (startTs && (!e.firstTs || startTs < e.firstTs)) e.firstTs = startTs
+      if (endTs > e.lastTs) e.lastTs = endTs
       e.cost += cost * share
       e.calls += callAlloc[i]!
       e.savingsUSD += savings * share
@@ -907,7 +919,7 @@ export function buildPrAttribution(projects: ProjectSummary[]): PrAttribution {
   const byUrl = new Map<string, {
     cost: number; savingsUSD: number; calls: number; approx: boolean
     legacyCost: number
-    sessions: Set<string>; firstStarted: string; lastEnded: string
+    sessions: Set<string>; ownSessions: Set<string>; foldedRuns: number; firstStarted: string; lastEnded: string
     models: Map<string, number>; categories: Map<string, number>
   }>()
   const attribution = resolveSubagentAttribution(projects)
@@ -925,17 +937,20 @@ export function buildPrAttribution(projects: ProjectSummary[]): PrAttribution {
     url: string, sessionKey: string, firstTs: string, lastTs: string,
     cost: number, savings: number, calls: number, approx: boolean,
     models: Map<string, number>, categories: Map<string, number>,
+    foldedRuns = 0,
   ): void => {
     if (cost === 0 && calls === 0 && savings === 0) return
     const row = byUrl.get(url) ?? {
       cost: 0, savingsUSD: 0, calls: 0, approx: false, legacyCost: 0,
-      sessions: new Set<string>(), firstStarted: firstTs, lastEnded: lastTs,
+      sessions: new Set<string>(), ownSessions: new Set<string>(), foldedRuns: 0, firstStarted: firstTs, lastEnded: lastTs,
       models: new Map<string, number>(), categories: new Map<string, number>(),
     }
     row.cost += cost
     row.savingsUSD += savings
     row.calls += calls
     row.sessions.add(sessionKey)
+    if (foldedRuns) row.foldedRuns += foldedRuns
+    else row.ownSessions.add(sessionKey)
     if (approx) { row.approx = true; row.legacyCost += cost }
     for (const [m, mc] of models) addToMap(row.models, m, mc)
     for (const [cat, cc] of categories) addToMap(row.categories, cat, cc)
@@ -968,7 +983,7 @@ export function buildPrAttribution(projects: ProjectSummary[]): PrAttribution {
         const categories = new Map<string, number>()
         for (const [cat, cc] of rc.fold.categories) categories.set(cat, cc * share)
         addTo(url, sessionKey, rc.fold.firstTs, rc.fold.lastTs,
-          rc.fold.cost * share, rc.fold.savingsUSD * share, callAlloc[i]!, false, models, categories)
+          rc.fold.cost * share, rc.fold.savingsUSD * share, callAlloc[i]!, false, models, categories, rc.fold.foldedSessions)
       })
     }
   }
@@ -981,7 +996,7 @@ export function buildPrAttribution(projects: ProjectSummary[]): PrAttribution {
       const { perUrl, unattributed } = attributeSessionPrSpend(session)
       for (const [url, c] of perUrl) {
         attributedCost += c.cost
-        addTo(url, sessionKey, session.firstTimestamp, session.lastTimestamp, c.cost, c.savingsUSD, c.calls, c.approx, c.models, c.categories)
+        addTo(url, sessionKey, c.firstTs || session.firstTimestamp, c.lastTs || session.lastTimestamp, c.cost, c.savingsUSD, c.calls, c.approx, c.models, c.categories)
       }
       unattributedCost += unattributed.cost
       foldChildren(session)
@@ -1026,6 +1041,7 @@ export function buildPrAttribution(projects: ProjectSummary[]): PrAttribution {
         cost: r.cost, savingsUSD: r.savingsUSD,
         sessions: r.sessions.size, calls: r.calls,
         firstStarted: r.firstStarted, lastEnded: r.lastEnded,
+        runs: r.ownSessions.size + r.foldedRuns,
         approx: r.approx,
         models,
         ...(categories.length ? { categories } : {}),

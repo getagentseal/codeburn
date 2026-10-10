@@ -155,3 +155,18 @@ describe('a run whose prompt names one PR outranks the carried pr-link', () => {
     expect(rows.reduce((s, r) => s + r.cost, 0)).toBeCloseTo(totals.attributedCost, 9)
   })
 })
+
+describe('PR dates and runs come from the attributed work, not the session', () => {
+  it('dates each PR by its own turns and counts its agent runs', () => {
+    const { rows } = buildPrAttribution(projects)
+    const row = (n: number) => rows.find(r => r.url === PR(n))!
+    expect(row(1694).firstStarted).toBe('2026-10-10T08:00:05.000Z')
+    expect(row(1694).lastEnded).toBe('2026-10-10T09:30:05.000Z')
+    expect(row(24).firstStarted).toBe('2026-10-10T10:00:05.000Z')
+    expect(row(1729).firstStarted).toBe('2026-10-10T10:02:00.000Z')
+    expect(row(1694).sessions).toBe(1)
+    expect(row(1694).runs).toBe(3)
+    expect(row(24).runs).toBe(2)
+    expect(row(1729).runs).toBe(1)
+  })
+})
