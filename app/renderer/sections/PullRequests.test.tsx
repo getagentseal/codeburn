@@ -430,7 +430,7 @@ describe('PullRequests', () => {
     it('the #24 shape: states every unknown, the carried spend and pr-link only', async () => {
       render6()
       const el = await card(3)
-      expect(facts(el)).toEqual(['Follow-ups: not tracked', 'No review run found', '$4.45 carried from session tag', 'Linked by pr-link only'])
+      expect(facts(el)).toEqual(['Follow-ups: not tracked', 'No review run found', '$4.45 from other work in the same session', 'Linked by pr-link only'])
       expect(el).toHaveTextContent('1 run')
       expect(el.textContent).not.toMatch(/stale|one shot/i)
     })
@@ -443,7 +443,7 @@ describe('PullRequests', () => {
     it('the #1732 shape: draft, follow-ups not tracked, no review, carried', async () => {
       render6()
       const el = await card(5)
-      expect(facts(el)).toEqual(['Open · draft', 'Follow-ups: not tracked', 'No review run found', '$27.97 carried from session tag'])
+      expect(facts(el)).toEqual(['Open · draft', 'Follow-ups: not tracked', 'No review run found', '$27.97 from other work in the same session'])
     })
 
     it('closed, and no carried note under the threshold', async () => {
@@ -472,9 +472,9 @@ describe('PullRequests', () => {
         ['Main session', 'opened it', 'Opus 5.5', '$0.62'],
         ['Main session', 'ran gh on this PR', 'Opus 5.5', '$1.60'],
         ['Create release/0.9.26 version branch', "pushed this PR's branch", 'Sonnet 5.5', '$0.43'],
-        ['Research PR view: one-shot, reviews', 'carried from session tag', 'Opus 5.5', '$27.97'],
+        ['Research PR view: one-shot, reviews', 'other work in this session', 'Opus 5.5', '$27.97'],
       ])
-      expect(runs).toHaveTextContent('$27.97 carried from session tag')
+      expect(runs).toHaveTextContent('$27.97 from other work in the same session')
       expect(tableRows(within(el).getByRole('region', { name: 'o/r#5 spend by phase' }))).toEqual([
         ['Building', '$30.62', '100%'], ['Review runs', '$0.00', '0%'], ['After first review', '$0.00', '0%'],
       ])
@@ -482,6 +482,23 @@ describe('PullRequests', () => {
         ['Coding', '$19.60', '64%'], ['Exploration', '$3.06', '10%'], ['Debugging', '$2.50', '8%'], ['Testing', '$2.00', '7%'], ['Planning', '$1.50', '5%'], ['Other', '$1.96', '6%'],
       ])
       expect(el.querySelector('.pr-cat-bar')).toBeNull()
+    })
+
+    it('shows the full run description in a tooltip only while it is cut off', async () => {
+      render6()
+      const el = await opened(5)
+      const cell = within(el).getByRole('region', { name: 'o/r#5 runs' }).querySelectorAll('td')[8]!
+      expect(cell).toHaveTextContent('Create release/0.9.26 version branch')
+      await userEvent.hover(cell)
+      expect(screen.queryByRole('tooltip')).toBeNull()
+      await userEvent.unhover(cell)
+      const spy = vi.spyOn(cell, 'scrollWidth', 'get').mockReturnValue(400)
+      vi.spyOn(cell, 'clientWidth', 'get').mockReturnValue(100)
+      await userEvent.hover(cell)
+      expect(screen.getByRole('tooltip')).toHaveTextContent('Create release/0.9.26 version branch')
+      await userEvent.unhover(cell)
+      expect(screen.queryByRole('tooltip')).toBeNull()
+      spy.mockRestore()
     })
 
     it('puts follow-up rounds, the first review and the merge on the timeline, and splits by phase', async () => {

@@ -327,6 +327,7 @@ body { overflow: hidden; background: var(--bg); color: var(--ink); }
 .usd-pop { min-width: 0; padding: 7px 9px; }
 .usd-pop-row { display: flex; align-items: baseline; justify-content: space-between; gap: var(--sp-4); font-size: var(--fs-meta); line-height: 1.5; white-space: nowrap; }
 .usd-pop-row span { color: var(--mut); }
+.trunc-pop { white-space: normal; overflow-wrap: anywhere; font-size: var(--fs-meta); line-height: 1.5; }
 .usd-pop-row b { font-family: var(--mono); font-variant-numeric: tabular-nums; font-weight: var(--fw-kpi); color: var(--ink); }
 .usd-pop-row.calls { margin-top: 4px; padding-top: 4px; border-top: 1px solid var(--line2); }
 .dropdown { max-width: 100%; }

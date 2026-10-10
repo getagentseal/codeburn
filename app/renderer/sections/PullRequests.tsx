@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { CliErrorPanel } from '../components/CliErrorPanel'
 import { EmptyNote } from '../components/EmptyState'
 import { Panel } from '../components/Panel'
+import { TruncTip } from '../components/TruncTip'
 import { SectionSkeleton } from '../components/Skeleton'
 import { StaleBanner } from '../components/StaleBanner'
 import { type Polled, usePolled } from '../hooks/usePolled'
@@ -78,7 +79,7 @@ function CostTable({ rows, total }: { rows: Array<{ key: string; label: string; 
       <tbody>
         {rows.map(row => (
           <tr key={row.key}>
-            <td>{row.label}</td>
+            <TruncTip as="td" text={row.label} />
             <td>{formatUsd(row.cost)}</td>
             <td className="pr-share">{share(row.cost, total)}</td>
           </tr>
@@ -223,19 +224,19 @@ function PrTable({ pullRequests, onInvestigate }: { pullRequests: PullRequests; 
         <div className="pr-summary" aria-label={t('pullRequests.summary.aria')}>
           <div className="pr-summary-item">
             <span>{t('pullRequests.summary.attributedSpend')}</span>
-            <strong>{formatUsd(summable ? displayedAttributed : distinctCost)}</strong>
+            <TruncTip as="strong" text={formatUsd(summable ? displayedAttributed : distinctCost)} />
           </div>
           <div className="pr-summary-item">
             <span>{t('pullRequests.summary.pullRequests')}</span>
-            <strong>{rows.length.toLocaleString('en-US')}</strong>
+            <TruncTip as="strong" text={rows.length.toLocaleString('en-US')} />
           </div>
           <div className="pr-summary-item">
             <span>{t('pullRequests.summary.linkedSessions')}</span>
-            <strong>{distinctSessions.toLocaleString('en-US')}</strong>
+            <TruncTip as="strong" text={distinctSessions.toLocaleString('en-US')} />
           </div>
           <div className="pr-summary-item">
             <span>{t('pullRequests.summary.foldedAgentRuns')}</span>
-            <strong>{(subagentSessions ?? 0).toLocaleString('en-US')}</strong>
+            <TruncTip as="strong" text={(subagentSessions ?? 0).toLocaleString('en-US')} />
           </div>
         </div>
       </Panel>
@@ -294,7 +295,7 @@ function PrRowView({ pr, expanded, onToggle, onInvestigate }: { pr: PrRow; expan
             <Icon name="git-pull-request" />
           </span>
           <div>
-            <a className="pr-link" href={pr.url} title={pr.url} onClick={event => openPr(event, pr.url)}>{pr.label}</a>
+            <TruncTip as="a" text={pr.label} className="pr-link" href={pr.url} title={pr.url} onClick={(event: MouseEvent<HTMLAnchorElement>) => openPr(event, pr.url)} />
             <div className="pr-card-meta">
               <span>{spanLabel(pr.firstStarted, pr.lastEnded)}</span>
               <span>{pr.runs !== undefined ? formatCount(pr.runs, 'run') : formatCount(pr.sessions, 'session')}</span>
@@ -346,7 +347,7 @@ function PrDetail({ pr, categories, onInvestigate }: { pr: PrRow; categories: No
                 <tbody>
                   {events.map(event => (
                     <tr key={`${event.label}-${event.at}`}>
-                      <td>{event.label}</td>
+                      <TruncTip as="td" text={event.label} />
                       <td>{timeLabel(event.at)}{event.note ? ` · ${event.note}` : ''}</td>
                     </tr>
                   ))}
@@ -365,7 +366,7 @@ function PrDetail({ pr, categories, onInvestigate }: { pr: PrRow; categories: No
               <tbody>
                 {runs.map((run, i) => (
                   <tr key={i}>
-                    <td title={run.description ?? undefined}>{run.description ?? t(run.kind === 'session' ? 'pullRequests.runs.mainSession' : 'pullRequests.runs.agentRun')}</td>
+                    <TruncTip as="td" text={run.description ?? t(run.kind === 'session' ? 'pullRequests.runs.mainSession' : 'pullRequests.runs.agentRun')} />
                     <td className="pr-run-why">{t(`pullRequests.runs.link.${run.link}`)}</td>
                     <td>{run.model ?? ''}</td>
                     <td>{formatUsd(run.costUSD)}</td>
