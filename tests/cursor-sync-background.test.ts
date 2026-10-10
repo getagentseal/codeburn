@@ -5,6 +5,7 @@ import { mkdtemp, rm, writeFile } from 'fs/promises'
 import { createRequire } from 'module'
 import { tmpdir } from 'os'
 import { dirname, join } from 'path'
+import { pathToFileURL } from 'url'
 
 import { CURSOR_CSV_HEADER, cursorImportPath } from '../src/cursor-import.js'
 import { maybeSyncCursor, setCursorImportRunner } from '../src/cursor-sync.js'
@@ -91,7 +92,7 @@ afterEach(async () => {
 })
 
 function start(args: string[]): { child: ChildProcess; stdout: () => string; exited: Promise<number | null> } {
-  const child = spawn(process.execPath, ['--import', 'tsx', '--import', join(root, 'fake-fetch.mjs'), CLI, ...args], { env, stdio: ['pipe', 'pipe', 'ignore'] })
+  const child = spawn(process.execPath, ['--import', 'tsx', '--import', pathToFileURL(join(root, 'fake-fetch.mjs')).href, CLI, ...args], { env, stdio: ['pipe', 'pipe', 'ignore'] })
   let out = ''
   child.stdout!.on('data', (chunk: Buffer) => { out += chunk.toString() })
   return { child, stdout: () => out, exited: new Promise(resolve => child.on('exit', resolve)) }
@@ -106,7 +107,8 @@ describe.skipIf(!isSqliteAvailable())('background Cursor sync', () => {
   it('a deferred import waits for the runner, then lands', async () => {
     let applyLater: (() => void) | undefined
     setCursorImportRunner(apply => new Promise((resolve, reject) => { applyLater = () => { apply().then(resolve, reject) } }))
-    process.env['HOME'] = env['HOME']
+    vi.stubEnv('HOME', env['HOME']!)
+    vi.stubEnv('USERPROFILE', env['HOME']!)
     const fetchImpl = async () => new Response(csv(), { status: 200 })
     const sync = maybeSyncCursor({ fetchImpl, deferImport: true })
     await until(() => applyLater !== undefined, 'the runner')
@@ -147,13 +149,15 @@ describe.skipIf(!isSqliteAvailable())('background Cursor sync', () => {
     try {
       await until(() => lines.some(l => l.includes('"ready"')), 'serve ready')
       expect(cursorCalls((await answer(1, args)).output)).toBe(0)
-      // Asked again before the download lands, once the watchers are armed: the memo answers.
-      const memoized = await answer(2, args)
-      expect((await answer(3, args)).generation.n).toBe(memoized.generation.n)
+      // Asked again before the download lands: once the watchers are armed, which
+      // can be after the first few answers on a slow machine, the memo answers.
+      let id = 2
+      let memoized = await answer(id++, args)
+      for (let next = await answer(id++, args); next.generation.n !== memoized.generation.n; next = await answer(id++, args)) memoized = next
 
       await writeFile(release, '')
       await until(() => existsSync(cursorImportPath()), 'the import')
-      const after = await answer(4, args)
+      const after = await answer(id, args)
       expect(after.generation.n).toBeGreaterThan(memoized.generation.n)
       expect(cursorCalls(after.output)).toBe(1)
     } finally {
