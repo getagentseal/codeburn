@@ -1227,7 +1227,12 @@ function matchCreates(cmds: Array<{ cmd: string; ms: number }>, fresh: string[],
 function turnSignals(session: SessionSummary, turnPrs: Array<string[] | null>, sig: (url: string) => PrSignals): void {
   const seen = new Set(session.prRefsAtRangeStart ?? [])
   session.turns.forEach((turn, i) => {
-    const cmds = turn.assistantCalls.flatMap(call => callCommands(call).map(cmd => ({ cmd, ms: parseMs(call.timestamp) })))
+    const cmds = turn.assistantCalls.flatMap(call => {
+      const list = callCommands(call)
+      if (!list.length) return []
+      const ms = parseMs(call.timestamp)
+      return list.map(cmd => ({ cmd, ms }))
+    })
     const fresh = (turn.prRefs ?? []).filter(u => !seen.has(u))
     for (const u of fresh) seen.add(u)
     if (fresh.length) matchCreates(cmds, fresh, sig)
@@ -1267,9 +1272,11 @@ function scanPrCommands(projects: ProjectSummary[]): PrCommandScan {
     const mentioned = side ? namedPrNumber(session.agentDescription ?? '') : null
     let upstream: string | undefined
     for (const turn of session.turns) for (const call of turn.assistantCalls) {
+      const cmds = callCommands(call)
+      if (!cmds.length) continue
       const ms = parseMs(call.timestamp)
       if (Number.isNaN(ms)) continue
-      for (const cmd of callCommands(call)) {
+      for (const cmd of cmds) {
         for (const branches of pushes(cmd)) {
           if (side && branches.length) upstream = branches.at(-1)
           out.pushes.push({ ms, branches: branches.length ? branches : upstream ? [upstream] : [], mentioned })

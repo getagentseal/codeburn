@@ -44,14 +44,15 @@ const API_PR_RE = /\/pulls?\/(\d+)\b/g
 const unquote = (s: string): string => s.replace(/"[^"]*"|'[^']*'/g, ' ')
 
 export const isPush = (cmd: string): boolean => pushes(cmd).length > 0
-export const isCommit = (cmd: string): boolean => COMMIT_RE.test(cmd)
-export const readsCode = (cmd: string): boolean => GIT_DIFF_RE.test(cmd) || ghPrCommands(cmd).some(c => READ_VERBS.has(c.verb))
+export const isCommit = (cmd: string): boolean => cmd.includes('commit') && COMMIT_RE.test(cmd)
+export const readsCode = (cmd: string): boolean => (cmd.includes('diff') && GIT_DIFF_RE.test(cmd)) || ghPrCommands(cmd).some(c => READ_VERBS.has(c.verb))
 
 /// Each `git push` in a command line with the branches it names (the refspec
 /// destination, `HEAD:fix/x` -> `fix/x`); [] for a bare `git push`. A branch
 /// delete is not a push.
 export function pushes(cmd: string): string[][] {
   const out: string[][] = []
+  if (!cmd.includes('push')) return out
   for (const m of cmd.matchAll(PUSH_RE)) {
     const tokens = unquote(m[1]!).trim().split(/\s+/).filter(t => t && !/[<>]/.test(t))
     if (tokens.some(t => t === '--delete' || t === '-d')) continue
@@ -70,6 +71,7 @@ export type GhPrCommand = { verb: string; number?: number; repo?: string; args: 
 /// never read as a PR number.
 export function ghPrCommands(cmd: string): GhPrCommand[] {
   const out: GhPrCommand[] = []
+  if (!cmd.includes('gh pr')) return out
   for (const m of cmd.matchAll(GH_PR_RE)) {
     const args = unquote(m[2]!)
     const url = PR_URL_RE.exec(args)
@@ -91,6 +93,7 @@ export function createHead(args: string): string | undefined {
 export function prNumbersIn(cmd: string): Set<number> {
   const out = new Set<number>()
   for (const c of ghPrCommands(cmd)) if (c.number !== undefined) out.add(c.number)
+  if (!cmd.includes('/pull')) return out
   for (const m of cmd.matchAll(API_PR_RE)) out.add(Number(m[1]))
   for (const m of cmd.matchAll(new RegExp(PR_URL_RE.source, 'g'))) out.add(Number(m[3]))
   return out
