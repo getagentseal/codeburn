@@ -6,6 +6,7 @@ import { tmpdir } from 'os'
 import { parseAllSessions, clearSessionCache } from '../src/parser.js'
 import { loadPricing } from '../src/models.js'
 import { buildPrAttribution } from '../src/sessions-report.js'
+import { buildSessionWhy } from '../src/session-why.js'
 import { createHead, ghPrCommands, isPush, namedPr, pushes, rounds } from '../src/pr-signals.js'
 import type { ProjectSummary } from '../src/types.js'
 
@@ -88,7 +89,8 @@ async function writeTranscripts(): Promise<void> {
     asst('2026-10-10T07:00:05.000Z', [bash('git status')]),
     // #1694: pushed and opened here.
     user('2026-10-10T08:00:00.000Z', 'ship the tooltip fix'),
-    asst('2026-10-10T08:00:05.000Z', [bash('git push -u origin fix/tooltip && gh pr create -R getagentseal/codeburn --base main --head fix/tooltip --title "fix(menubar): tooltip" --body-file /tmp/b.md')]),
+    asst('2026-10-10T08:00:05.000Z', [{ ...bash('git push -u origin fix/tooltip && gh pr create -R getagentseal/codeburn --base main --head fix/tooltip --title "fix(menubar): tooltip" --body-file /tmp/b.md'), id: 'toolu_create' }]),
+    user('2026-10-10T08:00:15.000Z', [{ type: 'tool_result', tool_use_id: 'toolu_create', content: `${PR(1694)}\n` }]),
     prLink('2026-10-10T08:00:20.000Z', 1694),
     user('2026-10-10T08:29:00.000Z', 'get it reviewed'),
     asst('2026-10-10T08:29:30.000Z', [spawn(c('aR1694').spawnId, c('aR1694').description)]),
@@ -241,5 +243,16 @@ describe('pr-signals command reading', () => {
     expect(namedPr('Apply review fixes to PRs 1689-1692')).toBe('multi')
     expect(namedPr('Review core library worker #22')).toBeNull()
     expect(namedPr('Scope-check PR 1478 and PR 1476')).toBe('multi')
+  })
+})
+
+describe('session why: PR work', () => {
+  it('reports the PR this session opened, its follow-up rounds and the review runs', async () => {
+    const why = await buildSessionWhy(join(configDir, 'projects', 'prins-proj', `${PARENT}.jsonl`))
+    expect(why.prWork.opened).toEqual([{ url: PR(1694), at: '2026-10-10T08:00:05.000Z', head: 'fix/tooltip', followUpRounds: 2, followUpPushes: 3 }])
+    expect(why.prWork.reviewRuns.map(r => [r.description, r.pr])).toEqual([
+      ['Review PR 1694 tooltip', 1694], ['Review PR 1712 Antigravity', 1712], ['Review PR 1729 Claude quota dir', 1729],
+    ])
+    expect(why.prWork.reviewCost).toBeCloseTo(['agent-aR1694', 'agent-aR1712', 'agent-aR1729'].reduce((n, id) => n + sessionCost(id), 0), 12)
   })
 })
