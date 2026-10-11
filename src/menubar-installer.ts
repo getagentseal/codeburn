@@ -1,12 +1,10 @@
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { once } from 'node:events'
-import { createWriteStream, constants as fsConstants } from 'node:fs'
+import { constants as fsConstants } from 'node:fs'
 import { access, chmod, cp, lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { homedir, platform, tmpdir } from 'node:os'
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
-import { pipeline } from 'node:stream/promises'
-import { Readable } from 'node:stream'
 import { ProxyAgent, fetch as undiciFetch } from 'undici'
 
 import { getCodeburnCacheDir } from './cache-dir.js'
@@ -663,10 +661,10 @@ export async function downloadToFile(
     // A 2xx with no body is the most retryable response there is; throw so the retry picks it up
     // rather than writing a zero-byte file that verifyChecksum would later reject as a mismatch.
     if (response.body === null) throw new Error('response had no body')
-    // fetch's ReadableStream needs to be wrapped for Node streams.
-    const nodeStream = Readable.fromWeb(response.body as never)
+    // Read whole, not piped: Electron's Node 24 undici asserts and kills the process when a
+    // server closes the socket while a paused body waits on the file write.
     try {
-      await pipeline(nodeStream, createWriteStream(destPath))
+      await writeFile(destPath, Buffer.from(await new Response(response.body as BodyInit).arrayBuffer()))
     } catch (err) {
       // A mid-stream drop leaves a truncated file. Remove it before re-throwing so the retry
       // starts clean and a genuine failure never leaves a partial artifact behind.
