@@ -357,7 +357,11 @@ import type { DateRange, ProjectSummary } from './types.js'
 // instead of dropped, Gemini 3.8 Flash placeholders get their own ids and
 // Gemini 3 Flash -a/-d rows are priced. Calls and cost only rise, so no
 // PENDING_REDERIVE_PROVIDER_VERSIONS entry is needed.
-export const DAILY_CACHE_VERSION = 74
+// v75: Copilot chat-session requests count every agent round and bill from
+// copilotCredits, and a chat session that also ran on the agent host is left
+// to it. That twin drops calls, so copilot joins
+// PENDING_REDERIVE_PROVIDER_VERSIONS at 75.
+export const DAILY_CACHE_VERSION = 75
 const MIN_SUPPORTED_VERSION = 28
 
 /// Providers whose per-day CALL COUNT means something different at
@@ -382,8 +386,9 @@ const MIN_SUPPORTED_VERSION = 28
 /// untouched, in both directions, and every other provider keeps the guard.
 const PENDING_REDERIVE_PROVIDER_VERSIONS: Readonly<Record<string, number>> = {
   // 56: a store row now pairs with its tokenless per-turn twin, which can
-  // move one call across midnight.
-  copilot: 56,
+  // move one call across midnight. 75: chat sessions that also ran on the
+  // agent host are no longer counted from the journal.
+  copilot: 75,
   // Codex response records replace stale/zero token_count twins and can
   // legitimately reduce counts as well as recover missing usage.
   codex: 43,

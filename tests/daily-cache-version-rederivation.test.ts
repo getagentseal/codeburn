@@ -201,3 +201,33 @@ describe('cursor-agent re-derive after Cursor IDE chats moved to cursor (v73)', 
     expect(prunedDay.cost).toBe(4)
   })
 })
+
+describe('copilot re-derive after chat-session twins moved to the agent host (v75)', () => {
+  it('replaces a settled copilot slice with fewer fresh calls and leaves other providers alone', async () => {
+    const settled = toDateString(new Date(Date.now() - 10 * 24 * 60 * 60 * 1000))
+    const yesterday = toDateString(new Date(Date.now() - 24 * 60 * 60 * 1000))
+    const slice = (calls: number, cost: number) => ({ ...day(settled, cost).providers.grok!, calls })
+    const entry = (copilotCalls: number, copilotCost: number): DailyEntry => ({
+      ...day(settled, copilotCost + 1),
+      calls: copilotCalls + 1,
+      providers: { copilot: slice(copilotCalls, copilotCost), claude: slice(1, 1) },
+      models: {},
+    })
+    await writeFile(join(cacheRoot, 'daily-cache.v74.json'), JSON.stringify({
+      version: 74,
+      savingsConfigHash: 'cfg',
+      tzKey: currentTzKey(),
+      lastComputedDate: yesterday,
+      days: [entry(5, 9)],
+      complete: true,
+      watermarkTrusted: true,
+    }))
+
+    const hydrated = await ensureCacheHydrated(async () => [], () => [entry(3, 4)], 'cfg', () => true)
+
+    const settledDay = hydrated.days.find(d => d.date === settled)!
+    expect(settledDay.providers.copilot).toMatchObject({ calls: 3, cost: 4 })
+    expect(settledDay.providers.claude).toMatchObject({ calls: 1, cost: 1 })
+    expect(hydrated.pendingRederive).toBeUndefined()
+  })
+})

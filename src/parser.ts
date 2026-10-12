@@ -4163,6 +4163,7 @@ export async function parseProviderSources(
     storeProject: Map<string, string>
     nanRollupFallbackTs: Map<string, string>
     sessionEarliestValidTs: Map<string, string>
+    agentHostUsageSessions: Set<string>
   } | null = null
   if (providerName === 'copilot') {
     // DEPENDS on the durable full-load exemption in session-cache.ts
@@ -4189,6 +4190,11 @@ export async function parseProviderSources(
     // sealed days.
     const nanRollupFallbackTs = new Map<string, string>()
     const sessionEarliestValidTs = new Map<string, string>()
+    // Sessions the agent host bills (session-state rollups or turns, store
+    // rows). A VS Code chat-session journal of the same session is a second
+    // record of the same requests, so it is left out at serve time. A
+    // session-state file with no usage yet keeps the journal.
+    const agentHostUsageSessions = new Set<string>()
     // Session-state per-turn calls carry no per-call project (the serve loop
     // takes it from source.project), so resolve it the same way here — every
     // call of the session must serve under the SAME label, whichever of the
@@ -4203,6 +4209,10 @@ export async function parseProviderSources(
           seenAggKeys.add(c.deduplicationKey)
           const ts = new Date(c.timestamp).getTime()
           const isStore = c.deduplicationKey.startsWith('copilot-store:')
+          if ((isStore || basename(cachedPath) === 'events.jsonl') && (c.nanoAiu != null ||
+            c.usage.inputTokens + c.usage.outputTokens + c.usage.cacheReadInputTokens + c.usage.cacheCreationInputTokens > 0)) {
+            agentHostUsageSessions.add(turn.sessionId)
+          }
           const isRollup = c.deduplicationKey.startsWith(shutdownPrefix)
           const aggKey = `${turn.sessionId}\n${c.model}`
           if (!Number.isNaN(ts)) {
@@ -4306,7 +4316,7 @@ export async function parseProviderSources(
         }
       }
     }
-    copilotRecon = { storeKeys, storeCalls, rollupLegs, supplementaryStoreKeys, turnOwnedOutputKeys, sessionProject, storeProject, nanRollupFallbackTs, sessionEarliestValidTs }
+    copilotRecon = { storeKeys, storeCalls, rollupLegs, supplementaryStoreKeys, turnOwnedOutputKeys, sessionProject, storeProject, nanRollupFallbackTs, sessionEarliestValidTs, agentHostUsageSessions }
   }
   const copilotServeProject = (sessionId: string): string | undefined =>
     copilotRecon
@@ -4318,6 +4328,10 @@ export async function parseProviderSources(
     let changed = false
     const kept: CachedCall[] = []
     for (const c of turn.calls) {
+      if (c.deduplicationKey.startsWith('copilot-chatsession:') && copilotRecon.agentHostUsageSessions.has(turn.sessionId)) {
+        changed = true
+        continue
+      }
       if (c.deduplicationKey.startsWith(shutdownPrefix)) {
         const tsValid = !Number.isNaN(new Date(c.timestamp).getTime())
         if (tsValid && copilotRecon.storeKeys.has(`${turn.sessionId}\n${c.model}`)) {

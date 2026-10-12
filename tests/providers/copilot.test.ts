@@ -1196,22 +1196,6 @@ describe('copilot provider - chatSessions parsing', () => {
     expect(calls.map(c => c.costUSD)).toEqual([0.965, 0.965, 0.0325].map(usd => expect.closeTo(usd, 12)))
   })
 
-  it('leaves a chat session that also ran on the agent host to the agent-host path', async () => {
-    await createSessionDir('twin-session', [modelChange('claude-sonnet-4.6'), userMessage('hi'), assistantMessage({ messageId: 'm1', outputTokens: 40 })])
-    const emptyWindowDir = join(tmpDir, 'globalStorage', 'emptyWindowChatSessions')
-    await mkdir(emptyWindowDir, { recursive: true })
-    for (const id of ['twin-session', 'solo-session']) {
-      await createChatSessionFile(join(emptyWindowDir, `${id}.jsonl`), [{ kind: 0, v: { sessionId: id, requests: [agentRequest()] } }])
-    }
-    const provider = createCopilotProvider(tmpDir, '/nonexistent/ws', join(tmpDir, 'globalStorage'), '/nonexistent/jetbrains', '/nonexistent/session-store.db')
-    const seen = new Set<string>()
-    const calls: ParsedProviderCall[] = []
-    for (const source of await provider.discoverSessions()) {
-      for await (const call of provider.createSessionParser(source, seen).parse()) calls.push(call)
-    }
-    expect(calls.map(c => c.deduplicationKey).sort()).toEqual(['copilot-chatsession:solo-session:agent', 'copilot:twin-session:m1'])
-  })
-
   it.each([0, -1, '1000', null])('skips invalid or zero root usage without estimating text (%s)', async promptTokens => {
     const path = join(tmpDir, 'invalid.jsonl')
     await createChatSessionFile(path, [{ kind: 0, v: { sessionId: 'invalid', requests: [{
@@ -1407,6 +1391,20 @@ describe('copilot provider - chatSessions parsing', () => {
 
     expect(calls).toHaveLength(1)
     expect(calls[0]!.outputTokens).toBe(88)
+  })
+
+  it('applies a journal edit inside the nested result metadata', async () => {
+    const filePath = join(tmpDir, 'append-edit-metadata.jsonl')
+    await createChatSessionFile(filePath, [
+      { kind: 0, v: { version: 3, creationDate: 1780157113020, sessionId: 'chat-edit-meta', requests: [] } },
+      { kind: 2, k: ['requests'], v: [chatSessionSampleRequest({ completionTokens: undefined })] },
+      { kind: 1, k: ['requests', 0, 'result', 'metadata', 'outputTokens'], v: 88 },
+      { kind: 1, k: ['requests', 0, 'result', 'metadata', 'promptTokens'], v: 777 },
+    ])
+
+    const calls = await collectCalls({ path: filePath, project: 'myproject', provider: 'copilot', sourceType: 'chatsession' })
+
+    expect(calls.map(c => [c.inputTokens, c.outputTokens])).toEqual([[777, 88]])
   })
 
   it('deduplicates by requestId across parser runs', async () => {

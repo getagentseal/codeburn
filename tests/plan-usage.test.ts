@@ -627,6 +627,21 @@ describe('copilot AI credit plan math', () => {
     expect(usage.creditsIncomplete).toBe(false)
   })
 
+  it('rates VS Code chat-session requests one by one in a session that spans the 0.69 upgrade', () => {
+    const chat = (ts: string, costUSD: number, nanoAiu?: number) => usageCall({
+      provider: 'copilot', costUSD, timestamp: `2026-08-05T12:00:${ts}.000Z`, deduplicationKey: `copilot-chatsession:s:${ts}`,
+      ...(nanoAiu !== undefined ? { nanoAiu } : {}),
+    })
+    const spend = copilotCreditSpend([usageProject([chat('00', 0.2), chat('01', 0.965, 96_500_000_000)])])
+
+    expect(spend.spentCredits).toBe(96.5)
+    expect(spend.estimatedCredits).toBeCloseTo(116.5, 9)
+    expect(spend.creditRatedCalls).toBe(1)
+    expect(spend.creditUnratedCalls).toBe(1)
+    expect(spend.creditsIncomplete).toBe(true)
+    expect(copilotCreditsNote(spend.creditRatedCalls, spend.creditUnratedCalls)).toContain('1 of 2 Copilot requests')
+  })
+
   // #1199: only CLI session-store rows carry total_nano_aiu, so a typical user
   // has hundreds of unrated requests and a confident, wrong credit total.
   it('estimates credits from token cost for requests with no exact figure', () => {

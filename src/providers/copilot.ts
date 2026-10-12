@@ -1798,7 +1798,7 @@ function createJsonlParser(
 }
 
 function createChatSessionParser(
-  source: ChatSessionSource,
+  source: SessionSource,
   seenKeys: Set<string>
 ): SessionParser {
   return {
@@ -1814,7 +1814,6 @@ function createChatSessionParser(
           return
         }
         const sessionId = readString(session.sessionId) || basename(source.path, '.json')
-        if (source.agentHostSessionIds?.has(sessionId)) return
         yield* parseLegacyChatSession(session, sessionId, source.project, seenKeys)
         return
       }
@@ -1823,7 +1822,6 @@ function createChatSessionParser(
       if (!isRecord(root)) return
 
       const sessionId = readString(root['sessionId']) || basename(source.path, '.jsonl')
-      if (source.agentHostSessionIds?.has(sessionId)) return
       const sessionCreatedAt = timestampToISO(root['creationDate'])
       const requests = Array.isArray(root['requests']) ? root['requests'] : []
 
@@ -3123,10 +3121,6 @@ interface TranscriptSessionSource extends SessionSource {
 
 interface ChatSessionSource extends SessionSource {
   sourceType: 'chatsession'
-  // Session-state dir names. A chat session with the same id also ran on the
-  // agent host, whose rollup and store rows bill it exactly; the journal copy
-  // is skipped so the request is not counted twice.
-  agentHostSessionIds?: ReadonlySet<string>
 }
 
 interface JetBrainsSessionSource extends SessionSource {
@@ -3768,10 +3762,9 @@ export function createCopilotProvider(
       if (storeSource) sources.push(storeSource)
 
       // 2. Discover JSONL sessions (fallback — output tokens only)
-      let jsonlSources: JsonlSessionSource[] = []
       try {
         const jsonlDir = getCopilotSessionStateDir(sessionStateDir)
-        jsonlSources = await discoverJsonlSessions(jsonlDir)
+        const jsonlSources = await discoverJsonlSessions(jsonlDir)
         if (storeSource) {
           // Same sessionId derivation as createJsonlParser: the CLI keys
           // session-state dirs and session-store rows by the same id, so the
@@ -3789,11 +3782,9 @@ export function createCopilotProvider(
       // Prefer OTel over chatSessions: they can mirror the same turns under
       // incompatible IDs, and OTel carries richer token/cache data.
       if (!discoveredOtel) {
-        const agentHostSessionIds = new Set(jsonlSources.map(src => basename(dirname(src.path))))
         // 3. Discover VS Code core chatSessions journals
         try {
           const chatSessionSources = await discoverWorkspaceChatSessions(getWsDirs())
-          for (const src of chatSessionSources) src.agentHostSessionIds = agentHostSessionIds
           sources.push(...chatSessionSources)
         } catch {
           // Workspace chatSessions discovery failed
@@ -3802,7 +3793,6 @@ export function createCopilotProvider(
         // 4. Discover VS Code empty-window chatSessions journals
         try {
           const emptyWindowSources = await discoverEmptyWindowChatSessions(getGlobalDirs())
-          for (const src of emptyWindowSources) src.agentHostSessionIds = agentHostSessionIds
           sources.push(...emptyWindowSources)
         } catch {
           // Empty-window chatSessions discovery failed

@@ -117,7 +117,17 @@ export function copilotCreditSpend(projects: ProjectSummary[]): CopilotCreditSpe
   // supplementary twin across a local-day boundary, so both nanoAiu rows can
   // occupy separate turns of the same session. Close the twin once here.
   forEachPlanSession(projects, calls => {
-    const copilot = calls.filter(call => call.provider === 'copilot')
+    // A VS Code chat-session request's copilotCredits bills that request
+    // alone, so a session that spans the Copilot Chat 0.69 upgrade keeps an
+    // estimate for its older requests. Agent-host figures bill the session.
+    const isChatRequest = (call: ParsedApiCall) => call.deduplicationKey.startsWith('copilot-chatsession:')
+    const chatRated = calls.filter(call => call.provider === 'copilot' && isChatRequest(call) && isFiniteNanoAiu(call.nanoAiu))
+    const chatUnrated = calls.filter(call => call.provider === 'copilot' && isChatRequest(call) && !isFiniteNanoAiu(call.nanoAiu))
+    for (const call of chatRated) nanoSum += call.nanoAiu!
+    for (const call of chatUnrated) estimatedUsd += call.costUSD
+    ratedCalls += behavioralCallCount(chatRated)
+    unratedCalls += behavioralCallCount(chatUnrated)
+    const copilot = calls.filter(call => call.provider === 'copilot' && !isChatRequest(call))
     if (copilot.length === 0) return
     const primaryNano = copilot.filter(call => !call.supplementaryAccounting && isFiniteNanoAiu(call.nanoAiu))
     const suppNano = copilot.filter(call => call.supplementaryAccounting && isFiniteNanoAiu(call.nanoAiu))
