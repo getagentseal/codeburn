@@ -1178,6 +1178,17 @@ describe('MenubarCompanion', () => {
       expect(launchEnvs).toEqual([{ [TRAY_CLI_ENV]: launcher }, { [TRAY_CLI_ENV]: launcher }])
     })
 
+    it('leaves a CODEBURN_BIN of the person\'s own in charge', async () => {
+      stageMsi()
+
+      await new MenubarCompanion(withCli({
+        env: { SystemRoot: 'C:\\Windows', LOCALAPPDATA: join(sandbox, 'Local'), CODEBURN_BUNDLED_CLI: entry, [TRAY_CLI_ENV]: 'D:\\Data\\Volta\\bin\\codeburn.cmd' },
+      })).bootstrap()
+
+      expect(launches).toHaveLength(1)
+      expect(launchEnvs).toEqual([undefined])
+    })
+
     it('leaves the switch off out of it: a login start needs the launcher either way', async () => {
       stageMsi()
       writeCompanionSettings(stateDir, { ...DEFAULT_COMPANION_SETTINGS, menuBar: false, sidebar: false, trayExePath: null, seeded: true })

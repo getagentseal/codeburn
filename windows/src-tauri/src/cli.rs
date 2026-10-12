@@ -162,41 +162,61 @@ pub enum DockQuota {
 }
 
 impl CodeburnCli {
-    /// Honours `CODEBURN_BIN` only when every whitespace-delimited token passes the
-    /// allowlist. Otherwise resolves `codeburn` from PATH and the usual npm locations.
+    /// The first of [`CodeburnCli::candidates`], or the bare name when there are none. What
+    /// the setup check settles on is [`CodeburnCli::probe`], which also knows whether it runs.
     pub fn resolve() -> Self {
+        Self::candidates()
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| Self::at(default_program_name()))
+    }
+
+    /// `CODEBURN_BIN` first, then PATH and the usual install prefixes, then the CLI the
+    /// CodeBurn desktop app leaves behind, so a global `codeburn` still wins wherever there
+    /// is one.
+    fn candidates() -> Vec<Self> {
+        preferred_order(Self::from_env(), locate_cli(), recorded_desktop_cli())
+    }
+
+    /// Runs `--version` on each candidate in turn and settles on the first that answers. One
+    /// that is there but will not start (a launcher pointing at an executable that moved, a
+    /// shim whose node is gone) is passed over, so it cannot hide a working install behind it.
+    pub async fn probe() -> (Self, CliStatus) {
+        let mut candidates = Self::candidates();
+        if candidates.is_empty() {
+            candidates.push(Self::at(default_program_name()));
+        }
+        first_answering(candidates).await
+    }
+
+    /// Honours `CODEBURN_BIN` only when every whitespace-delimited token passes the
+    /// allowlist.
+    fn from_env() -> Option<Self> {
         let raw = env::var("CODEBURN_BIN").unwrap_or_default();
         if raw.is_empty() {
-            return Self::default_program();
+            return None;
         }
         // A bare path (which may contain spaces, e.g. under Program Files) is used whole;
         // only otherwise is the value split into program + leading arguments.
         if is_safe_arg(&raw) && std::path::Path::new(&raw).is_file() {
-            return CodeburnCli {
-                program: raw,
-                extra_args: vec![],
-            };
+            return Some(Self::at(raw));
         }
         let parts: Vec<String> = raw.split_whitespace().map(String::from).collect();
         if parts.iter().all(|p| is_safe_arg(p)) {
             if let Some((first, rest)) = parts.split_first() {
-                return CodeburnCli {
+                return Some(CodeburnCli {
                     program: first.clone(),
                     extra_args: rest.to_vec(),
-                };
+                });
             }
         }
         crate::log_line!("codeburn-menubar: refusing unsafe CODEBURN_BIN; falling back to `codeburn`");
-        Self::default_program()
+        None
     }
 
-    /// PATH and the usual install prefixes first, then the CLI the CodeBurn desktop app
-    /// leaves behind, so a global `codeburn` still wins wherever there is one.
-    fn default_program() -> Self {
+    fn at(program: String) -> Self {
         CodeburnCli {
-            program: locate_cli()
-                .or_else(recorded_desktop_cli)
-                .unwrap_or_else(default_program_name),
+            program,
             extra_args: vec![],
         }
     }
@@ -506,6 +526,50 @@ impl CodeburnCli {
     }
 }
 
+fn preferred_order(
+    from_env: Option<CodeburnCli>,
+    found: Vec<String>,
+    recorded: Option<String>,
+) -> Vec<CodeburnCli> {
+    let mut out: Vec<CodeburnCli> = Vec::new();
+    let rest = found.into_iter().chain(recorded).map(CodeburnCli::at);
+    for cli in from_env.into_iter().chain(rest) {
+        if !out.iter().any(|seen| seen.program == cli.program) {
+            out.push(cli);
+        }
+    }
+    out
+}
+
+/// Expects at least one candidate. When none answers, the status names every program tried
+/// and what each said, rather than only the first.
+async fn first_answering(candidates: Vec<CodeburnCli>) -> (CodeburnCli, CliStatus) {
+    let mut failed: Vec<(CodeburnCli, CliStatus)> = Vec::new();
+    for cli in candidates {
+        let status = cli.status().await;
+        if status.found {
+            return (cli, status);
+        }
+        failed.push((cli, status));
+    }
+    let mut status = failed[0].1.clone();
+    if failed.len() > 1 {
+        status.program = failed
+            .iter()
+            .map(|(cli, _)| cli.program.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        status.error = Some(
+            failed
+                .iter()
+                .map(|(cli, s)| format!("{}: {}", cli.program, s.error.as_deref().unwrap_or("")))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
+    }
+    (failed.swap_remove(0).0, status)
+}
+
 /// Reads until the pipe closes, capping what is kept and touching the activity marker on
 /// every chunk. Reading in chunks rather than to the end is what makes the marker possible.
 async fn drain<R: tokio::io::AsyncRead + Unpin + Send + 'static>(
@@ -671,14 +735,14 @@ pub fn parse_version(text: &str) -> Option<(u32, u32, u32)> {
 /// launched from Explorer or at login, before (or long after) `npm install -g codeburn`
 /// changed the user's PATH, so we also read the live PATH from the registry on Windows and
 /// probe the standard npm / node install prefixes.
-fn locate_cli() -> Option<String> {
+fn locate_cli() -> Vec<String> {
     find_in_search_dirs(&candidate_names())
 }
 
 /// Same search for Claude Code's own binary, so "Connect Claude" spawns an absolute path
 /// instead of letting the console shell resolve a bare `claude`.
 fn locate_claude() -> Option<String> {
-    find_in_search_dirs(&CLAUDE_NAMES)
+    find_in_search_dirs(&CLAUDE_NAMES).into_iter().next()
 }
 
 /// The key the CodeBurn desktop app writes into `windows-settings.json` (the same file this
@@ -718,7 +782,7 @@ fn recorded_cli_candidate(settings: &serde_json::Map<String, Value>) -> Option<S
         .then(|| raw.to_string())
 }
 
-fn find_in_search_dirs(names: &[&str]) -> Option<String> {
+fn find_in_search_dirs(names: &[&str]) -> Vec<String> {
     let mut dirs: Vec<PathBuf> = Vec::new();
     if let Some(path) = env::var_os("PATH") {
         dirs.extend(env::split_paths(&path));
@@ -732,16 +796,20 @@ fn find_in_search_dirs(names: &[&str]) -> Option<String> {
 /// and the registry PATH can hold relative entries too; `PathBuf::from("").join("codeburn.cmd")`
 /// resolves against the current directory, which for a tray app launched at login is
 /// whatever Explorer handed it. A binary planted there must never win.
-fn find_in_dirs(dirs: &[PathBuf], names: &[&str]) -> Option<String> {
+fn find_in_dirs(dirs: &[PathBuf], names: &[&str]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
     for dir in dirs.iter().filter(|d| d.is_absolute()) {
         for name in names {
             let candidate = dir.join(name);
             if candidate.is_file() {
-                return Some(candidate.to_string_lossy().into_owned());
+                let path = candidate.to_string_lossy().into_owned();
+                if !out.contains(&path) {
+                    out.push(path);
+                }
             }
         }
     }
-    None
+    out
 }
 
 fn candidate_names() -> Vec<&'static str> {
@@ -957,7 +1025,13 @@ pub fn is_allowed_subcommand(args: &[&str]) -> bool {
 /// detached headless spawn. Windows: opens a console via `cmd /C start`. Never
 /// interpolates through a shell -- argv throughout.
 pub fn spawn_in_terminal(app: &AppHandle, subcommand: &[&str]) -> Result<()> {
-    let cli = CodeburnCli::resolve();
+    use tauri::Manager;
+    let cli = app
+        .state::<crate::AppState>()
+        .cli
+        .lock()
+        .map_err(|e| anyhow!("{e}"))?
+        .clone();
     spawn_program_in_terminal(app, &cli, subcommand)
 }
 
@@ -1026,7 +1100,7 @@ fn spawn_program_in_terminal(_app: &AppHandle, cli: &CodeburnCli, subcommand: &[
         // Only the unresolved default name is worth a second lookup; anything else is
         // either already absolute or a CODEBURN_BIN the user chose.
         let program = if cli.program == default_program_name() {
-            locate_cli().unwrap_or_else(|| cli.program.clone())
+            locate_cli().into_iter().next().unwrap_or_else(|| cli.program.clone())
         } else {
             cli.program.clone()
         };
@@ -1218,7 +1292,7 @@ mod which {
     pub fn which(program: &str) -> Result<PathBuf, ()> {
         let path = env::var_os("PATH").ok_or(())?;
         let dirs: Vec<PathBuf> = env::split_paths(&path).collect();
-        super::find_in_dirs(&dirs, &[program]).map(PathBuf::from).ok_or(())
+        super::find_in_dirs(&dirs, &[program]).into_iter().next().map(PathBuf::from).ok_or(())
     }
 }
 
@@ -1269,16 +1343,17 @@ mod tests {
         // Empty and relative entries are ignored even though the file is reachable
         // through them once the process CWD is the temp dir.
         let unsafe_dirs = vec![PathBuf::from(""), PathBuf::from("."), PathBuf::from("..")];
-        assert_eq!(find_in_dirs(&unsafe_dirs, &[name]), None);
+        assert!(find_in_dirs(&unsafe_dirs, &[name]).is_empty());
 
-        // The same name behind an absolute entry is found.
-        let found = find_in_dirs(std::slice::from_ref(&dir), &[name]).expect("absolute entry should match");
-        assert!(PathBuf::from(&found).is_absolute());
-        assert!(found.ends_with(name));
+        // The same name behind an absolute entry is found, once however often the entry repeats.
+        let found = find_in_dirs(&[dir.clone(), dir.clone()], &[name]);
+        assert_eq!(found.len(), 1);
+        assert!(PathBuf::from(&found[0]).is_absolute());
+        assert!(found[0].ends_with(name));
 
         // An unsafe entry ahead of a good one cannot shadow it.
         let mixed = vec![PathBuf::from(""), dir.clone()];
-        assert_eq!(find_in_dirs(&mixed, &[name]), Some(found));
+        assert_eq!(find_in_dirs(&mixed, &[name]), found);
 
         std::fs::remove_file(&planted).ok();
     }
@@ -1310,6 +1385,97 @@ mod tests {
         assert_eq!(recorded(Value::from("")), None);
         assert_eq!(recorded(Value::from(42)), None);
         assert_eq!(recorded_cli_candidate(&serde_json::Map::new()), None);
+    }
+
+    /// CODEBURN_BIN, then every install the search turned up (a relocated Volta home among
+    /// them), then the desktop app's launcher; a path reached twice is tried once.
+    #[test]
+    fn candidates_keep_the_override_first_and_the_desktop_launcher_last() {
+        let launcher = "/local/codeburn-menubar/codeburn-cli.cmd".to_string();
+        let volta = "/data/volta/bin/codeburn.cmd".to_string();
+        let npm = "/roaming/npm/codeburn.cmd".to_string();
+        let programs = |list: Vec<CodeburnCli>| list.into_iter().map(|c| c.program).collect::<Vec<_>>();
+
+        let ordered = preferred_order(
+            Some(CodeburnCli::at(launcher.clone())),
+            vec![volta.clone(), npm.clone(), volta.clone()],
+            Some(launcher.clone()),
+        );
+        assert_eq!(programs(ordered), vec![launcher.clone(), volta.clone(), npm.clone()]);
+
+        let ordered = preferred_order(None, vec![volta.clone()], Some(launcher.clone()));
+        assert_eq!(programs(ordered), vec![volta, launcher]);
+        assert!(preferred_order(None, vec![], None).is_empty());
+    }
+
+    #[cfg(unix)]
+    fn script(dir: &std::path::Path, name: &str, body: &str) -> String {
+        use std::os::unix::fs::PermissionsExt;
+        let path = dir.join(name);
+        std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        path.to_string_lossy().into_owned()
+    }
+
+    #[cfg(unix)]
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("codeburn-probe-{name}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// #1750: the desktop app's launcher was handed over as CODEBURN_BIN and exited 1 ("The
+    /// system cannot find the path specified"), and the Volta install behind it was never
+    /// tried. A launcher that is gone, or one that runs and fails, now gives way.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_missing_or_failing_launcher_gives_way_to_the_next_install() {
+        let dir = scratch("fallback");
+        let broken = script(&dir, "codeburn-cli.cmd", "echo 'The system cannot find the path specified.' >&2; exit 1");
+        let missing = dir.join("gone").join("codeburn-cli.cmd").to_string_lossy().into_owned();
+        let volta = script(&dir, "codeburn", "echo 0.9.27");
+
+        let (cli, status) = first_answering(vec![
+            CodeburnCli::at(missing),
+            CodeburnCli::at(broken),
+            CodeburnCli::at(volta.clone()),
+        ])
+        .await;
+        assert_eq!(cli.program, volta);
+        assert!(status.found && status.compatible, "{status:?}");
+        assert_eq!(status.program, volta);
+        assert_eq!(status.version.as_deref(), Some("0.9.27"));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn when_nothing_answers_the_error_names_every_path_tried() {
+        let dir = scratch("all-fail");
+        let broken = script(&dir, "codeburn-cli.cmd", "echo 'path not found' >&2; exit 1");
+        let missing = dir.join("gone").join("codeburn").to_string_lossy().into_owned();
+
+        let (cli, status) = first_answering(vec![
+            CodeburnCli::at(broken.clone()),
+            CodeburnCli::at(missing.clone()),
+        ])
+        .await;
+        assert_eq!(cli.program, broken);
+        assert!(!status.found);
+        assert_eq!(status.program, format!("{broken}, {missing}"));
+        let error = status.error.unwrap();
+        let lines: Vec<&str> = error.lines().collect();
+        assert_eq!(lines.len(), 2, "{error}");
+        assert!(lines[0].starts_with(&broken) && lines[0].contains("path not found"), "{error}");
+        assert!(lines[1].starts_with(&missing), "{error}");
+
+        // A single candidate reads exactly as it did before there was a list.
+        let (_, alone) = first_answering(vec![CodeburnCli::at(broken.clone())]).await;
+        assert_eq!(alone.program, broken);
+        assert!(!alone.error.unwrap().starts_with(&broken));
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// Nothing resolved at all is a different message from a CLI that is there and would not

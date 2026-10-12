@@ -1024,8 +1024,7 @@ mod commands {
     /// without restarting the tray app.
     #[tauri::command]
     pub async fn cli_status(state: State<'_, AppState>) -> Result<crate::cli::CliStatus, String> {
-        let fresh = crate::cli::CodeburnCli::resolve();
-        let status = fresh.status().await;
+        let (fresh, status) = crate::cli::CodeburnCli::probe().await;
         if status.found {
             if let Ok(mut guard) = state.cli.lock() {
                 *guard = fresh;
@@ -1117,7 +1116,11 @@ mod commands {
     /// shell, but it does become a directory name, so it is checked here rather than trusted:
     /// digits and hyphens only, and the length the format produces.
     #[tauri::command]
-    pub async fn export_usage(format: String, stamp: String) -> Result<String, String> {
+    pub async fn export_usage(
+        state: State<'_, AppState>,
+        format: String,
+        stamp: String,
+    ) -> Result<String, String> {
         if !matches!(format.as_str(), "csv" | "json") {
             return Err("unknown export format".into());
         }
@@ -1134,7 +1137,7 @@ mod commands {
             _ => format!("codeburn-{stamp}"),
         };
         let output = downloads.join(name);
-        let cli = crate::cli::CodeburnCli::resolve();
+        let cli = state.cli.lock().map_err(|e| e.to_string())?.clone();
         cli.export_to(&format, &output)
             .await
             .map_err(|e| e.to_string())?;

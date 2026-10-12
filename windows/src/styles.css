@@ -1740,7 +1740,7 @@ code { font-family: var(--font-mono); }
 .setup-details { font-size: 10.5px; color: var(--label-2); max-width: 300px; }
 .setup-details summary { display: inline-flex; align-items: center; gap: 4px; list-style: none; color: var(--label-3); }
 .setup-details summary::-webkit-details-marker { display: none; }
-.setup-error { margin-top: 6px; text-align: left; font-family: var(--font-mono); font-size: 10px; word-break: break-word; user-select: text; }
+.setup-error { margin-top: 6px; text-align: left; font-family: var(--font-mono); font-size: 10px; word-break: break-word; white-space: pre-line; user-select: text; }
 .setup-error-muted { margin-top: 4px; text-align: left; font-size: 10px; color: var(--label-3); word-break: break-all; }
 
 .toggle {

@@ -567,10 +567,11 @@ export class MenubarCompanion {
   /**
    * What a tray app started from here inherits. The recorded path in the settings file is
    * what an autostarted tray app reads, and it is read after PATH; this makes the very first
-   * launch work too, before the tray app has read anything at all.
+   * launch work too, before the tray app has read anything at all. A CODEBURN_BIN of the
+   * person's own is left to reach the tray app as it is.
    */
   private launchEnv(): NodeJS.ProcessEnv | undefined {
-    return this.cliLauncher ? { [TRAY_CLI_ENV]: this.cliLauncher } : undefined
+    return this.cliLauncher && !this.deps.env[TRAY_CLI_ENV] ? { [TRAY_CLI_ENV]: this.cliLauncher } : undefined
   }
 
   /**
