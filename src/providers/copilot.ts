@@ -66,6 +66,7 @@ import { getEditorDataDir } from '../editor-data-dir.js'
 import { createHash } from 'crypto'
 import { readSessionFile } from '../fs-utils.js'
 import { calculateCost, modelKeyMatches } from '../models.js'
+import { NANO_AIU_PER_CREDIT } from '../copilot-aiu.js'
 import { extractBashCommands } from '../bash-utils.js'
 import { estimateTokens } from '../context-tree.js'
 import type {
@@ -202,6 +203,8 @@ interface LegacyChatRequest {
   promptTokens?: number
   completionTokens?: number
   outputTokens?: number
+  modelTotals?: unknown
+  copilotCredits?: unknown
 }
 
 interface LegacyChatSession {
@@ -533,6 +536,34 @@ function extractModelFromRequest(req: LegacyChatRequest, session: LegacyChatSess
   return 'unknown'
 }
 
+// An agent-mode request makes one model call per tool round, but
+// result.metadata.promptTokens/outputTokens describe only the last one.
+// modelTotals sums every round per model. Its inputTokens includes the cached
+// part when it comes from the Copilot engine and excludes it when it comes from
+// the Claude SDK; an input below the cached count can only be the latter.
+function chatSessionModelTotals(raw: unknown): { inputTokens: number; cacheReadTokens: number; outputTokens: number } | undefined {
+  if (!Array.isArray(raw)) return undefined
+  let input = 0
+  let cached = 0
+  let output = 0
+  let found = false
+  for (const entry of raw) {
+    if (!isRecord(entry)) continue
+    found = true
+    input += numberOrZero(entry['inputTokens'])
+    cached += numberOrZero(entry['cachedTokens'])
+    output += numberOrZero(entry['outputTokens'])
+  }
+  if (!found) return undefined
+  return { inputTokens: input >= cached ? input - cached : input, cacheReadTokens: cached, outputTokens: output }
+}
+
+// copilotCredits is GitHub's billed total_nano_aiu / 1e9 for the whole request,
+// subagents included.
+function chatSessionNanoAiu(raw: unknown): number | undefined {
+  return typeof raw === 'number' && Number.isFinite(raw) && raw >= 0 ? Math.round(raw * NANO_AIU_PER_CREDIT) : undefined
+}
+
 function parseLegacyChatSession(
   session: LegacyChatSession,
   sessionId: string,
@@ -548,25 +579,31 @@ function parseLegacyChatSession(
     const meta = isRecord(resultObj?.['metadata']) ? (resultObj?.['metadata'] as Record<string, unknown>) : null
     const usage = isRecord(resultObj?.['usage']) ? (resultObj?.['usage'] as Record<string, unknown>) : null
 
+    const totals = chatSessionModelTotals(req.modelTotals)
+    const nanoAiu = chatSessionNanoAiu(req.copilotCredits)
+
     // Exact token extraction: check metadata, result, root req, and usage independently
-    const exactPromptTokens =
+    const exactPromptTokens = totals ? totals.inputTokens : (
       numberOrZero(meta?.['promptTokens']) ||
       numberOrZero(resultObj?.['promptTokens']) ||
       numberOrZero(req.promptTokens) ||
       numberOrZero(usage?.['promptTokens']) ||
       numberOrZero(usage?.['prompt_tokens']) ||
       undefined
+    )
 
-    const exactOutputTokens =
+    // Root completionTokens is summed over every round; metadata holds the last.
+    const exactOutputTokens = totals ? totals.outputTokens : (
+      numberOrZero(req.completionTokens) ||
       numberOrZero(meta?.['outputTokens']) ||
       numberOrZero(resultObj?.['outputTokens']) ||
-      numberOrZero(req.completionTokens) ||
       numberOrZero(req.outputTokens) ||
       numberOrZero(usage?.['completionTokens']) ||
       numberOrZero(usage?.['completion_tokens']) ||
       undefined
+    )
 
-    const exactCacheRead =
+    const exactCacheRead = totals ? totals.cacheReadTokens :
       numberOrZero(meta?.['cacheReadTokens']) ||
       numberOrZero(meta?.['cachedTokens']) ||
       numberOrZero(resultObj?.['cacheReadTokens']) ||
@@ -577,7 +614,7 @@ function parseLegacyChatSession(
       numberOrZero(usage?.['cached_tokens']) ||
       0
 
-    const exactCacheCreation =
+    const exactCacheCreation = totals ? 0 :
       numberOrZero(meta?.['cacheCreationTokens']) ||
       numberOrZero(meta?.['cacheWriteTokens']) ||
       numberOrZero(resultObj?.['cacheCreationTokens']) ||
@@ -716,6 +753,7 @@ function parseLegacyChatSession(
       userMessage: msgText,
       sessionId,
       project,
+      ...(nanoAiu !== undefined ? { nanoAiu } : {}),
     })
   }
 
@@ -1795,13 +1833,15 @@ function createChatSessionParser(
         const rawMetadata = resultRecord?.['metadata']
         const metadata = isRecord(rawMetadata) ? rawMetadata : createReplayObject()
 
-        // VS Code also serializes usage on the request itself. Keep the
-        // extension metadata's precedence, as in the legacy JSON parser.
-        const inputTokens = numberOrZero(metadata['promptTokens']) || numberOrZero(rawReq['promptTokens'])
-        const metadataOutputTokens = numberOrZero(metadata['outputTokens'])
-        const outputTokens = metadataOutputTokens || numberOrZero(rawReq['completionTokens'])
+        // VS Code also serializes usage on the request itself, with output
+        // summed over every round. Same precedence as the legacy JSON parser.
+        const totals = chatSessionModelTotals(rawReq['modelTotals'])
+        const nanoAiu = chatSessionNanoAiu(rawReq['copilotCredits'])
+        const inputTokens = totals ? totals.inputTokens : numberOrZero(metadata['promptTokens']) || numberOrZero(rawReq['promptTokens'])
+        const outputTokens = totals ? totals.outputTokens : numberOrZero(rawReq['completionTokens']) || numberOrZero(metadata['outputTokens'])
+        const cacheReadTokens = totals?.cacheReadTokens ?? 0
 
-        if (inputTokens === 0 && outputTokens === 0) continue
+        if (inputTokens === 0 && outputTokens === 0 && cacheReadTokens === 0 && !nanoAiu) continue
 
         const requestId = readString(rawReq['requestId']) || `request-${index}`
         const dedupKey = `copilot-chatsession:${sessionId}:${requestId}`
@@ -1809,7 +1849,7 @@ function createChatSessionParser(
         seenKeys.add(dedupKey)
 
         const model = modelFromChatSessionRequest(rawReq, metadata)
-        const costUSD = calculateCost(model, inputTokens, outputTokens, 0, 0, 0)
+        const costUSD = calculateCost(model, inputTokens, outputTokens, 0, cacheReadTokens, 0)
         const timestamp = timestampToISO(rawReq['timestamp']) || sessionCreatedAt
         const userMessage = isRecord(rawReq['message']) ? readString(rawReq['message']['text']) : ''
 
@@ -1823,7 +1863,7 @@ function createChatSessionParser(
           inputTokens,
           outputTokens,
           cacheCreationInputTokens: 0,
-          cacheReadInputTokens: 0,
+          cacheReadInputTokens: cacheReadTokens,
           cachedInputTokens: 0,
           reasoningTokens: 0,
           webSearchRequests: 0,
@@ -1835,6 +1875,7 @@ function createChatSessionParser(
           speed: 'standard' as const,
           deduplicationKey: dedupKey,
           userMessage,
+          ...(nanoAiu !== undefined ? { nanoAiu } : {}),
         }
       }
     },

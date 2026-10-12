@@ -161,7 +161,7 @@ export function copilotCreditsNote(rated: number, unrated: number): string {
   if (unrated === 0) {
     return `All ${rated} Copilot requests in this period carry GitHub's exact credit figure, so spentCredits is complete.`
   }
-  return `${rated} of ${rated + unrated} Copilot requests carry GitHub's exact credit figure (only Copilot CLI and VS Code agent-host sessions record it). spentCredits counts only those; estimatedCredits adds the rest priced from tokens at listed API rates, which matched GitHub within about 15% on real Copilot CLI events; VS Code chat sessions record no cache split, so their estimate can land either side of the bill. percentUsed tracks estimatedCredits while any request is unrated.`
+  return `${rated} of ${rated + unrated} Copilot requests carry GitHub's exact credit figure (Copilot CLI, VS Code agent-host sessions and VS Code chat sessions from Copilot Chat 0.69 on record it). spentCredits counts only those; estimatedCredits adds the rest priced from tokens at listed API rates, which matched GitHub within about 15% on real Copilot CLI events; older VS Code chat sessions record no cache split and only the last model call's prompt, so their estimate can land either side of the bill. percentUsed tracks estimatedCredits while any request is unrated.`
 }
 
 export function projectMonthEnd(

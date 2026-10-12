@@ -766,6 +766,13 @@ describe('modelKeyMatches', () => {
     expect(modelKeyMatches('xgpt-5', 'gpt-5')).toBe(false)
     expect(modelKeyMatches('claude-opus-4.8', 'claude-opus-4')).toBe(false)
   })
+
+  it('treats a short numeric dash segment as a minor version, not a suffix', () => {
+    expect(modelKeyMatches('claude-sonnet-4-6', 'claude-sonnet-4')).toBe(false)
+    expect(modelKeyMatches('claude-sonnet-4-6-20260101', 'claude-sonnet-4')).toBe(false)
+    expect(modelKeyMatches('claude-sonnet-4-20250514', 'claude-sonnet-4')).toBe(true)
+    expect(modelKeyMatches('claude-sonnet-4-5', 'claude-sonnet-4-5')).toBe(true)
+  })
 })
 
 describe('claude-fable-5 pricing + name', () => {

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixed
+- **Copilot agent requests in VS Code chat count every model call.** Copilot Chat 0.69 keeps only the last call of an agent request in its metadata, so CodeBurn showed a fraction of the output and cost. It now reads the request's totals (all calls, with the cache split when VS Code records it) and GitHub's exact credits, so Copilot plan credits for these requests match the bill.
+- Copilot showed `claude-sonnet-4-6` as "Sonnet 4" instead of "Sonnet 4.6".
+
 ## 0.9.27 - 2026-10-11
 
 ### Added

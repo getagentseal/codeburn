@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url'
 
 import { ChatCompletionContentPartKind, copilot, createCopilotProvider, findJetBrainsModelToken, getVSCodeGlobalStorageDirs, getVSCodeWorkspaceStorageDirs } from '../../src/providers/copilot.js'
 import { isSqliteAvailable, isSqliteBusyError } from '../../src/sqlite.js'
-import { calculateCost } from '../../src/models.js'
+import { calculateCost, fallbackRawModelDisplayName } from '../../src/models.js'
 import type { ParsedProviderCall } from '../../src/providers/types.js'
 
 let tmpDir: string
@@ -1125,14 +1125,72 @@ describe('copilot provider - chatSessions parsing', () => {
     expect(calls.map(c => [c.inputTokens, c.outputTokens])).toEqual([[1000, 20]])
   })
 
-  it('keeps metadata precedence without summing duplicate token fields', async () => {
+  it('takes summed root output over last-round metadata without summing duplicate fields', async () => {
     const path = join(tmpDir, 'precedence.jsonl')
     await createChatSessionFile(path, [{ kind: 0, v: { sessionId: 'precedence', requests: [{
       requestId: 'r', promptTokens: 1000, completionTokens: 490, modelId: 'copilot/gpt-4o',
       result: { metadata: { promptTokens: 500, outputTokens: 60 } },
     }] } }])
     const calls = await collectCalls({ path, project: 'p', provider: 'copilot', sourceType: 'chatsession' })
-    expect(calls.map(c => [c.inputTokens, c.outputTokens])).toEqual([[500, 60]])
+    expect(calls.map(c => [c.inputTokens, c.outputTokens])).toEqual([[500, 490]])
+  })
+
+  it('keeps metadata-only requests from older VS Code', async () => {
+    const path = join(tmpDir, 'metadata-only.jsonl')
+    await createChatSessionFile(path, [{ kind: 0, v: { sessionId: 'metadata-only', requests: [{
+      requestId: 'r', modelId: 'copilot/gpt-4o',
+      result: { metadata: { promptTokens: 500, outputTokens: 60 } },
+    }] } }])
+    const [call] = await collectCalls({ path, project: 'p', provider: 'copilot', sourceType: 'chatsession' })
+    expect([call!.inputTokens, call!.outputTokens, call!.cacheReadInputTokens]).toEqual([500, 60, 0])
+    expect(call!.costUSD).toBe(calculateCost('gpt-4o', 500, 60, 0, 0, 0))
+    expect(call!.nanoAiu).toBeUndefined()
+  })
+
+  // Copilot Chat 0.69: metadata holds the last of an agent request's model
+  // calls; completionTokens, modelTotals and copilotCredits cover all of them.
+  function agentRequest(overrides: Record<string, unknown> = {}) {
+    return chatSessionSampleRequest({
+      requestId: 'agent',
+      promptTokens: 30_100,
+      completionTokens: 4_300,
+      modelTotals: [{ model: 'claude-sonnet-4.6', inputTokens: 250_000, cachedTokens: 220_000, outputTokens: 4_300 }],
+      copilotCredits: 96.5,
+      sessionCopilotCredits: 140.25,
+      result: { metadata: { promptTokens: 30_100, outputTokens: 120, resolvedModel: 'claude-sonnet-4-6', summaries: [{ toolCallRoundId: 'round-3', text: 'summary' }] } },
+      ...overrides,
+    })
+  }
+
+  it.each(['journal', 'json'])('counts every round of a multi-round agent request (%s)', async format => {
+    const session = { version: 3, creationDate: 1780157113020, sessionId: 'agent-session', requests: [agentRequest()] }
+    const path = join(tmpDir, `agent.${format === 'json' ? 'json' : 'jsonl'}`)
+    if (format === 'json') await writeFile(path, JSON.stringify(session))
+    else await createChatSessionFile(path, [{ kind: 0, v: session }])
+    const [call, ...rest] = await collectCalls({ path, project: 'p', provider: 'copilot', sourceType: 'chatsession' })
+    expect(rest).toEqual([])
+    expect([call!.inputTokens, call!.cacheReadInputTokens, call!.cacheCreationInputTokens, call!.outputTokens]).toEqual([30_000, 220_000, 0, 4_300])
+    expect(call!.costUSD).toBe(calculateCost('claude-sonnet-4-6', 30_000, 4_300, 0, 220_000, 0))
+    expect(call!.nanoAiu).toBe(96_500_000_000)
+    expect(call!.costIsEstimated).toBeFalsy()
+  })
+
+  it('sums modelTotals across models and falls back to root completionTokens without them', async () => {
+    const path = join(tmpDir, 'agent-variants.jsonl')
+    await createChatSessionFile(path, [{ kind: 0, v: { sessionId: 'agent-variants', requests: [
+      agentRequest({ requestId: 'two-models', modelTotals: [
+        { model: 'claude-sonnet-4.6', inputTokens: 1_000, cachedTokens: 600, outputTokens: 50 },
+        { model: 'gpt-5-mini', inputTokens: 500, cachedTokens: 0, outputTokens: 25 },
+      ] }),
+      agentRequest({ requestId: 'no-totals', modelTotals: undefined }),
+      agentRequest({ requestId: 'credits-only', promptTokens: 0, completionTokens: 0, modelTotals: undefined, copilotCredits: 3.25, result: { metadata: {} } }),
+    ] } }])
+    const calls = await collectCalls({ path, project: 'p', provider: 'copilot', sourceType: 'chatsession' })
+    expect(calls.map(c => [c.inputTokens, c.cacheReadInputTokens, c.outputTokens, c.nanoAiu])).toEqual([
+      [900, 600, 75, 96_500_000_000],
+      [30_100, 0, 4_300, 96_500_000_000],
+      [0, 0, 0, 3_250_000_000],
+    ])
   })
 
   it.each([0, -1, '1000', null])('skips invalid or zero root usage without estimating text (%s)', async promptTokens => {
@@ -1154,9 +1212,9 @@ describe('copilot provider - chatSessions parsing', () => {
 
     expect(calls).toHaveLength(1)
     expect(calls[0]!.inputTokens).toBe(32543)
-    expect(calls[0]!.outputTokens).toBe(60)
+    expect(calls[0]!.outputTokens).toBe(490)
     expect(calls[0]!.model).toBe('claude-sonnet-4-6')
-    expect(calls[0]!.costUSD).toBeGreaterThan(0)
+    expect(calls[0]!.costUSD).toBe(calculateCost('claude-sonnet-4-6', 32543, 490, 0, 0, 0))
   })
 
   it('extracts structured skill calls without inferring from prompt text', async () => {
@@ -1323,7 +1381,7 @@ describe('copilot provider - chatSessions parsing', () => {
     await createChatSessionFile(filePath, [
       { kind: 0, v: { version: 3, creationDate: 1780157113020, sessionId: 'chat-edit', requests: [] } },
       { kind: 2, k: ['requests'], v: [chatSessionSampleRequest()] },
-      { kind: 1, k: ['requests', 0, 'result', 'metadata', 'outputTokens'], v: 88 },
+      { kind: 1, k: ['requests', 0, 'completionTokens'], v: 88 },
     ])
 
     const calls = await collectCalls({ path: filePath, project: 'myproject', provider: 'copilot', sourceType: 'chatsession' })
@@ -1528,6 +1586,13 @@ describe('copilot provider - metadata', () => {
     // gpt-5-mini-2026-01-01 must match gpt-5-mini, not gpt-5
     expect(copilot.modelDisplayName('gpt-5-mini-2026-01-01')).toBe('GPT-5 Mini')
     expect(copilot.modelDisplayName('gpt-4.1-mini-2026-01-01')).toBe('GPT-4.1 Mini')
+  })
+
+  it('does not let a major-version key swallow a dash minor version', () => {
+    const shown = (id: string) => fallbackRawModelDisplayName(copilot.modelDisplayName(id), id)
+    expect(shown('claude-sonnet-4-6')).toBe('Sonnet 4.6')
+    expect(shown('claude-sonnet-4-5')).toBe('Sonnet 4.5')
+    expect(shown('claude-sonnet-4-20250514')).toBe('Sonnet 4')
   })
 })
 

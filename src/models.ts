@@ -1758,10 +1758,11 @@ function lookupShortName(id: string): string | undefined {
 /// so `gpt-5` cannot capture `gpt-5.5` or `gpt-5.6-luna`, exactly as the
 /// global table's `id === key || id.startsWith(key + '-')` cannot (#1530).
 /// Providers match their local tables with this so one model id resolves to
-/// one display name on every provider.
+/// one display name on every provider. A one- or two-digit dash segment is a
+/// minor version (`claude-sonnet-4-6`), not a suffix; dates are longer.
 export function modelKeyMatches(model: string, key: string): boolean {
   const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  return new RegExp(`(?<![\\w.-])${escaped}(?=$|-)`).test(model)
+  return new RegExp(`(?<![\\w.-])${escaped}(?=$|-(?!\\d{1,2}(?:$|[-.])))`).test(model)
 }
 
 // Reports re-derive the display name of every cached call; the answer depends
