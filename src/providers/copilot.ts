@@ -66,7 +66,7 @@ import { getEditorDataDir } from '../editor-data-dir.js'
 import { createHash } from 'crypto'
 import { readSessionFile } from '../fs-utils.js'
 import { calculateCost, modelKeyMatches } from '../models.js'
-import { NANO_AIU_PER_CREDIT } from '../copilot-aiu.js'
+import { NANO_AIU_PER_CREDIT, creditsToUsd, nanoAiuToCredits } from '../copilot-aiu.js'
 import { extractBashCommands } from '../bash-utils.js'
 import { estimateTokens } from '../context-tree.js'
 import type {
@@ -559,7 +559,8 @@ function chatSessionModelTotals(raw: unknown): { inputTokens: number; cacheReadT
 }
 
 // copilotCredits is GitHub's billed total_nano_aiu / 1e9 for the whole request,
-// subagents included.
+// subagents included, so it prices the request where the last-round prompt
+// tokens cannot.
 function chatSessionNanoAiu(raw: unknown): number | undefined {
   return typeof raw === 'number' && Number.isFinite(raw) && raw >= 0 ? Math.round(raw * NANO_AIU_PER_CREDIT) : undefined
 }
@@ -721,7 +722,7 @@ function parseLegacyChatSession(
     if (seenKeys.has(dedupKey)) continue
     seenKeys.add(dedupKey)
 
-    const costUSD = calculateCost(
+    const costUSD = nanoAiu !== undefined ? creditsToUsd(nanoAiuToCredits(nanoAiu)) : calculateCost(
       model,
       totalInputTokens,
       outputTokens + reasoningTokens,
@@ -743,7 +744,7 @@ function parseLegacyChatSession(
       reasoningTokens,
       webSearchRequests: 0,
       costUSD,
-      costIsEstimated: isEstimated,
+      costIsEstimated: isEstimated && nanoAiu === undefined,
       tools,
       bashCommands: extracted.bashCommands,
       skills: extracted.skills.length > 0 ? extracted.skills : undefined,
@@ -753,7 +754,7 @@ function parseLegacyChatSession(
       userMessage: msgText,
       sessionId,
       project,
-      ...(nanoAiu !== undefined ? { nanoAiu } : {}),
+      ...(nanoAiu !== undefined ? { nanoAiu, costFromBilling: true } : {}),
     })
   }
 
@@ -1797,7 +1798,7 @@ function createJsonlParser(
 }
 
 function createChatSessionParser(
-  source: SessionSource,
+  source: ChatSessionSource,
   seenKeys: Set<string>
 ): SessionParser {
   return {
@@ -1813,6 +1814,7 @@ function createChatSessionParser(
           return
         }
         const sessionId = readString(session.sessionId) || basename(source.path, '.json')
+        if (source.agentHostSessionIds?.has(sessionId)) return
         yield* parseLegacyChatSession(session, sessionId, source.project, seenKeys)
         return
       }
@@ -1821,6 +1823,7 @@ function createChatSessionParser(
       if (!isRecord(root)) return
 
       const sessionId = readString(root['sessionId']) || basename(source.path, '.jsonl')
+      if (source.agentHostSessionIds?.has(sessionId)) return
       const sessionCreatedAt = timestampToISO(root['creationDate'])
       const requests = Array.isArray(root['requests']) ? root['requests'] : []
 
@@ -1849,7 +1852,9 @@ function createChatSessionParser(
         seenKeys.add(dedupKey)
 
         const model = modelFromChatSessionRequest(rawReq, metadata)
-        const costUSD = calculateCost(model, inputTokens, outputTokens, 0, cacheReadTokens, 0)
+        const costUSD = nanoAiu !== undefined
+          ? creditsToUsd(nanoAiuToCredits(nanoAiu))
+          : calculateCost(model, inputTokens, outputTokens, 0, cacheReadTokens, 0)
         const timestamp = timestampToISO(rawReq['timestamp']) || sessionCreatedAt
         const userMessage = isRecord(rawReq['message']) ? readString(rawReq['message']['text']) : ''
 
@@ -1875,7 +1880,7 @@ function createChatSessionParser(
           speed: 'standard' as const,
           deduplicationKey: dedupKey,
           userMessage,
-          ...(nanoAiu !== undefined ? { nanoAiu } : {}),
+          ...(nanoAiu !== undefined ? { nanoAiu, costFromBilling: true } : {}),
         }
       }
     },
@@ -3118,6 +3123,10 @@ interface TranscriptSessionSource extends SessionSource {
 
 interface ChatSessionSource extends SessionSource {
   sourceType: 'chatsession'
+  // Session-state dir names. A chat session with the same id also ran on the
+  // agent host, whose rollup and store rows bill it exactly; the journal copy
+  // is skipped so the request is not counted twice.
+  agentHostSessionIds?: ReadonlySet<string>
 }
 
 interface JetBrainsSessionSource extends SessionSource {
@@ -3759,9 +3768,10 @@ export function createCopilotProvider(
       if (storeSource) sources.push(storeSource)
 
       // 2. Discover JSONL sessions (fallback — output tokens only)
+      let jsonlSources: JsonlSessionSource[] = []
       try {
         const jsonlDir = getCopilotSessionStateDir(sessionStateDir)
-        const jsonlSources = await discoverJsonlSessions(jsonlDir)
+        jsonlSources = await discoverJsonlSessions(jsonlDir)
         if (storeSource) {
           // Same sessionId derivation as createJsonlParser: the CLI keys
           // session-state dirs and session-store rows by the same id, so the
@@ -3779,9 +3789,11 @@ export function createCopilotProvider(
       // Prefer OTel over chatSessions: they can mirror the same turns under
       // incompatible IDs, and OTel carries richer token/cache data.
       if (!discoveredOtel) {
+        const agentHostSessionIds = new Set(jsonlSources.map(src => basename(dirname(src.path))))
         // 3. Discover VS Code core chatSessions journals
         try {
           const chatSessionSources = await discoverWorkspaceChatSessions(getWsDirs())
+          for (const src of chatSessionSources) src.agentHostSessionIds = agentHostSessionIds
           sources.push(...chatSessionSources)
         } catch {
           // Workspace chatSessions discovery failed
@@ -3790,6 +3802,7 @@ export function createCopilotProvider(
         // 4. Discover VS Code empty-window chatSessions journals
         try {
           const emptyWindowSources = await discoverEmptyWindowChatSessions(getGlobalDirs())
+          for (const src of emptyWindowSources) src.agentHostSessionIds = agentHostSessionIds
           sources.push(...emptyWindowSources)
         } catch {
           // Empty-window chatSessions discovery failed

@@ -1145,6 +1145,7 @@ describe('copilot provider - chatSessions parsing', () => {
     expect([call!.inputTokens, call!.outputTokens, call!.cacheReadInputTokens]).toEqual([500, 60, 0])
     expect(call!.costUSD).toBe(calculateCost('gpt-4o', 500, 60, 0, 0, 0))
     expect(call!.nanoAiu).toBeUndefined()
+    expect(call!.costFromBilling).toBeUndefined()
   })
 
   // Copilot Chat 0.69: metadata holds the last of an agent request's model
@@ -1170,7 +1171,8 @@ describe('copilot provider - chatSessions parsing', () => {
     const [call, ...rest] = await collectCalls({ path, project: 'p', provider: 'copilot', sourceType: 'chatsession' })
     expect(rest).toEqual([])
     expect([call!.inputTokens, call!.cacheReadInputTokens, call!.cacheCreationInputTokens, call!.outputTokens]).toEqual([30_000, 220_000, 0, 4_300])
-    expect(call!.costUSD).toBe(calculateCost('claude-sonnet-4-6', 30_000, 4_300, 0, 220_000, 0))
+    expect(call!.costUSD).toBeCloseTo(0.965, 12)
+    expect(call!.costFromBilling).toBe(true)
     expect(call!.nanoAiu).toBe(96_500_000_000)
     expect(call!.costIsEstimated).toBeFalsy()
   })
@@ -1191,6 +1193,23 @@ describe('copilot provider - chatSessions parsing', () => {
       [30_100, 0, 4_300, 96_500_000_000],
       [0, 0, 0, 3_250_000_000],
     ])
+    expect(calls.map(c => c.costUSD)).toEqual([0.965, 0.965, 0.0325].map(usd => expect.closeTo(usd, 12)))
+  })
+
+  it('leaves a chat session that also ran on the agent host to the agent-host path', async () => {
+    await createSessionDir('twin-session', [modelChange('claude-sonnet-4.6'), userMessage('hi'), assistantMessage({ messageId: 'm1', outputTokens: 40 })])
+    const emptyWindowDir = join(tmpDir, 'globalStorage', 'emptyWindowChatSessions')
+    await mkdir(emptyWindowDir, { recursive: true })
+    for (const id of ['twin-session', 'solo-session']) {
+      await createChatSessionFile(join(emptyWindowDir, `${id}.jsonl`), [{ kind: 0, v: { sessionId: id, requests: [agentRequest()] } }])
+    }
+    const provider = createCopilotProvider(tmpDir, '/nonexistent/ws', join(tmpDir, 'globalStorage'), '/nonexistent/jetbrains', '/nonexistent/session-store.db')
+    const seen = new Set<string>()
+    const calls: ParsedProviderCall[] = []
+    for (const source of await provider.discoverSessions()) {
+      for await (const call of provider.createSessionParser(source, seen).parse()) calls.push(call)
+    }
+    expect(calls.map(c => c.deduplicationKey).sort()).toEqual(['copilot-chatsession:solo-session:agent', 'copilot:twin-session:m1'])
   })
 
   it.each([0, -1, '1000', null])('skips invalid or zero root usage without estimating text (%s)', async promptTokens => {
