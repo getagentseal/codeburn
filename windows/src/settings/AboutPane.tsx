@@ -6,11 +6,12 @@ import { Group, Note, Pane, Row } from './controls'
 import { ArrowUpRight, FLAME_PATH } from '../components/Icons'
 import { describeCliUpdate } from '../lib/cliUpdate'
 import { relativePast } from '../lib/dates'
-import { t, useI18nRevision } from '../lib/i18n'
+import { t as menuT, useI18nRevision } from '../lib/i18n'
 import {
   EMPTY_UPDATE, badgeAction, checkUpdates, runUpdateAction, subscribeUpdate, updateCli, type UpdateState,
 } from '../lib/update'
 import { track } from '../lib/telemetry'
+import { t } from '../i18n'
 
 /// The mac's AboutSettingsTab: a brand hero, the version with a Check for Updates button,
 /// the three links, and the licence line. A signed build installs what the check finds in one
@@ -48,7 +49,7 @@ export function AboutPane({ anchor }: Props) {
   const cliUpdate = status?.cliUpdateAvailable ?? false
   const oneClick = status?.installRoute === 'oneClick'
   const action = badgeAction(update)
-  const cliNote = describeCliUpdate(update.cliUpdate, t, status?.cliUpdateCommand ?? '')
+  const cliNote = describeCliUpdate(update.cliUpdate, menuT, status?.cliUpdateCommand ?? '')
   const busy = update.downloading || update.cliUpdate.running
 
   return (
@@ -67,13 +68,13 @@ export function AboutPane({ anchor }: Props) {
           </svg>
         </div>
         <div className="stg-hero-name">CodeBurn</div>
-        <div className="stg-hero-version">{version ? `Version ${version}` : 'Version'}</div>
-        <div className="stg-hero-tagline">Your AI Bill, Itemized</div>
+        <div className="stg-hero-version">{version ? t('Version %@', version) : t('Version')}</div>
+        <div className="stg-hero-tagline">{t('Your AI Bill, Itemized')}</div>
       </div>
 
-      <Group title="Updates">
+      <Group title={t('Updates')}>
         <Row
-          label={version ? `Version ${version}` : 'Version'}
+          label={version ? t('Version %@', version) : t('Version')}
           hint={lastChecked(update)}
           control={storeManaged ? null : (
             <>
@@ -84,10 +85,10 @@ export function AboutPane({ anchor }: Props) {
                   disabled={busy}
                   onClick={() => { track('update_click', { action }); runUpdateAction(action, status) }}
                 >
-                  {!oneClick ? 'Download from GitHub'
-                    : status?.readyToInstall ? 'Restart to Update'
-                    : update.cliUpdate.running ? t('Updating the CLI...')
-                    : update.downloading ? 'Downloading...' : 'Update'}
+                  {!oneClick ? t('Download from GitHub')
+                    : status?.readyToInstall ? t('Restart to Update')
+                    : update.cliUpdate.running ? menuT('Updating the CLI...')
+                    : update.downloading ? t('Downloading...') : t('Update')}
                 </button>
               )}
               <button
@@ -96,21 +97,21 @@ export function AboutPane({ anchor }: Props) {
                 disabled={update.checking}
                 onClick={() => { track('update_click', { action: 'check' }); void checkUpdates(true) }}
               >
-                {update.checking ? 'Checking...' : 'Check for Updates'}
+                {update.checking ? t('Checking...') : t('Check for Updates')}
               </button>
             </>
           )}
         />
         {appUpdate && !oneClick && status && (
           <CommandRow
-            label="Or install it from a terminal"
-            hint="Downloads the same release, checks it and runs the installer."
+            label={t('Or install it from a terminal')}
+            hint={t('Downloads the same release, checks it and runs the installer.')}
             command={status.appUpdateCommand}
           />
         )}
         {cliUpdate && status && !(appUpdate && oneClick) && (
           <Row
-            label={t('Update CLI')}
+            label={menuT('Update CLI')}
             control={(
               <button
                 type="button"
@@ -118,21 +119,21 @@ export function AboutPane({ anchor }: Props) {
                 disabled={busy}
                 onClick={() => { track('update_click', { action: 'cli' }); void updateCli() }}
               >
-                {t('Update CLI')}
+                {menuT('Update CLI')}
               </button>
             )}
           />
         )}
         {cliNote?.command && (
-          <CommandRow label="Run it from a terminal" command={cliNote.command} />
+          <CommandRow label={t('Run it from a terminal')} command={cliNote.command} />
         )}
         {cliNote && <Note>{cliNote.text}</Note>}
         <Note>{resultNote(update)}</Note>
       </Group>
 
       <Group
-        title="Links"
-        footer="Copyright 2026 Resham Joshi (iamtoruk) - AgentSeal. MIT License."
+        title={t('Links')}
+        footer={t('Copyright 2026 Resham Joshi (iamtoruk) - AgentSeal. MIT License.')}
       >
         {LINKS.map(link => (
           <button
@@ -141,7 +142,7 @@ export function AboutPane({ anchor }: Props) {
             className="stg-link-row"
             onClick={() => openUrl(link.url)}
           >
-            <span className="stg-row-label">{link.title}</span>
+            <span className="stg-row-label">{t(link.title)}</span>
             <span className="stg-link-arrow"><ArrowUpRight size={11} /></span>
           </button>
         ))}
@@ -174,10 +175,10 @@ function CommandRow({ label, hint, command }: { label: string; hint?: string; co
           <button
             type="button"
             className="btn"
-            aria-label={`Copy ${command} to the clipboard`}
+            aria-label={t('Copy %@ to the clipboard', command)}
             onClick={copy}
           >
-            {copied ? 'Copied' : 'Copy'}
+            {copied ? t('Copied') : t('Copy')}
           </button>
         </div>
       )}
@@ -189,30 +190,33 @@ function CommandRow({ label, hint, command }: { label: string; hint?: string; co
 /// modal: up to date, an update is available, or the check failed and why.
 function resultNote(update: UpdateState): string {
   const status = update.status
-  if (!status) return update.checking ? 'Checking GitHub for a newer release...' : ''
+  if (!status) return update.checking ? t('Checking GitHub for a newer release...') : ''
   if (status.storeManaged) {
-    const store = 'This copy came from the Microsoft Store, which keeps it up to date.'
+    const store = t('This copy came from the Microsoft Store, which keeps it up to date.')
     return status.cliUpdateAvailable && status.latestCliVersion
-      ? `${store} CLI ${status.latestCliVersion} is available (you have ${status.installedCliVersion ?? 'none'}).`
-      : `${store} There is nothing to check here.`
+      ? `${store} ${t('CLI %@ is available (you have %@).', status.latestCliVersion, status.installedCliVersion ?? t('none'))}`
+      : `${store} ${t('There is nothing to check here.')}`
   }
-  if (status.error) return `${status.failureStage === 'install' ? 'Update failed.' : 'Check failed.'} ${status.error}`
+  if (status.error) {
+    const lead = status.failureStage === 'install' ? t('Update failed.') : t('Check failed.')
+    return `${lead} ${status.error}`
+  }
   const parts: string[] = []
   if (status.updateAvailable && status.latestVersion) {
-    parts.push(`Version ${status.latestVersion} is available.`)
+    parts.push(t('Version %@ is available.', status.latestVersion))
   }
   if (status.cliUpdateAvailable && status.latestCliVersion) {
-    parts.push(`CLI ${status.latestCliVersion} is available (you have ${status.installedCliVersion ?? 'none'}).`)
+    parts.push(t('CLI %@ is available (you have %@).', status.latestCliVersion, status.installedCliVersion ?? t('none')))
   }
   if (parts.length === 0) {
-    return `You are on the latest version (${status.currentVersion}).`
+    return t('You are on the latest version (%@).', status.currentVersion)
   }
   if (status.updateAvailable && status.installRoute !== 'oneClick') {
     parts.push(
-      'These builds are unsigned and do not update themselves, so CodeBurn will not install one for you. Download it from GitHub and Windows will vet it before it runs.',
+      t('These builds are unsigned and do not update themselves, so CodeBurn will not install one for you. Download it from GitHub and Windows will vet it before it runs.'),
     )
     if (status.cliTooOld) {
-      parts.push('Update the CLI first: the installed one is too old to install this app.')
+      parts.push(t('Update the CLI first: the installed one is too old to install this app.'))
     }
   }
   return parts.join(' ')
@@ -223,5 +227,5 @@ function resultNote(update: UpdateState): string {
 function lastChecked(update: UpdateState): string {
   const at = update.status?.checkedAt
   if (!at) return ''
-  return `Checked ${relativePast(new Date(at * 1000))}`
+  return t('Checked %@', relativePast(new Date(at * 1000)))
 }

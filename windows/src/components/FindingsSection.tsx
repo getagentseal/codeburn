@@ -4,6 +4,7 @@ import type { CurrencyState } from '../lib/currency'
 import { computeTipGroups, type TipGroup } from '../lib/tips'
 import { plural } from '../lib/currency'
 import { ArrowForward, ArrowUpRightCircleIcon, BulbIcon, CheckCircleIcon, ChevronRight, WarningIcon } from './Icons'
+import { t } from '../i18n/index'
 
 type Props = {
   payload: MenubarPayload
@@ -23,7 +24,7 @@ export function FindingsSection({ payload, currency, onOpenTerminal }: Props) {
         <button type="button" className="findings-header" aria-expanded={expanded} onClick={() => setExpanded(e => !e)}>
           <span className="findings-header-left">
             <BulbIcon size={11} className="findings-icon" />
-            <span className="findings-title">Tips for you</span>
+            <span className="findings-title">{t('Tips for you')}</span>
           </span>
           <span className="findings-header-right">
             <span className="findings-count">{plural(totalSignals, 'signal')}</span>
@@ -36,7 +37,7 @@ export function FindingsSection({ payload, currency, onOpenTerminal }: Props) {
             {groups.map(g => g.items.length > 0 && <TipsGroupView key={g.label} group={g} />)}
             {payload.optimize.findingCount > 0 && (
               <button type="button" className="findings-open-optimize" onClick={() => onOpenTerminal(['optimize'])}>
-                <span>Open Full Optimize</span>
+                <span>{t('Open Full Optimize')}</span>
                 <ArrowForward size={9} />
               </button>
             )}
