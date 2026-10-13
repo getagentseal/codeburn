@@ -33,11 +33,14 @@ struct KimiUsage: Sendable, Equatable {
 
 /// Mirror of CodexSubscriptionService for Kimi Code. Reads the CLI's
 /// credential file directly (~/.kimi-code/credentials/kimi-code.json) —
-/// no keychain bootstrap, no OAuth refresh. Tokens are short-lived
-/// (~15 min) and only the Kimi CLI refreshes them, so an expired token is
-/// a terminal state: the UI tells the user to run the CLI once.
+/// no keychain bootstrap. Access tokens are short-lived (~15 min), so an
+/// expired one is renewed with the file's refresh_token against the same
+/// endpoint the Kimi CLI uses. The rotated credentials are kept in memory
+/// only; the CLI's file is never written back to.
 enum KimiSubscriptionService {
     private static let usageURL = URL(string: "https://api.kimi.com/coding/v1/usages")!
+    private static let tokenURL = URL(string: "https://auth.kimi.com/api/oauth/token")!
+    private static let oauthClientID = "17e5f671-d194-4dfb-9706-5516cb48c098"
     private static let usageBlockedUntilKey = "codeburn.kimi.usage.blockedUntil"
 
     enum FetchError: Error, LocalizedError {
@@ -81,16 +84,19 @@ enum KimiSubscriptionService {
 
     private struct CredentialFile: Decodable {
         let accessToken: String
+        let refreshToken: String?
         let expiresAt: Double
 
         enum CodingKeys: String, CodingKey {
             case accessToken = "access_token"
+            case refreshToken = "refresh_token"
             case expiresAt = "expires_at"
         }
 
         init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
             accessToken = try c.decode(String.self, forKey: .accessToken)
+            refreshToken = try? c.decode(String.self, forKey: .refreshToken)
             // Tolerate Int / Double / String epoch-seconds.
             if let n = try? c.decode(Double.self, forKey: .expiresAt) {
                 expiresAt = n
@@ -112,18 +118,94 @@ enum KimiSubscriptionService {
         FileManager.default.fileExists(atPath: credentialsURL.path)
     }
 
-    /// Returns the access token only when it is still fresh (60s skew).
-    /// Throws noCredentials / tokenExpired otherwise.
-    private static func freshToken() throws -> String {
+    /// Fresh access token, renewing through the CLI's OAuth refresh grant
+    /// when the file's access token is stale. A missing refresh grant is
+    /// still terminal — the UI then asks the user to run the Kimi CLI once.
+    private static func accessToken() async throws -> String {
         guard let data = FileManager.default.contents(atPath: credentialsURL.path),
               let cred = try? JSONDecoder().decode(CredentialFile.self, from: data),
               !cred.accessToken.isEmpty else {
             throw FetchError.noCredentials
         }
-        guard cred.expiresAt > Date().timeIntervalSince1970 + 60 else {
+        if cred.expiresAt > Date().timeIntervalSince1970 + 60 {
+            return cred.accessToken
+        }
+        if let cached = freshCachedToken(), cached.expiresAt > Date() + 60 {
+            return cached.token
+        }
+        guard let refreshToken = cred.refreshToken, !refreshToken.isEmpty else {
             throw FetchError.tokenExpired
         }
-        return cred.accessToken
+        return try await renewAccessToken(refreshToken)
+    }
+
+    /// The CLI's rotated access token lives only for this process — the
+    /// credential file keeps the CLI's own copy untouched. Locking stays in
+    /// synchronous helpers: NSLock is unavailable from async contexts.
+    private static let refreshedTokenLock = NSLock()
+    private nonisolated(unsafe) static var cachedRefreshedToken: (token: String, expiresAt: Date)?
+
+    private static func freshCachedToken() -> (token: String, expiresAt: Date)? {
+        refreshedTokenLock.lock()
+        defer { refreshedTokenLock.unlock() }
+        return cachedRefreshedToken
+    }
+
+    private static func storeCachedToken(_ token: String, expiresAt: Date) {
+        refreshedTokenLock.lock()
+        cachedRefreshedToken = (token, expiresAt)
+        refreshedTokenLock.unlock()
+    }
+
+    private static func renewAccessToken(_ refreshToken: String) async throws -> String {
+        var request = URLRequest(url: tokenURL)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 15
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        request.setValue("CodeBurn", forHTTPHeaderField: "User-Agent")
+        var body = URLComponents()
+        body.queryItems = [
+            URLQueryItem(name: "grant_type", value: "refresh_token"),
+            URLQueryItem(name: "refresh_token", value: refreshToken),
+            URLQueryItem(name: "client_id", value: oauthClientID),
+        ]
+        request.httpBody = body.percentEncodedQuery?.data(using: .utf8)
+
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await URLSession.shared.data(for: request)
+        } catch {
+            throw FetchError.network(error)
+        }
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200,
+              let tokens = try? JSONDecoder().decode(RenewedTokens.self, from: data),
+              !tokens.accessToken.isEmpty else {
+            throw FetchError.tokenExpired
+        }
+        let ttl = max(60, tokens.expiresIn ?? 900)
+        storeCachedToken(tokens.accessToken, expiresAt: Date().addingTimeInterval(ttl))
+        return tokens.accessToken
+    }
+
+    private struct RenewedTokens: Decodable {
+        let accessToken: String
+        let expiresIn: Double?
+        enum CodingKeys: String, CodingKey {
+            case accessToken = "access_token"
+            case expiresIn = "expires_in"
+        }
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            accessToken = try c.decode(String.self, forKey: .accessToken)
+            if let n = try? c.decode(Double.self, forKey: .expiresIn) {
+                expiresIn = n
+            } else if let s = try? c.decode(String.self, forKey: .expiresIn) {
+                expiresIn = Double(s)
+            } else {
+                expiresIn = nil
+            }
+        }
     }
 
     private static func deviceId() -> String? {
@@ -141,7 +223,7 @@ enum KimiSubscriptionService {
         if let until = usageBlockedUntil(), until > Date() {
             throw FetchError.rateLimited(retryAt: until)
         }
-        let token = try freshToken()
+        let token = try await accessToken()
 
         var request = URLRequest(url: usageURL)
         request.httpMethod = "GET"
