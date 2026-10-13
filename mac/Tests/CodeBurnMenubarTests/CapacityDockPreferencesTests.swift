@@ -273,9 +273,9 @@ struct CapacityDockPreferencesTests {
         let model = CapacityDockViewModel(preferences: snapshot, claudeProfiles: profiles)
         #expect(model.usesSeparateClaudeProfiles)
         #expect(model.effectiveSelectedProviders == [
+            .codex,
             .claudeProfile(id: "claude-config:0e4378b7c9974e40"),
             .claudeProfile(id: "claude-org:64cceafd-5d4b-4fdd-928c-91c807474898"),
-            .codex,
             zcode,
         ])
         #expect(model.effectivePreferredProvider == .claudeProfile(id: "claude-config:0e4378b7c9974e40"))
