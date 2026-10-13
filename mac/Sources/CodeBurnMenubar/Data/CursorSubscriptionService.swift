@@ -1,4 +1,5 @@
 import Foundation
+import Security
 import SQLite3
 
 /// CodeBurn-owned Cursor quota adapter. It reads Cursor.app's existing local
@@ -307,10 +308,68 @@ enum CursorSubscriptionService {
 /// Narrow read-only adapter for Cursor's own VS Code state database.
 struct CursorAppSessionStore: Sendable {
     private static let accessTokenKey = "cursorAuth/accessToken"
+    /// cursor-agent CLI keeps the same WorkOS session JWT in the login
+    /// keychain; no Cursor IDE install produces no state.vscdb at all.
+    private static let cliTokenService = "cursor-access-token"
+    private static let cliTokenAccount = "cursor-user"
     let databaseURL: URL
 
     init(databaseURL: URL = Self.defaultDatabaseURL()) {
         self.databaseURL = databaseURL
+    }
+
+    /// Read-only lookup of the cursor-agent CLI's session token. Prefers
+    /// `/usr/bin/security`: agent-created items let Apple's signed `security`
+    /// binary read them silently, while SecItemCopyMatching from this app
+    /// raises an interactive prompt that a menu-bar agent cannot anchor.
+    static func loadCLIAccessToken() -> String? {
+        loadCLIAccessTokenViaSecurityTool() ?? loadCLIAccessTokenViaKeychain()
+    }
+
+    private static func loadCLIAccessTokenViaSecurityTool() -> String? {
+        let process = Process()
+        let output = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/security")
+        process.arguments = [
+            "find-generic-password", "-s", cliTokenService, "-a", cliTokenAccount, "-w",
+        ]
+        process.standardOutput = output
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+        } catch {
+            return nil
+        }
+        // A missing or ACL-blocked item exits fast; anything else gets 5s
+        // before we kill it rather than block the refresh loop on a prompt.
+        let deadline = Date().addingTimeInterval(5)
+        while process.isRunning && Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.02)
+        }
+        if process.isRunning {
+            process.terminate()
+            process.waitUntilExit()
+            return nil
+        }
+        let token = String(data: output.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return (token?.isEmpty == false) ? token : nil
+    }
+
+    private static func loadCLIAccessTokenViaKeychain() -> String? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: cliTokenService,
+            kSecAttrAccount as String: cliTokenAccount,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+        ]
+        var item: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
+              let data = item as? Data else { return nil }
+        let token = String(data: data, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return (token?.isEmpty == false) ? token : nil
     }
 
     static func defaultDatabaseURL(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> URL {
@@ -320,12 +379,16 @@ struct CursorAppSessionStore: Sendable {
     }
 
     func loadAccessToken() throws -> String? {
-        guard FileManager.default.fileExists(atPath: databaseURL.path) else { return nil }
+        guard FileManager.default.fileExists(atPath: databaseURL.path) else {
+            return Self.loadCLIAccessToken()
+        }
         do {
             return try value(for: Self.accessTokenKey, immutable: false)
+                ?? Self.loadCLIAccessToken()
         } catch let error as SQLiteFailure
             where error.code == SQLITE_CANTOPEN && walSidecarsAreMissing {
             return try value(for: Self.accessTokenKey, immutable: true)
+                ?? Self.loadCLIAccessToken()
         } catch {
             throw CursorAppSessionStoreError.unreadable
         }
