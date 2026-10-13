@@ -251,4 +251,35 @@ struct CapacityDockPreferencesTests {
         #expect(selected.contains(.codex))
         #expect(selected.contains(zcode))
     }
+
+    @MainActor
+    @Test("separate Claude profiles mode expands the Claude ring into one captioned ring per profile")
+    func separateClaudeProfileRings() {
+        let (defaults, suiteName) = defaults()
+        defer { TestDefaults.forget(suiteName) }
+
+        CapacityDockPreferences.setSelectedProviders([.codex, .claude, .zcode], defaults: defaults)
+        CapacityDockPreferences.setPreferredProvider(.claude, defaults: defaults)
+        CapacityDockPreferences.setClaudeProfiles(.separate, defaults: defaults)
+
+        let profiles = [
+            CapacityDockClaudeProfile(id: "claude-config:0e4378b7c9974e40", label: "Personal"),
+            CapacityDockClaudeProfile(id: "claude-org:64cceafd-5d4b-4fdd-928c-91c807474898", label: "Codeburn"),
+        ]
+        let snapshot = CapacityDockPreferences.load(defaults: defaults)
+        #expect(snapshot.claudeProfiles == .separate)
+
+        let model = CapacityDockViewModel(preferences: snapshot, claudeProfiles: profiles)
+        #expect(model.usesSeparateClaudeProfiles)
+        #expect(model.effectiveSelectedProviders == [
+            .claudeProfile(id: "claude-config:0e4378b7c9974e40"),
+            .claudeProfile(id: "claude-org:64cceafd-5d4b-4fdd-928c-91c807474898"),
+            .codex,
+            .zcode,
+        ])
+        #expect(model.effectivePreferredProvider == .claudeProfile(id: "claude-config:0e4378b7c9974e40"))
+        #expect(model.caption(for: .claudeProfile(id: "claude-config:0e4378b7c9974e40")) == "Personal")
+        #expect(model.caption(for: .claudeProfile(id: "claude-org:64cceafd-5d4b-4fdd-928c-91c807474898")) == "Codeburn")
+        #expect(model.detailTitle(for: .claudeProfile(id: "claude-org:64cceafd-5d4b-4fdd-928c-91c807474898")) == "Claude · Codeburn")
+    }
 }

@@ -174,6 +174,10 @@ final class AppStore {
     var subscription: SubscriptionUsage?
     var subscriptionError: String?
     var subscriptionLoadState: SubscriptionLoadState = ClaudeCredentialStore.isBootstrapCompleted ? .dormant : .notBootstrapped
+    var capacityDockClaudeProfiles: [CapacityDockClaudeProfile] = []
+    var claudeProfileSubscriptions: [String: SubscriptionUsage] = [:]
+    var claudeProfileLoadStates: [String: SubscriptionLoadState] = [:]
+    var claudeProfileTodayPayloads: [String: CurrentBlock] = [:]
     var capacityEstimates: [String: CapacityEstimate] = [:]
     @ObservationIgnored var earlyQuotaResetMonitor = EarlyQuotaResetMonitor()
     @ObservationIgnored var quotaCrossingMonitor = QuotaCrossingMonitor()
@@ -227,6 +231,12 @@ final class AppStore {
     /// making the production tests contact provider endpoints.
     @ObservationIgnored var claudeQuotaFetcher: @Sendable () async throws -> SubscriptionUsage? = {
         try await ClaudeSubscriptionService.refreshIfBootstrapped()
+    }
+    @ObservationIgnored var claudeProfileQuotaFetcher: @Sendable (CapacityDockClaudeProfile) async throws -> SubscriptionUsage? = {
+        try await ClaudeSubscriptionService.refreshProfile($0)
+    }
+    @ObservationIgnored var claudeProfilesDiscoverer: @Sendable () -> [CapacityDockClaudeProfile] = {
+        ClaudeCredentialStore.discoverProfiles()
     }
     @ObservationIgnored var codexQuotaFetcher: @Sendable () async throws -> CodexUsage? = {
         try await CodexSubscriptionService.refreshIfBootstrapped()
@@ -1517,6 +1527,7 @@ final class AppStore {
             subscription = usage
             subscriptionError = nil
             subscriptionLoadState = .loaded
+            await refreshClaudeProfiles()
             await captureSnapshots(for: usage, baselineIsTrusted: false)
         } catch let err as ClaudeSubscriptionService.FetchError {
             applyFetchError(err)
@@ -1567,6 +1578,7 @@ final class AppStore {
             subscriptionError = nil
             subscriptionLoadState = .loaded
             finishClaudeQuotaRefresh(token)
+            await refreshClaudeProfiles()
             await captureSnapshots(
                 for: usage,
                 baselineIsTrusted: stateBeforeFetch.earlyResetBaselineIsTrusted
@@ -1591,6 +1603,53 @@ final class AppStore {
             subscriptionLoadState = .failed
             finishClaudeQuotaRefresh(token)
             return false
+        }
+    }
+
+    func refreshClaudeProfiles() async {
+        let profiles = claudeProfilesDiscoverer()
+        capacityDockClaudeProfiles = profiles
+        guard profiles.count > 1 else { return }
+        let defaultDir = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".claude").standardizedFileURL.path
+        for profile in profiles {
+            let isDefault = profile.path.map {
+                URL(fileURLWithPath: $0).standardizedFileURL.path == defaultDir
+            } == true && !profile.id.hasPrefix("claude-org:")
+            if isDefault, let subscription {
+                claudeProfileSubscriptions[profile.id] = subscription
+                claudeProfileLoadStates[profile.id] = subscriptionLoadState
+            } else {
+                do {
+                    if let usage = try await claudeProfileQuotaFetcher(profile) {
+                        claudeProfileSubscriptions[profile.id] = usage
+                        claudeProfileLoadStates[profile.id] = .loaded
+                    } else if claudeProfileSubscriptions[profile.id] == nil {
+                        claudeProfileLoadStates[profile.id] = .noCredentials
+                    }
+                } catch let err as ClaudeSubscriptionService.FetchError {
+                    if err.isTerminal {
+                        claudeProfileLoadStates[profile.id] = .terminalFailure(reason: sanitizeForUI(err.errorDescription))
+                    } else if let retryAt = err.rateLimitRetryAt {
+                        claudeProfileLoadStates[profile.id] = .transientFailure(retryAt: retryAt)
+                    } else {
+                        claudeProfileLoadStates[profile.id] = .failed
+                    }
+                } catch {
+                    claudeProfileLoadStates[profile.id] = .failed
+                }
+            }
+            let key = PayloadCacheKey(
+                scope: .local,
+                period: .today,
+                provider: .all,
+                day: nil,
+                claudeConfigSourceId: profile.id
+            )
+            if await refreshQuietly(key: key, includeOptimize: false, qualityOfService: .utility),
+               let current = cache[key]?.payload.current {
+                claudeProfileTodayPayloads[profile.id] = current
+            }
         }
     }
 
@@ -2259,6 +2318,11 @@ final class AppStore {
     /// "none running".
     func capacityDockLiveSessions(for provider: CapacityDockProvider) -> [LiveSession]? {
         guard let block = menubarPayload?.liveSessions else { return nil }
+        if let profileID = provider.claudeProfileID {
+            return block.sessions.filter {
+                $0.provider == "claude" && $0.claudeConfigSourceId == profileID
+            }
+        }
         // The CLI names providers by their own ids ("kimicode", "cursor-agent"),
         // not by the dock's raw identifiers ("kimi"); match the payload ids.
         let ids = provider.payloadProviderIDs
@@ -2335,6 +2399,32 @@ final class AppStore {
     /// from a breakdown that IS present had no usage today, which is a real
     /// zero, not missing data.
     func capacityDockToday(for provider: CapacityDockProvider) -> ProviderDetail? {
+        if let profileID = provider.claudeProfileID {
+            let scopedKey = PayloadCacheKey(
+                scope: .local,
+                period: .today,
+                provider: .all,
+                day: nil,
+                claudeConfigSourceId: profileID
+            )
+            guard let block = claudeProfileTodayPayloads[profileID] ?? cache[scopedKey]?.payload.current else {
+                return nil
+            }
+            if let claudeDetail = block.providerDetails.first(where: { $0.id == "claude" }) {
+                return claudeDetail
+            }
+            return ProviderDetail(
+                id: "claude",
+                label: "Claude",
+                cost: block.cost,
+                calls: block.calls,
+                hasUsage: block.calls > 0 || block.cost > 0,
+                inputTokens: block.inputTokens,
+                outputTokens: block.outputTokens,
+                sessions: block.sessions,
+                cacheReadTokens: block.cacheReadTokens
+            )
+        }
         guard let current = capacityDockToday, !current.providerDetails.isEmpty else { return nil }
         let ids = Set(provider.payloadProviderIDs)
         let rows = current.providerDetails.filter { ids.contains($0.id) }
@@ -2373,6 +2463,9 @@ final class AppStore {
     }
 
     func capacityDockQuotaSummary(for provider: CapacityDockProvider) -> QuotaSummary? {
+        if let profileID = provider.claudeProfileID {
+            return claudeProfileQuotaSummary(profileID: profileID)
+        }
         if let filter = provider.legacyFilter {
             return quotaSummary(for: filter)
         }
@@ -2591,17 +2684,39 @@ final class AppStore {
     }
 
     private func claudeQuotaSummary(filter: ProviderFilter) -> QuotaSummary? {
-        if case .notBootstrapped = subscriptionLoadState { return nil }
-        if case .bootstrapping = subscriptionLoadState { return nil }
-        if case .noCredentials = subscriptionLoadState { return nil }
-        let usageIsFresh = QuotaSummary.isFresh(fetchedAt: subscription?.fetchedAt)
+        buildClaudeQuotaSummary(
+            filter: filter,
+            usage: subscription,
+            loadState: subscriptionLoadState
+        )
+    }
+
+    private func claudeProfileQuotaSummary(profileID: String) -> QuotaSummary? {
+        let usage = claudeProfileSubscriptions[profileID] ?? (
+            capacityDockClaudeProfiles.first?.id == profileID ? subscription : nil
+        )
+        let loadState = claudeProfileLoadStates[profileID] ?? (
+            capacityDockClaudeProfiles.first?.id == profileID ? subscriptionLoadState : .dormant
+        )
+        return buildClaudeQuotaSummary(filter: .claude, usage: usage, loadState: loadState)
+    }
+
+    private func buildClaudeQuotaSummary(
+        filter: ProviderFilter,
+        usage: SubscriptionUsage?,
+        loadState: SubscriptionLoadState
+    ) -> QuotaSummary? {
+        if case .notBootstrapped = loadState { return nil }
+        if case .bootstrapping = loadState { return nil }
+        if case .noCredentials = loadState { return nil }
+        let usageIsFresh = QuotaSummary.isFresh(fetchedAt: usage?.fetchedAt)
 
         let connection: QuotaSummary.Connection = {
-            switch subscriptionLoadState {
+            switch loadState {
             case .notBootstrapped, .dormant, .bootstrapping, .noCredentials: return .disconnected
-            case .loading: return subscription == nil ? .loading : .stale
+            case .loading: return usage == nil ? .loading : .stale
             case .loaded: return usageIsFresh ? .connected : .stale
-            case .failed: return subscription == nil ? .loading : .stale
+            case .failed: return usage == nil ? .loading : .stale
             case let .terminalFailure(reason): return .terminalFailure(reason: reason)
             case .transientFailure: return .transientFailure
             }
@@ -2609,15 +2724,16 @@ final class AppStore {
 
         var primary: QuotaSummary.Window?
         var details: [QuotaSummary.Window] = []
-        if let usage = subscription {
+        if let usage {
             // Claude's rate-limit windows are fixed lengths, so each row
             // carries its validated duration for pace presentation.
             if let pct = usage.fiveHourPercent {
-                details.append(.init(
+                let fiveHour = QuotaSummary.Window(
                     label: "5-hour", percent: pct / 100, resetsAt: usage.fiveHourResetsAt,
                     windowSeconds: QuotaPacePresentation.claudeFiveHourSeconds,
                     fetchedAt: usage.fetchedAt
-                ))
+                )
+                details.append(fiveHour)
             }
             if let pct = usage.sevenDayPercent {
                 let weekly = QuotaSummary.Window(
@@ -2627,6 +2743,9 @@ final class AppStore {
                 )
                 primary = weekly
                 details.append(weekly)
+            }
+            if primary == nil {
+                primary = details.first
             }
             if let pct = usage.sevenDayOpusPercent {
                 details.append(.init(
@@ -2650,7 +2769,7 @@ final class AppStore {
                 ))
             }
         }
-        let plan = subscription?.tier.displayName
+        let plan = usage?.tier.displayName
         return QuotaSummary(providerFilter: filter, connection: connection, primary: primary, details: details, planLabel: plan, footerLines: [])
     }
 
