@@ -258,7 +258,8 @@ struct CapacityDockPreferencesTests {
         let (defaults, suiteName) = defaults()
         defer { TestDefaults.forget(suiteName) }
 
-        CapacityDockPreferences.setSelectedProviders([.codex, .claude, .zcode], defaults: defaults)
+        let zcode = CapacityDockProvider(rawValue: "zcode")!
+        CapacityDockPreferences.setSelectedProviders([.codex, .claude, zcode], defaults: defaults)
         CapacityDockPreferences.setPreferredProvider(.claude, defaults: defaults)
         CapacityDockPreferences.setClaudeProfiles(.separate, defaults: defaults)
 
@@ -275,7 +276,7 @@ struct CapacityDockPreferencesTests {
             .claudeProfile(id: "claude-config:0e4378b7c9974e40"),
             .claudeProfile(id: "claude-org:64cceafd-5d4b-4fdd-928c-91c807474898"),
             .codex,
-            .zcode,
+            zcode,
         ])
         #expect(model.effectivePreferredProvider == .claudeProfile(id: "claude-config:0e4378b7c9974e40"))
         #expect(model.caption(for: .claudeProfile(id: "claude-config:0e4378b7c9974e40")) == "Personal")
