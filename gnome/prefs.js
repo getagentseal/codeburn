@@ -54,7 +54,7 @@ export default class CodeBurnPreferences extends ExtensionPreferences {
 
     const refreshRow = new Adw.SpinRow({
       title: 'Refresh Interval',
-      subtitle: 'Seconds between data refreshes',
+      subtitle: 'Fastest poll while the menu is open or a session is working. Idle waits longer, and longer on battery.',
       adjustment: new Gtk.Adjustment({
         lower: 5,
         upper: 300,
