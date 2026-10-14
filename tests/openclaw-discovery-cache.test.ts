@@ -117,7 +117,7 @@ describe('OpenClaw discovery cache invalidation', () => {
 
   // Pin released versions: deriving this from DAILY_CACHE_VERSION would stop
   // detecting a reused version when another provider's migration lands first.
-  it.each([51, 73, 74])('backfills relocated history from a finalized v%i daily cache and retains archived usage', async version => {
+  it.each([51, 73, 74, 75])('backfills relocated history from a finalized v%i daily cache and retains archived usage', async version => {
     const root = await mkdtemp(join(tmpdir(), 'openclaw-daily-backfill-'))
     try {
       const cache = join(root, 'cache')
