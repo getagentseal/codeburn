@@ -3084,6 +3084,9 @@ export function detectBloatedClaudeMd(projectCwds: Set<string>): WasteFinding | 
 export const READ_TOOL_NAMES = new Set(['Read', 'Grep', 'Glob', 'FileReadTool', 'GrepTool', 'GlobTool'])
 export const EDIT_TOOL_NAMES = new Set(['Edit', 'Write', 'FileEditTool', 'FileWriteTool', 'NotebookEdit'])
 export const BASH_TOOL_NAMES = new Set(['Bash', 'BashTool', 'PowerShellTool'])
+// Writing a new file has nothing to read first; counting Write flagged subagents
+// that produce reports as editing blind. Not EDIT_TOOL_NAMES: act report baselines use that.
+const RATIO_EDIT_TOOL_NAMES = new Set(['Edit', 'FileEditTool', 'NotebookEdit'])
 
 export function detectLowReadEditRatio(calls: ToolCall[]): WasteFinding | null {
   let reads = 0
@@ -3100,7 +3103,7 @@ export function detectLowReadEditRatio(calls: ToolCall[]): WasteFinding | null {
       // reckless editors (90%+ of real reads were invisible to this ratio).
       reads++
       if (call.recent) recentReads++
-    } else if (EDIT_TOOL_NAMES.has(call.name)) {
+    } else if (RATIO_EDIT_TOOL_NAMES.has(call.name)) {
       edits++
       if (call.recent) recentEdits++
     }

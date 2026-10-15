@@ -307,13 +307,16 @@ describe('detectLowReadEditRatio', () => {
     expect(detectLowReadEditRatio(calls)).toBeNull()
   })
 
-  it('counts Write as edit', () => {
+  it('does not count Write as edit', () => {
+    // Subagents writing new report files have nothing to read first.
     const calls = [
       ...Array.from({ length: 15 }, () => call('Read', {})),
-      ...Array.from({ length: 10 }, () => call('Write', {})),
+      ...Array.from({ length: 10 }, () => call('Edit', {})),
+      ...Array.from({ length: 30 }, () => call('Write', {})),
     ]
     const finding = detectLowReadEditRatio(calls)
     expect(finding).not.toBeNull()
+    expect(finding!.explanation).toContain('15 reads and 10 edits')
   })
 })
 
