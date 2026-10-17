@@ -1,6 +1,6 @@
 import { availableParallelism, totalmem } from 'os'
 import { MessageChannel, Worker, type MessagePort } from 'worker_threads'
-import { loadCodexParentReplay } from './codex-fork-replay.js'
+import { loadCodexParentReplayIndex, type CodexParentReplayIndex } from './codex-fork-replay.js'
 import { snapshotPricingState } from './models.js'
 import type { ClaudeFileParse } from './parser.js'
 import type { SessionSource } from './providers/types.js'
@@ -124,13 +124,13 @@ type Task = { job: ParseJob; resolve: (r: ParseWorkerResult<unknown>) => void }
 
 type WorkerMessage = { json?: string | null; error?: string }
 
-export type ParentReplayRequest = { id: number; args: Parameters<typeof loadCodexParentReplay> }
-export type ParentReplayReply = { id: number; ids?: Set<string> | null; error?: string }
+export type ParentReplayRequest = { id: number; args: Parameters<typeof loadCodexParentReplayIndex> }
+export type ParentReplayReply = { id: number; index?: CodexParentReplayIndex | null; error?: string }
 
 function serveParentReplay(port: MessagePort): void {
   port.on('message', ({ id, args }: ParentReplayRequest) => {
-    loadCodexParentReplay(...args).then(
-      ids => port.postMessage({ id, ids } satisfies ParentReplayReply),
+    loadCodexParentReplayIndex(...args).then(
+      index => port.postMessage({ id, index } satisfies ParentReplayReply),
       (err: unknown) => port.postMessage({ id, error: err instanceof Error ? err.message : String(err) } satisfies ParentReplayReply),
     )
   })
