@@ -1,4 +1,4 @@
-import { readFile, mkdir, stat, open, rename, unlink } from 'fs/promises'
+import { readFile, readdir, mkdir, stat, open, rename, unlink } from 'fs/promises'
 import { existsSync } from 'fs'
 import { randomBytes } from 'crypto'
 import { join, resolve } from 'path'
@@ -137,6 +137,47 @@ function isCurrentCache(cache: ResultCache): boolean {
   return cache.version === CODEX_CACHE_VERSION && !!cache.files && typeof cache.files === 'object'
 }
 
+// Legacy temporary files have no owner information. Give recent writes a full day
+// before reclaiming them; new temporary files also identify their live writer.
+const ORPHAN_AGE_MS = 24 * 60 * 60 * 1000
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
+async function cleanOrphanedTemps(dir: string): Promise<void> {
+  try {
+    const names = await readdir(dir)
+    for (const name of names) {
+      const match = /^codex-(?:results(?:\.v\d+)?|projects\.v\d+)\.json\.[a-f0-9]{16}(?:\.(\d+))?\.tmp$/.exec(name)
+      if (!match) continue
+      if (match[1]) {
+        try {
+          process.kill(Number(match[1]), 0)
+          continue // Never unlink a live writer's file, even if it is old.
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ESRCH') continue
+        }
+      }
+      const path = join(dir, name)
+      try {
+        const info = await stat(path)
+        if (!info.isFile()) continue
+        console.warn(`[codeburn] Found unfinished Codex cache write: ${path} (${info.size} bytes). The disk cache may be stale; source fingerprints will be checked.`)
+        if (match[1] || Date.now() - info.mtimeMs >= ORPHAN_AGE_MS) await unlink(path)
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+          console.warn(`[codeburn] Could not clean Codex cache temporary file ${path}: ${errorMessage(error)}`)
+        }
+      }
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      console.warn(`[codeburn] Could not inspect unfinished Codex cache writes in ${dir}: ${errorMessage(error)}`)
+    }
+  }
+}
+
 // Embedded consumers can change CODEBURN_CACHE_DIR without reloading this
 // module. Keep each directory's in-memory state separate so a warm cache (or an
 // unflushed update) from A can never be read from or written into B.
@@ -180,23 +221,34 @@ async function writeProjectIndex(cacheDir: string, cache: ResultCache): Promise<
   }
   try {
     await writeFileAtomic(join(cacheDir, codexProjectsFileName()), JSON.stringify({ version: CODEX_CACHE_VERSION, files }))
-  } catch {}
+  } catch (error) {
+    console.warn(`[codeburn] Failed to update Codex project index ${join(cacheDir, codexProjectsFileName())}; the disk cache may be stale: ${errorMessage(error)}`)
+  }
 }
 
 async function writeFileAtomic(finalPath: string, payload: string): Promise<void> {
-  const tempPath = `${finalPath}.${randomBytes(8).toString('hex')}.tmp`
-  const handle = await open(tempPath, 'w', 0o600)
+  const tempPath = `${finalPath}.${randomBytes(8).toString('hex')}.${process.pid}.tmp`
+  let ownsTemp = false
   try {
-    await handle.writeFile(payload, { encoding: 'utf-8' })
-    await handle.sync()
-  } finally {
-    await handle.close()
-  }
-  try {
+    const handle = await open(tempPath, 'wx', 0o600)
+    ownsTemp = true
+    try {
+      await handle.writeFile(payload, { encoding: 'utf-8' })
+      await handle.sync()
+    } finally {
+      await handle.close()
+    }
     await rename(tempPath, finalPath)
-  } catch (err) {
-    try { await unlink(tempPath) } catch {}
-    throw err
+  } finally {
+    // Cover write, fsync, close, and rename failures. Never remove a file we
+    // did not create (for example, after an exclusive-open collision).
+    if (ownsTemp) {
+      try { await unlink(tempPath) } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+          console.warn(`[codeburn] Could not remove Codex cache temporary file ${tempPath}: ${errorMessage(error)}`)
+        }
+      }
+    }
   }
 }
 
@@ -216,6 +268,7 @@ function loadCache(cacheDir: string): Promise<ResultCache> {
 }
 
 async function loadCacheFromDisk(cacheDir: string): Promise<ResultCache> {
+  await cleanOrphanedTemps(cacheDir)
   const empty = { version: CODEX_CACHE_VERSION, files: {} }
   const versioned = await readExistingTextFile(getCachePath(cacheDir))
   if (versioned.status === 'ok') {
@@ -387,6 +440,7 @@ export async function flushCodexCache(): Promise<void> {
   const memCache = memCaches.get(cacheDir)
   if (!memCache) return
   try {
+    await cleanOrphanedTemps(cacheDir)
     // Evict entries for files that no longer exist on disk
     const paths = Object.keys(memCache.files)
     for (const p of paths) {
@@ -406,5 +460,8 @@ export async function flushCodexCache(): Promise<void> {
     await writeFileAtomic(getCachePath(cacheDir), JSON.stringify(memCache))
     await writeProjectIndex(cacheDir, memCache)
     projectIndexes.delete(cacheDir)
-  } catch {}
+  } catch (error) {
+    // Persistence is optional; reports can still use the parsed results.
+    console.warn(`[codeburn] Failed to update Codex cache ${getCachePath(cacheDir)}; the disk cache may be stale: ${errorMessage(error)}`)
+  }
 }
