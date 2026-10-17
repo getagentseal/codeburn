@@ -69,7 +69,7 @@ async function startHydratingDashboard(): Promise<RunningDashboard> {
   // plus 2000 utimes on a cold temp dir, then 2000 unlinks, is what pushed this
   // past the 30s limit on Windows CI. Same 60 MB, a twentieth of the files.
   const body = '{}\n'.repeat(200_000)
-  const old = new Date(Date.now() - 200 * 24 * 60 * 60 * 1_000)
+  const old = new Date(Date.now() - 400 * 24 * 60 * 60 * 1_000)
   await Promise.all(Array.from({ length: 100 }, async (_, offset) => {
     const sessionPath = join(sessionsDir, `old-${offset}.jsonl`)
     await writeFile(sessionPath, body)
@@ -122,7 +122,7 @@ async function startHydratingDashboard(): Promise<RunningDashboard> {
   // The cold background index takes and releases the hydration lock once per
   // phase. The opening phases hold it briefly with gaps in between, so a lock
   // seen then can be gone a moment later; only the lifetime phase, which parses
-  // these 200-day-old sessions, holds it for seconds. The banner names the phase
+  // these 400-day-old sessions, holds it for seconds. The banner names the phase
   // and lifetime is last, so a lock seen after its label is lifetime's.
   await waitFor(
     async () => output.includes('loading Lifetime') && pathExists(dashboard.hydrationLock),
