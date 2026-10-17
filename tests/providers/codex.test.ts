@@ -1730,6 +1730,29 @@ describe('codex provider - native tool events', () => {
       'WebSearch', 'WebSearch', 'WebSearch',
     ])
   })
+
+  it('does not classify a large compact line from a nested metadata payload', async () => {
+    const misleadingPayload = JSON.stringify({
+      type: 'response_item',
+      timestamp: '2026-04-14T10:00:10Z',
+      metadata: { payload: { type: 'image_generation_call', id: 'ig-decoy' } },
+      payload: {
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'output_text', text: 'large message body '.repeat(5_000) }],
+      },
+    })
+    const filePath = await writeSession(tmpDir, '2026-04-14', 'rollout-native-nested-payload.jsonl', [
+      sessionMeta({ session_id: 'sess-native-nested-payload' }),
+      misleadingPayload,
+      tokenUsageRecord({ responseId: 'resp-native-nested-payload', usage: { input: 100, output: 20 } }),
+    ])
+
+    const calls = await parseFile(filePath)
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]?.tools).toEqual([])
+  })
 })
 
 describe('codex provider - token_usage_record accounting', () => {
