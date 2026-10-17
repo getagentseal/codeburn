@@ -1621,6 +1621,29 @@ describe('codex provider - native tool events', () => {
     expect(forkCalls[0]?.tools).toEqual(['WebSearch'])
   })
 
+  it('keeps a fork-only native identity before replay usage anchors and suppresses parent item ids', async () => {
+    const parentPath = await writeSession(tmpDir, '2026-10-17', 'rollout-2026-10-17T10-00-00-sess-native-parent.jsonl', [
+      sessionMeta({ session_id: 'sess-native-parent', timestamp: '2026-10-17T10:00:00Z' }),
+      nativeResponseItem('web_search_call', { id: 'ws-parent', status: 'completed' }, '2026-10-17T10:00:01Z'),
+      tokenUsageRecord({ timestamp: '2026-10-17T10:00:02Z', responseId: 'resp-parent', usage: { input: 100, output: 20 } }),
+    ])
+    const forkPath = await writeSession(tmpDir, '2026-10-17', 'rollout-2026-10-17T10-00-10-sess-native-fork.jsonl', [
+      sessionMeta({ session_id: 'sess-native-fork', forked_from_id: 'sess-native-parent', timestamp: '2026-10-17T10:00:10Z' }),
+      nativeResponseItem('web_search_call', { id: 'ws-fork', status: 'completed' }, '2026-10-17T10:00:10.100Z'),
+      nativeResponseItem('web_search_call', { id: 'ws-parent', status: 'completed' }, '2026-10-17T10:00:10.200Z'),
+      tokenUsageRecord({ timestamp: '2026-10-17T10:00:10.300Z', responseId: 'resp-parent', usage: { input: 100, output: 20 } }),
+      tokenUsageRecord({ timestamp: '2026-10-17T10:00:10.400Z', responseId: 'resp-fork', usage: { input: 80, output: 15 } }),
+    ])
+
+    const parentCalls = await parseFile(parentPath)
+    const forkCalls = await parseFile(forkPath)
+
+    expect(parentCalls[0]?.tools).toEqual(['WebSearch'])
+    expect(forkCalls).toHaveLength(1)
+    expect(forkCalls[0]?.tools).toEqual(['WebSearch'])
+    expect(forkCalls[0]?.inputTokens).toBe(80)
+  })
+
   it('keeps direct native identities in large lines without reading nested or sibling ids', async () => {
     const largeImage = JSON.stringify({
       type: 'response_item', timestamp: '2026-04-14T10:00:10Z',
