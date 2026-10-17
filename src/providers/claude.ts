@@ -1,12 +1,13 @@
 import { readdirSync, statSync } from 'fs'
 import { readFile, readdir, stat } from 'fs/promises'
-import { basename, delimiter as pathDelimiter, join, resolve } from 'path'
+import { basename, delimiter as pathDelimiter, dirname, join, resolve } from 'path'
 import { homedir } from 'os'
 import { createHash } from 'crypto'
 
 import type { Provider, ProbeRoot, SessionSource, SessionParser } from './types.js'
 import { calculateCost, getShortModelName } from '../models.js'
 import { readConfig } from '../config.js'
+import { getCodeburnCacheDir } from '../cache-dir.js'
 import { FS_SCAN_CONCURRENCY, mapWithConcurrency, readSessionLines } from '../fs-utils.js'
 import { wslHomes } from '../wsl.js'
 
@@ -14,7 +15,11 @@ export type ClaudeConfigSource = {
   id: string
   label: string
   path: string
+  orgUuid?: string
+  accountUuid?: string
 }
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 function expandHome(p: string): string {
   if (p === '~') return homedir()
@@ -43,6 +48,23 @@ export function claudeConfigSourceId(path: string): string {
 /// Stable id for a Claude Desktop sessions directory.
 export function claudeDesktopSourceId(base: string): string {
   return 'claude-desktop:' + createHash('sha256').update(resolve(base)).digest('hex').slice(0, 16)
+}
+
+/// Stable id for a Claude organization (Personal or Team) discovered from
+/// Claude Desktop (`claude-code-sessions/<accountUuid>/<orgUuid>` / `oauth:tokenCacheV2`).
+export function claudeOrgSourceId(orgUuid: string): string {
+  return 'claude-org:' + orgUuid.trim().toLowerCase()
+}
+
+/// macOS Keychain service name Claude Code uses for a config directory.
+/// `~/.claude` uses the unsuffixed service; any other `CLAUDE_CONFIG_DIR`
+/// appends `-<first 8 hex of sha256(resolvedPath.normalize('NFC'))>`.
+export function claudeKeychainService(configDir?: string): string {
+  const target = resolve(configDir ? expandHome(configDir) : join(homedir(), '.claude'))
+  const def = resolve(join(homedir(), '.claude'))
+  if (target === def) return 'Claude Code-credentials'
+  const suffix = createHash('sha256').update(target.normalize('NFC')).digest('hex').slice(0, 8)
+  return `Claude Code-credentials-${suffix}`
 }
 
 // `\\wsl$\<distro>\home\<user>\.claude` -> distro, and the home's own name
@@ -131,6 +153,226 @@ export async function discoverClaudeConfigSources(): Promise<ClaudeConfigSource[
     label: baseClaudeConfigLabel(path, dirs),
     path,
   })))
+}
+
+export type CachedClaudeOrgProfile = {
+  orgUuid: string
+  accountUuid?: string
+  label?: string
+  organizationType?: string
+  isDefaultConfigOrg?: boolean
+}
+
+export function claudeOrgProfilesCachePath(): string {
+  return join(getCodeburnCacheDir(), 'claude-org-profiles.json')
+}
+
+export async function readClaudeOrgProfilesCache(): Promise<Map<string, CachedClaudeOrgProfile>> {
+  const map = new Map<string, CachedClaudeOrgProfile>()
+  try {
+    const raw = await readFile(claudeOrgProfilesCachePath(), 'utf-8')
+    const parsed = JSON.parse(raw) as Record<string, unknown>
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return map
+    for (const [key, val] of Object.entries(parsed)) {
+      if (!val || typeof val !== 'object' || Array.isArray(val)) continue
+      const row = val as Record<string, unknown>
+      const orgUuid = (typeof row.orgUuid === 'string' ? row.orgUuid : key).trim().toLowerCase()
+      if (!UUID_RE.test(orgUuid)) continue
+      map.set(orgUuid, {
+        orgUuid,
+        ...(typeof row.accountUuid === 'string' ? { accountUuid: row.accountUuid.trim().toLowerCase() } : {}),
+        ...(typeof row.label === 'string' && row.label.trim() ? { label: row.label.trim() } : {}),
+        ...(typeof row.organizationType === 'string' ? { organizationType: row.organizationType.trim().toLowerCase() } : {}),
+        ...(row.isDefaultConfigOrg === true ? { isDefaultConfigOrg: true } : {}),
+      })
+    }
+  } catch {
+    // Missing or unreadable cache is normal on first run.
+  }
+  return map
+}
+
+function formatOrgLabel(name: string | undefined, organizationType: string | undefined): string | undefined {
+  const trimmed = name?.trim()
+  const type = organizationType?.toLowerCase()
+  if (type === 'max' || type === 'pro' || type === 'claude_max' || type === 'claude_pro') {
+    return 'Personal'
+  }
+  if (trimmed) {
+    if (/^.+['’]s organization$/i.test(trimmed)) return 'Personal'
+    return trimmed
+  }
+  if (type === 'team' || type === 'claude_team') return 'Team'
+  if (type === 'enterprise' || type === 'claude_enterprise') return 'Enterprise'
+  return undefined
+}
+
+async function readDefaultClaudeOauthAccount(defaultDir: string): Promise<{
+  accountUuid?: string
+  orgUuid?: string
+  label?: string
+}> {
+  const candidates = [
+    join(homedir(), '.claude.json'),
+    join(defaultDir, '.claude.json'),
+  ]
+  for (const file of candidates) {
+    try {
+      const parsed = JSON.parse(await readFile(file, 'utf-8')) as { oauthAccount?: Record<string, unknown> }
+      const acct = parsed?.oauthAccount
+      if (!acct || typeof acct !== 'object') continue
+      const orgUuid = typeof acct.organizationUuid === 'string' && UUID_RE.test(acct.organizationUuid.trim())
+        ? acct.organizationUuid.trim().toLowerCase()
+        : undefined
+      const accountUuid = typeof acct.accountUuid === 'string' && UUID_RE.test(acct.accountUuid.trim())
+        ? acct.accountUuid.trim().toLowerCase()
+        : undefined
+      const orgName = typeof acct.organizationName === 'string' ? acct.organizationName : undefined
+      if (orgUuid || accountUuid) {
+        return {
+          accountUuid,
+          orgUuid,
+          label: formatOrgLabel(orgName, undefined),
+        }
+      }
+    } catch {
+      continue
+    }
+  }
+  return {}
+}
+
+type DiscoveredDesktopOrg = {
+  orgUuid: string
+  accountUuid: string
+  path: string
+  sessionIds: string[]
+}
+
+async function scanDesktopCodeSessionOrgs(): Promise<Map<string, DiscoveredDesktopOrg>> {
+  const byOrg = new Map<string, DiscoveredDesktopOrg>()
+  const appRoots = dedupeResolved(getDesktopSessionsDirs().map(dir => dirname(dir)))
+  for (const appRoot of appRoots) {
+    const codeSessionsRoot = join(appRoot, 'claude-code-sessions')
+    const acctEntries = await readdir(codeSessionsRoot, { withFileTypes: true }).catch(() => [])
+    for (const acctEntry of acctEntries) {
+      if (!acctEntry.isDirectory() || !UUID_RE.test(acctEntry.name)) continue
+      const accountUuid = acctEntry.name.toLowerCase()
+      const acctPath = join(codeSessionsRoot, acctEntry.name)
+      const orgEntries = await readdir(acctPath, { withFileTypes: true }).catch(() => [])
+      for (const orgEntry of orgEntries) {
+        if (!orgEntry.isDirectory() || !UUID_RE.test(orgEntry.name)) continue
+        const orgUuid = orgEntry.name.toLowerCase()
+        const orgPath = join(acctPath, orgEntry.name)
+        const files = await readdir(orgPath).catch(() => [])
+        const localFiles = files.filter(f => f.startsWith('local_') && f.endsWith('.json'))
+        if (localFiles.length === 0) continue
+        const sessionIds: string[] = []
+        for (const file of localFiles) {
+          try {
+            const meta = JSON.parse(await readFile(join(orgPath, file), 'utf-8')) as { cliSessionId?: unknown }
+            if (typeof meta?.cliSessionId === 'string' && meta.cliSessionId.trim()) {
+              sessionIds.push(meta.cliSessionId.trim())
+            }
+          } catch {
+            continue
+          }
+        }
+        const existing = byOrg.get(orgUuid)
+        if (existing) {
+          existing.sessionIds.push(...sessionIds)
+        } else {
+          byOrg.set(orgUuid, { orgUuid, accountUuid, path: orgPath, sessionIds })
+        }
+      }
+    }
+  }
+  return byOrg
+}
+
+/**
+ * Discovers Claude quota/usage profiles across both configured `claudeConfigDirs`
+ * and multi-organization Claude Desktop setups (Personal + Team accounts).
+ * Single-account setups without extra organizations return the exact same list as
+ * `discoverClaudeConfigSources()`.
+ */
+export async function discoverClaudeProfileSources(): Promise<ClaudeConfigSource[]> {
+  const base = await discoverClaudeConfigSources()
+  const defaultDir = resolve(join(homedir(), '.claude'))
+  const defaultIndex = base.findIndex(s => resolve(s.path) === defaultDir)
+  const [defaultAcct, desktopOrgs, cachedOrgs] = await Promise.all([
+    readDefaultClaudeOauthAccount(defaultDir),
+    scanDesktopCodeSessionOrgs(),
+    readClaudeOrgProfilesCache(),
+  ])
+
+  const cachedDefaultEntry = [...cachedOrgs.values()].find(o => o.isDefaultConfigOrg)
+    ?? [...cachedOrgs.values()].find(o => o.organizationType === 'max' || o.organizationType === 'pro' || o.label === 'Personal')
+  const defaultOrgUuid = cachedDefaultEntry?.orgUuid ?? defaultAcct.orgUuid
+  const allOrgUuids = new Set<string>([
+    ...desktopOrgs.keys(),
+    ...cachedOrgs.keys(),
+  ])
+  if (defaultOrgUuid) allOrgUuids.delete(defaultOrgUuid)
+
+  if (allOrgUuids.size === 0) return base
+
+  const result = base.map((source, idx) => {
+    if (idx !== defaultIndex) return source
+    const cachedDefault = defaultOrgUuid ? cachedOrgs.get(defaultOrgUuid) : undefined
+    const label = source.label === 'Default Claude'
+      ? (formatOrgLabel(cachedDefault?.label, cachedDefault?.organizationType) ?? defaultAcct.label ?? 'Personal')
+      : source.label
+    return {
+      ...source,
+      label,
+      ...(defaultOrgUuid ? { orgUuid: defaultOrgUuid } : {}),
+      ...(cachedDefault?.accountUuid ?? defaultAcct.accountUuid ? { accountUuid: cachedDefault?.accountUuid ?? defaultAcct.accountUuid } : {}),
+    }
+  })
+
+  const extraSources: ClaudeConfigSource[] = []
+  for (const orgUuid of allOrgUuids) {
+    const desktop = desktopOrgs.get(orgUuid)
+    const cached = cachedOrgs.get(orgUuid)
+    const orgPath = desktop?.path ?? defaultDir
+    const accountUuid = desktop?.accountUuid ?? cached?.accountUuid
+    const label = formatOrgLabel(cached?.label, cached?.organizationType) ?? 'Team'
+    extraSources.push({
+      id: claudeOrgSourceId(orgUuid),
+      label,
+      path: orgPath,
+      orgUuid,
+      ...(accountUuid ? { accountUuid } : {}),
+    })
+  }
+  extraSources.sort((a, b) => a.label.localeCompare(b.label))
+  return makeUniqueLabels([...result, ...extraSources])
+}
+
+/**
+ * Maps `cliSessionId` (the `<sessionId>.jsonl` basename in `~/.claude/projects/`)
+ * to its owning organization profile when multiple organizations are present.
+ */
+export async function discoverClaudeSessionOrgSources(): Promise<Map<string, ClaudeConfigSource>> {
+  const map = new Map<string, ClaudeConfigSource>()
+  const [profiles, desktopOrgs] = await Promise.all([
+    discoverClaudeProfileSources(),
+    scanDesktopCodeSessionOrgs(),
+  ])
+  if (profiles.length <= 1 || desktopOrgs.size === 0) return map
+  const profileByOrg = new Map<string, ClaudeConfigSource>()
+  for (const profile of profiles) {
+    if (profile.orgUuid) profileByOrg.set(profile.orgUuid.toLowerCase(), profile)
+  }
+  for (const [orgUuid, info] of desktopOrgs) {
+    const profile = profileByOrg.get(orgUuid.toLowerCase())
+    if (!profile) continue
+    for (const sessionId of info.sessionIds) {
+      map.set(sessionId, profile)
+    }
+  }
+  return map
 }
 
 // Filesystem changes under an unchanged input key intentionally do not invalidate this cache.

@@ -11,7 +11,7 @@ import { existsSync } from 'node:fs'
 
 import { renderTable } from '../text-table.js'
 import { filterProjectsByClaudeConfigSource, parseAllSessions } from '../parser.js'
-import { discoverClaudeConfigSources, type ClaudeConfigSource } from '../providers/claude.js'
+import { discoverClaudeProfileSources, type ClaudeConfigSource } from '../providers/claude.js'
 import { buildPeriodData } from '../usage-aggregator.js'
 import { fetchAntigravityQuota } from './antigravity.js'
 import { fetchClaudeQuota } from './claude.js'
@@ -154,18 +154,24 @@ export function toCommandProvider(id: ProviderName, name: string, quota: QuotaPr
   }
 }
 
-/** Reads one config directory's own quota from its `<dir>/.credentials.json`. The macOS
- *  Keychain fallback stays reserved for the default ~/.claude, so non-default directories
- *  read as disconnected on macOS (fine today: the dock is Windows/Linux only). WSL
- *  credential aggregation is off because every WSL home is its own config source. */
+/** Reads one profile's own quota from its `<dir>/.credentials.json`, its macOS Keychain
+ *  service (`Claude Code-credentials[-<sha256>]`), or its Claude Desktop organization token.
+ *  WSL credential aggregation is off because every WSL home is its own config source. */
 function readClaudeProfile(source: ClaudeConfigSource, signal: AbortSignal): Promise<QuotaProvider> {
-  const isDefault = path.resolve(source.path) === path.resolve(path.join(os.homedir(), '.claude'))
+  const isOrgProfile = source.id.startsWith('claude-org:')
   return fetchClaudeQuota({
     signal,
-    credentialPath: path.join(source.path, '.credentials.json'),
+    ...(isOrgProfile
+      ? { orgUuid: source.orgUuid }
+      : { configDir: source.path, credentialPath: path.join(source.path, '.credentials.json') }),
     wslCredentialPaths: () => [],
-    allowKeychain: isDefault,
-  }).then(result => result.quota)
+    allowKeychain: true,
+  }).then(result => {
+    if (result.label && (source.label === 'Team' || source.label.startsWith('Team '))) {
+      source.label = result.label
+    }
+    return result.quota
+  })
 }
 
 /** Each config directory's own today totals from one Claude-only parse of today's range
@@ -210,7 +216,7 @@ function toProfileRow(source: ClaudeConfigSource, quota: QuotaProvider | 'timeou
 }
 
 function isDefaultClaudeDir(source: ClaudeConfigSource): boolean {
-  return path.resolve(source.path) === path.resolve(path.join(os.homedir(), '.claude'))
+  return !source.id.startsWith('claude-org:') && path.resolve(source.path) === path.resolve(path.join(os.homedir(), '.claude'))
 }
 
 export async function collectQuota(options: {
@@ -228,9 +234,11 @@ export async function collectQuota(options: {
   const readers = options.readers ?? availableReaders()
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
   const detail = options.claudeProfileDetail ?? 'list'
-  // Profiles exist only when two or more config directories are really on disk; a missing
-  // directory in CLAUDE_CONFIG_DIRS is not a profile.
-  const sources = (await discoverClaudeConfigSources().catch(() => [])).filter(source => existsSync(source.path))
+  // Profiles exist when two or more config directories or Claude Desktop organizations are on disk;
+  // a missing directory in CLAUDE_CONFIG_DIRS is not a profile.
+  const sources = (await discoverClaudeProfileSources().catch(() => [])).filter(
+    source => source.id.startsWith('claude-org:') || existsSync(source.path),
+  )
   const profileSources = sources.length > 1 ? sources : []
   const providersTask = Promise.all(readers.map(async entry => {
     const controller = new AbortController()
