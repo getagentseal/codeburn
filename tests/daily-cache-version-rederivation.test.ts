@@ -109,12 +109,12 @@ describe('daily-cache re-derivation on a DAILY_CACHE_VERSION bump', () => {
     expect(JSON.parse(await readFile(oldPath, 'utf8'))).toEqual(oldCache)
   })
 
-  it('refreshes finalized Codex categories on v51 migration without changing usage totals', async () => {
+  it('refreshes finalized Codex categories from a literal v75 cache without changing usage totals', async () => {
     const date = toDateString(new Date(Date.now() - 14 * 24 * 60 * 60 * 1000))
     const yesterday = toDateString(new Date(Date.now() - 24 * 60 * 60 * 1000))
-    // Pin the shipped version that missed native tools. Deriving this from
-    // DAILY_CACHE_VERSION would still pass if the required bump were removed.
-    const oldVersion = 51
+    // Pin the shipped v75 cache that missed native tools. Deriving this from
+    // DAILY_CACHE_VERSION would still pass if the required v76 bump were removed.
+    const oldVersion = 75
     const oldPath = join(cacheRoot, `daily-cache.v${oldVersion}.json`)
     const makeCodexDay = (category: 'general' | 'exploration'): DailyEntry => {
       const categoryStats = { turns: 1, cost: 2, savingsUSD: 0, editTurns: 0, oneShotTurns: 0 }
