@@ -1536,6 +1536,16 @@ describe('codex provider - native tool events', () => {
     })
   }
 
+  function completedExtension(kind: string, id: string, timestamp: string, results: unknown[] = []) {
+    return JSON.stringify({
+      type: 'event_msg', timestamp,
+      payload: {
+        type: 'item_completed',
+        item: { type: 'Extension', results, id, action: { type: 'search' }, kind, query: 'fixture query' },
+      },
+    })
+  }
+
   async function parseFile(filePath: string): Promise<ParsedProviderCall[]> {
     const provider = createCodexProvider(tmpDir)
     const calls: ParsedProviderCall[] = []
@@ -1585,6 +1595,20 @@ describe('codex provider - native tool events', () => {
     expect(call?.toolSequence?.map(step => step[0]?.tool)).toEqual(['WebSearch', 'WebSearch'])
   })
 
+  it('recognizes only Extension items with the explicit web.search kind', async () => {
+    const largeResults = [{ body: 'fixture result body '.repeat(3_000) }]
+    const filePath = await writeSession(tmpDir, '2026-04-14', 'rollout-native-extension-search.jsonl', [
+      sessionMeta({ session_id: 'sess-native-extension-search' }),
+      completedExtension('web.search', 'ext-search', '2026-04-14T10:00:10Z', largeResults),
+      completedExtension('file.search', 'ext-other', '2026-04-14T10:00:11Z'),
+      tokenUsageRecord({ responseId: 'resp-native-extension-search', usage: { input: 100, output: 20 } }),
+    ])
+
+    const [call] = await parseFile(filePath)
+
+    expect(call?.tools).toEqual(['WebSearch'])
+  })
+
   it('attaches native tool events after the final usage record to that turn', async () => {
     const filePath = await writeSession(tmpDir, '2026-04-14', 'rollout-native-trailing.jsonl', [
       sessionMeta({ session_id: 'sess-native-trailing' }),
@@ -1622,15 +1646,24 @@ describe('codex provider - native tool events', () => {
   })
 
   it('keeps a fork-only native identity before replay usage anchors and suppresses parent item ids', async () => {
+    const largeParentImage = ` \t${JSON.stringify({
+      type: 'response_item',
+      timestamp: '2026-10-17T10:00:01.500Z',
+      payload: { type: 'image_generation_call', status: 'completed', result: 'x'.repeat(128 * 1024), id: 'ig-parent' },
+    })}`
     const parentPath = await writeSession(tmpDir, '2026-10-17', 'rollout-2026-10-17T10-00-00-sess-native-parent.jsonl', [
       sessionMeta({ session_id: 'sess-native-parent', timestamp: '2026-10-17T10:00:00Z' }),
       nativeResponseItem('web_search_call', { id: 'ws-parent', status: 'completed' }, '2026-10-17T10:00:01Z'),
+      completedExtension('web.search', 'ext-parent', '2026-10-17T10:00:01.250Z', [{ body: 'parent extension body '.repeat(3_000) }]),
+      largeParentImage,
       tokenUsageRecord({ timestamp: '2026-10-17T10:00:02Z', responseId: 'resp-parent', usage: { input: 100, output: 20 } }),
     ])
     const forkPath = await writeSession(tmpDir, '2026-10-17', 'rollout-2026-10-17T10-00-10-sess-native-fork.jsonl', [
       sessionMeta({ session_id: 'sess-native-fork', forked_from_id: 'sess-native-parent', timestamp: '2026-10-17T10:00:10Z' }),
       nativeResponseItem('web_search_call', { id: 'ws-fork', status: 'completed' }, '2026-10-17T10:00:10.100Z'),
       nativeResponseItem('web_search_call', { id: 'ws-parent', status: 'completed' }, '2026-10-17T10:00:10.200Z'),
+      nativeResponseItem('image_generation_call', { id: 'ig-parent', status: 'completed', result: 'small' }, '2026-10-17T10:00:10.250Z'),
+      completedExtension('web.search', 'ext-parent', '2026-10-17T10:00:10.275Z'),
       tokenUsageRecord({ timestamp: '2026-10-17T10:00:10.300Z', responseId: 'resp-parent', usage: { input: 100, output: 20 } }),
       tokenUsageRecord({ timestamp: '2026-10-17T10:00:10.400Z', responseId: 'resp-fork', usage: { input: 80, output: 15 } }),
     ])
@@ -1638,7 +1671,7 @@ describe('codex provider - native tool events', () => {
     const parentCalls = await parseFile(parentPath)
     const forkCalls = await parseFile(forkPath)
 
-    expect(parentCalls[0]?.tools).toEqual(['WebSearch'])
+    expect(parentCalls[0]?.tools).toEqual(['WebSearch', 'WebSearch', 'ImageGeneration'])
     expect(forkCalls).toHaveLength(1)
     expect(forkCalls[0]?.tools).toEqual(['WebSearch'])
     expect(forkCalls[0]?.inputTokens).toBe(80)
@@ -1732,7 +1765,7 @@ describe('codex provider - native tool events', () => {
   })
 
   it('does not classify a large compact line from a nested metadata payload', async () => {
-    const misleadingPayload = JSON.stringify({
+    const misleadingPayload = ` \t${JSON.stringify({
       type: 'response_item',
       timestamp: '2026-04-14T10:00:10Z',
       metadata: { payload: { type: 'image_generation_call', id: 'ig-decoy' } },
@@ -1741,7 +1774,7 @@ describe('codex provider - native tool events', () => {
         role: 'assistant',
         content: [{ type: 'output_text', text: 'large message body '.repeat(5_000) }],
       },
-    })
+    })}`
     const filePath = await writeSession(tmpDir, '2026-04-14', 'rollout-native-nested-payload.jsonl', [
       sessionMeta({ session_id: 'sess-native-nested-payload' }),
       misleadingPayload,

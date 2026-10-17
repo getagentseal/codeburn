@@ -2,6 +2,7 @@ import { stat } from 'fs/promises'
 import { basename, dirname } from 'path'
 
 import { readSessionLines } from './fs-utils.js'
+import { findRawObjectField, getRawJsonStringFieldAtObject } from './codex-jsonl-fields.js'
 import { walkRolloutFiles } from './launcher-homes.js'
 
 /** Maximum timestamp gap between copied records in Codex's fork replay burst. */
@@ -83,6 +84,7 @@ export function codexReplayUsageIdentity(info: { total_token_usage?: CodexUsageC
 }
 
 export const codexReplayResponseIdentity = (responseId: string): string => `response:${responseId}`
+export const codexReplayNativeToolIdentity = (tool: string, itemId: string): string => `native:${tool}:${itemId}`
 
 // Rollout names are `rollout-YYYY-MM-DDTHH-MM-SS-<id>.jsonl`.
 const ROLLOUT_ID_OFFSET = 'rollout-YYYY-MM-DDTHH-MM-SS-'.length
@@ -107,26 +109,94 @@ function codexHomeOf(path: string): string | undefined {
   return undefined
 }
 
-type ParentUsage = { sig: string; records: Promise<Array<[number, string]>> }
-const parentUsage = new Map<string, ParentUsage>()
+type ParentReplayRecords = { sig: string; records: Promise<Array<[number, string]>> }
+const parentReplayRecords = new Map<string, ParentReplayRecords>()
 
-async function readParentUsage(path: string): Promise<Array<[number, string]>> {
+function nativeToolForResponseType(type: string | undefined): 'WebSearch' | 'ToolSearch' | 'ImageGeneration' | undefined {
+  if (type === 'web_search_call') return 'WebSearch'
+  if (type === 'tool_search_call') return 'ToolSearch'
+  if (type === 'image_generation_call') return 'ImageGeneration'
+  return undefined
+}
+
+function addBufferParentReplayRecord(records: Array<[number, string]>, source: Buffer): void {
+  const entryType = getRawJsonStringFieldAtObject(source, 0, 'type')
+  if (!entryType) return
+  const timestamp = getRawJsonStringFieldAtObject(source, 0, 'timestamp')
+  const at = timestamp ? Date.parse(timestamp) : NaN
+  const payload = findRawObjectField(source, 0, 'payload')
+  if (!payload || source[payload.valueStart] !== 0x7b) return
+  const payloadStart = payload.valueStart
+  const payloadType = getRawJsonStringFieldAtObject(source, payloadStart, 'type')
+
+  // Keep the original usage identity semantics exactly: historical counters
+  // still pass through JSON.parse, including when a large line is a Buffer.
+  if (entryType === 'token_usage_record' || (entryType === 'event_msg' && payloadType === 'token_count')) {
+    addParsedParentReplayRecord(records, source.toString('utf-8'))
+    return
+  }
+
+  if (entryType === 'response_item') {
+    const tool = nativeToolForResponseType(payloadType)
+    if (!tool) return
+    const itemId = getRawJsonStringFieldAtObject(source, payloadStart, 'id')
+      ?? getRawJsonStringFieldAtObject(source, payloadStart, 'call_id')
+    if (itemId) records.push([at, codexReplayNativeToolIdentity(tool, itemId)])
+    return
+  }
+
+  if (entryType !== 'event_msg' || payloadType !== 'item_completed') return
+  const item = findRawObjectField(source, payloadStart, 'item')
+  if (!item || source[item.valueStart] !== 0x7b) return
+  const itemType = getRawJsonStringFieldAtObject(source, item.valueStart, 'type')
+  const itemKind = getRawJsonStringFieldAtObject(source, item.valueStart, 'kind')
+  if (itemType !== 'WebSearch' && !(itemType === 'Extension' && itemKind === 'web.search')) return
+  const itemId = getRawJsonStringFieldAtObject(source, item.valueStart, 'id')
+  if (itemId) records.push([at, codexReplayNativeToolIdentity('WebSearch', itemId)])
+}
+
+function addParsedParentReplayRecord(records: Array<[number, string]>, line: string): void {
+  let entry: { type?: string; timestamp?: string; payload?: { type?: string; response_id?: unknown; id?: unknown; call_id?: unknown; info?: Parameters<typeof codexReplayUsageIdentity>[0]; item?: { type?: unknown; id?: unknown; kind?: unknown } } }
+  try { entry = JSON.parse(line) } catch { return }
+  const at = entry.timestamp ? Date.parse(entry.timestamp) : NaN
+  if (entry.type === 'token_usage_record' && typeof entry.payload?.response_id === 'string') {
+    records.push([at, codexReplayResponseIdentity(entry.payload.response_id)])
+  } else if (entry.type === 'event_msg' && entry.payload?.type === 'token_count' && entry.payload.info) {
+    records.push([at, codexReplayUsageIdentity(entry.payload.info)])
+  } else if (entry.type === 'response_item') {
+    const tool = nativeToolForResponseType(entry.payload?.type)
+    const itemId = typeof entry.payload?.id === 'string' && entry.payload.id
+      ? entry.payload.id
+      : typeof entry.payload?.call_id === 'string' && entry.payload.call_id
+        ? entry.payload.call_id
+        : undefined
+    if (tool && itemId) records.push([at, codexReplayNativeToolIdentity(tool, itemId)])
+  } else if (entry.type === 'event_msg' && entry.payload?.type === 'item_completed'
+    && (entry.payload.item?.type === 'WebSearch'
+      || (entry.payload.item?.type === 'Extension' && entry.payload.item.kind === 'web.search'))
+    && typeof entry.payload.item.id === 'string' && entry.payload.item.id) {
+    records.push([at, codexReplayNativeToolIdentity('WebSearch', entry.payload.item.id)])
+  }
+}
+
+async function readParentReplayRecords(path: string): Promise<Array<[number, string]>> {
   const records: Array<[number, string]> = []
-  const skip = (head: string) => !head.includes('"token_count"') && !head.includes('"token_usage_record"')
-  for await (const line of readSessionLines(path, skip)) {
-    let entry: { type?: string; timestamp?: string; payload?: { type?: string; response_id?: unknown; info?: Parameters<typeof codexReplayUsageIdentity>[0] } }
-    try { entry = JSON.parse(line) } catch { continue }
-    const at = entry.timestamp ? Date.parse(entry.timestamp) : NaN
-    if (entry.type === 'token_usage_record' && typeof entry.payload?.response_id === 'string') {
-      records.push([at, codexReplayResponseIdentity(entry.payload.response_id)])
-    } else if (entry.type === 'event_msg' && entry.payload?.type === 'token_count' && entry.payload.info) {
-      records.push([at, codexReplayUsageIdentity(entry.payload.info)])
-    }
+  const skip = (head: string) => !head.includes('"token_count"')
+    && !head.includes('"token_usage_record"')
+    && !head.includes('"web_search_call"')
+    && !head.includes('"tool_search_call"')
+    && !head.includes('"image_generation_call"')
+    && !head.includes('"item_completed"')
+  for await (const line of readSessionLines(path, skip, { largeLineAsBuffer: true })) {
+    if (Buffer.isBuffer(line)) addBufferParentReplayRecord(records, line)
+    else addParsedParentReplayRecord(records, line)
   }
   return records
 }
 
-type ParentReplayLoader = (forkPath: string, parentId: string, forkedAtMs: number) => Promise<Set<string> | null>
+export type CodexParentReplayIndex = { usageIdentities: Set<string>; nativeIdentities: Set<string> }
+
+type ParentReplayLoader = (forkPath: string, parentId: string, forkedAtMs: number) => Promise<CodexParentReplayIndex | null>
 let parentReplayRequest: ParentReplayLoader | null = null
 
 /** A parse worker hands the lookup to the parent thread, so each parent is indexed and read once, not once per worker. */
@@ -135,12 +205,12 @@ export function routeCodexParentReplay(request: ParentReplayLoader): void {
 }
 
 /**
- * Usage identities the parent rollout recorded up to the fork, read from the
- * parent's raw file (its own copied history included, so a chain resolves one
- * level at a time). Null when the parent is not on disk next to the fork; the
- * caller then drops the whole replay burst.
+ * Usage and native item identities the parent rollout recorded up to the fork,
+ * read from the parent's raw file (its own copied history included, so a chain
+ * resolves one level at a time). A null result means the parent is not readable
+ * next to the fork; an empty native set means it was read and contains no items.
  */
-export async function loadCodexParentReplay(forkPath: string, parentId: string, forkedAtMs: number): Promise<Set<string> | null> {
+export async function loadCodexParentReplayIndex(forkPath: string, parentId: string, forkedAtMs: number): Promise<CodexParentReplayIndex | null> {
   if (parentReplayRequest) return parentReplayRequest(forkPath, parentId, forkedAtMs)
   const home = codexHomeOf(forkPath)
   const path = home ? findRollout(home, parentId) : undefined
@@ -152,12 +222,21 @@ export async function loadCodexParentReplay(forkPath: string, parentId: string, 
   } catch {
     return null
   }
-  let cached = parentUsage.get(path)
+  let cached = parentReplayRecords.get(path)
   if (cached?.sig !== sig) {
-    cached = { sig, records: readParentUsage(path) }
-    parentUsage.set(path, cached)
+    cached = { sig, records: readParentReplayRecords(path) }
+    parentReplayRecords.set(path, cached)
   }
   // Records the parent wrote after the fork were never copied into it.
-  const ids = new Set((await cached.records).filter(([at]) => !(at > forkedAtMs)).map(([, id]) => id))
-  return ids.size > 0 ? ids : null
+  const records = (await cached.records).filter(([at]) => !(at > forkedAtMs))
+  return {
+    usageIdentities: new Set(records.map(([, id]) => id).filter(id => !id.startsWith('native:'))),
+    nativeIdentities: new Set(records.map(([, id]) => id).filter(id => id.startsWith('native:'))),
+  }
+}
+
+/** Usage-only compatibility wrapper; an empty identity set still means no replay anchor. */
+export async function loadCodexParentReplay(forkPath: string, parentId: string, forkedAtMs: number): Promise<Set<string> | null> {
+  const index = await loadCodexParentReplayIndex(forkPath, parentId, forkedAtMs)
+  return index?.usageIdentities.size ? index.usageIdentities : null
 }

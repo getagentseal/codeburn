@@ -8,7 +8,8 @@ import { FS_SCAN_CONCURRENCY, mapWithConcurrency, readSessionLines } from '../fs
 import { billableOutputTokens, calculateCost, getModelCosts, pricingModelAt } from '../models.js'
 import { readCachedCodexResults, writeCachedCodexResults, getCachedCodexProject, fingerprintFile, type CodexFileFingerprint } from '../codex-cache.js'
 import { mergeToolIntervals } from '../codex-throughput.js'
-import { codexReplayResponseIdentity, codexReplayUsageIdentity, isCodexForkReplay, isCodexForkReplayState, loadCodexParentReplay, startCodexForkReplay, type CodexForkReplayState } from '../codex-fork-replay.js'
+import { codexReplayNativeToolIdentity, codexReplayResponseIdentity, codexReplayUsageIdentity, isCodexForkReplay, isCodexForkReplayState, loadCodexParentReplayIndex, startCodexForkReplay, type CodexForkReplayState } from '../codex-fork-replay.js'
+import { findRawObjectField, getRawObjectFieldWindow } from '../codex-jsonl-fields.js'
 import { normalizeContentBlocks } from '../content-utils.js'
 import { estimateTokensFromChars } from '../token-estimate.js'
 import { wslHomes } from '../wsl.js'
@@ -200,13 +201,14 @@ function nativeToolEvent(entry: CodexEntry): CodexNativeToolEvent | null {
         : undefined
   } else if (entry.type === 'event_msg' && payload.type === 'item_completed') {
     const item = payload.item
-    if (!item || item['type'] !== 'WebSearch') return null
+    if (!item) return null
+    if (item['type'] !== 'WebSearch' && !(item['type'] === 'Extension' && item['kind'] === 'web.search')) return null
     tool = 'WebSearch'
     identity = typeof item['id'] === 'string' && item['id'] ? item['id'] : undefined
   }
 
   if (!tool) return null
-  return { tool, ...(identity ? { identity: `${tool}:${identity}` } : {}) }
+  return { tool, ...(identity ? { identity: codexReplayNativeToolIdentity(tool, identity) } : {}) }
 }
 
 type CodexTokenUsage = {
@@ -320,67 +322,9 @@ function getRawJsonNumberField(head: string, field: string): number | undefined 
   return Number.isFinite(value) ? value : undefined
 }
 
-type RawJsonFieldBounds = { keyStart: number; valueStart: number }
-
-function findRawObjectField(source: Buffer, objectStart: number, field: string): RawJsonFieldBounds | undefined {
-  const fieldBytes = Buffer.from(field, 'utf-8')
-  let depth = 0
-  let inString = false
-  let escaped = false
-  for (let i = objectStart; i < source.length; i++) {
-    const byte = source[i]!
-    if (inString) {
-      if (escaped) escaped = false
-      else if (byte === 0x5c) escaped = true // \\
-      else if (byte === 0x22) inString = false // "
-      continue
-    }
-    if (byte === 0x22) {
-      const keyStart = i + 1
-      let keyEnd = keyStart
-      let keyEscaped = false
-      for (; keyEnd < source.length; keyEnd++) {
-        const keyByte = source[keyEnd]!
-        if (keyEscaped) { keyEscaped = false; continue }
-        if (keyByte === 0x5c) { keyEscaped = true; continue }
-        if (keyByte === 0x22) break
-      }
-      if (depth === 1 && keyEnd < source.length) {
-        // Most strings at depth 1 are values, including potentially huge
-        // image results. Check for the key/value delimiter and exact short-key
-        // length before comparing bytes so scanning never materializes them.
-        let colon = keyEnd + 1
-        while (colon < source.length && (source[colon] === 0x20 || source[colon] === 0x09 || source[colon] === 0x0a || source[colon] === 0x0d)) colon++
-        if (source[colon] === 0x3a && keyEnd - keyStart === fieldBytes.length && source.subarray(keyStart, keyEnd).equals(fieldBytes)) {
-          let valueStart = colon
-          valueStart++
-          while (valueStart < source.length && (source[valueStart] === 0x20 || source[valueStart] === 0x09 || source[valueStart] === 0x0a || source[valueStart] === 0x0d)) valueStart++
-          return { keyStart: i, valueStart }
-        }
-      }
-      i = keyEnd
-      inString = false
-      continue
-    }
-    if (byte === 0x22) inString = true
-    else if (byte === 0x7b || byte === 0x5b) depth++ // { or [
-    else if (byte === 0x7d || byte === 0x5d) depth-- // } or ]
-    if (depth <= 0) break
-  }
-  return undefined
-}
-
-function getRawObjectFieldWindow(source: Buffer, objectStart: number, field: string, windowBytes = 4096): string | undefined {
-  const bounds = findRawObjectField(source, objectStart, field)
-  return bounds ? source.subarray(bounds.keyStart, Math.min(source.length, bounds.keyStart + windowBytes)).toString('utf-8') : undefined
-}
-
 function getRawPayloadObjectStart(source: Buffer): number | undefined {
-  const payloadKey = Buffer.from('"payload"')
-  const payloadIndex = source.indexOf(payloadKey)
-  if (payloadIndex < 0) return undefined
-  const payloadStart = source.indexOf(0x7b, payloadIndex + payloadKey.length) // {
-  return payloadStart < 0 ? undefined : payloadStart
+  const payload = findRawObjectField(source, 0, 'payload')
+  return payload && source[payload.valueStart] === 0x7b ? payload.valueStart : undefined
 }
 
 function getRawPayloadFieldWindow(source: Buffer, field: string, windowBytes = 4096): string | undefined {
@@ -448,9 +392,11 @@ function getRawTokenUsage(head: string, field: 'last_token_usage' | 'total_token
   }
 }
 
-function payloadHead(head: string): string {
-  const idx = head.indexOf('"payload"')
-  return idx === -1 ? head : head.slice(idx)
+function payloadHead(source: Buffer): string {
+  const payloadStart = getRawPayloadObjectStart(source)
+  return payloadStart === undefined
+    ? ''
+    : source.subarray(payloadStart, Math.min(source.length, payloadStart + RAW_HEAD_BYTES)).toString('utf-8')
 }
 
 function getRawInvocation(head: string): { server?: string; tool?: string } | undefined {
@@ -555,8 +501,9 @@ function parseCodexLine(line: string | Buffer): CodexEntry | null {
   const head = line.subarray(0, RAW_HEAD_BYTES).toString('utf-8')
   const type = getRawJsonStringField(head, 'type')
   if (!type) return null
-  const pHead = payloadHead(head)
-  const payloadType = getRawJsonStringField(pHead, 'type')
+  const pHead = payloadHead(line)
+  const payloadTypeWindow = getRawPayloadFieldWindow(line, 'type')
+  const payloadType = payloadTypeWindow ? getRawJsonStringField(payloadTypeWindow, 'type') : undefined
   const role = getRawJsonStringField(pHead, 'role')
   // task_complete appends the potentially huge final assistant message before
   // its duration fields. Fall back to the full Buffer only for this event so
@@ -594,10 +541,14 @@ function parseCodexLine(line: string | Buffer): CodexEntry | null {
   const itemIdWindow = type === 'event_msg' && payloadType === 'item_completed'
     ? getRawPayloadItemFieldWindow(line, 'id')
     : undefined
+  const itemKindWindow = type === 'event_msg' && payloadType === 'item_completed'
+    ? getRawPayloadItemFieldWindow(line, 'kind')
+    : undefined
   const compactItemType = itemTypeWindow ? getRawJsonStringField(itemTypeWindow, 'type') : undefined
   const compactItemId = itemIdWindow ? getRawJsonStringField(itemIdWindow, 'id') : undefined
+  const compactItemKind = itemKindWindow ? getRawJsonStringField(itemKindWindow, 'kind') : undefined
   const compactItem = compactItemType
-    ? { type: compactItemType, ...(compactItemId ? { id: compactItemId } : {}) }
+    ? { type: compactItemType, ...(compactItemId ? { id: compactItemId } : {}), ...(compactItemKind ? { kind: compactItemKind } : {}) }
     : undefined
   const isNativeResponseTool = type === 'response_item' && (
     payloadType === 'web_search_call' || payloadType === 'tool_search_call' || payloadType === 'image_generation_call'
@@ -925,22 +876,35 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
       let sessionCwd: string | undefined = resume?.state.sessionCwd
       let forkedFromId = resume?.state.forkedFromId ?? ''
       let forkReplayState = resume?.state.forkReplayState ? { ...resume.state.forkReplayState } : undefined
-      // What the parent rollout recorded before the fork: a burst record found
-      // there is a copy and is dropped. The rest is the parent's work that its
-      // rollout kept only inside a running total, so it counts here. Loaded on
-      // the first burst usage record; null drops the whole burst.
+      // What the parent rollout recorded before the fork. Usage records use
+      // their conservative replay anchor; native items use exact ID membership.
+      // Loaded on the first relevant record; null drops the whole replay burst.
       let parentReplay: Set<string> | null | undefined
+      let parentNativeReplay: Set<string> | null | undefined
       let parentReplayAnchored = false
+      const loadParentReplay = async (): Promise<void> => {
+        if (parentReplay !== undefined) return
+        const index = forkedFromId && forkReplayState
+          ? await loadCodexParentReplayIndex(source.path, forkedFromId, forkReplayState.startedAtMs)
+          : null
+        parentReplay = index?.usageIdentities.size ? index.usageIdentities : null
+        parentNativeReplay = index?.nativeIdentities ?? null
+      }
       const isParentReplay = async (identity: string | undefined): Promise<boolean> => {
-        if (parentReplay === undefined) {
-          parentReplay = forkedFromId && forkReplayState ? await loadCodexParentReplay(source.path, forkedFromId, forkReplayState.startedAtMs) : null
-        }
+        await loadParentReplay()
         if (!parentReplay || identity === undefined) return true
         if (parentReplay.has(identity)) { parentReplayAnchored = true; return true }
         // A burst that opens with a record the parent lacks was not copied from
         // this parent file; fall back to dropping the burst.
         if (!parentReplayAnchored) { parentReplay = null; return true }
         return false
+      }
+      const isParentNativeReplay = async (identity: string | undefined): Promise<boolean> => {
+        await loadParentReplay()
+        // Without a readable parent set or a stable item ID, retain the old
+        // burst suppression. A loaded set makes membership an exact decision,
+        // independent of whether a token record has anchored the fork yet.
+        return !parentNativeReplay || identity === undefined || parentNativeReplay.has(identity)
       }
       // Null sentinel rather than `0` so the FIRST event is never confused
       // with a duplicate. A session that only emits last_token_usage (no
@@ -1197,6 +1161,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
             || entry.payload?.source?.subagent?.thread_spawn?.parent_thread_id
             || ''
           parentReplay = undefined
+          parentNativeReplay = undefined
           parentReplayAnchored = false
           if (forkedFromId) {
             forkReplayState = startCodexForkReplay(entry.timestamp)
@@ -1226,6 +1191,9 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
         }
 
         const isForkReplay = isCodexForkReplay(forkReplayState, entry.timestamp)
+        const nativeEvent = nativeToolEvent(entry)
+
+        if (nativeEvent && isForkReplay && await isParentNativeReplay(nativeEvent.identity)) continue
 
         if (entry.type === 'turn_context' && typeof entry.payload?.model === 'string') {
           sessionModel = entry.payload.model
@@ -1253,11 +1221,8 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
           entry.payload?.type === 'function_call_output' ||
           entry.payload?.type === 'custom_tool_call' ||
           entry.payload?.type === 'custom_tool_call_output' ||
-          entry.payload?.type === 'web_search_call' ||
-          entry.payload?.type === 'tool_search_call' ||
-          entry.payload?.type === 'image_generation_call' ||
           entry.payload?.type === 'mcp_tool_call_end' ||
-          entry.payload?.type === 'item_completed' ||
+          (entry.payload?.type === 'item_completed' && !nativeEvent) ||
           entry.payload?.type === 'patch_apply_end'
         )) continue
 
@@ -1340,7 +1305,6 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
           continue
         }
 
-        const nativeEvent = nativeToolEvent(entry)
         if (nativeEvent) {
           // Status transitions share an item identity. The first observed
           // record proves tool activity even when the rollout ends before its
