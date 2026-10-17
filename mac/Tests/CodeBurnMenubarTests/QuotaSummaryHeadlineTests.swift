@@ -91,4 +91,20 @@ struct QuotaSummaryHeadlineTests {
         #expect(QuotaSummary.severity(for: 0.94) == .critical)
         #expect(QuotaSummary.severity(for: 0.95) == .danger)
     }
+
+    @Test("model-scoped Weekly · Fable does not shadow 5-hour when unscoped Weekly is absent")
+    func scopedWeeklyDoesNotShadowSessionWindow() {
+        let fiveHour = QuotaSummary.Window(label: "5-hour", percent: 0.20, resetsAt: nil)
+        let scoped = QuotaSummary.Window(label: "Weekly · Fable", percent: 0.0, resetsAt: nil)
+        let summary = QuotaSummary(
+            providerFilter: .claude,
+            connection: .connected,
+            primary: fiveHour,
+            details: [fiveHour, scoped],
+            planLabel: "Team Premium",
+            footerLines: []
+        )
+
+        #expect(summary.headlineWindow == fiveHour)
+    }
 }
