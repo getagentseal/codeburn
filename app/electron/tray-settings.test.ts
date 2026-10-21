@@ -181,7 +181,7 @@ describe('sanitizeDockPatch', () => {
     expect(sanitizeDockPatch({ theme: 'glass' })).toEqual({ theme: 'glass' })
     expect(sanitizeDockPatch({ gaugeShape: 'squircle' })).toEqual({ gaugeShape: 'squircle' })
     expect(sanitizeDockPatch({ claudeProfiles: 'separate' })).toEqual({ claudeProfiles: 'separate' })
-    expect(sanitizeDockPatch({ preferred: 'codex' })).toEqual({ preferred: 'codex' })
+    expect(sanitizeDockPatch({ preferred: 'codex' })).toEqual({ preferred: 'codex', manualSelection: true })
   })
 
   // Editing the set by hand is what stops the tray app seeding it from whatever is connected.

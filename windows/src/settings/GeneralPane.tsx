@@ -324,8 +324,11 @@ function CapacityDockSection({ quota }: { quota: QuotaState }) {
   const all = quota.providers.map(p => p.id)
   const manageable = manageableProviders(all, prefs.providers, isConnected)
   // The rail can only rest on a provider it is actually showing. With nothing chosen yet it
-  // shows everything connected, which is what an empty selection means.
-  const restable = (prefs.providers.length > 0 ? prefs.providers : all).filter(isConnected)
+  // shows everything connected, which is what an empty selection means. The saved resting
+  // provider stays in the menu while its quota read is missing, so the control does not
+  // present whoever else answered as if the user had picked them.
+  const candidates = prefs.providers.length > 0 ? prefs.providers : all
+  const restable = candidates.filter(id => isConnected(id) || id === prefs.preferred)
   const resting = restable.includes(prefs.preferred ?? '') ? prefs.preferred! : restable[0] ?? ''
 
   const toggleProvider = (id: string, on: boolean) => {
@@ -362,7 +365,7 @@ function CapacityDockSection({ quota }: { quota: QuotaState }) {
               ariaLabel="Resting provider"
               value={resting}
               options={restable.map(id => ({ id, label: nameOf(id) }))}
-              onChange={preferred => apply({ preferred })}
+              onChange={preferred => apply({ preferred, manualSelection: true })}
             />
           }
         />

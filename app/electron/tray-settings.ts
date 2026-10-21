@@ -417,6 +417,10 @@ export function sanitizeDockPatch(patch: unknown): Record<string, unknown> {
   }
   if ('preferred' in patch) {
     out.preferred = typeof patch.preferred === 'string' && PROVIDER_ID.test(patch.preferred) ? patch.preferred : null
+    // Picking who the rail rests on is the user taking the set over, same as editing the
+    // switches. Until this latches, the tray app's auto-seed rewrites that choice whenever
+    // the connected list changes.
+    if (out.preferred !== null) out.manualSelection = true
   }
   if ('providers' in patch) {
     const providers = Array.isArray(patch.providers)
