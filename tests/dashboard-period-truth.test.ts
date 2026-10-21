@@ -106,6 +106,30 @@ describe('interactive period truth', () => {
     }, 'lifetime').durable).toMatchObject({ cost: 4, calls: 1, sessions: 1 })
   })
 
+  it.each(['copilot', 'codex'])('keeps %s days absent from a complete shared cache without shrinking cached history', provider => {
+    const at = (age: number) => new Date(Date.now() - age * 24 * 60 * 60 * 1000).toISOString()
+    const cached = historicalProviderProject(provider, 4, at(5))
+    const unrelated = historicalProviderProject('claude', 100, at(4))
+    const surviving = historicalProviderProject(provider, 1, at(5))
+    const missingDay = historicalProviderProject(provider, 7, at(3))
+    const outsideWeek = historicalProviderProject(provider, 50, at(12))
+    const sharedCache: DailyCache = {
+      ...emptyDailyCache(), days: aggregateProjectsIntoDays([cached, unrelated]),
+    }
+    const before = structuredClone(sharedCache)
+    const history: DashboardHistoryIndex = {
+      provider, normalizedProjects: [surviving, missingDay, outsideWeek],
+      cache: sharedCache, planUsages: [], readyThrough: 'lifetime',
+    }
+
+    expect(selectDashboardHistoryIndex(history, 'week').durable).toMatchObject({
+      cost: 11, calls: 2, inputTokens: 20, outputTokens: 10,
+    })
+    expect(selectDashboardHistoryIndex(history, 'today').durable).toMatchObject({ cost: 0, calls: 0 })
+    expect(selectDashboardHistoryIndex(history, 'lifetime').durable).toMatchObject({ cost: 61, calls: 3 })
+    expect(sharedCache).toEqual(before)
+  })
+
   it('names the visible explicit Month while a cold shared index widens in the background', async () => {
     const stdin = new PassThrough() as PassThrough & NodeJS.ReadStream
     const stdout = new PassThrough() as PassThrough & NodeJS.WriteStream

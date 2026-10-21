@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### Fixed
+- Provider-filtered TUI totals no longer drop after background refresh when a session's historical day is missing from an otherwise complete shared cache. (#1769)
 - **Copilot agent requests in VS Code chat count every model call.** Copilot Chat 0.69 keeps only the last call of an agent request in its metadata, so CodeBurn showed a fraction of the output and cost. It now reads the request's totals (all calls, with the cache split when VS Code records it), and a request that records GitHub's credits costs exactly that bill (1 credit = $0.01) in reports and plan credits. A chat session that also ran on the agent host is counted once, from the agent host. In Copilot plan credits each chat request is rated on its own. Past Copilot days re-derive once after the update.
 - Copilot showed `claude-sonnet-4-6` as "Sonnet 4" instead of "Sonnet 4.6".
 

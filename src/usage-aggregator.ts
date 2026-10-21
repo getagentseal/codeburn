@@ -793,9 +793,11 @@ export function buildDurableOverviewFromNormalizedIndex(
   const rangeEndStr = toDateString(periodInfo.range.end)
   // A provider-scoped index deliberately does not rewrite the shared all-
   // provider durable cache. When that cache has no row for a surviving
-  // historical source, fill the missing date from this same normalized index;
-  // existing durable rows stay authoritative so expired history is preserved.
-  const canFillMissingDates = cache.complete !== true || cache.days.length === 0
+  // historical source, fill the missing date from this same normalized index,
+  // even if the shared cache is complete: its last all-provider scan may predate
+  // these sources. Existing durable rows stay authoritative so expired history
+  // is preserved, and this projection never writes to the shared cache.
+  const canFillMissingDates = pf !== 'all' || cache.complete !== true || cache.days.length === 0
   const normalizedHistoricalDays = canFillMissingDates
     ? normalizedDays.filter(day =>
         day.date !== todayStr
