@@ -361,7 +361,10 @@ import type { DateRange, ProjectSummary } from './types.js'
 // copilotCredits, and a chat session that also ran on the agent host is left
 // to it. That twin drops calls, so copilot joins
 // PENDING_REDERIVE_PROVIDER_VERSIONS at 75.
-export const DAILY_CACHE_VERSION = 75
+// v77: Warp conversations that carry only total_billed_cost_in_cents are
+// priced from it instead of credits or the token floor. Calls are unchanged,
+// so no PENDING_REDERIVE_PROVIDER_VERSIONS entry is needed.
+export const DAILY_CACHE_VERSION = 77
 const MIN_SUPPORTED_VERSION = 28
 
 /// Providers whose per-day CALL COUNT means something different at

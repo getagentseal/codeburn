@@ -612,7 +612,9 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // cached before this hold costUSD: undefined and are re-priced from the
   // token floor on every read, so they must re-parse once for the real dollars
   // to land.
-  warp: 'worktree-project-grouping-v1-est-cost-billing-cost-v1',
+  // billed-cost-v1: total_billed_cost_in_cents prices conversations that carry
+  // no provider cost or charged usage.
+  warp: 'worktree-project-grouping-v1-est-cost-billing-cost-v1-billed-cost-v1',
   // cache-read-v1-est-cost: gen_metadata and RPC usage now carry cache-read
   // tokens, fields 9/10 read as thinking/response (they were swapped), and
   // placeholder-only models are priced and flagged costIsEstimated.
