@@ -673,6 +673,7 @@ const DATE_KEY_RE = /^\d{4}-\d{2}-\d{2}$/
 export const CARRIED_MODEL_NAME = 'Unknown (carried)'
 
 const REMAINDER_KEYS = ['calls', 'cost', 'savingsUSD', 'inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheWriteTokens'] as const
+const TOKEN_KEYS = ['inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheWriteTokens'] as const
 
 /// Money is compared at the cent every surface reports it in. Summing a day's
 /// model rows in a different order than its total was accumulated leaves a
@@ -702,6 +703,29 @@ function creditCarriedRemainder(
   const acc = Object.hasOwn(models, CARRIED_MODEL_NAME) ? models[CARRIED_MODEL_NAME]! : emptyModelStats()
   for (const key of REMAINDER_KEYS) acc[key] += rest[key]
   setOwn(models, CARRIED_MODEL_NAME, acc)
+}
+
+/// A token-only slice used to read as a placeholder, so every merge over it
+/// added its tokens to the day again while the slice itself stayed whole. A day
+/// whose slices all carry token figures never holds more than their sum; one
+/// holding a pre-v14 slice without them keeps its own totals.
+function healTokenTotals(day: DailyEntry): void {
+  const slices = Object.values(day.providers)
+  if (slices.length === 0 || slices.some(s => TOKEN_KEYS.every(k => s[k] === undefined))) return
+  const sums = TOKEN_KEYS.map(k => slices.reduce((sum, s) => sum + (s[k] ?? 0), 0))
+  if (TOKEN_KEYS.every((k, i) => day[k] <= sums[i]!)) return
+  TOKEN_KEYS.forEach((k, i) => { day[k] = Math.min(day[k], sums[i]!) })
+  const rows: Record<string, ModelDayStats> = {}
+  for (const s of slices) {
+    for (const [name, m] of Object.entries(s.models ?? {})) {
+      const acc = Object.hasOwn(rows, name) ? rows[name]! : emptyModelStats()
+      for (const k of TOKEN_KEYS) acc[k] += m[k]
+      setOwn(rows, name, acc)
+    }
+  }
+  for (const [name, r] of Object.entries(rows)) {
+    if (Object.hasOwn(day.models, name)) for (const k of TOKEN_KEYS) day.models[name]![k] = Math.min(day.models[name]![k], r[k])
+  }
 }
 
 function migrateDays(days: Record<string, unknown>[]): DailyEntry[] {
@@ -738,6 +762,7 @@ function migrateDays(days: Record<string, unknown>[]): DailyEntry[] {
     // split while one of its slices was written before slices carried one (or
     // the reverse), and a provider-scoped view reads the slice's map alone.
     .map(day => {
+      healTokenTotals(day)
       for (const slice of Object.values(day.providers)) creditCarriedRemainder(slice, slice.models ??= {})
       creditCarriedRemainder(day, day.models)
       return day
@@ -983,8 +1008,11 @@ function applyRetention(days: DailyEntry[], newestDate: string): DailyEntry[] {
   return days.filter(d => d.date >= cutoff)
 }
 
+/// Tokens count: a slice with usage but no call or cost (a Hermes session
+/// total) is already in the day's totals, so merging over it as a placeholder
+/// counts it twice.
 function hasSliceData(slice: ProviderDaySlice): boolean {
-  return slice.cost > 0 || slice.calls > 0 || (slice.savingsUSD ?? 0) > 0
+  return slice.cost > 0 || slice.calls > 0 || (slice.savingsUSD ?? 0) > 0 || TOKEN_KEYS.some(k => (slice[k] ?? 0) > 0)
 }
 
 /// A day from a pre-v5-era cache: day-level totals exist but the providers map
@@ -1180,7 +1208,8 @@ function subtractSlice(base: ProviderDaySlice, sub: ProviderDaySlice): ProviderD
     ...(categories ? { categories } : {}),
     ...(projects ? { projects } : {}),
   }
-  return hasSliceData(out) || (out.sessions ?? 0) > 0 ? out : null
+  // A token-only remainder is drift between two scans of the same calls, not usage.
+  return calls > 0 || cost > 0 || savingsUSD > 0 || sessions > 0 ? out : null
 }
 
 /// Entries are subtracted key by key, so content the fresh parse files under a
