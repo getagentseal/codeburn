@@ -7,6 +7,7 @@ import { computeHistoryStats } from '../lib/history'
 import type { Period } from './PeriodTabs'
 import { ArrowDownRight, ArrowUpRight, ChevronRight, FlameIcon } from './Icons'
 import { formatCompactSessionCount, formatSessionCount, SESSION_COUNT_HELP } from '../lib/session-count-label'
+import { t } from '../i18n'
 
 type Props = {
   payload: MenubarPayload
@@ -31,7 +32,7 @@ function projectDisplayName(path: string): string {
 
 export function StatsInsight({ payload, currency, period }: Props) {
   const s = computeHistoryStats(payload.history.daily)
-  const suffix = PERIOD_SUFFIX[period]
+  const suffix = t(PERIOD_SUFFIX[period])
   const projects = (payload.current.topProjects ?? []).slice(0, 3)
   const costliest = payload.current.topSessions?.[0]
 
@@ -39,22 +40,22 @@ export function StatsInsight({ payload, currency, period }: Props) {
     <div className="stats-insight">
       <div className="stats-grid">
         <div className="stats-col">
-          <StatRow label="Favorite model" value={payload.current.topModels[0]?.name ?? '-'} />
-          <StatRow label="Active days (month)" value={`${s.activeDaysThisMonth}/${daysInMonth(new Date())}`} />
-          <StatRow label="Most active day" value={s.peak ? monthDay(s.peak.date) : '-'} />
-          <StatRow label="Peak day spend" value={s.peak ? formatCompactCurrency(s.peak.cost, currency) : '-'} />
+          <StatRow label={t('Favorite model')} value={payload.current.topModels[0]?.name ?? '-'} />
+          <StatRow label={t('Active days (month)')} value={`${s.activeDaysThisMonth}/${daysInMonth(new Date())}`} />
+          <StatRow label={t('Most active day')} value={s.peak ? monthDay(s.peak.date) : '-'} />
+          <StatRow label={t('Peak day spend')} value={s.peak ? formatCompactCurrency(s.peak.cost, currency) : '-'} />
         </div>
         <div className="stats-col">
-          <StatRow label={`Sessions ${suffix}`} value={formatSessionCount(payload.current.sessions, payload.current.sessionCountBasis)} />
-          <StatRow label={`Calls ${suffix}`} value={payload.current.calls.toLocaleString()} />
-          <StatRow label="Current streak" value={s.currentStreak > 0 ? plural(s.currentStreak, 'day') : '-'} />
-          <StatRow label="Longest streak" value={s.longestStreak > 0 ? plural(s.longestStreak, 'day') : '-'} />
+          <StatRow label={t('Sessions %@', suffix)} value={formatSessionCount(payload.current.sessions, payload.current.sessionCountBasis)} />
+          <StatRow label={t('Calls %@', suffix)} value={payload.current.calls.toLocaleString(undefined)} />
+          <StatRow label={t('Current streak')} value={s.currentStreak > 0 ? (s.currentStreak === 1 ? t('1 day') : t('%lld days', s.currentStreak)) : '-'} />
+          <StatRow label={t('Longest streak')} value={s.longestStreak > 0 ? (s.longestStreak === 1 ? t('1 day') : t('%lld days', s.longestStreak)) : '-'} />
         </div>
       </div>
       {s.trackedDays > 0 && (
         <div className="stats-lifetime">
           <span className="stats-lifetime-label">
-            Tracked spend (last {plural(s.trackedDays, 'day')})
+            {t('Tracked spend (last %@)', s.trackedDays === 1 ? t('1 day') : t('%lld days', s.trackedDays))}
           </span>
           <span className="stats-lifetime-value">
             {formatCurrency(s.trackedTotal, currency)}
@@ -65,7 +66,7 @@ export function StatsInsight({ payload, currency, period }: Props) {
       {costliest && costliest.cost > 0 && (
         <div className="stats-costliest">
           <FlameIcon size={9} className="stats-costliest-icon" />
-          <span className="stats-costliest-label">Costliest session</span>
+          <span className="stats-costliest-label">{t('Costliest session')}</span>
           <span className="stats-spacer" />
           <span className="stats-costliest-value">{formatCompactCurrency(costliest.cost, currency)}</span>
           <span className="stats-costliest-project">· {projectDisplayName(costliest.project)}</span>

@@ -74,6 +74,7 @@ import {
 } from './dockGeometry'
 import { track } from './lib/telemetry'
 import './dock.css'
+import { t } from './i18n/index'
 
 const PROVIDER_NAMES: Record<string, string> = {
   claude: 'Claude',
@@ -284,15 +285,17 @@ function connectionAction(provider: Provider): 'Connect' | 'Reconnect' | null {
 /// The mac says "Add API Key" where the provider's only credential is a token. Here that is
 /// the same two providers whose settings pane offers a paste field.
 function actionTitle(provider: Provider, action: 'Connect' | 'Reconnect'): string {
-  return ACCEPTS_KEY.includes(provider.id) ? 'Add API Key' : action
+  return t(ACCEPTS_KEY.includes(provider.id) ? 'Add API Key' : action)
 }
 
 function checkedLabel(fetchedAt: number, now: number): string {
   const minutes = Math.floor(Math.max(0, now - fetchedAt) / 60_000)
-  if (minutes < 1) return 'Checked just now'
-  if (minutes < 60) return `Checked ${minutes}m ago`
+  if (minutes < 1) return t('just now')
+  if (minutes < 60) return t('%lldm ago', minutes)
   const hours = Math.floor(minutes / 60)
-  return `Checked ${hours}h ${minutes % 60}m ago`
+  const rest = minutes % 60
+  if (rest === 0) return t('%lldh ago', hours)
+  return t('%1$lldh %2$lldm ago', hours, rest)
 }
 
 /// The mac's footer carries provider facts its own adapters return. The CLI's `quota` output
@@ -302,12 +305,12 @@ function footerLines(provider: Provider, fetchedAt: number | null, now: number):
   const lines: string[] = []
   if (fetchedAt !== null) lines.push(checkedLabel(fetchedAt, now))
   const hidden = provider.windows.length - MAX_WINDOW_COLUMNS
-  if (hidden > 0) lines.push(`${hidden} more window${hidden === 1 ? '' : 's'} not shown`)
+  if (hidden > 0) lines.push(hidden === 1 ? t('1 more window not shown') : t('%lld more windows not shown', hidden))
   return visibleFooterLines(lines, provider.error ?? null).slice(0, 2)
 }
 
 function instruction(provider: Provider, quota: QuotaState): string {
-  if (quota.cliOutdated) return 'CLI update needed for live quota. Run npm install -g codeburn.'
+  if (quota.cliOutdated) return t('CLI update needed for live quota. Run npm install -g codeburn.')
   if (quota.error) return quota.error
   const name = PROVIDER_NAMES[provider.baseId ?? provider.id] ?? provider.name
   return `Sign in with the ${name} app or CLI. The dock checks again on the quota refresh cadence.`
@@ -427,23 +430,23 @@ function Detail({
           <ProviderGlyph id={baseId} size={m.detailGlyphSize} />
         </span>
         <span className="dock-glance-name">{title}</span>
-        {provider.plan ? <span className="dock-glance-plan">{provider.plan}</span> : null}
+        {provider.plan ? <span className="dock-glance-plan">{t(provider.plan)}</span> : null}
       </header>
 
-      {connection === 'loading' ? <p className="dock-conn is-loading">Refreshing…</p> : null}
-      {connection === 'stale' ? <p className="dock-conn is-stale">Last known usage · refreshing</p> : null}
+      {connection === 'loading' ? <p className="dock-conn is-loading">{t('Refreshing…')}</p> : null}
+      {connection === 'stale' ? <p className="dock-conn is-stale">{t('Last known usage · refreshing')}</p> : null}
       {connection === 'transientFailure' ? (
-        <p className="dock-conn is-retrying">Last known usage · retrying</p>
+        <p className="dock-conn is-retrying">{t('Last known usage · retrying')}</p>
       ) : null}
       {connection === 'disconnected' ? (
         <div className="dock-conn-block is-disconnected">
-          <p className="dock-conn is-disconnected">Not connected</p>
+          <p className="dock-conn is-disconnected">{t('Not connected')}</p>
           <p className="dock-conn-instruction">{instruction(provider, quota)}</p>
         </div>
       ) : null}
       {connection === 'terminalFailure' ? (
         <div className="dock-conn-block is-failed">
-          <p className="dock-conn is-failed">Reconnect required</p>
+          <p className="dock-conn is-failed">{t('Reconnect required')}</p>
           <p className="dock-conn-reason">{provider.error}</p>
           <p className="dock-conn-hint">{instruction(provider, quota)}</p>
         </div>
@@ -452,7 +455,7 @@ function Detail({
       {sessions ? (
         <section className="dock-glance-block has-rule">
           <div className="dock-glance-caption">
-            <span>Sessions</span>
+            <span>{t('Sessions')}</span>
             <span className="dock-glance-caption-end">{runningLabel(sessions.length)}</span>
           </div>
           {sessions.length > 0 ? (
@@ -468,12 +471,12 @@ function Detail({
       {today ? (
         <section className="dock-glance-block has-rule">
           <div className="dock-glance-caption">
-            <span>Today</span>
+            <span>{t('Today')}</span>
           </div>
           <div className="dock-today">
             <span className="dock-today-figure">
               <span className="dock-today-cost">{usd(today.cost)}</span>
-              <span className="dock-today-burned">burned</span>
+              <span className="dock-today-burned">{t('burned')}</span>
             </span>
             <span className="dock-today-stack">
               <span className="dock-today-token">

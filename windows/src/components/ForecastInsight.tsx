@@ -3,6 +3,7 @@ import type { CurrencyState } from '../lib/currency'
 import { formatCurrency, formatCompactCurrency } from '../lib/currency'
 import { computeHistoryStats } from '../lib/history'
 import { ArrowUpRight, ArrowDownRight } from './Icons'
+import { t } from '../i18n/index'
 
 const WEEK_DAYS = 7
 
@@ -21,26 +22,26 @@ export function ForecastInsight({ days, currency }: Props) {
     <div className="forecast-insight">
       <div className="insight-header">
         <div>
-          <div className="insight-sublabel">Month-to-date</div>
+          <div className="insight-sublabel">{t('Month-to-date')}</div>
           <div className="forecast-mtd">{formatCurrency(s.monthToDate, currency)}</div>
         </div>
         <div className="forecast-right">
-          <div className="insight-sublabel">On pace for</div>
+          <div className="insight-sublabel">{t('On pace for')}</div>
           <div className="forecast-projection">{formatCurrency(s.monthProjection, currency)}</div>
         </div>
       </div>
 
       <div className="mini-stats">
         <div className="mini-stat">
-          <div className="mini-stat-label">Avg/day (this wk)</div>
+          <div className="mini-stat-label">{t('Avg/day (this wk)')}</div>
           <div className="mini-stat-value">{formatCompactCurrency(s.weekTotal / WEEK_DAYS, currency)}</div>
         </div>
         <div className="mini-stat">
-          <div className="mini-stat-label">Yesterday</div>
+          <div className="mini-stat-label">{t('Yesterday')}</div>
           <div className="mini-stat-value">{formatCompactCurrency(s.yesterday, currency)}</div>
         </div>
         <div className="mini-stat">
-          <div className="mini-stat-label">Last 7d</div>
+          <div className="mini-stat-label">{t('Last 7d')}</div>
           <div className="mini-stat-value">{formatCompactCurrency(s.weekTotal, currency)}</div>
         </div>
       </div>

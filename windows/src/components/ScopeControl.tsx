@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 import type { ClaudeConfigOption } from '../lib/payload'
 import { CheckIcon, ChevronDown, PersonCircleIcon } from './Icons'
+import { t } from '../i18n/index'
 
 /// Port of ScopeSegmentedControl in mac/.../Views/MenuBarContent.swift. Local is this
 /// machine; Combined adds every paired device the CLI can reach. The Claude config picker
@@ -40,7 +41,7 @@ export function ScopeControl({ scope, onScope, configs, selectedConfigId, onConf
 
   return (
     <div className="scope-wrap">
-      <nav className="scope-tabs" role="radiogroup" aria-label="Scope" ref={radios} onKeyDown={onKeyDown}>
+      <nav className="scope-tabs" role="radiogroup" aria-label={t('Scope')} ref={radios} onKeyDown={onKeyDown}>
         {SCOPES.map((s, i) => (
           <button
             key={s.id}
@@ -51,7 +52,7 @@ export function ScopeControl({ scope, onScope, configs, selectedConfigId, onConf
             tabIndex={i === activeIndex ? 0 : -1}
             onClick={() => onScope(s.id)}
           >
-            {s.label}
+            {t(s.label)}
           </button>
         ))}
       </nav>
@@ -69,7 +70,7 @@ function ConfigPicker({ configs, selectedId, onSelect }: {
 }) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
-  const label = configs.find(c => c.id === selectedId)?.label ?? 'All'
+  const label = configs.find(c => c.id === selectedId)?.label ?? t('All')
 
   useEffect(() => {
     if (!open) return
@@ -87,7 +88,7 @@ function ConfigPicker({ configs, selectedId, onSelect }: {
       <button
         type="button"
         className="config-button"
-        title="Claude config"
+        title={t('Claude config')}
         aria-expanded={open}
         onClick={() => setOpen(o => !o)}
       >

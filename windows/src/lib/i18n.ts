@@ -40,6 +40,9 @@ export function subscribeI18n(listener: () => void): () => void {
     void listen('codeburn://settings-changed', () => {
       void reload()
     }).then(fn => { unlisten = fn })
+    void listen('codeburn://language-changed', () => {
+      void reload()
+    })
   }
   return () => {
     listeners = listeners.filter(item => item !== listener)

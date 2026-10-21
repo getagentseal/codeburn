@@ -4,9 +4,19 @@ import { getCurrentWindow } from '@tauri-apps/api/window'
 import { App } from './App'
 import { Dock } from './Dock'
 import { Settings } from './Settings'
+import { invoke } from '@tauri-apps/api/core'
+import { listen } from '@tauri-apps/api/event'
+import { applyLanguage, useLocale, type Locale } from './i18n'
 import { applyAccent, savedAccent } from './lib/accent'
 import { applyTheme, readSetting } from './lib/settings'
 import './styles.css'
+
+void invoke<{ locale: Locale }>('language_state')
+  .then(state => applyLanguage(state.locale))
+  .catch(() => {})
+void listen('codeburn://language-changed', () => {
+  void invoke<{ locale: Locale }>('language_state').then(state => applyLanguage(state.locale)).catch(() => {})
+})
 
 // Every window loads the one bundle, so the label decides which surface mounts.
 const label = getCurrentWindow().label
@@ -24,6 +34,9 @@ function surface() {
   return <App />
 }
 
-ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
-  <React.StrictMode>{surface()}</React.StrictMode>
-)
+function Root() {
+  const locale = useLocale()
+  return <React.StrictMode key={locale}>{surface()}</React.StrictMode>
+}
+
+ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(<Root />)

@@ -1,4 +1,5 @@
 import { WarningIcon } from './Icons'
+import { t } from '../i18n/index'
 
 /// Port of FetchErrorOverlay in mac/.../Views/MenuBarContent.swift. Shown in place of the
 /// loading overlay when the fetch failed and there is nothing cached to fall back on, so a
@@ -22,7 +23,7 @@ export function FetchErrorOverlay({ message, periodLabel, onRetry }: Props) {
         <WarningIcon size={28} className="fetch-error-icon" />
         <div className="fetch-error-title">Couldn't load {periodLabel}</div>
         <div className="fetch-error-message">{shown}</div>
-        <button type="button" className="btn btn-prominent" onClick={onRetry}>Retry</button>
+        <button type="button" className="btn btn-prominent" onClick={onRetry}>{t('Retry')}</button>
       </div>
     </div>
   )

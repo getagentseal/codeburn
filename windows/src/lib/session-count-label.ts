@@ -1,5 +1,7 @@
 /// Display copy for period session counts. Keep in lockstep with
-/// `src/session-count-label.ts`.
+/// `src/session-count-label.ts`. The English sentences are catalog keys.
+import { t } from '../i18n'
+
 export type SessionCountBasis = 'identity' | 'partial'
 
 export const SESSION_COUNT_HELP = 'Older session logs may be unavailable.'
@@ -15,11 +17,11 @@ export function formatSessionCount(
   basis: SessionCountBasis | undefined,
 ): string {
   if (!sessionCountIsExact(basis)) {
-    if (sessions <= 0) return 'Session count unavailable'
-    return sessions === 1 ? 'At least 1 session' : `At least ${sessions.toLocaleString('en-US')} sessions`
+    if (sessions <= 0) return t('Session count unavailable')
+    return sessions === 1 ? t('At least 1 session') : t('At least %lld sessions', sessions)
   }
-  if (sessions === 1) return '1 session'
-  return `${sessions.toLocaleString('en-US')} sessions`
+  if (sessions === 1) return t('1 session')
+  return t('%lld sessions', sessions)
 }
 
 export function formatCompactSessionCount(
@@ -27,10 +29,10 @@ export function formatCompactSessionCount(
   basis: SessionCountBasis | undefined,
 ): string {
   if (!sessionCountIsExact(basis)) {
-    if (sessions <= 0) return 'Unavailable'
-    return `≥${sessions.toLocaleString('en-US')} sess`
+    if (sessions <= 0) return t('Unavailable')
+    return t('≥%lld sess', sessions)
   }
-  return `${sessions.toLocaleString('en-US')} sess`
+  return t('%lld sess', sessions)
 }
 
 export function formatSessionAveragePlaceholder(): string {
@@ -38,5 +40,5 @@ export function formatSessionAveragePlaceholder(): string {
 }
 
 export function formatCombinedSessionCount(): string {
-  return COMBINED_SESSION_COUNT_LABEL
+  return t(COMBINED_SESSION_COUNT_LABEL)
 }
