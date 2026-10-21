@@ -10,7 +10,7 @@ import { findUnpricedModels, getFlatRateModelsConfigHash, getLocalModelSavingsCo
 import { getAllProviders, safeDiscoverSessions } from './providers/index.js'
 import { loadPlugins, pluginPayloadSections } from './plugins/loader.js'
 import { collectLiveSessions } from './live-sessions.js'
-import { claude, getClaudeConfigDirs, getDesktopSessionsDirs } from './providers/claude.js'
+import { claude, discoverClaudeProfileSources, getClaudeConfigDirs, getDesktopSessionsDirs } from './providers/claude.js'
 import { stat } from 'node:fs/promises'
 import { aggregateProjectsIntoDays, buildPeriodDataFromDays, dateKeyInTz } from './day-aggregator.js'
 import { aggregateModelEfficiency, buildRetryTax } from './model-efficiency.js'
@@ -345,6 +345,12 @@ async function claudeConfigSelector(projects: ProjectSummary[], selectedId?: str
         !source.sourcePath
       ) continue
       if (!byId.has(source.sourceId)) byId.set(source.sourceId, { id: source.sourceId, label: source.sourceLabel, path: source.sourcePath })
+    }
+    const profileSources = await discoverClaudeProfileSources().catch(() => [])
+    if (profileSources.length > 1) {
+      for (const profile of profileSources) {
+        byId.set(profile.id, { id: profile.id, label: profile.label, path: profile.path })
+      }
     }
   }
   return buildSelector(byId, selectedId)
