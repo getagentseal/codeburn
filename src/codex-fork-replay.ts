@@ -2,7 +2,7 @@ import { stat } from 'fs/promises'
 import { basename, dirname } from 'path'
 
 import { readSessionLines } from './fs-utils.js'
-import { walkRolloutFiles } from './launcher-homes.js'
+import { rolloutStem, walkRolloutFiles } from './launcher-homes.js'
 
 /** Maximum timestamp gap between copied records in Codex's fork replay burst. */
 export const CODEX_FORK_REPLAY_MAX_GAP_MS = 1000
@@ -84,7 +84,7 @@ export function codexReplayUsageIdentity(info: { total_token_usage?: CodexUsageC
 
 export const codexReplayResponseIdentity = (responseId: string): string => `response:${responseId}`
 
-// Rollout names are `rollout-YYYY-MM-DDTHH-MM-SS-<id>.jsonl`.
+// Rollout names are `rollout-YYYY-MM-DDTHH-MM-SS-<id>.jsonl` (or `.jsonl.zst`).
 const ROLLOUT_ID_OFFSET = 'rollout-YYYY-MM-DDTHH-MM-SS-'.length
 const rolloutIndexes = new Map<string, Map<string, string | null>>()
 
@@ -92,7 +92,7 @@ function findRollout(home: string, id: string): string | undefined {
   let index = rolloutIndexes.get(home)
   if (!index?.has(id)) {
     index = new Map()
-    walkRolloutFiles(home, path => index!.set(basename(path).slice(ROLLOUT_ID_OFFSET, -'.jsonl'.length), path))
+    walkRolloutFiles(home, path => index!.set(rolloutStem(basename(path)).slice(ROLLOUT_ID_OFFSET), path))
     if (!index.has(id)) index.set(id, null)
     rolloutIndexes.set(home, index)
   }
