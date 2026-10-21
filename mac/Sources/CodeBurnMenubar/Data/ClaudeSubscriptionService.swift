@@ -98,6 +98,64 @@ enum ClaudeSubscriptionService {
         }
     }
 
+    /// Background refresh for a specific Claude profile (Personal or Team organization,
+    /// or secondary config directory).
+    static func refreshProfile(_ profile: CapacityDockClaudeProfile) async throws -> SubscriptionUsage? {
+        let blockKey = "\(usageBlockedUntilKey).\(profile.id)"
+        if let until = UserDefaults.standard.object(forKey: blockKey) as? Date, until > Date() {
+            throw FetchError.rateLimited(retryAt: until)
+        }
+        guard let record = ClaudeCredentialStore.credentialForProfile(profile) else {
+            return nil
+        }
+        var request = URLRequest(url: usageURL)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 30
+        request.setValue("Bearer \(record.accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue(betaHeader, forHTTPHeaderField: "anthropic-beta")
+        request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
+
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await URLSession.shared.data(for: request)
+        } catch {
+            throw FetchError.network(error)
+        }
+        guard let http = response as? HTTPURLResponse else {
+            throw FetchError.usageHTTPError(-1, nil)
+        }
+        switch http.statusCode {
+        case 200:
+            UserDefaults.standard.removeObject(forKey: blockKey)
+            do {
+                return try parseUsage(
+                    data,
+                    rawTier: record.rateLimitTier,
+                    subscriptionType: record.subscriptionType
+                )
+            } catch {
+                throw FetchError.usageDecodeFailed
+            }
+        case 429:
+            let body = String(data: data, encoding: .utf8)
+            let retryAfter = parseRetryAfter(
+                header: http.value(forHTTPHeaderField: "Retry-After"),
+                body: body
+            )
+            let until = rateLimitBlockUntil(
+                existingUntil: UserDefaults.standard.object(forKey: blockKey) as? Date,
+                now: Date(),
+                retryAfterSeconds: retryAfter
+            )
+            UserDefaults.standard.set(until, forKey: blockKey)
+            throw FetchError.rateLimited(retryAt: until)
+        default:
+            throw FetchError.usageHTTPError(http.statusCode, String(data: data, encoding: .utf8))
+        }
+    }
+
     /// Reset everything — used on user-initiated disconnect.
     /// Returns the delete outcome so callers only tear down UI state once the
     /// credential material is actually gone. A failed delete leaves the usage

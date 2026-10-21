@@ -735,3 +735,6 @@
 "Downloads your own usage export with the Cursor app's login, at most once an hour." = "使用 Cursor 应用的登录下载你自己的用量导出，每小时最多一次。";
 "Turned off by CODEBURN_CURSOR_SYNC=0" = "已被 CODEBURN_CURSOR_SYNC=0 关闭";
 "Couldn't save the setting: config.json is invalid or locked" = "无法保存设置：config.json 无效或已被锁定";
+"Claude profiles" = "Claude 配置档案";
+"Separate rings" = "独立圆环";
+"Default" = "默认";
