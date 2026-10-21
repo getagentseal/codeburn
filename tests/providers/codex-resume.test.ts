@@ -128,6 +128,50 @@ async function parse(cacheDir: string, codexDir = tmpDir): Promise<ParsedProvide
 }
 
 describe('codex incremental resume', () => {
+  it('preserves native-tool identity and last-turn attachment across an appended tail', async () => {
+    const warmCache = join(tmpDir, 'cache-warm-native-tools')
+    const coldCache = join(tmpDir, 'cache-cold-native-tools')
+    const started = (timestamp: string) => JSON.stringify({
+      type: 'event_msg', timestamp, payload: { type: 'task_started' },
+    })
+    const record = (timestamp: string, responseId: string, input: number, output: number) => JSON.stringify({
+      type: 'token_usage_record', timestamp,
+      payload: { response_id: responseId, usage: { input_tokens: input, output_tokens: output } },
+    })
+    const responseSearch = JSON.stringify({
+      type: 'response_item', timestamp: '2026-04-14T10:00:03Z',
+      payload: { type: 'web_search_call', id: 'ws-resume', status: 'completed', action: { type: 'search', query: 'fixture' } },
+    })
+
+    sessionPath = await writeRollout([
+      meta(),
+      started('2026-04-14T10:00:00Z'),
+      record('2026-04-14T10:00:02Z', 'resp-native-1', 100, 20),
+      responseSearch,
+      started('2026-04-14T10:01:00Z'),
+    ])
+    const first = await parse(warmCache)
+    expect(first).toHaveLength(1)
+    expect(first[0]?.tools).toEqual(['WebSearch'])
+
+    await appendFile(sessionPath, [
+      JSON.stringify({
+        type: 'event_msg', timestamp: '2026-04-14T10:01:01Z',
+        payload: { type: 'item_completed', item: { type: 'WebSearch', id: 'ws-resume', results: [] } },
+      }),
+      record('2026-04-14T10:01:02Z', 'resp-native-2', 60, 10),
+    ].join('\n') + '\n')
+
+    readLineCalls.length = 0
+    const resumed = await parse(warmCache)
+    const resumeReads = readLineCalls.filter(c => c.filePath === sessionPath)
+    expect(resumeReads.length).toBeGreaterThan(0)
+    expect(resumeReads.every(c => (c.startByteOffset ?? 0) > 0)).toBe(true)
+    expect(resumed).toHaveLength(2)
+    expect(resumed.map(call => call.tools)).toEqual([['WebSearch'], []])
+    expect(JSON.stringify(resumed)).toBe(JSON.stringify(await parse(coldCache)))
+  })
+
   it('keeps the usage-record handover when an appended tail resumes at a task boundary', async () => {
     const warmCache = join(tmpDir, 'cache-warm')
     const coldCache = join(tmpDir, 'cache-cold')

@@ -361,7 +361,10 @@ import type { DateRange, ProjectSummary } from './types.js'
 // copilotCredits, and a chat session that also ran on the agent host is left
 // to it. That twin drops calls, so copilot joins
 // PENDING_REDERIVE_PROVIDER_VERSIONS at 75.
-export const DAILY_CACHE_VERSION = 75
+// v76: native Codex tool events now inform turn classification. Re-derive
+// settled days so their category totals reflect the recovered tool activity;
+// calls, tokens, and cost are unchanged.
+export const DAILY_CACHE_VERSION = 76
 const MIN_SUPPORTED_VERSION = 28
 
 /// Providers whose per-day CALL COUNT means something different at

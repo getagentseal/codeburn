@@ -71,6 +71,29 @@ Four layers, in order:
 
 Estimated events that fall back to char-counting use `codex:<sessionId>:<timestamp>:est<n>`.
 
+## Native tool attribution
+
+`web_search_call`, `tool_search_call`, and `image_generation_call` are recorded
+as `WebSearch`, `ToolSearch`, and `ImageGeneration`. `event_msg/item_completed`
+records whose item type is `WebSearch` share the same `WebSearch` identity.
+Persisted WebSearch extension items also appear with `type: "Extension"` and
+`kind: "web.search"`; only that explicit kind maps to `WebSearch`.
+Repeated status updates and mirrored records collapse by their stable item id
+(or `call_id` for tool search); records without one remain distinct because
+query or result text is not a safe identity.
+
+The first observed status records activity, whether partial or completed. Native
+items add tool attribution only: they do not change token usage,
+`webSearchRequests`, or cost. Fork replay suppression compares native item IDs
+against the readable parent's native identities, so a new item can count before
+the usage replay anchor while an exact parent item stays suppressed. Items
+without IDs or without a readable parent retain burst suppression. When a
+native tool item arrives
+after the final usage record in its task, it is attached to that task's last
+call. Large image results and search result arrays stay out of the compact
+decoded entry; the decoder scans direct id/type/kind fields and copies only
+bounded field windows.
+
 ## Quirks
 
 - Newer Codex builds emit one `token_usage_record` per model response with a `response_id`. Those records are the preferred usage source from the first usable record onward; earlier `token_count` events in a mixed rollout still count, and malformed records leave the legacy fallback active.
