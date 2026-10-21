@@ -1,6 +1,7 @@
 import { open, stat } from 'node:fs/promises'
 import { StringDecoder } from 'node:string_decoder'
 
+import { createTextReadStream } from './fs-utils.js'
 import { billableOutputTokens } from './models.js'
 import { isCodexForkReplay, startCodexForkReplay, type CodexForkReplayState } from './codex-fork-replay.js'
 
@@ -448,10 +449,55 @@ export class CodexThroughputReader {
     if (state.points.length > 10000) state.points.splice(0, state.points.length - 10000)
   }
 
+  private consume(buffer: Buffer): void {
+    let chunk = this.decoder.write(buffer)
+    while (chunk.length > 0) {
+      const newlineIndex = chunk.search(/\r?\n/)
+      const segment = newlineIndex >= 0 ? chunk.slice(0, newlineIndex) : chunk
+      this.pending += segment
+      this.scanDurationSegment(segment)
+      if (newlineIndex < 0) break
+      const newlineLength = chunk[newlineIndex] === '\r' ? 2 : 1
+      const line = this.pending
+      const durationOverride = this.pendingDurationMs
+      this.pending = ''
+      this.pendingDurationMs = undefined
+      this.scanDepth = 0
+      this.scanPayloadDepth = undefined
+      this.scanInString = false
+      this.scanEscape = false
+      this.scanString = ''
+      this.scanLastString = ''
+      this.scanAwaitingColon = false
+      this.scanCurrentKey = undefined
+      this.scanCapture = undefined
+      this.processLine(line, durationOverride)
+      chunk = chunk.slice(newlineIndex + newlineLength)
+    }
+    if (this.pending.length > MAX_PENDING_LINE_CHARS) {
+      const body = this.pending.startsWith(TRUNCATION_MARKER)
+        ? this.pending.slice(TRUNCATION_MARKER.length)
+        : this.pending
+      this.pending = TRUNCATION_MARKER + body.slice(0, 256 * 1024) + body.slice(-256 * 1024)
+    }
+  }
+
   async update(filePath: string, limit = 10, finalize = false): Promise<CodexThroughputPoint[]> {
     const info = await stat(filePath)
     if (info.size < this.offset) this.reset()
-    const bytesToRead = info.size - this.offset
+    // A compressed rollout is immutable and its byte offsets are not text
+    // offsets, so it is decoded whole, once.
+    const compressed = filePath.endsWith('.zst')
+    if (compressed && this.offset === 0) {
+      try {
+        for await (const buffer of createTextReadStream(filePath)) this.consume(buffer as Buffer)
+      } catch (err) {
+        this.reset()
+        throw err
+      }
+      this.offset = info.size
+    }
+    const bytesToRead = compressed ? 0 : info.size - this.offset
     if (bytesToRead > 0) {
       const file = await open(filePath, 'r')
       try {
@@ -462,36 +508,7 @@ export class CodexThroughputReader {
           if (bytesRead === 0) break
           position += bytesRead
           this.offset = position
-          let chunk = this.decoder.write(buffer.subarray(0, bytesRead))
-          while (chunk.length > 0) {
-            const newlineIndex = chunk.search(/\r?\n/)
-            const segment = newlineIndex >= 0 ? chunk.slice(0, newlineIndex) : chunk
-            this.pending += segment
-            this.scanDurationSegment(segment)
-            if (newlineIndex < 0) break
-            const newlineLength = chunk[newlineIndex] === '\r' ? 2 : 1
-            const line = this.pending
-            const durationOverride = this.pendingDurationMs
-            this.pending = ''
-            this.pendingDurationMs = undefined
-            this.scanDepth = 0
-            this.scanPayloadDepth = undefined
-            this.scanInString = false
-            this.scanEscape = false
-            this.scanString = ''
-            this.scanLastString = ''
-            this.scanAwaitingColon = false
-            this.scanCurrentKey = undefined
-            this.scanCapture = undefined
-            this.processLine(line, durationOverride)
-            chunk = chunk.slice(newlineIndex + newlineLength)
-          }
-          if (this.pending.length > MAX_PENDING_LINE_CHARS) {
-            const body = this.pending.startsWith(TRUNCATION_MARKER)
-              ? this.pending.slice(TRUNCATION_MARKER.length)
-              : this.pending
-            this.pending = TRUNCATION_MARKER + body.slice(0, 256 * 1024) + body.slice(-256 * 1024)
-          }
+          this.consume(buffer.subarray(0, bytesRead))
         }
       } finally {
         await file.close()

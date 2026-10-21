@@ -1,5 +1,7 @@
 import { readFile, stat } from 'fs/promises'
-import { readFileSync, statSync, createReadStream } from 'fs'
+import { readFileSync, statSync, createReadStream, openSync, readSync, closeSync } from 'fs'
+import { pipeline, type Readable } from 'stream'
+import zlib from 'zlib'
 
 // Hard cap well below V8's 512 MB string limit. Callers that need line-by-line
 // processing should use readSessionLines(), which avoids materializing the
@@ -21,6 +23,58 @@ function verbose(): boolean {
 
 function warn(msg: string): void {
   if (verbose()) process.stderr.write(`codeburn: ${msg}\n`)
+}
+
+// zstd landed in node:zlib in 22.15 / 23.8; the package floor is 22.13, so the
+// exports are optional and callers check zstdSupported before handing over a
+// `.zst` path.
+const zstd = zlib as unknown as {
+  createZstdDecompress?: typeof zlib.createZstdDecompress
+  zstdDecompressSync?: typeof zlib.zstdDecompressSync
+}
+export const zstdSupported = !!zstd.createZstdDecompress && !!zstd.zstdDecompressSync
+const MAX_ZSTD_HEAD_DECODED_BYTES = 64 * 1024 * 1024
+
+function requireZstd(filePath: string): void {
+  if (!zstdSupported) throw new Error(`${filePath} is zstd-compressed; reading it needs Node 22.15+`)
+}
+
+/** Reads a file's text, decompressing a `.zst` file on the fly. */
+export function createTextReadStream(filePath: string, options?: { start?: number; end?: number }): Readable {
+  if (!filePath.endsWith('.zst')) return createReadStream(filePath, options)
+  requireZstd(filePath)
+  const raw = createReadStream(filePath, options)
+  // pipeline, not pipe: a read error has to fail the decoder too, or its
+  // consumer waits forever.
+  return pipeline(raw, zstd.createZstdDecompress!(), () => {})
+}
+
+/** Up to `maxBytes` of a file's text from its start; for a `.zst` file only the compressed head is read. */
+export function readTextHeadSync(filePath: string, maxBytes: number): Buffer {
+  const fd = openSync(filePath, 'r')
+  let head: Buffer
+  try {
+    const buf = Buffer.alloc(maxBytes)
+    head = buf.subarray(0, readSync(fd, buf, 0, maxBytes, 0))
+  } finally {
+    closeSync(fd)
+  }
+  if (!filePath.endsWith('.zst') || head.length === 0) return head
+  requireZstd(filePath)
+  // ZSTD_e_continue decodes a cut-off frame as far as it goes instead of
+  // rejecting it as truncated; a head that inflates past the cap is retried
+  // with less input.
+  for (;;) {
+    try {
+      return zstd.zstdDecompressSync!(head, {
+        finishFlush: zlib.constants.ZSTD_e_continue,
+        maxOutputLength: MAX_ZSTD_HEAD_DECODED_BYTES,
+      }).subarray(0, maxBytes)
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ERR_BUFFER_TOO_LARGE' || head.length < 2) throw err
+      head = head.subarray(0, head.length >> 1)
+    }
+  }
 }
 
 // Always surfaced (not verbose-gated): dropping an entire session file silently
@@ -116,7 +170,7 @@ export async function* readSessionLines(
     return
   }
 
-  const stream = createReadStream(
+  const stream = createTextReadStream(
     filePath,
     options.startByteOffset !== undefined ? { start: options.startByteOffset } : undefined,
   )
@@ -220,7 +274,10 @@ export async function* readSessionLines(
       }
     }
   } catch (err) {
-    warn(`stream read failed for ${filePath}: ${(err as NodeJS.ErrnoException).code ?? 'unknown'}`)
+    const code = (err as NodeJS.ErrnoException).code ?? 'unknown'
+    // A truncated .zst decodes up to the damage and would pass for a whole session.
+    if (filePath.endsWith('.zst')) notice(`could not fully decompress ${filePath} (${code}); usage after the damaged part is NOT counted`)
+    else warn(`stream read failed for ${filePath}: ${code}`)
   } finally {
     stream.destroy()
   }

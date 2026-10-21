@@ -2,9 +2,12 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { mkdtemp, mkdir, writeFile, rm, stat } from 'fs/promises'
 import { basename, join } from 'path'
 import { tmpdir } from 'os'
+import zlib from 'zlib'
 
 import { createCodexProvider } from '../../src/providers/codex.js'
 import { clearCodexMemCaches, CODEX_CACHE_VERSION, codexCacheFileName } from '../../src/codex-cache.js'
+import { rolloutFileSessionId } from '../../src/launcher-homes.js'
+import { readCodexThroughput } from '../../src/codex-throughput.js'
 import { calculateCost, parseLiteLLMEntry, restorePricingState, snapshotPricingState } from '../../src/models.js'
 import type { ParsedProviderCall } from '../../src/providers/types.js'
 
@@ -2128,3 +2131,67 @@ describe('codex provider - priority service tier (#1616)', () => {
   })
 })
 
+describe.skipIf(typeof (zlib as { zstdCompressSync?: unknown }).zstdCompressSync !== 'function')('codex provider - Zstandard-compressed rollouts', () => {
+  const lines = [
+    // Larger than a stream chunk, so the first line spans several decoded chunks.
+    JSON.stringify({
+      type: 'session_meta',
+      timestamp: '2026-04-14T10:00:00Z',
+      payload: { cwd: '/Users/test/zst', originator: 'codex-cli', session_id: 'sess-zst', base_instructions: { text: 'x'.repeat(100_000) } },
+    }),
+    functionCall('exec_command'),
+    tokenCount({ timestamp: '2026-04-14T10:01:00Z', last: { input: 100, output: 50 }, total: { total: 150 } }),
+    tokenCount({ timestamp: '2026-04-14T10:02:00Z', last: { input: 300, cached: 100, output: 70 }, total: { total: 620 } }),
+  ]
+
+  async function writeCompressed(path: string): Promise<string> {
+    await writeFile(path, zlib.zstdCompressSync(Buffer.from(lines.join('\n') + '\n')))
+    return path
+  }
+
+  async function parseAll(dir: string): Promise<ParsedProviderCall[]> {
+    const provider = createCodexProvider(dir)
+    const seenKeys = new Set<string>()
+    const calls: ParsedProviderCall[] = []
+    for (const session of await provider.discoverSessions()) {
+      for await (const call of provider.createSessionParser(session, seenKeys).parse()) calls.push(call)
+    }
+    return calls
+  }
+
+  it('discovers and parses a .jsonl.zst rollout exactly like the plain one', async () => {
+    const plainHome = join(tmpDir, 'plain')
+    const zstHome = join(tmpDir, 'zst')
+    const plainPath = await writeSession(plainHome, '2026-04-14', 'rollout-2026-04-14T10-00-00-zst.jsonl', lines)
+    const zstPath = await writeCompressed((await writeSession(zstHome, '2026-04-14', 'rollout-2026-04-14T10-00-00-zst.jsonl', lines)) + '.zst')
+    await rm(zstPath.slice(0, -'.zst'.length))
+
+    const sessions = await createCodexProvider(zstHome).discoverSessions()
+    expect(sessions).toEqual([{ path: zstPath, project: 'Users-test-zst', provider: 'codex' }])
+
+    const plainCalls = await parseAll(plainHome)
+    expect(plainCalls).toHaveLength(2)
+    expect(await parseAll(zstHome)).toEqual(plainCalls)
+    expect(rolloutFileSessionId(zstPath)).toBe('sess-zst')
+    expect(await readCodexThroughput(zstPath)).toEqual(await readCodexThroughput(plainPath))
+  })
+
+  it('counts a rollout present in both forms once, from the plain file', async () => {
+    const plainPath = await writeSession(tmpDir, '2026-04-14', 'rollout-2026-04-14T10-00-00-zst.jsonl', lines)
+    await writeCompressed(plainPath + '.zst')
+
+    const sessions = await createCodexProvider(tmpDir).discoverSessions()
+    expect(sessions.map(s => s.path)).toEqual([plainPath])
+    expect(await parseAll(tmpDir)).toHaveLength(2)
+  })
+
+  it('discovers a .jsonl.zst rollout in archived_sessions', async () => {
+    const archivedDir = join(tmpDir, 'archived_sessions')
+    await mkdir(archivedDir, { recursive: true })
+    const zstPath = await writeCompressed(join(archivedDir, 'rollout-2026-04-14T10-00-00-zst.jsonl.zst'))
+
+    const sessions = await createCodexProvider(tmpDir).discoverSessions()
+    expect(sessions).toEqual([{ path: zstPath, project: 'Users-test-zst', provider: 'codex' }])
+    expect(await parseAll(tmpDir)).toHaveLength(2)
+  })
+})

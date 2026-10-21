@@ -1,10 +1,9 @@
 import { readdir, stat } from 'fs/promises'
-import { createReadStream } from 'fs'
 import { createInterface } from 'readline'
 import { basename, join, resolve } from 'path'
 import { homedir } from 'os'
 
-import { FS_SCAN_CONCURRENCY, mapWithConcurrency, readSessionLines } from '../fs-utils.js'
+import { createTextReadStream, FS_SCAN_CONCURRENCY, mapWithConcurrency, readSessionLines } from '../fs-utils.js'
 import { billableOutputTokens, calculateCost, getModelCosts, pricingModelAt } from '../models.js'
 import { readCachedCodexResults, writeCachedCodexResults, getCachedCodexProject, fingerprintFile, type CodexFileFingerprint } from '../codex-cache.js'
 import { mergeToolIntervals } from '../codex-throughput.js'
@@ -14,7 +13,7 @@ import { estimateTokensFromChars } from '../token-estimate.js'
 import { wslHomes } from '../wsl.js'
 import type { ToolCall } from '../types.js'
 import type { Provider, ProbeRoot, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
-import { defaultBilledCodexHome, defaultLauncherRoots, FIRST_LINE_READ_CAP, isNestedLauncherCodexHome, listRolloutSessionIds, rolloutFileSessionId, sameCodexHome } from '../launcher-homes.js'
+import { defaultBilledCodexHome, defaultLauncherRoots, FIRST_LINE_READ_CAP, isNestedLauncherCodexHome, isRolloutFileName, listRolloutSessionIds, rolloutFileSessionId, rolloutStem, sameCodexHome } from '../launcher-homes.js'
 
 const modelDisplayNames: Record<string, string> = {
   'codex-auto-review': 'Codex Auto Review',
@@ -203,8 +202,7 @@ async function readFirstLine(filePath: string): Promise<CodexEntry | null> {
   // would miss the trailing newline and reject the session as invalid.
   // Stream the file via readline so we can read the first line up to
   // FIRST_LINE_READ_CAP, which keeps memory bounded if the file has no newline.
-  const stream = createReadStream(filePath, {
-    encoding: 'utf-8',
+  const stream = createTextReadStream(filePath, {
     start: 0,
     end: FIRST_LINE_READ_CAP - 1,
   })
@@ -627,7 +625,7 @@ async function discoverSessionsInDir(codexDir: string): Promise<SessionSource[]>
 
   const dated = (await mapWithConcurrency(dayDirs, FS_SCAN_CONCURRENCY, async dayDir =>
     (await readdir(dayDir).catch(() => [] as string[]))
-      .filter(f => f.startsWith('rollout-') && f.endsWith('.jsonl'))
+      .filter(isRolloutFileName)
       .map(f => ({ file: f, path: join(dayDir, f) })),
   )).flat()
 
@@ -637,14 +635,19 @@ async function discoverSessionsInDir(codexDir: string): Promise<SessionSource[]>
   // archived copies, while basename dedup below prevents double discovery.
   const archivedDir = join(codexDir, 'archived_sessions')
   const archived = (await readdir(archivedDir).catch(() => [] as string[]))
-    .filter(f => f.startsWith('rollout-') && f.endsWith('.jsonl'))
+    .filter(isRolloutFileName)
     .map(f => ({ file: f, path: join(archivedDir, f) }))
 
   // Dedup before the reads so a basename is opened once, and keep the dated
   // pass ahead of the archived one — the same precedence the serial walk had.
+  // While Codex compresses a rollout both forms exist briefly; the plain one
+  // wins because it may still be growing.
   const candidates: Array<{ file: string; path: string }> = []
-  for (const entry of [...dated, ...archived]) {
+  const all = [...dated, ...archived]
+  const plain = new Set(all.filter(e => !e.file.endsWith('.zst')).map(e => e.file))
+  for (const entry of all) {
     if (seenBasenames.has(entry.file)) continue
+    if (entry.file.endsWith('.zst') && plain.has(entry.file.slice(0, -'.zst'.length))) continue
     seenBasenames.add(entry.file)
     candidates.push(entry)
   }
@@ -1021,7 +1024,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
         if (!entry) continue
 
         if (entry.type === 'session_meta') {
-          sessionId = entry.payload?.session_id ?? basename(source.path, '.jsonl')
+          sessionId = entry.payload?.session_id ?? rolloutStem(basename(source.path))
           // Guarded for the same reason as discoverSessionFile: parseCodexLine
           // hands back an unchecked JSON.parse cast, and a non-string cwd would
           // ride into projectPath/workingDirectory where the parser's path
@@ -1527,7 +1530,9 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
       // Flush the final task, which has no following task_started to trigger it.
       results.push(...pendingTaskCalls)
 
-      const resumeWrite = resumeState ? { offset: resumeOffset, state: resumeState, callCount: resumeCallCount } : undefined
+      // Offsets into decompressed text cannot pass the cache's raw-byte append
+      // check, and a compressed rollout is never appended to anyway.
+      const resumeWrite = resumeState && !source.path.endsWith('.zst') ? { offset: resumeOffset, state: resumeState, callCount: resumeCallCount } : undefined
       if (capture) {
         capture.write = { project: source.project, fingerprint: fp, ...(resumeWrite ? { resume: resumeWrite } : {}) }
       } else {

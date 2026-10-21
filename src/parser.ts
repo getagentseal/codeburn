@@ -3811,7 +3811,9 @@ export async function parseProviderSources(
       if (await readCachedCodexResults(source.path)) continue
       workerJobs.push({ kind: 'codex', source })
       workerPaths.add(source.path)
-      pendingBytes += fp.sizeBytes
+      // The worker memory budget scales with decoded size; real compressed
+      // rollouts decode to about 4x their size on disk (1.4-13x per file).
+      pendingBytes += source.path.endsWith('.zst') ? fp.sizeBytes * 4 : fp.sizeBytes
     }
   }
   const decision = workerJobs.length > 0

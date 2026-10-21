@@ -6,6 +6,7 @@ import { join } from 'path'
 import { getCodeburnCacheDir, RETIRED_PROVIDER_NAMES } from './cache-dir.js'
 import { sweepSupersededCacheFiles } from './cache-sweep.js'
 import { coverageFor, coversLocalDay, loadCursorImport } from './cursor-import.js'
+import { zstdSupported } from './fs-utils.js'
 import { projectOriginKey } from './git-origin.js'
 import type { ProjectFilterTarget } from './parser.js'
 import type { DateRange, ProjectSummary } from './types.js'
@@ -361,7 +362,15 @@ import type { DateRange, ProjectSummary } from './types.js'
 // copilotCredits, and a chat session that also ran on the agent host is left
 // to it. That twin drops calls, so copilot joins
 // PENDING_REDERIVE_PROVIDER_VERSIONS at 75.
-export const DAILY_CACHE_VERSION = 75
+// v76: Codex reads the Zstandard-compressed rollouts (`rollout-*.jsonl.zst`)
+// Codex moves cold sessions into, which were skipped, so days settled after
+// that move miss their Codex usage. Calls and cost only rise, so no
+// PENDING_REDERIVE_PROVIDER_VERSIONS entry is needed. A Node without zstd
+// cannot read them and stays at 75, so its cache never claims v76 and a later
+// Node upgrade still adopts and re-derives it. The next bump must retire this
+// split: raise the Node floor to 22.15 and drop the fallback, or give the
+// no-zstd runtime a generation of its own just below the new version.
+export const DAILY_CACHE_VERSION = zstdSupported ? 76 : 75
 const MIN_SUPPORTED_VERSION = 28
 
 /// Providers whose per-day CALL COUNT means something different at

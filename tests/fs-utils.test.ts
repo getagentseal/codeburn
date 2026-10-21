@@ -2,12 +2,14 @@ import { describe, it, expect, afterEach, vi } from 'vitest'
 import { mkdtemp, writeFile, rm } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
+import * as zlib from 'zlib'
 
 import {
   MAX_SESSION_FILE_BYTES,
   MAX_STREAM_SESSION_FILE_BYTES,
   readSessionFile,
   readSessionLines,
+  readTextHeadSync,
 } from '../src/fs-utils.js'
 
 describe('readSessionFile', () => {
@@ -191,5 +193,21 @@ describe('readSessionLines', () => {
 
   it('stream cap is generous enough for multi-GB Codex sessions', () => {
     expect(MAX_STREAM_SESSION_FILE_BYTES).toBe(4 * 1024 * 1024 * 1024)
+  })
+})
+
+describe.skipIf(!('zstdCompressSync' in zlib))('readTextHeadSync', () => {
+  it('returns the head of a .zst whose compressed head inflates past the decode cap', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'codeburn-head-'))
+    try {
+      const file = join(dir, 'rollout.jsonl.zst')
+      const text = Buffer.concat([Buffer.from('{"type":"session_meta"}\n'), Buffer.alloc(80 * 1024 * 1024, 0x61)])
+      await writeFile(file, (zlib as unknown as { zstdCompressSync(b: Buffer): Buffer }).zstdCompressSync(text))
+      const head = readTextHeadSync(file, 1024 * 1024)
+      expect(head.length).toBe(1024 * 1024)
+      expect(head.toString('utf8').split('\n')[0]).toBe('{"type":"session_meta"}')
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
   })
 })
