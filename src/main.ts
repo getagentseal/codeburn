@@ -1168,6 +1168,8 @@ program
   .option('--exclude <name>', 'Exclude projects matching name (repeatable)', collect, [])
   .option('--port <number>', 'Port to listen on (falls back to a free port if taken)', parseInteger, 4747)
   .option('--no-open', 'Do not open the browser automatically')
+  .option('--host <address>', 'Address to listen on (default 127.0.0.1). The dashboard has no login: expose it only behind an authenticating reverse proxy', '127.0.0.1')
+  .option('--allowed-host <name>', 'Also accept requests addressed to and coming from this hostname, e.g. the name a reverse proxy serves it under (repeatable)', collect, [])
   .action(async (opts) => {
     assertProvider(opts.provider, 'web')
     if (opts.project.length > 0 || opts.exclude.length > 0) {
@@ -1185,6 +1187,8 @@ program
       exclude: opts.exclude,
       port: opts.port,
       open: opts.open,
+      host: opts.host,
+      allowedHosts: opts.allowedHost,
     })
   })
 
