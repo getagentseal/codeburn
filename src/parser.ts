@@ -1658,11 +1658,15 @@ export function parseAdvisorCalls(entry: JournalEntry): ParsedApiCall[] {
 export function dedupeStreamingMessageIds(entries: JournalEntry[]): JournalEntry[] {
   const firstIdxById = new Map<string, number>()
   const lastIdxById = new Map<string, number>()
+  const idxsById = new Map<string, number[]>()
   for (let i = 0; i < entries.length; i++) {
     const id = getMessageId(entries[i]!)
     if (!id) continue
     if (!firstIdxById.has(id)) firstIdxById.set(id, i)
     lastIdxById.set(id, i)
+    const idxs = idxsById.get(id)
+    if (idxs) idxs.push(i)
+    else idxsById.set(id, [i])
   }
   if (lastIdxById.size === 0) return entries
   const result: JournalEntry[] = []
@@ -1670,13 +1674,43 @@ export function dedupeStreamingMessageIds(entries: JournalEntry[]): JournalEntry
     const id = getMessageId(entries[i]!)
     if (id && lastIdxById.get(id) !== i) continue
     if (id && firstIdxById.get(id) !== i) {
-      const firstTs = entries[firstIdxById.get(id)!]!.timestamp
-      result.push({ ...entries[i]!, timestamp: firstTs ?? entries[i]!.timestamp })
+      const firstIdx = firstIdxById.get(id)!
+      const firstTs = entries[firstIdx]!.timestamp
+      const message = withEarlierToolUses(entries, idxsById.get(id)!)
+      result.push({ ...entries[i]!, timestamp: firstTs ?? entries[i]!.timestamp, ...(message ? { message } : {}) })
       continue
     }
     result.push(entries[i]!)
   }
   return result
+}
+
+// Claude Code writes one line per content block, so the parallel tool calls of
+// one message sit on separate lines and the last line holds only the last of
+// them. Keeping the last line alone keeps the authoritative usage but drops the
+// earlier tool_use blocks, and with them their tool, MCP and Bash counts. This
+// returns the last line's message with those earlier blocks put back in order,
+// matched by block id so a stream that restates every block in its final write
+// (#110) is not counted twice. Null when nothing was missing.
+function withEarlierToolUses(entries: JournalEntry[], idxs: number[]): AssistantMessageContent | null {
+  const last = entries[idxs[idxs.length - 1]!]!.message as AssistantMessageContent
+  const lastContent = Array.isArray(last.content) ? last.content : []
+  const present = new Set<string>()
+  for (const block of lastContent) {
+    if (block.type === 'tool_use' && typeof block.id === 'string') present.add(block.id)
+  }
+  const missing: ContentBlock[] = []
+  for (const j of idxs.slice(0, -1)) {
+    const content = (entries[j]!.message as AssistantMessageContent).content
+    if (!Array.isArray(content)) continue
+    for (const block of content) {
+      if (block.type !== 'tool_use' || typeof block.id !== 'string' || present.has(block.id)) continue
+      present.add(block.id)
+      missing.push(block)
+    }
+  }
+  if (missing.length === 0) return null
+  return { ...last, content: [...missing, ...lastContent] }
 }
 
 export function groupIntoTurns(entries: JournalEntry[], seenMsgIds: Set<string>, toolResultMeta?: Map<string, ToolResultMeta>): ParsedTurn[] {
