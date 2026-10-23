@@ -6,7 +6,7 @@
     <key name="refresh-interval" type="u">
       <default>30</default>
       <summary>Refresh interval</summary>
-      <description>Seconds between automatic data refreshes</description>
+      <description>Fastest gap, in seconds, between polls while the menu is open or a session is working. Idle polling waits at least two minutes on AC, longer on battery and in power saver. A value slower than that idle floor is kept.</description>
       <range min="5" max="300"/>
     </key>
 
