@@ -377,7 +377,9 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // queued_command prompt attachments, including classification and PR links.
   // per-call-cwd-v1: cached calls carry their cwd so a session that moved
   // folders splits across projects per call.
-  claude: 'advisor-usage-v1-skills-rich-capture-v1-cross-provider-pr-v1-session-lineage-capture-v1-queued-human-prompts-v1-per-call-cwd-v1',
+  // streamed-tool-blocks-v1: parallel tool_use blocks written on earlier lines
+  // of one streamed message are kept, so cached calls regain their tools.
+  claude: 'advisor-usage-v1-skills-rich-capture-v1-cross-provider-pr-v1-session-lineage-capture-v1-queued-human-prompts-v1-per-call-cwd-v1-streamed-tool-blocks-v1',
   cline: 'worktree-project-grouping-v1',
   // reported-cost-v1: the CLI reports its own per-message cost, so entries
   // cached before cline-cli joined the reported-cost allowlist in parser.ts
