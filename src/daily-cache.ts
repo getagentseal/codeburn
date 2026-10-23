@@ -361,7 +361,12 @@ import type { DateRange, ProjectSummary } from './types.js'
 // copilotCredits, and a chat session that also ran on the agent host is left
 // to it. That twin drops calls, so copilot joins
 // PENDING_REDERIVE_PROVIDER_VERSIONS at 75.
-export const DAILY_CACHE_VERSION = 75
+// v76: a Claude message's parallel tool calls, written on separate lines of the
+// stream, are all kept instead of only the last. Tools drive turn
+// classification, so the per-category split and edit/one-shot turns move;
+// calls, cost and tokens are unchanged, so no
+// PENDING_REDERIVE_PROVIDER_VERSIONS entry is needed. Surviving days re-derive.
+export const DAILY_CACHE_VERSION = 76
 const MIN_SUPPORTED_VERSION = 28
 
 /// Providers whose per-day CALL COUNT means something different at
