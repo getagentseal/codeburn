@@ -619,7 +619,9 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // model-fallback-v1: gen_metadata without usage.model falls back to
   // chatModel.model instead of dropping the session, Gemini 3.8 Flash
   // placeholders resolve, and Gemini 3 Flash -a/-d rows are priced.
-  antigravity: 'worktree-project-grouping-v7-cache-read-v1-est-cost-model-fallback-v1',
+  // user-msg-v1: extracts user prompts from brain transcripts (<USER_REQUEST>)
+  // or SQLite steps table, attributing userMessage across calls and turns.
+  antigravity: 'worktree-project-grouping-v7-cache-read-v1-est-cost-model-fallback-v1-user-msg-v1',
   // pr-attribution-v1: the parser now reads the `message`/`part` tables for
   // per-turn user prompt text and the GitHub PR URLs it references. Cached
   // ZCode sessions hold empty userMessage turns and no session prLinks, so
