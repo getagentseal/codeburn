@@ -1073,7 +1073,7 @@ describe('codeburn status --format menubar-json', () => {
     }
   })
 
-  it('rejects a pre-count-basis render-5 snapshot and preserves nonempty costs', async () => {
+  it.each([5, 12])('rejects a render-%i snapshot and preserves nonempty Today identities and costs', async renderVersion => {
     const home = await mkdtemp(join(tmpdir(), 'codeburn-menubar-legacy-basis-live-'))
 
     try {
@@ -1101,12 +1101,24 @@ describe('codeburn status --format menubar-json', () => {
       }
       expect(original.current.calls).toBe(1)
       expect(original.current.sessions).toBe(1)
-      expect(original.current.sessionCountBasis).toBe('partial')
+      expect(original.current.sessionCountBasis).toBe('identity')
       expect(original.current.cost).toBeGreaterThan(0)
 
       const snapshotFiles = findSnapshotFiles(join(home, '.cache', 'codeburn'))
       expect(snapshotFiles).toHaveLength(1)
-      await plantRender5MissingBasis(snapshotFiles[0]!)
+      if (renderVersion === 5) {
+        await plantRender5MissingBasis(snapshotFiles[0]!)
+      } else {
+        // v12 already knows the field but wrongly qualifies live Today as partial.
+        // A v13 rendering bump must reject this otherwise-valid warm snapshot.
+        const record = JSON.parse(await readFile(snapshotFiles[0]!, 'utf-8')) as {
+          semanticKey: string
+          payload: { current: { sessionCountBasis: string } }
+        }
+        record.semanticKey = record.semanticKey.replace(/:render-\d+:/, ':render-12:')
+        record.payload.current.sessionCountBasis = 'partial'
+        await writeFile(snapshotFiles[0]!, JSON.stringify(record))
+      }
 
       const second = runCli(args, home)
       expect(second.status, `stderr: ${second.stderr}`).toBe(0)
@@ -1156,7 +1168,8 @@ describe('codeburn status --format menubar-json', () => {
       const first = runCli(args, home)
       expect(first.status, `stderr: ${first.stderr}`).toBe(0)
       const original = JSON.parse(first.stdout) as { current: { cost: number, calls: number, sessions: number, sessionCountBasis?: string } }
-      expect(original.current.sessionCountBasis).toBe('partial')
+      // Before adding retained history, this period contains only today's live session.
+      expect(original.current.sessionCountBasis).toBe('identity')
       expect(original.current.sessions).toBe(1)
 
       const cacheDir = join(home, '.cache', 'codeburn')
