@@ -339,6 +339,34 @@ describe('Overview', () => {
     await waitFor(() => expect(container.querySelector('.ov-hero-num')).toHaveTextContent(new RegExp(`^${shown.replace(/[$.]/g, '\\$&')}$`)))
   })
 
+  it.each(['poll', 'period switch'] as const)('survives estimate-marker changes during a %s (#1760)', (change) => {
+    const payload = makePayload(new Date())
+    const estimated = {
+      ...payload,
+      current: {
+        ...payload.current,
+        cost: 320,
+        providerDetails: [{ id: 'claude', label: 'Claude', cost: 320, estimatedCostUSD: 20 }],
+      },
+    }
+    const { container, rerender } = render(
+      <OverviewContent period="30days" provider="all" overview={polled(payload)} />,
+    )
+    expect(container.querySelector('.ov-hero-num')).toHaveTextContent(/^\$312\.40$/)
+
+    const period = change === 'period switch' ? 'week' : '30days'
+    rerender(<OverviewContent period={period} provider="all" overview={polled(estimated)} />)
+    const hero = container.querySelector('.ov-hero-num')!
+    expect(hero).toHaveTextContent(/^~\$320\.00$/)
+    // The original outer trigger still anchors the token/estimate popover.
+    fireEvent.focus(hero)
+    expect(screen.getByRole('tooltip')).toHaveTextContent(/estimated/i)
+    fireEvent.blur(hero)
+
+    rerender(<OverviewContent period="30days" provider="all" overview={polled(payload)} />)
+    expect(container.querySelector('.ov-hero-num')).toHaveTextContent(/^\$312\.40$/)
+  })
+
   it('keeps weekday labels, and month labels on one row at least three columns apart', async () => {
     const now = new Date()
     getOverview.mockResolvedValue(makePayload(now))
@@ -1104,6 +1132,18 @@ describe('Overview', () => {
 
     expect(await screen.findByText('Daily spend')).toBeInTheDocument()
     expect(screen.queryByLabelText('Coaching signals')).not.toBeInTheDocument()
+  })
+
+  it('updates the hero currency even when its raw cost and filter stay the same', () => {
+    const payload = makePayload(new Date())
+    const { container, rerender } = render(
+      <OverviewContent period="30days" provider="all" overview={polled(payload)} />,
+    )
+    expect(container.querySelector('.ov-hero-num')).toHaveTextContent(/^\$312\.40$/)
+
+    setActiveCurrency({ code: 'EUR', symbol: '€', rate: 0.9 })
+    rerender(<OverviewContent period="30days" provider="all" overview={polled(payload)} />)
+    expect(container.querySelector('.ov-hero-num')).toHaveTextContent(/^€281\.16$/)
   })
 
   it('renders section costs in the active non-USD currency (rate applied once, symbol swapped)', async () => {
