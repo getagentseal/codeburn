@@ -1325,7 +1325,6 @@ export function buildPayloadProjects(
   type Contrib = {
     cacheCost: number
     cacheSavings: number
-    cacheSessions: number
     cacheSessionDays: number
     cacheMaxDaySessions: number
     cacheCalls: number
@@ -1372,7 +1371,6 @@ export function buildPayloadProjects(
       c = {
         cacheCost: 0,
         cacheSavings: 0,
-        cacheSessions: 0,
         cacheSessionDays: 0,
         cacheMaxDaySessions: 0,
         cacheCalls: 0,
@@ -1407,7 +1405,6 @@ export function buildPayloadProjects(
     c.cacheCost += cost
     c.cacheSavings += savingsUSD
     c.cacheCalls += occupancy.calls
-    c.cacheSessions += occupancy.sessions
     c.cacheSessionDays += occupancy.sessionDays
     if (occupancy.maxDaySessions > c.cacheMaxDaySessions) c.cacheMaxDaySessions = occupancy.maxDaySessions
     return acc
