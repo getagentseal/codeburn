@@ -934,6 +934,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
         ? resume.state.pendingNativeToolEvents.map(event => ({ ...event }))
         : []
       const nativeToolEventIdentities = new Set(resume?.state.nativeToolEventIdentities ?? [])
+      let afterSearchItem = false
       let pendingSkills: string[] = resume?.state.pendingSkills ? [...resume.state.pendingSkills] : []
       // Attribution names already emitted from a `response_item` tool call.
       // Codex's item model repeats a finished shell command as
@@ -1195,6 +1196,11 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
 
         const isForkReplay = isCodexForkReplay(forkReplayState, entry.timestamp)
         const nativeEvent = nativeToolEvent(entry)
+        // Codex builds of May 2026 follow each item_completed WebSearch with an
+        // id-less web_search_call repeating its action: the same search.
+        const searchMirror = afterSearchItem && entry.type === 'response_item' && nativeEvent?.tool === 'WebSearch' && !nativeEvent.identity
+        afterSearchItem = entry.type === 'event_msg' && nativeEvent?.tool === 'WebSearch'
+        if (searchMirror) continue
 
         if (nativeEvent && isForkReplay && await isParentNativeReplay(nativeEvent.identity)) continue
 

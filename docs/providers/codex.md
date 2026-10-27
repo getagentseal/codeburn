@@ -80,7 +80,10 @@ Persisted WebSearch extension items also appear with `type: "Extension"` and
 `kind: "web.search"`; only that explicit kind maps to `WebSearch`.
 Repeated status updates and mirrored records collapse by their stable item id
 (or `call_id` for tool search); records without one remain distinct because
-query or result text is not a safe identity.
+query or result text is not a safe identity. The exception is the id-less
+`web_search_call` that Codex builds of May 2026 write right after each
+`item_completed` WebSearch: it repeats that item's action and is not counted
+again.
 
 The first observed status records activity, whether partial or completed. Native
 items add tool attribution only: they do not change token usage,

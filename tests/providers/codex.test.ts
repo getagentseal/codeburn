@@ -1598,6 +1598,23 @@ describe('codex provider - native tool events', () => {
     expect(call?.toolSequence?.map(step => step[0]?.tool)).toEqual(['WebSearch', 'WebSearch'])
   })
 
+  it('counts an id-less web_search_call written right after its item once', async () => {
+    const action = { type: 'search', query: 'fixture query' }
+    const filePath = await writeSession(tmpDir, '2026-04-14', 'rollout-native-idless-mirror.jsonl', [
+      sessionMeta({ session_id: 'sess-native-idless-mirror' }),
+      completedWebSearch('ws-a', '2026-04-14T10:00:10.000Z'),
+      nativeResponseItem('web_search_call', { status: 'completed', action }, '2026-04-14T10:00:10.002Z'),
+      completedWebSearch('ws-b', '2026-04-14T10:00:11.000Z'),
+      nativeResponseItem('web_search_call', { status: 'completed', action }, '2026-04-14T10:00:11.001Z'),
+      nativeResponseItem('web_search_call', { status: 'completed', action }, '2026-04-14T10:00:12.000Z'),
+      tokenUsageRecord({ responseId: 'resp-native-idless-mirror', usage: { input: 100, output: 20 } }),
+    ])
+
+    const [call] = await parseFile(filePath)
+
+    expect(call?.tools).toEqual(['WebSearch', 'WebSearch', 'WebSearch'])
+  })
+
   it('recognizes only Extension items with the explicit web.search kind', async () => {
     const largeResults = [{ body: 'fixture result body '.repeat(3_000) }]
     const filePath = await writeSession(tmpDir, '2026-04-14', 'rollout-native-extension-search.jsonl', [
