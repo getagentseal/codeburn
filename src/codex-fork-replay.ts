@@ -239,9 +239,3 @@ export async function loadCodexParentReplayIndex(forkPath: string, parentId: str
     nativeIdentities: new Set(records.map(([, id]) => id).filter(id => id.startsWith('native:'))),
   }
 }
-
-/** Usage-only compatibility wrapper; an empty identity set still means no replay anchor. */
-export async function loadCodexParentReplay(forkPath: string, parentId: string, forkedAtMs: number): Promise<Set<string> | null> {
-  const index = await loadCodexParentReplayIndex(forkPath, parentId, forkedAtMs)
-  return index?.usageIdentities.size ? index.usageIdentities : null
-}
