@@ -500,8 +500,13 @@ function parseCodexLine(line: string | Buffer): CodexEntry | null {
   const type = getRawJsonStringField(head, 'type')
   if (!type) return null
   const pHead = payloadHead(line)
-  const payloadTypeWindow = getRawPayloadFieldWindow(line, 'type')
-  const payloadType = payloadTypeWindow ? getRawJsonStringField(payloadTypeWindow, 'type') : undefined
+  // The depth-1 scan walks past large values when the key is missing (compacted
+  // history has no payload type), so only native tool candidates pay for it.
+  const headPayloadType = getRawJsonStringField(pHead, 'type')
+  const payloadType = headPayloadType === 'web_search_call' || headPayloadType === 'tool_search_call'
+    || headPayloadType === 'image_generation_call' || headPayloadType === 'item_completed'
+    ? getRawJsonStringField(getRawPayloadFieldWindow(line, 'type') ?? '', 'type')
+    : headPayloadType
   const role = getRawJsonStringField(pHead, 'role')
   // task_complete appends the potentially huge final assistant message before
   // its duration fields. Fall back to the full Buffer only for this event so
@@ -536,13 +541,10 @@ function parseCodexLine(line: string | Buffer): CodexEntry | null {
   const itemTypeWindow = type === 'event_msg' && payloadType === 'item_completed'
     ? getRawPayloadItemFieldWindow(line, 'type')
     : undefined
-  const itemIdWindow = type === 'event_msg' && payloadType === 'item_completed'
-    ? getRawPayloadItemFieldWindow(line, 'id')
-    : undefined
-  const itemKindWindow = type === 'event_msg' && payloadType === 'item_completed'
-    ? getRawPayloadItemFieldWindow(line, 'kind')
-    : undefined
   const compactItemType = itemTypeWindow ? getRawJsonStringField(itemTypeWindow, 'type') : undefined
+  const isSearchItem = compactItemType === 'WebSearch' || compactItemType === 'Extension'
+  const itemIdWindow = isSearchItem ? getRawPayloadItemFieldWindow(line, 'id') : undefined
+  const itemKindWindow = isSearchItem ? getRawPayloadItemFieldWindow(line, 'kind') : undefined
   const compactItemId = itemIdWindow ? getRawJsonStringField(itemIdWindow, 'id') : undefined
   const compactItemKind = itemKindWindow ? getRawJsonStringField(itemKindWindow, 'kind') : undefined
   const compactItem = compactItemType
@@ -553,9 +555,7 @@ function parseCodexLine(line: string | Buffer): CodexEntry | null {
   )
   const nativeIdWindow = isNativeResponseTool ? getRawPayloadFieldWindow(line, 'id') : undefined
   const nativeCallIdWindow = isNativeResponseTool ? getRawPayloadFieldWindow(line, 'call_id') : undefined
-  const compactId = isNativeResponseTool
-    ? nativeIdWindow ? getRawJsonStringField(nativeIdWindow, 'id') : undefined
-    : getRawJsonStringField(pHead, 'id')
+  const compactId = nativeIdWindow ? getRawJsonStringField(nativeIdWindow, 'id') : undefined
   const compactCallId = isNativeResponseTool
     ? nativeCallIdWindow ? getRawJsonStringField(nativeCallIdWindow, 'call_id') : undefined
     : getRawJsonStringField(pHead, 'call_id')
