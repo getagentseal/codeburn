@@ -18,7 +18,8 @@ const URL_PATTERN = /https?:\/\/\S+/i
 
 export const EDIT_TOOLS = new Set(['Edit', 'Write', 'FileEditTool', 'FileWriteTool', 'NotebookEdit', 'cursor:edit', 'cursor:strreplace', 'cursor:write', 'edit', 'write'])
 const READ_TOOLS = new Set(['Read', 'Grep', 'Glob', 'FileReadTool', 'GrepTool', 'GlobTool'])
-export const BASH_TOOLS = new Set(['Bash', 'BashTool', 'PowerShellTool'])
+// Claude Code on Windows runs shell commands through a tool named PowerShell.
+export const BASH_TOOLS = new Set(['Bash', 'BashTool', 'PowerShell', 'PowerShellTool'])
 const TASK_TOOLS = new Set(['TaskCreate', 'TaskUpdate', 'TaskGet', 'TaskList', 'TaskOutput', 'TaskStop', 'TodoWrite'])
 const SEARCH_TOOLS = new Set(['WebSearch', 'WebFetch', 'ToolSearch'])
 
