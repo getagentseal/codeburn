@@ -35,6 +35,26 @@ Desktop session roots are resolved in this order:
 All returned roots are absolute, resolved, and deduplicated. Missing or
 unreadable Windows package directories are ignored.
 
+## Organization attribution and quota
+
+Claude Desktop's non-secret `claude-code-sessions/<accountUuid>/<orgUuid>/local_*.json`
+metadata links `cliSessionId` to the corresponding Claude Code transcript. The
+source selector applies that attribution to the parent and its subagents,
+including cached sessions, without changing whole-machine token or cost totals.
+Conflicting organization mappings keep the original config-directory attribution.
+
+Config directories use the organization name from `.claude.json`'s `oauthAccount`
+when available; other organizations display their UUID. Desktop token caches and
+legacy CodeBurn organization caches are not identity sources. An unknown explicit
+source filter fails rather than returning unfiltered whole-machine usage.
+
+Quota uses the selected Claude Code config directory's existing credential. A
+user-invoked quota read on macOS can look up its account-specific Keychain item
+(the directory-hashed service for a non-default directory). CodeBurn does not
+refresh Claude tokens or persist organization credentials. A Desktop-only identity
+can show attributed usage, but quota remains unavailable until that organization
+has its own Claude Code config directory and credential.
+
 ## Storage format
 
 JSONL, one event per line, per session file. Sessions live under `<project>/<sessionId>.jsonl`.
