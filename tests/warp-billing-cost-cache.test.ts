@@ -100,7 +100,7 @@ itUnlessNoSqlite('prices a billing-backed Warp conversation the same cold and wa
   const warm = await parseAllSessions(undefined, 'warp')
   const warmCost = warm.reduce((sum, p) => sum + p.totalCostUSD, 0)
 
-  // Billing rungs (a) and (c) plus the token floor for the conversation that
+  // Billing rungs (a) and (d) plus the token floor for the conversation that
   // has no billing blob. Before the fix both runs reported 3 x TOKEN_FLOOR.
   expect(coldCost).toBeCloseTo(CREDIT_COST + PROVIDER_COST + TOKEN_FLOOR, 10)
   expect(warmCost).toBeCloseTo(coldCost, 10)

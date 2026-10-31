@@ -1,4 +1,5 @@
 import { localeTag, t } from '../i18n'
+import { isMacPlatform } from '../lib/platform'
 import type { CursorSyncStatus } from '../lib/types'
 
 const ERROR_KEYS: Record<string, string> = {
@@ -18,6 +19,8 @@ function ago(ms: number): string {
 /** The one line the apps show for the sync; null when it is off. */
 export function cursorSyncLine(status: CursorSyncStatus, now = Date.now()): { text: string; warn: boolean } | null {
   if (status.state === 'off') return null
+  // Only macOS has a keychain prompt to allow.
+  if (status.errorCode === 'locked') return { text: t(isMacPlatform() ? 'plans.cursorSync.locked' : 'plans.cursorSync.lockedUnsupported'), warn: true }
   if (status.errorCode) return { text: t(ERROR_KEYS[status.errorCode] ?? ERROR_KEYS.export!), warn: true }
   const at = status.lastSuccessAt ? Date.parse(status.lastSuccessAt) : NaN
   if (!Number.isFinite(at)) return { text: t('plans.cursorSync.notYet'), warn: false }

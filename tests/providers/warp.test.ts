@@ -469,4 +469,41 @@ skipUnlessSqlite('warp provider', () => {
     expect(totalCost).toBeCloseTo(0.05, 6)
     expect(calls[0]!.costIsEstimated).toBe(false)
   })
+
+  it.each([
+    ['only total_billed_cost_in_cents', { total_billed_cost_in_cents: 3.5 }, 0.035],
+    ['only legacy total_provider_cost_in_cents', { total_provider_cost_in_cents: 2.5 }, 0.025],
+    ['both cost fields, legacy provider cost first', { total_provider_cost_in_cents: 2.5, total_billed_cost_in_cents: 3.5 }, 0.025],
+    ['charged usage ahead of the billed snapshot', { total_billed_cost_in_cents: 3.5, total_charged_usage: { input_cost_in_cents: 4 } }, 0.04],
+  ])('prices from %s', async (_label, costFields, expectedUsd) => {
+    const dbPath = createWarpDb(tmpDir)
+    withTestDb(dbPath, (db) => {
+      insertConversation(db, 'conv-billed', {
+        conversation_usage_metadata: {
+          ...costFields,
+          credits_spent: 1.44165,
+          token_usage: [
+            {
+              model_id: 'Claude Haiku 4.5',
+              warp_tokens: 51385,
+              byok_tokens: 0,
+              warp_token_usage_by_category: { primary_agent: 51385 },
+              byok_token_usage_by_category: {},
+            },
+          ],
+        },
+      })
+      insertQuery(db, {
+        exchangeId: 'ex-1',
+        conversationId: 'conv-billed',
+        startTs: '2026-10-18 10:00:00.000000',
+        input: JSON.stringify([{ Query: { text: 'do the thing' } }]),
+      })
+    })
+
+    const calls = await collectCalls(dbPath, 'conv-billed')
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.costUSD).toBeCloseTo(expectedUsd, 6)
+    expect(calls[0]!.costIsEstimated).toBe(false)
+  })
 })

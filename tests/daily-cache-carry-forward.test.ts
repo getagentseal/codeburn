@@ -761,6 +761,55 @@ describe('adoption union across older cache files', () => {
   })
 })
 
+describe('token-only slices across migrations', () => {
+  const tokens = (inputTokens: number, outputTokens: number) => ({ inputTokens, outputTokens, cacheReadTokens: 0, cacheWriteTokens: 0 })
+  const model = (calls: number, cost: number, inputTokens: number, outputTokens: number) => ({ calls, cost, savingsUSD: 0, ...tokens(inputTokens, outputTokens) })
+  const tokenOnlyDay = (inputScale = 1) => day('2026-08-28', {
+    claude: slice(650, 3607, { sessions: 4, ...tokens(16569, 2000), models: { 'Opus 4.8': model(3607, 650, 16569, 2000) } }),
+    hermes: slice(0, 0, { sessions: 1, ...tokens(2898477, 16118), models: { 'minimax/MiniMax-M3': model(0, 0, 2898477, 16118) } }),
+  }, {
+    sessions: 5,
+    ...tokens(16569 + 2898477 * inputScale, 2000 + 16118 * inputScale),
+    models: { 'Opus 4.8': model(3607, 650, 16569, 2000), 'minimax/MiniMax-M3': model(0, 0, 2898477 * inputScale, 16118 * inputScale) },
+  })
+  const fileFor = (version: number, days: DailyEntry[]) => ({ version, savingsConfigHash: '', tzKey: currentTzKey(), lastComputedDate: '2026-08-28', complete: true, days })
+  const totals = (d: DailyEntry) => ({ cost: d.cost, calls: d.calls, inputTokens: d.inputTokens, outputTokens: d.outputTokens, minimax: d.models['minimax/MiniMax-M3'], hermes: d.providers['hermes'] })
+
+  it('keeps a carried day with a 0-call model row identical over two version bumps', async () => {
+    for (const v of [DAILY_CACHE_VERSION - 3, DAILY_CACHE_VERSION - 2]) {
+      await writeFile(join(TMP_CACHE_ROOT, `daily-cache.v${v}.json`), JSON.stringify(fileFor(v, [tokenOnlyDay()])), 'utf-8')
+    }
+    const expected = totals(tokenOnlyDay())
+
+    const first = await loadDailyCache()
+    expect(totals(first.days[0]!)).toEqual(expected)
+
+    // The next bump: the file just written becomes an older generation too.
+    const written = JSON.parse(await readFile(dailyCachePath(), 'utf-8'))
+    await writeFile(join(TMP_CACHE_ROOT, `daily-cache.v${DAILY_CACHE_VERSION - 1}.json`), JSON.stringify({ ...written, version: DAILY_CACHE_VERSION - 1 }), 'utf-8')
+    await rm(dailyCachePath())
+    const second = await loadDailyCache()
+    expect(totals(second.days[0]!)).toEqual(expected)
+  })
+
+  it('heals a day already inflated by it and leaves a pre-v14 day alone', async () => {
+    const preV14 = day('2026-06-16', { claude: slice(1.34, 267) }, { ...tokens(53249, 74664), models: { 'claude-sonnet-4-6': model(252, 1.34, 53249, 74664) } })
+    await writeFile(dailyCachePath(), JSON.stringify(fileFor(DAILY_CACHE_VERSION, [preV14, tokenOnlyDay(10)])), 'utf-8')
+    const cache = await loadDailyCache()
+    expect(cache.days[0]!.inputTokens).toBe(53249)
+    expect(cache.days[0]!.models['claude-sonnet-4-6']!.inputTokens).toBe(53249)
+    expect(totals(cache.days[1]!)).toEqual(totals(tokenOnlyDay()))
+  })
+
+  it('leaves a day alone when its calls exceed its slices too', async () => {
+    const damaged = { ...tokenOnlyDay(10), calls: 4107 }
+    await writeFile(dailyCachePath(), JSON.stringify(fileFor(DAILY_CACHE_VERSION, [damaged])), 'utf-8')
+    const loaded = (await loadDailyCache()).days[0]!
+    expect([loaded.calls, loaded.inputTokens, loaded.outputTokens]).toEqual([4107, damaged.inputTokens, damaged.outputTokens])
+    expect(loaded.models['minimax/MiniMax-M3']!.inputTokens).toBe(2898477 * 10)
+  })
+})
+
 // ═══════════════════════════════════════════════════════════════════════════
 // #946 validation round 5, item 2: the migration carried the copilot slice
 // verbatim instead of re-deriving it.

@@ -88,6 +88,9 @@ type WarpConversationData = {
     total_provider_cost_in_cents?: number
     // Cumulative per-category charged usage across the conversation, in cents.
     total_charged_usage?: WarpChargedUsageTotals
+    // Server snapshot of what the customer was billed, in US cents. Replaced
+    // total_provider_cost_in_cents in Warp 0.2026.10 (warpdotdev/warp#16327).
+    total_billed_cost_in_cents?: number
     // Credits Warp deducted for the conversation (always populated today).
     credits_spent?: number
   }
@@ -216,8 +219,9 @@ function extractTokenBudget(rawConversationData: string): { tokenBudget: number;
 // least authoritative:
 //   (a) total_provider_cost_in_cents  — server-authoritative USD  (exact)
 //   (b) sum of total_charged_usage    — server per-category USD   (exact)
-//   (c) credits_spent × CREDIT_USD_RATE — credits at published rate (heuristic)
-//   (d) null → caller falls back to the token × LiteLLM estimate  (floor)
+//   (c) total_billed_cost_in_cents    — server billed snapshot USD (exact)
+//   (d) credits_spent × CREDIT_USD_RATE — credits at published rate (heuristic)
+//   (e) null → caller falls back to the token × LiteLLM estimate  (floor)
 // A value of 0/absent at a rung is treated as "not recorded here" and defers to
 // the next rung, so a zero never masks a real cost recorded elsewhere.
 function conversationCostUsd(rawConversationData: string): WarpCost | null {
@@ -243,6 +247,9 @@ function conversationCostUsd(rawConversationData: string): WarpCost | null {
       safeNumber(charged.web_search_cost_in_cents)
     if (cents > 0) return { usd: cents / 100, estimated: false }
   }
+
+  const billedCents = safeNumber(meta.total_billed_cost_in_cents)
+  if (billedCents > 0) return { usd: billedCents / 100, estimated: false }
 
   const credits = safeNumber(meta.credits_spent)
   if (credits > 0) return { usd: credits * CREDIT_USD_RATE, estimated: true }
@@ -491,8 +498,8 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
             webSearchRequests: 0,
             costUSD: allocatedCosts ? (allocatedCosts[index] ?? 0) : calculateCost(model, inputTokens, 0, 0, 0, 0),
             costIsEstimated: conversationCost ? conversationCost.estimated : true,
-            // Rungs (a)-(c) are Warp's own billing record; keep them through
-            // the cache. Rung (d) is the token floor, which stays re-priceable.
+            // Rungs (a)-(d) are Warp's own billing record; keep them through
+            // the cache. Rung (e) is the token floor, which stays re-priceable.
             ...(conversationCost ? { costFromBilling: true } : {}),
             tools: exchangeTools.tools,
             bashCommands: exchangeTools.bashCommands,

@@ -645,7 +645,7 @@ function buildJsonReport(projects: ProjectSummary[], period: string, periodKey: 
   const sessionCountBasis = durable.data.sessionCountBasis
   // Same durable day set as the headline, so a project's row is what selecting
   // it reports (expired transcripts included), one row per repository.
-  const projectList = buildPayloadProjects(projects, durable.days, homedir()).map(p => ({
+  const projectList = buildPayloadProjects(projects, durable.days, homedir(), durable.sessionCountCacheDays).map(p => ({
     name: p.name,
     path: p.path ?? p.id ?? p.name,
     cost: convertCost(p.cost),

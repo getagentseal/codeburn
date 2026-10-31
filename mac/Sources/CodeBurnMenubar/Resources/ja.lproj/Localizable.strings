@@ -731,6 +731,7 @@
 "Synced from cursor.com %@" = "cursor.comから同期しました（%@）";
 "Not synced from cursor.com yet" = "cursor.comからはまだ同期していません";
 "Cursor login expired, open Cursor to sign in again" = "Cursorのサインインの有効期限が切れました。Cursorを開いてもう一度サインインしてください";
+"Cursor encrypted its app session. Run codeburn import cursor --sync in Terminal, then allow the Cursor Safe Storage keychain prompt." = "Cursorがセッションを暗号化しました。ターミナルで codeburn import cursor --sync を実行し、Cursor Safe Storageのキーチェーンの確認を許可してください。";
 "Couldn't reach cursor.com, will retry" = "cursor.comに接続できませんでした。再試行します";
 "Couldn't read the usage export from cursor.com, will retry" = "cursor.comの使用量エクスポートを読み取れませんでした。再試行します";
 "Sync Cursor usage from cursor.com" = "Cursorの使用量をcursor.comから同期";

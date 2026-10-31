@@ -83,6 +83,7 @@ struct CursorSyncStatus: Codable, Sendable, Equatable {
         if let errorCode {
             switch errorCode {
             case "login": return (L("Cursor login expired, open Cursor to sign in again"), true)
+            case "locked": return (L("Cursor encrypted its app session. Run codeburn import cursor --sync in Terminal, then allow the Cursor Safe Storage keychain prompt."), true)
             case "network": return (L("Couldn't reach cursor.com, will retry"), true)
             default: return (L("Couldn't read the usage export from cursor.com, will retry"), true)
             }

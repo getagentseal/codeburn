@@ -175,7 +175,7 @@ export type CursorSyncStatus = {
   enabled: boolean
   state: 'ok' | 'syncing-never' | 'error' | 'off' | 'no-login'
   lastSuccessAt: string | null
-  errorCode?: 'login' | 'network' | 'export'
+  errorCode?: 'login' | 'network' | 'export' | 'locked'
   error?: string
 }
 

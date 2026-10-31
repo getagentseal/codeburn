@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { createCipheriv, pbkdf2Sync } from 'crypto'
 import { existsSync, mkdirSync, mkdtempSync } from 'fs'
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'fs/promises'
 import { createRequire } from 'module'
@@ -17,6 +18,10 @@ import { clearSessionCache, parseAllSessions } from '../src/parser.js'
 import { createServer } from '../src/mcp/server.js'
 import { cursorDatabasePath } from '../src/quota/cursor.js'
 import { isSqliteAvailable } from '../src/sqlite.js'
+
+// Never the real keychain: on macOS a read can raise a prompt on the operator's screen.
+const readKeychain = vi.hoisted(() => vi.fn(async (): Promise<{ status: 'found'; value: string } | { status: 'accessDenied' }> => ({ status: 'accessDenied' })))
+vi.mock('../src/quota/security.js', async importOriginal => ({ ...await importOriginal<typeof import('../src/quota/security.js')>(), readKeychainPassword: readKeychain }))
 
 const requireForTest = createRequire(import.meta.url)
 const MIN = 60_000
@@ -329,6 +334,51 @@ describe.skipIf(!isSqliteAvailable())('cursorSyncStatus', () => {
     expect(await cursorSyncStatus(later)).toEqual(expired)
     await rm(cursorDatabasePath(), { force: true })
     expect(await cursorSyncStatus(later)).toEqual(expired)
+  })
+
+  const seal = (token: string, password: string) => {
+    const cipher = createCipheriv('aes-128-cbc', pbkdf2Sync(password, 'saltysalt', 1003, 16, 'sha1'), Buffer.alloc(16, 0x20))
+    return `cursor-safe-storage:v1:${Buffer.concat([Buffer.from('v10'), cipher.update(token), cipher.final()]).toString('base64')}`
+  }
+
+  it('never asks the keychain from status or from a background sync without consent', async () => {
+    expect((await import('../src/quota/security.js')).readKeychainPassword).toBe(readKeychain)
+    readKeychain.mockClear()
+    writeToken(seal(jwt(), 'k1'))
+    const f = fakeFetch()
+    expect(await maybeSyncCursor({ now: NOW, fetchImpl: f })).toBeNull()
+    expect(await cursorSyncStatus(later)).toMatchObject({ enabled: true, state: 'error', lastSuccessAt: null, errorCode: 'locked' })
+    expect(readKeychain).not.toHaveBeenCalled()
+    expect(f).not.toHaveBeenCalled()
+  })
+
+  it('asks once on a forced sync, then the background reuses the unlocked blob', async () => {
+    readKeychain.mockClear().mockResolvedValueOnce({ status: 'found', value: 'k2' })
+    writeToken(seal(jwt(), 'k2'))
+    await maybeSyncCursor({ now: NOW, force: true, fetchImpl: fakeFetch() })
+    const f = fakeFetch()
+    await maybeSyncCursor({ now: NOW + 2 * HOUR, fetchImpl: f })
+    expect(readKeychain).toHaveBeenCalledTimes(1)
+    expect(f).toHaveBeenCalledTimes(1)
+    expect((await state()).keychainConsentAt).toBe(NOW)
+  })
+
+  it('drops the consent at the first refused background read', async () => {
+    readKeychain.mockClear()
+    writeToken(seal(jwt(), 'k3'))
+    await mkdir(dirname(cursorSyncStatePath()), { recursive: true })
+    await writeFile(cursorSyncStatePath(), JSON.stringify({ keychainConsentAt: NOW - HOUR }))
+    expect(await maybeSyncCursor({ now: NOW, fetchImpl: fakeFetch() })).toBeNull()
+    expect((await state()).keychainConsentAt).toBeUndefined()
+    expect(await maybeSyncCursor({ now: NOW + 2 * HOUR, fetchImpl: fakeFetch() })).toBeNull()
+    expect(readKeychain).toHaveBeenCalledTimes(1)
+  })
+
+  it('records an expired encrypted session for status to show', async () => {
+    readKeychain.mockResolvedValueOnce({ status: 'found', value: 'k4' })
+    writeToken(seal(jwt(SUB, NOW - HOUR), 'k4'))
+    await expect(maybeSyncCursor({ now: NOW, force: true, fetchImpl: fakeFetch() })).rejects.toThrow(/expired/)
+    expect(await cursorSyncStatus(later)).toMatchObject({ state: 'error', errorCode: 'login' })
   })
 
   it('reports off from the config key or the env switch', async () => {

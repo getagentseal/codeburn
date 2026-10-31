@@ -731,6 +731,7 @@
 "Synced from cursor.com %@" = "cursor.com에서 동기화됨 (%@)";
 "Not synced from cursor.com yet" = "아직 cursor.com에서 동기화되지 않음";
 "Cursor login expired, open Cursor to sign in again" = "Cursor 로그인이 만료되었습니다. Cursor를 열어 다시 로그인하세요";
+"Cursor encrypted its app session. Run codeburn import cursor --sync in Terminal, then allow the Cursor Safe Storage keychain prompt." = "Cursor가 세션을 암호화했습니다. 터미널에서 codeburn import cursor --sync를 실행한 뒤 Cursor Safe Storage 키체인 요청을 허용하세요.";
 "Couldn't reach cursor.com, will retry" = "cursor.com에 연결할 수 없습니다. 다시 시도합니다";
 "Couldn't read the usage export from cursor.com, will retry" = "cursor.com의 사용량 내보내기를 읽을 수 없습니다. 다시 시도합니다";
 "Sync Cursor usage from cursor.com" = "cursor.com에서 Cursor 사용량 동기화";

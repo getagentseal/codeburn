@@ -729,6 +729,7 @@
 "Synced from cursor.com %@" = "已从 cursor.com 同步（%@）";
 "Not synced from cursor.com yet" = "尚未从 cursor.com 同步";
 "Cursor login expired, open Cursor to sign in again" = "Cursor 登录已过期，请打开 Cursor 重新登录";
+"Cursor encrypted its app session. Run codeburn import cursor --sync in Terminal, then allow the Cursor Safe Storage keychain prompt." = "Cursor 已加密其会话。请在终端运行 codeburn import cursor --sync，然后允许 Cursor Safe Storage 钥匙串提示。";
 "Couldn't reach cursor.com, will retry" = "无法连接到 cursor.com，将重试";
 "Couldn't read the usage export from cursor.com, will retry" = "无法读取 cursor.com 的用量导出，将重试";
 "Sync Cursor usage from cursor.com" = "从 cursor.com 同步 Cursor 用量";

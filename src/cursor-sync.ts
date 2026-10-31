@@ -7,8 +7,8 @@ import { getCodeburnCacheDir } from './cache-dir.js'
 import { readConfig } from './config.js'
 import { cursorImportPath, importCursorCsvText, loadCursorImport, replacedProviders, type CoverageRange, type CursorImportSummary } from './cursor-import.js'
 import { invalidateProviderDays, toDateString } from './daily-cache.js'
-import { cursorAccessTokenFromDatabase, cursorDatabasePath, cursorSessionCookie, cursorTokenClaims } from './quota/cursor.js'
-import { sanitizeError } from './quota/security.js'
+import { cursorAccessTokenFromDatabase, cursorDatabasePath, cursorLockedMessage, cursorSessionCookie, cursorTokenClaims, isCursorSafeStorageToken, unwrapCursorStoredToken } from './quota/cursor.js'
+import { readKeychainPassword, sanitizeError } from './quota/security.js'
 
 // Downloads the account's own usage export, the same CSV as Export CSV at
 // cursor.com/dashboard/usage, with the session the Cursor app keeps locally
@@ -42,7 +42,12 @@ type SyncState = {
   // Per account: the newest synced event, or the start of the day a sync
   // found nothing, so a quiet account is not re-downloaded from scratch.
   through?: Record<string, number>
+  // When a keychain read the user asked for first succeeded; a refused read clears it.
+  keychainConsentAt?: number
 }
+
+// The token a stored blob opened to, so a long-lived serve reads the keychain once per blob.
+let unlocked: { stored: string; token: string } | null = null
 
 // A sidecar, so recording an attempt never moves the import store's mtime.
 export function cursorSyncStatePath(): string {
@@ -75,7 +80,7 @@ export type CursorSyncStatus = {
   state: 'ok' | 'syncing-never' | 'error' | 'off' | 'no-login'
   lastSuccessAt: string | null
   // A fixed code for the apps to localize; `error` is its English text.
-  errorCode?: 'login' | 'network' | 'export'
+  errorCode?: 'login' | 'network' | 'export' | 'locked'
   error?: string
 }
 
@@ -83,9 +88,11 @@ const STATUS_ERRORS = {
   login: 'Cursor login expired, open Cursor to sign in again',
   network: "Couldn't reach cursor.com, will retry",
   export: "Couldn't read the usage export from cursor.com, will retry",
+  locked: cursorLockedMessage(),
 } as const
 
 function statusErrorCode(lastError: string): keyof typeof STATUS_ERRORS {
+  if (/Safe Storage|encrypted its app session/.test(lastError)) return 'locked'
   if (/sign in again|HTTP 40[13]\b/.test(lastError)) return 'login'
   if (/HTTP (429|5\d\d)\b|fetch failed|time(d)? ?out|abort|network|socket|ENOTFOUND|ECONN|ETIMEDOUT|EAI_AGAIN/i.test(lastError)) return 'network'
   return 'export'
@@ -105,8 +112,11 @@ export async function cursorSyncStatus(now = Date.now()): Promise<CursorSyncStat
   const enabled = await cursorSyncEnabled()
   const lastSuccessAt = state.lastSuccessAt !== undefined ? new Date(state.lastSuccessAt).toISOString() : null
   if (!enabled) return { enabled, state: 'off', lastSuccessAt }
-  const claims = token ? cursorTokenClaims(token) : null
-  if (token === null || (token !== undefined && (!claims || !cursorSessionCookie(token, now)))) {
+  // Only the sync opens an encrypted session, and it records the outcome: a
+  // keychain read here would raise a macOS prompt on every status poll.
+  const sealed = token ? isCursorSafeStorageToken(token) : false
+  const claims = token && !sealed ? cursorTokenClaims(token) : null
+  if (token === null || (token !== undefined && !sealed && (!claims || !cursorSessionCookie(token, now)))) {
     return { enabled, state: 'no-login', lastSuccessAt, errorCode: 'login', error: STATUS_ERRORS.login }
   }
   const code = state.lastError ? statusErrorCode(state.lastError) : null
@@ -178,17 +188,44 @@ export async function maybeSyncCursor(opts: { force?: boolean; now?: number; fet
     if (!force && !(await cursorSyncEnabled())) return null
     state = await readState()
     if (!force && state.nextAttemptAt !== undefined && now < state.nextAttemptAt) return null
-    const token = (await cursorAccessTokenFromDatabase(cursorDatabasePath()))?.trim()
-    if (!token) throw new Skip('the Cursor app is not signed in on this machine')
+    const stored = (await cursorAccessTokenFromDatabase(cursorDatabasePath()))?.trim()
+    if (!stored) throw new Skip('the Cursor app is not signed in on this machine')
+    const throttle = { lastAttemptAt: now, nextAttemptAt: now + THROTTLE_MS + Math.floor(Math.random() * JITTER_MS) }
+    const sealed = isCursorSafeStorageToken(stored)
+    let token = stored
+    if (sealed && !force && unlocked?.stored === stored) token = unlocked.token
+    else if (sealed) {
+      // Keychain consent is user-initiated, as for Claude: a forced sync may ask,
+      // and a background one reads only after a read succeeded and none was
+      // refused since. The read can raise a macOS prompt, so it is an attempt.
+      const locked = { ...state, ...throttle, lastError: STATUS_ERRORS.locked, keychainConsentAt: undefined }
+      if (!force && state.keychainConsentAt === undefined) {
+        await writeState(locked)
+        throw new Skip(STATUS_ERRORS.locked)
+      }
+      await writeState({ ...state, ...throttle })
+      const unwrapped = await unwrapCursorStoredToken(stored, readKeychainPassword)
+      if ('locked' in unwrapped) {
+        await writeState(locked)
+        throw new Skip(STATUS_ERRORS.locked)
+      }
+      token = unwrapped.token
+      unlocked = { stored, token }
+      state = { ...state, keychainConsentAt: state.keychainConsentAt ?? now }
+    }
     const claims = cursorTokenClaims(token)
     const cookie = cursorSessionCookie(token, now)
-    if (!claims || !cookie) throw new Skip('the Cursor app session is expired; open Cursor and sign in again')
+    if (!claims || !cookie) {
+      const expired = 'the Cursor app session is expired; open Cursor and sign in again'
+      // Status cannot see inside an encrypted session, so it reads this from the sidecar.
+      if (sealed) await writeState({ ...state, ...throttle, lastError: expired })
+      throw new Skip(expired)
+    }
     const backedOff = state.backoffUntil !== undefined && now < state.backoffUntil
       && (state.rejectedExp === undefined || state.rejectedExp === claims.exp)
     if (!force && backedOff) return null
 
     const account = createHash('sha256').update(claims.sub).digest('hex').slice(0, 16)
-    const throttle = { lastAttemptAt: now, nextAttemptAt: now + THROTTLE_MS + Math.floor(Math.random() * JITTER_MS) }
     // Only the throttle before the request; the account is recorded once the
     // store reflects it.
     await writeState({ ...state, ...throttle })
@@ -197,6 +234,7 @@ export async function maybeSyncCursor(opts: { force?: boolean; now?: number; fet
       account,
       ...(state.lastSuccessAt !== undefined ? { lastSuccessAt: state.lastSuccessAt } : {}),
       ...(state.through ? { through: state.through } : {}),
+      ...(state.keychainConsentAt !== undefined ? { keychainConsentAt: state.keychainConsentAt } : {}),
     }
 
     const store = existsSync(cursorImportPath()) ? await loadCursorImport() : null

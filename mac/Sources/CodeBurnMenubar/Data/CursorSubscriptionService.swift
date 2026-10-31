@@ -11,6 +11,7 @@ enum CursorSubscriptionService {
     enum FetchError: Error, Equatable, LocalizedError, Sendable {
         case noCredentials
         case expiredSession
+        case safeStorageLocked
         case authenticationRejected
         case appDataUnreadable
         case rateLimited
@@ -26,7 +27,7 @@ enum CursorSubscriptionService {
 
         var classification: Classification {
             switch self {
-            case .noCredentials, .expiredSession, .authenticationRejected:
+            case .noCredentials, .expiredSession, .safeStorageLocked, .authenticationRejected:
                 return .terminalAuth
             case .appDataUnreadable, .rateLimited, .providerUnavailable, .network:
                 return .transient
@@ -41,6 +42,8 @@ enum CursorSubscriptionService {
                 return "Sign in to the Cursor app, then click Retry."
             case .expiredSession:
                 return "The Cursor app session is expired or invalid. Sign in again, then click Retry."
+            case .safeStorageLocked:
+                return "Cursor encrypted its app session. Click Retry or Reconnect, then allow the Cursor Safe Storage keychain prompt."
             case .authenticationRejected:
                 return "Cursor rejected the current app session. Sign in again, then click Retry."
             case .appDataUnreadable:
@@ -88,11 +91,13 @@ enum CursorSubscriptionService {
             // keep it off the main actor so a lock held by Cursor cannot
             // stall the UI.
             let loadAccessToken = deps.loadAccessToken
-            let raw = try await Task.detached { try loadAccessToken() }.value
-            guard let loaded = raw?.trimmingCharacters(in: .whitespacesAndNewlines),
-                  !loaded.isEmpty else {
-                throw FetchError.noCredentials
-            }
+            let allowPrompt = CapacityDockProviderRefreshInteraction.isUserInitiated
+            let raw = try await Task.detached {
+                let loaded = try loadAccessToken()?.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard let loaded, !loaded.isEmpty else { return nil as String? }
+                return try CursorSafeStorage.unlock(loaded, allowPrompt: allowPrompt)
+            }.value
+            guard let loaded = raw else { throw FetchError.noCredentials }
             accessToken = loaded
         } catch let error as FetchError {
             throw error

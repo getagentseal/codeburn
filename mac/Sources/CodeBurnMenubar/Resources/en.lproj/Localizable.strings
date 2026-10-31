@@ -738,6 +738,7 @@
 "Synced from cursor.com %@" = "Synced from cursor.com %@";
 "Not synced from cursor.com yet" = "Not synced from cursor.com yet";
 "Cursor login expired, open Cursor to sign in again" = "Cursor login expired, open Cursor to sign in again";
+"Cursor encrypted its app session. Run codeburn import cursor --sync in Terminal, then allow the Cursor Safe Storage keychain prompt." = "Cursor encrypted its app session. Run codeburn import cursor --sync in Terminal, then allow the Cursor Safe Storage keychain prompt.";
 "Couldn't reach cursor.com, will retry" = "Couldn't reach cursor.com, will retry";
 "Couldn't read the usage export from cursor.com, will retry" = "Couldn't read the usage export from cursor.com, will retry";
 "Sync Cursor usage from cursor.com" = "Sync Cursor usage from cursor.com";
