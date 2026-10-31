@@ -10,7 +10,7 @@ import { findUnpricedModels, getFlatRateModelsConfigHash, getLocalModelSavingsCo
 import { getAllProviders, safeDiscoverSessions } from './providers/index.js'
 import { loadPlugins, pluginPayloadSections } from './plugins/loader.js'
 import { collectLiveSessions } from './live-sessions.js'
-import { claude, getClaudeConfigDirs, getDesktopSessionsDirs } from './providers/claude.js'
+import { claude, discoverClaudeProfileSources, getClaudeConfigDirs, getDesktopSessionsDirs } from './providers/claude.js'
 import { stat } from 'node:fs/promises'
 import { aggregateProjectsIntoDays, buildPeriodDataFromDays, dateKeyInTz } from './day-aggregator.js'
 import { aggregateModelEfficiency, buildRetryTax } from './model-efficiency.js'
@@ -307,7 +307,7 @@ type ConfigOption = { id: string; label: string; path: string }
 
 function buildSelector(byId: Map<string, ConfigOption>, selectedId?: string | null): ClaudeConfigSelector | undefined {
   const options = [...byId.values()].sort((a, b) => a.label.localeCompare(b.label))
-  if (options.length <= 1) return undefined
+  if (options.length <= 1 && !selectedId) return undefined
   const validSelectedId = selectedId && options.some(option => option.id === selectedId) ? selectedId : null
   return { selectedId: validSelectedId, options }
 }
@@ -346,6 +346,9 @@ async function claudeConfigSelector(projects: ProjectSummary[], selectedId?: str
       ) continue
       if (!byId.has(source.sourceId)) byId.set(source.sourceId, { id: source.sourceId, label: source.sourceLabel, path: source.sourcePath })
     }
+  }
+  for (const profile of await discoverClaudeProfileSources().catch(() => [])) {
+    byId.set(profile.id, { id: profile.id, label: profile.label, path: profile.path })
   }
   return buildSelector(byId, selectedId)
 }
@@ -1700,10 +1703,9 @@ export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: 
       scanRange = periodInfo.range
       currentData = buildPeriodData(periodInfo.label, scanProjects)
     }
-    // A stale/invalid id does NOT validate: fall through to the normal path so
-    // an --provider all query returns real all-provider totals instead of the
-    // Claude-only scan. claudeConfigs (selectedId null) is kept so the selector
-    // still renders.
+    if (!selectedSourceId) {
+      throw new Error(`Unknown Claude config source: ${requestedClaudeConfigSourceId}`)
+    }
   }
   if (!effectivelyScoped) {
     // Every non-config-scoped headline is built by the shared durable-totals

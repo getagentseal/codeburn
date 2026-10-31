@@ -366,13 +366,9 @@ describe('codeburn status --format menubar-json', () => {
         '--no-optimize',
       ], home, env)
 
-      expect(invalidResult.status, `stderr: ${invalidResult.stderr}`).toBe(0)
-      const invalidPayload = JSON.parse(invalidResult.stdout) as {
-        current: { calls: number }
-        claudeConfigs?: { selectedId: string | null }
-      }
-      expect(invalidPayload.current.calls).toBe(2)
-      expect(invalidPayload.claudeConfigs?.selectedId).toBeNull()
+      expect(invalidResult.status).not.toBe(0)
+      expect(invalidResult.stderr).toContain('Unknown Claude config source: claude-config:missing')
+      expect(invalidResult.stdout).not.toContain('"current"')
     } finally {
       await rm(home, { recursive: true, force: true })
     }
@@ -1115,7 +1111,7 @@ describe('codeburn status --format menubar-json', () => {
           semanticKey: string
           payload: { current: { sessionCountBasis: string } }
         }
-        record.semanticKey = record.semanticKey.replace(/:render-\d+:/, ':render-12:')
+        record.semanticKey = record.semanticKey.replace(/:render-\d+:/, ':render-13:')
         record.payload.current.sessionCountBasis = 'partial'
         await writeFile(snapshotFiles[0]!, JSON.stringify(record))
       }

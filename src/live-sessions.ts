@@ -4,7 +4,7 @@
 /// only what it finds here.
 import { open, readdir, stat } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
-import { getClaudeConfigDirs, getDesktopSessionsDirs, claudeConfigSourceId, claudeDesktopSourceId } from './providers/claude.js'
+import { getClaudeConfigDirs, getDesktopSessionsDirs, claudeConfigSourceId, claudeDesktopSourceId, discoverClaudeSessionOrgSources } from './providers/claude.js'
 import { kimicodeHomes, projectFromWorkDir, readState as readKimicodeState } from './providers/kimicode.js'
 import { reportedContextWindow } from './context-tree.js'
 import { modelRowKey } from './models.js'
@@ -252,10 +252,12 @@ export async function collectLiveSessionInputs(
   type PendingSidechain = { sessionId: string; mtimeMs: number; path: string; sourceId: string }
   const pendingSidechains: PendingSidechain[] = []
 
+  const sessionOrgSources = await discoverClaudeSessionOrgSources().catch(() => new Map())
+
   const toInput = (scan: ScannedFile, times: FileTimes, fallbackProject: string): LiveSessionInput => ({
     id: scan.sessionId,
     provider: 'claude',
-    claudeConfigSourceId: times.sourceId,
+    claudeConfigSourceId: sessionOrgSources.get(scan.sessionId)?.id ?? times.sourceId,
     project: scan.cwd ? basename(scan.cwd) : fallbackProject,
     branch: scan.branch,
     model: scan.model,
