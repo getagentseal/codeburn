@@ -2,7 +2,7 @@ import os from 'node:os'
 import path from 'node:path'
 
 import { fetchAntigravityQuota } from './antigravity'
-import { fetchClaudeQuota } from './claude'
+import { claudeConfigDir, fetchClaudeQuota } from './claude'
 import { fetchCodexQuota } from './codex'
 import { fetchCopilotQuota } from './copilot'
 import { fetchGeminiQuota } from './gemini'
@@ -38,7 +38,7 @@ type QuotaDeps = {
 const PROVIDERS: ProviderName[] = ['claude', 'codex', 'gemini', 'copilot', 'antigravity', 'kimi', 'zcode', 'grokbot']
 
 const defaultDeps: QuotaDeps = {
-  claude: fetchClaudeQuota,
+  claude: options => fetchClaudeQuota({ ...options, configDir: claudeConfigDir() }),
   codex: fetchCodexQuota,
   gemini: fetchGeminiQuota,
   copilot: fetchCopilotQuota,
