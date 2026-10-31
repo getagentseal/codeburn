@@ -260,12 +260,12 @@ describe('claude: JSONL cwd is canonical projectPath', () => {
   })
 })
 
-describe('kimicode: state.json workDir becomes projectPath', () => {
-  const fixtureHome = vi.hoisted(() => {
-    const base = process.env['TMPDIR'] || '/tmp'
-    return `${base.replace(/[\\/]+$/, '')}/kimicode-cwd-1260-${process.pid}-${Date.now()}`
-  })
+const fixtureHome = vi.hoisted(() => {
+  const base = process.env['TMPDIR'] || '/tmp'
+  return `${base.replace(/[\\/]+$/, '')}/kimicode-cwd-1260-${process.pid}-${Date.now()}`
+})
 
+describe('kimicode: state.json workDir becomes projectPath', () => {
   beforeEach(async () => {
     await rm(fixtureHome, { recursive: true, force: true })
     await mkdir(fixtureHome, { recursive: true })

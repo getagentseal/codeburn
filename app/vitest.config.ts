@@ -14,7 +14,7 @@ const execArgv = process.allowedNodeEnvironmentFlags.has('--no-experimental-webs
 export default defineConfig({
   plugins: [react()],
   test: {
-    poolOptions: { forks: { execArgv }, threads: { execArgv } },
+    execArgv,
     environment: 'node',
     // Node's --localstorage-file backs localStorage with one file shared by every
     // worker, so parallel files clobber each other's keys via the afterEach clear

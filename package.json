@@ -22,7 +22,7 @@
     "package:vscode": "npm --prefix vscode run package",
     "dev": "node --no-deprecation --import tsx src/cli.ts",
     "test": "vitest run tests --exclude \"tests/cache-refresh-lock*\"",
-    "test:locks": "vitest run tests/cache-refresh-lock.test.ts tests/cache-refresh-lock-corrupt-body.test.ts tests/cache-refresh-lock-process.test.ts tests/cache-refresh-lock-status-snapshot.test.ts --poolOptions.forks.singleFork=true",
+    "test:locks": "vitest run tests/cache-refresh-lock.test.ts tests/cache-refresh-lock-corrupt-body.test.ts tests/cache-refresh-lock-process.test.ts tests/cache-refresh-lock-status-snapshot.test.ts --maxWorkers=1 --no-isolate",
     "test:watch": "vitest tests --exclude \"tests/cache-refresh-lock*\"",
     "verify:upgrade": "node scripts/upgrade-path/run.mjs",
     "perf:fixture": "node scripts/perf/gen-fixture.mjs",
@@ -81,6 +81,6 @@
     "tsup": "^8.4.0",
     "tsx": "^4.19.0",
     "typescript": "^5.8.0",
-    "vitest": "^3.1.0"
+    "vitest": "^5.0.5"
   }
 }
