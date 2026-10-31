@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Security
 
@@ -38,6 +39,7 @@ enum ClaudeCredentialStore {
 
     private static let lock = NSLock()
     private nonisolated(unsafe) static var memoryCache: CachedRecord?
+    private nonisolated(unsafe) static var profileMemoryCache: [String: CredentialRecord] = [:]
 
     // MARK: - Injectable seams (tests + staged Keychain migration)
 
@@ -58,7 +60,7 @@ enum ClaudeCredentialStore {
         lastCacheDeleteResult = nil
         unlinkLegacyOverride = nil
         tightenLegacyOverride = nil
-        lock.withLock { memoryCache = nil }
+        lock.withLock { memoryCache = nil; profileMemoryCache = [:] }
     }
 
     private static var defaults: UserDefaults {
@@ -148,7 +150,7 @@ enum ClaudeCredentialStore {
     /// local copy is gone when `isSuccess` is false.
     @discardableResult
     static func resetBootstrap() -> CacheDeleteResult {
-        lock.withLock { memoryCache = nil }
+        lock.withLock { memoryCache = nil; profileMemoryCache = [:] }
         let result = deleteOurCache()
         lastCacheDeleteResult = result
         // A failed Keychain delete must not pretend the provider is disconnected.
@@ -263,13 +265,176 @@ enum ClaudeCredentialStore {
     }
 
     private static func readClaudeSourceSilently() -> CredentialRecord? {
-        if let fromFile = try? readClaudeFile() { return fromFile }
+        let fromFile = try? readClaudeFile()
+        if let fromFile, (fromFile.expiresAt ?? .distantFuture) > Date() {
+            return fromFile
+        }
         // An overridden home is an isolation boundary (tests and explicit
         // sandboxed probes). Falling through here would read the operator's
         // login Keychain when the isolated fixture has no Claude file.
-        guard homeDirectoryOverride == nil else { return nil }
-        if let fromKeychain = try? readClaudeKeychain(allowUI: false) { return fromKeychain }
-        return nil
+        guard homeDirectoryOverride == nil else { return fromFile }
+        if let fromKeychain = try? readClaudeKeychain(allowUI: false) {
+            if let fromFile,
+               let fileExp = fromFile.expiresAt,
+               let kcExp = fromKeychain.expiresAt,
+               fileExp >= kcExp {
+                return fromFile
+            }
+            return fromKeychain
+        }
+        return fromFile
+    }
+
+    // MARK: - Multi-profile & organization discovery
+
+    static func sha256Hex(_ input: String, prefixLength: Int) -> String {
+        let digest = SHA256.hash(data: Data(input.utf8))
+        return digest.map { String(format: "%02x", $0) }.joined().prefix(prefixLength).description
+    }
+
+    static func claudeConfigSourceId(forPath path: String) -> String {
+        let resolved = URL(fileURLWithPath: path).standardizedFileURL.path
+        return "claude-config:\(sha256Hex(resolved, prefixLength: 16))"
+    }
+
+    static func keychainService(forConfigDir path: String) -> String {
+        let resolved = URL(fileURLWithPath: path).standardizedFileURL.path
+        let defaultDir = homeDirectory.appendingPathComponent(".claude").standardizedFileURL.path
+        if resolved == defaultDir { return claudeKeychainService }
+        let suffix = sha256Hex(resolved.precomposedStringWithCanonicalMapping, prefixLength: 8)
+        return "\(claudeKeychainService)-\(suffix)"
+    }
+
+    /// File-only identity discovery, matching the CLI's non-secret sources.
+    static func discoverProfiles() -> [CapacityDockClaudeProfile] {
+        let defaultDir = homeDirectory.appendingPathComponent(".claude").standardizedFileURL.path
+        let configURL = homeDirectory.appendingPathComponent(".config/codeburn/config.json")
+        let configData = try? SafeFile.read(from: configURL.path)
+        let config = configData.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+        let env = homeDirectoryOverride == nil ? ProcessInfo.processInfo.environment : [:]
+        let multi = env["CLAUDE_CONFIG_DIRS"]?.split(separator: ":").map(String.init) ?? []
+        let single = env["CLAUDE_CONFIG_DIR"].map { [$0] } ?? []
+        let stored = config?["claudeConfigDirs"] as? [String] ?? []
+        let choices = [multi, single, stored].map { values in
+            values.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        }
+        let configured = choices.first { !$0.isEmpty } ?? [defaultDir]
+        var seen = Set<String>()
+        let dirs = configured.compactMap { raw -> String? in
+            let raw = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !raw.isEmpty else { return nil }
+            let expanded = raw == "~" ? homeDirectory.path
+                : raw.hasPrefix("~/") ? homeDirectory.appendingPathComponent(String(raw.dropFirst(2))).path : raw
+            let path = URL(fileURLWithPath: expanded).standardizedFileURL.path
+            guard seen.insert(path).inserted else { return nil }
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory), isDirectory.boolValue else { return nil }
+            return path
+        }
+        func account(_ path: String) -> (id: String, label: String)? {
+            let local = URL(fileURLWithPath: path).appendingPathComponent(".claude.json")
+            let files = path == defaultDir ? [homeDirectory.appendingPathComponent(".claude.json"), local] : [local]
+            for file in files {
+                guard let data = try? SafeFile.read(from: file.path),
+                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let row = json["oauthAccount"] as? [String: Any],
+                      let rawID = row["organizationUuid"] as? String,
+                      let uuid = UUID(uuidString: rawID.trimmingCharacters(in: .whitespacesAndNewlines))
+                else { continue }
+                let id = uuid.uuidString.lowercased()
+                let name = (row["organizationName"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                let validName = !name.isEmpty && name.utf16.count <= 256
+                    && !name.unicodeScalars.contains { $0.value < 32 || $0.value == 127 }
+                return (id, validName ? name : id)
+            }
+            return nil
+        }
+        let accounts = dirs.map(account)
+        let known = Set(accounts.compactMap { $0?.id })
+        let roots: [URL]
+        if let override = env["CODEBURN_DESKTOP_SESSIONS_DIR"], !override.isEmpty {
+            roots = [URL(fileURLWithPath: override).deletingLastPathComponent()]
+        } else {
+            roots = ["Claude", "Claude-3p"].map { homeDirectory.appendingPathComponent("Library/Application Support/\($0)") }
+        }
+        var extras: [String: String] = [:]
+        for root in roots {
+            let sessions = root.appendingPathComponent("claude-code-sessions")
+            for account in (try? FileManager.default.contentsOfDirectory(atPath: sessions.path)) ?? [] {
+                guard UUID(uuidString: account) != nil else { continue }
+                let accountURL = sessions.appendingPathComponent(account)
+                for org in (try? FileManager.default.contentsOfDirectory(atPath: accountURL.path)) ?? [] {
+                    guard let uuid = UUID(uuidString: org) else { continue }
+                    let id = uuid.uuidString.lowercased()
+                    guard !known.contains(id) else { continue }
+                    let orgURL = accountURL.appendingPathComponent(org)
+                    let files = (try? FileManager.default.contentsOfDirectory(atPath: orgURL.path)) ?? []
+                    if files.contains(where: { $0.hasPrefix("local_") && $0.hasSuffix(".json") }) {
+                        extras[id] = orgURL.path
+                    }
+                }
+            }
+        }
+        let multiple = dirs.count + extras.count > 1
+        var profiles = dirs.enumerated().map { index, path in
+            let name = URL(fileURLWithPath: path).lastPathComponent
+            let basename = (name.hasPrefix(".") ? String(name.dropFirst()) : name)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let fallback = path == defaultDir ? "Default Claude" : (basename.isEmpty ? path : basename)
+            return CapacityDockClaudeProfile(id: claudeConfigSourceId(forPath: path),
+                label: multiple ? accounts[index]?.label ?? fallback : fallback,
+                path: path, orgUuid: accounts[index]?.id)
+        }
+        profiles += extras.keys.sorted().map { id in
+            CapacityDockClaudeProfile(id: "claude-org:\(id)", label: id, path: extras[id], orgUuid: id)
+        }
+        let counts = Dictionary(grouping: profiles, by: \.label).mapValues { $0.count }
+        var labelIndex: [String: Int] = [:]
+        return profiles.map { profile in
+            guard (counts[profile.label] ?? 0) > 1 else { return profile }
+            labelIndex[profile.label, default: 0] += 1
+            return CapacityDockClaudeProfile(id: profile.id,
+                label: "\(profile.label) \(labelIndex[profile.label]!)", path: profile.path, orgUuid: profile.orgUuid)
+        }
+    }
+
+    /// Read only a profile's existing CLI login. A Desktop-only identity cannot
+    /// borrow the default login, decrypt Desktop storage or read an old token cache.
+    static func credentialForProfile(
+        _ profile: CapacityDockClaudeProfile,
+        userInitiated: Bool = false,
+        keychainReader: ((String, String) throws -> CredentialRecord?)? = nil
+    ) throws -> CredentialRecord? {
+        guard !profile.id.hasPrefix("claude-org:"), let path = profile.path else { return nil }
+        let defaultDir = homeDirectory.appendingPathComponent(".claude").standardizedFileURL.path
+        if URL(fileURLWithPath: path).standardizedFileURL.path == defaultDir {
+            return try currentRecord()
+        }
+        let fileURL = URL(fileURLWithPath: path).appendingPathComponent(".credentials.json")
+        var record: CredentialRecord?
+        if let data = try? SafeFile.read(from: fileURL.path, maxBytes: maxCredentialBytes) {
+            record = try? parseClaudeBlob(data: sanitizeClaudeBlob(data))
+        }
+        // A fresh file may represent a new login with a shorter token lifetime.
+        // It must win over a previously authorized account retained in memory.
+        if let record, (record.expiresAt ?? .distantFuture) > Date() { return record }
+        let cacheKey = "\(profile.id)|\(profile.orgUuid ?? "")"
+        if let cached = lock.withLock({ profileMemoryCache[cacheKey] }),
+           record == nil || (cached.expiresAt ?? .distantFuture) > (record?.expiresAt ?? .distantPast) {
+            record = cached
+        }
+        if let record, (record.expiresAt ?? .distantFuture) > Date() { return record }
+        // New source Keychain access is account-scoped and explicit. Hold the
+        // resulting credential in memory only; never write a per-org token file.
+        let readKeychain = keychainReader ?? { service, account in
+            try readClaudeKeychainPrompting(service: service, account: account)
+        }
+        if userInitiated, homeDirectoryOverride == nil || keychainReader != nil,
+           let keychainRecord = try readKeychain(keychainService(forConfigDir: path), NSUserName()) {
+            lock.withLock { profileMemoryCache[cacheKey] = keychainRecord }
+            return keychainRecord
+        }
+        return record
     }
 
     static func subscriptionTier() throws -> String? {
@@ -323,10 +488,10 @@ enum ClaudeCredentialStore {
         return try readClaudeKeychainPrompting(account: nil)
     }
 
-    private static func readClaudeKeychainPrompting(account: String?) throws -> CredentialRecord? {
+    private static func readClaudeKeychainPrompting(service: String = claudeKeychainService, account: String?) throws -> CredentialRecord? {
         var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: claudeKeychainService,
+            kSecAttrService as String: service,
             kSecMatchLimit as String: kSecMatchLimitOne,
             kSecReturnData as String: true,
         ]
@@ -343,10 +508,13 @@ enum ClaudeCredentialStore {
     /// Reads Claude's keychain entry via `/usr/bin/security`, which never raises
     /// the partition-list prompt. Returns nil on any failure so the caller falls
     /// back to the cached token.
-    private static func readClaudeKeychainSilently(account: String?) -> CredentialRecord? {
+    private static func readClaudeKeychainSilently(
+        service: String = claudeKeychainService,
+        account: String?
+    ) -> CredentialRecord? {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/security")
-        var args = ["find-generic-password", "-s", claudeKeychainService]
+        var args = ["find-generic-password", "-s", service]
         if let account { args += ["-a", account] }
         args.append("-w")
         process.arguments = args
@@ -612,7 +780,7 @@ enum ClaudeCredentialStore {
 
     /// Clears only the in-memory TTL cache (simulates process restart in tests).
     static func clearMemoryCacheForTesting() {
-        lock.withLock { memoryCache = nil }
+        lock.withLock { memoryCache = nil; profileMemoryCache = [:] }
     }
 
     private static func cacheInMemory(_ record: CredentialRecord) {

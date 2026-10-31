@@ -119,11 +119,15 @@ struct QuotaSummary: Equatable {
         if let primary, !candidates.contains(primary) {
             candidates.append(primary)
         }
-        func firstMatching(_ needle: String) -> Window? {
-            candidates.first { $0.label.range(of: needle, options: .caseInsensitive) != nil }
+        func firstUnscopedMatching(_ needle: String) -> Window? {
+            candidates.first {
+                !$0.label.contains("·")
+                    && $0.label.range(of: needle, options: .caseInsensitive) != nil
+            }
         }
-        if let weekly = firstMatching("week") { return weekly }
-        if let monthly = firstMatching("month") { return monthly }
+        if let weekly = firstUnscopedMatching("week") { return weekly }
+        if let monthly = firstUnscopedMatching("month") { return monthly }
+        if let fiveHour = firstUnscopedMatching("5-hour") { return fiveHour }
         return candidates.max { lhs, rhs in lhs.percent < rhs.percent }
     }
 }

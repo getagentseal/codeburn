@@ -738,3 +738,6 @@
 "Downloads your own usage export with the Cursor app's login, at most once an hour." = "Cursorアプリのサインインで自分の使用量エクスポートをダウンロードします（1時間に最大1回）。";
 "Turned off by CODEBURN_CURSOR_SYNC=0" = "CODEBURN_CURSOR_SYNC=0によりオフになっています";
 "Couldn't save the setting: config.json is invalid or locked" = "設定を保存できませんでした。config.jsonが無効か、ロックされています";
+"Claude profiles" = "Claude プロファイル";
+"Separate rings" = "個別のリング";
+"Default" = "デフォルト";

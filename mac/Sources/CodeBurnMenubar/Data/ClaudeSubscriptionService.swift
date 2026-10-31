@@ -98,6 +98,69 @@ enum ClaudeSubscriptionService {
         }
     }
 
+    /// Refresh for a specific Claude profile (file-discovered organization,
+    /// or secondary config directory).
+    static func refreshProfile(_ profile: CapacityDockClaudeProfile, userInitiated: Bool = false, session: URLSession = .shared) async throws -> SubscriptionUsage? {
+        if let until = usageBlockedUntil(), until > Date() {
+            throw FetchError.rateLimited(retryAt: until)
+        }
+        let record: ClaudeCredentialStore.CredentialRecord
+        do {
+            guard let found = try ClaudeCredentialStore.credentialForProfile(profile, userInitiated: userInitiated) else { return nil }
+            record = found
+        } catch let error as ClaudeCredentialStore.StoreError {
+            throw FetchError.credential(error)
+        }
+        if let expiry = record.expiresAt, expiry <= Date() {
+            throw FetchError.credential(.sourceTokenStale)
+        }
+        var request = URLRequest(url: usageURL)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 30
+        request.setValue("Bearer \(record.accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue(betaHeader, forHTTPHeaderField: "anthropic-beta")
+        request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
+
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await session.data(for: request)
+        } catch {
+            throw FetchError.network(error)
+        }
+        guard let http = response as? HTTPURLResponse else {
+            throw FetchError.usageHTTPError(-1, nil)
+        }
+        switch http.statusCode {
+        case 200:
+            clearUsageBlock()
+            do {
+                return try parseUsage(
+                    data,
+                    rawTier: record.rateLimitTier,
+                    subscriptionType: record.subscriptionType
+                )
+            } catch {
+                throw FetchError.usageDecodeFailed
+            }
+        case 401:
+            // AppStore returns this failure to the shared Claude cadence,
+            // so a rejected secondary login gets the same increasing backoff.
+            throw FetchError.credential(.sourceTokenStale)
+        case 429:
+            let body = String(data: data, encoding: .utf8)
+            let retryAfter = parseRetryAfter(
+                header: http.value(forHTTPHeaderField: "Retry-After"),
+                body: body
+            )
+            let until = recordUsageRateLimit(retryAfterSeconds: retryAfter)
+            throw FetchError.rateLimited(retryAt: until)
+        default:
+            throw FetchError.usageHTTPError(http.statusCode, String(data: data, encoding: .utf8))
+        }
+    }
+
     /// Reset everything — used on user-initiated disconnect.
     /// Returns the delete outcome so callers only tear down UI state once the
     /// credential material is actually gone. A failed delete leaves the usage
