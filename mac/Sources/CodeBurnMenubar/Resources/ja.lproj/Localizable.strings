@@ -738,3 +738,22 @@
 "Downloads your own usage export with the Cursor app's login, at most once an hour." = "Cursorアプリのサインインで自分の使用量エクスポートをダウンロードします（1時間に最大1回）。";
 "Turned off by CODEBURN_CURSOR_SYNC=0" = "CODEBURN_CURSOR_SYNC=0によりオフになっています";
 "Couldn't save the setting: config.json is invalid or locked" = "設定を保存できませんでした。config.jsonが無効か、ロックされています";
+
+"Generation speed" = "生成速度";
+"Last 24h · this device · all accounts and projects" = "過去24時間 · このデバイス · 全アカウント・プロジェクト";
+"No timing samples. Set up capture in the desktop Speed tab." = "計測なし。デスクトップの「速度」で計測を設定してください。";
+"Speed refresh failed. Showing the last available snapshot." = "速度の更新に失敗しました。最後のスナップショットを表示しています。";
+"Some timing records are unavailable. See desktop Speed for details." = "一部の計測は利用できません。詳細はデスクトップの「速度」で確認。";
+"Speed snapshot is stale" = "速度の情報が古くなっています";
+"24h · local · all accounts/projects" = "24時間 · ローカル · 全アカウント/プロジェクト";
+"Turn estimate" = "ターン推定";
+"Reading local timings…" = "ローカル計測を読み込み中…";
+"Individual tokens" = "個々のトークン";
+"Chunk timing" = "チャンク計測";
+"Request timing" = "リクエスト計測";
+"Turn timing" = "ターン計測";
+"First arrival" = "最初の到着";
+"Buffered delivery" = "バッファ配信";
+"Typical" = "通常";
+"Typical = median day of the previous %1$lld days. A colored change is %2$lld%% or more: green is better, orange is worse." = "通常 = 直前 %1$lld 日間の中央値の日。色付きの変化は %2$lld%% 以上：緑は改善、オレンジは悪化。";
+"Generation excludes the initial wait. ~ = estimate; short or buffered replies may distort it. — = unavailable." = "生成速度は最初の待ち時間を除外。~ は推定値で、短い応答やバッファリングの影響を受けます。— は計測不可。";

@@ -738,3 +738,22 @@
 "Downloads your own usage export with the Cursor app's login, at most once an hour." = "Télécharge votre propre export d'utilisation avec la connexion de l'app Cursor, au plus une fois par heure.";
 "Turned off by CODEBURN_CURSOR_SYNC=0" = "Désactivé par CODEBURN_CURSOR_SYNC=0";
 "Couldn't save the setting: config.json is invalid or locked" = "Impossible d'enregistrer le réglage : config.json est invalide ou verrouillé";
+
+"Generation speed" = "Vitesse de génération";
+"Last 24h · this device · all accounts and projects" = "Dernières 24h · cet appareil · tous comptes et projets";
+"No timing samples. Set up capture in the desktop Speed tab." = "Aucune mesure. Configurez la capture dans Vitesse sur le bureau.";
+"Speed refresh failed. Showing the last available snapshot." = "Échec de l’actualisation. Dernier instantané disponible affiché.";
+"Some timing records are unavailable. See desktop Speed for details." = "Certaines mesures sont indisponibles. Détails dans Vitesse sur le bureau.";
+"Speed snapshot is stale" = "Mesure de vitesse ancienne";
+"24h · local · all accounts/projects" = "24h · local · tous comptes/projets";
+"Turn estimate" = "Estimation par tour";
+"Reading local timings…" = "Lecture des mesures locales…";
+"Individual tokens" = "Tokens individuels";
+"Chunk timing" = "Mesure par fragment";
+"Request timing" = "Mesure par requête";
+"Turn timing" = "Mesure par tour";
+"First arrival" = "Première arrivée";
+"Buffered delivery" = "Livraison en rafale";
+"Typical" = "Habituel";
+"Typical = median day of the previous %1$lld days. A colored change is %2$lld%% or more: green is better, orange is worse." = "Habituel = jour médian des %1$lld jours précédents. Un écart coloré atteint %2$lld %% ou plus : vert = mieux, orange = moins bien.";
+"Generation excludes the initial wait. ~ = estimate; short or buffered replies may distort it. — = unavailable." = "La génération exclut l’attente initiale. ~ = estimation, sensible aux réponses courtes ou mises en tampon. — = indisponible.";

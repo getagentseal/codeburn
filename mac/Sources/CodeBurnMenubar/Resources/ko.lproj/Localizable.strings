@@ -738,3 +738,22 @@
 "Downloads your own usage export with the Cursor app's login, at most once an hour." = "Cursor 앱의 로그인으로 내 사용량 내보내기를 다운로드합니다(최대 1시간에 1회).";
 "Turned off by CODEBURN_CURSOR_SYNC=0" = "CODEBURN_CURSOR_SYNC=0으로 꺼져 있음";
 "Couldn't save the setting: config.json is invalid or locked" = "설정을 저장할 수 없습니다. config.json이 잘못되었거나 잠겨 있습니다";
+
+"Generation speed" = "생성 속도";
+"Last 24h · this device · all accounts and projects" = "지난 24시간 · 이 기기 · 모든 계정 및 프로젝트";
+"No timing samples. Set up capture in the desktop Speed tab." = "측정값이 없습니다. 데스크톱 속도 탭에서 수집을 설정하세요.";
+"Speed refresh failed. Showing the last available snapshot." = "속도 새로 고침에 실패했습니다. 마지막 스냅샷을 표시합니다.";
+"Some timing records are unavailable. See desktop Speed for details." = "일부 측정 기록을 사용할 수 없습니다. 데스크톱 속도 탭에서 확인하세요.";
+"Speed snapshot is stale" = "속도 스냅샷이 오래되었습니다";
+"24h · local · all accounts/projects" = "24시간 · 로컬 · 모든 계정/프로젝트";
+"Turn estimate" = "턴 추정";
+"Reading local timings…" = "로컬 측정값 읽는 중…";
+"Individual tokens" = "개별 토큰";
+"Chunk timing" = "청크 측정";
+"Request timing" = "요청 측정";
+"Turn timing" = "턴 측정";
+"First arrival" = "첫 도착";
+"Buffered delivery" = "버퍼링된 전송";
+"Typical" = "평소";
+"Typical = median day of the previous %1$lld days. A colored change is %2$lld%% or more: green is better, orange is worse." = "평소 = 직전 %1$lld일의 중앙값 일자. 색이 표시된 변화는 %2$lld%% 이상: 초록은 개선, 주황은 악화.";
+"Generation excludes the initial wait. ~ = estimate; short or buffered replies may distort it. — = unavailable." = "생성 속도는 초기 대기를 제외합니다. ~는 추정치이며 짧거나 버퍼링된 응답의 영향을 받습니다. —는 측정 불가입니다.";
