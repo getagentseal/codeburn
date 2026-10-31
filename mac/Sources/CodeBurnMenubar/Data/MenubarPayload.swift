@@ -116,6 +116,9 @@ struct LiveSession: Codable, Sendable, Identifiable {
     let id: String
     /// Provider catalog id, matching the dock ring the session runs under.
     let provider: String
+    /// For Claude sessions, the config directory or organization profile id
+    /// the transcript belongs to. Absent on non-Claude providers.
+    var claudeConfigSourceId: String? = nil
     let project: String
     let branch: String?
     let model: String?
@@ -340,6 +343,7 @@ struct CurrentBlock: Codable, Sendable {
     let oneShotRate: Double?
     let inputTokens: Int
     let outputTokens: Int
+    var cacheReadTokens: Int? = nil
     let cacheHitPercent: Double
     /// Codex credits consumed in the period (nil on payloads from older builds).
     let codexCredits: Double?
@@ -396,7 +400,7 @@ struct PullRequestRow: Codable, Sendable {
 extension CurrentBlock {
     enum CodingKeys: String, CodingKey {
         case label, cost, calls, sessions, sessionCountBasis, oneShotRate, inputTokens, outputTokens,
-             cacheHitPercent, codexCredits, topActivities, topModels, localModelSavings, providers, providerDetails, topProjects,
+             cacheReadTokens, cacheHitPercent, codexCredits, topActivities, topModels, localModelSavings, providers, providerDetails, topProjects,
              modelEfficiency, topSessions, retryTax, routingWaste,
              tools, skills, subagents, mcpServers,
              workflow, topReworkedFiles, pullRequests, unpricedModels
@@ -411,6 +415,7 @@ extension CurrentBlock {
         oneShotRate = try c.decodeIfPresent(Double.self, forKey: .oneShotRate)
         inputTokens = try c.decode(Int.self, forKey: .inputTokens)
         outputTokens = try c.decode(Int.self, forKey: .outputTokens)
+        cacheReadTokens = try c.decodeIfPresent(Int.self, forKey: .cacheReadTokens)
         cacheHitPercent = try c.decodeIfPresent(Double.self, forKey: .cacheHitPercent) ?? 0
         codexCredits = try c.decodeIfPresent(Double.self, forKey: .codexCredits)
         topActivities = try c.decodeIfPresent([ActivityEntry].self, forKey: .topActivities) ?? []

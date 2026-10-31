@@ -775,6 +775,21 @@ private struct CapacityDockSettingsSection: View {
             }
             .pickerStyle(.menu)
 
+            if store.capacityDockClaudeProfiles.count > 1 {
+                Picker(L("Claude profiles"), selection: Binding(
+                    get: { snapshot.claudeProfiles },
+                    set: { mode in
+                        CapacityDockPreferences.setClaudeProfiles(mode)
+                        Task { await store.refreshClaudeProfiles(userInitiated: true) }
+                    }
+                )) {
+                    ForEach(CapacityDockClaudeProfilesMode.allCases, id: \.self) { mode in
+                        Text(mode.displayName).tag(mode)
+                    }
+                }
+                .pickerStyle(.menu)
+            }
+
             Text(L("Dock providers"))
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(.secondary)
