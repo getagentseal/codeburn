@@ -2739,10 +2739,15 @@ function createOtelParser(
             const subagentTypes = subagentsByTrace.get(spanMetadata.trace_id)
             const timestamp = epochToISO(spanMetadata.start_time_ms)
 
+            // input_tokens is cache-INCLUSIVE. An input below the cached count
+            // can only come from an emitter that excludes it, so it stays as is.
+            const cached = cacheReadTokens + cacheCreationTokens
+            const uncached = inputTokens >= cached ? inputTokens - cached : inputTokens
+
             // calculateCost with FULL token data — this is the key improvement.
             const costUSD = calculateCost(
               model,
-              inputTokens,
+              uncached,
               outputTokens,
               cacheCreationTokens,
               cacheReadTokens,
@@ -2754,7 +2759,7 @@ function createOtelParser(
               sessionId: conversationId,
               project,
               model,
-              inputTokens,
+              inputTokens: uncached,
               outputTokens,
               cacheCreationInputTokens: cacheCreationTokens,
               cacheReadInputTokens: cacheReadTokens,
