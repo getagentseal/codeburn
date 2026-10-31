@@ -734,3 +734,22 @@
 "Downloads your own usage export with the Cursor app's login, at most once an hour." = "使用 Cursor 應用的登入下載你自己的用量匯出，每小時最多一次。";
 "Turned off by CODEBURN_CURSOR_SYNC=0" = "已被 CODEBURN_CURSOR_SYNC=0 關閉";
 "Couldn't save the setting: config.json is invalid or locked" = "無法儲存設定：config.json 無效或已被鎖定";
+
+"Generation speed" = "生成速度";
+"Last 24h · this device · all accounts and projects" = "過去24小時 · 此裝置 · 所有帳戶與專案";
+"No timing samples. Set up capture in the desktop Speed tab." = "尚無計時樣本。請在桌面應用程式速度頁設定擷取。";
+"Speed refresh failed. Showing the last available snapshot." = "速度重新整理失敗。顯示最後可用快照。";
+"Some timing records are unavailable. See desktop Speed for details." = "部分計時紀錄無法使用。詳情見桌面應用程式速度頁。";
+"Speed snapshot is stale" = "速度快照已過期";
+"24h · local · all accounts/projects" = "24小時 · 本機 · 所有帳戶/專案";
+"Turn estimate" = "輪次估算";
+"Reading local timings…" = "正在讀取本機計時…";
+"Individual tokens" = "逐 token";
+"Chunk timing" = "區塊計時";
+"Request timing" = "請求計時";
+"Turn timing" = "輪次計時";
+"First arrival" = "首次到達";
+"Buffered delivery" = "緩衝傳送";
+"Typical" = "典型";
+"Typical = median day of the previous %1$lld days. A colored change is %2$lld%% or more: green is better, orange is worse." = "典型 = 前 %1$lld 天的中位日。帶顏色的變化達 %2$lld%% 或以上：綠色為改善，橘色為變差。";
+"Generation excludes the initial wait. ~ = estimate; short or buffered replies may distort it. — = unavailable." = "生成速度不含初始等待。~ 為估算，短回覆或緩衝可能使其失真。— 為無法使用。";

@@ -29,6 +29,17 @@ private func quota(
 
 @Suite("Capacity Dock glance popover")
 struct CapacityDockGlanceTests {
+    @Test("Speed reserves space with and without a quota at every dock scale")
+    func speedHeight() {
+        for scale: CGFloat in [0.9, 1, 1.25] {
+            for summary: QuotaSummary? in [nil, quota([window("Weekly", 0.2)])] {
+                let without = CapacityDockMetrics.detailHeight(quota: summary, provider: .codex, sessionCount: nil, hasToday: false, tailEdge: .right, scale: scale)
+                let withSpeed = CapacityDockMetrics.detailHeight(quota: summary, provider: .codex, sessionCount: nil, hasToday: false, hasSpeed: true, tailEdge: .right, scale: scale)
+                #expect(abs((withSpeed - without) - CapacityDockGlance.speedHeight * scale) <= 1)
+            }
+        }
+    }
+
     @Test("Window columns keep the provider's own order and cap at four")
     func windowOrderAndCap() {
         let five = window("5-hour", 0.16)

@@ -745,3 +745,22 @@
 "Downloads your own usage export with the Cursor app's login, at most once an hour." = "Downloads your own usage export with the Cursor app's login, at most once an hour.";
 "Turned off by CODEBURN_CURSOR_SYNC=0" = "Turned off by CODEBURN_CURSOR_SYNC=0";
 "Couldn't save the setting: config.json is invalid or locked" = "Couldn't save the setting: config.json is invalid or locked";
+
+"Generation speed" = "Generation speed";
+"Last 24h · this device · all accounts and projects" = "Last 24h · this device · all accounts and projects";
+"No timing samples. Set up capture in the desktop Speed tab." = "No timing samples. Set up capture in the desktop Speed tab.";
+"Speed refresh failed. Showing the last available snapshot." = "Speed refresh failed. Showing the last available snapshot.";
+"Some timing records are unavailable. See desktop Speed for details." = "Some timing records are unavailable. See desktop Speed for details.";
+"Speed snapshot is stale" = "Speed snapshot is stale";
+"24h · local · all accounts/projects" = "24h · local · all accounts/projects";
+"Turn estimate" = "Turn estimate";
+"Reading local timings…" = "Reading local timings…";
+"Individual tokens" = "Individual tokens";
+"Chunk timing" = "Chunk timing";
+"Request timing" = "Request timing";
+"Turn timing" = "Turn timing";
+"First arrival" = "First arrival";
+"Buffered delivery" = "Buffered delivery";
+"Typical" = "Typical";
+"Typical = median day of the previous %1$lld days. A colored change is %2$lld%% or more: green is better, orange is worse." = "Typical = median day of the previous %1$lld days. A colored change is %2$lld%% or more: green is better, orange is worse.";
+"Generation excludes the initial wait. ~ = estimate; short or buffered replies may distort it. — = unavailable." = "Generation excludes the initial wait. ~ = estimate; short or buffered replies may distort it. — = unavailable.";

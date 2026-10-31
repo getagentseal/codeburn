@@ -21,7 +21,7 @@ private extension View {
     }
 }
 
-private extension Color {
+extension Color {
     /// Warm off-white for Capacity Dock text: a very mild orange tint so bright
     /// labels on the dark card read softer than pure white and do not stress the eyes.
     static let capacityDockText = Color(red: 0.98, green: 0.95, blue: 0.90)
@@ -87,6 +87,7 @@ enum CapacityDockMetrics {
         provider: CapacityDockProvider,
         sessionCount: Int?,
         hasToday: Bool,
+        hasSpeed: Bool = false,
         tailEdge: CapacityDockEdge,
         scale: CGFloat
     ) -> CGFloat {
@@ -95,7 +96,7 @@ enum CapacityDockMetrics {
                 provider: provider,
                 width: baseDetailWidth - 2 * CapacityDockGlance.contentInset
             )
-            return (card * scale).rounded()
+            return ((card + (hasSpeed ? CapacityDockGlance.speedHeight : 0)) * scale).rounded()
         }
         // Each section carries its own padding, so the panel adds none.
         var height = CapacityDockGlance.headerHeight
@@ -103,6 +104,7 @@ enum CapacityDockMetrics {
         if !tailEdge.isVertical { height += CapacityDockGlance.tailAllowance }
         if let sessionCount { height += CapacityDockGlance.sessionsHeight(count: sessionCount) }
         if hasToday { height += CapacityDockGlance.todayHeight }
+        if hasSpeed { height += CapacityDockGlance.speedHeight }
         if CapacityDockGlance.drawsWindows(quota) {
             height += CapacityDockGlance.windows(quota).isEmpty
                 ? CapacityDockGlance.windowsEmptyHeight
@@ -133,6 +135,7 @@ enum CapacityDockGlance {
     /// section rather than the panel, so group fills can still run edge to edge.
     static let contentInset: CGFloat = 16
     static let tailAllowance: CGFloat = 18
+    static let speedHeight: CGFloat = 108
 
     /// The title row's own line box.
     static let headerRow: CGFloat = 20
@@ -927,6 +930,7 @@ struct CapacityDockDetailView: View {
                 .padding(.top, CapacityDockGlance.contentInset * model.detailScale)
                 .padding(.horizontal, CapacityDockGlance.contentInset * model.detailScale)
                 Spacer(minLength: 0)
+                if let speed = store.capacityDockSpeed(for: provider) { SpeedGlance(row: speed, stale: store.speedRefreshFailed, scale: model.detailScale) }
                 connectButton(provider, quota: nil)
             }
         }
@@ -946,6 +950,7 @@ struct CapacityDockDetailView: View {
             if let today = store.capacityDockToday(for: provider) {
                 todaySection(today).dividerBelow()
             }
+            if let speed = store.capacityDockSpeed(for: provider) { SpeedGlance(row: speed, stale: store.speedRefreshFailed, scale: model.detailScale).dividerBelow() }
             if CapacityDockGlance.drawsWindows(quota) { windowsSection(quota) }
             Spacer(minLength: 0)
             connectButton(provider, quota: quota)
