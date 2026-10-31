@@ -2,11 +2,9 @@ import { mkdtemp, rm } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import type { AddressInfo } from 'net'
-import type { Server } from 'http'
+import { request, type Server } from 'http'
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-
-import { request } from 'http'
 
 import { injectDashboardBootstrap, isAllowedHost, isAllowedOrigin, runWebDashboard } from '../src/web-dashboard.js'
 import { setHome } from './setup/home.js'

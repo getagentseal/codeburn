@@ -12,24 +12,25 @@ A local web dashboard with the same task, model, tool, and project breakdowns as
 ## Behind a reverse proxy
 
 The dashboard has no login of its own, and the local view shows project names,
-paths and session detail. So by default it listens on `127.0.0.1` and refuses
-any request whose `Host` or `Origin` is not a loopback name. That stops DNS
+paths and session detail. So it listens only on `127.0.0.1` and refuses any
+request whose `Host` or `Origin` is not a loopback name. That stops DNS
 rebinding and cross-site requests.
 
 To reach it from another machine, put it behind a reverse proxy **that
-authenticates**, such as oauth2-proxy, Authelia or your SSO's forward auth, and
-name the hostname the proxy serves it under:
+authenticates** on the same machine, such as oauth2-proxy, Authelia or your
+SSO's forward auth, and name the hostname the proxy serves it under:
 
 ```bash
-codeburn web --no-open --host 0.0.0.0 --port 4747 --allowed-host usage.example.org
+codeburn web --no-open --port 4747 --allowed-host usage.example.org
 ```
 
-- `--host` is the address to listen on.
 - `--allowed-host` is repeatable. It is matched exactly and case-insensitively,
   without the port, against both `Host` and `Origin`. Everything else still
   gets a 403.
-- Allow the port only from the proxy, with a firewall, because anyone who
-  reaches it directly and sends the allowed `Host` gets the full dashboard.
+- The dashboard has no authentication, and `--allowed-host` adds none. It only
+  lets the proxy's `Host` and `Origin` through the loopback guard, so access
+  control is the proxy's job: anyone the proxy lets in gets the full dashboard,
+  sharing and pairing controls included.
 
 ## Combine usage across your devices
 

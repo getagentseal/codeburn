@@ -135,8 +135,6 @@ export async function runWebDashboard(opts: {
   exclude: string[]
   port: number
   open: boolean
-  /** Address to listen on. Default 127.0.0.1. */
-  host?: string
   /**
    * Extra hostnames, besides the loopback names, that requests may be
    * addressed to and come from, for running behind a reverse proxy that does
@@ -144,7 +142,6 @@ export async function runWebDashboard(opts: {
    */
   allowedHosts?: string[]
 }): Promise<Server> {
-  const bindHost = opts.host ?? '127.0.0.1'
   const allowedHosts = new Set((opts.allowedHosts ?? []).map((h) => h.trim().toLowerCase()).filter(Boolean))
   await loadPricing()
   const dashDir = resolveDashDir()
@@ -235,12 +232,12 @@ export async function runWebDashboard(opts: {
     try {
       const url = new URL(req.url ?? '/', 'http://localhost')
 
-      // Loopback-only server by default. Reject any request not addressed to
-      // localhost (defeats DNS rebinding, which would otherwise let a website
-      // you visit read your local usage) and any cross-origin request (CSRF).
-      // The local payload is unsanitized, so this guard is what keeps it on
-      // your machine. --allowed-host adds exact hostnames for a reverse proxy
-      // that authenticates; nothing else is let through.
+      // Loopback-only server. Reject any request not addressed to localhost
+      // (defeats DNS rebinding, which would otherwise let a website you visit
+      // read your local usage) and any cross-origin request (CSRF). The local
+      // payload is unsanitized, so this guard is what keeps it on your machine.
+      // --allowed-host adds exact hostnames for a reverse proxy that
+      // authenticates; nothing else is let through.
       const hostAllowed = isAllowedHost(req.headers.host, allowedHosts)
       const origin = req.headers.origin
       const originOk = !origin || isAllowedOrigin(origin, allowedHosts)
@@ -452,19 +449,19 @@ export async function runWebDashboard(opts: {
   const port = await new Promise<number>((resolve, reject) => {
     server.once('error', (err: NodeJS.ErrnoException) => {
       if (err.code === 'EADDRINUSE') {
-        server.listen(0, bindHost, () => resolve((server.address() as AddressInfo).port))
+        server.listen(0, '127.0.0.1', () => resolve((server.address() as AddressInfo).port))
       } else {
         reject(err)
       }
     })
-    server.listen(opts.port, bindHost, () => resolve((server.address() as AddressInfo).port))
+    server.listen(opts.port, '127.0.0.1', () => resolve((server.address() as AddressInfo).port))
   })
   // Durable handler so a post-bind socket error never crashes the process.
   server.on('error', () => {})
 
   void Promise.resolve().then(() => getLocalPayload(opts.period, opts.provider, opts.from, opts.to)).catch(() => {})
 
-  const url = `http://${bindHost.includes(':') ? `[${bindHost}]` : bindHost}:${port}`
+  const url = `http://127.0.0.1:${port}`
   if (!dashDir) {
     process.stdout.write(`\n  Dashboard UI is not built. Run: cd dash && npm install && npm run build\n`)
   }
