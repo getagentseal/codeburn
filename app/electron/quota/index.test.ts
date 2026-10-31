@@ -11,7 +11,7 @@ const quota = (provider: ProviderName): QuotaProvider => ({
 // real fetcher, which would touch disk or the network inside a test. Grok Bot's
 // install check is stubbed too, so the row does not depend on the host machine.
 const noopFetchers = () => ({
-  claude: vi.fn(async () => ({ quota: quota('claude') })),
+  claude: vi.fn(async (_options: { allowKeychain: boolean }) => ({ quota: quota('claude') })),
   codex: vi.fn(async () => ({ quota: quota('codex') })),
   gemini: vi.fn(async () => ({ quota: quota('gemini') })),
   copilot: vi.fn(async () => ({ quota: quota('copilot') })),
