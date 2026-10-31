@@ -17,6 +17,7 @@ import { sessions } from './catalogs/sessions'
 import { sessionView } from './catalogs/sessionView'
 import { plans } from './catalogs/plans'
 import { plugins } from './catalogs/plugins'
+import { speed } from './catalogs/speed'
 import { models } from './catalogs/models'
 import { compare } from './catalogs/compare'
 import { pullRequests } from './catalogs/pullRequests'
@@ -35,6 +36,7 @@ const SECTIONS: SectionCatalog[] = [
   plans,
   plugins,
   models,
+  speed,
   compare,
   pullRequests,
   spend,
