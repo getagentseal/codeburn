@@ -4,6 +4,7 @@
  *  the webview answers those itself, without a round trip. */
 export const FORWARDED_METHODS = [
   'getQuota', 'getOverview', 'getTimeline', 'getPlans', 'getActReport', 'getModels',
+  'getSpeed', 'getSpeedEvents',
   'getSessions', 'getSessionsContributions', 'getSessionWhy', 'getCompareModels', 'getCompare',
   'getPeriodCompare', 'getPeriodCompareSessions', 'getCompareCohortModels', 'getCompareCohort',
   'getYield', 'getSpendFlow', 'getBranchSpend', 'getOptimizeReport', 'getOptimizeSnapshot',

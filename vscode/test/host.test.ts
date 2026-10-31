@@ -64,6 +64,21 @@ describe('isWebUrl', () => {
 })
 
 describe('workspace scope through the shared handlers', () => {
+  it('routes the shared Speed view to local timing reads without adding a project filter', async () => {
+    const { createBridgeHandlers } = await import('../../app/electron/bridge-handlers')
+    const { scopeFilter } = await import('../src/workspace')
+    const calls: string[][] = []
+    const spawnCli = vi.fn(async (args: string[]) => { calls.push(args); return {} })
+    const handlers = createBridgeHandlers({ spawnCli, spawnCliAction: vi.fn(),
+      resolveCodeburnPath: () => '/cli', getQuota: vi.fn(async () => []),
+      scopeProjectFilter: scopeFilter(['/w/app']) })
+    const route = createRouter(handlers, editor())
+    expect(await route('codeburn:getSpeed', ['today', 'antigravity'])).toMatchObject({ ok: true })
+    expect(await route('codeburn:getSpeedEvents', ['request-1', 'antigravity'])).toMatchObject({ ok: true })
+    expect(calls[0]).toEqual(['speed', '--json', '--period', 'today', '--history-limit', '100000', '--typical-days', '7', '--no-turn-estimates', '--harness', 'antigravity'])
+    expect(calls[1]).toEqual(['speed', 'events', 'request-1', '--harness', 'antigravity'])
+  })
+
   it('adds the workspace as a rooted --project on every scoped read, and never asks for combined scope', async () => {
     const { createBridgeHandlers } = await import('../../app/electron/bridge-handlers')
     const { scopeFilter } = await import('../src/workspace')

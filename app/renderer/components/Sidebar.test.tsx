@@ -44,12 +44,13 @@ describe('Sidebar', () => {
     setPlatform(platform)
     const { container } = render(<Sidebar active="overview" onNavigate={() => {}} />)
     const labels = [...container.querySelectorAll('.ni')].map(item => item.textContent)
-    expect(labels).toEqual(['Overview', 'Sessions', 'Pull requests', 'Spend', 'Models', 'Optimize', 'Compare', 'Compare periods', 'Plans', 'Plugins', 'Settings'])
+    expect(labels).toEqual(['Overview', 'Sessions', 'Pull requests', 'Spend', 'Models', 'Speed', 'Optimize', 'Compare', 'Compare periods', 'Plans', 'Plugins', 'Settings'])
     const tip = (label: string) => [...container.querySelectorAll('.ni')].find(item => item.textContent === label)?.getAttribute('title')
     expect(tip('Sessions')).toBe(`Sessions ${mod}2`)
     expect(tip('Pull requests')).toBe(`Pull requests ${mod}3`)
     expect(tip('Compare')).toBe(`Compare ${mod}7`)
     expect(tip('Plans')).toBe(`Plans ${mod}8`)
+    expect(tip('Speed')).toBe(`Speed ${mod}0`)
   })
 
   it('calls onNavigate with the section id when a nav item is clicked', () => {
