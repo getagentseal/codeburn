@@ -224,9 +224,10 @@
 "resets in %@" = "%@後にリセット";
 "Change accent color" = "アクセントカラーを変更";
 "Copy update command to clipboard" = "更新コマンドをクリップボードにコピー";
-"Enjoying CodeBurn?" = "CodeBurnを楽しんでいますか？";
-"Star us on GitHub" = "GitHubでスターをつける";
-"Hide this banner" = "このバナーを非表示";
+"Enjoying CodeBurn?" = "CodeBurn を気に入っていただけましたか？";
+"If it has been helping you, a star on GitHub would mean a lot. It keeps the project free and open." = "お役に立っているなら、GitHub でスターを付けていただけるととても励みになります。プロジェクトを無料でオープンに保つ力になります。";
+"Not now" = "今はしない";
+"Star on GitHub" = "GitHub でスターを付ける";
 "CSV (folder)" = "CSV（フォルダ）";
 "JSON" = "JSON";
 "Export" = "書き出す";

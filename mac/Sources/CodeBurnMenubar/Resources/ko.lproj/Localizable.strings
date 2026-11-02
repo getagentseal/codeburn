@@ -225,8 +225,9 @@
 "Change accent color" = "강조 색상 변경";
 "Copy update command to clipboard" = "업데이트 명령어를 클립보드에 복사";
 "Enjoying CodeBurn?" = "CodeBurn이 마음에 드시나요?";
-"Star us on GitHub" = "GitHub에서 스타를 눌러주세요";
-"Hide this banner" = "이 배너 숨기기";
+"If it has been helping you, a star on GitHub would mean a lot. It keeps the project free and open." = "도움이 되셨다면 GitHub에 스타를 남겨 주시면 큰 힘이 됩니다. 프로젝트가 무료로, 오픈 소스로 유지되는 데 도움이 됩니다.";
+"Not now" = "나중에";
+"Star on GitHub" = "GitHub에서 스타 누르기";
 "CSV (folder)" = "CSV (폴더)";
 "JSON" = "JSON";
 "Export" = "내보내기";

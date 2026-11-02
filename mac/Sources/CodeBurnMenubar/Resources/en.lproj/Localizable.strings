@@ -232,8 +232,9 @@
 "Change accent color" = "Change accent color";
 "Copy update command to clipboard" = "Copy update command to clipboard";
 "Enjoying CodeBurn?" = "Enjoying CodeBurn?";
-"Star us on GitHub" = "Star us on GitHub";
-"Hide this banner" = "Hide this banner";
+"If it has been helping you, a star on GitHub would mean a lot. It keeps the project free and open." = "If it has been helping you, a star on GitHub would mean a lot. It keeps the project free and open.";
+"Not now" = "Not now";
+"Star on GitHub" = "Star on GitHub";
 "CSV (folder)" = "CSV (folder)";
 "JSON" = "JSON";
 "Export" = "Export";
