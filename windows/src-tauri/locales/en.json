@@ -42,5 +42,9 @@
   "The CLI update did not run. Run this in a terminal:": "The CLI update did not run. Run this in a terminal:",
   "Your package manager updates this CLI.": "Your package manager updates this CLI.",
   "Opening CodeBurn to update the desktop app.": "Opening CodeBurn to update the desktop app.",
-  "Update CLI": "Update CLI"
+  "Update CLI": "Update CLI",
+  "Enjoying CodeBurn?": "Enjoying CodeBurn?",
+  "If it has been helping you, a star on GitHub would mean a lot. It keeps the project free and open.": "If it has been helping you, a star on GitHub would mean a lot. It keeps the project free and open.",
+  "Not now": "Not now",
+  "Star on GitHub": "Star on GitHub"
 }

@@ -1934,34 +1934,30 @@ code { font-family: var(--font-mono); }
 
 .star-banner {
   display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 12px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 10px 12px;
   background: rgba(201, 82, 29, 0.08);
   box-shadow: inset 0 0.5px 0 var(--fill-18);
 }
-.star-banner-icon { color: var(--brand-accent); flex-shrink: 0; }
-.star-banner-link {
-  font-size: 10.5px;
-  font-weight: 500;
+.star-banner-title {
+  margin: 0;
+  font-size: 11.5px;
+  font-weight: 600;
   color: var(--label);
-  text-decoration: none;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  text-align: left;
 }
-.star-banner-cta { color: var(--brand-accent); text-decoration: underline; }
-.star-banner-spacer { flex: 1; }
-.star-banner-close {
-  display: inline-flex;
-  padding: 4px;
-  border: 0;
-  border-radius: 4px;
-  background: transparent;
+.star-banner-body {
+  margin: 0;
+  font-size: 10.5px;
+  line-height: 1.45;
   color: var(--label-2);
 }
-.star-banner-close:hover { background: var(--fill-08); }
+.star-banner-actions {
+  display: flex;
+  gap: 8px;
+  align-self: flex-end;
+}
 
 /* ---- CLI update banner ---------------------------------------------------------- */
 
