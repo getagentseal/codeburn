@@ -1715,7 +1715,7 @@ describe('copilot provider - OTel cache token parsing', () => {
       attrs: {
         'gen_ai.conversation.id': 'conv-001',
         'gen_ai.response.model': 'gpt-4.1',
-        'gen_ai.usage.input_tokens': 1000,
+        'gen_ai.usage.input_tokens': 51500,
         'gen_ai.usage.output_tokens': 200,
         'gen_ai.usage.cache_read.input_tokens': 50000,
         'gen_ai.usage.cache_creation.input_tokens': 500,
@@ -1742,6 +1742,42 @@ describe('copilot provider - OTel cache token parsing', () => {
     expect(call.cacheReadInputTokens).toBe(50000)
     expect(call.cacheCreationInputTokens).toBe(500)
     expect(call.costUSD).toBeGreaterThan(0)
+    expect(call.costUSD).toBeCloseTo(calculateCost('gpt-4.1', 1000, 200, 500, 50000, 0), 12)
+  })
+
+  it('keeps an input below the cached count as written', async () => {
+    if (!isSqliteAvailable()) return
+
+    createOtelDb(dbPath)
+    insertSpan(dbPath, {
+      spanId: 'span-excl',
+      traceId: 'trace-excl',
+      operationName: 'chat',
+      startTimeMs: 1000,
+      attrs: {
+        'gen_ai.conversation.id': 'conv-excl',
+        'gen_ai.response.model': 'gpt-4.1',
+        'gen_ai.usage.input_tokens': 1000,
+        'gen_ai.usage.output_tokens': 200,
+        'gen_ai.usage.cache_read.input_tokens': 50000,
+        'gen_ai.usage.cache_creation.input_tokens': 500,
+      },
+    })
+
+    const provider = createCopilotProvider('/nonexistent/jsonl', '/nonexistent/ws')
+    const src = (await provider.discoverSessions()).find(s => s.path === dbPath)
+    expect(src).toBeDefined()
+
+    const calls: ParsedProviderCall[] = []
+    for await (const call of provider.createSessionParser(src!, new Set()).parse()) {
+      calls.push(call)
+    }
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.inputTokens).toBe(1000)
+    expect(calls[0]!.cacheReadInputTokens).toBe(50000)
+    expect(calls[0]!.cacheCreationInputTokens).toBe(500)
+    expect(calls[0]!.costUSD).toBeCloseTo(calculateCost('gpt-4.1', 1000, 200, 500, 50000, 0), 12)
   })
 
   it('discovers one source per OTel DB file (not per conversation)', async () => {
