@@ -9,6 +9,29 @@ codeburn web --no-open          # start the server without opening a browser
 
 A local web dashboard with the same task, model, tool, and project breakdowns as the TUI, rendered with charts. The usage graph follows the selected period with 15-minute, hourly, or daily buckets and can switch between per-session and per-model lines. Everything is read from disk on your machine and the server binds to localhost; nothing is uploaded.
 
+## Behind a reverse proxy
+
+The dashboard has no login of its own, and the local view shows project names,
+paths and session detail. So it listens only on `127.0.0.1` and refuses any
+request whose `Host` or `Origin` is not a loopback name. That stops DNS
+rebinding and cross-site requests.
+
+To reach it from another machine, put it behind a reverse proxy **that
+authenticates** on the same machine, such as oauth2-proxy, Authelia or your
+SSO's forward auth, and name the hostname the proxy serves it under:
+
+```bash
+codeburn web --no-open --port 4747 --allowed-host usage.example.org
+```
+
+- `--allowed-host` is repeatable. It is matched exactly and case-insensitively,
+  without the port, against both `Host` and `Origin`. Everything else still
+  gets a 403.
+- The dashboard has no authentication, and `--allowed-host` adds none. It only
+  lets the proxy's `Host` and `Origin` through the loopback guard, so access
+  control is the proxy's job: anyone the proxy lets in gets the full dashboard,
+  sharing and pairing controls included.
+
 ## Combine usage across your devices
 
 See one total across your laptop, desktop, and work machine on the same network. On each other device, share its usage:
