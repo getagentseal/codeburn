@@ -111,7 +111,7 @@ function SplashStatus({ progress }: { progress: Progress }) {
  * same provider/tick stream without the cold flag, so the splash stays a plain
  * flame and dismisses the moment data arrives.
  */
-export function Splash({ hasData, hasError }: { hasData: boolean; hasError: boolean }) {
+export function Splash({ hasData, hasError, onDone }: { hasData: boolean; hasError: boolean; onDone?: () => void }) {
   const [phase, setPhase] = useState<Phase>('lit')
   const [progress, setProgress] = useState<Progress>(EMPTY)
   const [reveal, setReveal] = useState(false)
@@ -169,6 +169,8 @@ export function Splash({ hasData, hasError }: { hasData: boolean; hasError: bool
     }, CROSSFADE_MS)
     return () => clearTimeout(timer)
   }, [phase])
+
+  useEffect(() => { if (phase === 'done') onDone?.() }, [phase, onDone])
 
   if (phase === 'done' || typeof document === 'undefined') return null
 
