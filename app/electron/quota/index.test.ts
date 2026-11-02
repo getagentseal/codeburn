@@ -1,7 +1,17 @@
+import os from 'node:os'
+import path from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 
+import { claudeKeychainService } from './claude'
 import { QuotaService } from './index'
+import { readKeychainPassword } from './security'
 import type { ProviderName, QuotaProvider } from './types'
+
+// The real Claude fetcher runs in one test; its Keychain lookup is answered here.
+vi.mock('./security', async importOriginal => ({
+  ...await importOriginal<typeof import('./security')>(),
+  readKeychainPassword: vi.fn(),
+}))
 
 const quota = (provider: ProviderName): QuotaProvider => ({
   provider, connection: 'connected', primary: null, details: [], planLabel: null, footerLines: [],
@@ -227,6 +237,28 @@ describe('QuotaService', () => {
     expect(fetchers.claude).toHaveBeenCalledTimes(1)
     await service.getQuota({ force: true }) // force clears the still-fresh cache
     expect(fetchers.claude).toHaveBeenCalledTimes(2)
+  })
+
+  it('reads the Claude login of the first configured config dir', async () => {
+    const dir = path.join(os.tmpdir(), 'codeburn-no-such-claude-dir')
+    const saved = { dirs: process.env.CLAUDE_CONFIG_DIRS, platform: process.platform }
+    process.env.CLAUDE_CONFIG_DIRS = dir
+    Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true })
+    vi.mocked(readKeychainPassword).mockResolvedValue({ status: 'notFound' })
+    try {
+      const { claude: _real, ...fetchers } = noopFetchers()
+      const service = new QuotaService({
+        ...fetchers, grokbotInstalled: () => false, now: () => 1000,
+        readFile: vi.fn(async () => null), writeFile: vi.fn(async () => undefined),
+      })
+      const results = await service.getQuota({ force: true, allowKeychain: true })
+      expect(results.find(row => row.provider === 'claude')?.connection).toBe('disconnected')
+      expect(vi.mocked(readKeychainPassword).mock.calls.map(call => call[0])).toEqual([claudeKeychainService(dir)])
+    } finally {
+      if (saved.dirs === undefined) delete process.env.CLAUDE_CONFIG_DIRS
+      else process.env.CLAUDE_CONFIG_DIRS = saved.dirs
+      Object.defineProperty(process, 'platform', { value: saved.platform, configurable: true })
+    }
   })
 
   it('single-flights simultaneous callers', async () => {
