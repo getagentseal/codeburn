@@ -225,8 +225,9 @@
 "Change accent color" = "更改主題色";
 "Copy update command to clipboard" = "將更新命令複製到剪貼簿";
 "Enjoying CodeBurn?" = "喜歡 CodeBurn 嗎？";
-"Star us on GitHub" = "在 GitHub 上點個 Star";
-"Hide this banner" = "隱藏此橫幅";
+"If it has been helping you, a star on GitHub would mean a lot. It keeps the project free and open." = "如果它對您有幫助，在 GitHub 上點個 Star 對我們意義重大。這能讓專案保持免費和開源。";
+"Not now" = "稍後再說";
+"Star on GitHub" = "在 GitHub 上點 Star";
 "CSV (folder)" = "CSV（資料夾）";
 "JSON" = "JSON";
 "Export" = "匯出";

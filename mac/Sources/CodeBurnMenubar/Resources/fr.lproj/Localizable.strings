@@ -224,9 +224,10 @@
 "resets in %@" = "réinitialisation dans %@";
 "Change accent color" = "Changer la couleur d'accent";
 "Copy update command to clipboard" = "Copier la commande de mise à jour";
-"Enjoying CodeBurn?" = "Vous aimez CodeBurn ?";
-"Star us on GitHub" = "Mettez-nous une étoile sur GitHub";
-"Hide this banner" = "Masquer cette bannière";
+"Enjoying CodeBurn?" = "Vous appréciez CodeBurn ?";
+"If it has been helping you, a star on GitHub would mean a lot. It keeps the project free and open." = "S'il vous est utile, une étoile sur GitHub nous ferait très plaisir. Elle aide le projet à rester gratuit et ouvert.";
+"Not now" = "Plus tard";
+"Star on GitHub" = "Ajouter une étoile sur GitHub";
 "CSV (folder)" = "CSV (dossier)";
 "JSON" = "JSON";
 "Export" = "Exporter";
