@@ -1,6 +1,7 @@
 import { mkdtemp, mkdir, readFile, rm, stat, utimes, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
+import { fileURLToPath } from 'url'
 import { createRequire } from 'node:module'
 import { describe, expect, it } from 'vitest'
 
@@ -622,9 +623,9 @@ describe('antigravity provider helpers', () => {
         outputTokens: 71,
         reasoningTokens: 659,
         sessionId: fixture.conversationId,
-        project: 'antigravity-cli',
+        project: 'private-project',
+        projectPath: fileURLToPath('file:///Users/example/private-project'),
       })
-      expect(calls[0]!.projectPath).toBeUndefined()
       expect(calls[0]!.costUSD).toBeGreaterThan(0)
     } finally {
       if (previousCacheDir === undefined) delete process.env['CODEBURN_CACHE_DIR']

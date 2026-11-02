@@ -52,7 +52,7 @@ function conversationRoots(): readonly AntigravityConversationRoot[] {
     },
   ]
 }
-const CACHE_VERSION = 10
+const CACHE_VERSION = 11
 export const ANTIGRAVITY_CACHE_VERSION = CACHE_VERSION
 export const ANTIGRAVITY_LEGACY_CACHE_FILE = 'antigravity-results.json'
 export function antigravityCacheFileName(version = CACHE_VERSION): string {
@@ -1692,12 +1692,6 @@ function sanitizeProject(path: string): string {
 }
 
 function applyAntigravityProject(call: ParsedProviderCall, source: SessionSource, projectPath: string | undefined): void {
-  if (source.project === 'antigravity-cli') {
-    call.project = source.project
-    delete call.projectPath
-    return
-  }
-
   if (projectPath) {
     call.projectPath = projectPath
     call.project = sanitizeProject(projectPath)
@@ -1705,6 +1699,7 @@ function applyAntigravityProject(call: ParsedProviderCall, source: SessionSource
   }
 
   call.project = source.project
+  delete call.projectPath
 }
 
 // gen_metadata rows and RPC entries without a real ChatStartMetadata.created_at

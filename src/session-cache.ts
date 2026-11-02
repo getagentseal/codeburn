@@ -633,7 +633,10 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // placeholders resolve, and Gemini 3 Flash -a/-d rows are priced.
   // user-msg-v1: extracts user prompts from brain transcripts (<USER_REQUEST>)
   // or SQLite steps table, attributing userMessage across calls and turns.
-  antigravity: 'worktree-project-grouping-v7-cache-read-v1-est-cost-model-fallback-v1-user-msg-v1',
+  // cli-workspace-v1: Antigravity CLI (.db) conversations now attribute
+  // projectPath and project from trajectory_metadata_blob instead of collapsing
+  // into a generic antigravity-cli bucket.
+  antigravity: 'worktree-project-grouping-v7-cache-read-v1-est-cost-model-fallback-v1-user-msg-v1-cli-workspace-v1',
   // pr-attribution-v1: the parser now reads the `message`/`part` tables for
   // per-turn user prompt text and the GitHub PR URLs it references. Cached
   // ZCode sessions hold empty userMessage turns and no session prLinks, so
