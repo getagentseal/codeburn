@@ -235,6 +235,12 @@ body { overflow: hidden; background: var(--bg); color: var(--ink); }
   box-shadow: 0 18px 50px rgba(0, 0, 0, .28), 0 3px 12px rgba(0, 0, 0, .16);
   animation: modal-in var(--dur-base) var(--ease-out) backwards;
 }
+.about-modal.star-nudge { width: min(360px, 100%); padding: var(--sp-5); }
+.star-nudge-mark { display: block; margin-bottom: var(--sp-2); }
+.star-nudge-mark svg { display: block; width: 28px; height: 28px; fill: currentColor; }
+.star-nudge-title { margin: 0; font-size: var(--fs-subhead); font-weight: var(--fw-subhead); }
+.star-nudge-body { margin: var(--sp-1) 0 0; color: var(--mut); font-size: var(--fs-body); line-height: 1.5; }
+.star-nudge-actions { display: flex; justify-content: flex-end; gap: var(--sp-2); margin-top: var(--sp-5); }
 .about-modal-close {
   position: absolute; top: 10px; right: 10px; z-index: 1; width: 28px; height: 28px; padding: 0;
   border: 0; border-radius: 7px; background: transparent; color: var(--mut); font: inherit;
