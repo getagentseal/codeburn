@@ -68,7 +68,9 @@ import { isWslUncPath } from './wsl.js'
 // GPT-5.3 Codex Spark instead of $0. Stored costUSD and speed are the old ones.
 // v22: a fork's replay burst drops only records found in the parent rollout
 // and counts the rest. v21 entries dropped the whole burst.
-export const CODEX_CACHE_VERSION = 22
+// v23: attribute the Responses built-in tools and item-model WebSearch records;
+// v22 exact entries have no such tool activity, so they must reparse.
+export const CODEX_CACHE_VERSION = 23
 export const CODEX_LEGACY_CACHE_FILE = 'codex-results.json'
 export function codexCacheFileName(version = CODEX_CACHE_VERSION): string {
   return `codex-results.v${version}.json`
