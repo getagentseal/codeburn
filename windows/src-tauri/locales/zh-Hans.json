@@ -42,5 +42,9 @@
   "The CLI update did not run. Run this in a terminal:": "CLI 更新未能运行。请在终端中运行：",
   "Your package manager updates this CLI.": "此 CLI 由你的包管理器更新。",
   "Opening CodeBurn to update the desktop app.": "正在打开 CodeBurn 以更新桌面应用。",
-  "Update CLI": "更新 CLI"
+  "Update CLI": "更新 CLI",
+  "Enjoying CodeBurn?": "喜欢 CodeBurn 吗？",
+  "If it has been helping you, a star on GitHub would mean a lot. It keeps the project free and open.": "如果它对你有帮助，在 GitHub 上点个 Star 对我们意义重大。这能让项目保持免费和开源。",
+  "Not now": "以后再说",
+  "Star on GitHub": "在 GitHub 上点 Star"
 }
