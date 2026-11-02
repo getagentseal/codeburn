@@ -40,7 +40,9 @@ import { DAILY_CACHE_VERSION } from './daily-cache.js'
 // v12: pullRequests rows carry carriedUSD, runList, state and followUpAt, and
 // push evidence moves spend between rows; an older snapshot shows the old card.
 // v13: today's live session identities are exact, including project/provider counts.
-export const STATUS_SNAPSHOT_RENDER_VERSION = 13
+// v14: Claude org attribution and source labels come from non-secret local
+// metadata; an unknown explicit source must never reuse all-machine totals.
+export const STATUS_SNAPSHOT_RENDER_VERSION = 14
 
 /// The semantic key recorded on every status snapshot. A snapshot whose stored
 /// key differs (an older render revision, or a different daily-cache version)

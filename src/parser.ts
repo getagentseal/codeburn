@@ -12,7 +12,7 @@ import { normalizeContentBlocks, flatSlice, flatString } from './content-utils.j
 import { discoverAllSessions, discoverAllSessionsWithFailures, getProvider } from './providers/index.js'
 import { evictCachedCodexResults, flushCodexCache, readCachedCodexResults, withCodexCacheDirectory, writeCachedCodexResults } from './codex-cache.js'
 import { antigravityCascadeIdFromPath, flushAntigravityCache, preloadAntigravityCache, shouldReparseAntigravitySource } from './providers/antigravity.js'
-import { getClaudeConfigDirs, getDesktopSessionsDirs } from './providers/claude.js'
+import { discoverClaudeProfileSources, discoverClaudeSessionOrgSources, getClaudeConfigDirs, getDesktopSessionsDirs } from './providers/claude.js'
 import { kimicodeLineageForSource } from './providers/kimicode.js'
 import { isSqliteBusyError } from './sqlite.js'
 import { clearProviderIssue, recordProviderIssue } from './provider-issues.js'
@@ -2579,6 +2579,7 @@ async function scanProjectDirs(
     ...unchangedFiles.map(f => ({ filePath: f.filePath, dirName: f.dirName, source: f.source })),
     ...changedFiles.map(f => ({ filePath: f.filePath, dirName: f.info.dirName, source: f.info.source })),
   ]
+  const sessionOrgSources = await discoverClaudeSessionOrgSources().catch(() => new Map())
 
   for (const { filePath, dirName, source } of allFiles) {
     const cachedFile = section.files[filePath]
@@ -2653,6 +2654,14 @@ async function scanProjectDirs(
     if (classifiedTurns.length === 0 && !isSpawnAnchor) continue
 
     const sessionId = basename(filePath, '.jsonl')
+    const subagentMarker = filePath.lastIndexOf(`${sep}subagents${sep}`)
+    const folderParentId = subagentMarker > 0 ? basename(filePath.slice(0, subagentMarker)) : undefined
+    const orgSource = sessionOrgSources.get(sessionId)
+      ?? (cachedFile.parentSessionId ? sessionOrgSources.get(cachedFile.parentSessionId) : undefined)
+      ?? (folderParentId ? sessionOrgSources.get(folderParentId) : undefined)
+    const effectiveSource: SessionSourceMetadata | undefined = orgSource
+      ? { id: orgSource.id, label: orgSource.label, path: orgSource.path, kind: 'claude-config' }
+      : source
     const projectPath = cachedFile.canonicalCwd ?? claudeSlugFallbackPath(dirName)
     const projectName = cachedFile.canonicalProjectName ?? dirName
     const projectKey = cachedFile.canonicalCwd
@@ -2735,13 +2744,13 @@ async function scanProjectDirs(
     if (groups.length === 1) {
       const only = groups[0]!
       const name = only === fileProject || only.key === projectKey ? projectName : projectMap.get(only.key)?.project ?? only.name
-      const session = decorate(buildSessionSummary(sessionId, name, classifiedTurns, mcpInv, source))
+      const session = decorate(buildSessionSummary(sessionId, name, classifiedTurns, mcpInv, effectiveSource))
       if (session.apiCalls > 0 || anchorOnly) addToProject({ ...only, name }, session, anchorOnly)
       continue
     }
     const slices = groups.map(group => {
       const name = group.key === projectKey ? projectName : projectMap.get(group.key)?.project ?? group.name
-      return { project: { ...group, name }, session: decorate(buildSessionSummary(sessionId, name, group.turns, mcpInv, source)) }
+      return { project: { ...group, name }, session: decorate(buildSessionSummary(sessionId, name, group.turns, mcpInv, effectiveSource)) }
     })
     // Primary = the slice holding the most cost, so the session row sits where
     // the money went and a late `cd` cannot move it. Ties keep the earlier slice.
@@ -5994,6 +6003,15 @@ export async function computeCorpusFingerprint(providerFilter?: string): Promise
   const observedAtMs = performance.timeOrigin + performance.now()
   const sources = await discoverAllSessions(providerFilter)
   const entries: string[] = []
+  if (!providerFilter || providerFilter === 'claude') {
+    // Organization identity can change while every transcript remains intact.
+    // Include the file-only attribution and labels in the snapshot identity.
+    const [profiles, sessionOrgs] = await Promise.all([
+      discoverClaudeProfileSources(), discoverClaudeSessionOrgSources(),
+    ])
+    entries.push(`claude-profiles:${JSON.stringify(profiles)}`)
+    entries.push(`claude-session-orgs:${JSON.stringify([...sessionOrgs].map(([id, source]) => [id, source.id]).sort())}`)
+  }
   let newestMtimeMs = 0
   const record = async (path: string): Promise<void> => {
     const fp = await fingerprintFile(path)

@@ -1,6 +1,6 @@
 import { readdirSync, statSync } from 'fs'
 import { readFile, readdir, stat } from 'fs/promises'
-import { basename, delimiter as pathDelimiter, join, resolve } from 'path'
+import { basename, delimiter as pathDelimiter, dirname, join, resolve } from 'path'
 import { homedir } from 'os'
 import { createHash } from 'crypto'
 
@@ -14,7 +14,11 @@ export type ClaudeConfigSource = {
   id: string
   label: string
   path: string
+  orgUuid?: string
+  accountUuid?: string
 }
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 function expandHome(p: string): string {
   if (p === '~') return homedir()
@@ -43,6 +47,23 @@ export function claudeConfigSourceId(path: string): string {
 /// Stable id for a Claude Desktop sessions directory.
 export function claudeDesktopSourceId(base: string): string {
   return 'claude-desktop:' + createHash('sha256').update(resolve(base)).digest('hex').slice(0, 16)
+}
+
+/// Stable id for a Claude organization discovered from
+/// Claude Desktop's non-secret `claude-code-sessions/<accountUuid>/<orgUuid>` files.
+export function claudeOrgSourceId(orgUuid: string): string {
+  return 'claude-org:' + orgUuid.trim().toLowerCase()
+}
+
+/// macOS Keychain service name Claude Code uses for a config directory.
+/// `~/.claude` uses the unsuffixed service; any other `CLAUDE_CONFIG_DIR`
+/// appends `-<first 8 hex of sha256(resolvedPath.normalize('NFC'))>`.
+export function claudeKeychainService(configDir?: string): string {
+  const target = resolve(configDir ? expandHome(configDir) : join(homedir(), '.claude'))
+  const def = resolve(join(homedir(), '.claude'))
+  if (target === def) return 'Claude Code-credentials'
+  const suffix = createHash('sha256').update(target.normalize('NFC')).digest('hex').slice(0, 8)
+  return `Claude Code-credentials-${suffix}`
 }
 
 // `\\wsl$\<distro>\home\<user>\.claude` -> distro, and the home's own name
@@ -131,6 +152,141 @@ export async function discoverClaudeConfigSources(): Promise<ClaudeConfigSource[
     label: baseClaudeConfigLabel(path, dirs),
     path,
   })))
+}
+
+// Claude Code's account metadata contains organization identity, not tokens.
+// Preserve its display name verbatim; never infer Personal/Team from a plan or
+// a person's name. Without a known display name the organization ID is honest.
+async function readClaudeOauthAccount(configDir: string): Promise<{
+  accountUuid?: string; orgUuid?: string; label?: string
+}> {
+  const isDefault = resolve(configDir) === resolve(join(homedir(), '.claude'))
+  const candidates = isDefault
+    ? [join(homedir(), '.claude.json'), join(configDir, '.claude.json')]
+    : [join(configDir, '.claude.json')]
+  for (const file of candidates) {
+    try {
+      const parsed = JSON.parse(await readFile(file, 'utf-8')) as { oauthAccount?: Record<string, unknown> }
+      const account = parsed?.oauthAccount
+      if (!account || typeof account !== 'object') continue
+      const orgUuid = typeof account.organizationUuid === 'string' && UUID_RE.test(account.organizationUuid.trim())
+        ? account.organizationUuid.trim().toLowerCase() : undefined
+      if (!orgUuid) continue
+      const accountUuid = typeof account.accountUuid === 'string' && UUID_RE.test(account.accountUuid.trim())
+        ? account.accountUuid.trim().toLowerCase() : undefined
+      const name = typeof account.organizationName === 'string' ? account.organizationName.trim() : ''
+      const label = name && name.length <= 256 && !/[\x00-\x1f\x7f]/.test(name) ? name : orgUuid
+      return { orgUuid, accountUuid, label }
+    } catch { /* Missing or partial account metadata is normal. */ }
+  }
+  return {}
+}
+
+type DiscoveredDesktopOrg = {
+  orgUuid: string
+  accountUuid: string
+  path: string
+  sessionIds: string[]
+}
+
+async function scanDesktopCodeSessionOrgs(): Promise<Map<string, DiscoveredDesktopOrg>> {
+  const byOrg = new Map<string, DiscoveredDesktopOrg>()
+  const appRoots = dedupeResolved(getDesktopSessionsDirs().map(dir => dirname(dir)))
+  for (const appRoot of appRoots) {
+    const codeSessionsRoot = join(appRoot, 'claude-code-sessions')
+    const acctEntries = await readdir(codeSessionsRoot, { withFileTypes: true }).catch(() => [])
+    for (const acctEntry of acctEntries) {
+      if (!acctEntry.isDirectory() || !UUID_RE.test(acctEntry.name)) continue
+      const accountUuid = acctEntry.name.toLowerCase()
+      const acctPath = join(codeSessionsRoot, acctEntry.name)
+      const orgEntries = await readdir(acctPath, { withFileTypes: true }).catch(() => [])
+      for (const orgEntry of orgEntries) {
+        if (!orgEntry.isDirectory() || !UUID_RE.test(orgEntry.name)) continue
+        const orgUuid = orgEntry.name.toLowerCase()
+        const orgPath = join(acctPath, orgEntry.name)
+        const files = await readdir(orgPath).catch(() => [])
+        const localFiles = files.filter(f => f.startsWith('local_') && f.endsWith('.json'))
+        if (localFiles.length === 0) continue
+        const sessionIds: string[] = []
+        for (const file of localFiles) {
+          try {
+            const meta = JSON.parse(await readFile(join(orgPath, file), 'utf-8')) as { cliSessionId?: unknown }
+            if (typeof meta?.cliSessionId === 'string' && meta.cliSessionId.trim()) {
+              sessionIds.push(meta.cliSessionId.trim())
+            }
+          } catch {
+            continue
+          }
+        }
+        const existing = byOrg.get(orgUuid)
+        if (existing) {
+          existing.sessionIds.push(...sessionIds)
+        } else {
+          byOrg.set(orgUuid, { orgUuid, accountUuid, path: orgPath, sessionIds })
+        }
+      }
+    }
+  }
+  return byOrg
+}
+
+/** Discover config directories and Desktop organization identities from files only. */
+export async function discoverClaudeProfileSources(): Promise<ClaudeConfigSource[]> {
+  const base = await discoverClaudeConfigSources()
+  const [accounts, desktopOrgs] = await Promise.all([
+    Promise.all(base.map(source => readClaudeOauthAccount(source.path))),
+    scanDesktopCodeSessionOrgs(),
+  ])
+  const knownOrgs = new Set(accounts.flatMap(account => account.orgUuid ? [account.orgUuid] : []))
+  const extras = [...desktopOrgs.values()].filter(org => !knownOrgs.has(org.orgUuid))
+  // A lone configured account keeps its existing label and selector identity.
+  const multiple = base.length + extras.length > 1
+  const profiles = base.map((source, index) => {
+    const account = accounts[index]!
+    return { ...source, ...account, label: multiple ? account.label ?? source.label : source.label }
+  })
+  for (const org of extras.sort((a, b) => a.orgUuid.localeCompare(b.orgUuid))) {
+    profiles.push({ id: claudeOrgSourceId(org.orgUuid), label: org.orgUuid,
+      path: org.path, orgUuid: org.orgUuid, accountUuid: org.accountUuid })
+  }
+  return makeUniqueLabels(profiles)
+}
+
+/**
+ * Maps `cliSessionId` (the `<sessionId>.jsonl` basename in `~/.claude/projects/`)
+ * to its owning organization profile when multiple organizations are present.
+ */
+export async function discoverClaudeSessionOrgSources(): Promise<Map<string, ClaudeConfigSource>> {
+  const map = new Map<string, ClaudeConfigSource>()
+  const [profiles, desktopOrgs] = await Promise.all([
+    discoverClaudeProfileSources(),
+    scanDesktopCodeSessionOrgs(),
+  ])
+  if (profiles.length <= 1 || desktopOrgs.size === 0) return map
+  const profileByOrg = new Map<string, ClaudeConfigSource>()
+  for (const profile of profiles) {
+    // Two config dirs can use the same org. Keep their directory attribution
+    // instead of arbitrarily assigning all of that org's sessions to one.
+    if (profile.orgUuid && profiles.filter(p => p.orgUuid === profile.orgUuid).length === 1) {
+      profileByOrg.set(profile.orgUuid.toLowerCase(), profile)
+    }
+  }
+  const ambiguous = new Set<string>()
+  for (const [orgUuid, info] of desktopOrgs) {
+    const profile = profileByOrg.get(orgUuid.toLowerCase())
+    if (!profile) continue
+    for (const sessionId of info.sessionIds) {
+      if (ambiguous.has(sessionId)) continue
+      const previous = map.get(sessionId)
+      if (previous && previous.id !== profile.id) {
+        ambiguous.add(sessionId)
+        map.delete(sessionId)
+      } else {
+        map.set(sessionId, profile)
+      }
+    }
+  }
+  return map
 }
 
 // Filesystem changes under an unchanged input key intentionally do not invalidate this cache.

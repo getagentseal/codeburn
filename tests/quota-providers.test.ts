@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
-import { mkdirSync, mkdtempSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter, join, resolve } from 'node:path'
 
@@ -10,7 +10,12 @@ import { decodeCopilotUsage, fetchCopilotQuota } from '../src/quota/copilot.js'
 import { decodeGeminiUsage, fetchGeminiQuota } from '../src/quota/gemini.js'
 import { collectQuota, renderQuotaTable } from '../src/quota/index.js'
 import { decodeKimiUsage, fetchKimiQuota } from '../src/quota/kimi.js'
-import { discoverClaudeConfigSources } from '../src/providers/claude.js'
+import {
+  claudeKeychainService,
+  discoverClaudeConfigSources,
+  discoverClaudeProfileSources,
+  discoverClaudeSessionOrgSources,
+} from '../src/providers/claude.js'
 import type { QuotaProvider } from '../src/quota/types.js'
 
 const noFile = vi.fn(async () => null)
@@ -484,6 +489,91 @@ describe('collectQuota claudeProfiles (#1523)', () => {
     } finally {
       if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIRS
       else process.env.CLAUDE_CONFIG_DIRS = previous
+    }
+  })
+
+  it('derives the macOS Keychain service suffix for non-default config directories', () => {
+    const home = process.env.HOME!
+    expect(claudeKeychainService(join(home, '.claude'))).toBe('Claude Code-credentials')
+    const customDir = join(home, '.claude-work')
+    expect(claudeKeychainService(customDir)).toMatch(/^Claude Code-credentials-[0-9a-f]{8}$/)
+  })
+
+  it('falls back primary to five_hour when seven_day is null on a Team account', () => {
+    const quota = decodeClaudeUsage({
+      five_hour: { utilization: 1, resets_at: '2026-10-14T03:30:00Z' },
+      seven_day: null,
+      limits: [
+        {
+          kind: 'weekly_scoped',
+          percent: 0,
+          resets_at: '2026-10-14T10:00:00Z',
+          scope: { model: { display_name: 'Fable' } },
+        },
+      ],
+    }, { accessToken: 'hidden', subscriptionType: 'team', rateLimitTier: 'default_claude_max_5x' })
+
+    expect(quota.planLabel).toBe('Team Premium')
+    expect(quota.primary).toEqual({
+      label: '5-hour',
+      percent: 0.01,
+      resetsAt: '2026-10-14T03:30:00.000Z',
+    })
+    expect(quota.details.map(r => r.label)).toEqual(['5-hour', 'Weekly · Fable'])
+  })
+
+  it('discovers Personal and Team organizations from Claude Desktop and maps cliSessionId ownership', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'codeburn-org-profiles-'))
+    const claudeDir = join(home, '.claude')
+    const desktopRoot = join(home, 'ClaudeDesktop')
+    const desktopSessionsDir = join(desktopRoot, 'local-agent-mode-sessions')
+    const personalOrg = '0f0c63b6-3f5a-4a3e-8086-36e7267b2a93'
+    const personalAcct = '53944a3a-bc57-472d-98c6-8b19091acc9e'
+    const teamOrg = '64cceafd-5d4b-4fdd-928c-91c807474898'
+    const teamAcct = '70f6aa58-1194-4d64-9e3f-8a34850ff123'
+
+    mkdirSync(claudeDir, { recursive: true })
+    mkdirSync(desktopSessionsDir, { recursive: true })
+    writeFileSync(join(home, '.claude.json'), JSON.stringify({
+      oauthAccount: {
+        accountUuid: personalAcct,
+        organizationUuid: personalOrg,
+        organizationName: "user@example.com's Organization",
+      },
+    }))
+
+    const personalCodeDir = join(desktopRoot, 'claude-code-sessions', personalAcct, personalOrg)
+    const teamCodeDir = join(desktopRoot, 'claude-code-sessions', teamAcct, teamOrg)
+    mkdirSync(personalCodeDir, { recursive: true })
+    mkdirSync(teamCodeDir, { recursive: true })
+    writeFileSync(join(personalCodeDir, 'local_1.json'), JSON.stringify({ cliSessionId: 'sess-personal-1' }))
+    writeFileSync(join(teamCodeDir, 'local_2.json'), JSON.stringify({ cliSessionId: 'sess-team-1' }))
+
+    const prevHome = process.env.HOME
+    const prevUser = process.env.USERPROFILE
+    const prevDesktop = process.env.CODEBURN_DESKTOP_SESSIONS_DIR
+    process.env.HOME = home
+    process.env.USERPROFILE = home
+    process.env.CODEBURN_DESKTOP_SESSIONS_DIR = desktopSessionsDir
+    try {
+      const profiles = await discoverClaudeProfileSources()
+      expect(profiles).toHaveLength(2)
+      expect(profiles[0]?.label).toBe("user@example.com's Organization")
+      expect(profiles[0]?.orgUuid).toBe(personalOrg)
+      expect(profiles[1]?.id).toBe(`claude-org:${teamOrg}`)
+      expect(profiles[1]?.orgUuid).toBe(teamOrg)
+      expect(profiles[1]?.label).toBe(teamOrg)
+
+      const sessionMap = await discoverClaudeSessionOrgSources()
+      expect(sessionMap.get('sess-personal-1')?.id).toBe(profiles[0]?.id)
+      expect(sessionMap.get('sess-team-1')?.id).toBe(`claude-org:${teamOrg}`)
+    } finally {
+      if (prevHome === undefined) delete process.env.HOME
+      else process.env.HOME = prevHome
+      if (prevUser === undefined) delete process.env.USERPROFILE
+      else process.env.USERPROFILE = prevUser
+      if (prevDesktop === undefined) delete process.env.CODEBURN_DESKTOP_SESSIONS_DIR
+      else process.env.CODEBURN_DESKTOP_SESSIONS_DIR = prevDesktop
     }
   })
 })

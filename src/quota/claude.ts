@@ -1,13 +1,13 @@
 import os from 'node:os'
 import path from 'node:path'
 
+import { claudeKeychainService, getClaudeConfigDirs } from '../providers/claude.js'
 import { wslHomes } from '../wsl.js'
 import { fraction, quotaRequestSignal, readKeychainPassword, readSecureFile, sanitizeError } from './security.js'
 import type { KeychainOutcome } from './security.js'
 import type { QuotaProvider, QuotaWindow } from './types.js'
 
 const ENDPOINT = 'https://api.anthropic.com/api/oauth/usage'
-const KEYCHAIN_SERVICE = 'Claude Code-credentials'
 const EXPIRED_FOOTER = ['Claude Code login expired. Run Claude Code once, then refresh.']
 
 type ClaudeCredential = { accessToken: string; expiresAt?: number; rateLimitTier?: string; subscriptionType?: string }
@@ -19,7 +19,8 @@ export type ClaudeDeps = {
   /** Credential files inside running WSL distros (#1061); empty off Windows. */
   wslCredentialPaths: () => string[]
   readFile: typeof readSecureFile
-  keychain?: () => Promise<KeychainOutcome>
+  keychain?: (service?: string) => Promise<KeychainOutcome>
+  keychainService?: string
   now: () => number
 }
 
@@ -92,16 +93,15 @@ async function credentialFromFiles(deps: ClaudeDeps): Promise<{ credential: Clau
  */
 async function credentialFrom(source: CredentialSource, file: string, deps: ClaudeDeps): Promise<ClaudeCredential | null> {
   if (source === 'file') return file === deps.credentialPath ? credentialAt(file, deps) : wslCredentialAt(file, deps)
-  const outcome = await (deps.keychain ?? readClaudeKeychain)()
+  const outcome = await (deps.keychain ?? readClaudeKeychain)(deps.keychainService)
   return outcome.status === 'found' ? parseCredential(outcome.value) : null
 }
 
-export async function readClaudeKeychain(): Promise<KeychainOutcome> {
-  // Claude Code has written the item under both `$USER` (2.1.x) and the older
-  // hardcoded "agentseal" account; a user-scoped miss must fall through to the
-  // service-only lookup rather than reporting disconnected.
-  const user = process.env.USER
-  return readKeychainPassword(KEYCHAIN_SERVICE, user ? [user, null] : [null])
+export async function readClaudeKeychain(service = claudeKeychainService()): Promise<KeychainOutcome> {
+  // Account-scoped only. A service-only retry may raise another prompt after
+  // the user denied access, or select a different account's credential.
+  const account = process.env.USER || os.userInfo().username
+  return account ? readKeychainPassword(service, [account]) : { status: 'notFound' }
 }
 
 function windowOf(label: string, value: unknown): QuotaWindow | null {
@@ -154,7 +154,7 @@ export function decodeClaudeUsage(body: unknown, credential: ClaudeCredential): 
     }
   }
   return {
-    provider: 'claude', connection: 'connected', primary: weekly,
+    provider: 'claude', connection: 'connected', primary: weekly ?? five,
     details: [five, weekly, opus, sonnet].filter((row): row is QuotaWindow => row !== null).concat(scoped),
     planLabel: planLabel(credential), footerLines: [],
   }
@@ -174,17 +174,32 @@ async function request(token: string, deps: ClaudeDeps, parent?: AbortSignal): P
 
 export type ClaudeResult = { quota: QuotaProvider; retryAfterSeconds?: number }
 
-export async function fetchClaudeQuota(options: Partial<ClaudeDeps> & { signal?: AbortSignal; allowKeychain?: boolean } = {}): Promise<ClaudeResult> {
-  const deps = { ...defaults, ...options }
+export async function fetchClaudeQuota(options: Partial<ClaudeDeps> & { signal?: AbortSignal; allowKeychain?: boolean; configDir?: string } = {}): Promise<ClaudeResult> {
+  const configDir = options.configDir
+    ?? (options.credentialPath === undefined ? (await getClaudeConfigDirs())[0] : undefined)
+  const deps: ClaudeDeps = {
+    ...defaults,
+    ...(configDir ? {
+      credentialPath: path.join(configDir, '.credentials.json'),
+      keychainService: claudeKeychainService(configDir),
+      // An explicitly selected profile must never borrow another WSL login.
+      ...(path.resolve(configDir) !== path.resolve(path.join(os.homedir(), '.claude'))
+        ? { wslCredentialPaths: () => [] } : {}),
+    } : {}),
+    ...options,
+  }
   try {
     const fromFile = await credentialFromFiles(deps)
     let credential = fromFile?.credential ?? null
     let source: CredentialSource = 'file'
-    if (!credential && options.allowKeychain && process.platform === 'darwin') {
-      const outcome = await (deps.keychain ?? readClaudeKeychain)()
+    if ((!credential || (credential.expiresAt !== undefined && credential.expiresAt <= deps.now())) && options.allowKeychain && process.platform === 'darwin') {
+      const outcome = await (deps.keychain ?? readClaudeKeychain)(deps.keychainService)
       if (outcome.status === 'accessDenied') return { quota: empty('accessDenied') }
-      credential = outcome.status === 'found' ? parseCredential(outcome.value) : null
-      source = 'keychain'
+      const keychainCredential = outcome.status === 'found' ? parseCredential(outcome.value) : null
+      if (keychainCredential && (!credential || (keychainCredential.expiresAt ?? Infinity) > (credential.expiresAt ?? -Infinity))) {
+        credential = keychainCredential
+        source = 'keychain'
+      }
     }
     if (!credential) return { quota: empty('disconnected') }
 
