@@ -60,23 +60,15 @@ const toolNameMap: Record<string, string> = {
 // counts as Bash since it genuinely is a shell exec. Scoped to the mcp-cli
 // binary; other wrappers would need their own pattern.
 //
-// The negative lookbehind keeps `mcp-cli` a standalone binary (a leading
-// quote/space/slash from a `bash -lc "..."` wrapper or absolute path is fine,
-// but `foo-mcp-cli` is not). `(?:\s+(?!call\b)[^\s;|&]+)*` skips any options and
-// their values between the binary and the subcommand (e.g.
-// `mcp-cli -c ./mcp.json call ...`) without crossing a shell separator, and
-// stops at the `call` token. This is substring matching, so a command that
-// merely mentions the phrase (a comment, an echo, a commit message) can
-// false-positive, an accepted tradeoff for the common case. \s+ and the token
-// class don't overlap, so there is no catastrophic backtracking.
-const MCP_CLI_CALL = /(?<![\w.-])mcp-cli(?:\s+(?!call\b)[^\s;|&]+)*\s+call\s+(\S+)\s+(\S+)/
+// `mcp-cli` must be the command being run: the first word of a command
+// segment (text start, after a shell separator, `(`, a backtick, a `-c`/`-lc`
+// shell flag, or the exec tool's `cmd:`), optionally behind a directory prefix.
+// Options before `call` are skipped, and the server and tool must be
+// identifier-shaped, so a commit message or an echo that mentions it is not a call.
+const MCP_CLI_CALL = /(?:^|[;|&\n(`]|\s-l?c\s+['"]?|cmd:\s*['"]?)\s*(?:[\w.~/-]*\/)?(?<![\w.-])mcp-cli(?:\s+(?!call\b)[^\s;|&]+)*\s+call\s+(['"]?)([\w.-]+)\1\s+(['"]?)([\w.-]+)\3(?=[\s'"`;|&)]|$)/
 function mcpToolFromShellCommand(text: string): string | null {
   const m = MCP_CLI_CALL.exec(text)
-  if (!m) return null
-  const server = m[1]!.replace(/['"]/g, '')
-  const tool = m[2]!.replace(/['"]/g, '')
-  if (!server || !tool) return null
-  return `mcp__${server}__${tool}`
+  return m ? `mcp__${m[2]}__${m[4]}` : null
 }
 
 // Codex has no dedicated skill tool: loading a skill is an ordinary shell exec
@@ -91,7 +83,7 @@ function mcpToolFromShellCommand(text: string): string | null {
 // for a native skill read (#588) and the same vocabulary the Claude parser
 // records from the `Skill` tool, so the Skills breakdown stays cross-provider
 // coherent. Substring matching, so a command that merely quotes the phrase can
-// false-positive — the same accepted tradeoff as MCP_CLI_CALL above.
+// false-positive, an accepted tradeoff for this matcher.
 const SKILL_MD_READ = /(?<![\w.-])(?:cat|bat|sed|head|tail|less|more)\b[^;|&]*?[\s'"]([^\s;|&'"]*[\\/]([^\\/;|&'"]+)[\\/]SKILL\.md)\b/
 function skillFromShellCommand(text: string): string | null {
   const m = SKILL_MD_READ.exec(text)
