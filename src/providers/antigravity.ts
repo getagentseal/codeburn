@@ -1694,12 +1694,14 @@ function sanitizeProject(path: string): string {
 function applyAntigravityProject(call: ParsedProviderCall, source: SessionSource, projectPath: string | undefined): void {
   if (projectPath) {
     call.projectPath = projectPath
+    call.workingDirectory = projectPath
     call.project = sanitizeProject(projectPath)
     return
   }
 
   call.project = source.project
   delete call.projectPath
+  delete call.workingDirectory
 }
 
 // gen_metadata rows and RPC entries without a real ChatStartMetadata.created_at

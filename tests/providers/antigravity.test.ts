@@ -625,6 +625,7 @@ describe('antigravity provider helpers', () => {
         sessionId: fixture.conversationId,
         project: 'private-project',
         projectPath: fileURLToPath('file:///Users/example/private-project'),
+        workingDirectory: fileURLToPath('file:///Users/example/private-project'),
       })
       expect(calls[0]!.costUSD).toBeGreaterThan(0)
     } finally {
