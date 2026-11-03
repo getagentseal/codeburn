@@ -4,10 +4,15 @@ import Foundation
 /// to browser cookies, another app's Keychain items, or copied provider code.
 @MainActor
 enum CapacityDockProviderRefreshInteraction {
+    // Read by adapters that may raise a macOS keychain prompt (Cursor Safe Storage).
+    @TaskLocal static var isUserInitiated: Bool = false
+
     static func userInitiated<T>(
         operation: () async throws -> T
     ) async rethrows -> T {
-        try await operation()
+        try await $isUserInitiated.withValue(true) {
+            try await operation()
+        }
     }
 }
 

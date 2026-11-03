@@ -496,6 +496,14 @@ else {
 // double direction is asserted but not demonstrated: a faithful re-keying
 // simulation needs the parser to mint genuinely different keys, and a cheap
 // stand-in is collapsed by the serve-time dedup before it can be counted.)
+//
+// 2 Nov 2026, #1830: OTel spans billed cached tokens twice. input_tokens on a
+// span is cache-inclusive, and the bump re-parses the surviving spans with the
+// cache counts subtracted, so their input and cost drop by design while the
+// pruned calls keep the 0.9.20 figure. Calls, output and cache reads stay
+// exact; input must drop by exactly the cache counts of the surviving spans
+// that were cache-inclusive, and cost must drop. Drop this once a published
+// CLI carries the fix.
 
 step('durable history across a bump on an extant, pruned source')
 const prunedCache = join(CACHES, 'pruned')
@@ -540,6 +548,7 @@ if (beforeRecords.calls === 0) {
   // populated: the surviving rows are what the bump re-parses, the pruned ones
   // exist only in the cache from here on.
   let pruned = 0
+  let reparsedCache = 0
   try {
     const { DatabaseSync } = await import('node:sqlite')
     const db = new DatabaseSync(copilotDb)
@@ -549,6 +558,12 @@ if (beforeRecords.calls === 0) {
     const delAttr = db.prepare('DELETE FROM span_attributes WHERE span_id = ?')
     for (const id of doomed) { delAttr.run(id); delSpan.run(id) }
     pruned = doomed.length
+    const attrsOf = db.prepare('SELECT key, value FROM span_attributes WHERE span_id = ?')
+    for (const id of ids.filter((_, i) => i % 2 === 1)) {
+      const a = Object.fromEntries(attrsOf.all(id).map(r => [r.key, Number(r.value)]))
+      const cached = (a['gen_ai.usage.cache_read.input_tokens'] ?? 0) + (a['gen_ai.usage.cache_creation.input_tokens'] ?? 0)
+      if ((a['gen_ai.usage.input_tokens'] ?? 0) >= cached) reparsedCache += cached
+    }
     const left = db.prepare('SELECT COUNT(*) AS n FROM spans').get().n
     db.close()
     ok(`pruned ${pruned} of ${ids.length} spans; ${left} remain in a DB that still exists`)
@@ -567,14 +582,18 @@ if (beforeRecords.calls === 0) {
     const verdict = afterRecords.calls < beforeRecords.calls ? ' — LOST history'
       : afterRecords.calls > beforeRecords.calls ? ' — DOUBLED'
         : ''
-    check(sameRecords(beforeRecords, afterRecords),
+    const expectedRecords = { ...beforeRecords, inputTokens: beforeRecords.inputTokens - reparsedCache }
+    const repriced = r => sameRecords({ ...r, cost: 0 }, { ...expectedRecords, cost: 0 })
+      && (reparsedCache > 0 ? r.cost < beforeRecords.cost : sameRecords(r, beforeRecords))
+    console.log(`  note  copilot input ${beforeRecords.inputTokens} -> ${expectedRecords.inputTokens} expected (#1830, cached tokens were billed twice on OTel spans; tokens and cost now exclude the cache counts)`)
+    check(repriced(afterRecords),
       `copilot across the bump: ${showRecords(beforeRecords)} -> ${showRecords(afterRecords)}${verdict}`)
 
     // And persisted, not merely served: the second run reads the cache the
     // bump rewrote, so a carry-forward that only survived in memory fails.
     capture(newBin, prunedCache, join(PAYLOADS, 'pruned-warm'))
     const warmRecords = copilotRecords(join(PAYLOADS, 'pruned-warm'))
-    check(sameRecords(beforeRecords, warmRecords),
+    check(sameRecords(afterRecords, warmRecords) && repriced(warmRecords),
       `and again from the rewritten cache: ${showRecords(warmRecords)}`)
   }
 }

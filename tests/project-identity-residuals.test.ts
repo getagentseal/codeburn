@@ -255,12 +255,12 @@ describe('claude residuals: two-root abs cwd via parseAllSessions', () => {
   })
 })
 
-describe('kimicode residuals: two-root cold/warm', () => {
-  const fixtureHome = vi.hoisted(() => {
-    const base = process.env['TMPDIR'] || '/tmp'
-    return `${base.replace(/[\\/]+$/, '')}/kimicode-r3res-${process.pid}-${Date.now()}`
-  })
+const fixtureHome = vi.hoisted(() => {
+  const base = process.env['TMPDIR'] || '/tmp'
+  return `${base.replace(/[\\/]+$/, '')}/kimicode-r3res-${process.pid}-${Date.now()}`
+})
 
+describe('kimicode residuals: two-root cold/warm', () => {
   beforeEach(async () => {
     await rm(fixtureHome, { recursive: true, force: true })
     await mkdir(fixtureHome, { recursive: true })

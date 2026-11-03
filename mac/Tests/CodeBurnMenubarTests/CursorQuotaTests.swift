@@ -102,6 +102,25 @@ final class CursorQuotaTests: XCTestCase {
         await assertFetchError(.expiredSession, deps: expired)
     }
 
+    func testCursorSafeStorageV10UnlocksToTheJWT() throws {
+        let stored = "cursor-safe-storage:v1:djEwaLx01xXA5BrTaEen3asJGsszpUzl3kjapkdjjClgeE4="
+        XCTAssertEqual(
+            CursorSafeStorage.decrypt(stored, password: "cursor-key-not-a-secret"),
+            "header.payload.signature"
+        )
+        XCTAssertNil(CursorSafeStorage.decrypt(stored, password: "wrong-password"))
+        XCTAssertEqual(try CursorSafeStorage.unlock("plain.jwt.token", allowPrompt: false), "plain.jwt.token")
+    }
+
+    func testBackgroundRefreshNeverAsksTheKeychainWithoutConsent() {
+        let (defaults, suiteName) = TestDefaults.make("CodeBurnMenubarTests.CursorQuota.\(#function)")
+        defer { TestDefaults.forget(suiteName) }
+        let stored = "cursor-safe-storage:v1:djEwaLx01xXA5BrTaEen3asJGsszpUzl3kjapkdjjClgeE4="
+        XCTAssertThrowsError(try CursorSafeStorage.unlock(stored, allowPrompt: false, defaults: defaults)) { error in
+            XCTAssertEqual(error as? CursorSubscriptionService.FetchError, .safeStorageLocked)
+        }
+    }
+
     func testUnreadableLocalStoreIsReportedHonestlyWithoutNetwork() async throws {
         struct SyntheticStoreFailure: Error {}
         let deps = CursorSubscriptionService.Deps(

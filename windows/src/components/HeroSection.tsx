@@ -11,6 +11,7 @@ const CURSOR_SYNC_ERRORS: Record<string, string> = {
   login: 'Cursor login expired, open Cursor to sign in again',
   network: "Couldn't reach cursor.com, will retry",
   export: "Couldn't read the usage export from cursor.com, will retry",
+  locked: "Cursor encrypted its app session, CodeBurn can't unlock it on Windows yet",
 }
 
 type Props = {

@@ -99,6 +99,33 @@ export function injectDashboardBootstrap(html: string, payload: unknown): string
   return html.replace('<script type="module"', () => `<script>window.__CODEBURN_BOOTSTRAP__=${safeJson}</script>\n    <script type="module"`)
 }
 
+const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1'])
+
+/** Hostname of a Host header value or URL authority, lowercased, without port or IPv6 brackets. */
+function hostnameOf(authority: string): string {
+  const a = authority.trim().toLowerCase()
+  if (LOOPBACK_HOSTS.has(a)) return a
+  if (a.startsWith('[')) {
+    const end = a.indexOf(']')
+    return end === -1 ? a : a.slice(1, end)
+  }
+  return a.replace(/:\d+$/, '')
+}
+
+export function isAllowedHost(hostHeader: string | undefined, allowedHosts: ReadonlySet<string>): boolean {
+  if (!hostHeader) return false
+  const name = hostnameOf(hostHeader)
+  return LOOPBACK_HOSTS.has(name) || allowedHosts.has(name)
+}
+
+export function isAllowedOrigin(origin: string, allowedHosts: ReadonlySet<string>): boolean {
+  let url: URL
+  try { url = new URL(origin) } catch { return false }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') return false
+  const name = hostnameOf(url.host)
+  return LOOPBACK_HOSTS.has(name) || allowedHosts.has(name)
+}
+
 export async function runWebDashboard(opts: {
   period: string
   provider: string
@@ -108,7 +135,14 @@ export async function runWebDashboard(opts: {
   exclude: string[]
   port: number
   open: boolean
+  /**
+   * Extra hostnames, besides the loopback names, that requests may be
+   * addressed to and come from, for running behind a reverse proxy that does
+   * the authentication. Matched case-insensitively, without the port.
+   */
+  allowedHosts?: string[]
 }): Promise<Server> {
+  const allowedHosts = new Set((opts.allowedHosts ?? []).map((h) => h.trim().toLowerCase()).filter(Boolean))
   await loadPricing()
   const dashDir = resolveDashDir()
 
@@ -202,11 +236,12 @@ export async function runWebDashboard(opts: {
       // (defeats DNS rebinding, which would otherwise let a website you visit
       // read your local usage) and any cross-origin request (CSRF). The local
       // payload is unsanitized, so this guard is what keeps it on your machine.
-      const reqHost = (req.headers.host ?? '').replace(/:\d+$/, '')
-      const loopback = reqHost === '127.0.0.1' || reqHost === 'localhost' || reqHost === '::1' || reqHost === '[::1]'
+      // --allowed-host adds exact hostnames for a reverse proxy that
+      // authenticates; nothing else is let through.
+      const hostAllowed = isAllowedHost(req.headers.host, allowedHosts)
       const origin = req.headers.origin
-      const originOk = !origin || /^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/.test(origin)
-      if (!loopback || !originOk) {
+      const originOk = !origin || isAllowedOrigin(origin, allowedHosts)
+      if (!hostAllowed || !originOk) {
         res.writeHead(403, { 'content-type': 'text/plain' })
         res.end('Forbidden')
         return

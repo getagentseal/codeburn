@@ -15,6 +15,7 @@ import { join } from 'path'
 import { clearSessionCache, parseAllSessions } from '../src/parser.js'
 import { PROVIDER_PARSE_VERSIONS, type SessionCache } from '../src/session-cache.js'
 import { parseLiteLLMEntry, restorePricingState, snapshotPricingState } from '../src/models.js'
+import { clearCodexMemCaches, CODEX_CACHE_VERSION, codexCacheFileName } from '../src/codex-cache.js'
 import { readCacheOnDisk, writeCacheOnDisk } from './fixtures/session-cache-io.js'
 
 const testRoot = vi.hoisted(() => {
@@ -234,5 +235,60 @@ describe('codex parser change invalidates stale session-cache (#478/#513)', () =
     } finally {
       restorePricingState(snap)
     }
+  })
+  it('refreshes warm caches to capture native Codex tool events', async () => {
+    const sessionDir = join(CODEX_HOME, 'sessions', '2026', '10', '05')
+    await mkdir(sessionDir, { recursive: true })
+    await mkdir(CACHE_DIR, { recursive: true })
+    const lines = [
+      JSON.stringify({ type: 'session_meta', timestamp: '2026-10-05T10:00:00Z', payload: { session_id: 'sess-native-tool-cache', model: 'gpt-5.5', cwd: '/Users/test/proj', originator: 'codex_cli_rs' } }),
+      JSON.stringify({ type: 'response_item', timestamp: '2026-10-05T10:00:10Z', payload: { type: 'web_search_call', id: 'ws-cache', status: 'completed', action: { type: 'search', query: 'fixture' } } }),
+      JSON.stringify({ type: 'event_msg', timestamp: '2026-10-05T10:00:11Z', payload: { type: 'item_completed', item: { type: 'WebSearch', id: 'ws-cache', results: [] } } }),
+      JSON.stringify({ type: 'token_usage_record', timestamp: '2026-10-05T10:00:12Z', payload: { response_id: 'resp-native-tool-cache', model: 'gpt-5.5', usage: { input_tokens: 1000, output_tokens: 200 } } }),
+    ]
+    await writeFile(join(sessionDir, 'rollout-native-tool-cache.jsonl'), lines.join('\n') + '\n')
+
+    clearSessionCache()
+    clearCodexMemCaches()
+    const fresh = await parseAllSessions(undefined, 'codex')
+    const freshSession = fresh.flatMap(project => project.sessions).find(session => session.sessionId === 'sess-native-tool-cache')
+    expect(freshSession?.toolBreakdown['WebSearch']?.calls).toBe(1)
+
+    // Restore a pre-native-tool session section and pre-fix Codex result file.
+    // The provider fingerprint forces the session cache to ask the parser, and
+    // the older result version must not serve its tool-less exact entry.
+    const sessionCache = await readCacheOnDisk() as SessionCache
+    sessionCache.providers['codex']!.envFingerprint = preUsageRecordFingerprint()
+    for (const file of Object.values(sessionCache.providers['codex']!.files)) {
+      for (const turn of file.turns) {
+        for (const call of turn.calls) {
+          call.tools = call.tools.filter(tool => tool !== 'WebSearch')
+          call.toolSequence = call.toolSequence?.filter(step => step.every(tool => tool.tool !== 'WebSearch'))
+        }
+      }
+    }
+    await writeCacheOnDisk(sessionCache)
+
+    const rawPath = join(CACHE_DIR, codexCacheFileName())
+    const rawCache = JSON.parse(await readFile(rawPath, 'utf8')) as {
+      version: number
+      files: Record<string, { calls?: Array<{ tools?: string[]; toolSequence?: Array<Array<{ tool: string }>> }> }>
+    }
+    for (const file of Object.values(rawCache.files)) {
+      for (const call of file.calls ?? []) {
+        call.tools = (call.tools ?? []).filter(tool => tool !== 'WebSearch')
+        call.toolSequence = call.toolSequence?.filter(step => step.every(tool => tool.tool !== 'WebSearch'))
+      }
+    }
+    const oldVersion = CODEX_CACHE_VERSION - 1
+    rawCache.version = oldVersion
+    await rm(rawPath, { force: true })
+    await writeFile(join(CACHE_DIR, codexCacheFileName(oldVersion)), JSON.stringify(rawCache))
+
+    clearSessionCache()
+    clearCodexMemCaches()
+    const refreshed = await parseAllSessions(undefined, 'codex')
+    const refreshedSession = refreshed.flatMap(project => project.sessions).find(session => session.sessionId === 'sess-native-tool-cache')
+    expect(refreshedSession?.toolBreakdown['WebSearch']?.calls).toBe(1)
   })
 })

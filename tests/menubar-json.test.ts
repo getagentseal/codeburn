@@ -310,6 +310,19 @@ describe('buildMenubarPayload', () => {
     expect(payload.current.topActivities).toHaveLength(20)
   })
 
+  it('preserves exact live session counts across the headline, provider and project (#1785)', () => {
+    const period: PeriodData = {
+      ...emptyPeriod('Today'), cost: 4, calls: 2, sessions: 2, sessionCountBasis: 'identity',
+      projects: [{ name: 'project', cost: 4, savingsUSD: 0, sessions: 2, sessionCountBasis: 'identity' }],
+    }
+    const payload = buildMenubarPayload(period, [{
+      name: 'claude', displayName: 'Claude', cost: 4, calls: 2, sessions: 2, sessionCountBasis: 'identity',
+    }], null)
+    expect(payload.current).toMatchObject({ sessions: 2, sessionCountBasis: 'identity' })
+    expect(payload.current.providerDetails[0]).toMatchObject({ sessions: 2, sessionCountBasis: 'identity' })
+    expect(payload.current.topProjects[0]).toMatchObject({ sessions: 2, sessionCountBasis: 'identity', avgCostPerSession: 2 })
+  })
+
   it('computes cacheHitPercent from cache reads over input plus cache reads', () => {
     const period: PeriodData = {
       label: 'Today',

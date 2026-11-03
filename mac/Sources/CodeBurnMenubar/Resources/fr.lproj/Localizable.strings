@@ -224,9 +224,10 @@
 "resets in %@" = "réinitialisation dans %@";
 "Change accent color" = "Changer la couleur d'accent";
 "Copy update command to clipboard" = "Copier la commande de mise à jour";
-"Enjoying CodeBurn?" = "Vous aimez CodeBurn ?";
-"Star us on GitHub" = "Mettez-nous une étoile sur GitHub";
-"Hide this banner" = "Masquer cette bannière";
+"Enjoying CodeBurn?" = "Vous appréciez CodeBurn ?";
+"If it has been helping you, a star on GitHub would mean a lot. It keeps the project free and open." = "S'il vous est utile, une étoile sur GitHub nous ferait très plaisir. Elle aide le projet à rester gratuit et ouvert.";
+"Not now" = "Plus tard";
+"Star on GitHub" = "Ajouter une étoile sur GitHub";
 "CSV (folder)" = "CSV (dossier)";
 "JSON" = "JSON";
 "Export" = "Exporter";
@@ -731,6 +732,7 @@
 "Synced from cursor.com %@" = "Synchronisé depuis cursor.com %@";
 "Not synced from cursor.com yet" = "Pas encore synchronisé depuis cursor.com";
 "Cursor login expired, open Cursor to sign in again" = "La connexion à Cursor a expiré, ouvrez Cursor pour vous reconnecter";
+"Cursor encrypted its app session. Run codeburn import cursor --sync in Terminal, then allow the Cursor Safe Storage keychain prompt." = "Cursor a chiffré sa session. Exécutez codeburn import cursor --sync dans le Terminal, puis autorisez l'invite du trousseau Cursor Safe Storage.";
 "Couldn't reach cursor.com, will retry" = "Impossible de joindre cursor.com, nouvel essai prévu";
 "Couldn't read the usage export from cursor.com, will retry" = "Impossible de lire l'export d'utilisation de cursor.com, nouvel essai prévu";
 "Sync Cursor usage from cursor.com" = "Synchroniser l'utilisation de Cursor depuis cursor.com";

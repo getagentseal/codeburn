@@ -153,18 +153,47 @@ export function normalizedPreferred(preferred: string | null, selected: string[]
   return selected[0] ?? null
 }
 
-/// CapacityDockPreferences.autoSeedFromConnected: until the user edits the provider set, the
-/// dock mirrors whatever is connected, capped, so a fresh install shows what is actually
-/// active rather than nothing. Returns the patch to write, or null when there is nothing to do.
-export function autoSeed(prefs: DockPrefs, connected: string[]): Partial<DockPrefs> | null {
+/// Ids in order, skipping duplicates, capped at the rail's auto-seed limit.
+function cappedIds(ids: string[]): string[] {
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const id of ids) {
+    if (seen.has(id)) continue
+    seen.add(id)
+    out.push(id)
+    if (out.length >= DOCK_MAX_AUTO_PROVIDERS) break
+  }
+  return out
+}
+
+/// CapacityDockPreferences.autoSeedFromConnected: until the user edits the provider set, a
+/// newly connected provider fills a free slot. The resting provider and anyone already on
+/// the rail stay, in their current order, so one quota refresh that misses Codex cannot
+/// replace the rail with Cursor and leave that as the saved choice. Returns the patch to
+/// write, or null when there is nothing to do.
+export function autoSeed(prefs: DockPrefs, connected: string[], known?: string[]): Partial<DockPrefs> | null {
   if (prefs.manualSelection) return null
-  const desired = connected.slice(0, DOCK_MAX_AUTO_PROVIDERS)
   // Nothing connected yet is a reason to wait, not a reason to empty the dock.
+  if (connected.length === 0 && prefs.providers.length === 0) return null
+  // A resting provider that this refresh did not report is kept at the front of the
+  // candidates so the cap cannot drop it to make room for whoever did answer. Only one the
+  // CLI reads: a rail of separate Claude rings also saves its profile row id as the resting
+  // choice, and that id is not a provider.
+  const pinned = prefs.preferred !== null
+    && !prefs.providers.includes(prefs.preferred)
+    && (known?.includes(prefs.preferred) ?? true)
+    ? [prefs.preferred]
+    : []
+  const desired = cappedIds([...pinned, ...prefs.providers, ...connected])
   if (desired.length === 0) return null
   if (desired.length === prefs.providers.length && desired.every((id, i) => prefs.providers[i] === id)) {
     return null
   }
-  return { providers: desired, preferred: normalizedPreferred(prefs.preferred, desired) }
+  const preferred = normalizedPreferred(prefs.preferred, desired)
+  // Leave a saved resting provider out of the patch when it did not change. The file is
+  // shared with the desktop app, and a key this write does not mean to change stays as it was.
+  if (preferred === prefs.preferred) return { providers: desired }
+  return { providers: desired, preferred }
 }
 
 /// CapacityDockProviderSelection.canDeselect: the rail must never end up with nothing to

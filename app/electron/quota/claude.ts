@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
@@ -17,14 +19,34 @@ export type ClaudeDeps = {
   credentialPath: string
   readFile: typeof readSecureFile
   now: () => number
-  keychain?: () => Promise<KeychainOutcome>
+  keychain: () => Promise<KeychainOutcome>
 }
 
-const defaults: ClaudeDeps = {
+const defaults: Omit<ClaudeDeps, 'credentialPath' | 'keychain'> = {
   fetch: globalThis.fetch,
-  credentialPath: path.join(os.homedir(), '.claude', '.credentials.json'),
   readFile: readSecureFile,
   now: Date.now,
+}
+
+/** The first config dir in the CLI's order (src/providers/claude.ts): CLAUDE_CONFIG_DIRS,
+ *  CLAUDE_CONFIG_DIR, the menubar's `claudeConfigDirs` in config.json, ~/.claude. Read here
+ *  because bridge-handlers, which has a config reader, imports the quota module. */
+export function claudeConfigDir(env: NodeJS.ProcessEnv = process.env, home = os.homedir()): string {
+  const expand = (dir: string) => path.resolve(dir === '~' ? home : dir.startsWith('~/') || dir.startsWith('~\\') ? path.join(home, dir.slice(2)) : dir)
+  const multi = (env.CLAUDE_CONFIG_DIRS ?? '').split(path.delimiter).map(dir => dir.trim()).find(dir => dir.length > 0)
+  if (multi) return expand(multi)
+  if (env.CLAUDE_CONFIG_DIR) return expand(env.CLAUDE_CONFIG_DIR)
+  let dirs: unknown
+  try { dirs = (JSON.parse(readFileSync(path.join(home, '.config', 'codeburn', 'config.json'), 'utf8')) as { claudeConfigDirs?: unknown }).claudeConfigDirs } catch { /* no config: ~/.claude */ }
+  const first = Array.isArray(dirs) ? dirs.find((dir): dir is string => typeof dir === 'string' && dir.trim().length > 0) : undefined
+  return first ? expand(first.trim()) : path.join(home, '.claude')
+}
+
+/** Claude Code keeps the login of any config dir but ~/.claude under its own Keychain
+ *  item, suffixed with the first 8 hex chars of the SHA-256 of the dir's NFC path. */
+export function claudeKeychainService(configDir: string): string {
+  if (path.resolve(configDir) === path.resolve(os.homedir(), '.claude')) return KEYCHAIN_SERVICE
+  return `${KEYCHAIN_SERVICE}-${createHash('sha256').update(configDir.normalize('NFC')).digest('hex').slice(0, 8)}`
 }
 
 function empty(connection: QuotaProvider['connection'], footerLines: string[] = []): QuotaProvider {
@@ -58,7 +80,7 @@ async function credentialFromFile(deps: ClaudeDeps): Promise<ClaudeCredential | 
  */
 async function credentialFrom(source: CredentialSource, deps: ClaudeDeps): Promise<ClaudeCredential | null> {
   if (source === 'file') return credentialFromFile(deps)
-  const outcome = await (deps.keychain ?? readClaudeKeychain)()
+  const outcome = await deps.keychain()
   return outcome.status === 'found' ? parseCredential(outcome.value) : null
 }
 
@@ -77,12 +99,12 @@ function unrecoverable(credential: ClaudeCredential, deps: ClaudeDeps): QuotaPro
   return expired ? { ...empty('terminalFailure', EXPIRED_FOOTER), connectable: true } : empty('transientFailure')
 }
 
-export async function readClaudeKeychain(): Promise<KeychainOutcome> {
+export async function readClaudeKeychain(service: string): Promise<KeychainOutcome> {
   // Claude Code has written the item under both `$USER` (2.1.x) and the older
   // hardcoded "agentseal" account; a user-scoped miss must fall through to the
   // service-only lookup rather than reporting disconnected.
   const user = process.env.USER
-  return readKeychainPassword(KEYCHAIN_SERVICE, user ? [user, null] : [null])
+  return readKeychainPassword(service, user ? [user, null] : [null])
 }
 
 function windowOf(label: string, value: unknown): QuotaWindow | null {
@@ -155,16 +177,23 @@ async function request(token: string, deps: ClaudeDeps, parent?: AbortSignal): P
 
 export type ClaudeResult = { quota: QuotaProvider; retryAfterSeconds?: number }
 
-export async function fetchClaudeQuota(options: Partial<ClaudeDeps> & { signal?: AbortSignal; allowKeychain?: boolean } = {}): Promise<ClaudeResult> {
-  const deps = { ...defaults, ...options }
+export async function fetchClaudeQuota(options: Partial<ClaudeDeps> & { signal?: AbortSignal; allowKeychain?: boolean; configDir?: string } = {}): Promise<ClaudeResult> {
+  const configDir = options.configDir ?? path.join(os.homedir(), '.claude')
+  const deps = { ...defaults, credentialPath: path.join(configDir, '.credentials.json'), keychain: () => readClaudeKeychain(claudeKeychainService(configDir)), ...options }
   try {
     let credential = await credentialFromFile(deps)
     let source: CredentialSource = 'file'
-    if (!credential && options.allowKeychain && process.platform === 'darwin') {
-      const outcome = await (deps.keychain ?? readClaudeKeychain)()
+    // A file left from before Claude Code moved the login into the Keychain keeps an
+    // expired token: the Keychain's login wins, and without one the file still answers.
+    const fileExpired = credential?.expiresAt !== undefined && credential.expiresAt <= deps.now()
+    if ((!credential || fileExpired) && options.allowKeychain && process.platform === 'darwin') {
+      const outcome = await deps.keychain()
       if (outcome.status === 'accessDenied') return { quota: empty('accessDenied') }
-      credential = outcome.status === 'found' ? parseCredential(outcome.value) : null
-      source = 'keychain'
+      const fromKeychain = outcome.status === 'found' ? parseCredential(outcome.value) : null
+      if (fromKeychain) {
+        credential = fromKeychain
+        source = 'keychain'
+      }
     }
     // A Claude Code 2.x login lives only in the macOS keychain: no credentials
     // file at all. Since a background poll never reads the keychain, "no file"
@@ -173,6 +202,9 @@ export async function fetchClaudeQuota(options: Partial<ClaudeDeps> & { signal?:
     if (!credential) {
       return { quota: empty(!options.allowKeychain && process.platform === 'darwin' ? 'keychainUnchecked' : 'disconnected') }
     }
+    // Nor is an expired file, which a Keychain login may have replaced: the card
+    // keeps whatever the last forced check found.
+    if (fileExpired && !options.allowKeychain && process.platform === 'darwin') return { quota: empty('keychainUnchecked') }
 
     let response: Response
     // A keychain read can raise a macOS prompt, so a keychain credential is only

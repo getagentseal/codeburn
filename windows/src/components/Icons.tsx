@@ -133,14 +133,6 @@ export function CoinIcon(p: IconProps) {
   )
 }
 
-export function StarIcon(p: IconProps) {
-  return (
-    <Svg {...p}>
-      <path d="m8 1.8 1.9 3.9 4.3.6-3.1 3 .7 4.3L8 11.6l-3.8 2 .7-4.3-3.1-3 4.3-.6z" fill="currentColor" stroke="none" />
-    </Svg>
-  )
-}
-
 export function XIcon(p: IconProps) {
   return <Svg {...p}><path d="M4 4l8 8M12 4l-8 8" /></Svg>
 }

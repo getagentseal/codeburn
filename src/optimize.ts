@@ -3083,7 +3083,7 @@ export function detectBloatedClaudeMd(projectCwds: Set<string>): WasteFinding | 
 
 export const READ_TOOL_NAMES = new Set(['Read', 'Grep', 'Glob', 'FileReadTool', 'GrepTool', 'GlobTool'])
 export const EDIT_TOOL_NAMES = new Set(['Edit', 'Write', 'FileEditTool', 'FileWriteTool', 'NotebookEdit'])
-export const BASH_TOOL_NAMES = new Set(['Bash', 'BashTool', 'PowerShellTool'])
+export const BASH_TOOL_NAMES = new Set(['Bash', 'BashTool', 'PowerShell', 'PowerShellTool'])
 // Writing a new file has nothing to read first; counting Write flagged subagents
 // that produce reports as editing blind. Not EDIT_TOOL_NAMES: act report baselines use that.
 const RATIO_EDIT_TOOL_NAMES = new Set(['Edit', 'FileEditTool', 'NotebookEdit'])

@@ -5,6 +5,8 @@ const KEYS = {
   theme: 'codeburn.theme',
   insight: 'codeburn.insight',
   starBannerDismissed: 'codeburn.starBannerDismissed',
+  starNudgeOpens: 'codeburn.starNudgeOpens',
+  starNudgeDone: 'codeburn.starNudgeDone',
   trayBadge: 'codeburn.trayBadge',
   accent: 'codeburn.accent',
 } as const

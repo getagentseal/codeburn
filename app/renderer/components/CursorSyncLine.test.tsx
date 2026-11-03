@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import { cursorSyncLine } from './CursorSyncLine'
 
@@ -20,5 +20,14 @@ describe('cursorSyncLine', () => {
     expect(cursorSyncLine({ enabled: true, state: 'error', lastSuccessAt: ago(90), errorCode: 'network', error }, NOW)).toEqual({ text: "Couldn't reach cursor.com, will retry", warn: true })
     expect(cursorSyncLine({ enabled: true, state: 'error', lastSuccessAt: null, errorCode: 'export', error }, NOW)?.text).toBe("Couldn't read the usage export from cursor.com, will retry")
     expect(cursorSyncLine({ enabled: true, state: 'error', lastSuccessAt: null, errorCode: 'future' as 'export', error }, NOW)?.text).toBe("Couldn't read the usage export from cursor.com, will retry")
+  })
+
+  it('asks for the keychain prompt only on macOS', () => {
+    const locked = { enabled: true, state: 'error', lastSuccessAt: null, errorCode: 'locked', error: 'raw' } as const
+    vi.stubGlobal('window', { codeburn: { platform: 'win32' } })
+    expect(cursorSyncLine(locked, NOW)).toEqual({ text: "Cursor encrypted its app session, CodeBurn can't unlock it on this system yet", warn: true })
+    vi.stubGlobal('window', { codeburn: { platform: 'darwin' } })
+    expect(cursorSyncLine(locked, NOW)?.text).toBe('Cursor encrypted its app session, run codeburn import cursor --sync in Terminal and allow the Cursor Safe Storage keychain prompt')
+    vi.unstubAllGlobals()
   })
 })

@@ -225,8 +225,9 @@
 "Change accent color" = "更改主題色";
 "Copy update command to clipboard" = "將更新命令複製到剪貼簿";
 "Enjoying CodeBurn?" = "喜歡 CodeBurn 嗎？";
-"Star us on GitHub" = "在 GitHub 上點個 Star";
-"Hide this banner" = "隱藏此橫幅";
+"If it has been helping you, a star on GitHub would mean a lot. It keeps the project free and open." = "如果它對您有幫助，在 GitHub 上點個 Star 對我們意義重大。這能讓專案保持免費和開源。";
+"Not now" = "稍後再說";
+"Star on GitHub" = "在 GitHub 上點 Star";
 "CSV (folder)" = "CSV（資料夾）";
 "JSON" = "JSON";
 "Export" = "匯出";
@@ -727,6 +728,7 @@
 "Synced from cursor.com %@" = "已從 cursor.com 同步（%@）";
 "Not synced from cursor.com yet" = "尚未從 cursor.com 同步";
 "Cursor login expired, open Cursor to sign in again" = "Cursor 登入已過期，請開啟 Cursor 重新登入";
+"Cursor encrypted its app session. Run codeburn import cursor --sync in Terminal, then allow the Cursor Safe Storage keychain prompt." = "Cursor 已加密其工作階段。請在終端機執行 codeburn import cursor --sync，然後允許 Cursor Safe Storage 鑰匙圈提示。";
 "Couldn't reach cursor.com, will retry" = "無法連線到 cursor.com，將會重試";
 "Couldn't read the usage export from cursor.com, will retry" = "無法讀取 cursor.com 的用量匯出，將會重試";
 "Sync Cursor usage from cursor.com" = "從 cursor.com 同步 Cursor 用量";

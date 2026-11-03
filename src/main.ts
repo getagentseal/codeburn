@@ -645,7 +645,7 @@ function buildJsonReport(projects: ProjectSummary[], period: string, periodKey: 
   const sessionCountBasis = durable.data.sessionCountBasis
   // Same durable day set as the headline, so a project's row is what selecting
   // it reports (expired transcripts included), one row per repository.
-  const projectList = buildPayloadProjects(projects, durable.days, homedir()).map(p => ({
+  const projectList = buildPayloadProjects(projects, durable.days, homedir(), durable.sessionCountCacheDays).map(p => ({
     name: p.name,
     path: p.path ?? p.id ?? p.name,
     cost: convertCost(p.cost),
@@ -1168,6 +1168,7 @@ program
   .option('--exclude <name>', 'Exclude projects matching name (repeatable)', collect, [])
   .option('--port <number>', 'Port to listen on (falls back to a free port if taken)', parseInteger, 4747)
   .option('--no-open', 'Do not open the browser automatically')
+  .option('--allowed-host <name>', 'Also accept requests addressed to and coming from this hostname, e.g. the name a reverse proxy serves it under (repeatable)', collect, [])
   .action(async (opts) => {
     assertProvider(opts.provider, 'web')
     if (opts.project.length > 0 || opts.exclude.length > 0) {
@@ -1185,6 +1186,7 @@ program
       exclude: opts.exclude,
       port: opts.port,
       open: opts.open,
+      allowedHosts: opts.allowedHost,
     })
   })
 

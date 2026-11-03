@@ -224,9 +224,10 @@
 "resets in %@" = "%@後にリセット";
 "Change accent color" = "アクセントカラーを変更";
 "Copy update command to clipboard" = "更新コマンドをクリップボードにコピー";
-"Enjoying CodeBurn?" = "CodeBurnを楽しんでいますか？";
-"Star us on GitHub" = "GitHubでスターをつける";
-"Hide this banner" = "このバナーを非表示";
+"Enjoying CodeBurn?" = "CodeBurn を気に入っていただけましたか？";
+"If it has been helping you, a star on GitHub would mean a lot. It keeps the project free and open." = "お役に立っているなら、GitHub でスターを付けていただけるととても励みになります。プロジェクトを無料でオープンに保つ力になります。";
+"Not now" = "今はしない";
+"Star on GitHub" = "GitHub でスターを付ける";
 "CSV (folder)" = "CSV（フォルダ）";
 "JSON" = "JSON";
 "Export" = "書き出す";
@@ -731,6 +732,7 @@
 "Synced from cursor.com %@" = "cursor.comから同期しました（%@）";
 "Not synced from cursor.com yet" = "cursor.comからはまだ同期していません";
 "Cursor login expired, open Cursor to sign in again" = "Cursorのサインインの有効期限が切れました。Cursorを開いてもう一度サインインしてください";
+"Cursor encrypted its app session. Run codeburn import cursor --sync in Terminal, then allow the Cursor Safe Storage keychain prompt." = "Cursorがセッションを暗号化しました。ターミナルで codeburn import cursor --sync を実行し、Cursor Safe Storageのキーチェーンの確認を許可してください。";
 "Couldn't reach cursor.com, will retry" = "cursor.comに接続できませんでした。再試行します";
 "Couldn't read the usage export from cursor.com, will retry" = "cursor.comの使用量エクスポートを読み取れませんでした。再試行します";
 "Sync Cursor usage from cursor.com" = "Cursorの使用量をcursor.comから同期";

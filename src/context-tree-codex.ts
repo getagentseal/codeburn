@@ -3,7 +3,8 @@ import { existsSync } from 'fs'
 import { basename, join } from 'path'
 import { homedir } from 'os'
 
-import { readSessionLines } from './fs-utils.js'
+import { readSessionLines, readTextHeadSync } from './fs-utils.js'
+import { isRolloutFileName } from './launcher-homes.js'
 import { estimateTokensFromChars } from './token-estimate.js'
 import {
   add,
@@ -243,7 +244,7 @@ export async function buildCodexContextTree(session: SessionRef): Promise<Contex
   }
 }
 
-const ROLLOUT_RE = /^rollout-.{19}-(.+)\.jsonl$/
+const ROLLOUT_RE = /^rollout-.{19}-(.+)\.jsonl(?:\.zst)?$/
 
 // Mirrors the CODEX_HOME handling of providers/codex.ts.
 function codexSessionsRoot(): string {
@@ -262,9 +263,12 @@ async function listRolloutFiles(): Promise<RolloutFile[]> {
     return []
   }
   const rollouts: RolloutFile[] = []
+  const all = new Set(files)
   for (const rel of files) {
-    const match = ROLLOUT_RE.exec(basename(rel))
-    if (match) rollouts.push({ filePath: join(root, rel), sessionId: match[1] })
+    if (rel.endsWith('.zst') && all.has(rel.slice(0, -4))) continue
+    const name = basename(rel)
+    const match = ROLLOUT_RE.exec(name)
+    if (match && isRolloutFileName(name)) rollouts.push({ filePath: join(root, rel), sessionId: match[1] })
   }
   return rollouts
 }
@@ -299,7 +303,9 @@ export async function findCodexSession(idPrefix: string): Promise<SessionRef | n
 async function readCodexHeadInfo(ref: SessionRef): Promise<{ project: string; title: string }> {
   let chunk: string
   try {
-    chunk = await readChunk(ref.filePath, 0, 262_144)
+    chunk = ref.filePath.endsWith('.zst')
+      ? readTextHeadSync(ref.filePath, 262_144).toString('utf-8')
+      : await readChunk(ref.filePath, 0, 262_144)
   } catch {
     return { project: '', title: '' }
   }

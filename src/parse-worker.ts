@@ -1,5 +1,5 @@
 import { parentPort, workerData, type MessagePort } from 'worker_threads'
-import { routeCodexParentReplay } from './codex-fork-replay.js'
+import { routeCodexParentReplay, type CodexParentReplayIndex } from './codex-fork-replay.js'
 import { restorePricingState, type PricingSnapshot } from './models.js'
 import type { ParentReplayReply, ParentReplayRequest, ParseJob } from './parse-workers.js'
 import { parseClaudeFileFull } from './parser.js'
@@ -11,13 +11,13 @@ if (!port) throw new Error('parse-worker must be started as a worker thread')
 const { pricing, replayPort } = workerData as { pricing: PricingSnapshot; replayPort: MessagePort }
 restorePricingState(pricing)
 
-const replayReplies = new Map<number, { resolve: (ids: Set<string> | null) => void; reject: (err: Error) => void }>()
+const replayReplies = new Map<number, { resolve: (index: CodexParentReplayIndex | null) => void; reject: (err: Error) => void }>()
 let nextReplayRequest = 0
 replayPort.on('message', (msg: ParentReplayReply) => {
   const reply = replayReplies.get(msg.id)
   replayReplies.delete(msg.id)
   if (msg.error !== undefined) reply?.reject(new Error(msg.error))
-  else reply?.resolve(msg.ids ?? null)
+  else reply?.resolve(msg.index ?? null)
 })
 routeCodexParentReplay((...args) => new Promise((resolve, reject) => {
   const id = nextReplayRequest++

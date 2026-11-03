@@ -39,7 +39,8 @@ import { DAILY_CACHE_VERSION } from './daily-cache.js'
 // turns and cost for otherwise identical period queries.
 // v12: pullRequests rows carry carriedUSD, runList, state and followUpAt, and
 // push evidence moves spend between rows; an older snapshot shows the old card.
-export const STATUS_SNAPSHOT_RENDER_VERSION = 12
+// v13: today's live session identities are exact, including project/provider counts.
+export const STATUS_SNAPSHOT_RENDER_VERSION = 13
 
 /// The semantic key recorded on every status snapshot. A snapshot whose stored
 /// key differs (an older render revision, or a different daily-cache version)

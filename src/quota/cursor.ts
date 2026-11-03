@@ -9,11 +9,15 @@
 // state database, under the ItemTable key `cursorAuth/accessToken`, opened
 // read-only. Nothing is copied and nothing is written; CodeBurn never refreshes
 // the session, so an expired token is terminal until the user signs in again.
+// Cursor 3.27 stores that token as `cursor-safe-storage:v1:` (Chromium v10).
+// That blob is not an expired login: unlock it with the Cursor Safe Storage
+// keychain item, then apply the same JWT checks as a plaintext token.
+import { createDecipheriv, pbkdf2Sync } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-import { quotaRequestSignal, sanitizeError } from './security.js'
+import { quotaRequestSignal, readKeychainPassword, sanitizeError, type KeychainOutcome } from './security.js'
 import type { QuotaProvider, QuotaWindow } from './types.js'
 
 const USAGE_ENDPOINT = 'https://cursor.com/api/usage-summary'
@@ -26,6 +30,11 @@ const UNREADABLE_FOOTER = ["Could not read the Cursor app's local session data. 
 const RATE_LIMITED_FOOTER = ['Cursor rate-limited the quota request.']
 const UNAVAILABLE_FOOTER = ['Cursor is temporarily unavailable.']
 const PARSE_FOOTER = ['Cursor returned an unrecognized quota response.']
+const SAFE_STORAGE_PREFIX = 'cursor-safe-storage:'
+const SAFE_STORAGE_SERVICE = 'Cursor Safe Storage'
+// Cursor 3.27's account is "Cursor Key". Older Electron builds used "Cursor".
+// No service-only lookup: after a Deny it finds the same item and asks again.
+const SAFE_STORAGE_ACCOUNTS: (string | null)[] = ['Cursor Key', 'Cursor']
 
 /** Cursor is an Electron app, so its state database follows the VS Code layout
  *  of whichever platform it runs on. */
@@ -42,12 +51,19 @@ export function cursorDatabasePath(
   return path.join(home, '.config', 'Cursor', 'User', 'globalStorage', 'state.vscdb')
 }
 
+export type CursorKeychainReader = (
+  service: string,
+  accounts: (string | null)[],
+) => Promise<KeychainOutcome>
+
 export type CursorDeps = {
   fetch: typeof fetch
   databasePath: string
   /** Resolves the app's access token; `null` when Cursor is not signed in. */
   loadAccessToken: (databasePath: string) => Promise<string | null>
   now: () => number
+  /** Unlocks `cursor-safe-storage:v1:` tokens. Tests inject this; live uses the login keychain. */
+  readKeychain: CursorKeychainReader
 }
 
 /**
@@ -78,7 +94,54 @@ function defaultDeps(): CursorDeps {
     databasePath: cursorDatabasePath(),
     loadAccessToken: cursorAccessTokenFromDatabase,
     now: Date.now,
+    readKeychain: (service, accounts) => readKeychainPassword(service, accounts),
   }
+}
+
+/** Only macOS has a keychain prompt to allow; elsewhere CodeBurn cannot open the session yet. */
+export function cursorLockedMessage(platform: string = process.platform): string {
+  if (platform === 'darwin') return 'Cursor encrypted its app session. Run codeburn import cursor --sync, then allow the Cursor Safe Storage keychain prompt.'
+  return `Cursor encrypted its app session, which CodeBurn cannot unlock on ${platform === 'win32' ? 'Windows' : 'Linux'} yet.`
+}
+
+export function isCursorSafeStorageToken(token: string): boolean {
+  return token.startsWith(SAFE_STORAGE_PREFIX)
+}
+
+/**
+ * Chromium safe-storage v10: PBKDF2-HMAC-SHA1(password, "saltysalt", 1003, 16)
+ * and AES-128-CBC with a 16-space IV. Returns the plaintext JWT, or null when
+ * the blob is not v1/v10 or the password does not open it.
+ */
+export function decryptCursorSafeStorage(token: string, password: string): string | null {
+  if (!isCursorSafeStorageToken(token)) return token
+  const rest = token.slice(SAFE_STORAGE_PREFIX.length)
+  const sep = rest.indexOf(':')
+  if (sep < 0 || rest.slice(0, sep) !== 'v1') return null
+  const blob = Buffer.from(rest.slice(sep + 1), 'base64')
+  if (blob.length < 4 || blob.subarray(0, 3).toString('utf8') !== 'v10') return null
+  try {
+    // `security -w` appends a newline. The shared keychain reader keeps it for
+    // callers whose secret is line-wrapped JSON; AES will not open with it.
+    const key = pbkdf2Sync(Buffer.from(password.trim(), 'utf8'), 'saltysalt', 1003, 16, 'sha1')
+    const iv = Buffer.alloc(16, 0x20)
+    const decipher = createDecipheriv('aes-128-cbc', key, iv)
+    const plain = Buffer.concat([decipher.update(blob.subarray(3)), decipher.final()]).toString('utf8').trim()
+    return plain.length > 0 ? plain : null
+  } catch {
+    return null
+  }
+}
+
+export async function unwrapCursorStoredToken(
+  token: string,
+  readKeychain: CursorKeychainReader,
+): Promise<{ token: string } | { locked: true }> {
+  if (!isCursorSafeStorageToken(token)) return { token }
+  const key = await readKeychain(SAFE_STORAGE_SERVICE, SAFE_STORAGE_ACCOUNTS)
+  if (key.status !== 'found') return { locked: true }
+  const jwt = decryptCursorSafeStorage(token, key.value)
+  return jwt ? { token: jwt } : { locked: true }
 }
 
 function empty(connection: QuotaProvider['connection'], footerLines: string[] = []): QuotaProvider {
@@ -207,7 +270,7 @@ export function cursorSessionCookie(token: string, now: number): string | null {
 
 export type CursorResult = { quota: QuotaProvider; retryAfterSeconds?: number }
 
-export async function fetchCursorQuota(options: Partial<CursorDeps> & { signal?: AbortSignal } = {}): Promise<CursorResult> {
+export async function fetchCursorQuota(options: Partial<CursorDeps> & { signal?: AbortSignal; allowKeychain?: boolean } = {}): Promise<CursorResult> {
   const deps = { ...defaultDeps(), ...options }
   let token: string | null
   try {
@@ -220,7 +283,11 @@ export async function fetchCursorQuota(options: Partial<CursorDeps> & { signal?:
   }
   if (!token) return { quota: empty('disconnected', SIGNED_OUT_FOOTER) }
 
-  const cookie = cursorSessionCookie(token, deps.now())
+  // Keychain consent is user-initiated, as for Claude: only a caller that says so may raise the prompt.
+  if (isCursorSafeStorageToken(token) && !options.allowKeychain) return { quota: empty('terminalFailure', [cursorLockedMessage()]) }
+  const unwrapped = await unwrapCursorStoredToken(token, deps.readKeychain)
+  if ('locked' in unwrapped) return { quota: empty('terminalFailure', [cursorLockedMessage()]) }
+  const cookie = cursorSessionCookie(unwrapped.token, deps.now())
   if (cookie === null) return { quota: empty('terminalFailure', EXPIRED_FOOTER) }
 
   try {

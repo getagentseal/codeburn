@@ -4,6 +4,7 @@ import { createRoot } from 'react-dom/client'
 import { App } from './App'
 import { installPageHiddenClass } from './lib/pageVisibility'
 import { clearHeadlinesOnUpgrade } from './lib/overviewSnapshot'
+import { countLaunch } from './components/StarNudge'
 import { version } from '../package.json'
 // Bundled so the UI renders in the same faces on every OS instead of the platform's system
 // font (SF Pro on macOS, Segoe UI on Windows). Loaded before the stylesheets that reference
@@ -23,6 +24,8 @@ clearHeadlinesOnUpgrade(version)
 
 // Pause looping CSS animations while the window is hidden/minimized (energy).
 installPageHiddenClass()
+
+countLaunch()
 
 // Tag the platform so CSS can adapt native chrome (macOS hiddenInset insets +
 // drag regions); harmless when the bridge is absent (tests/jsdom).

@@ -1,6 +1,7 @@
 // Fixture-driven coverage for the Cursor quota adapter, ported from the
 // menubar's CursorQuotaTests. Every test drives a synthetic JWT and a temp
 // state database; none of them reads the operator's real Cursor session.
+import { createCipheriv, pbkdf2Sync } from 'node:crypto'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import os from 'node:os'
@@ -11,9 +12,12 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   cursorAccessTokenFromDatabase,
   cursorDatabasePath,
+  cursorLockedMessage,
   cursorSessionCookie,
   decodeCursorUsage,
+  decryptCursorSafeStorage,
   fetchCursorQuota,
+  unwrapCursorStoredToken,
 } from '../src/quota/cursor.js'
 import { isSqliteAvailable } from '../src/sqlite.js'
 
@@ -90,6 +94,75 @@ describe('Cursor credential discovery', () => {
     db.close()
 
     expect(await cursorAccessTokenFromDatabase(databasePath)).toBe('jwt-token-value')
+  })
+})
+
+function encryptSafeStorage(jwt: string, password: string): string {
+  const key = pbkdf2Sync(Buffer.from(password, 'utf8'), 'saltysalt', 1003, 16, 'sha1')
+  const iv = Buffer.alloc(16, 0x20)
+  const cipher = createCipheriv('aes-128-cbc', key, iv)
+  const blob = Buffer.concat([Buffer.from('v10'), cipher.update(jwt, 'utf8'), cipher.final()])
+  return `cursor-safe-storage:v1:${blob.toString('base64')}`
+}
+
+describe('Cursor safe-storage session', () => {
+  const password = 'cursor-key-not-a-secret'
+
+  it('unlocks a Cursor 3.27 v10 blob with the Safe Storage password', () => {
+    const jwt = syntheticJWT()
+    const stored = encryptSafeStorage(jwt, password)
+    expect(decryptCursorSafeStorage(stored, password)).toBe(jwt)
+    expect(decryptCursorSafeStorage(stored, `${password}\n`)).toBe(jwt)
+    expect(decryptCursorSafeStorage(stored, 'wrong-password')).toBeNull()
+  })
+
+  it('treats a locked Safe Storage item as locked, not as an expired login', async () => {
+    const stored = encryptSafeStorage(syntheticJWT(), password)
+    const locked = await unwrapCursorStoredToken(stored, async () => ({ status: 'notFound' }))
+    expect(locked).toEqual({ locked: true })
+    const opened = await unwrapCursorStoredToken(stored, async (service, accounts) => {
+      expect(service).toBe('Cursor Safe Storage')
+      expect(accounts[0]).toBe('Cursor Key')
+      return { status: 'found', value: password }
+    })
+    expect(opened).toEqual({ token: syntheticJWT() })
+  })
+
+  it('names the sync command only on macOS, which has a keychain prompt', () => {
+    expect(cursorLockedMessage('darwin')).toBe('Cursor encrypted its app session. Run codeburn import cursor --sync, then allow the Cursor Safe Storage keychain prompt.')
+    expect(cursorLockedMessage('win32')).toBe('Cursor encrypted its app session, which CodeBurn cannot unlock on Windows yet.')
+    expect(cursorLockedMessage('linux')).toBe('Cursor encrypted its app session, which CodeBurn cannot unlock on Linux yet.')
+  })
+
+  it('fetches quota from an encrypted app token without calling it expired', async () => {
+    const token = syntheticJWT()
+    const seen: string[] = []
+    const result = await fetchCursorQuota({
+      allowKeychain: true,
+      now: () => NOW,
+      loadAccessToken: async () => encryptSafeStorage(token, password),
+      readKeychain: async () => ({ status: 'found', value: password }),
+      fetch: (async (_url: string, init: RequestInit) => {
+        seen.push(String((init.headers as Record<string, string>).Cookie))
+        return jsonResponse(successBody)
+      }) as unknown as typeof fetch,
+    })
+    expect(result.quota.connection).toBe('connected')
+    expect(result.quota.planLabel).toBe('Pro')
+    expect(seen[0]).toBe(`WorkosCursorSessionToken=user_123%3A%3A${token}`)
+  })
+
+  it('leaves the keychain alone unless the caller allows it', async () => {
+    let reads = 0
+    const result = await fetchCursorQuota({
+      now: () => NOW,
+      loadAccessToken: async () => encryptSafeStorage(syntheticJWT(), password),
+      readKeychain: async () => { reads += 1; return { status: 'found', value: password } },
+      fetch: neverFetch,
+    })
+    expect(result.quota.connection).toBe('terminalFailure')
+    expect(result.quota.footerLines).toEqual([cursorLockedMessage()])
+    expect(reads).toBe(0)
   })
 })
 

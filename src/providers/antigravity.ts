@@ -1,7 +1,9 @@
+import { createReadStream } from 'fs'
 import { readdir, readFile, mkdir, stat, open, rename, unlink } from 'fs/promises'
+import { createInterface } from 'readline'
 import { execFile } from 'child_process'
 import { randomBytes } from 'crypto'
-import { basename, join, resolve } from 'path'
+import { basename, dirname, join, resolve } from 'path'
 import { homedir } from 'os'
 import { fileURLToPath } from 'url'
 import https from 'https'
@@ -50,7 +52,7 @@ function conversationRoots(): readonly AntigravityConversationRoot[] {
     },
   ]
 }
-const CACHE_VERSION = 9
+const CACHE_VERSION = 10
 export const ANTIGRAVITY_CACHE_VERSION = CACHE_VERSION
 export const ANTIGRAVITY_LEGACY_CACHE_FILE = 'antigravity-results.json'
 export function antigravityCacheFileName(version = CACHE_VERSION): string {
@@ -1014,6 +1016,7 @@ function buildCallFromSqliteGenMetadataRow(
   rootFields: readonly ProtoField[],
   turnTools?: TurnTools,
   firstStepTimestamp = '',
+  userMessage = '',
 ): ParsedProviderCall | null {
   const chatFields = parseProtoFields(protoFieldBytes(firstProtoField(rootFields, 1)) ?? new Uint8Array())
   const usageFields = parseProtoFields(protoFieldBytes(firstProtoField(chatFields, 4)) ?? new Uint8Array())
@@ -1062,7 +1065,7 @@ function buildCallFromSqliteGenMetadataRow(
     timestamp: antigravitySqliteCreatedAt(chatFields) || firstStepTimestamp,
     speed: 'standard',
     deduplicationKey: `antigravity:${cascadeId}:${responseId}`,
-    userMessage: '',
+    userMessage,
     sessionId: cascadeId,
   }
 }
@@ -1071,6 +1074,7 @@ function buildCallsFromSqliteGenMetadata(
   cascadeId: string,
   rows: AntigravityGenMetadataRow[],
   stepMap: Map<number, AntigravityStepRow>,
+  userMessage = '',
 ): ParsedProviderCall[] {
   const calls: ParsedProviderCall[] = []
   const seenResponseIds = new Set<string>()
@@ -1103,7 +1107,7 @@ function buildCallsFromSqliteGenMetadata(
       ? protoTimestampToIso(firstProtoField(parseProtoFields(genMetadataDataBytes(firstStep.metadata)), 1))
       : ''
 
-    const call = buildCallFromSqliteGenMetadataRow(cascadeId, row, rootFields, turnTools, firstStepTimestamp)
+    const call = buildCallFromSqliteGenMetadataRow(cascadeId, row, rootFields, turnTools, firstStepTimestamp, userMessage)
     if (!call) continue
     if (seenResponseIds.has(call.deduplicationKey)) continue
     seenResponseIds.add(call.deduplicationKey)
@@ -1111,6 +1115,118 @@ function buildCallsFromSqliteGenMetadata(
   }
 
   return calls
+}
+
+export const MAX_USER_TEXT_LENGTH = 500
+
+export function cleanAntigravityUserPrompt(raw: string): string {
+  if (!raw) return ''
+  const match = /<USER_REQUEST>([\s\S]*?)(?:<\/USER_REQUEST>|$)/i.exec(raw)
+  const text = (match ? match[1] : raw)?.trim() ?? ''
+  return text.slice(0, MAX_USER_TEXT_LENGTH)
+}
+
+async function readPromptFromTranscriptFile(filePath: string): Promise<string> {
+  let stream: ReturnType<typeof createReadStream> | undefined
+  let rl: ReturnType<typeof createInterface> | undefined
+  try {
+    const s = await stat(filePath).catch(() => null)
+    if (!s || !s.isFile()) return ''
+    stream = createReadStream(filePath, { encoding: 'utf-8' })
+    stream.on('error', () => {})
+    rl = createInterface({ input: stream, crlfDelay: Infinity })
+    let linesChecked = 0
+    for await (const line of rl) {
+      linesChecked++
+      if (linesChecked > 50) break
+      if (!line.includes('"USER_INPUT"')) continue
+      try {
+        const data = JSON.parse(line) as { type?: string; content?: unknown }
+        if (data.type === 'USER_INPUT') {
+          if (typeof data.content === 'string') {
+            const clean = cleanAntigravityUserPrompt(data.content)
+            if (clean) return clean
+          } else if (Array.isArray(data.content)) {
+            for (const item of data.content) {
+              if (typeof item === 'string') {
+                const clean = cleanAntigravityUserPrompt(item)
+                if (clean) return clean
+              } else if (item && typeof item === 'object' && 'text' in item && typeof (item as { text: unknown }).text === 'string') {
+                const clean = cleanAntigravityUserPrompt((item as { text: string }).text)
+                if (clean) return clean
+              }
+            }
+          }
+        }
+      } catch {}
+    }
+  } catch {
+    return ''
+  } finally {
+    rl?.close()
+    stream?.destroy()
+  }
+  return ''
+}
+
+export async function extractAntigravityTranscriptPrompt(cascadeId: string, sourcePath?: string): Promise<string> {
+  const home = homedir()
+  const candidates: string[] = []
+  if (sourcePath) {
+    candidates.push(join(dirname(sourcePath), '..', 'brain', cascadeId, '.system_generated', 'logs', 'transcript.jsonl'))
+    candidates.push(join(home, '.gemini', antigravityAppDataDirFromSourcePath(sourcePath), 'brain', cascadeId, '.system_generated', 'logs', 'transcript.jsonl'))
+  }
+  candidates.push(join(home, '.gemini', 'antigravity', 'brain', cascadeId, '.system_generated', 'logs', 'transcript.jsonl'))
+  candidates.push(join(home, '.gemini', 'antigravity-ide', 'brain', cascadeId, '.system_generated', 'logs', 'transcript.jsonl'))
+  candidates.push(join(home, '.gemini', 'antigravity-cli', 'brain', cascadeId, '.system_generated', 'logs', 'transcript.jsonl'))
+
+  for (const filePath of new Set(candidates)) {
+    const prompt = await readPromptFromTranscriptFile(filePath)
+    if (prompt) return prompt
+  }
+  return ''
+}
+
+export function extractAntigravitySqlitePrompt(db: ReturnType<typeof openDatabase>): string {
+  try {
+    const rows = db.query<{ step_payload?: Uint8Array }>(
+      'SELECT step_payload FROM steps WHERE idx = 0 OR step_type = 14 ORDER BY idx LIMIT 1',
+    )
+    if (rows.length === 0 || !rows[0]?.step_payload) return ''
+    const rootFields = parseProtoFields(rows[0].step_payload)
+    const tag19 = firstProtoField(rootFields, 19)
+    if (!tag19) return ''
+    const subFields = parseProtoFields(protoFieldBytes(tag19) ?? new Uint8Array())
+    const tag2 = firstProtoField(subFields, 2)
+    if (!tag2) return ''
+    const rawPrompt = protoFieldText(tag2) ?? ''
+    return cleanAntigravityUserPrompt(rawPrompt)
+  } catch {
+    return ''
+  }
+}
+
+export async function extractAntigravityUserPrompt(
+  cascadeId: string,
+  sourcePath?: string,
+  db?: ReturnType<typeof openDatabase> | null,
+): Promise<string> {
+  const transcriptPrompt = await extractAntigravityTranscriptPrompt(cascadeId, sourcePath)
+  if (transcriptPrompt) return transcriptPrompt
+  if (db) {
+    return extractAntigravitySqlitePrompt(db)
+  }
+  if (sourcePath && sourcePath.toLowerCase().endsWith('.db') && isSqliteAvailable()) {
+    try {
+      const autoDb = openDatabase(sourcePath)
+      try {
+        return extractAntigravitySqlitePrompt(autoDb)
+      } finally {
+        autoDb.close()
+      }
+    } catch {}
+  }
+  return ''
 }
 
 async function parseSqliteGenMetadataCalls(filePath: string, cascadeId: string): Promise<ParsedProviderCall[]> {
@@ -1123,6 +1239,8 @@ async function parseSqliteGenMetadataCalls(filePath: string, cascadeId: string):
     const rows = db.query<AntigravityGenMetadataRow>('SELECT idx, data FROM gen_metadata ORDER BY idx')
     if (rows.length === 0) return []
 
+    const userMessage = await extractAntigravityUserPrompt(cascadeId, filePath, db)
+
     const stepMap = new Map<number, AntigravityStepRow>()
     try {
       const stepRows = db.query<AntigravityStepRow>('SELECT idx, metadata FROM steps ORDER BY idx')
@@ -1133,7 +1251,7 @@ async function parseSqliteGenMetadataCalls(filePath: string, cascadeId: string):
       if (isSqliteBusyError(err)) throw err
     }
 
-    return buildCallsFromSqliteGenMetadata(cascadeId, rows, stepMap)
+    return buildCallsFromSqliteGenMetadata(cascadeId, rows, stepMap, userMessage)
   } catch (err) {
     // Let a transient lock propagate so the run retries this file on the next
     // refresh instead of treating it as empty (see parser.ts busy handling).
@@ -1196,6 +1314,7 @@ export function buildCallsFromGeneratorMetadata(
   cascadeId: string,
   metadata: GeneratorMetadata[],
   modelMap: ModelMap,
+  userMessage = '',
 ): ParsedProviderCall[] {
   const results: ParsedProviderCall[] = []
 
@@ -1238,7 +1357,7 @@ export function buildCallsFromGeneratorMetadata(
       timestamp,
       speed: 'standard',
       deduplicationKey: dedupKey,
-      userMessage: '',
+      userMessage,
       sessionId: cascadeId,
     })
   }
@@ -1522,7 +1641,8 @@ export async function snapshotAntigravityStatusLinePayload(input: unknown): Prom
     metadata = extractAntigravityGeneratorMetadata(
       await rpc(server, 'GetCascadeTrajectoryGeneratorMetadata', { cascadeId }),
     )
-    const snapshotCalls = buildCallsFromGeneratorMetadata(cascadeId, metadata, modelMap)
+    const userMessage = await extractAntigravityUserPrompt(cascadeId, source.path)
+    const snapshotCalls = buildCallsFromGeneratorMetadata(cascadeId, metadata, modelMap, userMessage)
     assignStableTimestamps(snapshotCalls, cached?.calls, new Date(s.mtimeMs).toISOString())
     cache.cascades[cascadeId] = {
       mtimeMs: s.mtimeMs,
@@ -1711,7 +1831,8 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
         return
       }
 
-      const results = buildCallsFromGeneratorMetadata(cascadeId, metadata, modelMap)
+      const userMessage = await extractAntigravityUserPrompt(cascadeId, source.path)
+      const results = buildCallsFromGeneratorMetadata(cascadeId, metadata, modelMap, userMessage)
       assignStableTimestamps(results, cached?.calls, fallbackTimestamp)
       for (const call of results) {
         applyAntigravityProject(call, source, projectPath)

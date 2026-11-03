@@ -695,13 +695,14 @@ export function Dock() {
     if (prefsLoaded) void refreshQuota()
   }, [prefs.claudeProfiles, prefsLoaded])
 
-  // Until the user edits the set in the settings window, the dock follows what is connected,
-  // up to the mac's five. The write reaches the settings window through the same event, so a
-  // window open on the Capacity Dock section fills its switches in as the answer arrives.
+  // Until the user edits the set in the settings window, a newly connected provider fills a
+  // free slot. The resting provider stays the one already saved. The write reaches the
+  // settings window through the same event, so a window open on the Capacity Dock section
+  // fills its switches in as the answer arrives.
   useEffect(() => {
     if (!prefsLoaded || quota.fetchedAt === null) return
     const connected = quota.providers.filter((p) => p.available).map((p) => p.id)
-    const patch = autoSeed(prefs, connected)
+    const patch = autoSeed(prefs, connected, quota.providers.map((p) => p.id))
     if (patch) void writeDockPrefs(patch).then(setPrefs)
   }, [prefsLoaded, quota, prefs])
 
@@ -1022,8 +1023,10 @@ export function Dock() {
     cancel('collapse')
     if (provider.id !== resolvedPreferredId) {
       track('dock_provider_switch', { provider: provider.id })
-      setPrefs((current) => ({ ...current, preferred: provider.id }))
-      void invoke('dock_set_preferred', { id: provider.id })
+      // A click is the same choice as the settings menu. Latch it, or the next quota
+      // refresh's auto-seed still treats the rail as unowned and can move it back.
+      setPrefs((current) => ({ ...current, preferred: provider.id, manualSelection: true }))
+      void writeDockPrefs({ preferred: provider.id, manualSelection: true }).then(setPrefs)
       setInteraction((i) => (i.pinned ? i : { ...i, pinned: true }))
     } else {
       setInteraction((i) => ({ ...i, pinned: !i.pinned }))
