@@ -177,8 +177,14 @@ function messageRole(value: unknown): string {
   return stringField(record, ['role', 'type', 'author']).toLowerCase()
 }
 
-function extractStructuredToolNames(value: unknown, text: string, options: { includeDirectName?: boolean } = {}): string[] {
-  const tools = extractToolNames(text)
+// Reads tool names from structured fields only. Message text is never scanned:
+// it includes tool OUTPUT (file contents, command output) and model prose, so
+// `<tool_use><name>` markup in it is content, not a call - scanning it turned
+// arbitrary private text into tool names that sync sends upstream. The legacy
+// `.chat` format, which has no structured tool record, scans bot messages via
+// extractToolNames in parseChatFile instead.
+function extractStructuredToolNames(value: unknown, options: { includeDirectName?: boolean } = {}): string[] {
+  const tools: string[] = []
   const record = asRecord(value)
   if (!record) return tools
 
@@ -296,7 +302,7 @@ function parseModernExecution(data: KiroModernExecution, sourcePath: string, see
   let hasOutputActivity = false
   const directInput = textField(data, ['prompt', 'input', 'userMessage', 'user_message', 'request'])
   const directOutput = textField(data, ['response', 'output', 'assistantMessage', 'assistant_message', 'result'])
-  const directTools = extractStructuredToolNames(data, directOutput, { includeDirectName: false })
+  const directTools = extractStructuredToolNames(data, { includeDirectName: false })
 
   if (directInput) {
     inputChars += directInput.length
@@ -327,7 +333,7 @@ function parseModernExecution(data: KiroModernExecution, sourcePath: string, see
       for (const message of messages) {
         const text = extractText(message)
         const role = messageRole(message)
-        const tools = extractStructuredToolNames(message, text)
+        const tools = extractStructuredToolNames(message)
 
         if (role === 'human' || role === 'user') {
           if (!text) continue
