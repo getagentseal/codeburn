@@ -561,7 +561,7 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // consumer requires (a marker-less value is treated as synthesized and fails
   // closed). Entries cached under project-path-v1 hold projectPath but no
   // workingDirectory, so a re-parse is required for the fix to take effect.
-  kiro: 'ide-parsing-v1-est-cost-project-path-v1-working-directory-v1',
+  kiro: 'ide-parsing-v1-est-cost-project-path-v1-working-directory-v1-no-text-tools-v1',
   // nested-agent-v1: OMP writes crewmate transcripts one directory below each
   // parent session. reported-cost-v2 persists those measured costs through the
   // cache, including the explicit zero on xai-oauth turns.

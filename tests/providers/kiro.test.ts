@@ -307,7 +307,10 @@ describe('kiro provider - chat file parsing', () => {
     expect(call.userMessage).toBe('summarize this workspace')
     expect(call.inputTokens).toBeGreaterThan(0)
     expect(call.outputTokens).toBeGreaterThan(0)
-    expect(call.tools).toEqual(['Bash', 'Read'])
+    // Only the structured toolCalls entry counts. The `<tool_use>` markup in
+    // the response text is content, not a call: modern files are never
+    // scanned for it (see kiro-modern-tool-text.test.ts).
+    expect(call.tools).toEqual(['Read'])
     expect(call.costUSD).toBeGreaterThan(0)
   })
 
@@ -345,7 +348,8 @@ describe('kiro provider - chat file parsing', () => {
       startTime: 1777333000000,
       model: { id: 'auto' },
       prompt: 'make a small change',
-      response: 'Changed it. <tool_use><name>writeFile</name></tool_use>',
+      response: 'Changed it. <tool_use><name>runCommand</name></tool_use>',
+      toolCalls: [{ name: 'writeFile' }],
     }))
 
     const source = { path: executionPath, project: 'test', provider: 'kiro' }
