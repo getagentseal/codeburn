@@ -1059,6 +1059,39 @@ describe('codex provider - JSONL parsing', () => {
     ])
   })
 
+  it('attributes mcp-cli only when it is the command being run', async () => {
+    const execStr = (command: string) => JSON.stringify({
+      type: 'response_item',
+      timestamp: '2026-04-14T10:00:30Z',
+      payload: { type: 'function_call', name: 'exec_command', arguments: JSON.stringify({ command }) },
+    })
+    const filePath = await writeSession(tmpDir, '2026-04-14', 'rollout-mcpcli-position.jsonl', [
+      sessionMeta({ session_id: 'sess-mcpcli-position', model: 'gpt-5.5' }),
+      userMessage('mention the MCP CLI without running it'),
+      execStr('git commit -m "mcp-cli call orion-merger initech-term-sheet"'),
+      execStr('echo mcp-cli call a b'),
+      execStr('ls -la # mcp-cli call a b'),
+      execStr('grep -rn "run mcp-cli call github get_issue to fetch" docs/'),
+      execStr('mcp-cli call "orion merger" initech'),
+      execStr('cd repo && mcp-cli call linear list_issues'),
+      execStr('./mcp-cli call github get_issue'),
+      tokenCount({ timestamp: '2026-04-14T10:01:00Z', last: { input: 300, output: 100 }, total: { total: 400 } }),
+    ])
+
+    const provider = createCodexProvider(tmpDir)
+    const source = { path: filePath, project: 'test', provider: 'codex' }
+    const calls: ParsedProviderCall[] = []
+    for await (const call of provider.createSessionParser(source, new Set()).parse()) calls.push(call)
+
+    expect(calls).toHaveLength(1)
+    const tools = calls[0]!.tools
+    expect(tools.filter(t => t === 'Bash')).toHaveLength(7)
+    expect(tools.filter(t => t.startsWith('mcp__')).sort()).toEqual([
+      'mcp__github__get_issue',
+      'mcp__linear__list_issues',
+    ])
+  })
+
   // #478 follow-up: the shapes the `function_call` path never reached. Fixtures
   // are synthesized from the real shapes seen in Codex rollouts (a `custom_tool_call`
   // whose payload is an `input` JS program, and an item-model `item_completed`
