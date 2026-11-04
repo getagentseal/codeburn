@@ -4144,6 +4144,19 @@ export function sessionTokensUSD(pricing: FindingPricing, sessionId: string | un
   return tokens * (modelRate(pricing, model, kind) ?? pricing.fallbackRate)
 }
 
+/// The token kind a measured finding prices its tokens at, so `act report`
+/// prices that fix's realized tokens the same way. Absent: the blended rate.
+export const FINDING_TOKEN_KIND: Readonly<Record<string, 'input' | 'cacheWrite'>> = {
+  'mcp-low-coverage': 'cacheWrite',
+  'mcp-project-scope': 'cacheWrite',
+  'unused-mcp': 'input',
+  'mcp-deferral-off': 'input',
+  'mcp-alwaysload-hygiene': 'input',
+  'mcp-defer-threshold': 'input',
+  'redundant-rereads': 'input',
+  'build-folder-reads': 'input',
+}
+
 /// Schema tokens charged once per session, priced at the input rate of each
 /// session in `sessions`: the token count times their mean rate.
 function perSessionSchemaUSD(pricing: FindingPricing, sessions: SessionSummary[], tokens: number): number {

@@ -217,32 +217,40 @@ describe('mcp realized delta', () => {
 
 describe('realized dollars', () => {
   const onModel = (model: string) => sessionsAt(20, daysAgo(5)).map(s => ({ ...s, turns: modelEditTurns(model, 1, 1) }))
+  const OPUS = 'claude-opus-4-6'
 
-  it('prices removed schema writes at the session model cache-write rate', async () => {
-    const opus = getModelCosts('claude-opus-4-6')
+  it('prices realized tokens at the session model rate of the token kind the finding priced', async () => {
+    const opus = getModelCosts(OPUS)
     expect(opus).not.toBeNull()
-    const actionsDir = await writeJournal([mcpRecord()])
-    const report = await computeActReport({ actionsDir, now: NOW, loadProjects: load([projectOf(onModel('claude-opus-4-6'))]) })
+    const lowCoverage = await writeJournal([mcpRecord({ findingId: 'mcp-low-coverage' })])
+    const unused = await writeJournal([mcpRecord({ findingId: 'unused-mcp' })])
+    const projects = load([projectOf(onModel(OPUS))])
+    const writes = await computeActReport({ actionsDir: lowCoverage, now: NOW, loadProjects: projects })
+    const inputs = await computeActReport({ actionsDir: unused, now: NOW, loadProjects: projects })
 
-    const row = report.rows[0]!
-    expect(row.realizedTokens).toBe(40_000)
-    expect(row.estimatedAtApply).toBe(56_000)
-    expect(row.realizedCostUSD).toBeCloseTo(40_000 * cacheWriteCostPerToken('claude-opus-4-6', opus!), 10)
-    expect(row.realizedCostUSD).not.toBeCloseTo(40_000 * report.costRate, 6)
-    const json = buildActReportJson(report) as { totals: { realizedCostUSD: number } }
-    expect(json.totals.realizedCostUSD).toBeCloseTo(row.realizedCostUSD, 10)
+    for (const report of [writes, inputs]) {
+      expect(report.rows[0]!.realizedTokens).toBe(40_000)
+      expect(report.rows[0]!.estimatedAtApply).toBe(56_000)
+    }
+    expect(writes.rows[0]!.realizedCostUSD).toBeCloseTo(40_000 * cacheWriteCostPerToken(OPUS, opus!), 10)
+    expect(inputs.rows[0]!.realizedCostUSD).toBeCloseTo(40_000 * opus!.inputCostPerToken, 10)
+    const json = buildActReportJson(writes) as { totals: { realizedCostUSD: number } }
+    expect(json.totals.realizedCostUSD).toBeCloseTo(writes.rows[0]!.realizedCostUSD, 10)
   })
 
-  it('falls back to the blended rate for an unpriced model', async () => {
-    const actionsDir = await writeJournal([mcpRecord()])
-    const report = await computeActReport({ actionsDir, now: NOW, loadProjects: load([projectOf(onModel('unpriced-test-model'))]) })
-
-    const row = report.rows[0]!
+  it('keeps the blended rate for an unpriced model and for findings still on the blended rate', async () => {
+    const unpriced = await writeJournal([mcpRecord({ findingId: 'mcp-low-coverage' })])
+    const report = await computeActReport({ actionsDir: unpriced, now: NOW, loadProjects: load([projectOf(onModel('unpriced-test-model'))]) })
     expect(report.costRate).toBeGreaterThan(0)
-    expect(row.realizedTokens).toBe(40_000)
-    expect(row.estimatedAtApply).toBe(56_000)
-    expect(row.realizedCostUSD).toBeCloseTo(40_000 * report.costRate, 10)
+    expect(report.rows[0]!.realizedTokens).toBe(40_000)
+    expect(report.rows[0]!.estimatedAtApply).toBe(56_000)
+    expect(report.rows[0]!.realizedCostUSD).toBeCloseTo(40_000 * report.costRate, 10)
     expect(report.totalRealizedCostUSD).toBeCloseTo(40_000 * report.costRate, 10)
+
+    const archived = await writeJournal([mcpRecord({ findingId: 'unused-skills', kind: 'archive-skill' })])
+    const onOpus = await computeActReport({ actionsDir: archived, now: NOW, loadProjects: load([projectOf(onModel(OPUS))]) })
+    expect(onOpus.rows[0]!.status).toBe('measured')
+    expect(onOpus.rows[0]!.realizedCostUSD).toBeCloseTo(onOpus.rows[0]!.realizedTokens * onOpus.costRate, 10)
   })
 })
 

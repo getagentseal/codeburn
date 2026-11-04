@@ -16,6 +16,7 @@ import {
   EDIT_TOOL_NAMES,
   aggregateMcpCoverage,
   computeInputCostRate,
+  FINDING_TOKEN_KIND,
   findingPricing,
   sessionTokensUSD,
   type FindingPricing,
@@ -80,8 +81,7 @@ export type ActReportRow = {
   // kinds with no window scaling.
   estimatedForWindow: number
   realizedTokens: number
-  // realizedTokens priced per session at that session's model rate for the
-  // token kind the fix removes; unpriced models fall back to costRate.
+  // realizedTokens priced the way the fix's finding priced its tokens.
   realizedCostUSD: number
   status: RealizedStatus
   confidence: 'low' | 'normal'
@@ -238,9 +238,15 @@ function confidenceFor(afterSessions: number, baseline: ActionBaseline, afterSta
   return 'normal'
 }
 
-// Prefix tokens (schema, definitions) are written to cache once per session.
-function perSessionPrefixUSD(pricing: FindingPricing, sessions: SessionSummary[], tokens: number): number {
-  return sessions.reduce((sum, s) => sum + sessionTokensUSD(pricing, s.sessionId, tokens, 'cacheWrite'), 0)
+// Advertised and realized stay comparable: a measured finding's token kind at
+// each benefiting session's rate, else the blended rate on the whole figure.
+function realizedUSD(
+  pricing: FindingPricing, rec: ActionRecord, realizedTokens: number,
+  perSession: Array<[SessionSummary, number]>,
+): number {
+  const kind = rec.findingId ? FINDING_TOKEN_KIND[rec.findingId] : undefined
+  if (!kind) return realizedTokens * pricing.fallbackRate
+  return perSession.reduce((sum, [s, tokens]) => sum + sessionTokensUSD(pricing, s.sessionId, tokens, kind), 0)
 }
 
 // ---------------------------------------------------------------------------
@@ -272,15 +278,15 @@ function mcpRow(
       note: `reverted by user: ${servers.join(', ')} loaded again in ${stillLoading} post-apply session${stillLoading === 1 ? '' : 's'}`,
     }
   }
+  const realizedTokens = Math.floor(perSessionTokens * saved.length)
   return {
-    ...base, estimatedForWindow, status: 'measured', confidence,
-    realizedTokens: Math.floor(perSessionTokens * saved.length),
-    realizedCostUSD: perSessionPrefixUSD(pricing, saved, perSessionTokens),
+    ...base, estimatedForWindow, status: 'measured', confidence, realizedTokens,
+    realizedCostUSD: realizedUSD(pricing, rec, realizedTokens, saved.map(s => [s, perSessionTokens])),
   }
 }
 
 function deferRow(
-  base: ActReportRow, sessions: SessionSummary[],
+  base: ActReportRow, rec: ActionRecord, sessions: SessionSummary[],
   baseline: ActionBaseline, afterStart: Date, now: Date,
   mcpClaimedServers: ReadonlySet<string>, pricing: FindingPricing,
 ): ActReportRow {
@@ -315,10 +321,10 @@ function deferRow(
       note: `not yet in effect: deferral is still inactive in ${sessions.length} post-apply session${sessions.length === 1 ? '' : 's'} (takes effect on the next session; the client may not have restarted, or the change was reverted)`,
     }
   }
+  const realizedTokens = Math.floor(perSessionTokens * deferred.length)
   return {
-    ...base, estimatedForWindow, status: 'measured', confidence,
-    realizedTokens: Math.floor(perSessionTokens * deferred.length),
-    realizedCostUSD: perSessionPrefixUSD(pricing, deferred, perSessionTokens),
+    ...base, estimatedForWindow, status: 'measured', confidence, realizedTokens,
+    realizedCostUSD: realizedUSD(pricing, rec, realizedTokens, deferred.map(s => [s, perSessionTokens])),
   }
 }
 
@@ -337,15 +343,15 @@ function archiveRow(
   }
   // Estimate and realized are the same product by construction; the measured
   // signal here is the session count and the revert check, not the multiply.
+  const realizedTokens = Math.floor(perSessionTokens * sessions.length)
   return {
-    ...base, estimatedForWindow, status: 'measured', confidence,
-    realizedTokens: Math.floor(perSessionTokens * sessions.length),
-    realizedCostUSD: perSessionPrefixUSD(pricing, sessions, perSessionTokens),
+    ...base, estimatedForWindow, status: 'measured', confidence, realizedTokens,
+    realizedCostUSD: realizedUSD(pricing, rec, realizedTokens, sessions.map(s => [s, perSessionTokens])),
   }
 }
 
 function readEditRow(
-  base: ActReportRow, sessions: SessionSummary[],
+  base: ActReportRow, rec: ActionRecord, sessions: SessionSummary[],
   baseline: ActionBaseline, afterStart: Date, now: Date, pricing: FindingPricing,
 ): ActReportRow {
   const editsNow = countToolCalls(sessions, EDIT_TOOL_NAMES)
@@ -363,8 +369,8 @@ function readEditRow(
   const readsPerEdit = Math.max(0, deficitThen - deficitNow) * AVG_TOKENS_PER_READ
   const realized = Math.floor(readsPerEdit * editsNow)
   // Each session's share of the credited reads follows its edits.
-  const realizedCostUSD = sessions.reduce((sum, s) =>
-    sum + sessionTokensUSD(pricing, s.sessionId, readsPerEdit * countToolCalls([s], EDIT_TOOL_NAMES), 'input'), 0)
+  const realizedCostUSD = realizedUSD(pricing, rec, realized,
+    sessions.map(s => [s, readsPerEdit * countToolCalls([s], EDIT_TOOL_NAMES)]))
   // Same edits denominator as realized, so realized never exceeds it.
   const estimatedForWindow = Math.floor(deficitThen * editsNow * AVG_TOKENS_PER_READ)
   return {
@@ -484,9 +490,9 @@ async function computeRow(
   if (!baseline) return { ...base, note: 'not measurable: no baseline captured at apply time' }
 
   if (MCP_KINDS.has(rec.kind)) return mcpRow(base, rec, sessions, baseline, afterStart, now, pricing)
-  if (DEFER_KINDS.has(rec.kind)) return deferRow(base, sessions, baseline, afterStart, now, mcpClaimedServers, pricing)
+  if (DEFER_KINDS.has(rec.kind)) return deferRow(base, rec, sessions, baseline, afterStart, now, mcpClaimedServers, pricing)
   if (rec.kind in ARCHIVE_DEF_TOKENS) return archiveRow(base, rec, sessions, baseline, afterStart, now, pricing)
-  if (rec.kind === 'claude-md-rule') return readEditRow(base, sessions, baseline, afterStart, now, pricing)
+  if (rec.kind === 'claude-md-rule') return readEditRow(base, rec, sessions, baseline, afterStart, now, pricing)
   if (rec.kind === 'shell-config') return { ...base, note: 'not measurable: bash result token sizes are not retained in the summary' }
   if (rec.kind === 'guard-install') return guardRow(base, afterStart, now, baseline, opts)
   if (rec.kind === 'model-default') return modelDefaultRow(base, rec, sessions, baseline, afterStart, now, modelDefaultProjectFound)
