@@ -33,7 +33,7 @@ export type CachedCall = {
   /// True when `costUSD` (or the tokens it is priced from) is estimated rather
   /// than metered. Persisted so the estimated-cost marker survives the cache.
   isEstimated?: boolean
-  speed: 'standard' | 'fast' | 'flex'
+  speed: 'standard' | 'fast' | 'flex' | 'ultrafast'
   timestamp: string
   tools: string[]
   bashCommands: string[]
@@ -381,9 +381,11 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // of one streamed message are kept, so cached calls regain their tools.
   // powershell-shell-tool-v1: the Windows PowerShell tool is a shell tool, so
   // cached calls regain the commands compaction used to drop.
+  // thinking-tokens-v1: reasoningTokens is read from usage.output_tokens_details,
+  // so cached calls regain their thinking share of the output.
   // sidechain-output-estimate-v1: subagent messages from Claude Code before
   // 2.1.307 that never got a final usage row have their output estimated.
-  claude: 'advisor-usage-v1-skills-rich-capture-v1-cross-provider-pr-v1-session-lineage-capture-v1-queued-human-prompts-v1-per-call-cwd-v1-streamed-tool-blocks-v1-powershell-shell-tool-v1-sidechain-output-estimate-v1',
+  claude: 'advisor-usage-v1-skills-rich-capture-v1-cross-provider-pr-v1-session-lineage-capture-v1-queued-human-prompts-v1-per-call-cwd-v1-streamed-tool-blocks-v1-powershell-shell-tool-v1-thinking-tokens-v1-sidechain-output-estimate-v1',
   cline: 'worktree-project-grouping-v1',
   // reported-cost-v1: the CLI reports its own per-message cost, so entries
   // cached before cline-cli joined the reported-cost allowlist in parser.ts
@@ -447,7 +449,7 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   crush: 'reported-cost-v1',
   // import-guess-est-v1: synced Auto rows with no dollar amount are estimated.
   // full-lookback-v1: a cached parse could be cut at a narrow request's start.
-  cursor: 'composer-anchored-crediting-v1-est-cost-import-guess-est-v1-full-lookback-v1',
+  cursor: 'composer-anchored-crediting-v1-est-cost-import-guess-est-v1-full-lookback-v1-bubble-id-dedupe-v1',
   // full-turn-accounting: every assistant message counts as a turn
   // (previously only the first after each user message survived), tool_use
   // inputs join the output text, and input tokens use the full user text
@@ -530,7 +532,8 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // billing-mode-v1: the resolved cost basis now rides on each call as
   // `billing` (`included` -> subscription, `actual` -> metered). Cached calls
   // hold none, so they must re-parse.
-  hermes: 'reasoning-output-accounting-v1-est-cost-routed-ids-workspace-pr-v5-cost-provenance-v3-billing-route-v1-billing-mode-v1',
+  // helper-usage-v1: auxiliary-model rows in session_model_usage now become calls.
+  hermes: 'reasoning-output-accounting-v1-est-cost-routed-ids-workspace-pr-v5-cost-provenance-v3-billing-route-v1-billing-mode-v1-helper-usage-v1',
   // reported-cost-v1: OpenClaw's per-message `usage.cost.total` is now
   // preserved through the cache via `costFromBilling`. This is OpenClaw's
   // first parse version; adding it moves the provider's env fingerprint,
@@ -637,7 +640,10 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // placeholders resolve, and Gemini 3 Flash -a/-d rows are priced.
   // user-msg-v1: extracts user prompts from brain transcripts (<USER_REQUEST>)
   // or SQLite steps table, attributing userMessage across calls and turns.
-  antigravity: 'worktree-project-grouping-v7-cache-read-v1-est-cost-model-fallback-v1-user-msg-v1',
+  // cli-workspace-v1: Antigravity CLI (.db) conversations now attribute
+  // projectPath and project from trajectory_metadata_blob instead of collapsing
+  // into a generic antigravity-cli bucket.
+  antigravity: 'worktree-project-grouping-v7-cache-read-v1-est-cost-model-fallback-v1-user-msg-v1-cli-workspace-v1',
   // pr-attribution-v1: the parser now reads the `message`/`part` tables for
   // per-turn user prompt text and the GitHub PR URLs it references. Cached
   // ZCode sessions hold empty userMessage turns and no session prLinks, so

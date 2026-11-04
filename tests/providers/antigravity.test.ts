@@ -1,6 +1,7 @@
 import { mkdtemp, mkdir, readFile, rm, stat, utimes, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
-import { join } from 'path'
+import { join, resolve } from 'path'
+import { fileURLToPath, pathToFileURL } from 'url'
 import { createRequire } from 'node:module'
 import { describe, expect, it } from 'vitest'
 
@@ -35,6 +36,7 @@ import { classifyTurn } from '../../src/classifier.js'
 import type { ParsedApiCall, ParsedTurn } from '../../src/types.js'
 
 const requireForTest = createRequire(import.meta.url)
+const PRIVATE_PROJECT_URI = pathToFileURL(resolve('/Users/example/private-project')).href
 
 // Mirrors the parsed-call -> turn shape src/parser.ts builds (cachedCallToApiCall).
 function turnFromCall(call: ParsedProviderCall): ParsedTurn {
@@ -84,7 +86,7 @@ function createCurrentAntigravityCliDb(dbPath: string, fixture: CurrentCliFixtur
     db.exec('CREATE TABLE trajectory_metadata_blob (id text DEFAULT "main", data blob, PRIMARY KEY (id))')
     db.prepare('INSERT INTO trajectory_metadata_blob (id, data) VALUES (?, ?)').run(
       'main',
-      Buffer.from('file:///Users/example/private-project'),
+      Buffer.from(PRIVATE_PROJECT_URI),
     )
     for (const row of fixture.rows) {
       const data = Buffer.from(row.hex, 'hex')
@@ -622,9 +624,9 @@ describe('antigravity provider helpers', () => {
         outputTokens: 71,
         reasoningTokens: 659,
         sessionId: fixture.conversationId,
-        project: 'antigravity-cli',
+        project: 'private-project',
+        projectPath: fileURLToPath(PRIVATE_PROJECT_URI),
       })
-      expect(calls[0]!.projectPath).toBeUndefined()
       expect(calls[0]!.costUSD).toBeGreaterThan(0)
     } finally {
       if (previousCacheDir === undefined) delete process.env['CODEBURN_CACHE_DIR']

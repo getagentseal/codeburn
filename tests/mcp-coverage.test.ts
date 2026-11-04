@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest'
 
 import {
   aggregateMcpCoverage,
@@ -8,6 +8,7 @@ import {
   detectMcpProfileAdvisor,
   detectMcpToolCoverage,
   estimateMcpSchemaCost,
+  findingPricing,
   runOptimize,
 } from '../src/optimize.js'
 import type {
@@ -18,6 +19,7 @@ import type {
   TaskCategory,
   TokenUsage,
 } from '../src/types.js'
+import { setPriceOverrides } from '../src/models.js'
 
 // ---------------------------------------------------------------------------
 // Test fixtures
@@ -1074,5 +1076,43 @@ describe('connector findings and finding class', () => {
     expect(finding!.explanation).not.toContain('is a claude.ai connector namespace')
     expect(finding!.manualFollowUp?.text)
       .toBe('If you also use a claude.ai connector named claude_ai_Slack, manage it with /mcp or in claude.ai Settings > Connectors.')
+  })
+})
+
+describe('MCP schema findings measured dollars', () => {
+  // Per token: cache write 5e-6, cache read 4e-7 for the priced model.
+  const MODEL = 'measured-test-model'
+  const BLENDED = 1e-6
+  beforeAll(() => setPriceOverrides({ [MODEL]: { input: 4, output: 20, cacheCreation: 5, cacheRead: 0.4 } }))
+  afterAll(() => setPriceOverrides({}))
+  const on = (model: string, call: ParsedApiCall): ParsedApiCall => ({ ...call, model })
+
+  it('prices low-coverage schema at each call model cache rate, unpriced calls at the blended rate', () => {
+    const inventory = Array.from({ length: 20 }, (_, i) => `mcp__big__t${i}`)
+    const projects = [project([
+      makeSession({ sessionId: 'a', inventory, turns: [makeTurn([on(MODEL, makeCall({ cacheCreation: 50_000 })), on(MODEL, makeCall({ cacheRead: 50_000 }))])] }),
+      makeSession({ sessionId: 'b', inventory, turns: [makeTurn([on('unpriced-test-model', makeCall({ cacheCreation: 50_000 }))])] }),
+    ])]
+    const finding = detectMcpToolCoverage(projects, undefined, new Set(['big']), findingPricing(projects, BLENDED))!
+    // 20 unused tools x 9 tokens = 180 schema tokens per call.
+    expect(finding.savingsUSD).toBeCloseTo(180 * 5e-6 + 180 * 4e-7 + 180 * 1.25 * BLENDED, 12)
+  })
+
+  it('prices project-scope cold schema at the call model cache-write rate', () => {
+    const inventory = Array.from({ length: 4 }, (_, i) => `mcp__github__t${i}`)
+    const hotTurns = [makeTurn([
+      on(MODEL, makeCall({ tools: ['mcp__github__t0'], cacheCreation: 10_000 })),
+      on(MODEL, makeCall({ tools: ['mcp__github__t1'], cacheCreation: 10_000 })),
+    ])]
+    const coldTurns = [makeTurn([on(MODEL, makeCall({ cacheCreation: 10_000 }))])]
+    const projects = [
+      projectNamed('api', [makeSession({ inventory, turns: hotTurns, mcpBreakdown: { github: { calls: 2 } } })]),
+      projectNamed('web', [makeSession({ inventory, turns: coldTurns, mcpBreakdown: { github: { calls: 0 } } })]),
+      projectNamed('docs', [makeSession({ inventory, turns: coldTurns, mcpBreakdown: { github: { calls: 0 } } })]),
+    ]
+    const finding = detectMcpProfileAdvisor(projects, undefined, undefined, findingPricing(projects, BLENDED))!
+    expect(finding.tokensSaved).toBe(90)
+    // Two cold calls, each writing 4 tools x 9 tokens.
+    expect(finding.savingsUSD).toBeCloseTo(2 * 36 * 5e-6, 12)
   })
 })

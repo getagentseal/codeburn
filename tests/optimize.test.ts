@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest'
 
 vi.mock('../src/providers/index.js', async (importOriginal) => {
   type ProvidersModule = typeof import('../src/providers/index.js')
@@ -35,6 +35,10 @@ import {
   optimizeEmptyScanLines,
   sessionOpenerLabel,
   askAgentLabel,
+  classTotals,
+  findingPricing,
+  findingUSD,
+  AVG_TOKENS_PER_READ,
   type FindingId,
   type ToolCall,
   type ApiCallMeta,
@@ -43,6 +47,7 @@ import {
 } from '../src/optimize.js'
 import type { ProjectSummary } from '../src/types.js'
 import type { AppliedFix } from '../src/act/types.js'
+import { setPriceOverrides } from '../src/models.js'
 
 function call(name: string, input: Record<string, unknown>, sessionId = 's1', project = 'p1'): ToolCall {
   return { name, input, sessionId, project }
@@ -1641,5 +1646,81 @@ describe('provider-scoped remediation copy (#1044)', () => {
     ))
     expect(opener).toContain('do NOT add to AGENTS.md')
     expect(opener).not.toContain('do NOT add to CLAUDE.md')
+  })
+})
+
+describe('measured finding dollars', () => {
+  // Per token: input 4e-6, cache write 5e-6, cache read 4e-7.
+  const MODEL = 'measured-test-model'
+  const BLENDED = 1e-6
+  beforeAll(() => setPriceOverrides({ [MODEL]: { input: 4, output: 20, cacheCreation: 5, cacheRead: 0.4 } }))
+  afterAll(() => setPriceOverrides({}))
+
+  const pricedProject = () => projectWithLowWorthSessions([
+    lowWorthSession(1, 0, { turns: [reliabilityTurn(0, { call: { model: MODEL } })] }),
+  ])
+
+  it('prices re-reads at their own session model input rate, unknown sessions at the blended rate', () => {
+    const calls = [
+      ...Array.from({ length: 4 }, () => call('Read', { file_path: '/src/a.ts' }, 's1')),
+      ...Array.from({ length: 3 }, () => call('Read', { file_path: '/src/b.ts' }, 'unknown')),
+    ]
+    const finding = detectDuplicateReads(calls, undefined, findingPricing([pricedProject()], BLENDED))!
+    expect(finding.tokensSaved).toBe(5 * AVG_TOKENS_PER_READ)
+    expect(finding.savingsUSD).toBeCloseTo(3 * 600 * 4e-6 + 2 * 600 * BLENDED, 12)
+  })
+
+  it('prices build-folder reads at the session model input rate', () => {
+    const calls = Array.from({ length: 3 }, (_, i) => call('Read', { file_path: `/x/node_modules/${i}.js` }, 's1'))
+    const finding = detectJunkReads(calls, undefined, findingPricing([pricedProject()], BLENDED))!
+    expect(finding.savingsUSD).toBeCloseTo(3 * 600 * 4e-6, 12)
+  })
+
+  it('prices excess warmup at the session model cache-write rate', () => {
+    const apiCalls: ApiCallMeta[] = Array.from({ length: 20 }, () => ({ cacheCreationTokens: 80_000, version: '2.1.100', sessionId: 's1' }))
+    const finding = detectCacheBloat(apiCalls, [pricedProject()], undefined, findingPricing([pricedProject()], BLENDED))!
+    // 80k median over the 50k default baseline, on 20 calls.
+    expect(finding.tokensSaved).toBe(600_000)
+    expect(finding.savingsUSD).toBeCloseTo(20 * 30_000 * 5e-6, 10)
+  })
+
+  it('prices low-worth sessions from their real cost', () => {
+    const project = projectWithLowWorthSessions([
+      lowWorthSession(4, 0, { turns: [lowWorthTurn({ hasEdits: false })] }),
+      lowWorthSession(6, 1, { turns: [lowWorthTurn({ hasEdits: false })] }),
+    ])
+    // Both no-edit sessions at the 50% recovery fraction.
+    expect(detectLowWorthSessions([project])!.savingsUSD).toBeCloseTo(5, 10)
+  })
+
+  it('prices retry-heavy capability turns from their real cost', () => {
+    const turns = Array.from({ length: 5 }, (_, i) => reliabilityTurn(i, {
+      retries: i < 3 ? 1 : 0,
+      call: { tools: ['Edit', 'Skill'], skills: ['reviewer'], costUSD: 0.2 },
+    }))
+    // Three retry turns at $0.20, 50% recoverable.
+    expect(detectCapabilityReliability([projectWithReliabilityTurns(turns)])!.savingsUSD).toBeCloseTo(0.3, 10)
+  })
+
+  it('keeps the blended estimate for a detector left on the fallback', () => {
+    const calls = [
+      ...Array.from({ length: 5 }, () => call('Read', { file_path: '/src/a.ts' })),
+      ...Array.from({ length: 10 }, () => call('Edit', {})),
+    ]
+    const finding = detectLowReadEditRatio(calls)!
+    expect(finding.savingsUSD).toBeUndefined()
+    expect(findingUSD(finding, BLENDED)).toBe(finding.tokensSaved * BLENDED)
+  })
+
+  it('sums measured dollars in class totals and scales them to the apply-able share', () => {
+    const base = { title: '', explanation: '', impact: 'low' as const, fix: { type: 'paste' as const, destination: 'prompt' as const, label: '', text: '' } }
+    const findings: WasteFinding[] = [
+      { ...base, id: 'low-worth-sessions', tokensSaved: 1000, savingsUSD: 2 },
+      { ...base, id: 'redundant-rereads', tokensSaved: 1000 },
+      { ...base, id: 'mcp-low-coverage', tokensSaved: 1000, applyTokensSaved: 250, savingsUSD: 4, apply: { kind: 'mcp-remove', servers: ['x'] } },
+    ]
+    const totals = classTotals(findings, BLENDED)
+    expect(totals.nudge.savingsUSD).toBeCloseTo(2 + 1000 * BLENDED, 12)
+    expect(totals.fix.savingsUSD).toBeCloseTo(1, 12)
   })
 })

@@ -339,7 +339,11 @@ fn parse_wsl_distros(raw: &[u8]) -> Vec<String> {
 fn tier_display(subscription_type: Option<&str>, rate_limit_tier: Option<&str>) -> String {
     let subscription_type = subscription_type.map(|s| s.to_lowercase()).unwrap_or_default();
     let tier = rate_limit_tier.map(|r| r.to_lowercase()).unwrap_or_default();
-    let has_max_20 = tier.contains("max_20x") || tier.contains("max20x") || tier.contains("max-20x");
+    let multiplier = tier.find("max").and_then(|i| {
+        let rest = tier[i + 3..].trim_start_matches(['_', '-']);
+        let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+        (!digits.is_empty() && rest[digits.len()..].starts_with('x')).then_some(digits)
+    });
     let has_max = tier.contains("max");
     if subscription_type == "team" || (subscription_type.is_empty() && tier.contains("team")) {
         return if has_max { "Team Premium".into() } else { "Team".into() };
@@ -347,13 +351,24 @@ fn tier_display(subscription_type: Option<&str>, rate_limit_tier: Option<&str>) 
     if subscription_type == "enterprise" || (subscription_type.is_empty() && tier.contains("enterprise")) {
         return if has_max { "Enterprise Premium".into() } else { "Enterprise".into() };
     }
+    if tier.contains("ultra") {
+        return "Ultra".into();
+    }
+    if let Some(n) = multiplier {
+        return format!("Max {n}x");
+    }
     if subscription_type == "max" || has_max {
-        return if has_max_20 { "Max 20x".into() } else { "Max 5x".into() };
+        return "Max".into();
     }
     if subscription_type == "pro" || tier.contains("pro") {
         return "Pro".into();
     }
-    "Subscription".into()
+    let readable = tier.strip_prefix("default_claude_").unwrap_or(&tier).replace('_', " ");
+    let mut chars = readable.chars();
+    match chars.next() {
+        Some(c) => c.to_uppercase().chain(chars).collect(),
+        None => "Subscription".into(),
+    }
 }
 
 // ---- HTTP ------------------------------------------------------------------------------
@@ -672,7 +687,7 @@ mod tests {
 
     #[test]
     fn tier_display_prefers_subscription_type() {
-        let cases: [(Option<&str>, Option<&str>, &str); 9] = [
+        let cases: [(Option<&str>, Option<&str>, &str); 14] = [
             (Some("max"), Some("default_claude_max_20x"), "Max 20x"),
             (Some("team"), Some("default_claude_max_5x"), "Team Premium"),
             (Some("team"), None, "Team"),
@@ -681,6 +696,11 @@ mod tests {
             (None, Some("max_5x"), "Max 5x"),
             (None, Some("max_20x"), "Max 20x"),
             (None, Some("team"), "Team"),
+            (None, Some("default_claude_max_10x"), "Max 10x"),
+            (None, Some("default_claude_ultra"), "Ultra"),
+            (None, Some("default_claude_foo_bar"), "Foo bar"),
+            (Some("max"), Some(""), "Max"),
+            (None, Some("default_claude_max"), "Max"),
             (None, None, "Subscription"),
         ];
         for (subscription_type, rate_limit_tier, expected) in cases {

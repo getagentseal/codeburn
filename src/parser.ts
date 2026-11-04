@@ -1221,6 +1221,7 @@ export function compactEntry(raw: JournalEntry): JournalEntry {
     }
   }
   if (u.cache_read_input_tokens) compactUsage.cache_read_input_tokens = u.cache_read_input_tokens
+  if (u.output_tokens_details?.thinking_tokens) compactUsage.output_tokens_details = { thinking_tokens: u.output_tokens_details.thinking_tokens }
   if (u.server_tool_use) {
     compactUsage.server_tool_use = {
       ...(u.server_tool_use.web_search_requests ? { web_search_requests: u.server_tool_use.web_search_requests } : {}),
@@ -1548,7 +1549,7 @@ export function parseApiCall(entry: JournalEntry, toolResultMeta?: Map<string, T
     cacheCreationInputTokens: cacheCreation.totalTokens,
     cacheReadInputTokens: usage.cache_read_input_tokens ?? 0,
     cachedInputTokens: 0,
-    reasoningTokens: 0,
+    reasoningTokens: usage.output_tokens_details?.thinking_tokens ?? 0,
     webSearchRequests: usage.server_tool_use?.web_search_requests ?? 0,
   }
 

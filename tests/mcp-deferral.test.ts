@@ -1,4 +1,4 @@
-import { describe, it, expect, afterAll } from 'vitest'
+import { describe, it, expect, afterAll, beforeAll } from 'vitest'
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { dirname, join } from 'path'
@@ -8,6 +8,7 @@ import {
   detectMcpAlwaysLoadHygiene,
   detectMcpDeferThreshold,
   findDeferralEnvSetting,
+  findingPricing,
   type ApiCallMeta,
   type ToolCall,
 } from '../src/optimize.js'
@@ -19,6 +20,7 @@ import type {
   TaskCategory,
   TokenUsage,
 } from '../src/types.js'
+import { setPriceOverrides } from '../src/models.js'
 
 // ---------------------------------------------------------------------------
 // Test fixtures (same conventions as tests/mcp-coverage.test.ts)
@@ -741,5 +743,49 @@ describe('deferral finding apply payloads', () => {
     writeJson(join(home, '.claude', 'settings.json'), { env: { ENABLE_TOOL_SEARCH: 'auto:50' } })
     const finding = detectMcpDeferThreshold([project([makeSession({ turns: claudeTurns() })])], new Set([cwd]), home)
     expect(finding!.apply).toMatchObject({ kind: 'defer-threshold', value: 'auto:50', removeOverride: true })
+  })
+})
+
+describe('deferral family measured dollars', () => {
+  // Input per token: 4e-6 for the priced model; the other model has no price.
+  const MODEL = 'measured-test-model'
+  const BLENDED = 1e-6
+  beforeAll(() => setPriceOverrides({ [MODEL]: { input: 4, output: 20 } }))
+  afterAll(() => setPriceOverrides({}))
+  const turnsOn = (model: string) => [makeTurn([{ ...makeCall({ tools: ['mcp__srv__t1'] }), model }])]
+  const sessions = () => [
+    makeSession({ sessionId: 'a', turns: turnsOn(MODEL), mcpBreakdown: { srv: { calls: 1 } } }),
+    makeSession({ sessionId: 'b', turns: turnsOn('unpriced-test-model'), mcpBreakdown: { srv: { calls: 1 } } }),
+  ]
+
+  it('prices mcp-deferral-off schema at each session model input rate', () => {
+    const projects = [project(sessions())]
+    const finding = detectMcpDeferralOff([], projects, new Set(), [], makeDir('codeburn-home-'), findingPricing(projects, BLENDED))!
+    // 2000 schema tokens in each of the two sessions.
+    expect(finding.tokensSaved).toBe(4000)
+    expect(finding.savingsUSD).toBeCloseTo(2000 * 4e-6 + 2000 * BLENDED, 12)
+  })
+
+  it('prices mcp-alwaysload-hygiene schema at each session model input rate', () => {
+    const home = makeDir('codeburn-home-')
+    const cwd = makeDir('codeburn-cwd-')
+    writeJson(join(cwd, '.mcp.json'), { mcpServers: { pinned: { command: 'x', alwaysLoad: true } } })
+    const projects = [project(sessions().map(s => ({ ...s, mcpBreakdown: {} })))]
+    const finding = detectMcpAlwaysLoadHygiene(projects, new Set([cwd]), [], undefined, home, findingPricing(projects, BLENDED))!
+    expect(finding.tokensSaved).toBe(4000)
+    expect(finding.savingsUSD).toBeCloseTo(2000 * 4e-6 + 2000 * BLENDED, 12)
+  })
+
+  it('prices mcp-defer-threshold schema at each session model input rate', () => {
+    const home = makeDir('codeburn-home-')
+    const cwd = makeDir('codeburn-cwd-')
+    const mcpServers: Record<string, unknown> = { srv0: { command: 'x' }, srv1: { command: 'x' }, srv2: { command: 'x' } }
+    writeJson(join(cwd, '.mcp.json'), { mcpServers })
+    writeJson(join(home, '.claude', 'settings.json'), { env: { ENABLE_TOOL_SEARCH: 'auto' } })
+    const projects = [project(sessions().map(s => ({ ...s, mcpBreakdown: {} })))]
+    const finding = detectMcpDeferThreshold(projects, new Set([cwd]), home, findingPricing(projects, BLENDED))!
+    // 6000 defs in each of the two sessions.
+    expect(finding.tokensSaved).toBe(12_000)
+    expect(finding.savingsUSD).toBeCloseTo(6000 * 4e-6 + 6000 * BLENDED, 12)
   })
 })

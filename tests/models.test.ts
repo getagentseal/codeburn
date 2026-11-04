@@ -367,6 +367,21 @@ describe('getModelCosts', () => {
       expect(costs?.fastMultiplier).toBe(1)
     })
 
+    it('prices an ultrafast call at the ultrafast rates, and standard without them', () => {
+      const costs = parseLiteLLMEntry({
+        input_cost_per_token: 1e-5,
+        output_cost_per_token: 5e-5,
+        input_cost_per_token_ultrafast: 6e-5,
+        output_cost_per_token_ultrafast: 3e-4,
+      } as never)
+      expect(costs?.ultrafastMultiplier).toBe(6)
+      const standard = calculateCost('gpt-6-astra', 1_000, 500, 0, 0, 0, 'standard', 0, 'codex')
+      expect(standard).toBeGreaterThan(0)
+      expect(calculateCost('gpt-6-astra', 1_000, 500, 0, 0, 0, 'ultrafast', 0, 'codex')).toBeCloseTo(standard * 6, 12)
+      const plain = calculateCost('gpt-5.3-codex', 1_000, 500, 0, 0, 0, 'standard', 0, 'codex')
+      expect(calculateCost('gpt-5.3-codex', 1_000, 500, 0, 0, 0, 'ultrafast', 0, 'codex')).toBe(plain)
+    })
+
     it('does not guess when the published ratios disagree', () => {
       // azure/gpt-5.5 as quoted live: 2.5x on every base rate but 2x on the
       // above-272k tier, so no single multiplier can price both regimes. The

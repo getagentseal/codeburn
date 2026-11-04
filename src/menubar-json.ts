@@ -138,7 +138,7 @@ export type ProviderCost = {
   /** Portion of `cost` priced from estimates (live parse only). Absent when zero. */
   estimatedCostUSD?: number
 }
-import type { OptimizeResult } from './optimize.js'
+import { findingUSD, type OptimizeResult } from './optimize.js'
 import { getCurrency } from './currency.js'
 import type { GranularHistory } from './granular-history.js'
 import { getShortModelName, modelRowKey } from './models.js'
@@ -667,11 +667,11 @@ function buildOptimize(optimize: OptimizeResult | null): MenubarPayload['optimiz
     return { findingCount: 0, savingsUSD: 0, topFindings: [] }
   }
   const { findings, costRate } = optimize
-  const totalSavingsUSD = findings.reduce((s, f) => s + f.tokensSaved * costRate, 0)
+  const totalSavingsUSD = findings.reduce((s, f) => s + findingUSD(f, costRate), 0)
   const topFindings = findings.slice(0, TOP_FINDINGS_LIMIT).map(f => ({
     title: f.title,
     impact: f.impact,
-    savingsUSD: f.tokensSaved * costRate,
+    savingsUSD: findingUSD(f, costRate),
   }))
   return {
     findingCount: findings.length,
