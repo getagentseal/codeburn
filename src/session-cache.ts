@@ -383,7 +383,9 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // cached calls regain the commands compaction used to drop.
   // thinking-tokens-v1: reasoningTokens is read from usage.output_tokens_details,
   // so cached calls regain their thinking share of the output.
-  claude: 'advisor-usage-v1-skills-rich-capture-v1-cross-provider-pr-v1-session-lineage-capture-v1-queued-human-prompts-v1-per-call-cwd-v1-streamed-tool-blocks-v1-powershell-shell-tool-v1-thinking-tokens-v1',
+  // sidechain-output-estimate-v1: subagent messages from Claude Code before
+  // 2.1.307 that never got a final usage row have their output estimated.
+  claude: 'advisor-usage-v1-skills-rich-capture-v1-cross-provider-pr-v1-session-lineage-capture-v1-queued-human-prompts-v1-per-call-cwd-v1-streamed-tool-blocks-v1-powershell-shell-tool-v1-thinking-tokens-v1-sidechain-output-estimate-v1',
   cline: 'worktree-project-grouping-v1',
   // reported-cost-v1: the CLI reports its own per-message cost, so entries
   // cached before cline-cli joined the reported-cost allowlist in parser.ts

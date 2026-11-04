@@ -370,7 +370,15 @@ import type { DateRange, ProjectSummary } from './types.js'
 // PENDING_REDERIVE_PROVIDER_VERSIONS entry is needed. 77 is the generation
 // both 0.9.27 upgrade paths converge on; no-zstd Nodes can no longer run since
 // the 22.15 floor.
-export const DAILY_CACHE_VERSION = 77
+// v78: subagent messages from Claude Code before 2.1.307 never got a final
+// usage row, and their output is now estimated from content. Days settled on
+// the placeholder counts re-derive so they carry it. Calls are unchanged and
+// output and cost only rise, so no PENDING_REDERIVE_PROVIDER_VERSIONS entry is
+// needed. The re-derive also moves the Claude activity split (exploration,
+// coding and delegation turns and their cost share, edit turns, one-shot
+// counts) of days whose transcripts survive onto the streamed-tool-blocks
+// parse (October 2026), which left settled days on the old split.
+export const DAILY_CACHE_VERSION = 78
 const MIN_SUPPORTED_VERSION = 28
 
 /// Providers whose per-day CALL COUNT means something different at

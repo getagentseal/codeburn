@@ -71,6 +71,7 @@ export type AssistantMessageContent = {
   content: ContentBlock[]
   usage: ApiUsage
   stop_reason?: string
+  estimatedOutputChars?: number
 }
 
 export type JournalEntry = {
