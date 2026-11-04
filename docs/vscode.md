@@ -20,7 +20,7 @@ The bundled CLI lives in `vscode/cli/`, staged by `vscode/scripts/stage-cli.mjs`
 
 ## Runtime
 
-The CLI needs Node 22.13 or later, and `node:sqlite` (Node 22.5+) for Cursor, OpenCode and Copilot. Measured on 6 Oct 2026 with `ELECTRON_RUN_AS_NODE=1`:
+The CLI needs Node 22.15 or later, and `node:sqlite` (Node 22.5+) for Cursor, OpenCode and Copilot. Measured on 6 Oct 2026 with `ELECTRON_RUN_AS_NODE=1`:
 
 | Editor | Version | Electron | Node | `node:sqlite` |
 |:--|:--|:--|:--|:--|
@@ -30,7 +30,7 @@ The CLI needs Node 22.13 or later, and `node:sqlite` (Node 22.5+) for Cursor, Op
 
 So on current editors the CLI runs on the editor's own Node (`process.execPath` with `ELECTRON_RUN_AS_NODE=1`), exactly as the desktop app runs it on Electron. `vscode/src/runtime.ts` picks, in order:
 
-1. `codeburn.nodePath`, if it is Node 22.13+ with `node:sqlite`;
+1. `codeburn.nodePath`, if it is Node 22.15+ with `node:sqlite`;
 2. the editor's own Node, if it is;
 3. the first `node` on `PATH` or in Homebrew, nvm, Volta, asdf or npm-global that is;
 4. the editor's own Node anyway, with a one-time warning and a note in the summary and tooltip naming what it cannot read.

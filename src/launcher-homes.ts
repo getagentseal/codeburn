@@ -2,7 +2,7 @@ import { existsSync, readdirSync, realpathSync } from 'fs'
 import { homedir } from 'os'
 import { join, resolve, sep } from 'path'
 
-import { readTextHeadSync, zstdSupported } from './fs-utils.js'
+import { readTextHeadSync } from './fs-utils.js'
 
 export type LauncherNote = {
   name: string
@@ -68,20 +68,9 @@ export function rolloutFileSessionId(filePath: string): string | undefined {
   }
 }
 
-let zstdSkipNoticeSent = false
-
-/** `rollout-*.jsonl`, or the `.jsonl.zst` form Codex compresses cold rollouts
- *  into, when this Node can decompress it. */
+/** `rollout-*.jsonl`, or the `.jsonl.zst` form Codex compresses cold rollouts into. */
 export function isRolloutFileName(name: string): boolean {
-  if (!name.startsWith('rollout-')) return false
-  if (name.endsWith('.jsonl')) return true
-  if (!name.endsWith('.jsonl.zst')) return false
-  if (zstdSupported) return true
-  if (!zstdSkipNoticeSent) {
-    zstdSkipNoticeSent = true
-    process.stderr.write('codeburn: codex: skipping compressed rollouts (.jsonl.zst); counting them needs Node 22.15+ (node:zlib zstd)\n')
-  }
-  return false
+  return name.startsWith('rollout-') && (name.endsWith('.jsonl') || name.endsWith('.jsonl.zst'))
 }
 
 /** Rollout filename without `.jsonl` / `.jsonl.zst`. */
