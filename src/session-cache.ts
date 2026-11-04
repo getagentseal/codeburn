@@ -528,7 +528,8 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // billing-mode-v1: the resolved cost basis now rides on each call as
   // `billing` (`included` -> subscription, `actual` -> metered). Cached calls
   // hold none, so they must re-parse.
-  hermes: 'reasoning-output-accounting-v1-est-cost-routed-ids-workspace-pr-v5-cost-provenance-v3-billing-route-v1-billing-mode-v1',
+  // helper-usage-v1: auxiliary-model rows in session_model_usage now become calls.
+  hermes: 'reasoning-output-accounting-v1-est-cost-routed-ids-workspace-pr-v5-cost-provenance-v3-billing-route-v1-billing-mode-v1-helper-usage-v1',
   // reported-cost-v1: OpenClaw's per-message `usage.cost.total` is now
   // preserved through the cache via `costFromBilling`. This is OpenClaw's
   // first parse version; adding it moves the provider's env fingerprint,
