@@ -217,9 +217,9 @@ describe('codeburn --route / --billing: the four commands slice by call', () => 
     ok(['export', '--format', 'json', '-o', out, '--from', '2026-01-01', '--to', '2030-01-01', '--billing', 'metered'], home)
 
     const written = JSON.parse(await readFile(`${out}.json`, 'utf-8')) as {
-      periods: Array<{ models: Array<{ Model: string }> }>
+      periods: Array<{ models: Array<{ model: string }> }>
     }
-    const models = written.periods.flatMap(p => p.models.map(m => m.Model)).sort()
+    const models = written.periods.flatMap(p => p.models.map(m => m.model)).sort()
     expect(models).not.toContain('Haiku 4.5')
     expect(models.some(m => m.includes('Bedrock'))).toBe(true)
     expect(models.some(m => m.includes('OpenRouter'))).toBe(true)
