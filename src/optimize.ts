@@ -11,8 +11,8 @@ import { EDIT_TOOLS } from './classifier.js'
 import { readSessionLines, readSessionFileSync } from './fs-utils.js'
 import { discoverAllSessions, providerDisplayName } from './providers/index.js'
 import { parseJsonlLine, shouldSkipLine } from './parser.js'
-import type { DateRange, ProjectSummary, SessionSummary } from './types.js'
-import { cacheWriteCostPerToken, getModelCosts, type ModelCosts } from './models.js'
+import type { DateRange, ParsedApiCall, ProjectSummary, SessionSummary } from './types.js'
+import { billableOutputTokens, cacheWriteCostPerToken, calculateCost, getModelCosts, getShortModelName, pricingModelAt, type ModelCosts } from './models.js'
 import { formatCost } from './currency.js'
 import { formatTokens } from './format.js'
 import { recommendModelDefault, type ModelDefaultRecommendation } from './act/model-defaults.js'
@@ -118,6 +118,9 @@ const LOW_CACHE_HIT_MIN_INPUT_TOKENS = CONTEXT_BLOAT_MIN_INPUT_TOKENS
 const LOW_CACHE_HIT_MIN_CALLS = 5
 const LOW_CACHE_HIT_PREVIEW = 5
 const WORTH_IT_MIN_COST_USD = 2
+const PREMIUM_MIN_USD = 1
+const PREMIUM_HIGH_USD = 20
+const PREMIUM_MEDIUM_USD = 5
 const WORTH_IT_NO_EDIT_MIN_COST_USD = 3
 // A zero-edit session's full cost is an upper bound on recoverable waste, not
 // a point estimate, so use a bounded fraction for honest savings numbers.
@@ -373,6 +376,8 @@ export type FindingId =
   | 'unused-skills'
   | 'unused-commands'
   | 'recurring-context'
+  | 'fast-mode-background'
+  | 'long-context-premium'
 
 /// How a finding is meant to be acted on:
 /// - `fix`   CodeBurn can write the change itself (`codeburn optimize --apply`)
@@ -412,6 +417,8 @@ export const FINDING_CLASS: Record<FindingId, FindingClass> = {
   'unused-skills': 'fix',
   'unused-commands': 'fix',
   'recurring-context': 'nudge',
+  'fast-mode-background': 'nudge',  // some runs pay for speed on purpose
+  'long-context-premium': 'keep',   // the context may be needed
 }
 
 /// Ids whose plan is built from the `apply` payload: without it the plan
@@ -456,6 +463,8 @@ export const FINDING_BASIS: Record<FindingId, FindingBasis> = {
   // system prompt, tool schemas and CLAUDE.md in with the pasted block, so
   // nothing counted isolates the block. Its size is modelled from its bytes.
   'recurring-context': 'estimated',        // block chars x BASH_TOKENS_PER_CHAR x repeats
+  'fast-mode-background': 'measured',     // priced calls, fast minus standard
+  'long-context-premium': 'measured',     // priced calls, tier minus base rates
 }
 
 /// Scope label for a setting that lives in ~/.zshrc / ~/.bashrc. The MCP
@@ -3985,6 +3994,120 @@ export function detectLowCacheHitSessions(projects: ProjectSummary[]): WasteFind
   }
 }
 
+/// The call's tokens priced again at `speed`; `provider` undefined drops the
+/// long-context tier, as `tieredCostsFor` applies it only to tiered providers.
+function repricedCallUSD(call: ParsedApiCall, speed: ParsedApiCall['speed'], provider: string | undefined): number {
+  const u = call.usage
+  return calculateCost(
+    pricingModelAt(call.model, call.timestamp), u.inputTokens,
+    billableOutputTokens(call.provider, u.outputTokens, u.reasoningTokens),
+    u.cacheCreationInputTokens, u.cacheReadInputTokens, u.webSearchRequests,
+    speed, call.cacheCreationOneHourTokens ?? 0, provider,
+  )
+}
+
+function premiumImpact(usd: number): Impact {
+  return usd > PREMIUM_HIGH_USD ? 'high' : usd > PREMIUM_MEDIUM_USD ? 'medium' : 'low'
+}
+
+function plural(n: number, word: string): string {
+  return `${n} ${word}${n === 1 ? '' : 's'}`
+}
+
+export function detectFastModeBackground(projects: ProjectSummary[]): WasteFinding | null {
+  let calls = 0
+  let outputTokens = 0
+  let premiumUSD = 0
+  const models = new Set<string>()
+  for (const project of projects) {
+    for (const session of project.sessions) {
+      if (session.isSidechain !== true) continue
+      for (const turn of session.turns) {
+        for (const call of turn.assistantCalls) {
+          if (call.speed !== 'fast' || call.supplementaryAccounting) continue
+          const premium = call.costUSD - repricedCallUSD(call, 'standard', call.provider)
+          if (premium <= 0) continue
+          calls++
+          outputTokens += call.usage.outputTokens
+          premiumUSD += premium
+          models.add(getShortModelName(call.model))
+        }
+      }
+    }
+  }
+  if (premiumUSD < PREMIUM_MIN_USD) return null
+
+  return {
+    id: 'fast-mode-background',
+    title: `Fast mode cost ${formatCost(premiumUSD)} extra on background agents`,
+    explanation: `${plural(calls, 'fast-mode call')} ran inside subagent sessions on ${[...models].sort().join(', ')}, where nobody waits for the reply. At standard speed the same tokens would have cost ${formatCost(premiumUSD)} less. Some background runs need the speed, so this is a habit check, not a rule.`,
+    impact: premiumImpact(premiumUSD),
+    tokensSaved: outputTokens,
+    savingsUSD: premiumUSD,
+    fix: {
+      type: 'paste',
+      destination: 'manual',
+      label: 'Keep fast mode for interactive work:',
+      text: 'Use fast mode only for interactive work. Turn it off before long subagent or background runs, where nobody waits for the speed.',
+    },
+  }
+}
+
+export function detectLongContextPremium(projects: ProjectSummary[]): WasteFinding | null {
+  let totalCalls = 0
+  let tokensAbove = 0
+  let premiumUSD = 0
+  const sessions = new Set<string>()
+  const byModel = new Map<string, { threshold: number; calls: number }>()
+  for (const project of projects) {
+    for (const session of project.sessions) {
+      for (const turn of session.turns) {
+        for (const call of turn.assistantCalls) {
+          if (call.supplementaryAccounting) continue
+          totalCalls++
+          const threshold = getModelCosts(pricingModelAt(call.model, call.timestamp))?.longContextTier?.thresholdTokens
+          if (threshold === undefined) continue
+          // Priced at the call's speed minus fast, so fast-mode-background owns the fast premium.
+          const speed = call.speed === 'fast' ? 'standard' : call.speed
+          const premium = repricedCallUSD(call, speed, call.provider) - repricedCallUSD(call, speed, undefined)
+          if (premium <= 0) continue
+          const u = call.usage
+          const prompt = u.inputTokens + u.cacheReadInputTokens + Math.max(u.cacheCreationInputTokens, call.cacheCreationOneHourTokens ?? 0)
+          tokensAbove += Math.max(0, prompt - threshold)
+          premiumUSD += premium
+          sessions.add(`${project.projectPath}\0${session.sessionId}`)
+          const name = getShortModelName(call.model)
+          const entry = byModel.get(name) ?? { threshold, calls: 0 }
+          entry.calls++
+          byModel.set(name, entry)
+        }
+      }
+    }
+  }
+  if (premiumUSD < PREMIUM_MIN_USD) return null
+
+  const crossed = [...byModel.values()].reduce((sum, m) => sum + m.calls, 0)
+  const models = [...byModel.entries()].sort((a, b) => b[1].calls - a[1].calls || a[0].localeCompare(b[0]))
+  const list = models.map(([name, m]) => `${name} above ${formatTokens(m.threshold)}: ${plural(m.calls, 'call')}`).join('; ')
+  const share = ((crossed / totalCalls) * 100).toFixed(1)
+  const limits = models.map(([name, m]) => `${formatTokens(m.threshold)} on ${name}`).join(', ')
+
+  return {
+    id: 'long-context-premium',
+    title: `${plural(crossed, 'call')} crossed the long-context price line, ${formatCost(premiumUSD)} extra`,
+    explanation: `${crossed} of ${totalCalls} calls (${share}%) in ${plural(sessions.size, 'session')} sent more prompt tokens than the model's long-context threshold (${list}), so each of those requests billed at the higher tier. The context may have been needed; this is what it cost.`,
+    impact: premiumImpact(premiumUSD),
+    tokensSaved: tokensAbove,
+    savingsUSD: premiumUSD,
+    fix: {
+      type: 'paste',
+      destination: 'manual',
+      label: 'Stay under the long-context price line:',
+      text: `Compact or start a fresh session before the prompt passes ${limits}.`,
+    },
+  }
+}
+
 function findYoungProjectFirstSessionIds(projects: ProjectSummary[]): Set<string> {
   const firstSessionIds = new Set<string>()
 
@@ -4247,6 +4370,8 @@ export async function scanAndDetect(
     () => detectContextBloat(behavioralProjects, lowWorthSessionIds, provider),
     () => detectSessionOutliers(behavioralProjects, outlierExclusions, provider),
     () => detectLowCacheHitSessions(behavioralProjects),
+    () => detectFastModeBackground(projects),
+    () => detectLongContextPremium(projects),
     claudeOnly(() => detectBloatedClaudeMd(projectCwds)),
     claudeOnly(() => detectBashBloat()),
     claudeOnly(() => detectRecurringContext(openers)),
