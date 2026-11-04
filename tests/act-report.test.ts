@@ -16,7 +16,7 @@ import {
 import { formatAppliedFix, REPORT_MIN_AGE_DAYS } from '../src/act/types.js'
 import type { ActionRecord } from '../src/act/types.js'
 import type { FindingPlan } from '../src/act/plans.js'
-import type { WasteFinding } from '../src/optimize.js'
+import { aggregateMcpCoverage, detectMcpToolCoverage, type WasteFinding } from '../src/optimize.js'
 import type { ClassifiedTurn, ProjectSummary } from '../src/types.js'
 import { cacheWriteCostPerToken, getModelCosts } from '../src/models.js'
 
@@ -134,6 +134,17 @@ function modelEditTurns(model: string, editTurns: number, oneShotTurns: number):
   }))
 }
 
+// One call that writes the prompt cache, one that reads it.
+function cachedTurns(): ClassifiedTurn[] {
+  return modelEditTurns('claude-opus-4-6', 2, 2).map((turn, i) => ({
+    ...turn,
+    assistantCalls: turn.assistantCalls.map(call => ({
+      ...call,
+      usage: { ...call.usage, cacheCreationInputTokens: i === 0 ? 50_000 : 0, cacheReadInputTokens: i === 0 ? 0 : 50_000 },
+    })),
+  }))
+}
+
 function modelProject(
   project: string, projectPath: string, model: string, editTurns: number, oneShotTurns: number,
 ): ProjectSummary {
@@ -222,7 +233,7 @@ describe('realized dollars', () => {
   it('prices realized tokens at the session model rate of the token kind the finding priced', async () => {
     const opus = getModelCosts(OPUS)
     expect(opus).not.toBeNull()
-    const lowCoverage = await writeJournal([mcpRecord({ findingId: 'mcp-low-coverage' })])
+    const lowCoverage = await writeJournal([mcpRecord({ kind: 'mcp-project-scope', findingId: 'mcp-project-scope' })])
     const unused = await writeJournal([mcpRecord({ findingId: 'unused-mcp' })])
     const projects = load([projectOf(onModel(OPUS))])
     const writes = await computeActReport({ actionsDir: lowCoverage, now: NOW, loadProjects: projects })
@@ -821,6 +832,7 @@ describe('partial-action baseline capture', () => {
     }
     const sessions = sessionsAt(2, daysAgo(1), {
       mcpInventory: Array.from({ length: 20 }, (_, i) => `mcp__filesystem__t${i}`),
+      turns: cachedTurns(),
     })
 
     const baseline = captureBaseline(finding, 'mcp-remove', {
@@ -829,7 +841,7 @@ describe('partial-action baseline capture', () => {
         server: 'filesystem',
         toolsAvailable: 20,
         toolsInvoked: 3,
-        unusedTools: Array.from({ length: 17 }, (_, i) => `mcp__filesystem__unused${i}`),
+        unusedTools: Array.from({ length: 17 }, (_, i) => `mcp__filesystem__t${i}`),
         invocations: 0,
         loadedSessions: 2,
         coverageRatio: 3 / 20,
@@ -841,7 +853,7 @@ describe('partial-action baseline capture', () => {
     expect(baseline).toMatchObject({
       estimatedTokens: 20_000,
       sessions: 2,
-      metrics: { filesystem: 6_800 },
+      metrics: { filesystem: 206.55 },
     })
     expect(finding.tokensSaved).toBe(40_000)
   })
@@ -863,6 +875,7 @@ describe('partial-action baseline capture', () => {
         ...Array.from({ length: 17 }, (_, i) => `mcp__filesystem__t${i}`),
         ...Array.from({ length: 12 }, (_, i) => `mcp__managed__t${i}`),
       ],
+      turns: cachedTurns(),
     })
     const coverage = [
       {
@@ -884,7 +897,7 @@ describe('partial-action baseline capture', () => {
     expect(baseline).toMatchObject({
       estimatedTokens: 10_000,
       sessions: 2,
-      metrics: { filesystem: 6_800 },
+      metrics: { filesystem: 206.55 },
     })
     expect(baseline!.metrics).not.toHaveProperty('managed')
   })
@@ -935,6 +948,7 @@ describe('partial-action baseline capture', () => {
         ...Array.from({ length: 17 }, (_, i) => `mcp__filesystem__t${i}`),
         ...Array.from({ length: 12 }, (_, i) => `mcp__managed__t${i}`),
       ],
+      turns: cachedTurns(),
     })
 
     await captureBaselinesForPlans([plan], {
@@ -944,9 +958,26 @@ describe('partial-action baseline capture', () => {
 
     expect(plan.plan?.baseline).toMatchObject({
       estimatedTokens: 10_000,
-      metrics: { filesystem: 6_800 },
+      metrics: { filesystem: 206.55 },
     })
     expect(plan.plan?.baseline?.metrics).not.toHaveProperty('managed')
+  })
+
+  it('stores the per-session schema tokens the mcp-low-coverage finding charges', () => {
+    const sessions = sessionsAt(4, daysAgo(1), {
+      mcpInventory: Array.from({ length: 20 }, (_, i) => `mcp__filesystem__t${i}`),
+      turns: cachedTurns(),
+    })
+    const projects = [projectOf(sessions)]
+    const coverage = aggregateMcpCoverage(projects)
+    const finding = detectMcpToolCoverage(projects, coverage, new Set(['filesystem']))!
+    expect(finding.id).toBe('mcp-low-coverage')
+
+    const baseline = captureBaseline(finding, 'mcp-remove', { projects, coverage, windowDays: 14, now: NOW })
+    // 20 deferred name lines at 9 tokens, one write (x1.25) and one read (x0.1)
+    // per session: 243 per session, where the old 400-per-tool figure was 8,000.
+    expect(baseline!.metrics.filesystem).toBeCloseTo(243, 10)
+    expect(baseline!.metrics.filesystem! * sessions.length).toBeCloseTo(finding.tokensSaved, 0)
   })
 
   it('does not stamp a numeric baseline onto an uncertain partial mutation', async () => {

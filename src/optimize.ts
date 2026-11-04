@@ -1855,6 +1855,20 @@ function estimateMcpSchemaCostAttributed(
   }
 }
 
+/// The effective schema tokens per loaded session that mcp-low-coverage
+/// charges each of `servers`, from the same per-call attribution as the finding.
+export function mcpLowCoverageSchemaPerSession(
+  projects: ProjectSummary[], coverage: McpServerCoverage[], servers: string[],
+): Record<string, number> {
+  const covByServer = new Map(coverage.filter(c => servers.includes(c.server)).map(c => [c.server, c]))
+  const unused = Object.fromEntries([...covByServer].map(([server, c]) => [server, c.unusedTools]))
+  const cost = estimateMcpSchemaCostAttributed(unused, projects, servers)
+  return Object.fromEntries(servers.map(server => {
+    const loaded = covByServer.get(server)?.loadedSessions ?? 0
+    return [server, loaded > 0 ? (cost.byServer[server]?.effectiveInputTokens ?? 0) / loaded : 0]
+  }))
+}
+
 /// Cached schema tokens at the call model's own cache rate; unpriced models
 /// keep the effective-input weighting at the blended rate.
 function schemaChargeUSD(pricing: FindingPricing, model: string, tokens: number, kind: 'cacheWrite' | 'cacheRead'): number {
@@ -4147,7 +4161,9 @@ export function sessionTokensUSD(pricing: FindingPricing, sessionId: string | un
 /// The token kind a measured finding prices its tokens at, so `act report`
 /// prices that fix's realized tokens the same way. Absent: the blended rate.
 export const FINDING_TOKEN_KIND: Readonly<Record<string, 'input' | 'cacheWrite'>> = {
-  'mcp-low-coverage': 'cacheWrite',
+  // Its act baseline stores effective tokens (writes x1.25, reads x0.1),
+  // which the input rate prices as the finding's per-call cache rates.
+  'mcp-low-coverage': 'input',
   'mcp-project-scope': 'cacheWrite',
   'unused-mcp': 'input',
   'mcp-deferral-off': 'input',

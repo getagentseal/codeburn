@@ -17,6 +17,7 @@ import {
   aggregateMcpCoverage,
   computeInputCostRate,
   FINDING_TOKEN_KIND,
+  mcpLowCoverageSchemaPerSession,
   findingPricing,
   sessionTokensUSD,
   type FindingPricing,
@@ -803,17 +804,15 @@ export function captureBaseline(
     const servers = mcpServersFromApply(finding, affectedMcpServers)
     if (servers.length === 0) return undefined
     const covByServer = new Map(ctx.coverage.map(c => [c.server, c]))
-    const metrics: Record<string, number> = {}
-    for (const server of servers) {
-      const cov = covByServer.get(server)
-      // Removal realizes only the unused schema that the low-coverage
-      // detector estimated. If coverage is unavailable, omit the numeric
-      // claim instead of inventing a five-tool baseline.
-      const tools = finding.id === 'mcp-low-coverage'
-        ? cov?.unusedTools.length ?? 0
-        : cov && cov.toolsAvailable > 0 ? cov.toolsAvailable : TOOLS_PER_MCP_SERVER
-      metrics[server] = tools * TOKENS_PER_MCP_TOOL
-    }
+    // Removal realizes only the unused schema that the low-coverage detector
+    // estimated, counted the way it counts it. If coverage is unavailable,
+    // that is 0 rather than an invented five-tool baseline.
+    const metrics: Record<string, number> = finding.id === 'mcp-low-coverage'
+      ? mcpLowCoverageSchemaPerSession(ctx.projects, ctx.coverage, servers)
+      : Object.fromEntries(servers.map(server => {
+        const cov = covByServer.get(server)
+        return [server, (cov && cov.toolsAvailable > 0 ? cov.toolsAvailable : TOOLS_PER_MCP_SERVER) * TOKENS_PER_MCP_TOOL]
+      }))
     const estimatedTokens = finding.applyTokensSavedByServer
       ? Math.round(servers.reduce((sum, server) => sum + (finding.applyTokensSavedByServer?.[server] ?? 0), 0))
       : common.estimatedTokens
