@@ -19,6 +19,7 @@ import { recommendModelDefault, type ModelDefaultRecommendation } from './act/mo
 import { appliedFixGlyph, formatAppliedFix, type AppliedFix } from './act/types.js'
 import { isUserStartedSession, userStartedProjects } from './session-population.js'
 import { countSessions, inferSessionProvider, sessionBillableOutputTokens } from './session-output.js'
+import { sessionCacheHitPercent } from './sessions-report.js'
 import { aggregateFileChurn, buildCoachingNotes, scanUserCorrections, medianTimeToFirstEditMs, worstOneShotCategory, type ReworkedFile } from './workflow-insights.js'
 
 // ============================================================================
@@ -3949,14 +3950,11 @@ export function detectLowCacheHitSessions(projects: ProjectSummary[]): WasteFind
       if (!isOptimizeSession(session)) continue
       const reads = session.totalCacheReadTokens
       const writes = session.totalCacheWriteTokens
-      // Parsers record unreported cache usage as 0, so a session with no cache
-      // tokens at all is unmeasured, not a 0% hit rate.
-      if (reads + writes === 0) continue
+      const hitPercent = sessionCacheHitPercent(session.totalInputTokens, reads, writes)
+      if (hitPercent === null) continue
       if (session.apiCalls < LOW_CACHE_HIT_MIN_CALLS) continue
       const totalInput = session.totalInputTokens + reads + writes
       if (totalInput < LOW_CACHE_HIT_MIN_INPUT_TOKENS) continue
-      // Same formula as the dashboard overview: reads over all input incl. writes.
-      const hitPercent = (reads / totalInput) * 100
       if (hitPercent >= LOW_CACHE_HIT_TARGET_PERCENT) continue
       candidates.push({
         project: project.project,

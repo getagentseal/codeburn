@@ -307,7 +307,7 @@ describe('buildTelemetrySnapshot', () => {
   it('reports cache hit and retry tax as shares, not dollars', () => {
     const snapshot = buildTelemetrySnapshot(richPayload())
 
-    expect(snapshot.efficiency.cacheHitRate).toBe(0.75)
+    expect(snapshot.efficiency.cacheHitRate).toBe(0.71)
     expect(snapshot.efficiency.retryTaxShare).toBe(0.1)
   })
 

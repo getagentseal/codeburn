@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { aggregateByBranch, aggregateSessions, attributeSessionPrSpend, renderJson, renderTable } from '../src/sessions-report.js'
+import { aggregateByBranch, aggregateSessions, attributeSessionPrSpend, renderJson, renderTable, sessionCacheHitPercent } from '../src/sessions-report.js'
 import type { ClassifiedTurn, ParsedApiCall, ProjectSummary, SessionSummary } from '../src/types.js'
 
 function makeProject(): ProjectSummary {
@@ -90,6 +90,7 @@ describe('sessions JSON emitter', () => {
       outputTokens: 20,
       cacheReadTokens: 400,
       cacheWriteTokens: 30,
+      cacheHitPercent: 400 / 530 * 100,
       startedAt: '2026-07-10T10:00:00.000Z',
       endedAt: '2026-07-10T10:05:00.000Z',
       durationMs: 300_000,
@@ -126,6 +127,22 @@ describe('sessions JSON emitter', () => {
     expect(output).toContain('session-1')
     expect(output).toContain('Sonnet 4.5')
     expect(output).toContain('1 sessions')
+  })
+
+  it('shows each session cache hit rate, and a dash when cache use is unmeasured', () => {
+    const rows = aggregateSessions([makeProject()])
+    const unmeasured = { ...rows[0]!, sessionId: 'no-cache', cacheReadTokens: 0, cacheWriteTokens: 0, cacheHitPercent: null }
+    const lines = renderTable([rows[0]!, unmeasured], { terminalWidth: 140 }).split('\n')
+
+    expect(lines[1]).toMatch(/│ +Cache │/)
+    expect(lines.find(line => line.includes('session-1'))).toMatch(/│ +75% │/)
+    expect(lines.find(line => line.includes('no-cache'))).toMatch(/│ +— │/)
+  })
+
+  it('computes the cache hit rate as reads over the whole prompt', () => {
+    expect(sessionCacheHitPercent(100, 400, 30)).toBeCloseTo(75.47, 2)
+    expect(sessionCacheHitPercent(100, 300, 0)).toBe(75)
+    expect(sessionCacheHitPercent(500, 0, 0)).toBeNull()
   })
 
   it('hides home-directory slugs and renders compact agent/worktree names', () => {

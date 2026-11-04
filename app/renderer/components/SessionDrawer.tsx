@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef } from 'react'
 
 import { Stat } from './Stat'
 import { useEscape } from '../hooks/useEscape'
-import { formatCompact, formatCount, formatDayLong, formatDuration, formatUsd, shortenProjectPath } from '../lib/format'
+import { formatCompact, formatCount, formatDayLong, formatDuration, formatUsd, sessionCacheHitPercent, shortenProjectPath } from '../lib/format'
 import { DUR, useExitAnimation } from '../lib/motion'
 import { codeburn } from '../lib/ipc'
 import type { InvestigationFilters } from '../lib/investigation'
@@ -99,8 +99,8 @@ export function SessionDrawer({ row, openKey, filters, medianCost, onClose }: {
 export function SessionDetails({ row, filters, medianCost }: { row: SessionDrillRow; filters: InvestigationFilters; medianCost?: number }) {
   const contribution = useMemo(() => contributeRow(row, filters), [row, filters])
   const breakdown = useMemo(() => buildBreakdowns(row), [row])
-  const cacheTotal = row.inputTokens + row.cacheReadTokens
-  const cacheHit = cacheTotal > 0 ? Math.round(row.cacheReadTokens / cacheTotal * 100) : 0
+  const cacheHitPercent = sessionCacheHitPercent(row.inputTokens, row.cacheReadTokens, row.cacheWriteTokens)
+  const cacheHit = cacheHitPercent === null ? null : Math.round(cacheHitPercent)
   const median = medianCost !== undefined && medianCost > 0 ? medianCost : null
   const selectedCost = contribution !== null && contribution.cost < row.cost - 1e-9 ? contribution.cost : null
   const leadCost = selectedCost ?? row.cost
@@ -149,18 +149,18 @@ export function SessionDetails({ row, filters, medianCost }: { row: SessionDrill
 
       <details className="drawer-fold">
         <summary>
-          {t('sessions.drawer.tokensSummary', {
+          {t(cacheHit === null ? 'sessions.drawer.tokensSummaryNoHit' : 'sessions.drawer.tokensSummary', {
             inTok: formatCompact(row.inputTokens),
             outTok: formatCompact(row.outputTokens),
             cacheTok: formatCompact(row.cacheWriteTokens),
-            hitPct: cacheHit,
+            ...(cacheHit === null ? {} : { hitPct: cacheHit }),
           })}
         </summary>
         <div className="drawer-fold-body">
           <div className="stats">
             <Stat label={t('sessions.drawer.statInputLabel')} value={formatCompact(row.inputTokens)} delta={t('sessions.drawer.deltaTokensSent')} />
             <Stat label={t('sessions.drawer.statOutputLabel')} value={formatCompact(row.outputTokens)} delta={t('sessions.drawer.deltaTokensGenerated')} />
-            <Stat label={t('sessions.drawer.statCacheReadLabel')} value={formatCompact(row.cacheReadTokens)} delta={t('sessions.drawer.deltaCacheHit', { percent: cacheHit })} />
+            <Stat label={t('sessions.drawer.statCacheReadLabel')} value={formatCompact(row.cacheReadTokens)} delta={cacheHit === null ? undefined : t('sessions.drawer.deltaCacheHit', { percent: cacheHit })} />
             <Stat label={t('sessions.drawer.statCacheWriteLabel')} value={formatCompact(row.cacheWriteTokens)} delta={t('sessions.drawer.deltaTokensCached')} />
           </div>
         </div>
