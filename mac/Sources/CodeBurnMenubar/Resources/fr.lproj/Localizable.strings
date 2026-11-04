@@ -425,6 +425,7 @@
 "%@%% in deficit" = "%@%% de déficit";
 "%@%% in reserve" = "%@%% en réserve";
 "%1$@ · hits 100%% %2$@" = "%1$@ · atteint 100%% %2$@";
+"%@ · lasts until reset" = "%@ · tient jusqu'à la réinitialisation";
 "%1$@ · %2$@ at reset" = "%1$@ · %2$@ à la réinitialisation";
 "On pace: %1$@ at reset · hits 100%% %2$@" = "En rythme : %1$@ à la réinitialisation · atteint 100%% %2$@";
 "Based on last cycle: %@" = "D'après le dernier cycle : %@";
@@ -645,6 +646,7 @@
 "%@ today" = "%@ aujourd'hui";
 "%@ tok today" = "%@ tok aujourd'hui";
 "%lld%% left" = "%lld%% restant";
+"out %@" = "épuisé %@";
 
 /* MARK: Codex credit limit */
 "Monthly" = "Mensuel";

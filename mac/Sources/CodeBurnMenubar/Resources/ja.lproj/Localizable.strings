@@ -425,6 +425,7 @@
 "%@%% in deficit" = "%@%%超過";
 "%@%% in reserve" = "%@%%の余裕";
 "%1$@ · hits 100%% %2$@" = "%1$@ · %2$@に100%%到達";
+"%@ · lasts until reset" = "%@ · リセットまで持つ";
 "%1$@ · %2$@ at reset" = "%1$@ · リセット時点で%2$@";
 "On pace: %1$@ at reset · hits 100%% %2$@" = "順調なペース：リセット時点で%1$@ · %2$@に100%%到達";
 "Based on last cycle: %@" = "前回のサイクルに基づく：%@";
@@ -645,6 +646,7 @@
 "%@ today" = "今日 %@";
 "%@ tok today" = "今日 %@ tok";
 "%lld%% left" = "残り%lld%%";
+"out %@" = "%@に枯渇";
 
 /* MARK: Codex credit limit */
 "Monthly" = "月間";

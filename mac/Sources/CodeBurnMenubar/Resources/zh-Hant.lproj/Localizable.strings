@@ -425,6 +425,7 @@
 "%@%% in deficit" = "超出 %@%%";
 "%@%% in reserve" = "結餘 %@%%";
 "%1$@ · hits 100%% %2$@" = "%1$@ · %2$@達到 100%%";
+"%@ · lasts until reset" = "%@ · 可撐到重置";
 "%1$@ · %2$@ at reset" = "%1$@ · 重置時 %2$@";
 "On pace: %1$@ at reset · hits 100%% %2$@" = "符合節奏：重置時 %1$@ · %2$@達到 100%%";
 "Based on last cycle: %@" = "按上一週期估算：%@";
@@ -641,6 +642,7 @@
 "%@ today" = "今日 %@";
 "%@ tok today" = "今日 %@ tok";
 "%lld%% left" = "剩餘 %lld%%";
+"out %@" = "%@ 用盡";
 
 /* MARK: Codex credit limit */
 "Monthly" = "每月";

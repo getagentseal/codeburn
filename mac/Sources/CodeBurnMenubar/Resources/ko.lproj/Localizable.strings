@@ -425,6 +425,7 @@
 "%@%% in deficit" = "%@%% 초과";
 "%@%% in reserve" = "%@%% 여유";
 "%1$@ · hits 100%% %2$@" = "%1$@ · %2$@에 100%% 도달";
+"%@ · lasts until reset" = "%@ · 초기화까지 유지";
 "%1$@ · %2$@ at reset" = "%1$@ · 초기화 시점 %2$@";
 "On pace: %1$@ at reset · hits 100%% %2$@" = "예상 순항: 초기화 시점 %1$@ · %2$@에 100%% 도달";
 "Based on last cycle: %@" = "지난 주기 기준: %@";
@@ -645,6 +646,7 @@
 "%@ today" = "오늘 %@";
 "%@ tok today" = "오늘 %@ tok";
 "%lld%% left" = "%lld%% 남음";
+"out %@" = "%@ 소진";
 
 /* MARK: Codex credit limit */
 "Monthly" = "월간";

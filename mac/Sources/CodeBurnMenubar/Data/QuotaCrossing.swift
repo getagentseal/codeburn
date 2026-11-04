@@ -20,6 +20,8 @@ struct QuotaCrossingWindow: Equatable, Sendable {
     /// Share of the window used, 0...100; nil when the provider did not report it.
     let percent: Double?
     let resetsAt: Date?
+    /// When the provider sample behind this reading was fetched.
+    var observedAt: Date? = nil
 
     /// One cycle of one window. A window that carries no reset instant cannot
     /// tell one cycle from the next, so it notifies once and then stays quiet.
