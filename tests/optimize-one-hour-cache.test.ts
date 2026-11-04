@@ -65,6 +65,13 @@ describe('detectOneHourCacheUnused', () => {
     expect(detectOneHourCacheUnused([fiveWrites(20 * MIN)])).toBeNull()
   })
 
+  it('keeps writes that hits held warm for over an hour before a 20-minute pause', () => {
+    const calls = Array.from({ length: 5 }, (_, i) => call(i * 2 * MIN, 100_000))
+    for (let t = 10 * MIN; t <= 130 * MIN; t += 2 * MIN) calls.push(call(t, 0))
+    calls.push(call(150 * MIN, 0))
+    expect(detectOneHourCacheUnused([project(calls)])).toBeNull()
+  })
+
   it('counts writes whose next pause outlasted the hour too', () => {
     expect(detectOneHourCacheUnused([fiveWrites(90 * MIN)])!.savingsUSD).toBeCloseTo(1.125, 10)
   })
