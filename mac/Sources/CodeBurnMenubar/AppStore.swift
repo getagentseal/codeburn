@@ -2224,11 +2224,13 @@ final class AppStore {
         return windows
     }
 
-    /// Appends each window's reading from the fetch that produced it. A
+    /// Appends each window's reading from the fetch that produced it, and
+    /// returns the windows with their forecasts for the crossing monitor. A
     /// provider that has not fetched since the last call adds nothing, so a
     /// failing one does not flatten its own pace with repeats of old data.
-    func recordQuotaReadings(now: Date = Date()) {
-        for window in quotaWindows {
+    func recordQuotaReadings(now: Date = Date()) -> [QuotaCrossingWindow] {
+        let windows = quotaWindows
+        for window in windows {
             guard let percent = window.percent, percent.isFinite,
                   let resetsAt = window.resetsAt, let observedAt = window.observedAt else { continue }
             let key = Self.quotaReadingKey(provider: window.providerName, label: window.label)
@@ -2237,6 +2239,15 @@ final class AppStore {
             readings.append(QuotaPace.Reading(percent: percent, resetsAt: resetsAt, observedAt: observedAt))
             readings.removeAll { $0.observedAt < now.addingTimeInterval(-QuotaPace.longWindowLookback) }
             quotaReadings[key] = readings
+        }
+        return windows.map { window in
+            var window = window
+            if case let .runsOut(at) = quotaForecast(
+                provider: window.providerName, label: window.label, resetsAt: window.resetsAt, now: now
+            ) {
+                window.runsOutAt = at
+            }
+            return window
         }
     }
 

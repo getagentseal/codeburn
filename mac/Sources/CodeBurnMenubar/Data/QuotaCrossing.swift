@@ -9,6 +9,14 @@ enum QuotaCrossingPreference {
     static func isEnabled(defaults: UserDefaults = .standard) -> Bool {
         defaults.object(forKey: defaultsKey) as? Bool ?? true
     }
+
+    static let warningPercentKey = "codeburn.quota.crossingWarningPercent"
+    static let defaultWarningPercent = 80
+    static let warningPercentOptions = [70, 80, 90]
+
+    static func warningPercent(defaults: UserDefaults = .standard) -> Int {
+        defaults.object(forKey: warningPercentKey) as? Int ?? defaultWarningPercent
+    }
 }
 
 /// One provider window as `AppStore.quotaWindows` reports it: the same list the
@@ -22,6 +30,8 @@ struct QuotaCrossingWindow: Equatable, Sendable {
     let resetsAt: Date?
     /// When the provider sample behind this reading was fetched.
     var observedAt: Date? = nil
+    /// When the recent-pace forecast says the window runs out.
+    var runsOutAt: Date? = nil
 
     /// One cycle of one window. A window that carries no reset instant cannot
     /// tell one cycle from the next, so it notifies once and then stays quiet.
@@ -37,6 +47,7 @@ struct QuotaCrossingEvent: Equatable, Sendable {
     enum Level: String, Sendable {
         case warning
         case limit
+        case runsOut
     }
 
     let providerName: String
@@ -44,11 +55,20 @@ struct QuotaCrossingEvent: Equatable, Sendable {
     let level: Level
     /// Fired-set entry and notification identifier: one per level per cycle.
     let key: String
+    var warningPercent = QuotaCrossingPreference.defaultWarningPercent
+    var runsOutAt: Date? = nil
+    var resetsAt: Date? = nil
 
     var notificationTitle: String {
         switch level {
-        case .warning: L("%1$@ · %2$@ at 80%%", providerName, windowLabel)
+        case .warning: L("%1$@ · %2$@ at %3$lld%%", providerName, windowLabel, warningPercent)
         case .limit: L("%1$@ · %2$@ limit reached", providerName, windowLabel)
+        case .runsOut: L(
+            "%1$@ · %2$@: at this pace it runs out at %3$@, resets %4$@",
+            providerName, windowLabel,
+            runsOutAt.map { QuotaPace.clockLabel($0) } ?? "",
+            resetsAt.map { QuotaPace.clockLabel($0) } ?? ""
+        )
         }
     }
 }
@@ -57,12 +77,12 @@ struct QuotaCrossingEvent: Equatable, Sendable {
 /// goes in and comes back out, so the caller owns persistence and nothing here
 /// reads a clock or a default.
 enum QuotaCrossingDetector {
-    static let warningPercent: Double = 80
     static let limitPercent: Double = 100
 
     static func evaluate(
         windows: [QuotaCrossingWindow],
-        fired: Set<String>
+        fired: Set<String>,
+        warningPercent: Int = QuotaCrossingPreference.defaultWarningPercent
     ) -> (events: [QuotaCrossingEvent], fired: Set<String>) {
         var live = fired
         for window in windows {
@@ -76,7 +96,21 @@ enum QuotaCrossingDetector {
         var events: [QuotaCrossingEvent] = []
         for window in windows {
             guard let percent = window.percent, percent.isFinite else { continue }
-            guard let level = level(for: percent) else { continue }
+            if let runsOutAt = window.runsOutAt, let resetsAt = window.resetsAt,
+               runsOutAt < resetsAt, percent < limitPercent {
+                let key = "\(window.cycleKey)|\(QuotaCrossingEvent.Level.runsOut.rawValue)"
+                if live.insert(key).inserted {
+                    events.append(QuotaCrossingEvent(
+                        providerName: window.providerName,
+                        windowLabel: window.label,
+                        level: .runsOut,
+                        key: key,
+                        runsOutAt: runsOutAt,
+                        resetsAt: resetsAt
+                    ))
+                }
+            }
+            guard let level = level(for: percent, warningPercent: warningPercent) else { continue }
             let key = "\(window.cycleKey)|\(level.rawValue)"
             guard live.insert(key).inserted else { continue }
             // Once the window is full the 80% notice is water under the bridge:
@@ -89,15 +123,16 @@ enum QuotaCrossingDetector {
                 providerName: window.providerName,
                 windowLabel: window.label,
                 level: level,
-                key: key
+                key: key,
+                warningPercent: warningPercent
             ))
         }
         return (events, live)
     }
 
-    private static func level(for percent: Double) -> QuotaCrossingEvent.Level? {
+    private static func level(for percent: Double, warningPercent: Int) -> QuotaCrossingEvent.Level? {
         if percent >= limitPercent { return .limit }
-        if percent >= warningPercent { return .warning }
+        if percent >= Double(warningPercent) { return .warning }
         return nil
     }
 }
@@ -126,7 +161,11 @@ final class QuotaCrossingMonitor {
     @discardableResult
     func record(windows: [QuotaCrossingWindow]) async -> [QuotaCrossingEvent] {
         let stored = Set(defaults.stringArray(forKey: Self.defaultsKey) ?? [])
-        let (events, fired) = QuotaCrossingDetector.evaluate(windows: windows, fired: stored)
+        let (events, fired) = QuotaCrossingDetector.evaluate(
+            windows: windows,
+            fired: stored,
+            warningPercent: QuotaCrossingPreference.warningPercent(defaults: defaults)
+        )
         // Persisted before delivery: a crossing is one-shot even when the user
         // has notifications off or denied.
         defaults.set(Array(fired), forKey: Self.defaultsKey)

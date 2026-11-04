@@ -720,9 +720,11 @@
 "Input tokens reused from this provider's prompt cache today — not fresh input (arrow.down), not cache writes, and already priced at the cache-read rate inside the burned figure." = "今日このプロバイダーのプロンプトキャッシュから再利用された入力トークンです。新規入力（arrow.down）でもキャッシュ書き込みでもなく、消費額の数値の中ですでにキャッシュ読取レートで計上済みです。";
 
 /* MARK: Quota crossing notifications */
-"%1$@ · %2$@ at 80%%" = "%1$@ · %2$@が80%%到達";
+"%1$@ · %2$@ at %3$lld%%" = "%1$@ · %2$@が%3$lld%%到達";
 "%1$@ · %2$@ limit reached" = "%1$@ · %2$@が上限到達";
+"%1$@ · %2$@: at this pace it runs out at %3$@, resets %4$@" = "%1$@ · %2$@：このペースだと%3$@に枯渇、リセットは%4$@";
 "Quota crossings (%1$lld%% and %2$lld%%)" = "クォータ通知しきい値（%1$lld%%と%2$lld%%）";
+"Warn at" = "通知するしきい値";
 
 /* MARK: Privacy */
 "Privacy" = "プライバシー";

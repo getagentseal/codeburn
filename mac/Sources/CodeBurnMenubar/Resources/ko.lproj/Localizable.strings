@@ -720,9 +720,11 @@
 "Input tokens reused from this provider's prompt cache today — not fresh input (arrow.down), not cache writes, and already priced at the cache-read rate inside the burned figure." = "오늘 이 제공업체의 프롬프트 캐시에서 재사용된 입력 토큰입니다 — 새 입력(arrow.down)도 캐시 쓰기도 아니며, 소진 금액에 이미 캐시 읽기 요율로 계산되어 있습니다.";
 
 /* MARK: Quota crossing notifications */
-"%1$@ · %2$@ at 80%%" = "%1$@ · %2$@ 80%% 도달";
+"%1$@ · %2$@ at %3$lld%%" = "%1$@ · %2$@ %3$lld%% 도달";
 "%1$@ · %2$@ limit reached" = "%1$@ · %2$@ 한도 도달";
+"%1$@ · %2$@: at this pace it runs out at %3$@, resets %4$@" = "%1$@ · %2$@: 이 속도면 %3$@에 소진, 초기화 %4$@";
 "Quota crossings (%1$lld%% and %2$lld%%)" = "할당량 임계값 알림 (%1$lld%% 및 %2$lld%%)";
+"Warn at" = "알림 기준";
 
 /* MARK: Privacy */
 "Privacy" = "개인정보";

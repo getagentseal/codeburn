@@ -754,8 +754,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
         case (false, false):
             break
         }
-        store.recordQuotaReadings()
-        await store.quotaCrossingMonitor.record(windows: store.quotaWindows)
+        await store.quotaCrossingMonitor.record(windows: store.recordQuotaReadings())
         return true
     }
 

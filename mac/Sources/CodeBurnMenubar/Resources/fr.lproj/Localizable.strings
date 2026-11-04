@@ -720,9 +720,11 @@
 "Input tokens reused from this provider's prompt cache today — not fresh input (arrow.down), not cache writes, and already priced at the cache-read rate inside the burned figure." = "Tokens d'entrée réutilisés aujourd'hui depuis le cache de prompts de ce fournisseur — pas une entrée fraîche (arrow.down), pas une écriture de cache, et déjà tarifés au taux de lecture cache dans le chiffre consommé.";
 
 /* MARK: Quota crossing notifications */
-"%1$@ · %2$@ at 80%%" = "%1$@ · %2$@ à 80%%";
+"%1$@ · %2$@ at %3$lld%%" = "%1$@ · %2$@ à %3$lld%%";
 "%1$@ · %2$@ limit reached" = "%1$@ · %2$@ limite atteinte";
+"%1$@ · %2$@: at this pace it runs out at %3$@, resets %4$@" = "%1$@ · %2$@ : à ce rythme, épuisé à %3$@, réinitialisation %4$@";
 "Quota crossings (%1$lld%% and %2$lld%%)" = "Franchissements de quota (%1$lld%% et %2$lld%%)";
+"Warn at" = "Avertir à";
 
 /* MARK: Privacy */
 "Privacy" = "Confidentialité";
