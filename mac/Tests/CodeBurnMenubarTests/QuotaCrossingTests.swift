@@ -62,6 +62,17 @@ struct QuotaCrossingDetectorTests {
         #expect(second.fired.count == 1)
     }
 
+    @Test("Reset jitter of a couple of seconds stays one cycle")
+    func resetJitterIsOneCycle() {
+        let first = QuotaCrossingDetector.evaluate(windows: [window(81)], fired: [])
+        let jittered = window(81, resetsAt: resetsAt.addingTimeInterval(2))
+        let second = QuotaCrossingDetector.evaluate(windows: [jittered], fired: first.fired)
+        let back = QuotaCrossingDetector.evaluate(windows: [window(81)], fired: second.fired)
+        #expect(first.events.count == 1)
+        #expect(second.events.isEmpty)
+        #expect(back.events.isEmpty)
+    }
+
     @Test("A window missing from this fetch keeps what it has already fired")
     func absenceIsNotAReset() {
         let first = QuotaCrossingDetector.evaluate(windows: [window(90)], fired: [])

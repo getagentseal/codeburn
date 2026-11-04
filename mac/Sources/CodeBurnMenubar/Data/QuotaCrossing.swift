@@ -23,8 +23,10 @@ struct QuotaCrossingWindow: Equatable, Sendable {
 
     /// One cycle of one window. A window that carries no reset instant cannot
     /// tell one cycle from the next, so it notifies once and then stays quiet.
+    /// The instant is bucketed to the minute because Claude's `resets_at`
+    /// jitters by a second or two within one window, which would re-arm it.
     var cycleKey: String {
-        let stamp = resetsAt.map { String(Int($0.timeIntervalSince1970.rounded())) } ?? "-"
+        let stamp = resetsAt.map { String(Int(($0.timeIntervalSince1970 / 60).rounded()) * 60) } ?? "-"
         return "\(providerName)|\(label)|\(stamp)"
     }
 }
