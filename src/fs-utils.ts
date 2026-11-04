@@ -25,28 +25,16 @@ function warn(msg: string): void {
   if (verbose()) process.stderr.write(`codeburn: ${msg}\n`)
 }
 
-// zstd landed in node:zlib in 22.15 / 23.8; the package floor is 22.13, so the
-// exports are optional and callers check zstdSupported before handing over a
-// `.zst` path.
-const zstd = zlib as unknown as {
-  createZstdDecompress?: typeof zlib.createZstdDecompress
-  zstdDecompressSync?: typeof zlib.zstdDecompressSync
-}
-export const zstdSupported = !!zstd.createZstdDecompress && !!zstd.zstdDecompressSync
+// zstd is built into node:zlib from the 22.15 floor.
 const MAX_ZSTD_HEAD_DECODED_BYTES = 64 * 1024 * 1024
-
-function requireZstd(filePath: string): void {
-  if (!zstdSupported) throw new Error(`${filePath} is zstd-compressed; reading it needs Node 22.15+`)
-}
 
 /** Reads a file's text, decompressing a `.zst` file on the fly. */
 export function createTextReadStream(filePath: string, options?: { start?: number; end?: number }): Readable {
   if (!filePath.endsWith('.zst')) return createReadStream(filePath, options)
-  requireZstd(filePath)
   const raw = createReadStream(filePath, options)
   // pipeline, not pipe: a read error has to fail the decoder too, or its
   // consumer waits forever.
-  return pipeline(raw, zstd.createZstdDecompress!(), () => {})
+  return pipeline(raw, zlib.createZstdDecompress(), () => {})
 }
 
 /** Up to `maxBytes` of a file's text from its start; for a `.zst` file only the compressed head is read. */
@@ -60,13 +48,12 @@ export function readTextHeadSync(filePath: string, maxBytes: number): Buffer {
     closeSync(fd)
   }
   if (!filePath.endsWith('.zst') || head.length === 0) return head
-  requireZstd(filePath)
   // ZSTD_e_continue decodes a cut-off frame as far as it goes instead of
   // rejecting it as truncated; a head that inflates past the cap is retried
   // with less input.
   for (;;) {
     try {
-      return zstd.zstdDecompressSync!(head, {
+      return zlib.zstdDecompressSync(head, {
         finishFlush: zlib.constants.ZSTD_e_continue,
         maxOutputLength: MAX_ZSTD_HEAD_DECODED_BYTES,
       }).subarray(0, maxBytes)

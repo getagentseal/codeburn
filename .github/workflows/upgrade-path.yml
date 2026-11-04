@@ -21,10 +21,8 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-        # Package floor, and the newest 22.x. The floor matters here: node:zlib
-        # gained zstd in 22.15, so dsh degrades below it (the corpus writes the
-        # uncompressed dsh variant so both legs still count the same numbers).
-        node-version: [22.13.0, 22]
+        # Package floor (zstd is built in from 22.15), and the newest 22.x.
+        node-version: [22.15.0, 22]
 
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0

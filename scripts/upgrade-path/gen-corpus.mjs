@@ -216,9 +216,8 @@ function genKiro() {
 }
 
 // ── dsh ──────────────────────────────────────────────────────────────────────
-// Written UNCOMPRESSED on purpose: node:zlib gained zstd in 22.15 and the
-// package floor is 22.13, so the .zstd variant would silently drop out of the
-// floor matrix leg and the two legs would not be comparable.
+// Written UNCOMPRESSED on purpose so both matrix legs count the same numbers
+// from the same bytes.
 
 function genDsh() {
   const cwd = '/work/api-gateway'
