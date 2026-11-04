@@ -36,7 +36,7 @@ export type ApiUsage = {
     web_search_requests?: number
     web_fetch_requests?: number
   }
-  speed?: 'standard' | 'fast' | 'flex'
+  speed?: 'standard' | 'fast' | 'flex' | 'ultrafast'
   // Claude Code advisor tool (/advisor): per-turn sub-usage records. A record
   // with type 'advisor_message' carries the advisor model's own tokens and is
   // NOT included in the top-level totals above; type 'message' records mirror
@@ -59,7 +59,7 @@ export type ApiUsageIteration = {
     web_search_requests?: number
     web_fetch_requests?: number
   }
-  speed?: 'standard' | 'fast' | 'flex'
+  speed?: 'standard' | 'fast' | 'flex' | 'ultrafast'
 }
 
 export type AssistantMessageContent = {
@@ -119,7 +119,7 @@ export type ParsedApiCall = {
   subagentTypes: string[]
   hasAgentSpawn: boolean
   hasPlanMode: boolean
-  speed: 'standard' | 'fast' | 'flex'
+  speed: 'standard' | 'fast' | 'flex' | 'ultrafast'
   timestamp: string
   bashCommands: string[]
   deduplicationKey: string

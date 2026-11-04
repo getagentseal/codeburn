@@ -2324,6 +2324,18 @@ describe('codex provider - priority service tier (#1616)', () => {
     expect(calls[1]!.costUSD).toBeCloseTo((800 * GPT54.input + 200 * GPT54.cacheRead + 500 * GPT54.output) * 2, 12)
   })
 
+  it('prices service_tier "ultrafast" turns at the ultrafast rates', async () => {
+    const calls = await parseCalls([
+      sessionMeta({ session_id: 'sess-ultra', model: 'gpt-6-astra', timestamp: '2026-09-28T10:00:00Z' }),
+      threadSettings('ultrafast', '2026-09-28T10:00:01Z'),
+      userMessage('ultrafast turn', '2026-09-28T10:01:00Z'),
+      tokenCount({ timestamp: '2026-09-28T10:01:30Z', last: { input: 1000, cached: 200, output: 500 }, total: { input: 1000, cached: 200, output: 500, total: 1700 } }),
+    ])
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.speed).toBe('ultrafast')
+    expect(calls[0]!.costUSD).toBeCloseTo(800 * 6e-5 + 200 * 6e-6 + 500 * 3e-4, 12)
+  })
+
   it('prices a flex turn at standard when the model publishes no flex rates', async () => {
     const calls = await parseCalls([
       sessionMeta({ session_id: 'sess-flex-none', model: 'gpt-5.3-codex', timestamp: '2026-09-28T10:00:00Z' }),
