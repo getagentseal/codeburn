@@ -19,7 +19,6 @@ vi.mock('../../src/sqlite.js', async (importOriginal) => {
 
 const requireForTest = createRequire(import.meta.url)
 
-const zstdCompressSync = (zlib as unknown as { zstdCompressSync?: (buf: Buffer) => Buffer }).zstdCompressSync
 
 const SESSION_LINES = [
   JSON.stringify({ type: 'session', version: 3, id: 'test-sess-1', timestamp: '2026-04-20T10:00:00.000Z', cwd: '/tmp' }),
@@ -114,7 +113,7 @@ function createAgentDb(dir: string, agent: string, sessions: TranscriptSeedSessi
     for (const row of session.rows) {
       const json = JSON.stringify(row.event)
       if (zstd && row.compress) {
-        insert.run(session.sessionId, row.seq, null, row.createdAt, zstdCompressSync!(Buffer.from(json, 'utf-8')))
+        insert.run(session.sessionId, row.seq, null, row.createdAt, zlib.zstdCompressSync(Buffer.from(json, 'utf-8')))
       } else if (zstd) {
         insert.run(session.sessionId, row.seq, json, row.createdAt, null)
       } else {
@@ -627,7 +626,6 @@ describe('openclaw provider', () => {
     })
 
     it('decodes zstd-compressed rows from the agent-schema 23 column pair', async () => {
-      if (!zstdCompressSync) return // node < 22.15: the runtime path skips these rows too
       const ev = sessionEvents()
       const dir = join(baseDir, 'sqlite-zstd')
       createAgentDb(dir, 'proj', [{

@@ -196,13 +196,13 @@ describe('readSessionLines', () => {
   })
 })
 
-describe.skipIf(!('zstdCompressSync' in zlib))('readTextHeadSync', () => {
+describe('readTextHeadSync', () => {
   it('returns the head of a .zst whose compressed head inflates past the decode cap', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'codeburn-head-'))
     try {
       const file = join(dir, 'rollout.jsonl.zst')
       const text = Buffer.concat([Buffer.from('{"type":"session_meta"}\n'), Buffer.alloc(80 * 1024 * 1024, 0x61)])
-      await writeFile(file, (zlib as unknown as { zstdCompressSync(b: Buffer): Buffer }).zstdCompressSync(text))
+      await writeFile(file, zlib.zstdCompressSync(text))
       const head = readTextHeadSync(file, 1024 * 1024)
       expect(head.length).toBe(1024 * 1024)
       expect(head.toString('utf8').split('\n')[0]).toBe('{"type":"session_meta"}')

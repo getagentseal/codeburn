@@ -63,7 +63,7 @@ Formats v2/v3/v4 embed the compact stream in each `assistant/message` or
 One parsed call per model attempt. The first attempt keeps dedup key
 `dsh:<sessionId>:<turn>:<step>`; retries add `:attempt:<n>`.
 
-`.zstd` logs are a concatenation of **independent** zstd frames, one per write batch, so they are decoded frame by frame behind a structural frame scan ported from `@deepseek-ai/dsh-session-persistence-jsonl`. Needs Node 22.15+ for `zlib.zstdDecompressSync`; below that dsh is skipped with a notice instead of counted as $0.
+`.zstd` logs are a concatenation of **independent** zstd frames, one per write batch, so they are decoded frame by frame behind a structural frame scan ported from `@deepseek-ai/dsh-session-persistence-jsonl`. Decoded with the built-in `zlib.zstdDecompressSync` (Node 22.15+, the CLI floor).
 
 ## Caching
 
