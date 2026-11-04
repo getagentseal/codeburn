@@ -108,7 +108,7 @@ Each finding also carries a `basis`, printed next to its savings and summarised 
 `N measured · M estimated`:
 
 - **measured** — the token number is summed from provider-counted usage on your own calls. Today
-  that is `context-heavy-sessions` and `cost-outliers`.
+  that is `context-heavy-sessions`, `cost-outliers` and `one-hour-cache-unused`.
 - **estimated** — the token number comes from a model: a per-tool schema size, a per-line `CLAUDE.md`
   cost, an average read size, a recovery fraction applied to real turn tokens. A detector that mixes
   counted tokens with a model counts as estimated.

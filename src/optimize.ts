@@ -15,6 +15,7 @@ import type { DateRange, ParsedApiCall, ProjectSummary, SessionSummary } from '.
 import { billableOutputTokens, cacheWriteCostPerToken, calculateCost, getModelCosts, getShortModelName, pricingModelAt, type ModelCosts } from './models.js'
 import { formatCost } from './currency.js'
 import { formatTokens } from './format.js'
+import { detectOneHourCacheUnused } from './optimize-one-hour-cache.js'
 import { recommendModelDefault, type ModelDefaultRecommendation } from './act/model-defaults.js'
 import { appliedFixGlyph, formatAppliedFix, type AppliedFix } from './act/types.js'
 import { isUserStartedSession, userStartedProjects } from './session-population.js'
@@ -371,6 +372,7 @@ export type FindingId =
   | 'context-heavy-sessions'
   | 'cost-outliers'
   | 'low-cache-hit-sessions'
+  | 'one-hour-cache-unused'
   | 'claude-md-too-long'
   | 'bash-output-cap'
   | 'unused-agents'
@@ -412,6 +414,7 @@ export const FINDING_CLASS: Record<FindingId, FindingClass> = {
   'context-heavy-sessions': 'keep',  // context-heavy work is often load-bearing
   'cost-outliers': 'nudge',
   'low-cache-hit-sessions': 'nudge',
+  'one-hour-cache-unused': 'nudge',
   'claude-md-too-long': 'nudge',     // trimming is a judgement call, not a rule block
   'bash-output-cap': 'fix',
   'unused-agents': 'fix',
@@ -455,6 +458,7 @@ export const FINDING_BASIS: Record<FindingId, FindingBasis> = {
   'context-heavy-sessions': 'measured',    // counted input/cache tokens above the target ratio
   'cost-outliers': 'measured',             // counted session tokens above the peer average
   'low-cache-hit-sessions': 'estimated',   // counted tokens below the target hit ratio x read discount
+  'one-hour-cache-unused': 'measured',     // counted one-hour write tokens x their own 60% premium
   'claude-md-too-long': 'estimated',       // lines x CLAUDEMD_TOKENS_PER_LINE
   'bash-output-cap': 'estimated',          // chars x BASH_TOKENS_PER_CHAR
   'unused-agents': 'estimated',            // count x TOKENS_PER_AGENT_DEF
@@ -4416,6 +4420,7 @@ export async function scanAndDetect(
     () => detectLowCacheHitSessions(behavioralProjects),
     () => detectFastModeBackground(projects),
     () => detectLongContextPremium(projects),
+    () => detectOneHourCacheUnused(projects),
     claudeOnly(() => detectBloatedClaudeMd(projectCwds)),
     claudeOnly(() => detectBashBloat()),
     claudeOnly(() => detectRecurringContext(openers)),

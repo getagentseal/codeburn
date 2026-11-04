@@ -957,6 +957,7 @@ describe('finding class', () => {
       'context-heavy-sessions': makeFinding('context-heavy-sessions', OPENER_FIX),
       'cost-outliers': makeFinding('cost-outliers', OPENER_FIX),
       'low-cache-hit-sessions': makeFinding('low-cache-hit-sessions', OPENER_FIX),
+      'one-hour-cache-unused': makeFinding('one-hour-cache-unused', PROMPT_FIX),
       'claude-md-too-long': makeFinding('claude-md-too-long', PROMPT_FIX),
       'bash-output-cap': makeFinding('bash-output-cap', SHELL_FIX),
       'unused-agents': makeFinding('unused-agents', CMD_FIX, { kind: 'archive', names: ['ghost'] }),
