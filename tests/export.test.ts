@@ -290,6 +290,29 @@ describe('exportCsv', () => {
     expect(turns).toBe('1')
   })
 
+  it('keeps every CSV header line byte-identical to v2', async () => {
+    const project = makeProject('app', 'planner')
+    project.sessions[0]!.mcpBreakdown = { github: { calls: 1 } }
+    const folder = await exportCsv([{ label: '30 Days', projects: [project] }], join(tmpDir, 'headers'))
+    const headers: Record<string, string> = {}
+    for (const f of (await readdir(folder)).filter(f => f.endsWith('.csv')).sort()) {
+      headers[f] = (await readFile(join(folder, f), 'utf-8')).split('\n')[0]!
+    }
+
+    expect(headers).toEqual({
+      'activity.csv': 'Period,Activity,Cost (USD),Share (%),Turns',
+      'daily.csv': 'Period,Date,Cost (USD),Saved (USD),API Calls,Sessions,Input Tokens,Output Tokens,Cache Read Tokens,Cache Write Tokens',
+      'mcp.csv': 'Server,Calls,Share (%)',
+      'models.csv': 'Period,Model,Cost (USD),Saved (USD),Share (%),API Calls,Edit Turns,One-shot Rate (%),Retries/Edit,Cost/Edit (USD),Input Tokens,Output Tokens,Cache Read Tokens,Cache Write Tokens',
+      'projects.csv': 'Project,Cost (USD),Saved (USD),Avg/Session (USD),Share (%),API Calls,Sessions',
+      'records.csv': 'project,sessionId,timestamp,category,provider,subagentType,model,inputTokens,outputTokens,reasoningTokens,cacheWriteTokens,cacheReadTokens,cost,savings,costBasis,supplementary,estimated,unpriced',
+      'sessions.csv': 'Project,Session ID,Started At,Cost (USD),Saved (USD),API Calls,Turns,subagentType,model',
+      'shell-commands.csv': 'Command,Calls,Share (%)',
+      'summary.csv': 'Period,Cost (USD),Saved (USD),API Calls,Sessions,Projects',
+      'tools.csv': 'Tool,Calls,Share (%)',
+    })
+  })
+
   it('adds optional subagentType and unambiguous model fields to sessions.csv', async () => {
     const periods: PeriodExport[] = [{ label: '30 Days', projects: [makeProject('app', 'planner')] }]
 
@@ -327,11 +350,11 @@ describe('exportJson', () => {
     const data = JSON.parse(await readFile(saved, 'utf-8'))
 
     const daily = data.periods[0].daily as Array<Record<string, number | string>>
-    expect(daily.map(d => [d.Date, d['Cost (USD)']])).toEqual([['2026-04-14', 1.23], ['2026-04-15', 2.01]])
-    const dailySum = daily.reduce((s, d) => s + (d['Cost (USD)'] as number), 0)
+    expect(daily.map(d => [d.date, d.cost])).toEqual([['2026-04-14', 1.23], ['2026-04-15', 2.01]])
+    const dailySum = daily.reduce((s, d) => s + (d.cost as number), 0)
     const recordSum = (data.records as Array<{ cost: number }>).reduce((s, r) => s + r.cost, 0)
-    expect(dailySum).toBeCloseTo(data.summary[0]['Cost (USD)'], 10)
-    expect(recordSum).toBeCloseTo(data.summary[0]['Cost (USD)'], 10)
+    expect(dailySum).toBeCloseTo(data.summary[0].cost, 10)
+    expect(recordSum).toBeCloseTo(data.summary[0].cost, 10)
     expect(data.records[1].cost).toBe(0.004)
   })
 
@@ -377,10 +400,10 @@ describe('exportJson', () => {
 
     expect(data.periods[0].daily).toHaveLength(1)
     expect(data.periods[0].daily[0]).toMatchObject({
-      'API Calls': 1,
-      'Input Tokens': 140,
-      'Cache Read Tokens': 900,
-      'Cost (USD)': 1.73,
+      apiCalls: 1,
+      inputTokens: 140,
+      cacheReadTokens: 900,
+      cost: 1.73,
     })
   })
 
@@ -435,7 +458,7 @@ describe('exportJson', () => {
 
     expect(saved.startsWith(join(tmpDir, 'codeburn-export-'))).toBe(true)
     expect(saved.endsWith('.json')).toBe(true)
-    expect(JSON.parse(await readFile(saved, 'utf-8')).schema).toBe('codeburn.export.v2')
+    expect(JSON.parse(await readFile(saved, 'utf-8')).schema).toBe('codeburn.export.v3')
     expect(await readFile(join(tmpDir, 'unrelated.txt'), 'utf-8')).toBe('keep me')
   })
 
@@ -446,7 +469,7 @@ describe('exportJson', () => {
     const saved = await exportJson(periods, `${folder}/`)
 
     expect(saved.startsWith(join(folder, 'codeburn-export-'))).toBe(true)
-    expect(JSON.parse(await readFile(saved, 'utf-8')).schema).toBe('codeburn.export.v2')
+    expect(JSON.parse(await readFile(saved, 'utf-8')).schema).toBe('codeburn.export.v3')
   })
 
   it('still appends .json to a destination that is not a folder', async () => {
@@ -473,8 +496,26 @@ describe('exportJson', () => {
 
     expect(Array.isArray(data.mcp)).toBe(true)
     expect(data.mcp).toEqual([
-      { Server: 'node_repl', Calls: 3, 'Share (%)': 75 },
-      { Server: 'github', Calls: 1, 'Share (%)': 25 },
+      { server: 'node_repl', calls: 3, share: 75 },
+      { server: 'github', calls: 1, share: 25 },
     ])
+  })
+
+  it('uses camelCase keys with no spaces or parentheses anywhere in the document', async () => {
+    const project = makeProject('app', 'planner')
+    project.sessions[0]!.mcpBreakdown = { github: { calls: 1 } }
+    const saved = await exportJson([{ label: '30 Days', projects: [project] }], join(tmpDir, 'keys.json'))
+    const data = JSON.parse(await readFile(saved, 'utf-8'))
+
+    expect(data.currency.code).toBe('USD')
+    expect(data.periods[0].daily[0]).toMatchObject({ period: '30 Days', date: '2026-04-14', cost: 1.23, saved: 0, apiCalls: 1, sessions: 1 })
+    const keys: string[] = []
+    const walk = (v: unknown): void => {
+      if (Array.isArray(v)) v.forEach(walk)
+      else if (v && typeof v === 'object') for (const [k, c] of Object.entries(v)) { keys.push(k); walk(c) }
+    }
+    walk(data)
+    expect(keys.length).toBeGreaterThan(50)
+    expect(keys.filter(k => /[\s()]/.test(k))).toEqual([])
   })
 })

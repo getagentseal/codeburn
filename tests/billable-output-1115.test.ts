@@ -170,14 +170,14 @@ describe('#1115 billableOutputTokens on report/optimize totals', () => {
         { label: '30 Days', projects: [makeProject(makeSession('grok', 10, 3)), makeProject(makeSession('codex', 10, 3))] },
       ], join(dir, 'out.json'))
       const data = JSON.parse(await readFile(path, 'utf-8')) as {
-        periods: Array<{ daily: Array<{ 'Output Tokens': number }>; models: Array<{ Model: string; 'Output Tokens': number }> }>
+        periods: Array<{ daily: Array<{ outputTokens: number }>; models: Array<{ model: string; outputTokens: number }> }>
         records: Array<{ outputTokens: number; reasoningTokens: number }>
       }
-      expect(data.periods[0]!.daily[0]!['Output Tokens']).toBe(23)
-      const grokRow = data.periods[0]!.models.find(r => r.Model === getShortModelName('grok-4'))!
-      const codexRow = data.periods[0]!.models.find(r => r.Model === getShortModelName('gpt-5.4'))!
-      expect(grokRow['Output Tokens']).toBe(13)
-      expect(codexRow['Output Tokens']).toBe(10)
+      expect(data.periods[0]!.daily[0]!.outputTokens).toBe(23)
+      const grokRow = data.periods[0]!.models.find(r => r.model === getShortModelName('grok-4'))!
+      const codexRow = data.periods[0]!.models.find(r => r.model === getShortModelName('gpt-5.4'))!
+      expect(grokRow.outputTokens).toBe(13)
+      expect(codexRow.outputTokens).toBe(10)
       // Record-level export stays raw columns, not the billable sum.
       expect(data.records.map(r => r.outputTokens).sort()).toEqual([10, 10])
       expect(data.records.map(r => r.reasoningTokens).sort()).toEqual([3, 3])
@@ -241,15 +241,15 @@ describe('#1115 billableOutputTokens on report/optimize totals', () => {
         join(dir, 'out.json'),
       )
       const data = JSON.parse(await readFile(path, 'utf-8')) as {
-        periods: Array<{ models: Array<{ Model: string; 'API Calls': number; 'Output Tokens': number }> }>
+        periods: Array<{ models: Array<{ model: string; apiCalls: number; outputTokens: number }> }>
       }
       const rows = data.periods[0]!.models
-      expect(rows.filter(r => r.Model === 'deepseek-v4-pro')).toHaveLength(0)
-      const named = rows.find(r => r.Model === 'DeepSeek v4 Pro')
+      expect(rows.filter(r => r.model === 'deepseek-v4-pro')).toHaveLength(0)
+      const named = rows.find(r => r.model === 'DeepSeek v4 Pro')
       expect(named).toEqual(expect.objectContaining({
-        Model: 'DeepSeek v4 Pro',
-        'API Calls': 1,
-        'Output Tokens': 10,
+        model: 'DeepSeek v4 Pro',
+        apiCalls: 1,
+        outputTokens: 10,
       }))
     } finally {
       await rm(dir, { recursive: true, force: true })
@@ -299,9 +299,9 @@ describe('#1115 billableOutputTokens on report/optimize totals', () => {
         join(dir, 'out.json'),
       )
       const data = JSON.parse(await readFile(path, 'utf-8')) as {
-        periods: Array<{ models: Array<{ Model: string; 'Output Tokens': number }> }>
+        periods: Array<{ models: Array<{ model: string; outputTokens: number }> }>
       }
-      expect(data.periods[0]!.models.find(r => r.Model === getShortModelName('grok-4'))!['Output Tokens']).toBe(13)
+      expect(data.periods[0]!.models.find(r => r.model === getShortModelName('grok-4'))!.outputTokens).toBe(13)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

@@ -82,13 +82,13 @@ describe('codeburn export custom date range', () => {
       expect(result.stdout).toContain('Exported (2026-04-10 to 2026-04-10)')
 
       const exported = JSON.parse(await readFile(outputPath, 'utf-8')) as {
-        summary: Array<{ Period: string; Sessions: number }>
-        sessions: Array<{ 'Session ID': string }>
+        summary: Array<{ period: string; sessions: number }>
+        sessions: Array<{ sessionId: string }>
       }
       expect(exported.summary).toHaveLength(1)
-      expect(exported.summary[0]?.Period).toBe('2026-04-10 to 2026-04-10')
-      expect(exported.summary[0]?.Sessions).toBe(1)
-      expect(exported.sessions.map(s => s['Session ID'])).toEqual(['in-range'])
+      expect(exported.summary[0]?.period).toBe('2026-04-10 to 2026-04-10')
+      expect(exported.summary[0]?.sessions).toBe(1)
+      expect(exported.sessions.map(s => s.sessionId)).toEqual(['in-range'])
     } finally {
       await rm(home, { recursive: true, force: true })
     }
