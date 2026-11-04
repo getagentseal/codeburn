@@ -5,6 +5,7 @@ import type { ClassifiedTurn, ProjectSummary } from './types.js'
 import { behavioralCallWeight, isBehavioralCall } from './behavioral-weight.js'
 import { modelRowKey } from './models.js'
 import { callBillableOutputTokens } from './session-output.js'
+import { sessionCacheHitPercent } from './sessions-report.js'
 
 const PLANNING_TOOLS = new Set(['TaskCreate', 'TaskUpdate', 'TodoWrite', 'EnterPlanMode', 'ExitPlanMode'])
 
@@ -188,12 +189,7 @@ const METRICS: MetricDef[] = [
     label: 'Cache hit rate',
     formatFn: 'percent',
     higherIsBetter: true,
-    compute: s => {
-      // Cache-hit = reads over reads + fresh input (excludes cache writes), to
-      // match src/menubar-json.ts:cacheHitPercent and the rest of the app.
-      const total = s.inputTokens + s.cacheReadTokens
-      return total > 0 ? (s.cacheReadTokens / total) * 100 : null
-    },
+    compute: s => sessionCacheHitPercent(s.inputTokens, s.cacheReadTokens, s.cacheWriteTokens),
   },
 ]
 

@@ -177,6 +177,9 @@ final class AppStore {
     var capacityEstimates: [String: CapacityEstimate] = [:]
     @ObservationIgnored var earlyQuotaResetMonitor = EarlyQuotaResetMonitor()
     @ObservationIgnored var quotaCrossingMonitor = QuotaCrossingMonitor()
+    /// The last few hours of readings per quota window, for the run-out
+    /// forecast. Memory only: the forecast never looks further back.
+    private(set) var quotaReadings: [String: [QuotaPace.Reading]] = [:]
 
     var codexUsage: CodexUsage?
     var codexError: String?
@@ -2170,15 +2173,18 @@ final class AppStore {
     /// disagree about what a provider is reporting.
     var quotaWindows: [QuotaCrossingWindow] {
         var windows: [QuotaCrossingWindow] = []
-        func include(_ name: String, _ candidates: [QuotaWarning.Candidate]) {
+        func include(_ name: String, _ fetchedAt: Date, _ candidates: [QuotaWarning.Candidate]) {
             windows += candidates.map {
-                QuotaCrossingWindow(providerName: name, label: $0.label, percent: $0.percent, resetsAt: $0.resetsAt)
+                QuotaCrossingWindow(
+                    providerName: name, label: $0.label, percent: $0.percent, resetsAt: $0.resetsAt,
+                    observedAt: fetchedAt
+                )
             }
         }
         if let usage = subscription, shouldIncludeCachedQuota(loadState: subscriptionLoadState) {
             // Labelled as `claudeQuotaSummary` labels them, so the warning row
             // names a window the way the Plan tab and the Capacity Dock do.
-            include("Claude", [
+            include("Claude", usage.fetchedAt, [
                 .init(label: "5-hour", percent: usage.fiveHourPercent, resetsAt: usage.fiveHourResetsAt),
                 .init(label: "Weekly", percent: usage.sevenDayPercent, resetsAt: usage.sevenDayResetsAt),
                 .init(label: "Weekly · Opus", percent: usage.sevenDayOpusPercent, resetsAt: usage.sevenDayOpusResetsAt),
@@ -2186,7 +2192,7 @@ final class AppStore {
             ])
         }
         if let usage = codexUsage, shouldIncludeCachedQuota(loadState: codexLoadState) {
-            include("Codex", [usage.primary, usage.secondary].compactMap { $0 }.map {
+            include("Codex", usage.fetchedAt, [usage.primary, usage.secondary].compactMap { $0 }.map {
                 QuotaWarning.Candidate(label: $0.windowLabel, percent: $0.usedPercent, resetsAt: $0.resetsAt)
             })
         }
@@ -2198,24 +2204,62 @@ final class AppStore {
             windows += usage.details.map {
                 QuotaWarning.Candidate(label: $0.label, percent: $0.usedPercent, resetsAt: $0.resetsAt)
             }
-            include("Kimi Code", windows)
+            include("Kimi Code", usage.fetchedAt, windows)
         }
         if let usage = geminiUsage, shouldIncludeCachedQuota(loadState: geminiLoadState) {
-            include("Gemini", usage.details.map {
+            include("Gemini", usage.fetchedAt, usage.details.map {
                 QuotaWarning.Candidate(label: $0.label, percent: $0.usedPercent, resetsAt: $0.resetsAt)
             })
         }
         if let usage = copilotUsage, shouldIncludeCachedQuota(loadState: copilotLoadState) {
-            include("Copilot", usage.details.map {
+            include("Copilot", usage.fetchedAt, usage.details.map {
                 QuotaWarning.Candidate(label: $0.label, percent: $0.usedPercent, resetsAt: $0.resetsAt)
             })
         }
         if let usage = antigravityUsage, shouldIncludeCachedQuota(loadState: antigravityLoadState) {
-            include("Antigravity", usage.details.map {
+            include("Antigravity", usage.fetchedAt, usage.details.map {
                 QuotaWarning.Candidate(label: $0.label, percent: $0.usedPercent, resetsAt: $0.resetsAt)
             })
         }
         return windows
+    }
+
+    /// Appends each window's reading from the fetch that produced it, and
+    /// returns the windows with their forecasts for the crossing monitor. A
+    /// provider that has not fetched since the last call adds nothing, so a
+    /// failing one does not flatten its own pace with repeats of old data.
+    func recordQuotaReadings(now: Date = Date()) -> [QuotaCrossingWindow] {
+        let windows = quotaWindows
+        for window in windows {
+            guard let percent = window.percent, percent.isFinite,
+                  let resetsAt = window.resetsAt, let observedAt = window.observedAt else { continue }
+            let key = Self.quotaReadingKey(provider: window.providerName, label: window.label)
+            var readings = quotaReadings[key, default: []]
+            guard readings.last?.observedAt != observedAt else { continue }
+            readings.append(QuotaPace.Reading(percent: percent, resetsAt: resetsAt, observedAt: observedAt))
+            readings.removeAll { $0.observedAt < now.addingTimeInterval(-QuotaPace.longWindowLookback) }
+            quotaReadings[key] = readings
+        }
+        return windows.map { window in
+            var window = window
+            if case let .runsOut(at) = quotaForecast(
+                provider: window.providerName, label: window.label, resetsAt: window.resetsAt, now: now
+            ) {
+                window.runsOutAt = at
+            }
+            return window
+        }
+    }
+
+    /// The recent-pace forecast for one window, named as `quotaWindows` names it.
+    func quotaForecast(provider: String, label: String, resetsAt: Date?, now: Date = Date()) -> QuotaPace.Forecast? {
+        guard let resetsAt,
+              let readings = quotaReadings[Self.quotaReadingKey(provider: provider, label: label)] else { return nil }
+        return QuotaPace.forecast(readings: readings, resetsAt: resetsAt, now: now)
+    }
+
+    private static func quotaReadingKey(provider: String, label: String) -> String {
+        "\(provider)|\(label)"
     }
 
     var aggregateQuotaStatus: AggregateQuotaStatus {
@@ -2286,16 +2330,22 @@ final class AppStore {
         var candidates: [MenubarQuotaCandidate] = []
         var seen: Set<String> = []
 
-        func append(label: String, summary: QuotaSummary?) {
+        func append(label: String, summary: QuotaSummary?, readingsProvider: String? = nil) {
             guard let summary,
-                  let candidate = MenubarQuotaRowSelection.candidate(label: label, summary: summary),
+                  var candidate = MenubarQuotaRowSelection.candidate(label: label, summary: summary),
                   seen.insert(label).inserted else { return }
+            // `quotaWindows` names providers by their filter, not their display
+            // name ("Copilot", not "GitHub Copilot").
+            if let readingsProvider, let window = MenubarQuotaRowSelection.worstWindow(summary),
+               case let .runsOut(at) = quotaForecast(provider: readingsProvider, label: window.label, resetsAt: window.resetsAt) {
+                candidate.runsOutAt = at
+            }
             candidates.append(candidate)
         }
 
         for provider in CapacityDockPreferences.supportedProviders {
             guard let filter = provider.legacyFilter else { continue }
-            append(label: provider.displayName, summary: quotaSummary(for: filter))
+            append(label: provider.displayName, summary: quotaSummary(for: filter), readingsProvider: filter.rawValue)
         }
         for (id, summary) in capacityDockProviderSummaries {
             guard let provider = CapacityDockProvider(rawValue: id) else { continue }

@@ -30,7 +30,7 @@ import { t } from '../i18n'
 export const INITIAL_VISIBLE = 120
 const STEP = 120
 
-export type SessionSort = 'cost' | 'recent' | 'turns' | 'tokens'
+export type SessionSort = 'cost' | 'recent' | 'turns' | 'tokens' | 'cache'
 
 /** Composite identity of a session row: provider + project + sessionId. An id
  *  alone is not globally unique (another provider, or an imported transcript,
@@ -67,6 +67,10 @@ function rowTokens(row: SessionRow): number {
   return row.inputTokens + row.outputTokens
 }
 
+function rowCacheHit(row: SessionRow): number {
+  return row.cacheHitPercent ?? -1
+}
+
 /** Under a selection the Cost column (and the sort) mean the row's
  *  CONTRIBUTION to the selection; otherwise the plain row cost. */
 function entryCost(entry: IncludedRow, filtered: boolean): number {
@@ -77,6 +81,7 @@ function compareEntries(sort: SessionSort, filtered: boolean, a: IncludedRow, b:
   if (sort === 'cost') return entryCost(b, filtered) - entryCost(a, filtered)
   if (sort === 'turns') return b.row.turns - a.row.turns
   if (sort === 'tokens') return rowTokens(b.row) - rowTokens(a.row)
+  if (sort === 'cache') return rowCacheHit(b.row) - rowCacheHit(a.row)
   return endedAtTime(b.row) - endedAtTime(a.row)
 }
 
@@ -84,6 +89,7 @@ function groupSortValue(sort: SessionSort, filtered: boolean, entries: IncludedR
   if (sort === 'cost') return entries.reduce((sum, entry) => sum + entryCost(entry, filtered), 0)
   if (sort === 'turns') return entries.reduce((sum, entry) => sum + entry.row.turns, 0)
   if (sort === 'tokens') return entries.reduce((sum, entry) => sum + rowTokens(entry.row), 0)
+  if (sort === 'cache') return entries.reduce((best, entry) => Math.max(best, rowCacheHit(entry.row)), -1)
   return entries.reduce((latest, entry) => Math.max(latest, endedAtTime(entry.row)), 0)
 }
 
@@ -396,6 +402,7 @@ export function Sessions({
             { value: 'recent', label: t('sessions.sort.recent') },
             { value: 'turns', label: t('sessions.sort.turns') },
             { value: 'tokens', label: t('sessions.sort.tokens') },
+            { value: 'cache', label: t('sessions.sort.cache') },
           ]}
           value={sort}
           onChange={value => setSort(value as SessionSort)}
@@ -489,6 +496,7 @@ export function Sessions({
                       <span><Usd value={entry.entry.row.cost} tokens={tokensOf(entry.entry.row)} nested estimated={isEstimatedCost(entry.entry.row.cost, entry.entry.row.estimatedCost)} /></span>
                     )}
                     <span>{formatCompact(rowTokens(entry.entry.row))}</span>
+                    <span title={t('sessions.sort.cache')}>{entry.entry.row.cacheHitPercent == null ? '—' : `${Math.round(entry.entry.row.cacheHitPercent)}%`}</span>
                   </button>
                 </Fragment>
               ))}

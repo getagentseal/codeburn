@@ -29,6 +29,7 @@ import { BSU, patchStdoutForWindows } from './ink-win.js'
 import { startUserTimingGuard } from './user-timing-guard.js'
 import { folderNameOriginKey, isTemporaryProjectPath, linkedOriginKey, originRepoName, projectOriginKey, TEMPORARY_PROJECTS } from './git-origin.js'
 import { countSessions } from './session-output.js'
+import { sessionCacheHitPercent } from './sessions-report.js'
 
 type View = 'dashboard' | 'optimize' | 'compare'
 
@@ -612,9 +613,7 @@ function Overview({ projects, label, width, planUsages, durable }: { projects: P
   const totalOutput = durable ? durable.outputTokens : allSessions.reduce((s, sess) => s + sess.totalOutputTokens, 0)
   const totalCacheRead = durable ? durable.cacheReadTokens : allSessions.reduce((s, sess) => s + sess.totalCacheReadTokens, 0)
   const totalCacheWrite = durable ? durable.cacheWriteTokens : allSessions.reduce((s, sess) => s + sess.totalCacheWriteTokens, 0)
-  const allInputTokens = totalInput + totalCacheRead + totalCacheWrite
-  const cacheHit = allInputTokens > 0
-    ? (totalCacheRead / allInputTokens) * 100 : 0
+  const cacheHit = sessionCacheHitPercent(totalInput, totalCacheRead, totalCacheWrite) ?? 0
   const activePlanUsages = planUsages ?? []
 
   return (

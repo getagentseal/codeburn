@@ -142,16 +142,16 @@ describe('Compare', () => {
     expect(mocks.getCompare).toHaveBeenCalledWith('30days', 'all', 'Sonnet 5', 'Opus 4.8')
   })
 
-  it('computes cache hit rate over input + cache reads (excludes cache writes)', async () => {
+  it('computes cache hit rate over input + cache reads + cache writes', async () => {
     mocks.getCompareModels.mockResolvedValue([modelA, modelB])
     mocks.getCompare.mockResolvedValue(report)
     render(<Compare period="30days" provider="all" />)
 
     const context = (await screen.findByText('Context')).closest<HTMLElement>('.cmp-card')!
     const row = within(context).getByText('Cache hit rate').closest('.cmp-metric')!
-    // 119.4M / (152.6M + 119.4M) = 44%, not 119.4 / (152.6 + 119.4 + 16) = 41%.
-    expect(row).toHaveTextContent('44%')
-    expect(row).not.toHaveTextContent('41%')
+    // 119.4M / (152.6M + 119.4M + 16M) = 41%, not 119.4 / (152.6 + 119.4) = 44%.
+    expect(row).toHaveTextContent('41%')
+    expect(row).not.toHaveTextContent('44%')
   })
 
   it('notes that custom ranges are unsupported and still compares by period', async () => {

@@ -392,6 +392,9 @@ private struct GeneralSettingsTab: View {
     @AppStorage(QuotaCrossingPreference.defaultsKey)
     private var notifyAboutQuotaCrossings: Bool = true
 
+    @AppStorage(QuotaCrossingPreference.warningPercentKey)
+    private var quotaWarningPercent: Int = QuotaCrossingPreference.defaultWarningPercent
+
     private let costPresets: Set<Double> = [25, 50, 100, 200, 500]
     private let tokenPresets: Set<Double> = [1_000_000, 5_000_000, 10_000_000, 25_000_000, 50_000_000, 100_000_000]
 
@@ -539,7 +542,13 @@ private struct GeneralSettingsTab: View {
                 Text(L("Posts a notification when a provider resets a usage limit before its scheduled time, so you know the capacity is back."))
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
-                Toggle(L("Quota crossings (%1$lld%% and %2$lld%%)", 80, 100), isOn: $notifyAboutQuotaCrossings)
+                Toggle(L("Quota crossings (%1$lld%% and %2$lld%%)", quotaWarningPercent, 100), isOn: $notifyAboutQuotaCrossings)
+                Picker(L("Warn at"), selection: $quotaWarningPercent) {
+                    ForEach(QuotaCrossingPreference.warningPercentOptions, id: \.self) { percent in
+                        Text(verbatim: "\(percent)%").tag(percent)
+                    }
+                }
+                .pickerStyle(.menu)
             }
 
             Section(L("Terminal")) {

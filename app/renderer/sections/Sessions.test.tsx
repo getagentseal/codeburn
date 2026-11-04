@@ -175,6 +175,27 @@ describe('Sessions', () => {
     expect(container.querySelector('.session-row .session-title')).toHaveTextContent('alpha/worker')
   })
 
+  it('shows each session cache hit rate, sorts unmeasured sessions last, and hides the drawer hit line for them', async () => {
+    const user = userEvent.setup()
+    getSessions.mockResolvedValue([
+      session({ sessionId: 'low', project: 'low-cache', provider: 'claude', cost: 3, cacheReadTokens: 40_000, cacheWriteTokens: 4_000, cacheHitPercent: 24.4 }),
+      session({ sessionId: 'none', project: 'no-cache', provider: 'claude', cost: 2, cacheHitPercent: null }),
+      session({ sessionId: 'high', project: 'high-cache', provider: 'claude', cost: 1, cacheHitPercent: 91.6 }),
+    ])
+    const { container } = render(<Sessions period="30days" provider="all" />)
+    await waitFor(() => expect(container.querySelectorAll('.session-row')).toHaveLength(3))
+    const hitCells = () => [...container.querySelectorAll('.session-row')].map(row => row.lastElementChild?.textContent)
+
+    expect(hitCells()).toEqual(['24%', '—', '92%'])
+    await user.click(screen.getByRole('tab', { name: 'Cache hit rate' }))
+    expect(hitCells()).toEqual(['92%', '24%', '—'])
+
+    await user.click(screen.getByRole('button', { name: /no\/cache/ }))
+    const drawer = screen.getByRole('dialog', { name: /session details/i })
+    expect(within(drawer).queryByText(/% hit/)).not.toBeInTheDocument()
+    expect(within(drawer).getByText(/written to cache$/)).toBeInTheDocument()
+  })
+
   it('turns provider grouping off and back on', async () => {
     const user = userEvent.setup()
     getSessions.mockResolvedValue(rows)

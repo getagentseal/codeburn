@@ -35,6 +35,10 @@ export function estimatedPortion(current: MenubarPayload['current']): number {
   return (current.topModels ?? []).reduce((sum, row) => sum + (row.estimatedCostUSD ?? 0), 0)
 }
 
+export function sessionCacheHitPercent(input: number, reads: number, writes: number): number | null {
+  return reads + writes === 0 ? null : reads / (input + reads + writes) * 100
+}
+
 /** Raw-USD input formatted against an explicit payload currency. This keeps a
  * persisted exact snapshot correct on its very first paint, before App's
  * global active-currency effect has had a chance to run. */

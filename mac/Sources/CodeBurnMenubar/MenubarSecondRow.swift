@@ -85,6 +85,8 @@ struct MenubarQuotaCandidate: Equatable, Sendable {
     /// Fraction of the window consumed, 0...1.
     let percentUsed: Double
     let resetsAt: Date?
+    /// When the window runs out at its recent pace, before it resets.
+    var runsOutAt: Date? = nil
 }
 
 enum MenubarQuotaRowSelection {
@@ -227,7 +229,9 @@ enum MenubarRowFormatter {
 
     /// "Claude 42% left · 3h 12m". The countdown is dropped when the provider
     /// reports no reset instant; the whole row is dropped when there is no
-    /// usable percentage.
+    /// usable percentage. A window that runs out before it resets shows that
+    /// time instead ("· out 15:40"): the budget has no room for both, and the
+    /// earlier instant is the one that stops work.
     ///
     /// The percentage and the countdown are bounded by their own shapes; the
     /// provider label is not ("GitHub Copilot"), so it is the part that gives
@@ -239,7 +243,9 @@ enum MenubarRowFormatter {
         let remaining = min(max(1 - quota.percentUsed, 0), 1)
         let percent = Int((remaining * 100).rounded())
         var figures = L("%lld%% left", percent)
-        if let countdown = resetCountdown(quota.resetsAt, now: now) {
+        if let runsOutAt = quota.runsOutAt {
+            figures += " · " + L("out %@", QuotaPace.clockLabel(runsOutAt, now: now))
+        } else if let countdown = resetCountdown(quota.resetsAt, now: now) {
             figures += " · \(countdown)"
         }
         guard !quota.label.isEmpty else { return figures }
