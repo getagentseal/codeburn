@@ -68,6 +68,9 @@ describe('Claude quota', () => {
       [undefined, 'max_5x', 'Max 5x'],
       [undefined, 'max_20x', 'Max 20x'],
       [undefined, 'team', 'Team'],
+      [undefined, 'default_claude_max_10x', 'Max 10x'],
+      [undefined, 'default_claude_ultra', 'Ultra'],
+      [undefined, 'default_claude_foo_bar', 'Foo bar'],
       [undefined, undefined, 'Subscription'],
     ]
     for (const [subscriptionType, rateLimitTier, label] of cases) {

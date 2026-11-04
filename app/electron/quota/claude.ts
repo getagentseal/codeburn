@@ -120,7 +120,7 @@ function windowOf(label: string, value: unknown): QuotaWindow | null {
 export function planLabel(credential: Pick<ClaudeCredential, 'subscriptionType' | 'rateLimitTier'>): string {
   const subscriptionType = credential.subscriptionType?.toLowerCase() ?? ''
   const tier = credential.rateLimitTier?.toLowerCase() ?? ''
-  const hasMax20 = tier.includes('max_20x') || tier.includes('max20x') || tier.includes('max-20x')
+  const multiplier = tier.match(/max[_-]?(\d+)x/)?.[1]
   const hasMax = tier.includes('max')
   if (subscriptionType === 'team' || (subscriptionType === '' && tier.includes('team'))) {
     return hasMax ? 'Team Premium' : 'Team'
@@ -128,13 +128,13 @@ export function planLabel(credential: Pick<ClaudeCredential, 'subscriptionType' 
   if (subscriptionType === 'enterprise' || (subscriptionType === '' && tier.includes('enterprise'))) {
     return hasMax ? 'Enterprise Premium' : 'Enterprise'
   }
-  if (subscriptionType === 'max' || hasMax) {
-    return hasMax20 ? 'Max 20x' : 'Max 5x'
-  }
+  if (tier.includes('ultra')) return 'Ultra'
+  if (multiplier) return `Max ${multiplier}x`
   if (subscriptionType === 'pro' || tier.includes('pro')) {
     return 'Pro'
   }
-  return 'Subscription'
+  const readable = tier.replace(/^default_claude_/, '').replace(/_/g, ' ')
+  return readable ? readable[0].toUpperCase() + readable.slice(1) : 'Subscription'
 }
 
 export function decodeClaudeUsage(body: unknown, credential: ClaudeCredential): QuotaProvider {
