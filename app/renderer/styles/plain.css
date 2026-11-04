@@ -1064,9 +1064,9 @@ td:first-child { font-size: var(--fs-body); font-weight: var(--fw-medium); }
 .sessions-empty { display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-4); border: 1px solid var(--line); border-radius: 14px; background: var(--panel); }
 .sessions-clear { padding: 0; border: 0; background: transparent; color: var(--mut); font: inherit; font-size: var(--fs-meta); cursor: pointer; }
 .sessions-clear:hover, .sessions-clear:focus-visible { color: var(--accent-text); text-decoration: underline; }
-.session-list { --session-columns: minmax(160px, 1.6fr) 64px minmax(144px, 1fr) 48px 68px 72px; padding: 0 2px 2px; border: 1px solid var(--line); border-radius: 14px; background: var(--panel); box-shadow: var(--card-shadow); }
+.session-list { --session-columns: minmax(160px, 1.6fr) 64px minmax(144px, 1fr) 48px 68px 72px 48px; padding: 0 2px 2px; border: 1px solid var(--line); border-radius: 14px; background: var(--panel); box-shadow: var(--card-shadow); }
 .session-list-inner { overflow-x: auto; margin-top: 2px; border: 1px solid var(--line); border-radius: 12px; background: var(--card-inner); box-shadow: var(--card-inner-shadow); }
-.provider-h, .session-row { display: grid; min-width: 650px; grid-template-columns: var(--session-columns); align-items: center; column-gap: 8px; }
+.provider-h, .session-row { display: grid; min-width: 706px; grid-template-columns: var(--session-columns); align-items: center; column-gap: 8px; }
 .provider-h { position: sticky; top: 0; z-index: 2; padding: var(--sp-2) var(--sp-3) var(--sp-1); background: var(--card-inner); color: var(--mut2); font-size: var(--fs-eyebrow); font-weight: var(--fw-subhead); font-variant-numeric: tabular-nums; letter-spacing: .05em; text-transform: uppercase; }
 .provider-h > span:not(:first-child) { font-family: var(--mono); letter-spacing: 0; text-align: right; }
 .provider-h-name { display: inline-flex; min-width: 0; align-items: center; gap: 6px; }

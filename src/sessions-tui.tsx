@@ -5,6 +5,7 @@ import { formatTokens, markEstimated } from './format.js'
 import { patchStdoutForWindows } from './ink-win.js'
 import { startUserTimingGuard } from './user-timing-guard.js'
 import {
+  cacheHitLabel,
   cleanSessionProjectLabel,
   sessionDisplayName,
   sessionModelLabel,
@@ -17,7 +18,7 @@ const MUTED = '#71717A'
 const BORDER = '#3F3F46'
 
 type Column = {
-  key: 'started' | 'session' | 'project' | 'provider' | 'models' | 'cost' | 'calls' | 'turns'
+  key: 'started' | 'session' | 'project' | 'provider' | 'models' | 'cost' | 'cache' | 'calls' | 'turns'
   label: string
   width: number
   right?: boolean
@@ -56,6 +57,7 @@ function columnsFor(width: number): Column[] {
     { key: 'provider', label: 'PROVIDER', width: 9 },
     { key: 'models', label: 'MODELS', width: 24 },
     { key: 'cost', label: 'COST', width: 9, right: true },
+    { key: 'cache', label: 'CACHE', width: 6, right: true },
     { key: 'calls', label: 'CALLS', width: 7, right: true },
     { key: 'turns', label: 'TURNS', width: 7, right: true },
   ]
@@ -106,6 +108,7 @@ function rowValue(row: SessionRow, key: Column['key']): string {
     case 'provider': return row.provider
     case 'models': return sessionModelLabel(row.models)
     case 'cost': return markEstimated(`$${row.cost.toFixed(2)}`, row.isEstimated)
+    case 'cache': return cacheHitLabel(row.cacheHitPercent)
     case 'calls': return row.calls.toLocaleString('en-US')
     case 'turns': return row.turns.toLocaleString('en-US')
   }

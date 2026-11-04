@@ -17,7 +17,7 @@ import { ESTIMATED_COST_LEGEND, excludedGatewayNote, formatTokens, isEstimatedCo
 import { toDateString } from './daily-cache.js'
 import { statusSnapshotSemanticKey } from './status-snapshot-semantic.js'
 import { dateKey } from './day-aggregator.js'
-import { foldedSessionRows } from './sessions-report.js'
+import { foldedSessionRows, sessionCacheHitPercent } from './sessions-report.js'
 import { behavioralCallWeight } from './behavioral-weight.js'
 import { CATEGORY_LABELS, type DateRange, type ProjectSummary, type TaskCategory } from './types.js'
 import type { AppliedFix } from './act/types.js'
@@ -618,10 +618,7 @@ function buildJsonReport(projects: ProjectSummary[], period: string, periodKey: 
   const totalOutput = durable.data.outputTokens
   const totalCacheRead = durable.data.cacheReadTokens
   const totalCacheWrite = durable.data.cacheWriteTokens
-  // Match src/menubar-json.ts:cacheHitPercent: reads over reads+fresh-input. cache_write
-  // counts tokens being stored, not served, so it doesn't belong in the denominator.
-  const cacheHitDenom = totalInput + totalCacheRead
-  const cacheHitPercent = cacheHitDenom > 0 ? Math.round((totalCacheRead / cacheHitDenom) * 1000) / 10 : 0
+  const cacheHitPercent = Math.round((sessionCacheHitPercent(totalInput, totalCacheRead, totalCacheWrite) ?? 0) * 10) / 10
 
   // Daily rows come from the same durable day set as the headline so they sum
   // to it, carried days included. Both JSON call sites always pass durable

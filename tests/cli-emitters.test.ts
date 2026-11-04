@@ -133,7 +133,7 @@ describe('CLI JSON emitters', () => {
       expect(rows).toHaveLength(2)
       expect(Object.keys(rows[0]!)).toEqual([
         'sessionId', 'title', 'project', 'provider', 'models', 'cost', 'savingsUSD', 'calls', 'turns',
-        'inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheWriteTokens',
+        'inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheWriteTokens', 'cacheHitPercent',
         'startedAt', 'endedAt', 'durationMs', 'estimatedCost', 'isEstimated',
       ])
       expect(rows.every(row => row.provider === 'claude')).toBe(true)
