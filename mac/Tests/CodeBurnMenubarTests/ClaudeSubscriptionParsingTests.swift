@@ -39,7 +39,7 @@ struct ClaudeSubscriptionParsingTests {
         #expect(usage.sevenDayPercent == 63.0)
         #expect(usage.sevenDayOpusPercent == nil)
         #expect(usage.sevenDaySonnetPercent == nil)
-        #expect(usage.tier == .max20x)
+        #expect(usage.tier == .max(20))
     }
 
     @Test("session and weekly_all limits are not duplicated as scoped rows")
@@ -78,14 +78,19 @@ struct ClaudeSubscriptionParsingTests {
     @Test("plan tier prefers subscriptionType over rateLimitTier")
     func tierPrefersSubscriptionType() {
         let cases: [(String?, String?, SubscriptionUsage.Tier)] = [
-            ("max", "default_claude_max_20x", .max20x),
+            ("max", "default_claude_max_20x", .max(20)),
             ("team", "default_claude_max_5x", .teamPremium),
             ("team", nil, .team),
             ("enterprise", "default_claude_max_5x", .enterprisePremium),
             ("pro", "default_claude_pro", .pro),
-            (nil, "max_5x", .max5x),
-            (nil, "max_20x", .max20x),
+            (nil, "max_5x", .max(5)),
+            (nil, "max_20x", .max(20)),
             (nil, "team", .team),
+            (nil, "default_claude_max_10x", .max(10)),
+            (nil, "default_claude_ultra", .ultra),
+            (nil, "default_claude_foo_bar", .other("Foo bar")),
+            ("max", "", .other("Max")),
+            (nil, "default_claude_max", .other("Max")),
             (nil, nil, .unknown),
         ]
         for (subscriptionType, rateLimitTier, expected) in cases {

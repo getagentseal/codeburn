@@ -173,4 +173,41 @@ describe.skipIf(skipReason !== null)('cursor bubble dedup (regression for v3 fix
     // assistant call's userMessage field.)
     expect(calls.length).toBe(1)
   })
+
+  async function parseRows(rows: Array<[string, string]>): Promise<ParsedProviderCall[]> {
+    const dbPath = await createCursorTestDb()
+    const Module = await import('node:module')
+    const { DatabaseSync } = Module.createRequire(import.meta.url)('node:sqlite') as {
+      DatabaseSync: new (path: string) => { prepare(sql: string): { run(...p: unknown[]): unknown }; close(): void }
+    }
+    const db = new DatabaseSync(dbPath)
+    db.prepare('DELETE FROM cursorDiskKV').run()
+    rows.forEach(([key, bubbleId], n) => {
+      db.prepare('INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)').run(
+        key,
+        JSON.stringify({ ...JSON.parse(buildBubbleValue({ conversationId: 'c', text: `reply ${n}`, inputTokens: 100, outputTokens: 20, type: 2 })), bubbleId }),
+      )
+    })
+    db.close()
+    const provider = await getCursorProvider()
+    const calls: ParsedProviderCall[] = []
+    for await (const call of provider.createSessionParser({ path: dbPath, project: 'p', provider: 'cursor' }, new Set()).parse()) calls.push(call)
+    return calls
+  }
+
+  it('counts a bubble once when it is copied under several composer keys', async () => {
+    const calls = await parseRows([
+      ['bubbleId:abc-123:b1', 'b1'],
+      ['bubbleId:def-456:b1', 'b1'],
+    ])
+    expect(calls.length).toBe(1)
+  })
+
+  it('keeps bubbles with different bubbleIds separate', async () => {
+    const calls = await parseRows([
+      ['bubbleId:abc-123:b1', 'b1'],
+      ['bubbleId:def-456:b2', 'b2'],
+    ])
+    expect(calls.length).toBe(2)
+  })
 })

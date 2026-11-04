@@ -12,10 +12,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Package floor, the newest 22.x so paths gated on later node:zlib
-        # features (zstd, 22.15+) get exercised, and the current LTS plus
-        # current release so warnings newer Node prints reach the suite.
-        node-version: [22.13.0, 22, 24, 26]
+        # Package floor (zstd is built in from 22.15), the newest 22.x, and the
+        # current LTS plus current release so warnings newer Node prints reach
+        # the suite.
+        node-version: [22.15.0, 22, 24, 26]
 
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
@@ -97,7 +97,7 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: 22.13.0
+          node-version: 22.15.0
           cache: npm
           cache-dependency-path: app/package-lock.json
       - run: npm ci
@@ -119,7 +119,7 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: 22.13.0
+          node-version: 22.15.0
           cache: npm
           cache-dependency-path: |
             package-lock.json

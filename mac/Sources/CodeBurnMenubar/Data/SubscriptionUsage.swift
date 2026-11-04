@@ -1,10 +1,11 @@
 import Foundation
 
 struct SubscriptionUsage: Sendable, Equatable {
-    enum Tier: String, Sendable, Equatable {
+    enum Tier: Sendable, Equatable {
         case pro
-        case max5x
-        case max20x
+        case max(Int)
+        case ultra
+        case other(String)
         case team
         case teamPremium
         case enterprise
@@ -14,8 +15,9 @@ struct SubscriptionUsage: Sendable, Equatable {
         var displayName: String {
             switch self {
             case .pro: "Pro"
-            case .max5x: "Max 5x"
-            case .max20x: "Max 20x"
+            case .max(let n): "Max \(n)x"
+            case .ultra: "Ultra"
+            case .other(let text): text
             case .team: "Team"
             case .teamPremium: "Team Premium"
             case .enterprise: "Enterprise"
@@ -54,7 +56,7 @@ struct SubscriptionUsage: Sendable, Equatable {
     static func tier(subscriptionType: String?, rateLimitTier: String?) -> Tier {
         let subscriptionType = subscriptionType?.lowercased() ?? ""
         let rateLimitTier = rateLimitTier?.lowercased() ?? ""
-        let hasMax20 = rateLimitTier.contains("max_20x") || rateLimitTier.contains("max20x") || rateLimitTier.contains("max-20x")
+        let multiplier = rateLimitTier.firstMatch(of: /max[_-]?(\d+)x/).flatMap { Int($0.1) }
         let hasMax = rateLimitTier.contains("max")
         if subscriptionType == "team" || (subscriptionType.isEmpty && rateLimitTier.contains("team")) {
             return hasMax ? .teamPremium : .team
@@ -62,12 +64,13 @@ struct SubscriptionUsage: Sendable, Equatable {
         if subscriptionType == "enterprise" || (subscriptionType.isEmpty && rateLimitTier.contains("enterprise")) {
             return hasMax ? .enterprisePremium : .enterprise
         }
-        if subscriptionType == "max" || hasMax {
-            return hasMax20 ? .max20x : .max5x
-        }
+        if rateLimitTier.contains("ultra") { return .ultra }
+        if let multiplier { return .max(multiplier) }
+        if subscriptionType == "max" || hasMax { return .other("Max") }
         if subscriptionType == "pro" || rateLimitTier.contains("pro") {
             return .pro
         }
-        return .unknown
+        let readable = rateLimitTier.replacingOccurrences(of: "default_claude_", with: "").replacingOccurrences(of: "_", with: " ")
+        return readable.isEmpty ? .unknown : .other(readable.prefix(1).uppercased() + String(readable.dropFirst()))
     }
 }

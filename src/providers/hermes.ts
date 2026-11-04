@@ -74,6 +74,14 @@ type TableInfoRow = {
 
 type TableColumn = keyof HermesSessionRow | keyof HermesMessageRow
 
+type HermesHelperUsageRow = HermesTokenTotals & Pick<HermesSessionRow, 'billing_provider' | 'estimated_cost_usd' | 'actual_cost_usd' | 'cost_status' | 'cost_source'> & {
+  task: string
+  model: string
+  billing_base_url: string
+  billing_mode: string
+  first_seen: number | null
+}
+
 const toolNameMap: Record<string, string> = {
   terminal: 'Bash',
   execute_code: 'CodeExecution',
@@ -282,6 +290,23 @@ function getMessageColumns(db: SqliteDatabase): Set<string> {
   return new Set(db.query<TableInfoRow>('PRAGMA table_info(messages)').map(row => row.name))
 }
 
+function readHelperUsage(db: SqliteDatabase, sessionId: string): HermesHelperUsageRow[] {
+  const columns = new Set(db.query<TableInfoRow>('PRAGMA table_info(session_model_usage)').map(row => row.name))
+  if (!columns.has('task')) return []
+  // Auxiliary calls (compression, titles, ...) land only here, never in the sessions totals;
+  // voice_chat is the one task Hermes also adds to the sessions totals.
+  return db.query<HermesHelperUsageRow>(
+    `SELECT task, model, billing_provider, billing_base_url, billing_mode,
+            input_tokens AS inputTokens, output_tokens AS outputTokens,
+            cache_read_tokens AS cacheReadTokens, cache_write_tokens AS cacheWriteTokens,
+            reasoning_tokens AS reasoningTokens, estimated_cost_usd,
+            CASE WHEN cost_status = 'actual' THEN actual_cost_usd ELSE NULLIF(actual_cost_usd, 0) END AS actual_cost_usd, cost_status, cost_source, first_seen
+     FROM session_model_usage
+     WHERE session_id = ? AND task NOT IN ('', 'voice_chat')`,
+    [sessionId],
+  )
+}
+
 function usageExpression(columns: Set<string>): string {
   const usageColumns: Array<keyof HermesSessionRow> = [
     'input_tokens',
@@ -418,7 +443,7 @@ function tokenSum(tokens: HermesTokenTotals): number {
 }
 
 function resolveHermesCost(
-  row: HermesSessionRow | undefined,
+  row: Pick<HermesSessionRow, 'estimated_cost_usd' | 'actual_cost_usd' | 'cost_status' | 'cost_source'> | undefined,
   model: string,
   tokens: HermesTokenTotals,
 ): { costUSD: number; costIsEstimated: boolean; costBasis: HermesCostBasis } {
@@ -580,7 +605,7 @@ async function discoverFromDb(dbPath: string, profile: string): Promise<SessionS
     const discoveredIds = new Set(rows.map(row => row.id))
     const ledger = loadHermesSessionLedger()
     for (const sessionId of listHermesCursorSessionIds(ledger, profile)) {
-      if (discoveredIds.has(sessionId)) continue
+      if (discoveredIds.has(sessionId) || sessionId.includes('#helper:')) continue
       sources.push({
         path: encodeSourcePath(dbPath, sessionId),
         project: displayProjectForProfile(profile),
@@ -766,6 +791,49 @@ function createParser(source: SessionSource, seenKeys: Set<string>, hermesHome: 
             costIsEstimated: cost.costIsEstimated,
             route: routeFromProviderField(row.billing_provider)?.id,
           })),
+        }
+        for (const helper of readHelperUsage(db, row.id)) {
+          const helperId = `${row.id}#helper:${[helper.task, helper.model, helper.billing_provider, helper.billing_base_url, helper.billing_mode].join('|')}`
+          const helperKey = hermesBaselineKey(profile, helperId)
+          if (seenKeys.has(helperKey)) continue
+          seenKeys.add(helperKey)
+          const helperCost = resolveHermesCost(helper, helper.model, helper)
+          const helperCursor = await recordHermesSnapshot({
+            profile,
+            sessionId: helperId,
+            startedAt: parseTimestamp(helper.first_seen) || timestamp || hermesLedgerNow().toISOString(),
+            observedAt: hermesLedgerNow().toISOString(),
+            tokens: {
+              inputTokens: helper.inputTokens,
+              outputTokens: helper.outputTokens,
+              cacheReadTokens: helper.cacheReadTokens,
+              cacheWriteTokens: helper.cacheWriteTokens,
+              reasoningTokens: helper.reasoningTokens,
+            },
+            costUSD: helperCost.costUSD,
+            costBasis: helperCost.costBasis,
+          })
+          for (const observation of helperCursor.observations) {
+            if (observation.index > 0) seenKeys.add(hermesObservationKey(profile, helperId, observation.index))
+            result.calls.push({
+              ...observationToCall(observation, {
+                profile,
+                sessionId: helperId,
+                model: helper.model,
+                tools: [],
+                bashCommands: [],
+                toolSequence: [],
+                userMessage: '',
+                project: workspace.project,
+                projectPath: workspace.projectPath,
+                workingDirectory: workspace.workingDirectory,
+                costIsEstimated: helperCost.costIsEstimated,
+                route: routeFromProviderField(helper.billing_provider)?.id,
+              }),
+              sessionId: row.id,
+              supplementaryAccounting: true,
+            })
+          }
         }
         }
       } catch (err) {
