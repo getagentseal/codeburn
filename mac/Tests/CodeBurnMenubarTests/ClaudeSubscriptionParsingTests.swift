@@ -89,6 +89,8 @@ struct ClaudeSubscriptionParsingTests {
             (nil, "default_claude_max_10x", .max(10)),
             (nil, "default_claude_ultra", .ultra),
             (nil, "default_claude_foo_bar", .other("Foo bar")),
+            ("max", "", .other("Max")),
+            (nil, "default_claude_max", .other("Max")),
             (nil, nil, .unknown),
         ]
         for (subscriptionType, rateLimitTier, expected) in cases {

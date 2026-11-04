@@ -357,6 +357,9 @@ fn tier_display(subscription_type: Option<&str>, rate_limit_tier: Option<&str>) 
     if let Some(n) = multiplier {
         return format!("Max {n}x");
     }
+    if subscription_type == "max" || has_max {
+        return "Max".into();
+    }
     if subscription_type == "pro" || tier.contains("pro") {
         return "Pro".into();
     }
@@ -684,7 +687,7 @@ mod tests {
 
     #[test]
     fn tier_display_prefers_subscription_type() {
-        let cases: [(Option<&str>, Option<&str>, &str); 12] = [
+        let cases: [(Option<&str>, Option<&str>, &str); 14] = [
             (Some("max"), Some("default_claude_max_20x"), "Max 20x"),
             (Some("team"), Some("default_claude_max_5x"), "Team Premium"),
             (Some("team"), None, "Team"),
@@ -696,6 +699,8 @@ mod tests {
             (None, Some("default_claude_max_10x"), "Max 10x"),
             (None, Some("default_claude_ultra"), "Ultra"),
             (None, Some("default_claude_foo_bar"), "Foo bar"),
+            (Some("max"), Some(""), "Max"),
+            (None, Some("default_claude_max"), "Max"),
             (None, None, "Subscription"),
         ];
         for (subscription_type, rate_limit_tier, expected) in cases {
