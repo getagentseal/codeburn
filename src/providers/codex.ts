@@ -465,8 +465,9 @@ function serviceTierFromThreadSettings(payload: CodexEntry['payload']): string |
 // `"flex"` bills at the model's published Flex rates, or standard without them.
 // Everything else - `"default"`, an unrecognised value, no tier at all - is
 // standard, never a guess.
-function speedForServiceTier(tier: string): 'standard' | 'fast' | 'flex' {
+function speedForServiceTier(tier: string): 'standard' | 'fast' | 'flex' | 'ultrafast' {
   if (tier === 'flex') return 'flex'
+  if (tier === 'ultrafast') return 'ultrafast'
   return tier === 'priority' || tier === 'fast' ? 'fast' : 'standard'
 }
 

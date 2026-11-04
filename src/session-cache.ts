@@ -33,7 +33,7 @@ export type CachedCall = {
   /// True when `costUSD` (or the tokens it is priced from) is estimated rather
   /// than metered. Persisted so the estimated-cost marker survives the cache.
   isEstimated?: boolean
-  speed: 'standard' | 'fast' | 'flex'
+  speed: 'standard' | 'fast' | 'flex' | 'ultrafast'
   timestamp: string
   tools: string[]
   bashCommands: string[]

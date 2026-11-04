@@ -105,18 +105,18 @@ const TIER_KEY_RE = /^(input_cost_per_token|output_cost_per_token|cache_read_inp
 const PRIORITY_KEY_SUFFIX = '_priority'
 const MAX_DERIVED_FAST_MULTIPLIER = 100
 
-function priorityMultiplierOf(entry) {
+function priorityMultiplierOf(entry, suffix = PRIORITY_KEY_SUFFIX) {
   const ratios = []
   let inputRatio
   let outputRatio
   for (const [key, value] of Object.entries(entry)) {
-    if (!key.endsWith(PRIORITY_KEY_SUFFIX)) continue
-    const base = entry[key.slice(0, -PRIORITY_KEY_SUFFIX.length)]
+    if (!key.endsWith(suffix)) continue
+    const base = entry[key.slice(0, -suffix.length)]
     if (typeof value !== 'number' || typeof base !== 'number') continue
     if (!Number.isFinite(value) || !Number.isFinite(base) || value <= 0 || base <= 0) continue
     const ratio = value / base
-    if (key === 'input_cost_per_token_priority') inputRatio = ratio
-    else if (key === 'output_cost_per_token_priority') outputRatio = ratio
+    if (key === `input_cost_per_token${suffix}`) inputRatio = ratio
+    else if (key === `output_cost_per_token${suffix}`) outputRatio = ratio
     ratios.push(ratio)
   }
   if (inputRatio === undefined || outputRatio === undefined) return null
@@ -187,6 +187,8 @@ function toVal(entry) {
   }
   const val = [inp, out, entry.cache_creation_input_token_cost ?? null, entry.cache_read_input_token_cost ?? null, explicitFast ?? priorityFast, tier]
   const flex = flexOf(entry, val[2], val[3], tier)
+  const ultrafast = priorityMultiplierOf(entry, '_ultrafast')
+  if (ultrafast !== null) return [...val, flex, ultrafast]
   return flex ? [...val, flex] : val
 }
 

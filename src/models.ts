@@ -31,6 +31,9 @@ export type ModelCosts = {
   /// The Flex service tier's rates (LiteLLM `<rate>_flex`), priced instead of
   /// these when a call runs under Flex. Absent: Flex bills at standard.
   flex?: ModelCosts
+  /// Multiplier for the ultrafast service tier (LiteLLM `<rate>_ultrafast`).
+  /// Absent: ultrafast bills at standard.
+  ultrafastMultiplier?: number
 }
 
 /** Long-context pricing tier, e.g. OpenAI's above-272k or Anthropic's
@@ -81,14 +84,14 @@ type LiteLLMEntry = {
   provider_specific_entry?: { fast?: number }
 }
 
-// [input, output, cacheWrite, cacheRead, fastMultiplier, longContextTier?, flex?].
+// [input, output, cacheWrite, cacheRead, fastMultiplier, longContextTier?, flex?, ultrafastMultiplier?].
 // The trailing fast multiplier is carried straight from LiteLLM's
 // provider_specific_entry.fast so new models pick it up automatically — no
 // hand-maintained per-model table. The optional sixth slot carries the
 // vendor's long-context tier; older bundles without it parse unchanged. The
 // optional seventh is the Flex tier's own tuple, present only where published.
 type SnapshotTier = { threshold: number, input: number, output: number, cacheWrite: number | null, cacheRead: number | null, fast?: number }
-type SnapshotEntry = [number, number, number | null, number | null, (number | null)?, (SnapshotTier | null)?, (SnapshotEntry | null)?]
+type SnapshotEntry = [number, number, number | null, number | null, (number | null)?, (SnapshotTier | null)?, (SnapshotEntry | null)?, number?]
 
 const LITELLM_URL = 'https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json'
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000
@@ -107,7 +110,8 @@ const CACHE_TTL_MS = 24 * 60 * 60 * 1000
 // 7: ModelCosts carries the Flex tier's rates (`flex`), read from `<rate>_flex`.
 // 8: a bare id takes the maker's row over a reseller's, and a reseller's priced
 // row over a reseller's $0 one, so a cached map can still hold azure_ai's rate under `grok-4.6`.
-export const CACHE_SCHEMA_VERSION = 8
+// 9: ModelCosts carries ultrafastMultiplier, derived from `<rate>_ultrafast` keys.
+export const CACHE_SCHEMA_VERSION = 9
 const WEB_SEARCH_COST = 0.01
 const ONE_HOUR_CACHE_WRITE_MULTIPLIER_FROM_FIVE_MINUTE_RATE = 1.6
 
@@ -148,6 +152,7 @@ function buildCosts(
   fast: number | null | undefined,
   tier?: SnapshotTier | null,
   flex?: SnapshotEntry | null,
+  ultrafast?: number | null,
 ): ModelCosts {
   return {
     inputCostPerToken: input,
@@ -166,6 +171,7 @@ function buildCosts(
       ...(tier.fast !== undefined ? { fastMultiplier: tier.fast } : {}),
     } } : {}),
     ...(flex ? { flex: tupleToCosts(flex) } : {}),
+    ...(ultrafast ? { ultrafastMultiplier: ultrafast } : {}),
   }
 }
 // For grok-4.6, prompt tokens mean input tokens plus cached input tokens for a
@@ -223,8 +229,8 @@ export function tieredCostsFor(model: string, baseCosts: ModelCosts, promptToken
 
 
 function tupleToCosts(raw: SnapshotEntry): ModelCosts {
-  const [input, output, cacheWrite, cacheRead, fast, tier, flex] = raw
-  return buildCosts(input, output, cacheWrite, cacheRead, fast, tier, flex)
+  const [input, output, cacheWrite, cacheRead, fast, tier, flex, ultrafast] = raw
+  return buildCosts(input, output, cacheWrite, cacheRead, fast, tier, flex, ultrafast)
 }
 
 function applyBuiltinPriceOverrides(pricing: Map<string, ModelCosts>): Map<string, ModelCosts> {
@@ -334,19 +340,19 @@ const PRIORITY_KEY_SUFFIX = '_priority'
 // anything past this is a corrupted or hostile upstream row, not a price.
 const MAX_DERIVED_FAST_MULTIPLIER = 100
 
-function priorityMultiplierOf(entry: LiteLLMEntry): number | null {
+function priorityMultiplierOf(entry: LiteLLMEntry, suffix = PRIORITY_KEY_SUFFIX): number | null {
   const record = entry as Record<string, unknown>
   const ratios: number[] = []
   let inputRatio: number | undefined
   let outputRatio: number | undefined
   for (const [key, value] of Object.entries(record)) {
-    if (!key.endsWith(PRIORITY_KEY_SUFFIX)) continue
-    const base = record[key.slice(0, -PRIORITY_KEY_SUFFIX.length)]
+    if (!key.endsWith(suffix)) continue
+    const base = record[key.slice(0, -suffix.length)]
     if (typeof value !== 'number' || typeof base !== 'number') continue
     if (!Number.isFinite(value) || !Number.isFinite(base) || value <= 0 || base <= 0) continue
     const ratio = value / base
-    if (key === 'input_cost_per_token_priority') inputRatio = ratio
-    else if (key === 'output_cost_per_token_priority') outputRatio = ratio
+    if (key === `input_cost_per_token${suffix}`) inputRatio = ratio
+    else if (key === `output_cost_per_token${suffix}`) outputRatio = ratio
     ratios.push(ratio)
   }
   // No priority input AND output rate means there is no priority price to
@@ -438,6 +444,7 @@ export function parseLiteLLMEntry(entry: LiteLLMEntry): ModelCosts | null {
     explicitFast ?? priorityFast,
     tier,
     flexOf(entry, cacheWrite, cacheRead, tier),
+    priorityMultiplierOf(entry, '_ultrafast'),
   )
 }
 
@@ -886,7 +893,7 @@ export function calculateLocalModelSavings(
   cacheCreationTokens: number,
   cacheReadTokens: number,
   webSearchRequests: number,
-  speed: 'standard' | 'fast' | 'flex' = 'standard',
+  speed: 'standard' | 'fast' | 'flex' | 'ultrafast' = 'standard',
   oneHourCacheCreationTokens = 0,
 ): { savingsUSD: number; baselineModel: string } | null {
   const baseline = getLocalSavingsBaseline(rawModel)
@@ -1520,7 +1527,7 @@ export function calculateCost(
   cacheCreationTokens: number,
   cacheReadTokens: number,
   webSearchRequests: number,
-  speed: 'standard' | 'fast' | 'flex' = 'standard',
+  speed: 'standard' | 'fast' | 'flex' | 'ultrafast' = 'standard',
   oneHourCacheCreationTokens = 0,
   provider?: string,
 ): number {
@@ -1546,7 +1553,7 @@ export function calculateCost(
   const safeFiveMinuteCacheCreation = Math.max(0, safeCacheCreation - safeOneHourCacheCreation)
   const promptTokens = safe(inputTokens) + safe(cacheReadTokens) + safeCacheCreation
   const tieredCosts = tieredCostsFor(model, speed === 'flex' ? costs.flex ?? costs : costs, promptTokens, provider)
-  const multiplier = speed === 'fast' ? tieredCosts.fastMultiplier : 1
+  const multiplier = speed === 'fast' ? tieredCosts.fastMultiplier : speed === 'ultrafast' ? tieredCosts.ultrafastMultiplier ?? 1 : 1
 
   // Clamp negative inputs to 0. A corrupt JSONL that emits a negative token
   // count would otherwise produce a negative cost that silently subtracts
