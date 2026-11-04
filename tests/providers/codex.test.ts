@@ -2447,7 +2447,7 @@ describe('codex provider - priority service tier (#1616)', () => {
   })
 })
 
-describe.skipIf(typeof (zlib as { zstdCompressSync?: unknown }).zstdCompressSync !== 'function')('codex provider - Zstandard-compressed rollouts', () => {
+describe('codex provider - Zstandard-compressed rollouts', () => {
   const lines = [
     // Larger than a stream chunk, so the first line spans several decoded chunks.
     JSON.stringify({
