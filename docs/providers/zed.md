@@ -16,7 +16,7 @@ One SQLite database with one row per agent thread (`zed.ts:19`):
 
 ## Storage format
 
-The `threads` table stores each thread's `data` BLOB as zstd-compressed JSON (`data_type = "zstd"`; legacy rows may be uncompressed `"json"`, both are read, `zed.ts:117-127`). Decompression uses Node's built-in `zlib.zstdDecompressSync` (`zed.ts:17`), no extra dependency.
+The `threads` table stores each thread's `data` BLOB as zstd-compressed JSON (`data_type = "zstd"`; legacy rows may be uncompressed `"json"`, both are read, `zed.ts:117-127`). Decompression uses Node's built-in `zlib.zstdDecompressSync` (`zed.ts:17`), no extra dependency (zstd is built in from the Node 22.15 floor).
 
 The decompressed thread JSON carries:
 
@@ -38,7 +38,6 @@ Per `zed:<threadId>:<requestKey>` (`zed.ts:96`), where `requestKey` is the user-
 
 - `request_token_usage` is keyed by user message and does not cover every request a thread made (verified on a real thread: cumulative was ~3x the map sum). One remainder entry per thread tops usage up to the exact `cumulative_token_usage` (`zed.ts:133-153`), so totals always match the store.
 - The per-request map carries no timestamps, so every call in a thread uses the thread's `updated_at`; day-level attribution inside long-running threads is approximate.
-- Node's zlib gained zstd in 22.15. On older Nodes the provider skips with a notice instead of failing (`zed.ts:14-17`).
 - All Zed usage currently lands under a single `zed` project; `folder_paths` is not yet mapped to per-project attribution.
 
 ## When fixing a bug here
