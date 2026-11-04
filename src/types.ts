@@ -110,6 +110,8 @@ export type ParsedTurn = {
   spawnToolUseIds?: string[]
 }
 
+export type CostBasis = 'recorded' | 'calculated' | 'estimated' | 'included' | 'unpriced'
+
 export type ParsedApiCall = {
   provider: string
   model: string
@@ -147,6 +149,7 @@ export type ParsedApiCall = {
   /// across the parser/cache boundary. Aggregates roll the estimated portion up
   /// as `estimatedCostUSD`; it is display/metadata only and never changes totals.
   isEstimated?: boolean
+  costBasis?: CostBasis
   /// Lines added/removed by this call's edits, counted from tool-result diffs
   /// (Claude: `toolUseResult.structuredPatch`). Numbers only, never patch text;
   /// omitted when zero. Rich-session-capture (capture-only; no report yet).

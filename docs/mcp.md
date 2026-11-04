@@ -13,3 +13,5 @@ claude mcp add codeburn -- npx -y codeburn mcp
 
 Everything is read from local disk, same as the CLI. Project names are pseudonymized by default; the agent only sees real names if it asks with `include_project_names: true`. For other MCP clients, configure a stdio server with command `npx` and args `-y codeburn mcp`.
 
+`get_usage` totals include `costBasis` when there is spend: the share of cost, from 0 to 1, that is `recorded` by the tool itself, `calculated` from measured tokens at published prices, or `estimated` from content length. The other two bases, `included` (a subscription already paid) and `unpriced` (no known price), are $0 and carry no share. New keys can appear in the output, so read fields by name.
+

@@ -46,6 +46,17 @@ describe('mcp server', () => {
     const res = await client.callTool({ name: 'get_usage', arguments: { period: 'today', by: 'project', include_project_names: true } })
     expect(JSON.stringify(res)).toContain('real-repo')
   })
+  it('get_usage totals carry costBasis shares when the scan has them, and omit them otherwise', async () => {
+    const withBasis = fakePayload()
+    withBasis.current.costBasis = { calculated: 0.75, recorded: 0.25 }
+    const res = await (await connect(async () => withBasis)).callTool({ name: 'get_usage', arguments: { period: 'today' } })
+    expect(res.isError).toBeFalsy()
+    expect((res.structuredContent as { totals: { costBasis?: unknown } }).totals.costBasis).toEqual({ calculated: 0.75, recorded: 0.25 })
+
+    const without = await (await connect(async () => fakePayload())).callTool({ name: 'get_usage', arguments: { period: 'today' } })
+    expect(without.isError).toBeFalsy()
+    expect((without.structuredContent as { totals: object }).totals).not.toHaveProperty('costBasis')
+  })
   it('empty data returns a friendly message, not a zero table', async () => {
     const client = await connect(async () => fakePayload(0))
     const res = await client.callTool({ name: 'get_usage', arguments: { period: 'today' } })

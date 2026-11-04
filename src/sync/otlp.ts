@@ -295,9 +295,7 @@ export function buildOtlpPayload(calls: CallWithSession[], opts?: BuildOtlpOptio
       })
     }
 
-    // cost_estimated = true when provider reports char-based estimates
-    const isEstimated = call.provider === 'kiro' || call.usage.inputTokens === 0
-    attributes.push({ key: 'ai.cost_estimated', value: { boolValue: isEstimated } })
+    attributes.push({ key: 'ai.cost_estimated', value: { boolValue: call.costBasis === 'estimated' } })
 
     // --- CB-3 additive fields (boundary spec section 7). Each is emitted only
     // when its value is proven; an old receiver ignoring them loses nothing.

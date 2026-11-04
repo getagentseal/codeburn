@@ -193,6 +193,8 @@ codeburn today --format json | jq '.overview.cost'
 
 For lighter output, use `status --format json` (today and month totals only), `optimize --format json` (setup health, findings, and copy-paste fixes), `yield --format json` (productive/reverted/abandoned/ambiguous spend), or file exports (`export -f json`).
 
+Every dollar says where it came from. Each record in `export -f json` and `records.csv` has a `costBasis`: `recorded` is the tool's own figure, `calculated` is measured tokens at published prices, `estimated` is tokens guessed from content length, `included` is $0 a subscription already paid for, and `unpriced` is $0 for a model with no known price. Sessions and days in the JSON export, `sessions --format json` rows and their `subagents`, and the MCP `get_usage` totals carry `costBasis` as the share of cost that is `recorded`, `calculated` or `estimated`, from 0 to 1, with zero shares left out. Keys like this can be added under the same `codeburn.export.v2` schema string, so read fields by name.
+
 ## Diagnosing detection
 
 When a tool shows zero (or a number that looks wrong), `codeburn doctor` explains why. It runs fully offline and read-only, and never writes to caches or config.

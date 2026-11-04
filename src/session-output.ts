@@ -1,5 +1,5 @@
 import { billableOutputTokens, modelRowKey } from './models.js'
-import type { SessionSummary } from './types.js'
+import type { CostBasis, SessionSummary } from './types.js'
 
 type UsageLike = {
   outputTokens?: number
@@ -128,4 +128,19 @@ export function countSessions(projects: ReadonlyArray<{ sessions: SessionSummary
     }
   }
   return count + split.size
+}
+
+export type CostBasisShares = Partial<Record<CostBasis, number>>
+
+export function costBasisShares(calls: Iterable<{ costBasis?: CostBasis; costUSD: number }>): CostBasisShares | undefined {
+  const shares: CostBasisShares = {}
+  let total = 0
+  for (const { costBasis, costUSD } of calls) {
+    if (!costBasis || costUSD <= 0) continue
+    shares[costBasis] = (shares[costBasis] ?? 0) + costUSD
+    total += costUSD
+  }
+  if (total <= 0) return undefined
+  for (const basis of Object.keys(shares) as CostBasis[]) shares[basis] = shares[basis]! / total
+  return shares
 }

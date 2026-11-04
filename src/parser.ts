@@ -5,7 +5,7 @@ import { createHash } from 'crypto'
 import { performance } from 'node:perf_hooks'
 import { basename, dirname, join, resolve, sep } from 'path'
 import { FS_SCAN_CONCURRENCY, mapWithConcurrency, readSessionLines } from './fs-utils.js'
-import { billableOutputTokens, calculateCost, calculateLocalModelSavings, getShortModelName, modelRowKey, pricingModelAt, isProxiedPath, getProxyPathsConfigHash, getModelAliasesConfigHash, getPriceOverridesConfigHash, getLocalModelSavingsConfigHash, recordedCostFallback, getModelRoute, isStandInPricedAt } from './models.js'
+import { billableOutputTokens, calculateCost, calculateLocalModelSavings, getShortModelName, modelRowKey, pricingModelAt, isProxiedPath, getProxyPathsConfigHash, getModelAliasesConfigHash, getPriceOverridesConfigHash, getLocalModelSavingsConfigHash, recordedCostFallback, getModelRoute, isStandInPricedAt, findUnpricedModels } from './models.js'
 import { resolveSubagentAttribution, sessionIdentity } from './sessions-report.js'
 import { applyCodexSessionNames } from './codex-session-index.js'
 import { normalizeContentBlocks, flatSlice, flatString } from './content-utils.js'
@@ -3072,7 +3072,7 @@ function providerCallsToCachedTurns(calls: ParsedProviderCall[]): CachedTurn[] {
   return turns
 }
 
-function cachedCallToApiCall(call: CachedCall): ParsedApiCall {
+export function cachedCallToApiCall(call: CachedCall): ParsedApiCall {
   const u = call.usage
   // Cache-rehydration twin of the fresh-parse pricing in
   // src/providers/codex.ts (and every other provider's parser): both go
@@ -3084,7 +3084,8 @@ function cachedCallToApiCall(call: CachedCall): ParsedApiCall {
     u.cacheCreationInputTokens, u.cacheReadInputTokens,
     u.webSearchRequests, call.speed, u.cacheCreationOneHourTokens, call.provider,
   )
-  return applyLocalModelSavings({
+  const fallbackCostUSD = call.costUSD === undefined ? recordedCostFallback(call.model, costUSD, call.fallbackCostUSD) : undefined
+  const apiCall = applyLocalModelSavings({
     provider: call.provider,
     model: call.model,
     usage: {
@@ -3096,7 +3097,7 @@ function cachedCallToApiCall(call: CachedCall): ParsedApiCall {
       reasoningTokens: u.reasoningTokens,
       webSearchRequests: u.webSearchRequests,
     },
-    costUSD: call.costUSD ?? recordedCostFallback(call.model, costUSD, call.fallbackCostUSD) ?? costUSD,
+    costUSD: call.costUSD ?? fallbackCostUSD ?? costUSD,
     isEstimated: call.isEstimated || (call.costUSD === undefined && isStandInPricedAt(call.model, call.timestamp)) || undefined,
     tools: call.tools,
     mcpTools: extractMcpTools(call.tools),
@@ -3121,6 +3122,12 @@ function cachedCallToApiCall(call: CachedCall): ParsedApiCall {
       ? { supplementaryAccounting: true }
       : {}),
   })
+  apiCall.costBasis = call.billing === 'subscription' && call.costUSD === 0 ? 'included'
+    : apiCall.isEstimated ? 'estimated'
+    : call.costUSD !== undefined || fallbackCostUSD !== undefined ? 'recorded'
+    : apiCall.costUSD === 0 && findUnpricedModels([{ model: call.model, calls: 1, cost: 0 }]).length > 0 ? 'unpriced'
+    : 'calculated'
+  return apiCall
 }
 
 // NOT memoizable as it stands, though it looks pure and is the obvious next
@@ -4762,6 +4769,7 @@ export async function parseProviderSources(
           // per leg after the equal-timestamp coalescing above.
           deduplicationKey: `copilot:${sessionId}:shutdown-residual:${model}:${leg.ts}`,
           supplementaryAccounting: true,
+          costBasis: 'calculated',
         })
         residualsBySession.set(sessionId, calls)
       }

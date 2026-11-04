@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 
-import { compactEntry, dedupeStreamingMessageIds, parseApiCall, parseJsonlLine } from '../src/parser.js'
+import { cachedCallToApiCall, compactEntry, dedupeStreamingMessageIds, parseApiCall, parseJsonlLine } from '../src/parser.js'
+import type { CachedCall } from '../src/session-cache.js'
 import type { JournalEntry } from '../src/types.js'
 
 function entry(overrides: Partial<JournalEntry> & Record<string, unknown>): JournalEntry {
@@ -512,5 +513,29 @@ describe('placeholder usage on pre-2.1.307 subagent messages', () => {
     const [call] = calls(row({ content: [write] }))
     expect(call!.usage.outputTokens).toBe(Math.ceil(JSON.stringify(write.input).length / 4))
     expect(call!.isEstimated).toBe(true)
+  })
+})
+
+describe('cachedCallToApiCall costBasis', () => {
+  const call = (overrides: Partial<CachedCall>): CachedCall => ({
+    provider: 'claude',
+    model: 'claude-sonnet-4-6',
+    usage: { inputTokens: 1000, outputTokens: 100, cacheCreationInputTokens: 0, cacheReadInputTokens: 0, cachedInputTokens: 0, reasoningTokens: 0, webSearchRequests: 0, cacheCreationOneHourTokens: 0 },
+    speed: 'standard',
+    timestamp: '2026-07-10T10:00:00.000Z',
+    tools: [], bashCommands: [], skills: [], subagentTypes: [],
+    deduplicationKey: 'k',
+    ...overrides,
+  })
+  const basis = (overrides: Partial<CachedCall>) => cachedCallToApiCall(call(overrides)).costBasis
+
+  it('derives each basis, first match wins', () => {
+    expect(basis({ provider: 'hermes', billing: 'subscription', costUSD: 0 })).toBe('included')
+    expect(basis({ provider: 'hermes', costUSD: 0.4, isEstimated: true })).toBe('estimated')
+    expect(basis({ provider: 'cursor', isEstimated: true })).toBe('estimated')
+    expect(basis({ provider: 'hermes', costUSD: 0.4 })).toBe('recorded')
+    expect(basis({ provider: 'opencode', model: 'acme-unknown-model-9', fallbackCostUSD: 0.02 })).toBe('recorded')
+    expect(basis({ model: 'acme-unknown-model-9' })).toBe('unpriced')
+    expect(basis({})).toBe('calculated')
   })
 })

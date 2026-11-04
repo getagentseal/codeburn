@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
-import { aggregateByBranch, aggregateSessions, attributeSessionPrSpend, renderJson, renderTable } from '../src/sessions-report.js'
+import { aggregateByBranch, aggregateSessions, attributeSessionPrSpend, foldSubagentRows, renderJson, renderTable } from '../src/sessions-report.js'
+import { workUnitSessionKey } from '../src/work-units.js'
 import type { ClassifiedTurn, ParsedApiCall, ProjectSummary, SessionSummary } from '../src/types.js'
 
 function makeProject(): ProjectSummary {
@@ -24,6 +25,7 @@ function makeProject(): ProjectSummary {
         webSearchRequests: 0,
       },
       costUSD: 0.12,
+      costBasis: 'calculated',
       tools: [],
       mcpTools: [],
       skills: [],
@@ -95,7 +97,22 @@ describe('sessions JSON emitter', () => {
       durationMs: 300_000,
       estimatedCost: 0,
       isEstimated: false,
+      costBasis: { calculated: 1 },
     }])
+  })
+
+  it('weights a folded parent costBasis by each member cost', () => {
+    const [parent] = aggregateSessions([makeProject()])
+    const child = { ...parent!, sessionId: 'child-1', cost: 0.36, costBasis: { recorded: 0.5, estimated: 0.5 } }
+    const [folded] = foldSubagentRows([parent!, child], {
+      units: [{ workUnitId: 'u', rootSessionId: 'session-1', childSessionIds: ['child-1'], roles: { 'session-1': 'root', 'child-1': 'child' } }],
+      bySession: new Map([[workUnitSessionKey('claude', 'session-1'), 'u'], [workUnitSessionKey('claude', 'child-1'), 'u']]),
+    })
+
+    expect(folded!.costBasis!.calculated).toBeCloseTo(0.25)
+    expect(folded!.costBasis!.recorded).toBeCloseTo(0.375)
+    expect(folded!.costBasis!.estimated).toBeCloseTo(0.375)
+    expect(folded!.subagents![0]!.costBasis).toEqual({ recorded: 0.5, estimated: 0.5 })
   })
 
   it('marks an estimated session row and explains the marker under the table', () => {
