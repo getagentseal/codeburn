@@ -12,7 +12,7 @@ export type Runtime =
 
 export type NodeProbe = { version: string; sqlite: boolean }
 
-const FLOOR: [number, number] = [22, 13]
+const FLOOR: [number, number] = [22, 15]
 
 export function meetsFloor(version: string): boolean {
   const [major = 0, minor = 0] = version.split('.').map(Number)

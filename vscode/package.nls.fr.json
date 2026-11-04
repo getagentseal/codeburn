@@ -28,5 +28,5 @@
   "config.currency": "Devise d'affichage, en code à trois lettres. La définir modifie la devise du CLI CodeBurn, partagée par toutes les applications CodeBurn. Vide : aucun changement.",
   "config.provider": "Ne compter que ce fournisseur dans la barre d'état et le résumé, par exemple `claude` ou `cursor`. `all` compte tous les fournisseurs.",
   "config.quotaProviders": "Les forfaits dont CodeBurn vérifie le quota. Chaque vérification interroge l'API du fournisseur avec la connexion déjà présente sur cette machine. Retirez-en un pour ne plus l'interroger.",
-  "config.nodePath": "Un Node.js 22.13 ou plus récent pour exécuter le CLI CodeBurn quand le Node intégré à l'éditeur est trop ancien. Vide : recherche automatique."
+  "config.nodePath": "Un Node.js 22.15 ou plus récent pour exécuter le CLI CodeBurn quand le Node intégré à l'éditeur est trop ancien. Vide : recherche automatique."
 }
