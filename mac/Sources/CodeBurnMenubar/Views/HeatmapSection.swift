@@ -1899,16 +1899,16 @@ private struct PlanInsight: View {
 
             VStack(spacing: 8) {
                 if let p = usage.fiveHourPercent {
-                    UtilizationRow(label: L("5-hour window"), percent: p, resetsAt: usage.fiveHourResetsAt, projection: projections["five_hour"])
+                    UtilizationRow(label: L("5-hour window"), percent: p, resetsAt: usage.fiveHourResetsAt, projection: projection("five_hour", window: "5-hour", resetsAt: usage.fiveHourResetsAt))
                 }
                 if let p = usage.sevenDayPercent {
-                    UtilizationRow(label: L("7-day total"), percent: p, resetsAt: usage.sevenDayResetsAt, projection: projections["seven_day"])
+                    UtilizationRow(label: L("7-day total"), percent: p, resetsAt: usage.sevenDayResetsAt, projection: projection("seven_day", window: "Weekly", resetsAt: usage.sevenDayResetsAt))
                 }
                 if let p = usage.sevenDayOpusPercent {
-                    UtilizationRow(label: L("7-day Opus"), percent: p, resetsAt: usage.sevenDayOpusResetsAt, projection: projections["seven_day_opus"])
+                    UtilizationRow(label: L("7-day Opus"), percent: p, resetsAt: usage.sevenDayOpusResetsAt, projection: projection("seven_day_opus", window: "Weekly · Opus", resetsAt: usage.sevenDayOpusResetsAt))
                 }
                 if let p = usage.sevenDaySonnetPercent {
-                    UtilizationRow(label: L("7-day Sonnet"), percent: p, resetsAt: usage.sevenDaySonnetResetsAt, projection: projections["seven_day_sonnet"])
+                    UtilizationRow(label: L("7-day Sonnet"), percent: p, resetsAt: usage.sevenDaySonnetResetsAt, projection: projection("seven_day_sonnet", window: "Weekly · Sonnet", resetsAt: usage.sevenDaySonnetResetsAt))
                 }
                 ForEach(usage.scopedWeekly, id: \.label) { scoped in
                     UtilizationRow(label: L("7-day %@", scoped.label), percent: scoped.percent, resetsAt: scoped.resetsAt, projection: projections["scoped_\(scoped.label)"])
@@ -1941,6 +1941,15 @@ private struct PlanInsight: View {
         projections = result
     }
 
+    /// The stored projection with the forecast read live, so a new reading
+    /// redraws the caption without waiting for the next fetch. `window` is
+    /// the label `AppStore.quotaWindows` gives the window.
+    private func projection(_ key: String, window: String, resetsAt: Date?) -> WindowProjection? {
+        guard var projection = projections[key] else { return nil }
+        projection.forecast = store.quotaForecast(provider: "Claude", label: window, resetsAt: resetsAt)
+        return projection
+    }
+
     /// Linear extrapolation when window is past the freshness threshold; otherwise falls back to
     /// the prior cycle's final percent from the snapshot store.
     private func project(key: String, percent: Double?, resetsAt: Date?, windowSeconds: TimeInterval) async -> WindowProjection? {
@@ -1951,20 +1960,12 @@ private struct PlanInsight: View {
 
         if elapsedFraction > Self.freshWindowThreshold, percent > 0 {
             let projectedPercent = percent / elapsedFraction
-            var hitDate: Date? = nil
-            if projectedPercent > 100, percent < 100 {
-                let remainingPercent = 100 - percent
-                let percentPerSecond = percent / elapsed
-                if percentPerSecond > 0 {
-                    hitDate = Date().addingTimeInterval(remainingPercent / percentPerSecond)
-                }
-            }
-            return WindowProjection(percent: projectedPercent, willOverflow: projectedPercent > 100, hitsLimitAt: hitDate, source: .linear)
+            return WindowProjection(percent: projectedPercent, willOverflow: projectedPercent > 100, source: .linear)
         }
 
         // Window too fresh OR percent exactly zero -- use the prior cycle's final reading.
         if let prior = await SubscriptionSnapshotStore.previousWindowFinal(windowKey: key, currentResetsAt: resetsAt) {
-            return WindowProjection(percent: prior, willOverflow: prior > 100, hitsLimitAt: nil, source: .historicalBaseline)
+            return WindowProjection(percent: prior, willOverflow: prior > 100, source: .historicalBaseline)
         }
         return nil
     }
@@ -2200,7 +2201,7 @@ private struct CodexPlanInsight: View {
                     label: L("%@ window", primary.windowLabel),
                     percent: primary.usedPercent,
                     resetsAt: primary.resetsAt,
-                    projection: pace(for: primary)
+                    projection: pace(for: primary, withForecast: true)
                 )
             }
             if let secondary = usage.secondary {
@@ -2208,7 +2209,7 @@ private struct CodexPlanInsight: View {
                     label: L("%@ window", secondary.windowLabel),
                     percent: secondary.usedPercent,
                     resetsAt: secondary.resetsAt,
-                    projection: pace(for: secondary)
+                    projection: pace(for: secondary, withForecast: true)
                 )
             }
             // Surface non-zero per-model rate limits (Codex Spark, etc.) so
@@ -2273,9 +2274,10 @@ private struct CodexPlanInsight: View {
     }
 
     /// Codex has no snapshot history yet, so this is the linear phase-1 pace
-    /// (#726): deficit/reserve everywhere, projection and ETA only where the
-    /// window is long enough for a whole-window rate to be defensible.
-    private func pace(for window: CodexUsage.Window) -> WindowProjection? {
+    /// (#726): deficit/reserve everywhere, projection only where the window is
+    /// long enough for a whole-window rate to be defensible. The ETA is the
+    /// recent-pace forecast, kept to the windows `AppStore.quotaWindows` reads.
+    private func pace(for window: CodexUsage.Window, withForecast: Bool = false) -> WindowProjection? {
         guard let result = QuotaPace.evaluate(
             usedPercent: window.usedPercent,
             resetsAt: window.resetsAt,
@@ -2284,7 +2286,9 @@ private struct CodexPlanInsight: View {
         return WindowProjection(
             percent: result.projectedPercent,
             willOverflow: result.willOverflow,
-            hitsLimitAt: result.hitsLimitAt,
+            forecast: withForecast
+                ? store.quotaForecast(provider: "Codex", label: window.windowLabel, resetsAt: window.resetsAt)
+                : nil,
             source: .linear,
             deltaPercent: result.deltaPercent,
             compact: TimeInterval(window.limitWindowSeconds) <= QuotaPace.etaSuppressionMaxSeconds
@@ -2303,7 +2307,6 @@ private struct CodexPlanInsight: View {
         return WindowProjection(
             percent: result.projectedPercent,
             willOverflow: result.willOverflow,
-            hitsLimitAt: result.hitsLimitAt,
             source: .linear,
             deltaPercent: result.deltaPercent,
             compact: TimeInterval(windowSeconds) <= QuotaPace.etaSuppressionMaxSeconds
@@ -2707,13 +2710,15 @@ private struct WindowProjection {
     enum Source { case linear, historicalBaseline }
     let percent: Double
     let willOverflow: Bool
-    let hitsLimitAt: Date?
+    /// The recent-pace run-out, which the caption reports instead of the
+    /// whole-window projection's.
+    var forecast: QuotaPace.Forecast? = nil
     let source: Source
     /// used% − expected%; set by pace-aware callers (#726) to get the
     /// deficit/reserve caption. Nil keeps the original caption wording.
     var deltaPercent: Double? = nil
-    /// Stage-only caption: deficit/reserve without projection or ETA. Used on
-    /// short windows where a linear extrapolation isn't defensible.
+    /// Stage-only caption: deficit/reserve without projection. Used on short
+    /// windows where a linear extrapolation isn't defensible.
     var compact: Bool = false
 }
 
@@ -2782,28 +2787,34 @@ private struct ProjectionCaption: View {
     private var captionText: String {
         let projected = String(format: "%.0f%%", projection.percent)
         // Deficit-first wording (#726): pace state up front, projection or
-        // ETA after it, and neither on windows flagged compact.
+        // ETA after it, and no projection on windows flagged compact.
         if let delta = projection.deltaPercent {
             if abs(delta) <= 2 {
-                return projection.compact ? L("On pace") : L("On pace: %@ at reset", projected)
+                return withForecast(projection.compact ? L("On pace") : L("On pace: %@ at reset", projected))
             }
             let stage = delta > 0
                 ? L("%@%% in deficit", String(format: "%.0f", delta))
                 : L("%@%% in reserve", String(format: "%.0f", -delta))
-            if projection.compact { return stage }
-            if projection.willOverflow, let hit = projection.hitsLimitAt {
-                return L("%1$@ · hits 100%% %2$@", stage, relativeReset(hit))
-            }
-            return L("%1$@ · %2$@ at reset", stage, projected)
+            if projection.compact { return withForecast(stage) }
+            if case .runsOut = projection.forecast { return withForecast(stage) }
+            return withForecast(L("%1$@ · %2$@ at reset", stage, projected))
         }
         switch projection.source {
         case .linear:
-            if projection.willOverflow, let hit = projection.hitsLimitAt {
+            if case let .runsOut(hit) = projection.forecast {
                 return L("On pace: %1$@ at reset · hits 100%% %2$@", projected, relativeReset(hit))
             }
-            return L("On pace: %@ at reset", projected)
+            return withForecast(L("On pace: %@ at reset", projected))
         case .historicalBaseline:
             return L("Based on last cycle: %@", projected)
+        }
+    }
+
+    private func withForecast(_ caption: String) -> String {
+        switch projection.forecast {
+        case let .runsOut(hit): L("%1$@ · hits 100%% %2$@", caption, relativeReset(hit))
+        case .lastsUntilReset: L("%@ · lasts until reset", caption)
+        case nil: caption
         }
     }
 }

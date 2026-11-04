@@ -62,6 +62,17 @@ struct QuotaCrossingDetectorTests {
         #expect(second.fired.count == 1)
     }
 
+    @Test("Reset jitter of a couple of seconds stays one cycle")
+    func resetJitterIsOneCycle() {
+        let first = QuotaCrossingDetector.evaluate(windows: [window(81)], fired: [])
+        let jittered = window(81, resetsAt: resetsAt.addingTimeInterval(2))
+        let second = QuotaCrossingDetector.evaluate(windows: [jittered], fired: first.fired)
+        let back = QuotaCrossingDetector.evaluate(windows: [window(81)], fired: second.fired)
+        #expect(first.events.count == 1)
+        #expect(second.events.isEmpty)
+        #expect(back.events.isEmpty)
+    }
+
     @Test("A window missing from this fetch keeps what it has already fired")
     func absenceIsNotAReset() {
         let first = QuotaCrossingDetector.evaluate(windows: [window(90)], fired: [])
@@ -81,6 +92,43 @@ struct QuotaCrossingDetectorTests {
         )
         #expect(result.events.count == 2)
         #expect(result.events.contains { $0.providerName == "Codex" && $0.level == .limit })
+    }
+
+    @Test("A window that will run out before it resets says so once per cycle")
+    func runsOutFiresOncePerCycle() {
+        var early = window(50)
+        early.runsOutAt = resetsAt.addingTimeInterval(-3600)
+        let first = QuotaCrossingDetector.evaluate(windows: [early], fired: [])
+        #expect(first.events.map(\.level) == [.runsOut])
+        #expect(first.events[0].notificationTitle == "Claude Weekly runs out at \(QuotaPace.clockLabel(resetsAt.addingTimeInterval(-3600)))")
+        #expect(first.events[0].notificationBody == "At this pace. Resets \(QuotaPace.clockLabel(resetsAt)).")
+
+        early.runsOutAt = resetsAt.addingTimeInterval(-7200)
+        let second = QuotaCrossingDetector.evaluate(windows: [early], fired: first.fired)
+        #expect(second.events.isEmpty)
+
+        var nextCycle = window(50, resetsAt: resetsAt.addingTimeInterval(7 * 24 * 3600))
+        nextCycle.runsOutAt = resetsAt
+        let third = QuotaCrossingDetector.evaluate(windows: [nextCycle], fired: second.fired)
+        #expect(third.events.map(\.level) == [.runsOut])
+    }
+
+    @Test("A run-out at or after the reset, or a full window, says nothing")
+    func runsOutNeedsTimeLeft() {
+        var lasts = window(50)
+        lasts.runsOutAt = resetsAt
+        var full = window(100, label: "5-hour")
+        full.runsOutAt = resetsAt.addingTimeInterval(-3600)
+        let result = QuotaCrossingDetector.evaluate(windows: [lasts, full], fired: [])
+        #expect(result.events.map(\.level) == [.limit])
+    }
+
+    @Test("The warning fires at the chosen threshold")
+    func warningThresholdIsConfigurable() {
+        #expect(QuotaCrossingDetector.evaluate(windows: [window(75)], fired: []).events.isEmpty)
+        let lower = QuotaCrossingDetector.evaluate(windows: [window(75)], fired: [], warningPercent: 70)
+        #expect(lower.events.map(\.notificationTitle) == ["Claude · Weekly at 70%"])
+        #expect(QuotaCrossingDetector.evaluate(windows: [window(85)], fired: [], warningPercent: 90).events.isEmpty)
     }
 
     @Test("A window with no reported percent is no opinion")
@@ -131,6 +179,19 @@ struct QuotaCrossingMonitorTests {
             await monitor.record(windows: [window(100)])
             #expect(notifier.posts.isEmpty)
             #expect(notifier.authorizationRequests == 0)
+        }
+    }
+
+    @Test("The threshold comes from the stored preference, 80 when unset")
+    func thresholdPreference() async throws {
+        try await withMonitor { monitor, notifier, defaults in
+            #expect(QuotaCrossingPreference.warningPercent(defaults: defaults) == 80)
+            defaults.set(90, forKey: QuotaCrossingPreference.warningPercentKey)
+            await monitor.record(windows: [window(85)])
+            #expect(notifier.posts.isEmpty)
+
+            await monitor.record(windows: [window(91)])
+            #expect(notifier.posts.map(\.title) == ["Claude · Weekly at 90%"])
         }
     }
 

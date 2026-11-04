@@ -83,6 +83,46 @@ struct MenubarSecondRowTests {
         #expect(rows == ["$12.34", "Claude 42% left · 3h 12m"])
     }
 
+    @Test("quota row names today's run-out time in place of the countdown")
+    func quotaRowRunsOutToday() throws {
+        let runsOutAt = try #require(Calendar.current.date(bySettingHour: 15, minute: 40, second: 0, of: now))
+        let row = MenubarRowFormatter.secondRow(
+            settings: settings(true, .quotaRemaining),
+            snapshot: snapshot(
+                quota: MenubarQuotaCandidate(
+                    label: "Claude",
+                    percentUsed: 0.58,
+                    resetsAt: now.addingTimeInterval(3 * 86400),
+                    runsOutAt: runsOutAt
+                )
+            ),
+            now: now
+        )
+        // The provider name gives way so both figures fit the budget.
+        #expect(row == "Cl… 42% left · out 15:40")
+    }
+
+    @Test("quota row names the weekday when the run-out is not today")
+    func quotaRowRunsOutAnotherDay() throws {
+        let later = try #require(Calendar.current.date(byAdding: .day, value: 2, to: now))
+        let runsOutAt = try #require(Calendar.current.date(bySettingHour: 9, minute: 10, second: 0, of: later))
+        let weekday = DateFormatter()
+        weekday.dateFormat = "EEE"
+        let row = MenubarRowFormatter.secondRow(
+            settings: settings(true, .quotaRemaining),
+            snapshot: snapshot(
+                quota: MenubarQuotaCandidate(
+                    label: "Claude",
+                    percentUsed: 0.58,
+                    resetsAt: now.addingTimeInterval(3 * 86400),
+                    runsOutAt: runsOutAt
+                )
+            ),
+            now: now
+        )
+        #expect(row == "42% left · out \(weekday.string(from: runsOutAt)) 09:10")
+    }
+
     @Test("quota row drops the countdown when the provider reports no reset")
     func quotaRowWithoutReset() {
         let row = MenubarRowFormatter.secondRow(
