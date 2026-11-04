@@ -1692,12 +1692,6 @@ function sanitizeProject(path: string): string {
 }
 
 function applyAntigravityProject(call: ParsedProviderCall, source: SessionSource, projectPath: string | undefined): void {
-  if (source.project === 'antigravity-cli') {
-    call.project = source.project
-    delete call.projectPath
-    return
-  }
-
   if (projectPath) {
     call.projectPath = projectPath
     call.project = sanitizeProject(projectPath)

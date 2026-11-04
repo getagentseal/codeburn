@@ -28,5 +28,5 @@
   "config.currency": "显示货币,使用三个字母的代码。设置后会更改所有 CodeBurn 应用共用的 CodeBurn CLI 货币。留空则不更改。",
   "config.provider": "在状态栏和摘要中只统计此提供商,例如 `claude` 或 `cursor`。`all` 统计所有提供商。",
   "config.quotaProviders": "CodeBurn 检查配额的套餐。每次检查都会用本机已有的登录信息向该提供商自己的 API 查询。移除一项即停止查询它。",
-  "config.nodePath": "当编辑器内置的 Node 版本过旧时,用于运行 CodeBurn CLI 的 Node.js 22.13 或更高版本。留空则自动查找。"
+  "config.nodePath": "当编辑器内置的 Node 版本过旧时,用于运行 CodeBurn CLI 的 Node.js 22.15 或更高版本。留空则自动查找。"
 }

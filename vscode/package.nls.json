@@ -28,5 +28,5 @@
   "config.currency": "Display currency, as a three-letter code. Setting it changes the CodeBurn CLI's own currency, which every CodeBurn app shares. Empty leaves it alone.",
   "config.provider": "Count only this provider in the status bar and summary, such as `claude` or `cursor`. `all` counts every provider.",
   "config.quotaProviders": "Plans whose quota CodeBurn checks. Each check asks that provider's own API with the login already on this machine. Remove one to stop asking it.",
-  "config.nodePath": "A Node.js 22.13 or later to run the CodeBurn CLI with, when the editor's built-in Node is too old. Empty finds one automatically."
+  "config.nodePath": "A Node.js 22.15 or later to run the CodeBurn CLI with, when the editor's built-in Node is too old. Empty finds one automatically."
 }

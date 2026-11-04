@@ -302,6 +302,9 @@
     "test:smoke": "node test/smoke/run.mjs",
     "package": "npm run build && vsce package --no-dependencies --baseImagesUrl https://raw.githubusercontent.com/getagentseal/codeburn/main/vscode"
   },
+  "overrides": {
+    "minimatch": "^11.0.1"
+  },
   "devDependencies": {
     "@types/node": "^22.19.17",
     "@types/vscode": "~1.82.0",

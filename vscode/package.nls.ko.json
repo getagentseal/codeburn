@@ -28,5 +28,5 @@
   "config.currency": "표시 통화(세 글자 코드). 설정하면 모든 CodeBurn 앱이 함께 쓰는 CodeBurn CLI의 통화가 바뀝니다. 비워 두면 바꾸지 않습니다.",
   "config.provider": "상태 표시줄과 요약에서 이 공급자만 집계합니다(예: `claude`, `cursor`). `all`은 모든 공급자를 집계합니다.",
   "config.quotaProviders": "CodeBurn이 할당량을 확인할 플랜입니다. 확인할 때마다 이 컴퓨터에 있는 로그인 정보로 해당 공급자의 API에 묻습니다. 빼면 더 이상 묻지 않습니다.",
-  "config.nodePath": "편집기에 내장된 Node가 너무 오래되었을 때 CodeBurn CLI를 실행할 Node.js 22.13 이상. 비워 두면 자동으로 찾습니다."
+  "config.nodePath": "편집기에 내장된 Node가 너무 오래되었을 때 CodeBurn CLI를 실행할 Node.js 22.15 이상. 비워 두면 자동으로 찾습니다."
 }

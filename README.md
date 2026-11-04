@@ -29,7 +29,7 @@
 
 <p align="center"><code>npx codeburn</code></p>
 
-<p align="center"><sub>To keep it: <code>npm install -g codeburn</code> or <code>brew install codeburn</code>. Needs Node.js 22.13+.</sub></p>
+<p align="center"><sub>To keep it: <code>npm install -g codeburn</code> or <code>brew install codeburn</code>. Needs Node.js 22.15+.</sub></p>
 
 <p align="center">
   <a href="https://codeburn.app/download/mac-arm64"><img src="https://img.shields.io/badge/macOS-Apple_Silicon-F97316?logo=apple&logoColor=white" alt="Download CodeBurn for macOS (Apple Silicon)" /></a>

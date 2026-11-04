@@ -59,13 +59,13 @@ All under **CodeBurn** in the Command Palette:
 | `codeburn.currency` | empty | A three-letter code. Changes the CodeBurn CLI's currency, shared with every CodeBurn app |
 | `codeburn.provider` | `all` | Count one provider in the status bar and summary |
 | `codeburn.quotaProviders` | all | Plans whose quota CodeBurn checks |
-| `codeburn.nodePath` | empty | A Node.js 22.13+ to run the CLI with, if the editor's own is too old |
+| `codeburn.nodePath` | empty | A Node.js 22.15+ to run the CLI with, if the editor's own is too old |
 
 ## Requirements
 
 Nothing to install. The CodeBurn CLI ships inside the extension and runs on the editor's built-in Node.js. Current VS Code, Cursor and Antigravity ship Node 24, which is all the CLI needs.
 
-On an older editor whose Node is below 22.13, CodeBurn looks for a Node.js 22.13 or later on your machine and uses that. If there is none, it runs on the editor's Node and says which tools it cannot read: Cursor, OpenCode and Copilot usage needs `node:sqlite`. Install Node 22 or set `codeburn.nodePath`.
+On an older editor whose Node is below 22.15, CodeBurn looks for a Node.js 22.15 or later on your machine and uses that. If there is none, it runs on the editor's Node and says which tools it cannot read: Cursor, OpenCode and Copilot usage needs `node:sqlite`. Install Node 22 or set `codeburn.nodePath`.
 
 ## Privacy
 
