@@ -18,10 +18,6 @@ import type { ProbeRoot, Provider, SessionSource, SessionParser, ParsedProviderC
 // @deepseek-ai/dsh-session-persistence-jsonl package, which is third-party code
 // under its own license - see THIRD_PARTY_NOTICES.md.
 
-// zstd landed in node:zlib in 22.15 / 23.8; the package floor is lower, so the
-// provider degrades with a notice instead of assuming the export exists.
-const zstdDecompress = (zlib as { zstdDecompressSync?: (buf: Buffer, opts?: { maxOutputLength?: number }) => Buffer }).zstdDecompressSync
-
 const ZSTD_MAGIC = 0xfd2fb528
 
 // SESSION_FORMAT_VERSION in @deepseek-ai/dsh-session. DSH refuses to load a log
@@ -269,7 +265,7 @@ export function* readZstdLines(
     if (remaining <= 0) throw new Error(`decodes past the ${budget}-byte cap`)
     // node throws ERR_BUFFER_TOO_LARGE without allocating past the cap, so the
     // per-frame limit doubles as the running budget for the frames after it.
-    const decoded = zstdDecompress!(buffer.subarray(frame.start, frame.end), {
+    const decoded = zlib.zstdDecompressSync(buffer.subarray(frame.start, frame.end), {
       maxOutputLength: Math.min(remaining, MAX_FRAME_DECODED_BYTES),
     })
     remaining -= decoded.length
@@ -281,10 +277,6 @@ export function* readZstdLines(
 
 async function readEventLines(filePath: string): Promise<string[] | null> {
   if (filePath.endsWith('.zstd')) {
-    if (!zstdDecompress) {
-      notice('codeburn: DSH sessions need Node >= 22.15 (zstd support); skipping DSH usage.\n')
-      return null
-    }
     let buffer: Buffer
     try {
       // The whole log is buffered to scan its frames, so it needs the same
@@ -316,7 +308,6 @@ async function readEventLines(filePath: string): Promise<string[] | null> {
 async function readSessionHeader(filePath: string): Promise<DshEvent | null> {
   const firstLine = async (): Promise<string | null> => {
     if (filePath.endsWith('.zstd')) {
-      if (!zstdDecompress) return null
       let head: Buffer
       try {
         const handle = await open(filePath, 'r')
@@ -346,7 +337,7 @@ async function readSessionHeader(filePath: string): Promise<DshEvent | null> {
           return null
         }
       }
-      const text = zstdDecompress(head.subarray(frames[0]!.start, frames[0]!.end), {
+      const text = zlib.zstdDecompressSync(head.subarray(frames[0]!.start, frames[0]!.end), {
         maxOutputLength: MAX_FRAME_DECODED_BYTES,
       }).toString('utf-8')
       return text.split('\n').find(l => l.trim()) ?? null
@@ -437,14 +428,6 @@ async function discoverSessionsInDir(sessionsDir: string, onSkippedVersion?: (ve
       if (!SUPPORTED_SESSION_FORMAT_VERSIONS.has(selected.version)) {
         onSkippedVersion?.(selected.version)
         notice(`codeburn: skipping DSH sessions written in session format version ${selected.version}; upgrade codeburn.\n`)
-        continue
-      }
-
-      // Without zstd every compressed header reads as unreadable, so say why
-      // once rather than naming every session log.
-      if (selected.compressed && !zstdDecompress) {
-        onSkippedVersion?.(selected.version)
-        notice('codeburn: DSH sessions need Node >= 22.15 (zstd support); skipping DSH usage.\n')
         continue
       }
 

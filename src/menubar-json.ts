@@ -143,7 +143,7 @@ import { getCurrency } from './currency.js'
 import type { GranularHistory } from './granular-history.js'
 import { getShortModelName, modelRowKey } from './models.js'
 import type { ReworkedFile } from './workflow-insights.js'
-import type { PrRow, BranchRow } from './sessions-report.js'
+import { sessionCacheHitPercent, type PrRow, type BranchRow } from './sessions-report.js'
 import type { LiveSessionsBlock } from './live-sessions.js'
 import type { CursorSyncStatus } from './cursor-sync.js'
 import { buildTelemetrySnapshot, type TelemetrySnapshot, type TelemetrySnapshotInput } from './telemetry-snapshot.js'
@@ -566,12 +566,6 @@ function aggregateOneShotRate(categories: PeriodData['categories']): number | nu
   return oneShots / edits
 }
 
-function cacheHitPercent(inputTokens: number, cacheReadTokens: number): number {
-  const denom = inputTokens + cacheReadTokens
-  if (denom === 0) return 0
-  return (cacheReadTokens / denom) * 100
-}
-
 function buildTopActivities(categories: PeriodData['categories']): MenubarPayload['current']['topActivities'] {
   return categories.slice(0, TOP_ACTIVITIES_LIMIT).map(cat => ({
     name: cat.name,
@@ -831,7 +825,7 @@ export function buildMenubarPayload(
       outputTokens: current.outputTokens,
       cacheReadTokens: current.cacheReadTokens,
       cacheWriteTokens: current.cacheWriteTokens,
-      cacheHitPercent: cacheHitPercent(current.inputTokens, current.cacheReadTokens),
+      cacheHitPercent: sessionCacheHitPercent(current.inputTokens, current.cacheReadTokens, current.cacheWriteTokens) ?? 0,
       codexCredits: current.codexCredits ?? 0,
       estimatedCostUSD: current.estimatedCostUSD ?? 0,
       topActivities: buildTopActivities(current.categories),

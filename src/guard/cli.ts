@@ -22,6 +22,10 @@ function usd(n: number | null): string {
   return n === null ? 'off' : `$${n}`
 }
 
+function times(n: number | null, unit: string): string {
+  return n === null ? 'off' : `${n} ${unit}`
+}
+
 async function refreshFlags(): Promise<number> {
   const { parseAllSessions } = await import('../parser.js')
   const { buildFlags, writeFlags } = await import('./flags.js')
@@ -59,7 +63,7 @@ async function doInstall(scope: Scope, statusline: boolean): Promise<void> {
   if (!existsSync(guardConfigPath())) {
     await writeGuardConfig({ ...DEFAULT_GUARD_CONFIG, updatedAt: new Date().toISOString() })
     const c = await readGuardConfig()
-    console.log(chalk.dim(`  Wrote guard.json (soft ${usd(c.softUSD)}, hard ${usd(c.hardUSD)}, checkpoint ${usd(c.checkpointUSD)}).`))
+    console.log(chalk.dim(`  Wrote guard.json (soft ${usd(c.softUSD)}, hard ${usd(c.hardUSD)}, checkpoint ${usd(c.checkpointUSD)}, loop ${c.loopWarnAfter ?? 'off'}/${c.loopStopAfter ?? 'off'}, retry ${c.retryWarnAfter ?? 'off'}/${c.retryStopAfter ?? 'off'}).`))
   }
 
   try {
@@ -95,6 +99,10 @@ async function doStatus(): Promise<void> {
   console.log(`    soft cap:   ${usd(config.softUSD)}`)
   console.log(`    hard cap:   ${usd(config.hardUSD)}`)
   console.log(`    checkpoint: ${usd(config.checkpointUSD)}`)
+  console.log(`    loop warn:  ${times(config.loopWarnAfter, 'identical calls')}`)
+  console.log(`    loop stop:  ${times(config.loopStopAfter, 'identical calls')}`)
+  console.log(`    retry warn: ${times(config.retryWarnAfter, 'failures')}`)
+  console.log(`    retry stop: ${times(config.retryStopAfter, 'failures')}`)
   console.log(`    openers:    ${config.openerEnabled ? 'on' : 'off'}`)
 
   const locations = [
@@ -149,7 +157,7 @@ async function doAllow(sessionId: string | undefined): Promise<void> {
     return
   }
   await writeAllow(id)
-  console.log(`  Lifted the guard hard cap for session ${id} (this session only).`)
+  console.log(`  Lifted the guard hard cap, loop stop and retry stop for session ${id} (this session only).`)
 }
 
 export function registerGuardCommands(program: Command): void {
@@ -206,7 +214,7 @@ export function registerGuardCommands(program: Command): void {
 
   guard
     .command('allow [sessionId]')
-    .description('Lift the hard budget cap for the current (or given) session')
+    .description('Lift the hard budget cap and loop/retry stops for the current (or given) session')
     .action(async (sessionId: string | undefined) => { await doAllow(sessionId) })
 
   guard

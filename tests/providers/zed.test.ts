@@ -11,13 +11,9 @@ import type { ParsedProviderCall } from '../../src/providers/types.js'
 
 const requireForTest = createRequire(import.meta.url)
 
-const zstd = (zlib as { zstdCompressSync?: (buf: Buffer) => Buffer }).zstdCompressSync
-
 const skipReason = !isSqliteAvailable()
   ? 'node:sqlite not available — needs Node 22+; skipping'
-  : !zstd
-    ? 'zlib zstd not available — needs Node 22.15+; skipping'
-    : null
+  : null
 
 let tmpDir: string
 
@@ -60,7 +56,7 @@ function insertThread(db: {
   thread?: unknown
   rawData?: Buffer
 }): void {
-  const data = opts.rawData ?? zstd!(Buffer.from(JSON.stringify(opts.thread ?? {})))
+  const data = opts.rawData ?? zlib.zstdCompressSync(Buffer.from(JSON.stringify(opts.thread ?? {})))
   db.prepare('INSERT INTO threads (id, summary, updated_at, data_type, data) VALUES (?, ?, ?, ?, ?)').run(
     opts.id,
     opts.summary ?? 'a thread',

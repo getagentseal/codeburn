@@ -964,6 +964,8 @@ describe('finding class', () => {
       'unused-skills': makeFinding('unused-skills', CMD_FIX, { kind: 'archive', names: ['ghost'] }),
       'unused-commands': makeFinding('unused-commands', CMD_FIX, { kind: 'archive', names: ['ghost'] }),
       'recurring-context': makeFinding('recurring-context', PROMPT_FIX),
+      'fast-mode-background': makeFinding('fast-mode-background', PROMPT_FIX),
+      'long-context-premium': makeFinding('long-context-premium', PROMPT_FIX),
     }
 
     const planCtx: PlanContext = { homeDir: fx.home, cwd: fx.project, shell: '/bin/zsh', claudeVersion: () => '2.1.130' }

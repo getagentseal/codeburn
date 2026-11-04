@@ -279,10 +279,7 @@ function createJsonlParser(source: SessionSource, seenKeys: Set<string>): Sessio
 }
 
 /// agent-schema 23 (in flight upstream) lets a transcript row store its event
-/// as a zstd BLOB instead of event_json TEXT. zstd landed in node:zlib in
-/// 22.15 / 23.8 while the package floor is lower, so the export is optional
-/// and rows that cannot be decoded are skipped with one notice per run.
-const zstdDecompressSync = (zlib as unknown as { zstdDecompressSync?: (buf: Uint8Array, opts?: { maxOutputLength?: number }) => Buffer }).zstdDecompressSync
+/// as a zstd BLOB instead of event_json TEXT.
 
 // The schema CHECK bounds a compressed payload and its decoded form at 4 MiB;
 // decode with headroom rather than an unbounded buffer.
@@ -314,14 +311,8 @@ function transcriptHasZstdColumn(db: SqliteDatabase): boolean {
 function decodeEventPayload(row: TranscriptRow, dbPath: string): string | null {
   if (typeof row.event_json === 'string') return row.event_json
   if (row.event_zstd == null || !(row.event_zstd instanceof Uint8Array)) return null
-  if (!zstdDecompressSync) {
-    sqliteNotice(
-      `codeburn: openclaw: ${dbPath} stores compressed transcript rows; counting them needs Node 22.15+ (node:zlib zstd)\n`,
-    )
-    return null
-  }
   try {
-    return zstdDecompressSync(row.event_zstd, { maxOutputLength: MAX_EVENT_DECODED_BYTES }).toString('utf-8')
+    return zlib.zstdDecompressSync(row.event_zstd, { maxOutputLength: MAX_EVENT_DECODED_BYTES }).toString('utf-8')
   } catch {
     // A torn row understates usage silently unless we say so; one notice per
     // store keeps it visible without per-row spam.

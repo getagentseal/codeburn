@@ -47,6 +47,10 @@ export type GuardConfig = {
   softUSD: number | null
   hardUSD: number | null
   checkpointUSD: number | null
+  loopWarnAfter: number | null
+  loopStopAfter: number | null
+  retryWarnAfter: number | null
+  retryStopAfter: number | null
   openerEnabled: boolean
   updatedAt: string
 }
@@ -55,6 +59,10 @@ export const DEFAULT_GUARD_CONFIG: GuardConfig = {
   softUSD: 5,
   hardUSD: 15,
   checkpointUSD: 3,
+  loopWarnAfter: 4,
+  loopStopAfter: 8,
+  retryWarnAfter: 3,
+  retryStopAfter: 5,
   openerEnabled: true,
   updatedAt: '',
 }
@@ -81,6 +89,10 @@ export async function readGuardConfig(base?: string): Promise<GuardConfig> {
     softUSD: coerceThreshold(parsed.softUSD, DEFAULT_GUARD_CONFIG.softUSD),
     hardUSD: coerceThreshold(parsed.hardUSD, DEFAULT_GUARD_CONFIG.hardUSD),
     checkpointUSD: coerceThreshold(parsed.checkpointUSD, DEFAULT_GUARD_CONFIG.checkpointUSD),
+    loopWarnAfter: coerceThreshold(parsed.loopWarnAfter, DEFAULT_GUARD_CONFIG.loopWarnAfter),
+    loopStopAfter: coerceThreshold(parsed.loopStopAfter, DEFAULT_GUARD_CONFIG.loopStopAfter),
+    retryWarnAfter: coerceThreshold(parsed.retryWarnAfter, DEFAULT_GUARD_CONFIG.retryWarnAfter),
+    retryStopAfter: coerceThreshold(parsed.retryStopAfter, DEFAULT_GUARD_CONFIG.retryStopAfter),
     openerEnabled: parsed.openerEnabled !== false,
     updatedAt: typeof parsed.updatedAt === 'string' ? parsed.updatedAt : '',
   }

@@ -425,6 +425,7 @@
 "%@%% in deficit" = "超出 %@%%";
 "%@%% in reserve" = "結餘 %@%%";
 "%1$@ · hits 100%% %2$@" = "%1$@ · %2$@達到 100%%";
+"%@ · lasts until reset" = "%@ · 可撐到重置";
 "%1$@ · %2$@ at reset" = "%1$@ · 重置時 %2$@";
 "On pace: %1$@ at reset · hits 100%% %2$@" = "符合節奏：重置時 %1$@ · %2$@達到 100%%";
 "Based on last cycle: %@" = "按上一週期估算：%@";
@@ -641,6 +642,7 @@
 "%@ today" = "今日 %@";
 "%@ tok today" = "今日 %@ tok";
 "%lld%% left" = "剩餘 %lld%%";
+"out %@" = "%@ 用盡";
 
 /* MARK: Codex credit limit */
 "Monthly" = "每月";
@@ -714,9 +716,12 @@
 "Input tokens reused from this provider's prompt cache today — not fresh input (arrow.down), not cache writes, and already priced at the cache-read rate inside the burned figure." = "今天從該服務商提示快取中複用的輸入 Token。不是新的輸入（arrow.down），也不是快取寫入，並且已按快取讀取費率計入已消耗金額。";
 
 /* MARK: Quota crossing notifications */
-"%1$@ · %2$@ at 80%%" = "%1$@ · %2$@ 已達 80%%";
+"%1$@ · %2$@ at %3$lld%%" = "%1$@ · %2$@ 已達 %3$lld%%";
 "%1$@ · %2$@ limit reached" = "%1$@ · %2$@ 已達上限";
+"%1$@ %2$@ runs out at %3$@" = "%1$@ %2$@ 將在 %3$@ 用盡";
+"At this pace. Resets %@." = "按此速度。%@ 重置。";
 "Quota crossings (%1$lld%% and %2$lld%%)" = "配額跨越（%1$lld%% 與 %2$lld%%）";
+"Warn at" = "提醒閾值";
 
 /* MARK: Privacy */
 "Privacy" = "隱私";

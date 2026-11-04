@@ -425,6 +425,7 @@
 "%@%% in deficit" = "%@%% de déficit";
 "%@%% in reserve" = "%@%% en réserve";
 "%1$@ · hits 100%% %2$@" = "%1$@ · atteint 100%% %2$@";
+"%@ · lasts until reset" = "%@ · tient jusqu'à la réinitialisation";
 "%1$@ · %2$@ at reset" = "%1$@ · %2$@ à la réinitialisation";
 "On pace: %1$@ at reset · hits 100%% %2$@" = "En rythme : %1$@ à la réinitialisation · atteint 100%% %2$@";
 "Based on last cycle: %@" = "D'après le dernier cycle : %@";
@@ -645,6 +646,7 @@
 "%@ today" = "%@ aujourd'hui";
 "%@ tok today" = "%@ tok aujourd'hui";
 "%lld%% left" = "%lld%% restant";
+"out %@" = "épuisé %@";
 
 /* MARK: Codex credit limit */
 "Monthly" = "Mensuel";
@@ -718,9 +720,12 @@
 "Input tokens reused from this provider's prompt cache today — not fresh input (arrow.down), not cache writes, and already priced at the cache-read rate inside the burned figure." = "Tokens d'entrée réutilisés aujourd'hui depuis le cache de prompts de ce fournisseur — pas une entrée fraîche (arrow.down), pas une écriture de cache, et déjà tarifés au taux de lecture cache dans le chiffre consommé.";
 
 /* MARK: Quota crossing notifications */
-"%1$@ · %2$@ at 80%%" = "%1$@ · %2$@ à 80%%";
+"%1$@ · %2$@ at %3$lld%%" = "%1$@ · %2$@ à %3$lld%%";
 "%1$@ · %2$@ limit reached" = "%1$@ · %2$@ limite atteinte";
+"%1$@ %2$@ runs out at %3$@" = "%1$@ %2$@ épuisé à %3$@";
+"At this pace. Resets %@." = "À ce rythme. Réinitialisation %@.";
 "Quota crossings (%1$lld%% and %2$lld%%)" = "Franchissements de quota (%1$lld%% et %2$lld%%)";
+"Warn at" = "Avertir à";
 
 /* MARK: Privacy */
 "Privacy" = "Confidentialité";

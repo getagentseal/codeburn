@@ -13,12 +13,6 @@ import type { ParsedProviderCall } from '../../src/providers/types.js'
 // a single zstdCompressSync over the whole file is a different (single-frame)
 // format than what DSH writes.
 
-const zstdCompress = (zlib as { zstdCompressSync?: (buf: Buffer) => Buffer }).zstdCompressSync
-// node:zlib gained zstd in 22.15; the package floor (and CI's pinned Node) is
-// 22.13. Container-specific tests skip there; the rest fall back to plain jsonl
-// so the parsing semantics are still exercised.
-const itZstd = zstdCompress ? it : it.skip
-
 let tmpDir: string
 
 beforeEach(async () => {
@@ -99,13 +93,8 @@ function toolCall(turn: number, step: number, name: string, args: Record<string,
 async function writeZstdSession(projectDirName: string, sessionDirName: string, batches: string[][]) {
   const dir = join(tmpDir, 'sessions', projectDirName, sessionDirName)
   await mkdir(dir, { recursive: true })
-  if (!zstdCompress) {
-    const filePath = join(dir, 'session.jsonl')
-    await writeFile(filePath, batches.map(lines => lines.join('\n') + '\n').join(''))
-    return filePath
-  }
   const filePath = join(dir, 'session.jsonl.zstd')
-  const frames = batches.map(lines => zstdCompress(Buffer.from(lines.join('\n') + '\n', 'utf-8')))
+  const frames = batches.map(lines => zlib.zstdCompressSync(Buffer.from(lines.join('\n') + '\n', 'utf-8')))
   await writeFile(filePath, Buffer.concat(frames))
   return filePath
 }
@@ -129,11 +118,11 @@ async function writeVersionedSession(
   await mkdir(dir, { recursive: true })
   const suffix = compressed ? '.zstd' : ''
   const filePath = join(dir, `session.v${version}.jsonl${suffix}`)
-  if (compressed && zstdCompress) {
+  if (compressed) {
     const split = Math.max(1, Math.floor(lines.length / 2))
     const frames = [lines.slice(0, split), lines.slice(split)]
       .filter(batch => batch.length > 0)
-      .map(batch => zstdCompress(Buffer.from(batch.join('\n') + '\n')))
+      .map(batch => zlib.zstdCompressSync(Buffer.from(batch.join('\n') + '\n')))
     await writeFile(filePath, Buffer.concat(frames))
   } else {
     await writeFile(filePath, lines.join('\n') + '\n')
@@ -173,7 +162,7 @@ async function parseAll(provider: ReturnType<typeof createDshProvider>, filePath
 }
 
 describe('dsh provider - session discovery', () => {
-  itZstd('discovers a multi-frame zstd session, project from the header cwd', async () => {
+  it('discovers a multi-frame zstd session, project from the header cwd', async () => {
     await writeZstdSession('--C-Users-test-myproject--', 'session-abc', [
       [sessionHeader({ cwd: 'C:\\Users\\test\\myproject' })],
       [assistantMessage(1, 1, { inputTokens: 100, outputTokens: 10 }, 1786707340000)],
@@ -305,32 +294,7 @@ describe('dsh provider - session discovery', () => {
     expect(skipped).toEqual([expected])
   })
 
-  it('explains missing zstd support once instead of naming every compressed log', async () => {
-    for (const id of ['one', 'two', 'three', 'four', 'five']) {
-      const dir = join(tmpDir, 'sessions', '--home-u-proj--', id)
-      await mkdir(dir, { recursive: true })
-      await writeFile(join(dir, 'session.v3.jsonl.zstd'), 'not zstd')
-    }
-    const zlibExports = zlib as unknown as Record<string, unknown>
-    const original = zlibExports['zstdDecompressSync']
-    delete zlibExports['zstdDecompressSync']
-    const warnings = vi.spyOn(process.stderr, 'write').mockImplementation(() => true)
-    try {
-      vi.resetModules()
-      const { createDshProvider: create } = await import('../../src/providers/dsh.js')
-      const skipped: number[] = []
-      expect(await create(tmpDir).discoverSessions(v => { skipped.push(v) })).toEqual([])
-      expect(skipped).toEqual([3, 3, 3, 3, 3])
-      expect(warnings.mock.calls.map(([m]) => String(m)))
-        .toEqual(['codeburn: DSH sessions need Node >= 22.15 (zstd support); skipping DSH usage.\n'])
-    } finally {
-      warnings.mockRestore()
-      if (original !== undefined) zlibExports['zstdDecompressSync'] = original
-      vi.resetModules()
-    }
-  })
-
-  it('returns empty for a non-existent home', async () => {
+    it('returns empty for a non-existent home', async () => {
     const provider = createDshProvider('/nonexistent/dsh/home')
     expect(await provider.discoverSessions()).toEqual([])
   })
@@ -621,7 +585,7 @@ describe('dsh provider - parsing', () => {
       .toEqual(routes.map(([, model, input]) => [model, input, 5, 3, 2]))
   })
 
-  itZstd('decodes a versioned v3 log split across independent zstd frames', async () => {
+  it('decodes a versioned v3 log split across independent zstd frames', async () => {
     const filePath = await writeVersionedSession(3, '--home-u-proj--', 'session-v3-zstd', [
       versionedHeader(3, { id: 'session-v3-zstd' }),
       JSON.stringify({
@@ -633,7 +597,7 @@ describe('dsh provider - parsing', () => {
     expect((await parseAll(createDshProvider(tmpDir), filePath))[0]).toMatchObject({ inputTokens: 12, outputTokens: 3 })
   })
 
-  itZstd('decodes every versioned generation from zstd', async () => {
+  it('decodes every versioned generation from zstd', async () => {
     for (const version of [1, 2, 3] as const) {
       const settlement = version === 1
         ? assistantMessage(1, 1, { inputTokens: version * 10, outputTokens: version }, 1786707340000)
@@ -653,7 +617,7 @@ describe('dsh provider - parsing', () => {
     }
   })
 
-  itZstd('ignores a torn trailing frame in a v3 log', async () => {
+  it('ignores a torn trailing frame in a v3 log', async () => {
     const filePath = await writeVersionedSession(3, '--home-u-proj--', 'session-v3-torn', [
       versionedHeader(3, { id: 'session-v3-torn' }),
       JSON.stringify({
@@ -662,7 +626,7 @@ describe('dsh provider - parsing', () => {
       }),
     ], true)
     const original = await readFile(filePath)
-    const torn = zstdCompress!(Buffer.from(JSON.stringify({
+    const torn = zlib.zstdCompressSync(Buffer.from(JSON.stringify({
       type: 'assistant/message', seq: 1, time: 1786707341000, surfaceOp: 'append',
       data: { turn: 1, step: 2, message: { role: 'assistant', content: [] }, usage: { inputTokens: 999, outputTokens: 99 }, stream: [] },
     }) + '\n'))
@@ -671,7 +635,7 @@ describe('dsh provider - parsing', () => {
     expect((await parseAll(createDshProvider(tmpDir), filePath)).map(call => call.inputTokens)).toEqual([10])
   })
 
-  itZstd('decodes events spread across multiple independent zstd frames', async () => {
+  it('decodes events spread across multiple independent zstd frames', async () => {
     const filePath = await writeZstdSession('--C-Users-test-myproject--', 'session-multi', [
       [sessionHeader({ id: 'session-multi', cwd: 'C:\\Users\\test\\myproject' })],
       [turnStart(1, 1786707339000), userMessage('build the thing', 1786707339100)],
@@ -820,15 +784,15 @@ describe('dsh provider - parsing', () => {
     expect(calls).toHaveLength(0)
   })
 
-  itZstd('ignores a torn final frame appended by a crashed writer', async () => {
+  it('ignores a torn final frame appended by a crashed writer', async () => {
     const dir = join(tmpDir, 'sessions', '--C-Users-test-myproject--', 'session-torn')
     await mkdir(dir, { recursive: true })
     const filePath = join(dir, 'session.jsonl.zstd')
-    const good = zstdCompress!(Buffer.from(
+    const good = zlib.zstdCompressSync(Buffer.from(
       sessionHeader({ id: 'session-torn' }) + '\n' +
       chunkUsage(1, 1, { inputTokens: 100, outputTokens: 10 }, 1786707340000) + '\n',
     ))
-    const torn = zstdCompress!(Buffer.from(chunkUsage(1, 2, { inputTokens: 1, outputTokens: 1 }, 1786707341000) + '\n'))
+    const torn = zlib.zstdCompressSync(Buffer.from(chunkUsage(1, 2, { inputTokens: 1, outputTokens: 1 }, 1786707341000) + '\n'))
     await writeFile(filePath, Buffer.concat([good, torn.subarray(0, Math.floor(torn.length / 2))]))
 
     const calls = await parseAll(createDshProvider(tmpDir), filePath)
@@ -1017,7 +981,7 @@ describe('dsh provider - defensive reads', () => {
 })
 
 describe('dsh provider - real log, real container', () => {
-  itZstd('reads the upstream snapshot out of multi-frame zstd with a torn tail identically to plain jsonl', async () => {
+  it('reads the upstream snapshot out of multi-frame zstd with a torn tail identically to plain jsonl', async () => {
     const lines = (await readFile(join(import.meta.dirname, '../fixtures/dsh/bash-tool-turn.jsonl'), 'utf-8'))
       .split('\n').filter(l => l.trim())
     const plain = await parseAll(
@@ -1030,9 +994,9 @@ describe('dsh provider - real log, real container', () => {
     await mkdir(dir, { recursive: true })
     const filePath = join(dir, 'session.jsonl.zstd')
     const frames = [[lines[0]!], lines.slice(1, 10), lines.slice(10, 25), lines.slice(25)]
-      .map(batch => zstdCompress!(Buffer.from(batch.join('\n') + '\n', 'utf-8')))
+      .map(batch => zlib.zstdCompressSync(Buffer.from(batch.join('\n') + '\n', 'utf-8')))
     // A crashed writer's half-written final batch, carrying usage that must not count.
-    const torn = zstdCompress!(Buffer.from(assistantMessage(9, 9, { inputTokens: 123456, outputTokens: 1 }, 1785730424999) + '\n', 'utf-8'))
+    const torn = zlib.zstdCompressSync(Buffer.from(assistantMessage(9, 9, { inputTokens: 123456, outputTokens: 1 }, 1785730424999) + '\n', 'utf-8'))
     await writeFile(filePath, Buffer.concat([...frames, torn.subarray(0, Math.floor(torn.length / 2))]))
 
     const framed = await parseAll(createDshProvider(tmpDir), filePath)
@@ -1043,15 +1007,15 @@ describe('dsh provider - real log, real container', () => {
 })
 
 describe('dsh provider - hostile input', () => {
-  itZstd('skips a session whose frames decompress to far more than the file cap', async () => {
+  it('skips a session whose frames decompress to far more than the file cap', async () => {
     const dir = join(tmpDir, 'sessions', '--home-u-proj--', 'session-bomb')
     await mkdir(dir, { recursive: true })
     const filePath = join(dir, 'session.jsonl.zstd')
     // 200 MB of zeros compresses to a few KB. Uncapped this decoded to ~916 MB
     // of RSS for a 16 KB file; the per-frame cap now rejects it without
     // allocating past the cap.
-    const bomb = zstdCompress!(Buffer.alloc(200 * 1024 * 1024))
-    const good = zstdCompress!(Buffer.from(
+    const bomb = zlib.zstdCompressSync(Buffer.alloc(200 * 1024 * 1024))
+    const good = zlib.zstdCompressSync(Buffer.from(
       sessionHeader({ id: 'session-bomb', cwd: '/home/u/proj' }) + '\n'
       + chunkUsage(1, 1, { inputTokens: 100, outputTokens: 10 }, 1786707340000) + '\n',
       'utf-8',
@@ -1064,8 +1028,8 @@ describe('dsh provider - hostile input', () => {
     expect(await parseAll(createDshProvider(tmpDir), filePath)).toEqual([])
   })
 
-  itZstd('stops decoding once the frames exceed the running budget', async () => {
-    const frame = zstdCompress!(Buffer.from('{"type":"turn/start","seq":0,"time":1,"data":{"turn":1}}\n', 'utf-8'))
+  it('stops decoding once the frames exceed the running budget', async () => {
+    const frame = zlib.zstdCompressSync(Buffer.from('{"type":"turn/start","seq":0,"time":1,"data":{"turn":1}}\n', 'utf-8'))
     const buffer = Buffer.concat([frame, frame, frame])
 
     expect([...readZstdLines(buffer, Number.POSITIVE_INFINITY, 4096)]).toHaveLength(3)

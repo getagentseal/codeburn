@@ -432,6 +432,7 @@
 "%@%% in deficit" = "%@%% in deficit";
 "%@%% in reserve" = "%@%% in reserve";
 "%1$@ · hits 100%% %2$@" = "%1$@ · hits 100%% %2$@";
+"%@ · lasts until reset" = "%@ · lasts until reset";
 "%1$@ · %2$@ at reset" = "%1$@ · %2$@ at reset";
 "On pace: %1$@ at reset · hits 100%% %2$@" = "On pace: %1$@ at reset · hits 100%% %2$@";
 "Based on last cycle: %@" = "Based on last cycle: %@";
@@ -652,6 +653,7 @@
 "%@ today" = "%@ today";
 "%@ tok today" = "%@ tok today";
 "%lld%% left" = "%lld%% left";
+"out %@" = "out %@";
 
 /* MARK: Codex credit limit */
 "Monthly" = "Monthly";
@@ -725,9 +727,12 @@
 "Input tokens reused from this provider's prompt cache today — not fresh input (arrow.down), not cache writes, and already priced at the cache-read rate inside the burned figure." = "Input tokens reused from this provider's prompt cache today — not fresh input (arrow.down), not cache writes, and already priced at the cache-read rate inside the burned figure.";
 
 /* MARK: Quota crossing notifications */
-"%1$@ · %2$@ at 80%%" = "%1$@ · %2$@ at 80%%";
+"%1$@ · %2$@ at %3$lld%%" = "%1$@ · %2$@ at %3$lld%%";
 "%1$@ · %2$@ limit reached" = "%1$@ · %2$@ limit reached";
+"%1$@ %2$@ runs out at %3$@" = "%1$@ %2$@ runs out at %3$@";
+"At this pace. Resets %@." = "At this pace. Resets %@.";
 "Quota crossings (%1$lld%% and %2$lld%%)" = "Quota crossings (%1$lld%% and %2$lld%%)";
+"Warn at" = "Warn at";
 
 /* MARK: Privacy */
 "Privacy" = "Privacy";

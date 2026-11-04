@@ -716,6 +716,7 @@ export type SessionRow = {
   outputTokens: number
   cacheReadTokens: number
   cacheWriteTokens: number
+  cacheHitPercent?: number | null
   startedAt: string
   endedAt: string
   durationMs: number

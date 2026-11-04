@@ -12,10 +12,6 @@ import type { ParsedProviderCall, ProbeRoot, Provider, SessionParser, SessionSou
 // (per-request Anthropic-shaped token counts) and the thread's model.
 // Format documented in issue #480.
 
-// zstd landed in node:zlib in 22.15 / 23.8; the package floor is 22.13, so the
-// provider degrades with a notice instead of assuming the export exists.
-const zstdDecompress = (zlib as { zstdDecompressSync?: (buf: Buffer) => Buffer }).zstdDecompressSync
-
 function getZedThreadsDbPath(): string {
   if (process.platform === 'darwin') {
     return join(homedir(), 'Library', 'Application Support', 'Zed', 'threads', 'threads.db')
@@ -123,7 +119,7 @@ function parseThreads(db: SqliteDatabase, seenKeys: Set<string>): ParsedProvider
       const timestamp = parsedAt.toISOString()
 
       const jsonText = row.data_type === 'zstd'
-        ? zstdDecompress!(Buffer.from(row.data)).toString('utf-8')
+        ? zlib.zstdDecompressSync(Buffer.from(row.data)).toString('utf-8')
         : Buffer.from(row.data).toString('utf-8')
       const thread = JSON.parse(jsonText) as ThreadJson
       const model = thread.model?.model || 'unknown'
@@ -175,10 +171,6 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
     async *parse(): AsyncGenerator<ParsedProviderCall> {
       if (!isSqliteAvailable()) {
         process.stderr.write(getSqliteLoadError() + '\n')
-        return
-      }
-      if (!zstdDecompress) {
-        process.stderr.write('codeburn: Zed threads need Node >= 22.15 (zstd support); skipping Zed usage.\n')
         return
       }
 

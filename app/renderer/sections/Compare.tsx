@@ -13,7 +13,7 @@ import {
   type VolumeBand,
   type VolumeMeasure,
 } from '../lib/cohortStats'
-import { formatCompact, formatCount, formatUsd, shortenProjectPath } from '../lib/format'
+import { formatCompact, formatCount, formatUsd, sessionCacheHitPercent, shortenProjectPath } from '../lib/format'
 import { Usd, tokensOf } from '../components/Usd'
 import { t } from '../i18n'
 import { codeburn } from '../lib/ipc'
@@ -341,9 +341,8 @@ function CategoryCard({ report }: { report: CompareJsonReport }) {
 }
 
 function cacheHitRate(model: ModelStats): string {
-  // reads over reads + fresh input (matches menubar-json + compare-stats).
-  const total = model.inputTokens + model.cacheReadTokens
-  return total > 0 ? `${Math.round(model.cacheReadTokens / total * 100)}%` : '—'
+  const percent = sessionCacheHitPercent(model.inputTokens, model.cacheReadTokens, model.cacheWriteTokens)
+  return percent === null ? '—' : `${Math.round(percent)}%`
 }
 
 function daysOfData(model: ModelStats): string {

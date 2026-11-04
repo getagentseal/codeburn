@@ -126,7 +126,7 @@ Tell CodeBurn which subscription you pay for and it stops showing only what you 
 
 `codeburn quota` reads the live limits out of the tools you are already signed in to. That is where the five-hour and weekly windows come from. Check it before a long run.
 
-Guard is opt-in and local. `codeburn guard install` adds Claude Code hooks that warn a session once it passes $5 and stop it at $15. Both numbers are yours to change, `codeburn guard status` shows where the hooks live, and `codeburn guard uninstall` takes them out again.
+Guard is opt-in and local. `codeburn guard install` adds Claude Code hooks that warn a session once it passes $5 and stop it at $15, and do the same for a tool call stuck in a loop or a failing command retried over and over. All the limits are yours to change, `codeburn guard status` shows where the hooks live, and `codeburn guard uninstall` takes them out again.
 
 ## Always in view
 
