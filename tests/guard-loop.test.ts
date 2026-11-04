@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Command } from 'commander'
 import { parseApiCall, parseJsonlLine } from '../src/parser.js'
-import { readCache } from '../src/guard/usage.js'
+import { readCache, writeAllow } from '../src/guard/usage.js'
 import { runGuardHook } from '../src/guard/hooks.js'
 import { writeGuardConfig, DEFAULT_GUARD_CONFIG, type GuardConfig } from '../src/guard/store.js'
 import { setHome } from './setup/home.js'
@@ -67,6 +67,13 @@ async function call(
   return out
 }
 
+function warnJson(sentence: string): string {
+  return JSON.stringify({
+    systemMessage: sentence,
+    hookSpecificOutput: { hookEventName: 'PreToolUse', additionalContext: `${sentence} Change approach or ask the user.` },
+  })
+}
+
 function denyJson(reason: string): string {
   return JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: reason } })
 }
@@ -77,11 +84,11 @@ describe('identical-call loop', () => {
     const outs: string[] = []
     for (let i = 0; i < 8; i++) outs.push(await call(env, 'Read', { file_path: '/repo/a.ts', limit: 50 }))
     expect(outs.slice(0, 3)).toEqual(['', '', ''])
-    expect(outs[3]).toBe(JSON.stringify({ systemMessage: 'codeburn guard: Read was called 4 times in a row with the same input.' }))
+    expect(outs[3]).toBe(warnJson('codeburn guard: Read was called 4 times in a row with the same input.'))
     expect(outs.slice(4, 7)).toEqual(['', '', ''])
     const cost = (await readCache(SID, env.base)).costUSD
     expect(outs[7]).toBe(denyJson(
-      `Read was called 8 times in a row with the same input; this session is $${cost.toFixed(2)} (codeburn guard). Change approach or ask the user. Raise loopStopAfter in guard.json to allow more.`,
+      `Read was called 8 times in a row with the same input; this session is $${cost.toFixed(2)} (codeburn guard). Change approach or ask the user. Run 'codeburn guard allow' to lift this for the session, or raise loopStopAfter in guard.json.`,
     ))
   })
 
@@ -137,13 +144,13 @@ describe('failing-command retry', () => {
     const shown = test.command.slice(0, 60)
     expect(outs).toEqual(['', '', '', ''])
     await run(true)
-    expect(outs[4]).toBe(JSON.stringify({ systemMessage: `codeburn guard: the command "${shown}" already failed 3 times.` }))
+    expect(outs[4]).toBe(warnJson(`codeburn guard: the command "${shown}" already failed 3 times.`))
     await run(true)
     expect(outs[5]).toBe('')
     const out = await call(env, 'Bash', test)
     const cost = (await readCache(SID, env.base)).costUSD
     expect(out).toBe(denyJson(
-      `The command "${shown}" already failed 5 times; this session is $${cost.toFixed(2)} (codeburn guard). Change approach or ask the user. Raise retryStopAfter in guard.json to allow more.`,
+      `The command "${shown}" already failed 5 times; this session is $${cost.toFixed(2)} (codeburn guard). Change approach or ask the user. Run 'codeburn guard allow' to lift this for the session, or raise retryStopAfter in guard.json.`,
     ))
   })
 
@@ -154,6 +161,23 @@ describe('failing-command retry', () => {
     expect(outs.every(o => o === '')).toBe(true)
     for (let i = 0; i < 4; i++) outs.push(await call(env, 'PowerShell', { command: 'Get-Thing' }, { fails: true }))
     expect(JSON.parse(outs[9]!).systemMessage).toContain('"Get-Thing" already failed 3 times')
+  })
+})
+
+describe('guard allow', () => {
+  it('lifts loop and retry stops for that session only', async () => {
+    const env = await setup({ loopStopAfter: 3, retryStopAfter: 2 })
+    for (let i = 0; i < 2; i++) await call(env, 'Bash', { command: 'gh run view 1 --exit-status' }, { fails: true })
+    expect(await call(env, 'Bash', { command: 'gh run view 1 --exit-status' })).toContain('"permissionDecision":"deny"')
+    await writeAllow(SID, env.base)
+    for (let i = 0; i < 4; i++) expect(await call(env, 'Bash', { command: 'gh run view 1 --exit-status' }, { fails: true })).not.toContain('deny')
+
+    const other = await setup({ loopStopAfter: 3 })
+    const input = (id: string) => JSON.stringify({ session_id: 'sess-other', transcript_path: other.path, tool_name: 'Read', tool_input: { file_path: '/a' }, tool_use_id: id })
+    await writeAllow(SID, other.base)
+    const outs: string[] = []
+    for (let i = 0; i < 3; i++) outs.push(await runGuardHook('pretooluse', input(`toolu_o${i}`), { base: other.base }))
+    expect(outs[2]).toContain('"permissionDecision":"deny"')
   })
 })
 

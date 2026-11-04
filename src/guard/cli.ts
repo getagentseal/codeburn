@@ -157,7 +157,7 @@ async function doAllow(sessionId: string | undefined): Promise<void> {
     return
   }
   await writeAllow(id)
-  console.log(`  Lifted the guard hard cap for session ${id} (this session only).`)
+  console.log(`  Lifted the guard hard cap, loop stop and retry stop for session ${id} (this session only).`)
 }
 
 export function registerGuardCommands(program: Command): void {
@@ -214,7 +214,7 @@ export function registerGuardCommands(program: Command): void {
 
   guard
     .command('allow [sessionId]')
-    .description('Lift the hard budget cap for the current (or given) session')
+    .description('Lift the hard budget cap and loop/retry stops for the current (or given) session')
     .action(async (sessionId: string | undefined) => { await doAllow(sessionId) })
 
   guard

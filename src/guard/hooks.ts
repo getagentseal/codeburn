@@ -21,7 +21,10 @@
 // PreToolUse block: { hookSpecificOutput: { hookEventName: "PreToolUse",
 //   permissionDecision: "deny", permissionDecisionReason } } (permissionDecision
 //   is allow|deny|ask|defer). Non-blocking user note anywhere: top-level
-//   systemMessage.
+//   systemMessage. A note for the model on PreToolUse (checked 2026-11-04):
+//   hookSpecificOutput.additionalContext, ignored only under "defer". We send it
+//   with no permissionDecision, because "allow" would also skip the user's
+//   permission prompt.
 // SessionStart context: { hookSpecificOutput: { hookEventName: "SessionStart",
 //   additionalContext } }; SessionStart cannot block.
 // Stop: may block via top-level { decision: "block", reason } or exit 2; we
@@ -99,22 +102,24 @@ async function handlePreToolUse(input: unknown, opts: HookOpts): Promise<string>
 
   let output = ''
   const notes: string[] = []
-  if (config.hardUSD !== null && cache.costUSD >= config.hardUSD && !(await isAllowed(sessionId, opts.base))) {
+  const agentNotes: string[] = []
+  const allowed = await isAllowed(sessionId, opts.base)
+  if (config.hardUSD !== null && cache.costUSD >= config.hardUSD && !allowed) {
     // A block is a stronger signal than the soft nag; once blocked, don't also
     // fire a soft warning on the next (e.g. post-`allow`) tool call.
     cache.softWarned = true
     output = deny(
       `Session cost passed ${usd(config.hardUSD)} (codeburn guard). Run 'codeburn guard allow' to lift the cap for this session, or raise hardUSD in guard.json.`,
     )
-  } else if (reached(run, config.loopStopAfter)) {
+  } else if (reached(run, config.loopStopAfter) && !allowed) {
     markSignal(cache, 'loop')
     output = deny(
-      `${toolName} was called ${run} times in a row with the same input; this session is ${usd(cache.costUSD)} (codeburn guard). Change approach or ask the user. Raise loopStopAfter in guard.json to allow more.`,
+      `${toolName} was called ${run} times in a row with the same input; this session is ${usd(cache.costUSD)} (codeburn guard). Change approach or ask the user. Run 'codeburn guard allow' to lift this for the session, or raise loopStopAfter in guard.json.`,
     )
-  } else if (reached(failures, config.retryStopAfter)) {
+  } else if (reached(failures, config.retryStopAfter) && !allowed) {
     markSignal(cache, 'retry')
     output = deny(
-      `The command "${shown}" already failed ${failures} times; this session is ${usd(cache.costUSD)} (codeburn guard). Change approach or ask the user. Raise retryStopAfter in guard.json to allow more.`,
+      `The command "${shown}" already failed ${failures} times; this session is ${usd(cache.costUSD)} (codeburn guard). Change approach or ask the user. Run 'codeburn guard allow' to lift this for the session, or raise retryStopAfter in guard.json.`,
     )
   } else {
     if (config.softUSD !== null && cache.costUSD >= config.softUSD && !cache.softWarned) {
@@ -124,12 +129,21 @@ async function handlePreToolUse(input: unknown, opts: HookOpts): Promise<string>
     if (reached(run, config.loopWarnAfter) && !cache.loopWarned) {
       markSignal(cache, 'loop')
       notes.push(`codeburn guard: ${toolName} was called ${run} times in a row with the same input.`)
+      agentNotes.push(`${notes[notes.length - 1]} Change approach or ask the user.`)
     }
     if (reached(failures, config.retryWarnAfter) && !cache.retryWarned) {
       markSignal(cache, 'retry')
       notes.push(`codeburn guard: the command "${shown}" already failed ${failures} times.`)
+      agentNotes.push(`${notes[notes.length - 1]} Change approach or ask the user.`)
     }
-    if (notes.length > 0) output = JSON.stringify({ systemMessage: notes.join('\n') })
+    if (notes.length > 0) {
+      output = JSON.stringify({
+        systemMessage: notes.join('\n'),
+        ...(agentNotes.length > 0
+          ? { hookSpecificOutput: { hookEventName: 'PreToolUse', additionalContext: agentNotes.join('\n') } }
+          : {}),
+      })
+    }
   }
 
   await writeCache(cache, opts.base)
