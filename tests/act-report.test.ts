@@ -16,9 +16,9 @@ import {
 import { formatAppliedFix, REPORT_MIN_AGE_DAYS } from '../src/act/types.js'
 import type { ActionRecord } from '../src/act/types.js'
 import type { FindingPlan } from '../src/act/plans.js'
-import { aggregateMcpCoverage, detectMcpToolCoverage, type WasteFinding } from '../src/optimize.js'
+import { aggregateMcpCoverage, detectMcpProfileAdvisor, detectMcpToolCoverage, type WasteFinding } from '../src/optimize.js'
 import type { ClassifiedTurn, ProjectSummary } from '../src/types.js'
-import { cacheWriteCostPerToken, getModelCosts } from '../src/models.js'
+import { getModelCosts } from '../src/models.js'
 
 type Session = ProjectSummary['sessions'][number]
 
@@ -233,20 +233,18 @@ describe('realized dollars', () => {
   it('prices realized tokens at the session model rate of the token kind the finding priced', async () => {
     const opus = getModelCosts(OPUS)
     expect(opus).not.toBeNull()
-    const lowCoverage = await writeJournal([mcpRecord({ kind: 'mcp-project-scope', findingId: 'mcp-project-scope' })])
-    const unused = await writeJournal([mcpRecord({ findingId: 'unused-mcp' })])
     const projects = load([projectOf(onModel(OPUS))])
-    const writes = await computeActReport({ actionsDir: lowCoverage, now: NOW, loadProjects: projects })
-    const inputs = await computeActReport({ actionsDir: unused, now: NOW, loadProjects: projects })
-
-    for (const report of [writes, inputs]) {
+    for (const findingId of ['mcp-low-coverage', 'mcp-project-scope', 'unused-mcp']) {
+      const kind = findingId === 'mcp-project-scope' ? 'mcp-project-scope' : 'mcp-remove'
+      const actionsDir = await writeJournal([mcpRecord({ kind, findingId })])
+      const report = await computeActReport({ actionsDir, now: NOW, loadProjects: projects })
       expect(report.rows[0]!.realizedTokens).toBe(40_000)
       expect(report.rows[0]!.estimatedAtApply).toBe(56_000)
+      expect(report.rows[0]!.realizedCostUSD).toBeCloseTo(40_000 * opus!.inputCostPerToken, 10)
+      expect(report.rows[0]!.realizedCostUSD).not.toBeCloseTo(40_000 * report.costRate, 6)
+      const json = buildActReportJson(report) as { totals: { realizedCostUSD: number } }
+      expect(json.totals.realizedCostUSD).toBeCloseTo(report.rows[0]!.realizedCostUSD, 10)
     }
-    expect(writes.rows[0]!.realizedCostUSD).toBeCloseTo(40_000 * cacheWriteCostPerToken(OPUS, opus!), 10)
-    expect(inputs.rows[0]!.realizedCostUSD).toBeCloseTo(40_000 * opus!.inputCostPerToken, 10)
-    const json = buildActReportJson(writes) as { totals: { realizedCostUSD: number } }
-    expect(json.totals.realizedCostUSD).toBeCloseTo(writes.rows[0]!.realizedCostUSD, 10)
   })
 
   it('keeps the blended rate for an unpriced model and for findings still on the blended rate', async () => {
@@ -978,6 +976,28 @@ describe('partial-action baseline capture', () => {
     // per session: 243 per session, where the old 400-per-tool figure was 8,000.
     expect(baseline!.metrics.filesystem).toBeCloseTo(243, 10)
     expect(baseline!.metrics.filesystem! * sessions.length).toBeCloseTo(finding.tokensSaved, 0)
+  })
+
+  it('stores the per-session cold schema tokens the mcp-project-scope finding charges', () => {
+    const inventory = Array.from({ length: 4 }, (_, i) => `mcp__github__t${i}`)
+    const cold = (name: string) => projectOf(
+      sessionsAt(2, daysAgo(1), { mcpInventory: inventory, turns: cachedTurns() }).map(s => ({ ...s, sessionId: `${name}-${s.sessionId}` })),
+      { project: name, projectPath: `/tmp/${name}` },
+    )
+    const hot = projectOf(
+      [makeSession('api-s0', daysAgo(1), { mcpInventory: inventory, mcpBreakdown: { github: { calls: 2 } }, turns: cachedTurns() })],
+      { project: 'api', projectPath: '/tmp/api' },
+    )
+    const projects = [hot, cold('web'), cold('docs')]
+    const coverage = aggregateMcpCoverage(projects)
+    const finding = detectMcpProfileAdvisor(projects, coverage)!
+    expect(finding.id).toBe('mcp-project-scope')
+
+    const baseline = captureBaseline(finding, 'mcp-project-scope', { projects, coverage, windowDays: 14, now: NOW })
+    // 4 name lines at 9 tokens, one write (x1.25) and one read (x0.1) per
+    // cold session: 48.6 per session, where the old 400-per-tool figure was 1,600.
+    expect(baseline!.metrics.github).toBeCloseTo(48.6, 10)
+    expect(baseline!.metrics.github! * 4).toBeCloseTo(finding.tokensSaved, 0)
   })
 
   it('does not stamp a numeric baseline onto an uncertain partial mutation', async () => {
