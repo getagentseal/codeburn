@@ -722,7 +722,8 @@
 /* MARK: Quota crossing notifications */
 "%1$@ · %2$@ at %3$lld%%" = "%1$@ · %2$@ %3$lld%% 도달";
 "%1$@ · %2$@ limit reached" = "%1$@ · %2$@ 한도 도달";
-"%1$@ · %2$@: at this pace it runs out at %3$@, resets %4$@" = "%1$@ · %2$@: 이 속도면 %3$@에 소진, 초기화 %4$@";
+"%1$@ %2$@ runs out at %3$@" = "%1$@ %2$@ %3$@에 소진";
+"At this pace. Resets %@." = "이 속도 기준. 초기화 %@.";
 "Quota crossings (%1$lld%% and %2$lld%%)" = "할당량 임계값 알림 (%1$lld%% 및 %2$lld%%)";
 "Warn at" = "알림 기준";
 

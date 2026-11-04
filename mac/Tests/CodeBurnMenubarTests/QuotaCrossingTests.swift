@@ -100,7 +100,8 @@ struct QuotaCrossingDetectorTests {
         early.runsOutAt = resetsAt.addingTimeInterval(-3600)
         let first = QuotaCrossingDetector.evaluate(windows: [early], fired: [])
         #expect(first.events.map(\.level) == [.runsOut])
-        #expect(first.events[0].notificationTitle == "Claude · Weekly: at this pace it runs out at \(QuotaPace.clockLabel(resetsAt.addingTimeInterval(-3600))), resets \(QuotaPace.clockLabel(resetsAt))")
+        #expect(first.events[0].notificationTitle == "Claude Weekly runs out at \(QuotaPace.clockLabel(resetsAt.addingTimeInterval(-3600)))")
+        #expect(first.events[0].notificationBody == "At this pace. Resets \(QuotaPace.clockLabel(resetsAt)).")
 
         early.runsOutAt = resetsAt.addingTimeInterval(-7200)
         let second = QuotaCrossingDetector.evaluate(windows: [early], fired: first.fired)

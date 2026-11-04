@@ -718,7 +718,8 @@
 /* MARK: Quota crossing notifications */
 "%1$@ · %2$@ at %3$lld%%" = "%1$@ · %2$@ 已達 %3$lld%%";
 "%1$@ · %2$@ limit reached" = "%1$@ · %2$@ 已達上限";
-"%1$@ · %2$@: at this pace it runs out at %3$@, resets %4$@" = "%1$@ · %2$@：按此速度將在 %3$@ 用盡，%4$@ 重置";
+"%1$@ %2$@ runs out at %3$@" = "%1$@ %2$@ 將在 %3$@ 用盡";
+"At this pace. Resets %@." = "按此速度。%@ 重置。";
 "Quota crossings (%1$lld%% and %2$lld%%)" = "配額跨越（%1$lld%% 與 %2$lld%%）";
 "Warn at" = "提醒閾值";
 

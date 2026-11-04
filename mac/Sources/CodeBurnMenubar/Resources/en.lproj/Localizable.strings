@@ -729,7 +729,8 @@
 /* MARK: Quota crossing notifications */
 "%1$@ · %2$@ at %3$lld%%" = "%1$@ · %2$@ at %3$lld%%";
 "%1$@ · %2$@ limit reached" = "%1$@ · %2$@ limit reached";
-"%1$@ · %2$@: at this pace it runs out at %3$@, resets %4$@" = "%1$@ · %2$@: at this pace it runs out at %3$@, resets %4$@";
+"%1$@ %2$@ runs out at %3$@" = "%1$@ %2$@ runs out at %3$@";
+"At this pace. Resets %@." = "At this pace. Resets %@.";
 "Quota crossings (%1$lld%% and %2$lld%%)" = "Quota crossings (%1$lld%% and %2$lld%%)";
 "Warn at" = "Warn at";
 

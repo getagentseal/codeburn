@@ -63,13 +63,13 @@ struct QuotaCrossingEvent: Equatable, Sendable {
         switch level {
         case .warning: L("%1$@ · %2$@ at %3$lld%%", providerName, windowLabel, warningPercent)
         case .limit: L("%1$@ · %2$@ limit reached", providerName, windowLabel)
-        case .runsOut: L(
-            "%1$@ · %2$@: at this pace it runs out at %3$@, resets %4$@",
-            providerName, windowLabel,
-            runsOutAt.map { QuotaPace.clockLabel($0) } ?? "",
-            resetsAt.map { QuotaPace.clockLabel($0) } ?? ""
-        )
+        case .runsOut: L("%1$@ %2$@ runs out at %3$@", providerName, windowLabel, runsOutAt.map { QuotaPace.clockLabel($0) } ?? "")
         }
+    }
+
+    var notificationBody: String {
+        guard level == .runsOut, let resetsAt else { return "" }
+        return L("At this pace. Resets %@.", QuotaPace.clockLabel(resetsAt))
     }
 }
 
@@ -179,7 +179,7 @@ final class QuotaCrossingMonitor {
         for event in events {
             notifier.post(
                 title: event.notificationTitle,
-                body: "",
+                body: event.notificationBody,
                 identifier: Self.notificationIdentifierPrefix + event.key
             )
         }
