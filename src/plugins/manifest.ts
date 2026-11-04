@@ -31,7 +31,7 @@ export const pluginManifestSchema = z.object({
     }).strict()).max(64).default([]),
     payloadSections: z.array(z.string().regex(SUBCOMMAND)).max(16).default([]),
     spanKinds: z.array(z.string().regex(DOTTED_KEY).max(128)).max(16).default([]),
-  }).strict().default({}),
+  }).strict().prefault({}),
 }).strict()
 
 export type PluginManifest = z.infer<typeof pluginManifestSchema>

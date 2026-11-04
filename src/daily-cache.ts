@@ -6,7 +6,6 @@ import { join } from 'path'
 import { getCodeburnCacheDir, RETIRED_PROVIDER_NAMES } from './cache-dir.js'
 import { sweepSupersededCacheFiles } from './cache-sweep.js'
 import { coverageFor, coversLocalDay, loadCursorImport } from './cursor-import.js'
-import { zstdSupported } from './fs-utils.js'
 import { projectOriginKey } from './git-origin.js'
 import type { ProjectFilterTarget } from './parser.js'
 import type { DateRange, ProjectSummary } from './types.js'
@@ -365,18 +364,13 @@ import type { DateRange, ProjectSummary } from './types.js'
 // v76: Codex reads the Zstandard-compressed rollouts (`rollout-*.jsonl.zst`)
 // Codex moves cold sessions into, which were skipped, so days settled after
 // that move miss their Codex usage. Calls and cost only rise, so no
-// PENDING_REDERIVE_PROVIDER_VERSIONS entry is needed. A Node without zstd
-// cannot read them and stayed at 75, so its cache never claimed v76 and a
-// later Node upgrade still adopts and re-derives it.
+// PENDING_REDERIVE_PROVIDER_VERSIONS entry is needed.
 // v77: Warp conversations that carry only total_billed_cost_in_cents are
 // priced from it instead of the credits estimate. Calls are unchanged, so no
-// PENDING_REDERIVE_PROVIDER_VERSIONS entry is needed. A Node without zstd
-// takes 76, so it re-derives for this fix too and a zstd Node still adopts
-// and re-derives its file. This is the last bump that can keep the split: a
-// no-zstd Node adopts any file at its own number, and after this release zstd
-// Nodes will have written v77 files next to it. Raise the Node floor to 22.15
-// and drop the fallback before the next bump.
-export const DAILY_CACHE_VERSION = zstdSupported ? 77 : 76
+// PENDING_REDERIVE_PROVIDER_VERSIONS entry is needed. 77 is the generation
+// both 0.9.27 upgrade paths converge on; no-zstd Nodes can no longer run since
+// the 22.15 floor.
+export const DAILY_CACHE_VERSION = 77
 const MIN_SUPPORTED_VERSION = 28
 
 /// Providers whose per-day CALL COUNT means something different at

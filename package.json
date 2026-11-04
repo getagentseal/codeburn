@@ -49,7 +49,7 @@
     "developer-tools"
   ],
   "engines": {
-    "node": ">=22.13.0"
+    "node": ">=22.15.0"
   },
   "author": "AgentSeal <hello@agentseal.org>",
   "license": "MIT",
@@ -71,7 +71,7 @@
     "selfsigned": "^5.5.0",
     "strip-ansi": "^7.2.0",
     "undici": "^7.27.2",
-    "zod": "^3.25.76"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/node": "^22.19.17",

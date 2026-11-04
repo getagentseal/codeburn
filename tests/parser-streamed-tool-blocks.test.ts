@@ -79,3 +79,16 @@ describe('streamed assistant messages restated with every block in the final wri
     expect(dedupeStreamingMessageIds(entries)[0]!.message).toBe(last.message)
   })
 })
+
+describe('thinking tokens', () => {
+  it('fills reasoningTokens without changing output tokens or cost', () => {
+    const base = line('msg-t', [{ type: 'text', text: 'ok' }], '2026-09-11T10:00:00.000Z')
+    const withThinking = line('msg-t', [{ type: 'text', text: 'ok' }], '2026-09-11T10:00:00.000Z')
+    withThinking.message!.usage = { ...usage, output_tokens_details: { thinking_tokens: 120 } }
+    const a = parseApiCall(base)!
+    const b = parseApiCall(withThinking)!
+    expect(b.usage.reasoningTokens).toBe(120)
+    expect(b.usage.outputTokens).toBe(a.usage.outputTokens)
+    expect(b.costUSD).toBe(a.costUSD)
+  })
+})

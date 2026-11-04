@@ -1283,4 +1283,92 @@ skipUnlessSqlite('hermes provider', () => {
     const calls = await collectCalls(tmpDir, `${dbPath}#hermes-session=tool-result-session`)
     expect(calls[0]!.tools).toContain('Read')
   })
+
+  it('counts helper-model usage from session_model_usage on its own session, beside the main call', async () => {
+    const dbPath = createHermesDb(tmpDir)
+    withTestDb(dbPath, (db) => {
+      db.exec(`
+        CREATE TABLE session_model_usage (
+          session_id TEXT NOT NULL, model TEXT NOT NULL,
+          billing_provider TEXT NOT NULL DEFAULT '', billing_base_url TEXT NOT NULL DEFAULT '',
+          billing_mode TEXT NOT NULL DEFAULT '', task TEXT NOT NULL DEFAULT '',
+          api_call_count INTEGER NOT NULL DEFAULT 0, input_tokens INTEGER NOT NULL DEFAULT 0,
+          output_tokens INTEGER NOT NULL DEFAULT 0, cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+          cache_write_tokens INTEGER NOT NULL DEFAULT 0, reasoning_tokens INTEGER NOT NULL DEFAULT 0,
+          estimated_cost_usd REAL NOT NULL DEFAULT 0, actual_cost_usd REAL NOT NULL DEFAULT 0,
+          cost_status TEXT, cost_source TEXT, first_seen REAL, last_seen REAL,
+          PRIMARY KEY (session_id, model, billing_provider, billing_base_url, billing_mode, task)
+        )
+      `)
+      const usage = db.prepare(`INSERT INTO session_model_usage
+        (session_id, model, billing_provider, task, input_tokens, output_tokens, first_seen) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+      for (const id of ['with-helpers', 'without-helpers']) {
+        insertSession(db, {
+          id, model: 'claude-sonnet-4-20250514', billingProvider: 'anthropic',
+          inputTokens: 1000, outputTokens: 200, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0, startedAt: 1779549200,
+        })
+        usage.run(id, 'claude-sonnet-4-20250514', 'anthropic', '', 1000, 200, 1779549200)
+      }
+      usage.run('with-helpers', 'claude-haiku-4-5', 'anthropic', 'compression', 5000, 300, 1779549300)
+      usage.run('with-helpers', 'gpt-5.5', 'openrouter', 'title_generation', 40, 8, 1779549400)
+      // Already inside the sessions totals.
+      usage.run('with-helpers', 'claude-sonnet-4-20250514', 'anthropic', 'voice_chat', 70, 7, 1779549500)
+    })
+
+    const main = calculateCost('claude-sonnet-4-20250514', 1000, 200, 0, 0, 0)
+    const compression = calculateCost('claude-haiku-4-5', 5000, 300, 0, 0, 0)
+    const title = calculateCost('gpt-5.5', 40, 8, 0, 0, 0)
+    expect(compression).toBeGreaterThan(0)
+    expect(title).toBeGreaterThan(0)
+
+    const plain = await collectCalls(tmpDir, `${dbPath}#hermes-session=without-helpers`)
+    expect(plain).toHaveLength(1)
+    expect(plain[0]).toMatchObject({ model: 'claude-sonnet-4-20250514', inputTokens: 1000, outputTokens: 200, costUSD: main })
+    expect(plain[0]!.supplementaryAccounting).toBeUndefined()
+
+    const calls = await collectCalls(tmpDir, `${dbPath}#hermes-session=with-helpers`)
+    expect(calls.map(call => call.model)).toEqual(['claude-sonnet-4-20250514', 'claude-haiku-4-5', 'gpt-5.5'])
+    expect(calls[0]).toEqual({ ...plain[0], sessionId: 'with-helpers', deduplicationKey: 'hermes:default:with-helpers', turnId: 'with-helpers:session' })
+    expect(calls[1]).toMatchObject({
+      sessionId: 'with-helpers', inputTokens: 5000, outputTokens: 300, costUSD: compression,
+      timestamp: new Date(1779549300 * 1000).toISOString(), supplementaryAccounting: true, userMessage: '', tools: [],
+    })
+    expect(calls[2]).toMatchObject({ sessionId: 'with-helpers', costUSD: title, route: 'openrouter', supplementaryAccounting: true })
+    expect(new Set(calls.map(call => call.deduplicationKey)).size).toBe(3)
+    expect(calls.reduce((sum, call) => sum + call.inputTokens, 0)).toBe(1000 + 5000 + 40)
+    expect(calls.reduce((sum, call) => sum + call.costUSD, 0)).toBeCloseTo(main + compression + title, 12)
+  })
+
+  it('keeps a recorded actual $0 on a helper row instead of pricing its tokens', async () => {
+    const dbPath = createHermesDb(tmpDir)
+    withTestDb(dbPath, (db) => {
+      db.exec(`
+        CREATE TABLE session_model_usage (
+          session_id TEXT NOT NULL, model TEXT NOT NULL,
+          billing_provider TEXT NOT NULL DEFAULT '', billing_base_url TEXT NOT NULL DEFAULT '',
+          billing_mode TEXT NOT NULL DEFAULT '', task TEXT NOT NULL DEFAULT '',
+          api_call_count INTEGER NOT NULL DEFAULT 0, input_tokens INTEGER NOT NULL DEFAULT 0,
+          output_tokens INTEGER NOT NULL DEFAULT 0, cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+          cache_write_tokens INTEGER NOT NULL DEFAULT 0, reasoning_tokens INTEGER NOT NULL DEFAULT 0,
+          estimated_cost_usd REAL NOT NULL DEFAULT 0, actual_cost_usd REAL NOT NULL DEFAULT 0,
+          cost_status TEXT, cost_source TEXT, first_seen REAL, last_seen REAL,
+          PRIMARY KEY (session_id, model, billing_provider, billing_base_url, billing_mode, task)
+        )
+      `)
+      insertSession(db, {
+        id: 'free-helper', model: 'claude-sonnet-4-20250514', billingProvider: 'anthropic',
+        inputTokens: 1000, outputTokens: 200, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0, startedAt: 1779549200,
+      })
+      const usage = db.prepare(`INSERT INTO session_model_usage
+        (session_id, model, billing_provider, task, input_tokens, output_tokens, cost_status, first_seen) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+      usage.run('free-helper', 'claude-haiku-4-5', 'openrouter', 'compression', 5000, 300, 'actual', 1779549300)
+      usage.run('free-helper', 'claude-haiku-4-5', 'openrouter', 'vision', 5000, 300, null, 1779549300)
+    })
+
+    const calls = await collectCalls(tmpDir, `${dbPath}#hermes-session=free-helper`)
+    expect(calls).toHaveLength(3)
+    expect(calls[1]).toMatchObject({ costUSD: 0, costIsEstimated: false, billing: 'metered' })
+    expect(calls[2]!.costUSD).toBe(calculateCost('claude-haiku-4-5', 5000, 300, 0, 0, 0))
+    expect(calls[2]!.costUSD).toBeGreaterThan(0)
+  })
 })

@@ -28,5 +28,5 @@
   "config.currency": "表示通貨 (3 文字のコード)。設定すると、すべての CodeBurn アプリが共有する CodeBurn CLI の通貨が変わります。空欄の場合は変更しません。",
   "config.provider": "ステータスバーと概要で、このプロバイダーだけを集計します (例: `claude`、`cursor`)。`all` はすべてのプロバイダーを集計します。",
   "config.quotaProviders": "CodeBurn がクォータを確認するプラン。確認のたびに、このマシンにあるログイン情報で各プロバイダーの API に問い合わせます。外すと問い合わせなくなります。",
-  "config.nodePath": "エディター内蔵の Node が古い場合に CodeBurn CLI を実行する Node.js 22.13 以降。空欄の場合は自動で探します。"
+  "config.nodePath": "エディター内蔵の Node が古い場合に CodeBurn CLI を実行する Node.js 22.15 以降。空欄の場合は自動で探します。"
 }
