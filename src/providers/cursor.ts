@@ -57,6 +57,7 @@ const modelDisplayNames: Record<string, string> = {
 
 type BubbleRow = {
   bubble_key: string
+  bubble_id?: string | null
   input_tokens: number | null
   output_tokens: number | null
   model: string | null
@@ -316,6 +317,7 @@ function modelForDisplay(raw: string | null): string {
 const BUBBLE_QUERY_BASE = `
   SELECT
     key as bubble_key,
+    json_extract(value, '$.bubbleId') as bubble_id,
     json_extract(value, '$.tokenCount.inputTokens') as input_tokens,
     json_extract(value, '$.tokenCount.outputTokens') as output_tokens,
     json_extract(value, '$.modelInfo.modelName') as model,
@@ -372,6 +374,7 @@ const BUBBLE_QUERY_SINCE = BUBBLE_QUERY_SINCE_HEAD + BUBBLE_QUERY_SINCE_TAIL
 const BUBBLE_QUERY_PAGE = `
   SELECT
     key as bubble_key,
+    json_extract(value, '$.bubbleId') as bubble_id,
     ROWID as rid,
     json_extract(value, '$.tokenCount.inputTokens') as input_tokens,
     json_extract(value, '$.tokenCount.outputTokens') as output_tokens,
@@ -819,7 +822,7 @@ function parseBubbles(
       // completes — including tokens in the dedup key (the previous
       // implementation) caused the same bubble to be counted twice once
       // its tokens stabilized.
-      const dedupKey = `cursor:bubble:${row.bubble_key}`
+      const dedupKey = `cursor:bubble:${row.bubble_id ?? row.bubble_key}`
       if (seenKeys.has(dedupKey)) continue
       seenKeys.add(dedupKey)
 
