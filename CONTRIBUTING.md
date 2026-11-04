@@ -4,7 +4,7 @@ Thanks for your interest. This document covers what you need to know to send a w
 
 ## Prerequisites
 
-- Node.js 22.13.0 or newer (`engines.node` in `package.json`).
+- Node.js 22.15.0 or newer (`engines.node` in `package.json`).
 - npm 10 or newer (ships with recent Node).
 - macOS or Linux for full provider coverage. Windows works for most providers but Cursor / Antigravity development is easier on macOS.
 - Optional: Swift 6 toolchain if you are touching the macOS menubar (`mac/`).

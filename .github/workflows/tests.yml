@@ -12,9 +12,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Package floor, the newest 22.x so paths gated on later node:zlib
-        # features (zstd, 22.15+) get exercised, and the current LTS plus
-        # current release so warnings newer Node prints reach the suite.
+        # Package floor (zstd is built in from 22.15), the newest 22.x, and the
+        # current LTS plus current release so warnings newer Node prints reach
+        # the suite.
         node-version: [22.15.0, 22, 24, 26]
 
     steps:
