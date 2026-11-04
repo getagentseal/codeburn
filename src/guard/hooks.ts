@@ -8,6 +8,9 @@
 // stdin JSON (snake_case) common to every event: session_id, transcript_path,
 //   cwd, hook_event_name, permission_mode. PreToolUse adds tool_name +
 //   tool_input; SessionStart adds source (startup|resume|clear|compact).
+//   PreToolUse also carries tool_use_id. The transcript is written
+//   asynchronously and may lag, so the incoming call is read from stdin, never
+//   assumed to be in the transcript yet.
 //   statusLine stdin differs: session_id, transcript_path, workspace.current_dir,
 //   cost.total_cost_usd (plain text out; each stdout line renders as its own
 //   status row, so we emit exactly one).
@@ -29,8 +32,18 @@
 //   is startup|resume|clear|compact; an omitted matcher matches all. Statusline
 //   is a top-level statusLine: { type: "command", command }.
 // ===========================================================================
+import { BASH_TOOLS } from '../classifier.js'
 import { readGuardConfig } from './store.js'
-import { computeSessionUsage, isAllowed, readCache, writeCache } from './usage.js'
+import {
+  computeSessionUsage,
+  identicalRun,
+  inputHash,
+  isAllowed,
+  readCache,
+  recordToolCall,
+  writeCache,
+  type GuardCache,
+} from './usage.js'
 import { FLAG_STALE_MS, flagsAgeMs, matchFlag, readFlags } from './flags.js'
 
 export type HookOpts = { base?: string }
@@ -47,6 +60,22 @@ function usd(n: number): string {
   return `$${n.toFixed(2)}`
 }
 
+function reached(n: number, threshold: number | null): boolean {
+  return threshold !== null && n >= threshold
+}
+
+function markSignal(cache: GuardCache, signal: 'loop' | 'retry'): void {
+  if (signal === 'loop') cache.loopWarned = true
+  else cache.retryWarned = true
+  cache.signalWarnCostUSD ??= cache.costUSD
+}
+
+function deny(reason: string): string {
+  return JSON.stringify({
+    hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: reason },
+  })
+}
+
 async function handlePreToolUse(input: unknown, opts: HookOpts): Promise<string> {
   const sessionId = str(input, 'session_id')
   const transcript = str(input, 'transcript_path')
@@ -56,24 +85,51 @@ async function handlePreToolUse(input: unknown, opts: HookOpts): Promise<string>
   const prev = await readCache(sessionId, opts.base)
   const { cache } = await computeSessionUsage(prev, transcript)
 
+  const toolName = str(input, 'tool_name')
+  const toolInput = (input as { tool_input?: unknown }).tool_input
+  const call = toolName ? { id: str(input, 'tool_use_id') ?? '', name: toolName, hash: inputHash(toolInput ?? {}) } : null
+  const run = call ? identicalRun(cache, call) : 0
+  // Without a tool_use_id the transcript copy cannot be told apart from ours,
+  // so the call is left for the transcript to record.
+  if (call?.id) recordToolCall(cache, call)
+  cache.loopRun = Math.max(cache.loopRun, run)
+  const command = toolName && BASH_TOOLS.has(toolName) ? str(toolInput, 'command') : undefined
+  const failures = command !== undefined ? cache.failedCommands[inputHash(command)] ?? 0 : 0
+  const shown = command?.slice(0, 60) ?? ''
+
   let output = ''
+  const notes: string[] = []
   if (config.hardUSD !== null && cache.costUSD >= config.hardUSD && !(await isAllowed(sessionId, opts.base))) {
     // A block is a stronger signal than the soft nag; once blocked, don't also
     // fire a soft warning on the next (e.g. post-`allow`) tool call.
     cache.softWarned = true
-    output = JSON.stringify({
-      hookSpecificOutput: {
-        hookEventName: 'PreToolUse',
-        permissionDecision: 'deny',
-        permissionDecisionReason:
-          `Session cost passed ${usd(config.hardUSD)} (codeburn guard). Run 'codeburn guard allow' to lift the cap for this session, or raise hardUSD in guard.json.`,
-      },
-    })
-  } else if (config.softUSD !== null && cache.costUSD >= config.softUSD && !cache.softWarned) {
-    cache.softWarned = true
-    output = JSON.stringify({
-      systemMessage: `codeburn guard: this session is ${usd(cache.costUSD)} (soft cap ${usd(config.softUSD)}).`,
-    })
+    output = deny(
+      `Session cost passed ${usd(config.hardUSD)} (codeburn guard). Run 'codeburn guard allow' to lift the cap for this session, or raise hardUSD in guard.json.`,
+    )
+  } else if (reached(run, config.loopStopAfter)) {
+    markSignal(cache, 'loop')
+    output = deny(
+      `${toolName} was called ${run} times in a row with the same input; this session is ${usd(cache.costUSD)} (codeburn guard). Change approach or ask the user. Raise loopStopAfter in guard.json to allow more.`,
+    )
+  } else if (reached(failures, config.retryStopAfter)) {
+    markSignal(cache, 'retry')
+    output = deny(
+      `The command "${shown}" already failed ${failures} times; this session is ${usd(cache.costUSD)} (codeburn guard). Change approach or ask the user. Raise retryStopAfter in guard.json to allow more.`,
+    )
+  } else {
+    if (config.softUSD !== null && cache.costUSD >= config.softUSD && !cache.softWarned) {
+      cache.softWarned = true
+      notes.push(`codeburn guard: this session is ${usd(cache.costUSD)} (soft cap ${usd(config.softUSD)}).`)
+    }
+    if (reached(run, config.loopWarnAfter) && !cache.loopWarned) {
+      markSignal(cache, 'loop')
+      notes.push(`codeburn guard: ${toolName} was called ${run} times in a row with the same input.`)
+    }
+    if (reached(failures, config.retryWarnAfter) && !cache.retryWarned) {
+      markSignal(cache, 'retry')
+      notes.push(`codeburn guard: the command "${shown}" already failed ${failures} times.`)
+    }
+    if (notes.length > 0) output = JSON.stringify({ systemMessage: notes.join('\n') })
   }
 
   await writeCache(cache, opts.base)
@@ -104,6 +160,7 @@ async function handleStop(input: unknown, opts: HookOpts): Promise<string> {
   const { cache } = await computeSessionUsage(prev, transcript)
 
   let output = ''
+  const lines: string[] = []
   if (
     config.checkpointUSD !== null
     && cache.costUSD > config.checkpointUSD
@@ -112,11 +169,20 @@ async function handleStop(input: unknown, opts: HookOpts): Promise<string> {
     && !cache.stopNotified
   ) {
     cache.stopNotified = true
-    output = JSON.stringify({
-      systemMessage:
-        `This session is ${usd(cache.costUSD)} with no edits or commits yet. If exploring is the goal, fine; otherwise consider a fresh session with a named deliverable.`,
-    })
+    lines.push(
+      `This session is ${usd(cache.costUSD)} with no edits or commits yet. If exploring is the goal, fine; otherwise consider a fresh session with a named deliverable.`,
+    )
   }
+  if ((cache.loopWarned || cache.retryWarned) && cache.signalWarnCostUSD !== null && !cache.signalStopNotified) {
+    cache.signalStopNotified = true
+    const what: string[] = []
+    if (cache.loopWarned) what.push(`${cache.loopRun} identical tool calls in a row`)
+    if (cache.retryWarned) what.push(`${Math.max(0, ...Object.values(cache.failedCommands))} failed runs of one command`)
+    lines.push(
+      `codeburn guard: ${what.join(' and ')}; the calls after the first warning cost ${usd(Math.max(0, cache.costUSD - cache.signalWarnCostUSD))}.`,
+    )
+  }
+  if (lines.length > 0) output = JSON.stringify({ systemMessage: lines.join('\n') })
 
   await writeCache(cache, opts.base)
   return output
