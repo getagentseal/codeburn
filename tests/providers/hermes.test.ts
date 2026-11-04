@@ -1338,4 +1338,37 @@ skipUnlessSqlite('hermes provider', () => {
     expect(calls.reduce((sum, call) => sum + call.inputTokens, 0)).toBe(1000 + 5000 + 40)
     expect(calls.reduce((sum, call) => sum + call.costUSD, 0)).toBeCloseTo(main + compression + title, 12)
   })
+
+  it('keeps a recorded actual $0 on a helper row instead of pricing its tokens', async () => {
+    const dbPath = createHermesDb(tmpDir)
+    withTestDb(dbPath, (db) => {
+      db.exec(`
+        CREATE TABLE session_model_usage (
+          session_id TEXT NOT NULL, model TEXT NOT NULL,
+          billing_provider TEXT NOT NULL DEFAULT '', billing_base_url TEXT NOT NULL DEFAULT '',
+          billing_mode TEXT NOT NULL DEFAULT '', task TEXT NOT NULL DEFAULT '',
+          api_call_count INTEGER NOT NULL DEFAULT 0, input_tokens INTEGER NOT NULL DEFAULT 0,
+          output_tokens INTEGER NOT NULL DEFAULT 0, cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+          cache_write_tokens INTEGER NOT NULL DEFAULT 0, reasoning_tokens INTEGER NOT NULL DEFAULT 0,
+          estimated_cost_usd REAL NOT NULL DEFAULT 0, actual_cost_usd REAL NOT NULL DEFAULT 0,
+          cost_status TEXT, cost_source TEXT, first_seen REAL, last_seen REAL,
+          PRIMARY KEY (session_id, model, billing_provider, billing_base_url, billing_mode, task)
+        )
+      `)
+      insertSession(db, {
+        id: 'free-helper', model: 'claude-sonnet-4-20250514', billingProvider: 'anthropic',
+        inputTokens: 1000, outputTokens: 200, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0, startedAt: 1779549200,
+      })
+      const usage = db.prepare(`INSERT INTO session_model_usage
+        (session_id, model, billing_provider, task, input_tokens, output_tokens, cost_status, first_seen) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+      usage.run('free-helper', 'claude-haiku-4-5', 'openrouter', 'compression', 5000, 300, 'actual', 1779549300)
+      usage.run('free-helper', 'claude-haiku-4-5', 'openrouter', 'vision', 5000, 300, null, 1779549300)
+    })
+
+    const calls = await collectCalls(tmpDir, `${dbPath}#hermes-session=free-helper`)
+    expect(calls).toHaveLength(3)
+    expect(calls[1]).toMatchObject({ costUSD: 0, costIsEstimated: false, billing: 'metered' })
+    expect(calls[2]!.costUSD).toBe(calculateCost('claude-haiku-4-5', 5000, 300, 0, 0, 0))
+    expect(calls[2]!.costUSD).toBeGreaterThan(0)
+  })
 })

@@ -300,7 +300,7 @@ function readHelperUsage(db: SqliteDatabase, sessionId: string): HermesHelperUsa
             input_tokens AS inputTokens, output_tokens AS outputTokens,
             cache_read_tokens AS cacheReadTokens, cache_write_tokens AS cacheWriteTokens,
             reasoning_tokens AS reasoningTokens, estimated_cost_usd,
-            NULLIF(actual_cost_usd, 0) AS actual_cost_usd, cost_status, cost_source, first_seen
+            CASE WHEN cost_status = 'actual' THEN actual_cost_usd ELSE NULLIF(actual_cost_usd, 0) END AS actual_cost_usd, cost_status, cost_source, first_seen
      FROM session_model_usage
      WHERE session_id = ? AND task NOT IN ('', 'voice_chat')`,
     [sessionId],
