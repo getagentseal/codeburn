@@ -1,4 +1,4 @@
-import { describe, it, expect, afterAll, afterEach, beforeEach, vi } from 'vitest'
+import { describe, it, expect, afterAll, afterEach, beforeAll, beforeEach, vi } from 'vitest'
 import { Writable } from 'node:stream'
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, utimesSync } from 'fs'
 import { tmpdir } from 'os'
@@ -30,9 +30,11 @@ import {
   scanAndDetect,
   detectRecurringContext,
   renderOptimize,
+  findingPricing,
   type SessionOpener,
   type ToolCall,
 } from '../src/optimize.js'
+import { setPriceOverrides } from '../src/models.js'
 import {
   estimateContextBudget,
   discoverProjectCwd,
@@ -235,6 +237,26 @@ describe('detectUnusedMcp', () => {
     const split = detectUnusedMcp([], projects, new Set([projectDir]), [])
     const single = detectUnusedMcp([], projects.slice(0, 1), new Set([projectDir]), [])
     expect(split!.tokensSaved).toBe(single!.tokensSaved)
+  })
+
+  describe('measured dollars', () => {
+    beforeAll(() => setPriceOverrides({ 'measured-test-model': { input: 4, output: 20 } }))
+    afterAll(() => setPriceOverrides({}))
+
+    it('prices the schema at each session model input rate, unpriced sessions at the blended rate', () => {
+      const root = makeFixtureRoot()
+      const projectDir = join(root, 'myapp')
+      mkdirSync(projectDir, { recursive: true })
+      writeFile(join(projectDir, '.mcp.json'), JSON.stringify({ mcpServers: { ghost: { command: 'x' } } }))
+      touchOld(join(projectDir, '.mcp.json'), 30)
+      const session = (sessionId: string, model: string) => ({ sessionId, mcpBreakdown: {}, turns: [{ assistantCalls: [{ model }] }] })
+      const projects = [
+        { project: 'a', projectPath: '/a', sessions: [session('s1', 'measured-test-model'), session('s2', 'unpriced-test-model')] },
+      ] as unknown as ProjectSummary[]
+      const finding = detectUnusedMcp([], projects, new Set([projectDir]), [], findingPricing(projects, 1e-6))!
+      expect(finding.tokensSaved).toBe(4000)
+      expect(finding.savingsUSD).toBeCloseTo(2000 * 4e-6 + 2000 * 1e-6, 12)
+    })
   })
 
   it('does not flag servers configured within 24 hours', () => {

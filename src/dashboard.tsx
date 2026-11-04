@@ -15,7 +15,7 @@ import { buildDurableOverviewFromNormalizedIndex, buildDurablePeriod, hydrateDai
 import { loadDailyCache, type DailyCache } from './daily-cache.js'
 import { exitAfterCacheCleanup } from './session-cache.js'
 import { getAllProviders, safeDiscoverSessions } from './providers/index.js'
-import { classHeaderLine, classTotals, findingBasis, findingClass, scanAndDetect, type FindingClass, type WasteFinding, type WasteAction, type OptimizeResult } from './optimize.js'
+import { classHeaderLine, classTotals, findingBasis, findingClass, findingUSD, scanAndDetect, type FindingClass, type WasteFinding, type WasteAction, type OptimizeResult } from './optimize.js'
 import { appliedFixGlyph, formatAppliedFix, type AppliedFix } from './act/types.js'
 import { aggregateFileChurn, buildCoachingNotes, computePricingCoverage, medianTimeToFirstEditMs, scanUserCorrections, worstOneShotCategory, type ReworkedFile } from './workflow-insights.js'
 import { estimateContextBudget, type ContextBudget } from './context-budget.js'
@@ -1353,7 +1353,7 @@ function FindingAction({ action }: { action: WasteAction }) {
 }
 
 function FindingPanel({ index, finding, costRate, width }: { index: number; finding: WasteFinding; costRate: number; width: number }) {
-  const costSaved = finding.tokensSaved * costRate
+  const costSaved = findingUSD(finding, costRate)
   const color = IMPACT_PANEL_COLORS[finding.impact] ?? DIM
   const label = finding.impact.charAt(0).toUpperCase() + finding.impact.slice(1)
   const trendBadge = finding.trend === 'improving' ? ' improving \u2193' : ''
@@ -1391,7 +1391,7 @@ const APPLIED_FIX_COLORS: Record<AppliedFix['verdict'], string> = {
 function OptimizeView({ findings, costRate, projects, label, width, healthScore, healthGrade, cursor, appliedFixes = [] }: { findings: WasteFinding[]; costRate: number; projects: ProjectSummary[]; label: string; width: number; healthScore: number; healthGrade: string; cursor: number; appliedFixes?: AppliedFix[] }) {
   const periodCost = projects.reduce((s, p) => s + p.totalCostUSD, 0)
   const totalTokens = findings.reduce((s, f) => s + f.tokensSaved, 0)
-  const totalCost = totalTokens * costRate
+  const totalCost = findings.reduce((s, f) => s + findingUSD(f, costRate), 0)
   const pctRaw = periodCost > 0 ? (totalCost / periodCost) * 100 : 0
   const pct = pctRaw >= 1 ? pctRaw.toFixed(0) : pctRaw.toFixed(1)
   const gradeColor = GRADE_COLORS[healthGrade] ?? DIM

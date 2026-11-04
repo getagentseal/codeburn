@@ -12,6 +12,7 @@ import { readSessionLines, readSessionFileSync } from './fs-utils.js'
 import { discoverAllSessions, providerDisplayName } from './providers/index.js'
 import { parseJsonlLine, shouldSkipLine } from './parser.js'
 import type { DateRange, ProjectSummary, SessionSummary } from './types.js'
+import { cacheWriteCostPerToken, getModelCosts, type ModelCosts } from './models.js'
 import { formatCost } from './currency.js'
 import { formatTokens } from './format.js'
 import { recommendModelDefault, type ModelDefaultRecommendation } from './act/model-defaults.js'
@@ -491,6 +492,14 @@ export const CLASS_HEADERS: Record<FindingClass, string> = {
 
 export type ClassTotals = { tokensSaved: number; savingsUSD: number; count: number }
 
+/// A finding's dollars for `tokens` of its `tokensSaved` (the whole finding by
+/// default): its own `savingsUSD` scaled to that share, else the blended rate.
+export function findingUSD(f: WasteFinding, costRate: number, tokens = f.tokensSaved): number {
+  if (f.savingsUSD === undefined) return tokens * costRate
+  if (tokens === f.tokensSaved) return f.savingsUSD
+  return f.tokensSaved > 0 ? f.savingsUSD * (tokens / f.tokensSaved) : 0
+}
+
 export function classTotals(findings: WasteFinding[], costRate: number): Record<FindingClass, ClassTotals> {
   const totals: Record<FindingClass, ClassTotals> = {
     fix: { tokensSaved: 0, savingsUSD: 0, count: 0 },
@@ -508,7 +517,7 @@ export function classTotals(findings: WasteFinding[], costRate: number): Record<
     const tokens = cls === 'fix' ? f.applyTokensSaved ?? f.tokensSaved : f.tokensSaved
     const t = totals[cls]
     t.tokensSaved += tokens
-    t.savingsUSD += tokens * costRate
+    t.savingsUSD += findingUSD(f, costRate, tokens)
     t.count++
   }
   return totals
@@ -570,6 +579,10 @@ export type WasteFinding = {
   /// command (for example, connector guidance beside a local MCP removal).
   /// Internal apply UI metadata; the stable optimize JSON mapper omits it.
   manualFollowUp?: { label: string; text: string }
+  /// Dollars priced from the calls the finding points at (their own model
+  /// rates or real cost). Absent: `tokensSaved` at the blended `costRate`.
+  /// Read through `findingUSD`.
+  savingsUSD?: number
   fix: WasteAction
   trend?: Trend
   apply?: FindingApply
@@ -646,6 +659,7 @@ export type ToolCall = {
 export type ApiCallMeta = {
   cacheCreationTokens: number
   version: string
+  sessionId?: string
   tsMs?: number
   recent?: boolean
 }
@@ -955,7 +969,7 @@ async function scanFileRecord(
       const cacheCreate = (usage.cache_creation_input_tokens as number) ?? 0
       if (cacheCreate > 0) {
         record.apiCalls.push({
-          call: { cacheCreationTokens: cacheCreate, version: carry.version, tsMs },
+          call: { cacheCreationTokens: cacheCreate, version: carry.version, sessionId, tsMs },
           versionIndex: record.versionEvents.length,
         })
       }
@@ -1420,10 +1434,11 @@ export function localMcpServerNames(projectCwds: Iterable<string>, homeDir = hom
 // Detectors
 // ============================================================================
 
-export function detectJunkReads(calls: ToolCall[], dateRange?: DateRange): WasteFinding | null {
+export function detectJunkReads(calls: ToolCall[], dateRange?: DateRange, pricing?: FindingPricing): WasteFinding | null {
   const dirCounts = new Map<string, number>()
   let totalJunkReads = 0
   let recentJunkReads = 0
+  let savingsUSD = 0
 
   for (const call of calls) {
     if (!isReadTool(call.name)) continue
@@ -1431,6 +1446,7 @@ export function detectJunkReads(calls: ToolCall[], dateRange?: DateRange): Waste
     if (!filePath || !JUNK_PATTERN.test(filePath)) continue
     totalJunkReads++
     if (call.recent) recentJunkReads++
+    if (pricing) savingsUSD += sessionTokensUSD(pricing, call.sessionId, AVG_TOKENS_PER_READ, 'input')
     for (const dir of JUNK_DIRS) {
       if (filePath.includes(`/${dir}/`)) {
         dirCounts.set(dir, (dirCounts.get(dir) ?? 0) + 1)
@@ -1460,6 +1476,7 @@ export function detectJunkReads(calls: ToolCall[], dateRange?: DateRange): Waste
     explanation: `Claude read into ${dirList} (${totalJunkReads} reads). These are generated or dependency directories, not your code. Tell Claude in CLAUDE.md to avoid them.`,
     impact: totalJunkReads > JUNK_READS_HIGH_THRESHOLD ? 'high' : totalJunkReads > JUNK_READS_MEDIUM_THRESHOLD ? 'medium' : 'low',
     tokensSaved,
+    ...(pricing ? { savingsUSD } : {}),
     fix: {
       type: 'paste',
       destination: 'claude-md',
@@ -1470,21 +1487,21 @@ export function detectJunkReads(calls: ToolCall[], dateRange?: DateRange): Waste
   }
 }
 
-export function detectDuplicateReads(calls: ToolCall[], dateRange?: DateRange): WasteFinding | null {
+export function detectDuplicateReads(calls: ToolCall[], dateRange?: DateRange, pricing?: FindingPricing): WasteFinding | null {
   // A sidechain re-reading what its parent read is not a repeat: a subagent
   // starts on a fresh context and has to read it. Junk reads and the
   // read:edit ratio keep the full call population - that waste is waste
   // whoever does it, and the CLAUDE.md rule they suggest binds subagents too.
   calls = calls.filter(call => call.isSidechain !== true)
-  const sessionFiles = new Map<string, Map<string, { count: number; recent: number }>>()
+  const sessionFiles = new Map<string, { sessionId: string; files: Map<string, { count: number; recent: number }> }>()
 
   for (const call of calls) {
     if (!isReadTool(call.name)) continue
     const filePath = call.input.file_path as string | undefined
     if (!filePath || JUNK_PATTERN.test(filePath)) continue
     const key = `${call.project}:${call.sessionId}`
-    if (!sessionFiles.has(key)) sessionFiles.set(key, new Map())
-    const fm = sessionFiles.get(key)!
+    if (!sessionFiles.has(key)) sessionFiles.set(key, { sessionId: call.sessionId, files: new Map() })
+    const fm = sessionFiles.get(key)!.files
     const entry = fm.get(filePath) ?? { count: 0, recent: 0 }
     entry.count++
     if (call.recent) entry.recent++
@@ -1493,13 +1510,15 @@ export function detectDuplicateReads(calls: ToolCall[], dateRange?: DateRange): 
 
   let totalDuplicates = 0
   let recentDuplicates = 0
+  let savingsUSD = 0
   const fileDupes = new Map<string, number>()
 
-  for (const fm of sessionFiles.values()) {
-    for (const [file, entry] of fm) {
+  for (const { sessionId, files } of sessionFiles.values()) {
+    for (const [file, entry] of files) {
       if (entry.count <= 1) continue
       const extra = entry.count - 1
       totalDuplicates += extra
+      if (pricing) savingsUSD += sessionTokensUSD(pricing, sessionId, extra * AVG_TOKENS_PER_READ, 'input')
       if (entry.recent > 1) recentDuplicates += entry.recent - 1
       const name = basename(file)
       fileDupes.set(name, (fileDupes.get(name) ?? 0) + extra)
@@ -1526,6 +1545,7 @@ export function detectDuplicateReads(calls: ToolCall[], dateRange?: DateRange): 
     explanation: `${totalDuplicates} redundant re-reads across sessions. Top repeats: ${worst}. Each re-read loads the same content into context again.`,
     impact: totalDuplicates > DUPLICATE_READS_HIGH_THRESHOLD ? 'high' : totalDuplicates > DUPLICATE_READS_MEDIUM_THRESHOLD ? 'medium' : 'low',
     tokensSaved,
+    ...(pricing ? { savingsUSD } : {}),
     fix: {
       type: 'paste',
       destination: 'prompt',
@@ -1562,6 +1582,7 @@ type McpSchemaCostEstimate = {
 
 type McpSchemaCostAttribution = McpSchemaCostEstimate & {
   byServer: Record<string, McpSchemaCostEstimate>
+  usd: number
 }
 
 type McpUnusedToolsByServer = Record<string, number | readonly string[]>
@@ -1753,6 +1774,7 @@ function estimateMcpSchemaCostAttributed(
   unusedToolsByServer: McpUnusedToolsByServer,
   projects: ProjectSummary[],
   servers: string[],
+  pricing?: FindingPricing,
 ): McpSchemaCostAttribution {
   servers = [...new Set(servers)]
   const byServer: Record<string, McpSchemaCostEstimate> = {}
@@ -1764,15 +1786,17 @@ function estimateMcpSchemaCostAttributed(
     loaded: Array<{ server: string; schemaTokens: number }>,
     bucket: number,
     key: 'cacheWriteTokens' | 'cacheReadTokens',
-  ): void => {
-    if (bucket <= 0) return
+  ): number => {
+    if (bucket <= 0) return 0
     const totalSchemaTokens = loaded.reduce((sum, entry) => sum + entry.schemaTokens, 0)
-    if (totalSchemaTokens <= 0) return
+    if (totalSchemaTokens <= 0) return 0
     const charged = Math.min(totalSchemaTokens, bucket)
     for (const entry of loaded) {
       byServer[entry.server]![key] += charged * (entry.schemaTokens / totalSchemaTokens)
     }
+    return charged
   }
+  let usd = 0
 
   for (const project of projects) {
     for (const session of project.sessions) {
@@ -1802,8 +1826,13 @@ function estimateMcpSchemaCostAttributed(
           // combined total and makes any local-only subset additive.
           // The tool lines sit in the prefix: a call that read cache read
           // them; only a call with no cache read wrote them.
-          if (call.usage.cacheReadInputTokens > 0) addBucket(loaded, call.usage.cacheReadInputTokens, 'cacheReadTokens')
-          else addBucket(loaded, call.usage.cacheCreationInputTokens, 'cacheWriteTokens')
+          if (call.usage.cacheReadInputTokens > 0) {
+            const charged = addBucket(loaded, call.usage.cacheReadInputTokens, 'cacheReadTokens')
+            if (pricing && charged > 0) usd += schemaChargeUSD(pricing, call.model, charged, 'cacheRead')
+          } else {
+            const charged = addBucket(loaded, call.usage.cacheCreationInputTokens, 'cacheWriteTokens')
+            if (pricing && charged > 0) usd += schemaChargeUSD(pricing, call.model, charged, 'cacheWrite')
+          }
         }
       }
     }
@@ -1822,7 +1851,16 @@ function estimateMcpSchemaCostAttributed(
     cacheReadTokens,
     effectiveInputTokens: cacheWriteTokens * CACHE_WRITE_MULTIPLIER + cacheReadTokens * CACHE_READ_DISCOUNT,
     byServer,
+    usd,
   }
+}
+
+/// Cached schema tokens at the call model's own cache rate; unpriced models
+/// keep the effective-input weighting at the blended rate.
+function schemaChargeUSD(pricing: FindingPricing, model: string, tokens: number, kind: 'cacheWrite' | 'cacheRead'): number {
+  const rate = modelRate(pricing, model, kind)
+    ?? pricing.fallbackRate * (kind === 'cacheWrite' ? CACHE_WRITE_MULTIPLIER : CACHE_READ_DISCOUNT)
+  return tokens * rate
 }
 
 /**
@@ -1843,6 +1881,7 @@ export function detectMcpToolCoverage(
   projects: ProjectSummary[],
   coverage = aggregateMcpCoverage(projects),
   localServerNames: ReadonlySet<string> = new Set(),
+  pricing?: FindingPricing,
 ): WasteFinding | null {
   if (coverage.length === 0) return null
 
@@ -1886,7 +1925,7 @@ export function detectMcpToolCoverage(
   // total unused-schema budget across all flagged servers, so two
   // flagged servers cannot independently claim the same call's cache
   // bucket and overstate `tokensSaved`.
-  const cost = estimateMcpSchemaCostAttributed(unusedToolsByServer, projects, flaggedServers)
+  const cost = estimateMcpSchemaCostAttributed(unusedToolsByServer, projects, flaggedServers, pricing)
   const tokensSaved = Math.round(cost.effectiveInputTokens)
   const applyTokensSavedByServer = Object.fromEntries(localServers.map(server => [
     server,
@@ -1963,6 +2002,7 @@ export function detectMcpToolCoverage(
       `${lines.join('; ')}.${connectorGuidance}${ambiguousGuidance}`,
     impact,
     tokensSaved,
+    ...(pricing ? { savingsUSD: cost.usd } : {}),
     ...(applyTokensSaved !== undefined ? { applyTokensSaved } : {}),
     ...(localServers.length > 0 ? { applyTokensSavedByServer } : {}),
     ...(localServers.length > 0 && connectorAction ? { manualFollowUp: connectorAction } : {}),
@@ -2029,13 +2069,15 @@ function estimateMcpProfileColdSchemaCost(
   projects: ProjectSummary[],
   serverToolCounts: Map<string, number>,
   coldProjectKeysByServer: Map<string, Set<string>>,
-): McpSchemaCostEstimate {
+  pricing?: FindingPricing,
+): McpSchemaCostEstimate & { usd: number } {
   if (serverToolCounts.size === 0 || coldProjectKeysByServer.size === 0) {
-    return { cacheWriteTokens: 0, cacheReadTokens: 0, effectiveInputTokens: 0 }
+    return { cacheWriteTokens: 0, cacheReadTokens: 0, effectiveInputTokens: 0, usd: 0 }
   }
 
   let cacheWriteTokens = 0
   let cacheReadTokens = 0
+  let usd = 0
   for (const project of projects) {
     const projectKey = projectProfileKey(project)
     for (const session of project.sessions) {
@@ -2050,9 +2092,13 @@ function estimateMcpProfileColdSchemaCost(
       for (const turn of session.turns) {
         for (const call of turn.assistantCalls) {
           if (call.usage.cacheReadInputTokens > 0) {
-            cacheReadTokens += Math.min(schemaTokens, call.usage.cacheReadInputTokens)
+            const charged = Math.min(schemaTokens, call.usage.cacheReadInputTokens)
+            cacheReadTokens += charged
+            if (pricing) usd += schemaChargeUSD(pricing, call.model, charged, 'cacheRead')
           } else if (call.usage.cacheCreationInputTokens > 0) {
-            cacheWriteTokens += Math.min(schemaTokens, call.usage.cacheCreationInputTokens)
+            const charged = Math.min(schemaTokens, call.usage.cacheCreationInputTokens)
+            cacheWriteTokens += charged
+            if (pricing) usd += schemaChargeUSD(pricing, call.model, charged, 'cacheWrite')
           }
         }
       }
@@ -2060,7 +2106,7 @@ function estimateMcpProfileColdSchemaCost(
   }
 
   const effectiveInputTokens = cacheWriteTokens * CACHE_WRITE_MULTIPLIER + cacheReadTokens * CACHE_READ_DISCOUNT
-  return { cacheWriteTokens, cacheReadTokens, effectiveInputTokens }
+  return { cacheWriteTokens, cacheReadTokens, effectiveInputTokens, usd }
 }
 
 function collectMcpProjectProfiles(
@@ -2170,6 +2216,7 @@ export function detectMcpProfileAdvisor(
   projects: ProjectSummary[],
   coverage = aggregateMcpCoverage(projects),
   provider?: string,
+  pricing?: FindingPricing,
 ): WasteFinding | null {
   const candidates = collectMcpProjectProfiles(projects, coverage)
   if (candidates.length === 0) return null
@@ -2190,7 +2237,7 @@ export function detectMcpProfileAdvisor(
   const extra = candidates.length > preview.length ? `; +${candidates.length - preview.length} more` : ''
   const serverToolCounts = new Map(candidates.map(c => [c.server, c.toolsAvailable]))
   const coldProjectKeysByServer = new Map(candidates.map(c => [c.server, c.coldProjectKeys]))
-  const combinedCost = estimateMcpProfileColdSchemaCost(projects, serverToolCounts, coldProjectKeysByServer)
+  const combinedCost = estimateMcpProfileColdSchemaCost(projects, serverToolCounts, coldProjectKeysByServer, pricing)
   const tokensSaved = Math.round(combinedCost.effectiveInputTokens)
   const impact: Impact = tokensSaved >= MCP_PROFILE_HIGH_IMPACT_TOKENS
     || candidates.length >= UNUSED_MCP_HIGH_THRESHOLD
@@ -2205,6 +2252,7 @@ export function detectMcpProfileAdvisor(
       `Project-scoping them keeps the hot-project workflow while avoiding their tool lines elsewhere. ${lines.join('; ')}${extra}.`,
     impact,
     tokensSaved,
+    ...(pricing ? { savingsUSD: combinedCost.usd } : {}),
     fix: {
       type: 'paste',
       destination: 'prompt',
@@ -2408,6 +2456,7 @@ export function detectCapabilityReliability(projects: ProjectSummary[], provider
 
   const candidateKeys = new Set(candidates.map(c => capabilityKey(c)))
   const uniqueRetryTurnSavings = new Map<string, number>()
+  const retryTurnUSD = new Map<string, number>()
   for (const project of projects) {
     for (const session of project.sessions) {
       for (let turnIndex = 0; turnIndex < session.turns.length; turnIndex++) {
@@ -2422,11 +2471,14 @@ export function detectCapabilityReliability(projects: ProjectSummary[], provider
         const key = reliabilityTurnKey(project, session, turn, turnIndex)
         const tokens = Math.round(turnEffectiveTokenTotal(turn) * CAPABILITY_RELIABILITY_RECOVERY_FRACTION)
         uniqueRetryTurnSavings.set(key, Math.max(uniqueRetryTurnSavings.get(key) ?? 0, tokens))
+        const turnCost = turn.assistantCalls.reduce((sum, call) => sum + call.costUSD, 0)
+        retryTurnUSD.set(key, turnCost * CAPABILITY_RELIABILITY_RECOVERY_FRACTION)
       }
     }
   }
 
   const tokensSaved = Array.from(uniqueRetryTurnSavings.values()).reduce((sum, tokens) => sum + tokens, 0)
+  const savingsUSD = Array.from(retryTurnUSD.values()).reduce((sum, usd) => sum + usd, 0)
   const preview = candidates.slice(0, CAPABILITY_RELIABILITY_PREVIEW)
   const list = preview.map(c => {
     const percent = Math.round(c.retryRate * 100)
@@ -2461,6 +2513,7 @@ export function detectCapabilityReliability(projects: ProjectSummary[], provider
     explanation: `Edit turns using these capabilities are retry-heavy: ${list}${extra}. This is a correlation report, not proof of causation; compare the retry-heavy turns with one-shot turns before changing MCP scope or skill instructions.`,
     impact,
     tokensSaved,
+    savingsUSD,
     fix: {
       type: 'paste',
       destination: 'prompt',
@@ -2475,6 +2528,7 @@ export function detectUnusedMcp(
   projects: ProjectSummary[],
   projectCwds: Set<string>,
   mcpCoverage = aggregateMcpCoverage(projects),
+  pricing?: FindingPricing,
 ): WasteFinding | null {
   const configured = loadMcpConfigs(projectCwds)
   if (configured.size === 0) return null
@@ -2528,6 +2582,7 @@ export function detectUnusedMcp(
     explanation: `Never called in this period: ${unused.join(', ')}. Each server loads ~${TOOLS_PER_MCP_SERVER * TOKENS_PER_MCP_TOOL} tokens of tool schema into every session.`,
     impact: unused.length >= UNUSED_MCP_HIGH_THRESHOLD ? 'high' : 'medium',
     tokensSaved,
+    ...(pricing ? { savingsUSD: perSessionSchemaUSD(pricing, projects.flatMap(p => p.sessions), tokensSaved) } : {}),
     apply: { kind: 'mcp-remove', servers: unused },
     fix: {
       type: 'command',
@@ -2757,6 +2812,7 @@ export function detectMcpDeferralOff(
   projectCwds: Set<string>,
   apiCalls: ApiCallMeta[],
   homeDir = homedir(),
+  pricing?: FindingPricing,
 ): WasteFinding | null {
   // Deferral-active evidence anywhere in the window suppresses the finding.
   if (calls.some(c => c.name === TOOL_SEARCH_TOOL_NAME)) return null
@@ -2781,19 +2837,19 @@ export function detectMcpDeferralOff(
     if (seg && !pinnedServers.has(seg)) observedServers.add(seg)
   }
   let invocations = 0
-  let sessionsWithMcpCalls = 0
-  let totalSessions = 0
+  const claudeSessions: SessionSummary[] = []
+  const mcpCallSessions: SessionSummary[] = []
   for (const project of projects) {
     for (const session of project.sessions) {
       if (!isClaudeSession(session)) continue
-      totalSessions++
+      claudeSessions.push(session)
       let sessionCalls = 0
       for (const [server, data] of Object.entries(session.mcpBreakdown)) {
         if (pinnedServers.has(server)) continue
         observedServers.add(server)
         sessionCalls += data.calls
       }
-      if (sessionCalls > 0) sessionsWithMcpCalls++
+      if (sessionCalls > 0) mcpCallSessions.push(session)
       invocations += sessionCalls
     }
   }
@@ -2803,7 +2859,8 @@ export function detectMcpDeferralOff(
 
   // Configured servers load their schemas into every session; with only
   // invocation evidence we can vouch just for the sessions that called MCP.
-  const affectedSessions = configuredUnpinned.length > 0 ? totalSessions : sessionsWithMcpCalls
+  const affected = configuredUnpinned.length > 0 ? claudeSessions : mcpCallSessions
+  const affectedSessions = affected.length
   if (affectedSessions < DEFERRAL_OFF_MIN_MCP_SESSIONS) return null
 
   const enableToolSearch = findDeferralEnvSetting(ENABLE_TOOL_SEARCH_VAR, projectCwds, homeDir)
@@ -2840,6 +2897,7 @@ export function detectMcpDeferralOff(
     explanation: `${evidence} ${cause}`,
     impact: tokensSaved >= DEFERRAL_OFF_HIGH_IMPACT_TOKENS ? 'high' : 'medium',
     tokensSaved,
+    ...(pricing ? { savingsUSD: perSessionSchemaUSD(pricing, affected, tokensSaved) } : {}),
     fix,
     ...(apply ? { apply } : {}),
   }
@@ -2860,6 +2918,7 @@ export function detectMcpAlwaysLoadHygiene(
   apiCalls: ApiCallMeta[] = [],
   mcpCoverage = aggregateMcpCoverage(projects),
   homeDir = homedir(),
+  pricing?: FindingPricing,
 ): WasteFinding | null {
   const configured = loadMcpConfigs(projectCwds, homeDir)
   const pinned = [...configured.values()].filter(e => e.alwaysLoadPaths.length > 0)
@@ -2888,6 +2947,8 @@ export function detectMcpAlwaysLoadHygiene(
   const fixLines: string[] = []
   const applyServers: Array<{ server: string; paths: string[] }> = []
   let tokensSaved = 0
+  let savingsUSD = 0
+  const allSessions = projects.flatMap(p => p.sessions)
   for (const entry of pinned) {
     const invocations = invocationsByServer.get(entry.normalized) ?? 0
     const callRate = invocations / totalSessions
@@ -2898,7 +2959,12 @@ export function detectMcpAlwaysLoadHygiene(
     const coverage = coverageByServer.get(entry.normalized)
     const toolsAvailable = coverage?.toolsAvailable ?? TOOLS_PER_MCP_SERVER
     const loadedSessions = coverage?.loadedSessions ?? totalSessions
-    tokensSaved += toolsAvailable * TOKENS_PER_MCP_TOOL * loadedSessions
+    const serverTokens = toolsAvailable * TOKENS_PER_MCP_TOOL * loadedSessions
+    tokensSaved += serverTokens
+    if (pricing) {
+      const sessions = coverage ? allSessions.filter(s => sessionLoadedMcpServer(s, entry.normalized)) : allSessions
+      savingsUSD += perSessionSchemaUSD(pricing, sessions, serverTokens)
+    }
     lines.push(`${entry.original}: ${invocations} call${invocations === 1 ? '' : 's'} across ${totalSessions} session${totalSessions === 1 ? '' : 's'}`)
     fixLines.push(`- Remove "alwaysLoad": true from ${entry.original} in ${entry.alwaysLoadPaths.map(shortHomePath).join(', ')}.`)
     // Original (config-key) name plus the exact files carrying the pin, so
@@ -2916,6 +2982,7 @@ export function detectMcpAlwaysLoadHygiene(
       `(up to ${ALWAYSLOAD_STARTUP_CAP_SECONDS}s). Usage doesn't justify the pin: ${lines.join('; ')}.`,
     impact: tokensSaved >= ALWAYSLOAD_HIGH_IMPACT_TOKENS ? 'high' : 'medium',
     tokensSaved,
+    ...(pricing ? { savingsUSD } : {}),
     apply: { kind: 'defer-alwaysload', servers: applyServers },
     fix: {
       type: 'paste',
@@ -2937,6 +3004,7 @@ export function detectMcpDeferThreshold(
   projects: ProjectSummary[],
   projectCwds: Set<string>,
   homeDir = homedir(),
+  pricing?: FindingPricing,
 ): WasteFinding | null {
   const setting = findDeferralEnvSetting(ENABLE_TOOL_SEARCH_VAR, projectCwds, homeDir)
   if (!setting) return null
@@ -2958,14 +3026,15 @@ export function detectMcpDeferThreshold(
   const servers = new Set(configured.keys())
   // Claude-scoped for the same reason as detectMcpDeferralOff: other
   // providers' sessions carry MCP breakdowns but not this override's cost.
-  let totalSessions = 0
+  const claudeSessions: SessionSummary[] = []
   for (const project of projects) {
     for (const session of project.sessions) {
       if (!isClaudeSession(session)) continue
-      totalSessions++
+      claudeSessions.push(session)
       for (const server of Object.keys(session.mcpBreakdown)) servers.add(server)
     }
   }
+  const totalSessions = claudeSessions.length
   if (servers.size === 0) return null
   if (totalSessions === 0) return null
 
@@ -2997,6 +3066,7 @@ export function detectMcpDeferThreshold(
       `so every tool still loads upfront in all ${totalSessions} session${totalSessions === 1 ? '' : 's'}.`,
     impact: tokensSaved >= DEFER_THRESHOLD_MEDIUM_IMPACT_TOKENS ? 'medium' : 'low',
     tokensSaved,
+    ...(pricing ? { savingsUSD: perSessionSchemaUSD(pricing, claudeSessions, tokensSaved) } : {}),
     apply: {
       kind: 'defer-threshold',
       settingPath: setting.path,
@@ -3156,7 +3226,7 @@ function computeBudgetAwareCacheBaseline(projects: ProjectSummary[]): number {
   return sorted[Math.floor(sorted.length * CACHE_BASELINE_QUANTILE)] || DEFAULT_CACHE_BASELINE_TOKENS
 }
 
-export function detectCacheBloat(apiCalls: ApiCallMeta[], projects: ProjectSummary[], dateRange?: DateRange): WasteFinding | null {
+export function detectCacheBloat(apiCalls: ApiCallMeta[], projects: ProjectSummary[], dateRange?: DateRange, pricing?: FindingPricing): WasteFinding | null {
   if (apiCalls.length < MIN_API_CALLS_FOR_CACHE) return null
 
   const sorted = apiCalls.map(c => c.cacheCreationTokens).sort((a, b) => a - b)
@@ -3187,6 +3257,9 @@ export function detectCacheBloat(apiCalls: ApiCallMeta[], projects: ProjectSumma
 
   const excess = median - baseline
   const tokensSaved = excess * apiCalls.length
+  const savingsUSD = pricing
+    ? apiCalls.reduce((sum, call) => sum + sessionTokensUSD(pricing, call.sessionId, excess, 'cacheWrite'), 0)
+    : undefined
 
   let versionNote = ''
   if (versionAvgs.length >= 2) {
@@ -3203,6 +3276,7 @@ export function detectCacheBloat(apiCalls: ApiCallMeta[], projects: ProjectSumma
     explanation: `Median cache_creation per call is ${formatTokens(median)} tokens, about ${formatTokens(excess)} above your baseline of ${formatTokens(baseline)}.${versionNote}`,
     impact: excess > CACHE_EXCESS_HIGH_THRESHOLD ? 'high' : 'medium',
     tokensSaved,
+    ...(savingsUSD !== undefined ? { savingsUSD } : {}),
     fix: {
       type: 'paste',
       destination: 'shell-config',
@@ -3537,17 +3611,15 @@ function sessionEditSteps(session: ProjectSummary['sessions'][number]): number {
 //     we credit the model with that and only flag the retry overhead.
 // A retry is a re-edit, so the fraction is retries over edit steps, not over
 // user prompts (an agent loop can make dozens of edits per prompt).
-function estimateLowWorthRecoverableTokens(
+function lowWorthRecoveryFraction(
   session: ProjectSummary['sessions'][number],
   editTurns: number,
   retries: number,
 ): number {
-  const tokens = sessionTokenTotal(session)
-  if (editTurns === 0) return Math.round(tokens * WORTH_IT_NO_EDIT_RECOVERY_FRACTION)
+  if (editTurns === 0) return WORTH_IT_NO_EDIT_RECOVERY_FRACTION
   const editSteps = sessionEditSteps(session)
   if (editSteps === 0) return 0
-  const fraction = Math.min(1, Math.max(0, retries / editSteps))
-  return Math.round(tokens * fraction)
+  return Math.min(1, Math.max(0, retries / editSteps))
 }
 
 // Session-opener texts, the single source of truth shared by the optimize
@@ -3562,6 +3634,8 @@ export type LowWorthCandidate = {
   date: string
   cost: number
   tokens: number
+  /// The session's real cost times the same recovery fraction as `tokens`.
+  recoverableUSD: number
   reasons: string[]
 }
 
@@ -3595,12 +3669,14 @@ export function findLowWorthCandidates(projects: ProjectSummary[]): LowWorthCand
 
       if (reasons.length === 0) continue
 
+      const fraction = lowWorthRecoveryFraction(session, editTurns, retries)
       candidates.push({
         project: project.project,
         sessionId: session.sessionId,
         date: session.firstTimestamp.slice(0, 10),
         cost: session.totalCostUSD,
-        tokens: estimateLowWorthRecoverableTokens(session, editTurns, retries),
+        tokens: Math.round(sessionTokenTotal(session) * fraction),
+        recoverableUSD: session.totalCostUSD * fraction,
         reasons,
       })
     }
@@ -3627,6 +3703,7 @@ export function detectLowWorthSessions(projects: ProjectSummary[], provider?: st
   // Per-candidate `tokens` is already the recoverable estimate (bounded
   // no-edit fraction, retry-fraction for edit-with-retries). Sum across candidates.
   const tokensSaved = Math.round(candidates.reduce((sum, s) => sum + s.tokens, 0))
+  const savingsUSD = candidates.reduce((sum, s) => sum + s.recoverableUSD, 0)
   const totalCost = candidates.reduce((sum, s) => sum + s.cost, 0)
 
   // Three tiers consistent with detectContextBloat: high at >=10 candidates
@@ -3647,6 +3724,7 @@ export function detectLowWorthSessions(projects: ProjectSummary[], provider?: st
     explanation: `Sessions with meaningful spend but weak delivery signals: ${list}${extra}. This is a review candidate, not proof of waste: CodeBurn flags missing edit turns, repeated retries, and sessions without git delivery commands so you can decide whether the work was worth its cost before it becomes a habit.`,
     impact,
     tokensSaved,
+    savingsUSD,
     fix: {
       type: 'paste',
       destination: 'session-opener',
@@ -4015,6 +4093,65 @@ export function computeInputCostRate(projects: ProjectSummary[]): number {
   return (totalCost * INPUT_COST_RATIO) / totalTokens
 }
 
+/// Rates for pricing a finding from the calls it points at. `fallbackRate` is
+/// the blended input rate, kept for tokens whose session or model is unpriced.
+export type FindingPricing = {
+  fallbackRate: number
+  /// Each session's most-called model, by session id.
+  sessionModels: ReadonlyMap<string, string>
+  costs: (model: string) => ModelCosts | null
+}
+
+export function findingPricing(projects: ProjectSummary[], fallbackRate: number): FindingPricing {
+  const sessionModels = new Map<string, string>()
+  for (const project of projects) {
+    for (const session of project.sessions) {
+      const counts = new Map<string, number>()
+      let best: string | undefined
+      let bestCount = 0
+      for (const turn of session.turns) {
+        for (const call of turn.assistantCalls) {
+          const n = (counts.get(call.model) ?? 0) + 1
+          counts.set(call.model, n)
+          if (n > bestCount) { best = call.model; bestCount = n }
+        }
+      }
+      if (best !== undefined) sessionModels.set(session.sessionId, best)
+    }
+  }
+  const memo = new Map<string, ModelCosts | null>()
+  const costs = (model: string): ModelCosts | null => {
+    if (!memo.has(model)) memo.set(model, getModelCosts(model))
+    return memo.get(model)!
+  }
+  return { fallbackRate, sessionModels, costs }
+}
+
+type TokenKind = 'input' | 'cacheWrite' | 'cacheRead'
+
+/// One token of `kind` at `model`'s own price; undefined when it has none.
+function modelRate(pricing: FindingPricing, model: string | undefined, kind: TokenKind): number | undefined {
+  const costs = model === undefined ? null : pricing.costs(model)
+  if (!costs) return undefined
+  if (kind === 'input') return costs.inputCostPerToken
+  if (kind === 'cacheWrite') return cacheWriteCostPerToken(model!, costs)
+  return costs.cacheReadCostPerToken
+}
+
+/// `tokens` of one session at its own model's rate, else at the blended rate.
+function sessionTokensUSD(pricing: FindingPricing, sessionId: string | undefined, tokens: number, kind: TokenKind): number {
+  const model = sessionId === undefined ? undefined : pricing.sessionModels.get(sessionId)
+  return tokens * (modelRate(pricing, model, kind) ?? pricing.fallbackRate)
+}
+
+/// Schema tokens charged once per session, priced at the input rate of each
+/// session in `sessions`: the token count times their mean rate.
+function perSessionSchemaUSD(pricing: FindingPricing, sessions: SessionSummary[], tokens: number): number {
+  if (sessions.length === 0) return tokens * pricing.fallbackRate
+  const meanRate = sessions.reduce((sum, s) => sum + sessionTokensUSD(pricing, s.sessionId, 1, 'input'), 0) / sessions.length
+  return tokens * meanRate
+}
+
 // ============================================================================
 // Main entry points
 // ============================================================================
@@ -4068,6 +4205,7 @@ export async function scanAndDetect(
   if (cached && Date.now() - cached.ts < RESULT_CACHE_TTL_MS) return cached.data
 
   const costRate = computeInputCostRate(projects)
+  const pricing = findingPricing(projects, costRate)
   const behavioralProjects = userStartedProjects(projects)
   const scanCoversClaude = providerCoversClaude(provider)
   const { toolCalls, projectCwds, apiCalls, userMessages, openers } = await scanSessions(dateRange, provider)
@@ -4093,17 +4231,17 @@ export async function scanAndDetect(
   const claudeOnly = (detect: () => WasteFinding | null): (() => WasteFinding | null) =>
     scanCoversClaude ? detect : () => null
   const syncDetectors: Array<() => WasteFinding | null> = [
-    claudeOnly(() => detectCacheBloat(apiCalls, projects, dateRange)),
+    claudeOnly(() => detectCacheBloat(apiCalls, projects, dateRange, pricing)),
     claudeOnly(() => detectLowReadEditRatio(toolCalls)),
-    claudeOnly(() => detectJunkReads(toolCalls, dateRange)),
-    claudeOnly(() => detectDuplicateReads(toolCalls, dateRange)),
-    claudeOnly(() => detectUnusedMcp(toolCalls, projects, projectCwds, mcpCoverage)),
-    () => detectMcpToolCoverage(projects, mcpCoverage, localMcpServerNames(projectCwds)),
-    () => detectMcpProfileAdvisor(projects, mcpCoverage, provider),
+    claudeOnly(() => detectJunkReads(toolCalls, dateRange, pricing)),
+    claudeOnly(() => detectDuplicateReads(toolCalls, dateRange, pricing)),
+    claudeOnly(() => detectUnusedMcp(toolCalls, projects, projectCwds, mcpCoverage, pricing)),
+    () => detectMcpToolCoverage(projects, mcpCoverage, localMcpServerNames(projectCwds), pricing),
+    () => detectMcpProfileAdvisor(projects, mcpCoverage, provider, pricing),
     // mcp-deferral-gaps family (#614): detection only, no apply plans yet.
-    claudeOnly(() => detectMcpDeferralOff(toolCalls, projects, projectCwds, apiCalls)),
-    claudeOnly(() => detectMcpAlwaysLoadHygiene(projects, projectCwds, apiCalls, mcpCoverage)),
-    claudeOnly(() => detectMcpDeferThreshold(projects, projectCwds)),
+    claudeOnly(() => detectMcpDeferralOff(toolCalls, projects, projectCwds, apiCalls, undefined, pricing)),
+    claudeOnly(() => detectMcpAlwaysLoadHygiene(projects, projectCwds, apiCalls, mcpCoverage, undefined, pricing)),
+    claudeOnly(() => detectMcpDeferThreshold(projects, projectCwds, undefined, pricing)),
     () => detectCapabilityReliability(behavioralProjects, provider),
     () => detectLowWorthSessions(behavioralProjects, provider),
     () => detectContextBloat(behavioralProjects, lowWorthSessionIds, provider),
@@ -4192,7 +4330,7 @@ function renderActionHeader(action: WasteAction, copy: OptimizeRemediationCopy):
 
 function renderFinding(n: number, f: WasteFinding, costRate: number, copy: OptimizeRemediationCopy): string[] {
   const lines: string[] = []
-  const costSaved = f.tokensSaved * costRate
+  const costSaved = findingUSD(f, costRate)
   const impactLabel = f.impact.charAt(0).toUpperCase() + f.impact.slice(1)
   const trendBadge = f.trend === 'improving' ? ' improving \u2193 ' : ''
   const savings = `~${formatTokens(f.tokensSaved)} tokens (~${formatCost(costSaved)})`
@@ -4320,7 +4458,7 @@ export function renderOptimize(
   }
 
   const totalTokens = findings.reduce((s, f) => s + f.tokensSaved, 0)
-  const totalCost = totalTokens * costRate
+  const totalCost = findings.reduce((s, f) => s + findingUSD(f, costRate), 0)
   const pctRaw = periodCost > 0 ? (totalCost / periodCost) * 100 : 0
   const pct = pctRaw >= 1 ? pctRaw.toFixed(0) : pctRaw.toFixed(1)
 
@@ -4426,7 +4564,7 @@ export function buildOptimizeJsonReport(
   const periodCostUSD = projects.reduce((s, p) => s + p.totalCostUSD, 0)
   const calls = projects.reduce((s, p) => s + p.totalApiCalls, 0)
   const potentialSavingsTokens = result.findings.reduce((s, f) => s + f.tokensSaved, 0)
-  const potentialSavingsCostUSD = potentialSavingsTokens * result.costRate
+  const potentialSavingsCostUSD = result.findings.reduce((s, f) => s + findingUSD(f, result.costRate), 0)
   const potentialSavingsPercent = periodCostUSD > 0
     ? Math.round((potentialSavingsCostUSD / periodCostUSD) * 1000) / 10
     : null
@@ -4450,7 +4588,7 @@ export function buildOptimizeJsonReport(
       costRateUSD: result.costRate,
       measuredSavingsUSD: result.findings
         .filter(f => findingBasis(f) === 'measured')
-        .reduce((s, f) => s + f.tokensSaved * result.costRate, 0),
+        .reduce((s, f) => s + findingUSD(f, result.costRate), 0),
       byClass: classTotals(result.findings, result.costRate),
     },
     findings: result.findings.map(f => ({
@@ -4460,7 +4598,7 @@ export function buildOptimizeJsonReport(
       severity: f.impact,
       trend: f.trend ?? null,
       tokensSaved: f.tokensSaved,
-      estimatedSavingsUSD: f.tokensSaved * result.costRate,
+      estimatedSavingsUSD: findingUSD(f, result.costRate),
       class: findingClass(f),
       basis: findingBasis(f),
       fix: f.fix,
