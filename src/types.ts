@@ -32,6 +32,7 @@ export type ApiUsage = {
     ephemeral_1h_input_tokens?: number
   }
   cache_read_input_tokens?: number
+  output_tokens_details?: { thinking_tokens?: number }
   server_tool_use?: {
     web_search_requests?: number
     web_fetch_requests?: number
