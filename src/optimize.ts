@@ -4139,7 +4139,7 @@ function modelRate(pricing: FindingPricing, model: string | undefined, kind: Tok
 }
 
 /// `tokens` of one session at its own model's rate, else at the blended rate.
-function sessionTokensUSD(pricing: FindingPricing, sessionId: string | undefined, tokens: number, kind: TokenKind): number {
+export function sessionTokensUSD(pricing: FindingPricing, sessionId: string | undefined, tokens: number, kind: TokenKind): number {
   const model = sessionId === undefined ? undefined : pricing.sessionModels.get(sessionId)
   return tokens * (modelRate(pricing, model, kind) ?? pricing.fallbackRate)
 }

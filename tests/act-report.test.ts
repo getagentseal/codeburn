@@ -18,6 +18,7 @@ import type { ActionRecord } from '../src/act/types.js'
 import type { FindingPlan } from '../src/act/plans.js'
 import type { WasteFinding } from '../src/optimize.js'
 import type { ClassifiedTurn, ProjectSummary } from '../src/types.js'
+import { cacheWriteCostPerToken, getModelCosts } from '../src/models.js'
 
 type Session = ProjectSummary['sessions'][number]
 
@@ -211,6 +212,37 @@ describe('mcp realized delta', () => {
     expect(row.realizedTokens).toBe(0)
     expect(row.note).toMatch(/reverted by user/)
     expect(report.totalRealizedTokens).toBe(0)
+  })
+})
+
+describe('realized dollars', () => {
+  const onModel = (model: string) => sessionsAt(20, daysAgo(5)).map(s => ({ ...s, turns: modelEditTurns(model, 1, 1) }))
+
+  it('prices removed schema writes at the session model cache-write rate', async () => {
+    const opus = getModelCosts('claude-opus-4-6')
+    expect(opus).not.toBeNull()
+    const actionsDir = await writeJournal([mcpRecord()])
+    const report = await computeActReport({ actionsDir, now: NOW, loadProjects: load([projectOf(onModel('claude-opus-4-6'))]) })
+
+    const row = report.rows[0]!
+    expect(row.realizedTokens).toBe(40_000)
+    expect(row.estimatedAtApply).toBe(56_000)
+    expect(row.realizedCostUSD).toBeCloseTo(40_000 * cacheWriteCostPerToken('claude-opus-4-6', opus!), 10)
+    expect(row.realizedCostUSD).not.toBeCloseTo(40_000 * report.costRate, 6)
+    const json = buildActReportJson(report) as { totals: { realizedCostUSD: number } }
+    expect(json.totals.realizedCostUSD).toBeCloseTo(row.realizedCostUSD, 10)
+  })
+
+  it('falls back to the blended rate for an unpriced model', async () => {
+    const actionsDir = await writeJournal([mcpRecord()])
+    const report = await computeActReport({ actionsDir, now: NOW, loadProjects: load([projectOf(onModel('unpriced-test-model'))]) })
+
+    const row = report.rows[0]!
+    expect(report.costRate).toBeGreaterThan(0)
+    expect(row.realizedTokens).toBe(40_000)
+    expect(row.estimatedAtApply).toBe(56_000)
+    expect(row.realizedCostUSD).toBeCloseTo(40_000 * report.costRate, 10)
+    expect(report.totalRealizedCostUSD).toBeCloseTo(40_000 * report.costRate, 10)
   })
 })
 
