@@ -16,6 +16,12 @@ import {
   EDIT_TOOL_NAMES,
   aggregateMcpCoverage,
   computeInputCostRate,
+  FINDING_TOKEN_KIND,
+  mcpLowCoverageSchemaPerSession,
+  mcpProjectScopeSchemaPerSession,
+  findingPricing,
+  sessionTokensUSD,
+  type FindingPricing,
   type McpServerCoverage,
   type WasteFinding,
 } from '../optimize.js'
@@ -77,6 +83,8 @@ export type ActReportRow = {
   // kinds with no window scaling.
   estimatedForWindow: number
   realizedTokens: number
+  // realizedTokens priced the way the fix's finding priced its tokens.
+  realizedCostUSD: number
   status: RealizedStatus
   confidence: 'low' | 'normal'
   note: string
@@ -232,13 +240,24 @@ function confidenceFor(afterSessions: number, baseline: ActionBaseline, afterSta
   return 'normal'
 }
 
+// Advertised and realized stay comparable: a measured finding's token kind at
+// each benefiting session's rate, else the blended rate on the whole figure.
+function realizedUSD(
+  pricing: FindingPricing, rec: ActionRecord, realizedTokens: number,
+  perSession: Array<[SessionSummary, number]>,
+): number {
+  const kind = rec.findingId ? FINDING_TOKEN_KIND[rec.findingId] : undefined
+  if (!kind) return realizedTokens * pricing.fallbackRate
+  return perSession.reduce((sum, [s, tokens]) => sum + sessionTokensUSD(pricing, s.sessionId, tokens, kind), 0)
+}
+
 // ---------------------------------------------------------------------------
 // Per-kind realized deltas
 // ---------------------------------------------------------------------------
 
 function mcpRow(
   base: ActReportRow, rec: ActionRecord, sessions: SessionSummary[],
-  baseline: ActionBaseline, afterStart: Date, now: Date,
+  baseline: ActionBaseline, afterStart: Date, now: Date, pricing: FindingPricing,
 ): ActReportRow {
   const servers = Object.keys(baseline.metrics)
   const perSessionTokens = Object.values(baseline.metrics).reduce((a, b) => a + b, 0)
@@ -249,7 +268,8 @@ function mcpRow(
   // (and the revert check), so the pair is derived from session counts, not
   // independently measured.
   const estimatedForWindow = Math.floor(perSessionTokens * sessions.length)
-  const stillLoading = sessions.filter(s => sessionLoadsAny(s, servers)).length
+  const saved = sessions.filter(s => !sessionLoadsAny(s, servers))
+  const stillLoading = sessions.length - saved.length
   const confidence = confidenceFor(sessions.length, baseline, afterStart, now)
   if (rec.kind === 'mcp-remove' && stillLoading > 0) {
     return {
@@ -260,14 +280,17 @@ function mcpRow(
       note: `reverted by user: ${servers.join(', ')} loaded again in ${stillLoading} post-apply session${stillLoading === 1 ? '' : 's'}`,
     }
   }
-  const savedSessions = Math.max(0, sessions.length - stillLoading)
-  return { ...base, estimatedForWindow, status: 'measured', realizedTokens: Math.floor(perSessionTokens * savedSessions), confidence }
+  const realizedTokens = Math.floor(perSessionTokens * saved.length)
+  return {
+    ...base, estimatedForWindow, status: 'measured', confidence, realizedTokens,
+    realizedCostUSD: realizedUSD(pricing, rec, realizedTokens, saved.map(s => [s, perSessionTokens])),
+  }
 }
 
 function deferRow(
-  base: ActReportRow, sessions: SessionSummary[],
+  base: ActReportRow, rec: ActionRecord, sessions: SessionSummary[],
   baseline: ActionBaseline, afterStart: Date, now: Date,
-  mcpClaimedServers: ReadonlySet<string>,
+  mcpClaimedServers: ReadonlySet<string>, pricing: FindingPricing,
 ): ActReportRow {
   // Sum only the servers no MCP row claims (see mcpClaimedServers in
   // computeActReport), so the same schema tokens are never realized twice.
@@ -289,9 +312,9 @@ function deferRow(
   // begun before the user restarted still run deferral-off — those aren't
   // counted, and if none benefited we report it plainly rather than claim a
   // saving that hasn't taken effect.
-  const deferredSessions = sessions.filter(sessionHasDeferralActive).length
+  const deferred = sessions.filter(sessionHasDeferralActive)
   const confidence = confidenceFor(sessions.length, baseline, afterStart, now)
-  if (deferredSessions === 0) {
+  if (deferred.length === 0) {
     return {
       ...base,
       estimatedForWindow,
@@ -300,12 +323,16 @@ function deferRow(
       note: `not yet in effect: deferral is still inactive in ${sessions.length} post-apply session${sessions.length === 1 ? '' : 's'} (takes effect on the next session; the client may not have restarted, or the change was reverted)`,
     }
   }
-  return { ...base, estimatedForWindow, status: 'measured', realizedTokens: Math.floor(perSessionTokens * deferredSessions), confidence }
+  const realizedTokens = Math.floor(perSessionTokens * deferred.length)
+  return {
+    ...base, estimatedForWindow, status: 'measured', confidence, realizedTokens,
+    realizedCostUSD: realizedUSD(pricing, rec, realizedTokens, deferred.map(s => [s, perSessionTokens])),
+  }
 }
 
 function archiveRow(
   base: ActReportRow, rec: ActionRecord, sessions: SessionSummary[],
-  baseline: ActionBaseline, afterStart: Date, now: Date,
+  baseline: ActionBaseline, afterStart: Date, now: Date, pricing: FindingPricing,
 ): ActReportRow {
   const perSessionTokens = Object.values(baseline.metrics).reduce((a, b) => a + b, 0)
   if (perSessionTokens === 0) return { ...base, note: 'not measurable: empty baseline' }
@@ -318,12 +345,16 @@ function archiveRow(
   }
   // Estimate and realized are the same product by construction; the measured
   // signal here is the session count and the revert check, not the multiply.
-  return { ...base, estimatedForWindow, status: 'measured', realizedTokens: Math.floor(perSessionTokens * sessions.length), confidence }
+  const realizedTokens = Math.floor(perSessionTokens * sessions.length)
+  return {
+    ...base, estimatedForWindow, status: 'measured', confidence, realizedTokens,
+    realizedCostUSD: realizedUSD(pricing, rec, realizedTokens, sessions.map(s => [s, perSessionTokens])),
+  }
 }
 
 function readEditRow(
-  base: ActReportRow, sessions: SessionSummary[],
-  baseline: ActionBaseline, afterStart: Date, now: Date,
+  base: ActReportRow, rec: ActionRecord, sessions: SessionSummary[],
+  baseline: ActionBaseline, afterStart: Date, now: Date, pricing: FindingPricing,
 ): ActReportRow {
   const editsNow = countToolCalls(sessions, EDIT_TOOL_NAMES)
   const readsNow = countToolCalls(sessions, READ_TOOL_NAMES)
@@ -337,7 +368,11 @@ function readEditRow(
   // by current edits; a worsened ratio claims nothing.
   const deficitThen = Math.max(HEALTHY_READ_EDIT_RATIO - ratioThen, 0)
   const deficitNow = Math.max(HEALTHY_READ_EDIT_RATIO - ratioNow, 0)
-  const realized = Math.floor(Math.max(0, deficitThen - deficitNow) * editsNow * AVG_TOKENS_PER_READ)
+  const readsPerEdit = Math.max(0, deficitThen - deficitNow) * AVG_TOKENS_PER_READ
+  const realized = Math.floor(readsPerEdit * editsNow)
+  // Each session's share of the credited reads follows its edits.
+  const realizedCostUSD = realizedUSD(pricing, rec, realized,
+    sessions.map(s => [s, readsPerEdit * countToolCalls([s], EDIT_TOOL_NAMES)]))
   // Same edits denominator as realized, so realized never exceeds it.
   const estimatedForWindow = Math.floor(deficitThen * editsNow * AVG_TOKENS_PER_READ)
   return {
@@ -345,6 +380,7 @@ function readEditRow(
     estimatedForWindow,
     status: 'measured',
     realizedTokens: realized,
+    realizedCostUSD,
     confidence: confidenceFor(sessions.length, baseline, afterStart, now),
     note: `read:edit ${ratioThen.toFixed(1)}:1 -> ${ratioNow.toFixed(1)}:1`,
   }
@@ -435,7 +471,7 @@ async function modelDefaultRow(
 
 async function computeRow(
   rec: ActionRecord, sessions: SessionSummary[], afterStart: Date, now: Date,
-  mcpClaimedServers: ReadonlySet<string>, opts: ActReportOptions, modelDefaultProjectFound = true,
+  mcpClaimedServers: ReadonlySet<string>, pricing: FindingPricing, opts: ActReportOptions, modelDefaultProjectFound = true,
 ): Promise<ActReportRow> {
   const estimatedAtApply = rec.baseline?.estimatedTokens ?? 0
   const base: ActReportRow = {
@@ -447,6 +483,7 @@ async function computeRow(
     estimatedAtApply,
     estimatedForWindow: estimatedAtApply,
     realizedTokens: 0,
+    realizedCostUSD: 0,
     status: 'not-measurable',
     confidence: 'normal',
     note: '',
@@ -454,10 +491,10 @@ async function computeRow(
   const baseline = rec.baseline
   if (!baseline) return { ...base, note: 'not measurable: no baseline captured at apply time' }
 
-  if (MCP_KINDS.has(rec.kind)) return mcpRow(base, rec, sessions, baseline, afterStart, now)
-  if (DEFER_KINDS.has(rec.kind)) return deferRow(base, sessions, baseline, afterStart, now, mcpClaimedServers)
-  if (rec.kind in ARCHIVE_DEF_TOKENS) return archiveRow(base, rec, sessions, baseline, afterStart, now)
-  if (rec.kind === 'claude-md-rule') return readEditRow(base, sessions, baseline, afterStart, now)
+  if (MCP_KINDS.has(rec.kind)) return mcpRow(base, rec, sessions, baseline, afterStart, now, pricing)
+  if (DEFER_KINDS.has(rec.kind)) return deferRow(base, rec, sessions, baseline, afterStart, now, mcpClaimedServers, pricing)
+  if (rec.kind in ARCHIVE_DEF_TOKENS) return archiveRow(base, rec, sessions, baseline, afterStart, now, pricing)
+  if (rec.kind === 'claude-md-rule') return readEditRow(base, rec, sessions, baseline, afterStart, now, pricing)
   if (rec.kind === 'shell-config') return { ...base, note: 'not measurable: bash result token sizes are not retained in the summary' }
   if (rec.kind === 'guard-install') return guardRow(base, afterStart, now, baseline, opts)
   if (rec.kind === 'model-default') return modelDefaultRow(base, rec, sessions, baseline, afterStart, now, modelDefaultProjectFound)
@@ -569,6 +606,7 @@ export async function computeActReport(opts: ActReportOptions = {}): Promise<Act
   const loadProjects = opts.loadProjects ?? ((range: DateRange) => parseAllSessions(range, 'claude'))
   const projects = await loadProjects({ start: windowStart, end: now })
   const costRate = computeInputCostRate(projects)
+  const pricing = findingPricing(projects, costRate)
 
   // Servers a same-journal MCP row (mcp-remove / mcp-project-scope) already
   // measures. Deferral baselines for defer-enable / defer-threshold span the
@@ -591,7 +629,7 @@ export async function computeActReport(opts: ActReportOptions = {}): Promise<Act
       ? modelDefaultSessionsInWindow(rec, projects, afterStart, now)
       : undefined
     const sessions = modelDefaultWindow?.sessions ?? sessionsInWindow(projects, afterStart, now)
-    rows.push(await computeRow(rec, sessions, afterStart, now, mcpClaimedServers, opts, modelDefaultWindow?.projectFound))
+    rows.push(await computeRow(rec, sessions, afterStart, now, mcpClaimedServers, pricing, opts, modelDefaultWindow?.projectFound))
   }
 
   const measuredRows = rows.filter(r => r.status === 'measured' && isTokenKind(r.kind))
@@ -607,7 +645,7 @@ export async function computeActReport(opts: ActReportOptions = {}): Promise<Act
     costRate,
     rows,
     totalRealizedTokens,
-    totalRealizedCostUSD: totalRealizedTokens * costRate,
+    totalRealizedCostUSD: measuredRows.reduce((s, r) => s + r.realizedCostUSD, 0),
     measuredCount: measuredRows.length,
     activeCount: active.length,
     observedDays,
@@ -628,7 +666,8 @@ export function buildOptimizeAppliedHeader(report: ActReport): string | null {
     report.windowCapDays,
     confident.reduce((mx, r) => Math.max(mx, Math.ceil(ageDays(r.appliedAt, generated))), 0),
   )
-  const cost = report.costRate > 0 ? ` (~${formatCost(tokens * report.costRate)})` : ''
+  const usd = confident.reduce((s, r) => s + r.realizedCostUSD, 0)
+  const cost = report.costRate > 0 ? ` (~${formatCost(usd)})` : ''
   return `Applied fixes: ${report.activeCount} active, realized ~${formatTokens(tokens)} tokens${cost} over ${days} day${days === 1 ? '' : 's'}. Details: codeburn act report`
 }
 
@@ -766,17 +805,17 @@ export function captureBaseline(
     const servers = mcpServersFromApply(finding, affectedMcpServers)
     if (servers.length === 0) return undefined
     const covByServer = new Map(ctx.coverage.map(c => [c.server, c]))
-    const metrics: Record<string, number> = {}
-    for (const server of servers) {
-      const cov = covByServer.get(server)
-      // Removal realizes only the unused schema that the low-coverage
-      // detector estimated. If coverage is unavailable, omit the numeric
-      // claim instead of inventing a five-tool baseline.
-      const tools = finding.id === 'mcp-low-coverage'
-        ? cov?.unusedTools.length ?? 0
-        : cov && cov.toolsAvailable > 0 ? cov.toolsAvailable : TOOLS_PER_MCP_SERVER
-      metrics[server] = tools * TOKENS_PER_MCP_TOOL
-    }
+    // Removal and scoping realize only the schema their detector estimated,
+    // counted the way it counts it. If coverage is unavailable, that is 0
+    // rather than an invented five-tool baseline.
+    const metrics: Record<string, number> = finding.id === 'mcp-low-coverage'
+      ? mcpLowCoverageSchemaPerSession(ctx.projects, ctx.coverage, servers)
+      : finding.apply?.kind === 'mcp-project-scope'
+        ? mcpProjectScopeSchemaPerSession(ctx.projects, ctx.coverage, finding.apply.servers.filter(s => servers.includes(s.server)))
+        : Object.fromEntries(servers.map(server => {
+          const cov = covByServer.get(server)
+          return [server, (cov && cov.toolsAvailable > 0 ? cov.toolsAvailable : TOOLS_PER_MCP_SERVER) * TOKENS_PER_MCP_TOOL]
+        }))
     const estimatedTokens = finding.applyTokensSavedByServer
       ? Math.round(servers.reduce((sum, server) => sum + (finding.applyTokensSavedByServer?.[server] ?? 0), 0))
       : common.estimatedTokens
