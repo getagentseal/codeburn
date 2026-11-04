@@ -5,9 +5,9 @@ import { ESTIMATED_COST_LEGEND, isEstimatedCost, markEstimated } from './format.
 import { modelRowKey } from './models.js'
 import { maxOf } from './math-utils.js'
 import { callCommands, createHead, ghPrCommands, isCommit, namedPr, namedPrNumber, prNumbersIn, pushes, readPrNumbers, readsCode, reviewVerdict, roundStarts, type NamedPr } from './pr-signals.js'
-import { inferSessionProvider, sessionBillableOutputTokens } from './session-output.js'
+import { costBasisShares, inferSessionProvider, sessionBillableOutputTokens, type CostBasisShares } from './session-output.js'
 import { CATEGORY_LABELS } from './types.js'
-import type { ProjectSummary, SessionSummary, TaskCategory } from './types.js'
+import type { CostBasis, ProjectSummary, SessionSummary, TaskCategory } from './types.js'
 import { resolveWorkUnits, workUnitSessionKey } from './work-units.js'
 import type { WorkUnit, WorkUnitResolution } from './work-units.js'
 
@@ -23,6 +23,7 @@ export type SessionRow = {
   /// `isEstimatedCost(cost, estimatedCost)`, the marker rule every view shares.
   estimatedCost: number
   isEstimated: boolean
+  costBasis?: CostBasisShares
   savingsUSD: number
   calls: number
   turns: number
@@ -77,6 +78,7 @@ export function aggregateSessions(projects: ProjectSummary[]): SessionRow[] {
     durationMs: durationMs(session.firstTimestamp, session.lastTimestamp),
     estimatedCost: session.totalEstimatedCostUSD ?? 0,
     isEstimated: isEstimatedCost(session.totalCostUSD, session.totalEstimatedCostUSD, sessionCostLabel(session.totalCostUSD)),
+    costBasis: costBasisShares(session.turns.flatMap(turn => turn.assistantCalls)),
   })))
 }
 
@@ -343,6 +345,8 @@ function groupWorkUnitRows<T extends SessionRow>(rows: T[], resolution: WorkUnit
         cost,
         estimatedCost,
         isEstimated: isEstimatedCost(cost, estimatedCost, sessionCostLabel(cost)),
+        costBasis: costBasisShares(members.flatMap(member => Object.entries(member.costBasis ?? {})
+          .map(([basis, share]) => ({ costBasis: basis as CostBasis, costUSD: share * member.cost })))),
         savingsUSD: sum(member => member.savingsUSD),
         calls: sum(member => member.calls),
         turns: sum(member => member.turns),

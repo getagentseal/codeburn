@@ -73,6 +73,12 @@ describe('buildMenubarPayload', () => {
     expect(payload.current.topProjects[0]!.sessionDetails[0]).toMatchObject({ sessionId: 'session-a1', provider: 'claude' })
   })
 
+  it('carries the live costBasis shares on current and omits the key when absent', () => {
+    const period = { ...emptyPeriod('Today'), cost: 4, costBasis: { calculated: 0.75, estimated: 0.25 } }
+    expect(buildMenubarPayload(period, [], null).current.costBasis).toEqual({ calculated: 0.75, estimated: 0.25 })
+    expect(buildMenubarPayload(emptyPeriod('Today'), [], null).current).not.toHaveProperty('costBasis')
+  })
+
   it('passes the pull-requests payload (models, categories, cap remainder) through verbatim', () => {
     const period: PeriodData = {
       ...emptyPeriod('7 Days'),

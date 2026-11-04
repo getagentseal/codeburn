@@ -19,7 +19,7 @@ import { aggregateModelTaskTurns, sessionDurationMinutes } from './telemetry-sna
 import { scanUserCorrections, medianTimeToFirstEditMs, aggregateFileChurn, computePricingCoverage } from './workflow-insights.js'
 import { buildPrAttribution, aggregateByBranch, foldedSessionRows } from './sessions-report.js'
 import { scanAndDetect } from './optimize.js'
-import { callBillableOutputTokens, sessionBillableOutput, sessionBillableOutputTokens, inferSessionProvider } from './session-output.js'
+import { callBillableOutputTokens, costBasisShares, sessionBillableOutput, sessionBillableOutputTokens, inferSessionProvider } from './session-output.js'
 import { getDateRange } from './cli-date.js'
 import { activityStreak } from './streak.js'
 import { getDaysInRange, ensureCacheHydrated, loadDailyCache, cachedProjectIdentities, projectDayIdentity, emptyCache, mergeDayEntries, BACKFILL_DAYS, toDateString, type DailyCache, type DailyEntry, type ProjectDayStats, type ProviderDaySlice } from './daily-cache.js'
@@ -185,6 +185,7 @@ export function buildPeriodData(label: string, projects: ProjectSummary[]): Peri
     cost: projects.reduce((s, p) => s + p.totalCostUSD, 0),
     savingsUSD: projects.reduce((s, p) => s + p.totalSavingsUSD, 0),
     estimatedCostUSD: projects.reduce((s, p) => s + (p.totalEstimatedCostUSD ?? 0), 0),
+    costBasis: costBasisShares(sessions.flatMap(sess => sess.turns.flatMap(turn => turn.assistantCalls))),
     calls: projects.reduce((s, p) => s + p.totalApiCalls, 0),
     sessions: uniqueCanonicalSessionCountFromProjects(projects),
     sessionCountBasis: 'identity',
@@ -1022,6 +1023,7 @@ export async function buildDurablePeriod(periodInfo: PeriodInfo, opts: Aggregate
   // the live population, a subset of the carried headline.
   const scanData = buildPeriodData(periodInfo.label, liveProjects)
   data.estimatedCostUSD = scanData.estimatedCostUSD
+  data.costBasis = scanData.costBasis
   data.unpricedModels = scanData.unpricedModels
   data.workflow = scanData.workflow
   data.topReworkedFiles = scanData.topReworkedFiles

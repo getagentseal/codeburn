@@ -235,10 +235,12 @@ describe('exportCsv', () => {
   it('keeps supplementary accounting rows in records.csv and marks them', async () => {
     const project = makeProject('app')
     const turn = project.sessions[0]!.turns[0]!
+    turn.assistantCalls[0]!.costBasis = 'calculated'
     turn.assistantCalls.push({
       ...turn.assistantCalls[0]!,
       supplementaryAccounting: true,
       costUSD: 0.5,
+      costBasis: 'recorded',
       deduplicationKey: 'dedup-supp',
     })
     const periods: PeriodExport[] = [{ label: '30 Days', projects: [project] }]
@@ -248,9 +250,9 @@ describe('exportCsv', () => {
 
     // The column exists on every row (undefined on normal ones), so rowsToCsv —
     // which reads headers off the first row — always emits it.
-    expect(lines[0]!.endsWith(',supplementary,estimated,unpriced')).toBe(true)
-    expect(lines[1]!.endsWith(',1.23,0,,,')).toBe(true)
-    expect(lines[2]!.endsWith(',0.5,0,true,,')).toBe(true)
+    expect(lines[0]!.endsWith(',costBasis,supplementary,estimated,unpriced')).toBe(true)
+    expect(lines[1]!.endsWith(',1.23,0,calculated,,,')).toBe(true)
+    expect(lines[2]!.endsWith(',0.5,0,recorded,true,,')).toBe(true)
     expect(lines).toHaveLength(3)
   })
 
@@ -263,8 +265,8 @@ describe('exportCsv', () => {
     const folder = await exportCsv([{ label: '30 Days', projects: [project] }], join(tmpDir, 'records.csv'))
     const lines = (await readFile(join(folder, 'records.csv'), 'utf-8')).trimEnd().split('\n')
 
-    expect(lines[1]!.endsWith(',0.3,0,,,')).toBe(true)
-    expect(lines[2]!.endsWith(',0.0000001,0,,,')).toBe(true)
+    expect(lines[1]!.endsWith(',0.3,0,,,,')).toBe(true)
+    expect(lines[2]!.endsWith(',0.0000001,0,,,,')).toBe(true)
   })
 
   it('counts only behavioral turns in the sessions.csv Turns column', async () => {
@@ -399,6 +401,29 @@ describe('exportJson', () => {
     expect(data.records).toHaveLength(2)
     expect(data.records[0]).not.toHaveProperty('supplementary')
     expect(data.records[1]).toMatchObject({ supplementary: true, cost: 0.5 })
+  })
+
+  it('says where each dollar comes from per record, session and day', async () => {
+    const project = makeProject('app')
+    const turn = project.sessions[0]!.turns[0]!
+    const base = turn.assistantCalls[0]!
+    turn.assistantCalls = [
+      { ...base, costUSD: 3, costBasis: 'calculated' },
+      { ...base, costUSD: 1, costBasis: 'recorded', deduplicationKey: 'rec' },
+      { ...base, costUSD: 0, costBasis: 'unpriced', deduplicationKey: 'unp' },
+    ]
+    project.sessions[0]!.totalCostUSD = 4
+
+    const saved = await exportJson([{ label: '30 Days', projects: [project] }], join(tmpDir, 'basis.json'))
+    const data = JSON.parse(await readFile(saved, 'utf-8'))
+
+    expect(data.records.map((r: { costBasis: string }) => r.costBasis)).toEqual(['calculated', 'recorded', 'unpriced'])
+    expect(data.sessions[0].costBasis).toEqual({ calculated: 0.75, recorded: 0.25 })
+    expect(data.periods[0].daily[0].costBasis).toEqual({ calculated: 0.75, recorded: 0.25 })
+
+    const folder = await exportCsv([{ label: '30 Days', projects: [project] }], join(tmpDir, 'basis-csv'))
+    expect(await readFile(join(folder, 'sessions.csv'), 'utf-8')).not.toContain('costBasis')
+    expect(await readFile(join(folder, 'daily.csv'), 'utf-8')).not.toContain('costBasis')
   })
 
   it('writes a dated file inside the folder when the destination is an existing folder', async () => {

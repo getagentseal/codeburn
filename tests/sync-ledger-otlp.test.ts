@@ -161,7 +161,16 @@ describe('buildOtlpPayload', () => {
     expect(attrMap['ai.session_id']).toBeUndefined()
   })
 
-  it('bills reasoning into ai.output_tokens for exclusive providers (opencode)', () => {
+  it('sets ai.cost_estimated from the call costBasis, not the provider name', () => {
+    const estimated = (overrides: Partial<ParsedApiCall>) => buildOtlpPayload([makeCallWithSession(overrides)])
+      .resourceSpans[0]!.scopeSpans[0]!.spans[0]!.attributes.find(a => a.key === 'ai.cost_estimated')!.value
+    expect(estimated({ costBasis: 'estimated' })).toEqual({ boolValue: true })
+    expect(estimated({ costBasis: 'recorded' })).toEqual({ boolValue: false })
+    expect(estimated({ provider: 'cursor', costBasis: 'estimated' })).toEqual({ boolValue: true })
+    expect(estimated({ provider: 'claude', costBasis: 'calculated', usage: { ...makeCall({ deduplicationKey: 'x' }).usage, inputTokens: 0 } })).toEqual({ boolValue: false })
+  })
+
+    it('bills reasoning into ai.output_tokens for exclusive providers (opencode)', () => {
     const payload = buildOtlpPayload([makeCallWithSession({
       provider: 'opencode',
       usage: {

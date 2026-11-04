@@ -18,6 +18,7 @@ export type PeriodData = {
   /// Display/metadata only; never summed into `cost`. Optional so PeriodData
   /// producers predating the field keep compiling.
   estimatedCostUSD?: number
+  costBasis?: CostBasisShares
   calls: number
   sessions: number
   /// How `sessions` was derived. `identity` is exact unique source ids with no
@@ -143,6 +144,7 @@ import { getCurrency } from './currency.js'
 import type { GranularHistory } from './granular-history.js'
 import { getShortModelName, modelRowKey } from './models.js'
 import type { ReworkedFile } from './workflow-insights.js'
+import type { CostBasisShares } from './session-output.js'
 import { sessionCacheHitPercent, type PrRow, type BranchRow } from './sessions-report.js'
 import type { LiveSessionsBlock } from './live-sessions.js'
 import type { CursorSyncStatus } from './cursor-sync.js'
@@ -326,6 +328,7 @@ export type MenubarPayload = {
     /// display/metadata only, never summed into `cost`. Optional for compatibility
     /// with payloads produced before the field existed.
     estimatedCostUSD?: number
+    costBasis?: CostBasisShares
     topActivities: Array<{
       name: string
       cost: number
@@ -828,6 +831,7 @@ export function buildMenubarPayload(
       cacheHitPercent: sessionCacheHitPercent(current.inputTokens, current.cacheReadTokens, current.cacheWriteTokens) ?? 0,
       codexCredits: current.codexCredits ?? 0,
       estimatedCostUSD: current.estimatedCostUSD ?? 0,
+      ...(current.costBasis ? { costBasis: current.costBasis } : {}),
       topActivities: buildTopActivities(current.categories),
       topModels: buildTopModels(current.models),
       unpricedModels: current.unpricedModels ?? [],

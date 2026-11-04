@@ -60,7 +60,7 @@ export function createServer(deps: { version: string; aggregate?: Aggregate }): 
       outputSchema: {
         period: z.string(),
         empty: z.boolean(),
-        totals: z.object({ costUSD: z.number(), estimatedCostUSD: z.number(), calls: z.number(), sessions: z.number(), cacheHitPercent: z.number(), oneShotRate: z.number().nullable() }),
+        totals: z.object({ costUSD: z.number(), estimatedCostUSD: z.number(), costBasis: z.object({ recorded: z.number().optional(), calculated: z.number().optional(), estimated: z.number().optional() }).optional(), calls: z.number(), sessions: z.number(), cacheHitPercent: z.number(), oneShotRate: z.number().nullable() }),
         breakdown: z.array(z.object({ name: z.string(), costUSD: z.number(), estimatedCostUSD: z.number().optional() })).nullable(),
       },
       annotations: { title: 'CodeBurn — usage & cost', readOnlyHint: true, openWorldHint: false, idempotentHint: true },
@@ -69,7 +69,7 @@ export function createServer(deps: { version: string; aggregate?: Aggregate }): 
       try {
         const payload = redactProjectNames(await getPayload(period, false), include_project_names)
         const c = payload.current
-        const totals = { costUSD: c.cost, estimatedCostUSD: c.estimatedCostUSD ?? 0, calls: c.calls, sessions: c.sessions, cacheHitPercent: c.cacheHitPercent, oneShotRate: c.oneShotRate }
+        const totals = { costUSD: c.cost, estimatedCostUSD: c.estimatedCostUSD ?? 0, ...(c.costBasis ? { costBasis: c.costBasis } : {}), calls: c.calls, sessions: c.sessions, cacheHitPercent: c.cacheHitPercent, oneShotRate: c.oneShotRate }
         if (c.calls === 0) {
           return {
             content: [{ type: 'text' as const, text: `No usage recorded for ${c.label} yet — run some coding sessions and try again.` }],

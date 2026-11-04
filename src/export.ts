@@ -1,12 +1,12 @@
 import { writeFile, mkdir, readdir, open, stat, rm } from 'fs/promises'
 import { dirname, join, resolve } from 'path'
 
-import { CATEGORY_LABELS, type ProjectSummary, type TaskCategory } from './types.js'
+import { CATEGORY_LABELS, type ParsedApiCall, type ProjectSummary, type TaskCategory } from './types.js'
 import { getCurrency, convertCost, roundForActiveCurrency } from './currency.js'
 import { dateKey } from './day-aggregator.js'
 import { behavioralCallWeight, behavioralTurnCount } from './behavioral-weight.js'
 import { aggregateModelEfficiency } from './model-efficiency.js'
-import { callBillableOutputTokens, countSessions, sessionModelBillableOutputTokens } from './session-output.js'
+import { callBillableOutputTokens, costBasisShares, countSessions, sessionModelBillableOutputTokens, type CostBasisShares } from './session-output.js'
 import { findUnpricedModels } from './models.js'
 
 function escCsv(s: string): string {
@@ -17,7 +17,7 @@ function escCsv(s: string): string {
   return sanitized
 }
 
-type Row = Record<string, string | number | boolean | undefined>
+type Row = Record<string, string | number | boolean | undefined | CostBasisShares>
 
 function rowsToCsv(rows: Row[]): string {
   if (rows.length === 0) return ''
@@ -52,9 +52,10 @@ type DailyAgg = {
   cacheRead: number
   cacheWrite: number
   sessions: Set<string>
+  served: ParsedApiCall[]
 }
 
-function buildDailyRows(projects: ProjectSummary[], period: string): Row[] {
+function buildDailyRows(projects: ProjectSummary[], period: string, withCostBasis = false): Row[] {
   const daily: Record<string, DailyAgg> = {}
   for (const project of projects) {
     for (const session of project.sessions) {
@@ -65,7 +66,7 @@ function buildDailyRows(projects: ProjectSummary[], period: string): Row[] {
           // rows sum to the summary and land on the days the history shows.
           const day = dateKey(Number.isNaN(new Date(call.timestamp).getTime()) ? turnTs : call.timestamp)
           if (!daily[day]) {
-            daily[day] = { cost: 0, savings: 0, calls: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, sessions: new Set() }
+            daily[day] = { cost: 0, savings: 0, calls: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, sessions: new Set(), served: [] }
           }
           daily[day].sessions.add(session.sessionId)
           daily[day].cost += call.costUSD
@@ -78,6 +79,7 @@ function buildDailyRows(projects: ProjectSummary[], period: string): Row[] {
           daily[day].output += callBillableOutputTokens(call)
           daily[day].cacheRead += call.usage.cacheReadInputTokens
           daily[day].cacheWrite += call.usage.cacheCreationInputTokens
+          daily[day].served.push(call)
         }
       }
     }
@@ -94,6 +96,7 @@ function buildDailyRows(projects: ProjectSummary[], period: string): Row[] {
     'Output Tokens': d.output,
     'Cache Read Tokens': d.cacheRead,
     'Cache Write Tokens': d.cacheWrite,
+    ...(withCostBasis ? { costBasis: costBasisShares(d.served) } : {}),
   }))
 }
 
@@ -128,6 +131,7 @@ function buildRecordRows(projects: ProjectSummary[]): Row[] {
             cacheReadTokens: Math.max(call.usage.cacheReadInputTokens, call.usage.cachedInputTokens),
             cost: convertCost(call.costUSD),
             savings: convertCost(call.savingsUSD ?? 0),
+            costBasis: call.costBasis,
             // Records are the raw serve ledger and keep every supplementary
             // accounting row; the marker is how a "one row per API call"
             // consumer tells them apart. Key present on every row (undefined
@@ -295,7 +299,7 @@ function buildProjectRows(projects: ProjectSummary[]): Row[] {
     }))
 }
 
-function buildSessionRows(projects: ProjectSummary[]): Row[] {
+function buildSessionRows(projects: ProjectSummary[], withCostBasis = false): Row[] {
   const { code } = getCurrency()
   const rows: Row[] = []
   for (const p of projects) {
@@ -313,6 +317,7 @@ function buildSessionRows(projects: ProjectSummary[]): Row[] {
         Turns: behavioralTurnCount(s.turns),
         subagentType: s.agentType?.trim() || undefined,
         model: models.size === 1 ? [...models][0] : undefined,
+        ...(withCostBasis ? { costBasis: costBasisShares(s.turns.flatMap(turn => turn.assistantCalls)) } : {}),
       })
     }
   }
@@ -364,7 +369,10 @@ function buildReadme(periods: PeriodExport[]): string {
     '                        supplementary marks accounting-only rows: recovered tokens/cost that',
     '                        are not distinct requests. estimated marks costs priced from',
     '                        estimated or missing token counts; unpriced marks $0 rows whose',
-    '                        model has no known price. cost is unrounded.',
+    '                        model has no known price. cost is unrounded. costBasis says where the',
+    '                        cost came from: recorded (the tool\'s own figure), calculated (measured',
+    '                        tokens at published prices), estimated (guessed tokens), included',
+    '                        (covered by a subscription, $0) or unpriced (no known price, $0).',
     '  projects.csv          Spend per project folder for the selected detail period.',
     '  sessions.csv          One row per session for the selected detail period.',
     '  tools.csv             Tool invocations and share for the selected detail period.',
@@ -375,6 +383,7 @@ function buildReadme(periods: PeriodExport[]): string {
     '-----',
     '  Every cost column is already converted to the active currency. Tokens are raw integer',
     '  counts from provider telemetry. Share (%) is relative to the period/table total.',
+    '  New columns can be added under the same codeburn.export.v2 schema; read them by header.',
     '',
   ]
   return lines.join('\n')
@@ -465,12 +474,12 @@ export async function exportJson(periods: PeriodExport[], outputPath: string): P
     summary: buildSummaryRows(periods),
     periods: periods.map(p => ({
       label: p.label,
-      daily: buildDailyRows(p.projects, p.label),
+      daily: buildDailyRows(p.projects, p.label, true),
       activity: buildActivityRows(p.projects, p.label),
       models: buildModelRows(p.projects, p.label),
     })),
     projects: buildProjectRows(thirtyDayProjects),
-    sessions: buildSessionRows(thirtyDayProjects),
+    sessions: buildSessionRows(thirtyDayProjects, true),
     records: buildRecordRows(thirtyDayProjects),
     tools: buildToolRows(thirtyDayProjects),
     mcp: buildMcpRows(thirtyDayProjects),
