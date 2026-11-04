@@ -9,6 +9,7 @@ import { billableOutputTokens, calculateCost, calculateLocalModelSavings, getSho
 import { resolveSubagentAttribution, sessionIdentity } from './sessions-report.js'
 import { applyCodexSessionNames } from './codex-session-index.js'
 import { normalizeContentBlocks, flatSlice, flatString } from './content-utils.js'
+import { estimateTokensFromChars } from './token-estimate.js'
 import { discoverAllSessions, discoverAllSessionsWithFailures, getProvider } from './providers/index.js'
 import { evictCachedCodexResults, flushCodexCache, readCachedCodexResults, withCodexCacheDirectory, writeCachedCodexResults } from './codex-cache.js'
 import { antigravityCascadeIdFromPath, flushAntigravityCache, preloadAntigravityCache, shouldReparseAntigravitySource } from './providers/antigravity.js'
@@ -672,8 +673,52 @@ function extractObjectFields(
   return captured
 }
 
-const LARGE_ROOT_FIELDS = ['type', 'timestamp', 'sessionId', 'cwd', 'gitBranch', 'attachment', 'message', 'isSidechain', 'promptSource'] as const
-const LARGE_ASSISTANT_MESSAGE_FIELDS = ['model', 'usage', 'id', 'content'] as const
+const LARGE_ROOT_FIELDS = ['type', 'timestamp', 'sessionId', 'cwd', 'gitBranch', 'attachment', 'message', 'isSidechain', 'promptSource', 'version'] as const
+const LARGE_ASSISTANT_MESSAGE_FIELDS = ['model', 'usage', 'id', 'content', 'stop_reason'] as const
+
+// Claude Code before 2.1.307 never wrote the final usage of a subagent message:
+// every row of the id keeps the first streamed chunk's output_tokens and a null
+// stop_reason, so the real output is lost and has to be estimated from content.
+function hasPlaceholderUsage(isSidechain: boolean | undefined, version: unknown, stopReason: unknown): boolean {
+  if (isSidechain !== true || stopReason || typeof version !== 'string') return false
+  const [major, minor, patch] = version.split('.').map(Number)
+  if (major !== 2) return major! < 2
+  if (minor !== 1) return minor! < 1
+  return patch! < 307
+}
+
+function contentOutputChars(content: ContentBlock[]): number {
+  let chars = 0
+  for (const b of content) {
+    if (b?.type === 'text' && typeof b.text === 'string') chars += b.text.length
+    else if (b?.type === 'tool_use' || b?.type === 'server_tool_use') chars += JSON.stringify((b as ToolUseBlock).input ?? {}).length
+  }
+  return chars
+}
+
+function largeContentOutputChars(source: JsonSource, contentBounds: JsonValueBounds | null): number {
+  if (!contentBounds || contentBounds.kind !== 'array') return 0
+  let chars = 0
+  let i = contentBounds.start + 1
+  while (i < contentBounds.end - 1) {
+    i = skipJsonWhitespace(source, i, contentBounds.end)
+    if (jsonCharCodeAt(source, i) !== 0x7b) {
+      i++
+      continue
+    }
+    const objectEnd = findJsonContainerEnd(source, i, 0x7b, 0x7d, contentBounds.end)
+    if (objectEnd === -1) break
+    const blockType = readJsonString(source, findObjectFieldValue(source, i, objectEnd + 1, 'type'))
+    if (blockType === 'text') {
+      chars += readJsonString(source, findObjectFieldValue(source, i, objectEnd + 1, 'text'))?.length ?? 0
+    } else if (blockType === 'tool_use' || blockType === 'server_tool_use') {
+      const input = findObjectFieldValue(source, i, objectEnd + 1, 'input')
+      if (input) chars += input.end - input.start
+    }
+    i = objectEnd + 1
+  }
+  return chars
+}
 
 function parseLargeJsonl(line: string | Buffer): JournalEntry | null {
   const source = createJsonSource(line)
@@ -722,6 +767,7 @@ function parseLargeJsonl(line: string | Buffer): JournalEntry | null {
   if (!model || usageBounds?.kind !== 'object') return entry
   const id = readJsonString(source, messageFields['id'])
   const contentBounds = messageFields['content']
+  const placeholder = hasPlaceholderUsage(entry.isSidechain, readJsonString(source, root['version']), readJsonString(source, messageFields['stop_reason']))
 
   entry.message = {
     type: 'message',
@@ -730,6 +776,7 @@ function parseLargeJsonl(line: string | Buffer): JournalEntry | null {
     ...(id !== undefined ? { id } : {}),
     content: extractLargeToolBlocks(source, contentBounds),
     usage: parseLargeUsage(source, usageBounds),
+    ...(placeholder ? { estimatedOutputChars: largeContentOutputChars(source, contentBounds) } : {}),
   }
 
   return entry
@@ -1209,6 +1256,8 @@ export function compactEntry(raw: JournalEntry): JournalEntry {
     if (advisorIterations.length > 0) compactUsage.iterations = advisorIterations
   }
 
+  const estimatedOutputChars = msg.estimatedOutputChars
+    ?? (hasPlaceholderUsage(raw.isSidechain, raw.version, msg.stop_reason) ? contentOutputChars(contentArr) : undefined)
   entry.message = {
     type: 'message',
     role: 'assistant',
@@ -1216,6 +1265,7 @@ export function compactEntry(raw: JournalEntry): JournalEntry {
     usage: compactUsage,
     content: compactContent,
     ...(msg.id ? { id: msg.id } : {}),
+    ...(estimatedOutputChars !== undefined ? { estimatedOutputChars } : {}),
   }
 
   return entry
@@ -1509,6 +1559,9 @@ export function parseApiCall(entry: JournalEntry, toolResultMeta?: Map<string, T
   const tools = extractToolNames(contentBlocks)
   const skills = extractSkillNames(contentBlocks)
   const subagentTypes = extractSubagentTypes(contentBlocks)
+  const estimatedOutput = msg.estimatedOutputChars === undefined ? 0 : estimateTokensFromChars(msg.estimatedOutputChars)
+  const outputIsEstimated = estimatedOutput > tokens.outputTokens
+  if (outputIsEstimated) tokens.outputTokens = estimatedOutput
   const costUSD = calculateCost(
     msg.model,
     tokens.inputTokens,
@@ -1584,6 +1637,7 @@ export function parseApiCall(entry: JournalEntry, toolResultMeta?: Map<string, T
     ...(interrupted ? { interrupted: true } : {}),
     ...(userModified ? { userModified: true } : {}),
     ...(toolErrors ? { toolErrors } : {}),
+    ...(outputIsEstimated ? { isEstimated: true } : {}),
   })
 }
 
@@ -1676,7 +1730,16 @@ export function dedupeStreamingMessageIds(entries: JournalEntry[]): JournalEntry
     if (id && firstIdxById.get(id) !== i) {
       const firstIdx = firstIdxById.get(id)!
       const firstTs = entries[firstIdx]!.timestamp
-      const message = withEarlierToolUses(entries, idxsById.get(id)!)
+      const idxs = idxsById.get(id)!
+      let message = withEarlierToolUses(entries, idxs)
+      // A placeholder message is spread one content block per row, so its
+      // output estimate is the sum over every row of the id.
+      const last = entries[i]!.message as AssistantMessageContent
+      if (last.estimatedOutputChars !== undefined) {
+        let chars = 0
+        for (const j of idxs) chars += (entries[j]!.message as AssistantMessageContent).estimatedOutputChars ?? 0
+        message = { ...(message ?? last), estimatedOutputChars: chars }
+      }
       result.push({ ...entries[i]!, timestamp: firstTs ?? entries[i]!.timestamp, ...(message ? { message } : {}) })
       continue
     }

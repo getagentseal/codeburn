@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 
-import { compactEntry } from '../src/parser.js'
+import { compactEntry, dedupeStreamingMessageIds, parseApiCall, parseJsonlLine } from '../src/parser.js'
 import type { JournalEntry } from '../src/types.js'
 
 function entry(overrides: Partial<JournalEntry> & Record<string, unknown>): JournalEntry {
@@ -443,5 +443,74 @@ describe('compactEntry', () => {
     const compactedSize = JSON.stringify(compacted).length
     expect(rawSize).toBeGreaterThan(2_000_000)
     expect(compactedSize).toBeLessThan(500)
+  })
+})
+
+// Claude Code before 2.1.307 left subagent messages on the first streamed
+// chunk's output_tokens with a null stop_reason; the output is estimated from
+// the content instead.
+describe('placeholder usage on pre-2.1.307 subagent messages', () => {
+  const text = 'x'.repeat(3_000)
+  function row(opts: { id?: string; version?: string; isSidechain?: boolean; stop_reason?: string | null; output?: number; content?: unknown[] } = {}): string {
+    return JSON.stringify({
+      type: 'assistant',
+      timestamp: '2026-06-01T10:00:00.000Z',
+      sessionId: 's1',
+      isSidechain: opts.isSidechain ?? true,
+      version: opts.version ?? '2.1.300',
+      message: {
+        id: opts.id ?? 'msg-1',
+        type: 'message',
+        role: 'assistant',
+        model: 'claude-sonnet-4-5',
+        content: opts.content ?? [{ type: 'text', text }],
+        stop_reason: opts.stop_reason ?? null,
+        usage: { input_tokens: 3, output_tokens: opts.output ?? 8, cache_read_input_tokens: 20_000 },
+      },
+    })
+  }
+  const calls = (...lines: string[]) =>
+    dedupeStreamingMessageIds(lines.map(l => compactEntry(parseJsonlLine(l)!))).map(e => parseApiCall(e)!)
+
+  it('estimates the output of a row that never got a stop_reason', () => {
+    const [call] = calls(row())
+    expect(call!.usage.outputTokens).toBe(750)
+    expect(call!.usage.inputTokens).toBe(3)
+    expect(call!.usage.cacheReadInputTokens).toBe(20_000)
+    expect(call!.isEstimated).toBe(true)
+  })
+
+  it('keeps the recorded output when the row has a stop_reason', () => {
+    const [call] = calls(row({ stop_reason: 'end_turn' }))
+    expect(call!.usage.outputTokens).toBe(8)
+    expect(call!.isEstimated).toBeUndefined()
+  })
+
+  it('keeps the recorded output from 2.1.307 on', () => {
+    expect(calls(row({ version: '2.1.307' }))[0]!.usage.outputTokens).toBe(8)
+  })
+
+  it('keeps the recorded output of a main-thread row', () => {
+    expect(calls(row({ isSidechain: false }))[0]!.usage.outputTokens).toBe(8)
+  })
+
+  it('resolves a placeholder row followed by a final row to the final row', () => {
+    const [call] = calls(row(), row({ stop_reason: 'end_turn', output: 40 }))
+    expect(call!.usage.outputTokens).toBe(40)
+    expect(call!.isEstimated).toBeUndefined()
+  })
+
+  it('sums the content of every row of a placeholder message', () => {
+    const write = { type: 'tool_use', id: 't1', name: 'Write', input: { file_path: '/a.ts', content: 'y'.repeat(4_000) } }
+    const [call] = calls(row(), row({ content: [write] }))
+    expect(call!.usage.outputTokens).toBe(Math.ceil((3_000 + JSON.stringify(write.input).length) / 4))
+    expect(call!.tools).toEqual(['Write'])
+  })
+
+  it('estimates a large row the same way as a small one', () => {
+    const write = { type: 'tool_use', id: 't1', name: 'Write', input: { file_path: '/a.ts', content: 'y'.repeat(40_000) } }
+    const [call] = calls(row({ content: [write] }))
+    expect(call!.usage.outputTokens).toBe(Math.ceil(JSON.stringify(write.input).length / 4))
+    expect(call!.isEstimated).toBe(true)
   })
 })
