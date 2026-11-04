@@ -2,7 +2,7 @@ import { createInterface } from 'node:readline/promises'
 import { homedir } from 'os'
 import chalk from 'chalk'
 import type { DateRange, ProjectSummary } from '../types.js'
-import { scanAndDetect, type WasteFinding } from '../optimize.js'
+import { findingUSD, scanAndDetect, type WasteFinding } from '../optimize.js'
 import { formatCost } from '../currency.js'
 import { formatTokens } from '../format.js'
 import { runAction } from './apply.js'
@@ -68,7 +68,7 @@ export function renderApplyList(appliable: FindingPlan[], manual: FindingPlan[],
     const f = fp.finding
     const actionTokensSaved = planTokensSaved(fp)
     const savings = Number.isFinite(actionTokensSaved)
-      ? `~${formatTokens(actionTokensSaved)} tokens${costRate > 0 ? `, ~${formatCost(actionTokensSaved * costRate)}` : ''}`
+      ? `~${formatTokens(actionTokensSaved)} tokens${costRate > 0 ? `, ~${formatCost(findingUSD(f, costRate, actionTokensSaved))}` : ''}`
       : 'Savings not estimated'
     lines.push('')
     lines.push(`  ${i + 1}. ${f.title}  ${chalk.hex('#FFD700')(`(${savings})`)}`)
