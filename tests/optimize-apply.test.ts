@@ -966,6 +966,7 @@ describe('finding class', () => {
       'recurring-context': makeFinding('recurring-context', PROMPT_FIX),
       'fast-mode-background': makeFinding('fast-mode-background', PROMPT_FIX),
       'long-context-premium': makeFinding('long-context-premium', PROMPT_FIX),
+      'idle-compaction-blocked': makeFinding('idle-compaction-blocked', PROMPT_FIX),
     }
 
     const planCtx: PlanContext = { homeDir: fx.home, cwd: fx.project, shell: '/bin/zsh', claudeVersion: () => '2.1.130' }

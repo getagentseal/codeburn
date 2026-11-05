@@ -20,6 +20,7 @@ import {
   detectBloatedClaudeMd,
   detectUnusedMcp,
   detectBashBloat,
+  detectIdleCompactionBlocked,
   detectGhostCommands,
   detectDuplicateReads,
   detectJunkReads,
@@ -309,6 +310,59 @@ describe('detectBashBloat', () => {
     process.env['BASH_MAX_OUTPUT_LENGTH'] = '50000'
     const finding = detectBashBloat()
     expect(finding).not.toBeNull()
+  })
+})
+
+// ============================================================================
+// detectIdleCompactionBlocked
+// ============================================================================
+
+describe('detectIdleCompactionBlocked', () => {
+  const calls = (version: string) => [{ cacheCreationTokens: 0, version }]
+
+  function setup(user: Record<string, unknown>, project?: Record<string, unknown>): { home: string; cwds: Set<string> } {
+    const home = makeFixtureRoot()
+    const cwd = makeFixtureRoot()
+    writeFile(join(home, '.claude', 'settings.json'), JSON.stringify(user))
+    if (project) writeFile(join(cwd, '.claude', 'settings.json'), JSON.stringify(project))
+    return { home, cwds: new Set([cwd]) }
+  }
+
+  it('fires when the window equals the default threshold', () => {
+    const { home, cwds } = setup({ autoCompactWindow: 200000 })
+    const finding = detectIdleCompactionBlocked(cwds, calls('2.1.290'), home)
+    expect(finding?.id).toBe('idle-compaction-blocked')
+    expect(finding!.tokensSaved).toBe(0)
+    expect(finding!.fix.type === 'paste' && finding!.fix.text).toBe('"CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS": "100000"')
+  })
+
+  it('fires when the window is below the threshold', () => {
+    const { home, cwds } = setup({ autoCompactWindow: 150000 })
+    const finding = detectIdleCompactionBlocked(cwds, calls('2.1.311'), home)
+    expect(finding!.explanation).toContain('"autoCompactWindow": 150000 in user settings')
+    expect(finding!.explanation).toContain('(its default)')
+  })
+
+  it('is silent when the window is above the threshold', () => {
+    const { home, cwds } = setup({ autoCompactWindow: 150000, env: { CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS: '100000' } })
+    expect(detectIdleCompactionBlocked(cwds, calls('2.1.311'), home)).toBeNull()
+  })
+
+  it('is silent before Claude Code v2.1.290', () => {
+    const { home, cwds } = setup({ autoCompactWindow: 150000 })
+    expect(detectIdleCompactionBlocked(cwds, calls('2.1.289'), home)).toBeNull()
+  })
+
+  it('is silent when idle compaction is turned off', () => {
+    const { home, cwds } = setup({ autoCompactWindow: 150000, idleCompaction: false })
+    expect(detectIdleCompactionBlocked(cwds, calls('2.1.311'), home)).toBeNull()
+  })
+
+  it('takes project settings over user settings', () => {
+    const above = setup({ autoCompactWindow: 150000 }, { autoCompactWindow: 300000 })
+    expect(detectIdleCompactionBlocked(above.cwds, calls('2.1.311'), above.home)).toBeNull()
+    const below = setup({ autoCompactWindow: 300000 }, { autoCompactWindow: 150000 })
+    expect(detectIdleCompactionBlocked(below.cwds, calls('2.1.311'), below.home)!.explanation).toContain('in project settings')
   })
 })
 
