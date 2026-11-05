@@ -9,6 +9,7 @@
 //!
 //! The `log` submodule is here because it writes to that same directory, next to status.json.
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
@@ -111,13 +112,16 @@ fn config_number(path: &[&str]) -> Option<f64> {
     (number > 0.0).then_some(number)
 }
 
-/// The badge text and tooltip from the last successful refresh.
+/// The badge text and tooltip from the last successful refresh, and the quota crossings
+/// already announced.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct TrayStatus {
     #[serde(default)]
     pub badge: Option<String>,
     #[serde(default)]
     pub tooltip: Option<String>,
+    #[serde(default)]
+    pub quota_crossings_fired: BTreeSet<String>,
 }
 
 fn status_path() -> Option<PathBuf> {

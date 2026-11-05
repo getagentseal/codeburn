@@ -10,6 +10,8 @@ mod fx;
 mod glance;
 mod i18n;
 mod plan;
+mod quota_crossing;
+mod quota_pace;
 mod refresh;
 mod session;
 mod settings;
