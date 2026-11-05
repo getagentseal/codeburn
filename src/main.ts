@@ -3,7 +3,7 @@ import { Command, Option } from 'commander'
 import { installMenubarApp, uninstallMenubarApp } from './menubar-installer.js'
 import { COMPONENTS, defaultUpdateDeps, runUpdate, type Component } from './update.js'
 import { exportCsv, exportJson, type PeriodExport } from './export.js'
-import { findUnpricedModels, modelRowKey, loadPricing, sanitizeModelForDisplay, setModelAliases, setPriceOverrides, setLocalModelSavings, setFlatRateModels, setFlatRateRemoved, setProxyPaths, normalizeProxyPath, unpricedModelHint, isBuiltInFlatRateModel, isSameFlatRateModel, getProxyPathsConfigHash, getModelAliasesConfigHash, getPriceOverridesConfigHash, getLocalModelSavingsConfigHash, getFlatRateModelsConfigHash, getPricingGenerationKey } from './models.js'
+import { findUnpricedModels, modelRowKey, loadPricing, sanitizeModelForDisplay, setModelAliases, setPriceOverrides, setPriceDiscounts, isValidDiscountPercent, DISCOUNT_KINDS, getModelCosts, setLocalModelSavings, setFlatRateModels, setFlatRateRemoved, setProxyPaths, normalizeProxyPath, unpricedModelHint, isBuiltInFlatRateModel, isSameFlatRateModel, getProxyPathsConfigHash, getModelAliasesConfigHash, getPriceOverridesConfigHash, getLocalModelSavingsConfigHash, getFlatRateModelsConfigHash, getPricingGenerationKey } from './models.js'
 import { cachedProjectIdentitiesForRange } from './daily-cache.js'
 import { reportUnmatchedProjectPatterns } from './project-filter-warnings.js'
 import { getVercelGatewayApiKey } from './providers/vercel-gateway.js'
@@ -570,6 +570,7 @@ program.hook('preAction', async (thisCommand) => {
   const config = await readConfig()
   setModelAliases(config.modelAliases ?? {})
   setPriceOverrides(config.priceOverrides ?? {})
+  setPriceDiscounts(config.discounts ?? {})
   setLocalModelSavings(config.localModelSavings ?? {})
   setFlatRateModels(config.flatRateModels ?? [])
   setFlatRateRemoved(config.flatRateModelsRemoved ?? [])
@@ -1912,6 +1913,72 @@ program
   })
 
 program
+  .command('price-discount [action] [scope] [percent]')
+  .description('Contracted discount off list price on calculated costs: price-discount set <scope> <percent>, price-discount remove <scope>, price-discount list. <scope> is a provider (claude), a model (claude-opus-4-8) or a model and token kind (claude-opus-4-8:output; kinds: input, output, cacheWrite, cacheRead). The most specific scope wins.')
+  .option('--format <format>', 'Output format: text, json', 'text')
+  .action(async (action?: string, scope?: string, percent?: string, opts?: { format?: string }) => {
+    const format = opts?.format ?? 'text'
+    assertFormat(format, ['text', 'json'], 'price-discount')
+    const config = await readConfig()
+    const discounts = { ...config.discounts }
+
+    if (!action || action === 'list') {
+      if (format === 'json') {
+        console.log(JSON.stringify({ discounts: Object.entries(discounts).map(([s, p]) => ({ scope: s, percent: p })), configPath: getConfigFilePath() }, null, 2))
+        return
+      }
+      if (Object.keys(discounts).length === 0) {
+        console.log('\n  No price discounts configured.')
+        console.log('  Add one with: codeburn price-discount set <provider|model|model:kind> <percent>\n')
+        return
+      }
+      console.log('\n  Price discounts (percent off list price):')
+      for (const [s, p] of Object.entries(discounts)) console.log(`    ${s}: ${p}%`)
+      console.log(`  Config: ${getConfigFilePath()}\n`)
+      return
+    }
+
+    if (action === 'remove') {
+      if (!scope || !Object.hasOwn(discounts, scope)) {
+        console.error(`\n  Price discount not found: ${scope ?? '(no scope given)'}\n`)
+        process.exitCode = 1
+        return
+      }
+      delete discounts[scope]
+      config.discounts = Object.keys(discounts).length > 0 ? discounts : undefined
+      await saveConfig(config)
+      console.log(`\n  Removed price discount: ${scope}\n`)
+      return
+    }
+
+    if (action !== 'set' || !scope || percent === undefined) {
+      console.error('\n  Usage: codeburn price-discount set <scope> <percent> | price-discount remove <scope> | price-discount list\n')
+      process.exitCode = 1
+      return
+    }
+    const value = Number(percent.replace(/%$/, ''))
+    if (percent.trim() === '' || !isValidDiscountPercent(value)) {
+      console.error(`\n  Invalid percent: ${percent}. Expected a number from 0 to 100.\n`)
+      process.exitCode = 1
+      return
+    }
+    await loadPricing()
+    const kind = DISCOUNT_KINDS.find(k => scope.endsWith(`:${k}`))
+    const model = kind ? scope.slice(0, -kind.length - 1) : scope
+    const isProvider = !kind && allProviderNames().includes(scope)
+    if (!isProvider && (!getModelCosts(model) || (!kind && /:[a-zA-Z]+$/.test(scope)))) {
+      console.error(`\n  Unknown scope: ${scope}. Use a provider id (e.g. claude, codex, cursor), a priced model id, or <model>:<${DISCOUNT_KINDS.join('|')}>.\n`)
+      process.exitCode = 1
+      return
+    }
+    discounts[scope] = value
+    config.discounts = discounts
+    await saveConfig(config)
+    console.log(`\n  Price discount saved: ${scope}: ${value}% off list price`)
+    console.log(`  Config: ${getConfigFilePath()}\n`)
+  })
+
+program
   .command('model-savings [local] [baseline]')
   .description('Track a local model as "savings" rather than cost. Maps a local-model name to a paid baseline so the dashboard can show what the same tokens would have cost on the baseline (e.g. codeburn model-savings "llama3.1:8b" gpt-4o). The local call itself still costs $0 — actual cost is left untouched.')
   .option('--remove <local>', 'Remove a savings mapping for the given local model')
@@ -2920,7 +2987,7 @@ program
       process.stderr.write('codeburn: --by-task and --by-agent cannot be combined. Pick one breakdown.\n')
       process.exit(1)
     }
-    const { aggregateModels, renderTable, renderMarkdown, renderJson, renderCsv } = await import('./models-report.js')
+    const { aggregateModels, renderTable, renderMarkdown, renderJson, renderCsv, isDiscounted } = await import('./models-report.js')
     await loadPricing()
 
     let range
@@ -3030,6 +3097,7 @@ program
     } else if (fmt === 'table') {
       process.stdout.write(renderTable(renderRows, { byTask: !!opts.byTask, byAgent: !!opts.byAgent, showTotals: opts.totals !== false }) + '\n')
       if (renderRows.some(r => isEstimatedCost(r.costUSD, r.estimatedCostUSD))) process.stdout.write(ESTIMATED_COST_LEGEND + '\n')
+      if (renderRows.some(isDiscounted)) process.stdout.write('-N% effective contracted discount off list price (codeburn price-discount list)\n')
       if (renderRows.some(r => r.peakUSD != null || r.offPeakUSD != null)) {
         process.stdout.write('Peak / Off-peak: consumption shares of the list-rate cost — DeepSeek peak hours are Mon–Fri 01:00–04:00 and 06:00–10:00 UTC (excl. Chinese public holidays), GLM/Z.ai peak hours are Mon–Fri 14:00–18:00 Singapore time. The vendors discount off-peak usage on their own bills (DeepSeek USD at 0.5x, Z.ai plan credits at 0.5x); the split only shows where usage ran. First-party routes only (dsh, zcode).\n')
       }

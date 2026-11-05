@@ -37,6 +37,14 @@ codeburn proxy-path ~/work/copilot-repo                       # subscription-cov
 
 `price-override` sets exact rates for any model (input, output, cache read, cache creation), useful for private deployments or models LiteLLM prices wrong. `model-savings` maps a free local model to a paid baseline: the local calls stay $0, and the dashboard shows what the same tokens would have cost on the baseline. `model-flat-rate` marks a subscription-billed product SKU so the unpriced warning stays quiet and `model-alias` is not suggested — aliasing those ids invents spend. `--remove` also opts out of a built-in SKU. `proxy-path` marks a project routed through a subscription-backed proxy (e.g. Claude Code over GitHub Copilot), so its API-rate cost is reported as subscription-covered and your net out-of-pocket stays honest. All four support `--list` and `--remove`.
 
+```bash
+codeburn price-discount set claude 20                  # 20% off calculated Claude Code costs
+codeburn price-discount set claude-opus-4-8:output 30  # one model's output tokens
+codeburn price-discount list                           # or: price-discount remove <scope>
+```
+
+On an enterprise agreement you pay a percentage off list price. `price-discount` takes that percentage off every cost CodeBurn calculates from tokens, after long-context tiers and fast or flex rates, so the discount follows LiteLLM's list prices as they change. A scope is a provider id (as in `--provider`), a model id, or a model id and token kind (`input`, `output`, `cacheWrite`, `cacheRead`); the most specific scope wins. Costs a tool recorded itself and subscription-included calls are left as they are. `codeburn models` shows the effective discount per row, and export records carry `listCost`. Discounts are stored under `discounts` in `~/.config/codeburn/config.json` and apply to all history, not from a date. Optimize findings and savings estimates use list prices.
+
 ## Environment variables
 
 Override data directories and paths.
