@@ -21,6 +21,7 @@ import {
   detectUnusedMcp,
   detectBashBloat,
   detectIdleCompactionBlocked,
+  commandNames,
   detectGhostCommands,
   detectDuplicateReads,
   detectJunkReads,
@@ -390,12 +391,12 @@ describe('detectGhostCommands', () => {
       'look at /usr/local/bin',
       'rm -rf /var/cache',
     ]
-    expect(await detectGhostCommands(messages)).toBeNull()
+    expect(await detectGhostCommands(messages.flatMap(commandNames))).toBeNull()
   })
 
   it('matches <command-name> tags in user messages', async () => {
     const messages = ['<command-name>review</command-name>']
-    expect(await detectGhostCommands(messages)).toBeNull()
+    expect(await detectGhostCommands(messages.flatMap(commandNames))).toBeNull()
   })
 })
 
@@ -409,7 +410,7 @@ describe('scanJsonlFile', () => {
     expect(result.calls).toEqual([])
     expect(result.cwds).toEqual([])
     expect(result.apiCalls).toEqual([])
-    expect(result.userMessages).toEqual([])
+    expect(result.commandNames).toEqual([])
   })
 
   it('parses tool_use blocks from assistant entries', async () => {
@@ -463,7 +464,7 @@ describe('scanJsonlFile', () => {
       },
     })
     writeFile(filePath, [
-      JSON.stringify({ type: 'user', timestamp: now, cwd: '/x', message: { content: 'delegate this' } }),
+      JSON.stringify({ type: 'user', timestamp: now, cwd: '/x', message: { content: 'delegate this with /review' } }),
       assistant('Read'),
       assistant('Edit', true, 'x'.repeat(40_000)),
       assistant('Bash'),
@@ -478,7 +479,7 @@ describe('scanJsonlFile', () => {
     ])
     expect(result.apiCalls).toHaveLength(3)
     expect(result.cwds).toHaveLength(4)
-    expect(result.userMessages).toEqual(['delegate this'])
+    expect(result.commandNames).toEqual(['review'])
   })
 
   it('keeps sidechain calls out of duplicate reads but in junk reads and the read:edit ratio', () => {

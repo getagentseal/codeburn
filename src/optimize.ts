@@ -703,7 +703,7 @@ type ScanData = {
   toolCalls: ToolCall[]
   projectCwds: Set<string>
   apiCalls: ApiCallMeta[]
-  userMessages: string[]
+  commandNames: string[]
   openers: SessionOpener[]
 }
 
@@ -715,16 +715,18 @@ function cappedString(value: unknown, cap = OPTIMIZE_FIELD_CAP): string | undefi
   return typeof value === 'string' ? value.slice(0, cap) : undefined
 }
 
-function compactOptimizeInput(name: string, input: unknown): Record<string, unknown> {
+export function compactOptimizeInput(name: string, input: unknown): Record<string, unknown> {
   if (!input || typeof input !== 'object') return {}
   const raw = input as Record<string, unknown>
   if (isReadTool(name)) {
     const filePath = cappedString(raw['file_path'], OPTIMIZE_TEXT_CAP)
     return filePath ? { file_path: filePath } : {}
   }
+  // Only whether the command reads is ever asked of it, so that is all a call
+  // keeps: the command text was most of what a scan held.
   if (BASH_TOOL_NAMES.has(name)) {
     const command = cappedString(raw['command'], OPTIMIZE_TEXT_CAP)
-    return command ? { command } : {}
+    return command && isReadShapedBashCommand(command) ? { readShaped: true } : {}
   }
   if (name === 'Agent' || name === 'Task') {
     const subagentType = cappedString(raw['subagent_type'])
@@ -791,7 +793,7 @@ type ScanFileResult = {
   calls: ToolCall[]
   cwds: string[]
   apiCalls: ApiCallMeta[]
-  userMessages: string[]
+  commandNames: string[]
   openers: SessionOpener[]
 }
 
@@ -873,7 +875,9 @@ type ScanFileRecord = {
   /// file that changed version partway through resolves exactly as a scan
   /// carrying that range would have.
   versionEvents: Array<{ version: string; anchor: string | null }>
-  users: Array<{ tsMs: number; messages: string[]; opener: SessionOpener | null }>
+  /// Each user entry that carried text: the slash commands it names, which is
+  /// all of its text a detector reads, and its opening block when it is one.
+  users: Array<{ tsMs: number; commands: string[]; opener: SessionOpener | null }>
   /// A line marking the file as a sidechain qualifies unless the range filter
   /// would have skipped it: `always` is one that can never be skipped, `maxTs`
   /// the latest timestamp among those that can.
@@ -982,7 +986,7 @@ async function scanFileRecord(
       }
       // An entry with no text at all is not recorded: the opening block is the
       // first user message that carries text, and this one never claims it.
-      if (messages.length > 0) record.users.push({ tsMs, messages, opener })
+      if (messages.length > 0) record.users.push({ tsMs, commands: messages.flatMap(commandNames), opener })
       continue
     }
 
@@ -1090,18 +1094,18 @@ function projectRecord(record: ScanFileRecord, dateRange: DateRange | undefined)
     versions.push(versionBefore[entry.versionIndex]!)
     apiCalls.push(entry.call)
   }
-  const userMessages: string[] = []
+  const commandNamesInRange: string[] = []
   const openers: SessionOpener[] = []
   let sawUserText = false
   for (const user of record.users) {
     if (!within(user.tsMs)) continue
-    for (const message of user.messages) userMessages.push(message)
+    for (const name of user.commands) commandNamesInRange.push(name)
     if (!sawUserText) {
       sawUserText = true
       if (user.opener) openers.push(user.opener)
     }
   }
-  return { result: { calls, cwds, apiCalls, userMessages, openers }, sidechain: isSidechain, versions }
+  return { result: { calls, cwds, apiCalls, commandNames: commandNamesInRange, openers }, sidechain: isSidechain, versions }
 }
 
 // The session scan reads Claude Code transcripts only, so a `--provider` that
@@ -1201,7 +1205,7 @@ function scanResultBytes(record: ScanFileRecord): number {
   bytes += record.calls.length * (128 + averageInput)
   for (const user of record.users) {
     bytes += 96
-    for (const message of user.messages) bytes += message.length
+    for (const name of user.commands) bytes += name.length
     if (user.opener) bytes += user.opener.preview.length + 96
   }
   return Math.round(bytes * SCAN_RETAINED_FACTOR)
@@ -1227,8 +1231,8 @@ async function headDigest(filePath: string): Promise<string | null> {
 /// What one range's selection costs to keep: slots holding references, not the
 /// items themselves, which is the whole reason a period can have its own.
 function projectionBytes(projection: ScanProjection): number {
-  const { calls, cwds, apiCalls, userMessages, openers } = projection.result
-  const slots = calls.length + cwds.length + apiCalls.length + userMessages.length
+  const { calls, cwds, apiCalls, commandNames, openers } = projection.result
+  const slots = calls.length + cwds.length + apiCalls.length + commandNames.length
     + openers.length + projection.versions.length
   return slots * 24
 }
@@ -1324,13 +1328,13 @@ export async function scanJsonlFileMemoized(
 
 async function scanSessions(dateRange?: DateRange, provider?: string): Promise<ScanData> {
   if (!providerCoversClaude(provider)) {
-    return { toolCalls: [], projectCwds: new Set(), apiCalls: [], userMessages: [], openers: [] }
+    return { toolCalls: [], projectCwds: new Set(), apiCalls: [], commandNames: [], openers: [] }
   }
   const sources = await discoverAllSessions('claude')
   const allCalls: ToolCall[] = []
   const allCwds = new Set<string>()
   const allApiCalls: ApiCallMeta[] = []
-  const allUserMessages: string[] = []
+  const allCommandNames: string[] = []
   const allOpeners: SessionOpener[] = []
 
   const tasks: Array<{ file: string; project: string; identity: { size: number; mtimeMs: number } | null }> = []
@@ -1356,15 +1360,15 @@ async function scanSessions(dateRange?: DateRange, provider?: string): Promise<S
   await runWithConcurrency(tasks.map((task, slot) => ({ ...task, slot })), FILE_READ_CONCURRENCY, async ({ file, project, identity, slot }) => {
     results[slot] = await scanJsonlFileMemoized(file, project, dateRange, identity, recentCutoffMs)
   })
-  for (const { calls, cwds, apiCalls, userMessages, openers } of results) {
+  for (const { calls, cwds, apiCalls, commandNames, openers } of results) {
     allCalls.push(...calls)
     for (const cwd of cwds) allCwds.add(cwd)
     allApiCalls.push(...apiCalls)
-    allUserMessages.push(...userMessages)
+    allCommandNames.push(...commandNames)
     allOpeners.push(...openers)
   }
 
-  return { toolCalls: allCalls, projectCwds: allCwds, apiCalls: allApiCalls, userMessages: allUserMessages, openers: allOpeners }
+  return { toolCalls: allCalls, projectCwds: allCwds, apiCalls: allApiCalls, commandNames: allCommandNames, openers: allOpeners }
 }
 
 // ============================================================================
@@ -3314,7 +3318,7 @@ export function detectLowReadEditRatio(calls: ToolCall[]): WasteFinding | null {
     if (READ_TOOL_NAMES.has(call.name)) {
       reads++
       if (call.recent) recentReads++
-    } else if (BASH_TOOL_NAMES.has(call.name) && typeof call.input['command'] === 'string' && isReadShapedBashCommand(call.input['command'])) {
+    } else if (BASH_TOOL_NAMES.has(call.name) && call.input['readShaped'] === true) {
       // A session that looks things up with rg/cat/git log IS reading (#941):
       // ignoring shell reads scored disciplined rg-first workflows as
       // reckless editors (90%+ of real reads were invisible to this ratio).
@@ -3518,18 +3522,22 @@ export async function detectGhostSkills(calls: ToolCall[]): Promise<WasteFinding
   }
 }
 
-export async function detectGhostCommands(userMessages: string[]): Promise<WasteFinding | null> {
+/// The slash commands a user message names, as the ghost-command detector
+/// counts them: `<command-name>` tags and `/name` tokens.
+export function commandNames(text: string): string[] {
+  const names: string[] = []
+  for (const m of text.matchAll(COMMAND_PATTERN)) {
+    const name = (m[1] || m[2] || '').trim()
+    if (name) names.push(name)
+  }
+  return names
+}
+
+export async function detectGhostCommands(names: string[]): Promise<WasteFinding | null> {
   const defined = await listMarkdownFiles(join(homedir(), '.claude', 'commands'))
   if (defined.length === 0) return null
 
-  const invoked = new Set<string>()
-  for (const msg of userMessages) {
-    COMMAND_PATTERN.lastIndex = 0
-    for (const m of msg.matchAll(COMMAND_PATTERN)) {
-      const name = (m[1] || m[2] || '').trim()
-      if (name) invoked.add(name)
-    }
-  }
+  const invoked = new Set(names)
 
   const ghosts = defined.filter(name => !invoked.has(name))
   if (ghosts.length === 0) return null
@@ -4481,7 +4489,7 @@ export async function scanAndDetect(
   const pricing = findingPricing(projects, costRate)
   const behavioralProjects = userStartedProjects(projects)
   const scanCoversClaude = providerCoversClaude(provider)
-  const { toolCalls, projectCwds, apiCalls, userMessages, openers } = await scanSessions(dateRange, provider)
+  const { toolCalls, projectCwds, apiCalls, commandNames, openers } = await scanSessions(dateRange, provider)
   const mcpCoverage = aggregateMcpCoverage(projects)
 
   const findings: WasteFinding[] = []
@@ -4537,7 +4545,7 @@ export async function scanAndDetect(
     ? await Promise.all([
       detectGhostAgents(toolCalls),
       detectGhostSkills(toolCalls),
-      detectGhostCommands(userMessages),
+      detectGhostCommands(commandNames),
     ])
     : []
   for (const f of ghostResults) if (f) findings.push(f)
