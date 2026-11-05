@@ -65,7 +65,7 @@ struct SubscriptionUsage: Sendable, Equatable {
             return hasMax ? .enterprisePremium : .enterprise
         }
         if rateLimitTier.contains("ultra") { return .ultra }
-        if let multiplier { return .max(multiplier) }
+        if let multiplier { return multiplier == 20 ? .ultra : .max(multiplier) }
         if subscriptionType == "max" || hasMax { return .other("Max") }
         if subscriptionType == "pro" || rateLimitTier.contains("pro") {
             return .pro

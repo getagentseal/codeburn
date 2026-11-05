@@ -37,7 +37,7 @@ describe('Claude quota', () => {
     }, { accessToken: 'hidden', rateLimitTier: 'max_20x' })
 
     expect(quota.connection).toBe('connected')
-    expect(quota.planLabel).toBe('Max 20x')
+    expect(quota.planLabel).toBe('Ultra')
     expect(quota.primary?.label).toBe('Weekly')
     expect(quota.details.map(row => row.label)).toEqual(['5-hour', 'Weekly', 'Weekly · Opus', 'Weekly · Sonnet', 'Weekly · Haiku'])
     expect(quota.details.map(row => row.percent)).toEqual([0.25, 0.5, 0.75, 0.9, 0.1])
@@ -60,13 +60,13 @@ describe('Claude quota', () => {
 
   it('prefers subscriptionType over rateLimitTier for the plan label', () => {
     const cases: Array<[string | undefined, string | undefined, string]> = [
-      ['max', 'default_claude_max_20x', 'Max 20x'],
+      ['max', 'default_claude_max_20x', 'Ultra'],
       ['team', 'default_claude_max_5x', 'Team Premium'],
       ['team', undefined, 'Team'],
       ['enterprise', 'default_claude_max_5x', 'Enterprise Premium'],
       ['pro', 'default_claude_pro', 'Pro'],
       [undefined, 'max_5x', 'Max 5x'],
-      [undefined, 'max_20x', 'Max 20x'],
+      [undefined, 'max_20x', 'Ultra'],
       [undefined, 'team', 'Team'],
       [undefined, 'default_claude_max_10x', 'Max 10x'],
       [undefined, 'default_claude_ultra', 'Ultra'],
@@ -129,7 +129,7 @@ describe('Claude keychain fallback', () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ seven_day: { utilization: 4, resets_at: '2026-07-19T00:00:00Z' } }), { status: 200 }))
     const result = await fetchClaudeQuota({ fetch: fetchMock, readFile: vi.fn(async () => null), allowKeychain: true, keychain: vi.fn(async () => ({ status: 'found' as const, value: credential })) })
     expect(result.quota.connection).toBe('connected')
-    expect(result.quota.planLabel).toBe('Max 20x')
+    expect(result.quota.planLabel).toBe('Ultra')
   })
 
   it('surfaces accessDenied when macOS blocks the keychain read', async () => {
@@ -274,7 +274,7 @@ describe('Claude login of a non-default config dir', () => {
   it("reads that dir's own file and Keychain item, $USER account first", async () => {
     keychain.mockResolvedValue({ status: 'found', value: stored('live', now() + HOUR) })
     const { done, readFile } = run(null)
-    expect((await done).quota).toMatchObject({ connection: 'connected', planLabel: 'Max 20x' })
+    expect((await done).quota).toMatchObject({ connection: 'connected', planLabel: 'Ultra' })
     expect(readFile.mock.calls.map(call => call[0])).toEqual([path.join(WORK, '.credentials.json')])
     expect(keychain.mock.calls).toEqual([['Claude Code-credentials-f0fc2950', ['alice', null]]])
   })
