@@ -12,7 +12,7 @@ import Foundation
 ///   file exists, its decision and its install id are used and this app never
 ///   writes that file: one decision covers both, and the two apps' events join
 ///   on one id. Standalone, the decision lives in this app's own defaults and
-///   defaults off for EU / EEA / UK / CH and for an unknown region.
+///   defaults on in every region; the settings toggle turns it off.
 /// - The only identifier is a random id minted locally. Switching the toggle
 ///   off mints a fresh one so past and future data cannot be linked.
 /// - Events carry a day-granularity date only, and every prop goes through the
@@ -238,15 +238,6 @@ final class Telemetry {
     nonisolated static let appName = "codeburn-menubar"
     static let releaseBundleID = "org.agentseal.codeburn-menubar"
 
-    /// EU-27 + EEA (IS, LI, NO) + UK + CH: the conservative "default off"
-    /// region. Copied from `app/electron/telemetry.ts`; the suite asserts the
-    /// two lists are still the same set.
-    static let defaultOffCountries: Set<String> = [
-        "AT", "BE", "BG", "HR", "CY", "CZ", "DK", "EE", "FI", "FR", "DE", "GR",
-        "HU", "IE", "IT", "LV", "LT", "LU", "MT", "NL", "PL", "PT", "RO", "SK",
-        "SI", "ES", "SE", "IS", "LI", "NO", "GB", "CH",
-    ]
-
     /// Every event this app may send. An unknown name is dropped rather than
     /// forwarded, so a typo at a call site cannot invent a metric. `update_click`,
     /// `glance_open`, `dock_provider_switch` and `dock_drag_end` have no call
@@ -284,9 +275,9 @@ final class Telemetry {
     static let lastSnapshotDayKey = "CodeBurnTelemetryLastSnapshotDay"
 
     /// Whether a standalone install has to be asked before anything is sent, or
-    /// whether the region default is itself the answer. Today it is the region
-    /// default, as on the Windows tray before its notice appears; flipping this
-    /// to `true` is the whole of "standalone needs a first-run notice", and
+    /// whether the default is itself the answer. Today it is the default, as on
+    /// the Windows tray before its notice appears; flipping this to `true` is
+    /// the whole of "standalone needs a first-run notice", and
     /// nothing else reads the `decidedKey` marker.
     static let standaloneRequiresExplicitDecision = false
 
@@ -347,8 +338,7 @@ final class Telemetry {
         self.openedAt = now()
         self.consent = Telemetry.resolveConsent(
             desktop: Telemetry.readDesktopState(at: desktopStateURL),
-            defaults: defaults,
-            country: Telemetry.normalizedCountry(region)
+            defaults: defaults
         )
         reresolve()
     }
@@ -387,13 +377,6 @@ final class Telemetry {
         return region.uppercased()
     }
 
-    /// An unknown region is the conservative case and defaults off, exactly as
-    /// the desktop does.
-    static func defaultEnabled(for country: String?) -> Bool {
-        guard let country else { return false }
-        return !defaultOffCountries.contains(country.uppercased())
-    }
-
     // MARK: Consent
 
     /// A version this build does not understand, a missing id or a missing
@@ -423,8 +406,7 @@ final class Telemetry {
     /// own question.
     static func resolveConsent(
         desktop: DesktopTelemetryState?,
-        defaults: UserDefaults,
-        country: String?
+        defaults: UserDefaults
     ) -> TelemetryConsent {
         let vetoed = defaults.bool(forKey: localOptOutKey)
         if let desktop {
@@ -437,14 +419,14 @@ final class Telemetry {
             )
         }
         let stored = defaults.string(forKey: installIDKey)
-        // A decision recorded here wins over the region default, which is what
+        // A decision recorded here wins over the default, which is what
         // keeps a desktop app's "no" standing after that app is deleted: its
         // answer was inherited locally the last time its file was read.
         let recorded = defaults.object(forKey: enabledKey) as? Bool
         return TelemetryConsent(
             source: .app,
             installID: (stored?.isEmpty == false ? stored : nil) ?? UUID().uuidString,
-            enabled: (recorded ?? defaultEnabled(for: country)) && !vetoed,
+            enabled: (recorded ?? true) && !vetoed,
             decided: defaults.bool(forKey: decidedKey),
             lockedOff: false
         )
@@ -458,8 +440,7 @@ final class Telemetry {
         let desktop = Telemetry.readDesktopState(at: desktopStateURL)
         var fresh = Telemetry.resolveConsent(
             desktop: desktop,
-            defaults: defaults,
-            country: country
+            defaults: defaults
         )
         if let desktop {
             inheritDesktopDecision(desktop)
@@ -489,7 +470,7 @@ final class Telemetry {
 
     /// Records the desktop app's answer here as well. Deleting that app leaves
     /// its `telemetry.v1.json` behind on a Mac, but a file that is removed or
-    /// corrupted would otherwise hand the question back to the region default
+    /// corrupted would otherwise hand the question back to the default
     /// — turning an explicit "no" into a "yes" on the next resolve.
     private func inheritDesktopDecision(_ desktop: DesktopTelemetryState) {
         if defaults.object(forKey: Telemetry.enabledKey) as? Bool != desktop.enabled {

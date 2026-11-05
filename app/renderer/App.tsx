@@ -528,8 +528,8 @@ function AppMain({ transientProject, onTransientProject }: { transientProject: T
   }, [overview.data, overview.error, overviewCold])
 
   // Telemetry onboarding page is hidden for now (component kept for later). On
-  // first launch, silently complete onboarding with the region-aware default
-  // (on outside EU/EEA/UK/CH, off inside); users change it in Settings. Bridge
+  // first launch, silently complete onboarding with the default (on); users
+  // change it in Settings. Bridge
   // calls stay typeof-guarded so an older preload degrades to no tracking.
   useEffect(() => {
     if (typeof codeburn.telemetryStatus !== 'function') return

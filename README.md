@@ -482,12 +482,12 @@ CodeBurn is MIT licensed and all of it is in this repository: the CLI, the deskt
 
 The **CLI sends nothing.** No wrapper, no proxy, no phoning home.
 
-The **desktop app and the Windows tray** can send an anonymous usage report, and only after you
-decide on the first-launch consent screen. The toggle defaults to **off** in the EU, EEA, UK and
-Switzerland, and anywhere the region is unknown; **on** elsewhere. Either way it is your call, and
-you can change it any time in **Settings > Privacy & data > Anonymous telemetry**. Turning it off
-stops all sending, clears anything queued, and mints a fresh install id so past and future reports
-cannot be linked.
+The **desktop app, the macOS menu bar and the Windows tray** can send an anonymous usage report.
+Telemetry is **on** by default in every region. The Windows tray asks once, with Accept and Decline.
+The desktop app and the macOS menu bar start with it on, and Settings turns it off at any time (on
+desktop: **Settings > Privacy & data > Anonymous telemetry**). A choice you already made is kept.
+Turning it off stops all sending, clears anything queued, and mints a fresh install id so past and
+future reports cannot be linked. What is sent is listed below.
 
 The only identifier is a random id generated on your machine. Events carry the calendar day, never
 a clock time. Alongside each batch go the app version, platform, architecture and country.
@@ -531,8 +531,8 @@ The names of the models, tools, skills and MCP servers you use are collected, as
 sets out, and a whitelist sanitizer drops anything that is not a short string, a finite number or a
 boolean before it leaves the machine.
 
-**To turn it off:** decline on the consent screen, or open **Settings > Privacy & data** and switch
-**Anonymous telemetry** off.
+**To turn it off:** press Decline on the Windows tray's notice, or open **Settings > Privacy & data**
+and switch **Anonymous telemetry** off.
 
 </details>
 
