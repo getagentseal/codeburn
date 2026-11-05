@@ -708,9 +708,11 @@ export function createBridgeHandlers(deps: Deps): Record<string, Handler> {
       catch { return { ok: true, value: false } }
     },
     // Timeline variant for the Spend punchcard only: identical payload WITH
-    // history.timeline (every other fetch keeps --no-timeline lean).
+    // history.timeline (every other fetch keeps --no-timeline lean). The
+    // punchcard reads nothing from the optimize scan, which rereads every
+    // transcript in the period (tens of seconds on a large history).
     'codeburn:getTimeline': run((period: string, provider: string, range?: DateRange) => [
-      'status', '--format', 'menubar-json', '--period', vPeriod(period),
+      'status', '--format', 'menubar-json', '--period', vPeriod(period), '--no-optimize',
       ...providerArgs(vProvider(provider)),
       ...projectArgs(),
       ...rangeArgs(vRange(range)),
