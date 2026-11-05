@@ -77,7 +77,7 @@ describe('observeClaudeIdentities', () => {
     const text = await readFile(identityLogPath(), 'utf-8')
     expect(JSON.parse(text).entries).toEqual([entry(ACCOUNT_A, ORG_A, 'Acme Corp', '2026-11-01T10:00:00.000Z')])
     for (const secret of [ACCOUNT_A, ORG_A, 'me@example.com']) expect(text).not.toContain(secret)
-    expect((await stat(identityLogPath())).mode & 0o777).toBe(0o600)
+    if (process.platform !== 'win32') expect((await stat(identityLogPath())).mode & 0o777).toBe(0o600)
   })
 
   it('appends only when the account or organization changes, and never rewrites history', async () => {
