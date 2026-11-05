@@ -8,6 +8,7 @@ import {
   downloadToFile,
   fetchLatestMacReleaseAssets,
   formatGitHubReleaseLookupError,
+  desktopAppCli,
   hasRunnableRecordedCli,
   isFallbackUpgrade,
   isMissingDirectAssetError,
@@ -499,6 +500,35 @@ describe('hasRunnableRecordedCli', () => {
     const record = join(dir, 'record.v1')
     await writeFile(record, `${launcher}\n`)
     expect(await hasRunnableRecordedCli(record)).toBe(true)
+  })
+})
+
+describe.skipIf(process.platform === 'win32')('desktopAppCli', () => {
+  // A desktop-only machine with no usable record still has the launcher inside CodeBurn.app.
+  let dir: string
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'codeburn-desktop-cli-'))
+  })
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true })
+  })
+
+  const launcherIn = async (folder: string, mode: number) => {
+    const path = join(dir, folder, 'CodeBurn.app', 'Contents', 'Resources', 'cli', 'codeburn')
+    await mkdir(dirname(path), { recursive: true })
+    await writeFile(path, '#!/bin/sh\n', { mode })
+    return path
+  }
+
+  it('is null when neither folder has a desktop app', async () => {
+    expect(await desktopAppCli([join(dir, 'Applications'), join(dir, 'home', 'Applications')])).toBeNull()
+  })
+
+  it('takes the first folder whose launcher runs, skipping one that is not executable', async () => {
+    await launcherIn('Applications', 0o644)
+    const user = await launcherIn(join('home', 'Applications'), 0o755)
+    expect(await desktopAppCli([join(dir, 'Applications'), join(dir, 'home', 'Applications')])).toBe(user)
   })
 })
 

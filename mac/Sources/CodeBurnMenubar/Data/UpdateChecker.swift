@@ -576,9 +576,11 @@ final class UpdateChecker {
     }
 
     /// The launcher the CodeBurn desktop app writes for the CLI it carries
-    /// (app/electron/mac-menubar.ts). Only a desktop app update moves it.
+    /// (app/electron/mac-menubar.ts), or the one inside its bundle. Only a desktop
+    /// app update moves either.
     nonisolated static func isDesktopBundledCli(_ cliPath: String) -> Bool {
         (cliPath as NSString).lastPathComponent == "codeburn-desktop-cli.sh"
+            || cliPath.hasSuffix("/CodeBurn.app/Contents/Resources/cli/codeburn")
     }
 
     /// `codeburn menubar --force` installs the menubar matching the CLI's own
