@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { EMPTY_FILTERS } from '../lib/investigation'
-import type { SessionRow, SessionWhy, WhyParts, WhyTurn } from '../lib/types'
+import type { SessionRow, SessionWhy, WhyParts, WhyStep, WhyTurn } from '../lib/types'
 import { hasSessionView, SessionView } from './SessionView'
 import { Sessions } from './Sessions'
 
@@ -70,6 +70,105 @@ const row: SessionRow = {
 beforeEach(() => {
   getSessionWhy.mockReset()
   getSessions.mockReset()
+})
+
+const model = (start: number, end: number, cost: number, extra: Partial<Extract<WhyStep, { kind: 'model' }>> = {}): WhyStep => (
+  { kind: 'model', start, end, model: 'Fable 5.1', cost, parts: parts(cost), tokens, startedBy: 'tool', cachedPct: 86, toolCalls: 0, answer: false, ...extra }
+)
+const tool = (start: number, end: number, name: string, label: string, parent: number, resultChars: number, extra: Partial<Extract<WhyStep, { kind: 'tool' }>> = {}): WhyStep => (
+  { kind: 'tool', start, end, name, label, isError: false, detail: null, parent, resultChars, ...extra }
+)
+const LONG = 'npm test -- --run src/webhooks/retry/very/long/path/to/the/spec/file.test.ts'
+const inspectTurn = turn(5, 0.9, {
+  calls: 4,
+  steps: [
+    model(0, 3_000, 0.1, { toolCalls: 2 }),
+    tool(3_000, 3_400, 'Read', 'retry.ts', 0, 8_000, { parallel: { index: 1, of: 2 } }),
+    tool(3_000, 3_200, 'Grep', 'retryAfter', 0, 400, { parallel: { index: 2, of: 2 } }),
+    model(3_500, 70_000, 0.5, { toolCalls: 1 }),
+    tool(70_000, 75_000, 'Bash', LONG, 3, 48_000, { isError: true, detail: { command: LONG, output: 'Exit code 1' } }),
+    model(75_100, 79_000, 0.2, { toolCalls: 1 }),
+    tool(79_000, 79_300, 'Edit', 'retry.ts', 5, 100),
+    model(79_400, 82_000, 0.1, { answer: true }),
+  ],
+})
+const inspectPayload: SessionWhy = {
+  ...payload,
+  turns: [...payload.turns, inspectTurn],
+  findings: [{ id: 'f1', kind: 'slowCall', turn: 5, step: 3, usd: null, share: null, timeMs: 66_500, model: 'Fable 5.1', outputTokens: 1_000 }],
+}
+const texts = (root: Element, sel: string) => [...root.querySelectorAll(sel)].map(e => e.textContent)
+
+describe('SessionView inspect', () => {
+  it('ranks the insights, flagged rows first, and shows Problems only when a step failed', async () => {
+    const user = userEvent.setup()
+    getSessionWhy.mockResolvedValue(inspectPayload)
+    const { container } = render(<SessionView row={row} filters={EMPTY_FILTERS} onBack={() => {}} />)
+    await screen.findByText('Slowest request')
+    const td = container.querySelector('#sv-turn-5 .sv-td')!
+    expect(texts(td, '.sv-ins-row')).toEqual([
+      'Slowest request1m 07sRequest 2',
+      'Added the most context≈12K tokensBash',
+      'Problems1 failed stepBash',
+      'Costliest request$0.50 · 56% of the promptRequest 2',
+      'Tool calls4 in 3 batchesRequest 1 · 2 parallel',
+    ])
+    expect(td.querySelector('.sv-ins-row b.top')).toHaveTextContent('$0.50')
+    await user.click(screen.getByText('All 5'))
+    await user.click(within(container.querySelector('#sv-turn-1')!).getByRole('button', { name: /Prompt text 1/ }))
+    const t1 = container.querySelector('#sv-turn-1 .sv-td')!
+    expect(texts(t1, '.sv-ins-row .lb')).toEqual(['Slowest request', 'Costliest request'])
+  })
+
+  it('shows one card per request, newest first, with nested tools, parallel labels and roles', async () => {
+    const user = userEvent.setup()
+    getSessionWhy.mockResolvedValue(inspectPayload)
+    const { container } = render(<SessionView row={row} filters={EMPTY_FILTERS} onBack={() => {}} />)
+    await screen.findByText('Slowest request')
+    const td = container.querySelector('#sv-turn-5 .sv-td')!
+    expect(texts(td, '.sv-rq-head .ti b')).toEqual(['Request 4', 'Request 3', 'Request 2', 'Request 1'])
+    const [last] = td.querySelectorAll('.sv-rq')
+    expect(last!.querySelector('.mt')).toHaveTextContent('58K in / 1K out / 86% cached · wrote the answer')
+    expect(last!.querySelectorAll('.sv-rq-tool')).toHaveLength(0)
+    expect(texts(last!, '.sv-rq-head .sv-pill')).toEqual(['$0.10'])
+    expect(td.querySelector('.sv-rq.sel .sv-sd')).toHaveTextContent('Model call')
+    await user.click(screen.getByRole('button', { name: 'Newest first' }))
+    const first = td.querySelector('.sv-rq')!
+    expect(first.querySelector('.mt')).toHaveTextContent('asked for 2 tool calls')
+    expect(texts(first, '.sv-rq-tool .nm')).toEqual(['Read', 'Grep'])
+    expect(texts(first, '.sv-rq-tool .tg')).toEqual(['parallel 1/2', 'parallel 2/2'])
+    expect(texts(first, '.sv-rq-tool .tk')).toEqual(['+2K', '+100'])
+    const failed = td.querySelector('.sv-rq-tool.err')!
+    expect(failed.querySelector('.lb')!.textContent).toBe(LONG.slice(0, 60))
+    expect(failed.querySelector('.tg')).toHaveTextContent('failed')
+    await user.click(failed)
+    expect(td.querySelector('.sv-rq-tools .sv-sd')).toHaveTextContent('Command')
+  })
+
+  it('filters cards and tools by text, and switches between all, model and tools', async () => {
+    const user = userEvent.setup()
+    getSessionWhy.mockResolvedValue(inspectPayload)
+    const { container } = render(<SessionView row={row} filters={EMPTY_FILTERS} onBack={() => {}} />)
+    await screen.findByText('Slowest request')
+    const td = container.querySelector('#sv-turn-5 .sv-td')!
+    const search = screen.getByRole('searchbox', { name: 'Filter requests and tools' })
+    await user.type(search, 'grep')
+    expect(texts(td, '.sv-rq-head .ti b')).toEqual(['Request 1'])
+    expect(texts(td, '.sv-rq-tool .nm')).toEqual(['Grep'])
+    await user.clear(search)
+    await user.type(search, 'request 3')
+    expect(texts(td, '.sv-rq-head .ti b')).toEqual(['Request 3'])
+    expect(texts(td, '.sv-rq-tool .nm')).toEqual(['Edit'])
+    await user.type(search, 'x')
+    expect(td).toHaveTextContent('Nothing matches the filter.')
+    await user.clear(search)
+    await user.click(within(td as HTMLElement).getByRole('tab', { name: 'Model' }))
+    expect(td.querySelectorAll('.sv-rq-head')).toHaveLength(4)
+    expect(td.querySelectorAll('.sv-rq-tool')).toHaveLength(0)
+    await user.click(within(td as HTMLElement).getByRole('tab', { name: 'Tools' }))
+    expect(td.querySelectorAll('.sv-rq-head')).toHaveLength(0)
+    expect(texts(td, '.sv-rq-tool .nm')).toEqual(['Edit', 'Bash', 'Grep', 'Read'])
+  })
 })
 
 describe('SessionView', () => {
@@ -169,8 +268,8 @@ describe('SessionView', () => {
     const detail = container.querySelector('#sv-turn-3 .sv-sd') as HTMLElement
     expect(detail).toHaveTextContent('exit code 1')
     expect(detail.querySelector('.sv-pre .hl')).toHaveTextContent("error TS2339: Property 'retryAfter' does not exist")
-    expect(container.querySelector('#sv-turn-3 .sv-td-sum')).toHaveTextContent('Model calls: 2 · tool steps: 1')
-    expect(container.querySelectorAll('#sv-turn-3 .sv-wf-bar')).toHaveLength(3)
+    expect(container.querySelector('#sv-turn-3 .sv-td-sum')).toHaveTextContent('Done in 1m 00s · 2 model requests · $1.20 for this prompt')
+    expect(container.querySelectorAll('#sv-turn-3 .sv-rq')).toHaveLength(2)
   })
 
   it('shows the error and keeps the session details when the transcript cannot be read', async () => {
