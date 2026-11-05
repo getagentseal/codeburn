@@ -80,9 +80,9 @@ describe('storyOf', () => {
       ],
     })
     expect(texts(t).filter(l => l.startsWith('It '))).toEqual([
-      'It handed “Scan the whole repository for dead code and list every unuse…” to a Explore subagent, which made 3 requests and 4 tool calls in 19s and reported back.',
-      'It handed “Write docs” to a general-purpose subagent, which made 1 request and 1 tool call in 3.0s and is still running.',
-      'It handed “Lint” to a Explore subagent, which made 3 requests and 4 tool calls in 2.0s and stopped without reporting back.',
+      'It handed “Scan the whole repository for dead code and list every unuse…” to the Explore subagent, which made 3 requests and 4 tool calls in 19s and reported back.',
+      'It handed “Write docs” to the general-purpose subagent, which made 1 request and 1 tool call in 3.0s and is still running.',
+      'It handed “Lint” to the Explore subagent, which made 3 requests and 4 tool calls in 2.0s and stopped without reporting back.',
     ])
   })
 

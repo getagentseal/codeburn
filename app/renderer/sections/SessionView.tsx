@@ -629,12 +629,18 @@ const STORY_GLYPHS: Record<StoryKind, IconName> = {
 
 function StoryView({ turn, why, seg, onOpen }: { turn: WhyTurn; why: SessionWhy; seg: ReactNode; onOpen: (k: number) => void }) {
   const story = storyOf(turn, why.rules.idleMs)
+  const [copied, setCopied] = useState(false)
+  const copy = async () => {
+    await navigator.clipboard.writeText(storyMarkdown(story))
+    setCopied(true)
+    window.setTimeout(() => setCopied(false), 1_500)
+  }
   return (
     <div className="sv-td">
       {seg}
       <div className="sv-story-head">
         <p>{story.header}</p>
-        <button type="button" className="sv-jump" onClick={() => void navigator.clipboard.writeText(storyMarkdown(story))}>{t('sessions.why.story.copy')}</button>
+        <button type="button" className="sv-jump" onClick={() => void copy()}>{t(copied ? 'spend.optimize.copy.done' : 'sessions.why.story.copy')}</button>
       </div>
       <ol className="sv-story">
         {story.lines.map((l, n) => (

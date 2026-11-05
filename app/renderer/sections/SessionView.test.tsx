@@ -287,7 +287,7 @@ describe('SessionView story', () => {
     const { td } = await openStory()
     expect(td.querySelector('.sv-story-head p')).toHaveTextContent('What happened: done in 1m 05s (answer at 12s) · 2 model requests · 0 tool calls · 4 subagents · $1.45 at API rates')
     expect(texts(td, '.sv-story .off')).toEqual(['+0s', '+0s', '+3.0s', '+3.0s', '+3.0s', '+9.0s', '+12s', '+1m 05s'])
-    expect(texts(td, '.sv-story .tx')[2]).toBe('It handed “Scan the repo for dead code.” to a Explore subagent, which made 3 requests and 1 tool call in 1m 02s and reported back.')
+    expect(texts(td, '.sv-story .tx')[2]).toBe('It handed “Scan the repo for dead code.” to the Explore subagent, which made 3 requests and 1 tool call in 1m 02s and reported back.')
     expect(td.querySelector('.sv-story + .sv-note')).toHaveTextContent('Written from the recorded steps alone.')
   })
 
@@ -310,6 +310,7 @@ describe('SessionView story', () => {
     expect(lines[0]).toBe(td.querySelector('.sv-story-head p')!.textContent)
     expect(lines.slice(2)).toEqual([...td.querySelectorAll('.sv-story li')].map(li => `- ${li.querySelector('.off')!.textContent} ${li.querySelector('.tx')!.textContent}`))
     expect(lines[2]).toBe('- +0s You asked “Prompt text 6”.')
+    expect(within(td as HTMLElement).getByRole('button', { name: 'Copied' })).toBeInTheDocument()
   })
 })
 
