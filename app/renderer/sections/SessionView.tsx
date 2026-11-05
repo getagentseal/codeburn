@@ -4,6 +4,7 @@ import { ChartTip } from '../components/ChartTip'
 import { cliErrorDisplay } from '../components/CliErrorPanel'
 import { Panel } from '../components/Panel'
 import { SessionDetails } from '../components/SessionDrawer'
+import { SegTabs } from '../components/SegTabs'
 import { SectionSkeleton } from '../components/Skeleton'
 import { Usd } from '../components/Usd'
 import { Icon } from '../components/icons'
@@ -22,7 +23,6 @@ export function hasSessionView(row: SessionDrillRow): boolean {
 }
 
 const FINDINGS_SHOWN = 5
-const STEPS_SHOWN = 12
 
 const pct = (p: number) => (p > 0 && p < 0.01 ? '<1%' : `${Math.round(p * 100)}%`)
 const tok = (n: number) => formatCompact(Math.round(n))
@@ -358,83 +358,140 @@ function StepDetail({ step }: { step: WhyStep }) {
   )
 }
 
-function turnSummary(turn: WhyTurn): string {
-  const calls = turn.steps.filter(s => s.kind === 'model').length
-  const tools = turn.steps.length - calls
-  const top = PART_KEYS.slice().sort((a, b) => turn.parts[b] - turn.parts[a])[0]!
-  return t('sessions.why.turn.summary', {
-    calls, tools, duration: formatStepDuration(turn.wallMs), share: pct(turn.cost > 0 ? turn.parts[top] / turn.cost : 0),
-    amount: formatUsd(turn.cost), part: t(`sessions.why.partName.${top}`),
-  }) + (turn.helperCost > 0 ? ' ' + t('sessions.why.turn.helpers', { amount: formatUsd(turn.helperCost) }) : '')
+type ModelStep = Extract<WhyStep, { kind: 'model' }>
+type ToolStep = Extract<WhyStep, { kind: 'tool' }>
+type ToolRef = { s: ToolStep; k: number }
+type Request = { s: ModelStep; k: number; n: number; tools: ToolRef[] }
+type Insight = { key: string; label: string; value: string; pill: string; step: number; tone?: 'top' | 'bad'; flag: boolean }
+
+const toolName = (s: ToolStep) => s.name.replace(/^mcp__(.+?)__/, '')
+const added = (s: ToolStep) => Math.ceil((s.resultChars ?? 0) / 4)
+const span = (s: WhyStep) => Math.max(0, s.end - s.start)
+
+function requestsOf(turn: WhyTurn): Request[] {
+  const out: Request[] = []
+  turn.steps.forEach((s, k) => {
+    if (s.kind === 'model') out.push({ s, k, n: out.length + 1, tools: [] })
+    else (out.find(r => r.k === s.parent) ?? out.at(-1))?.tools.push({ s, k })
+  })
+  return out
 }
 
-function stepClass(s: WhyStep): string {
-  if (s.kind === 'model') return 'model'
-  if (s.isError) return 'err'
-  return s.helperCost !== undefined || s.name === 'Agent' || s.name === 'Task' ? 'agent' : 'tool'
+function insightsOf(turn: WhyTurn, reqs: Request[], rules: SessionWhy['rules']): Insight[] {
+  if (!reqs.length) return []
+  const reqPill = (r: Request) => t('sessions.why.inspect.request', { n: r.n })
+  const tools = reqs.flatMap(r => r.tools)
+  const slow = reqs.reduce((a, b) => (span(b.s) > span(a.s) ? b : a))
+  const dear = reqs.reduce((a, b) => (b.s.cost > a.s.cost ? b : a))
+  const rows: Insight[] = [
+    { key: 'slowest', label: t('sessions.why.inspect.slowest'), value: formatStepDuration(span(slow.s)), pill: reqPill(slow), step: slow.k, flag: span(slow.s) >= rules.slowCallMs },
+    { key: 'costliest', label: t('sessions.why.inspect.costliest'), value: t('sessions.why.inspect.costValue', { amount: usdFine(dear.s.cost), share: pct(turn.cost > 0 ? dear.s.cost / turn.cost : 0) }), pill: reqPill(dear), step: dear.k, tone: 'top', flag: false },
+  ]
+  const big = tools.reduce<ToolRef | null>((a, b) => (added(b.s) > (a ? added(a.s) : 0) ? b : a), null)
+  if (big) rows.push({ key: 'context', label: t('sessions.why.inspect.context'), value: t('sessions.why.inspect.contextValue', { tokens: tok(added(big.s)) }), pill: toolName(big.s), step: big.k, flag: added(big.s) >= rules.carryTokens })
+  if (tools.length) {
+    const asked = reqs.filter(r => r.tools.length)
+    const widest = asked.reduce((a, b) => (b.tools.length > a.tools.length ? b : a))
+    rows.push(asked.length === tools.length
+      ? { key: 'tools', label: t('sessions.why.inspect.toolCalls'), value: plural('sessions.why.inspect.sequential', tools.length), pill: reqPill(widest), step: widest.k, flag: false }
+      : { key: 'tools', label: t('sessions.why.inspect.toolCalls'), value: t(one('sessions.why.inspect.batches', asked.length), { count: tools.length, batches: asked.length }), pill: t('sessions.why.inspect.batchPill', { request: reqPill(widest), count: widest.tools.length }), step: widest.k, flag: false })
+  }
+  const failed = tools.filter(x => x.s.isError)
+  if (failed.length) rows.push({ key: 'problems', label: t('sessions.why.inspect.problems'), value: plural('sessions.why.inspect.failed', failed.length), pill: toolName(failed[0]!.s), step: failed[0]!.k, tone: 'bad', flag: true })
+  return rows.sort((a, b) => Number(b.flag) - Number(a.flag)).slice(0, 5)
+}
+
+function roleOf(r: Request): string {
+  if (r.tools.length) return plural('sessions.why.inspect.role.tools', r.tools.length)
+  return t(r.s.answer ? 'sessions.why.inspect.role.answer' : 'sessions.why.inspect.role.none')
 }
 
 function TurnDetail({ turn, findings, why, openStep, onStep }: { turn: WhyTurn; findings: WhyFinding[]; why: SessionWhy; openStep: number | null; onStep: (k: number | null) => void }) {
-  const [tip, setTip] = useState<{ x: number; y: number; step: WhyStep } | null>(null)
-  const [allSteps, setAllSteps] = useState(false)
-  const span = Math.max(1, ...turn.steps.map(s => s.end))
-  const indexed = turn.steps.map((s, k) => ({ s, k }))
-  const tools = indexed.filter(x => x.s.kind === 'tool')
-  const flaggedSteps = new Set(findings.map(f => f.step).filter((s): s is number => s !== undefined))
-  const shown = allSteps || tools.length <= STEPS_SHOWN ? tools : tools.filter((x, j) => j < 8 || (x.s.kind === 'tool' && x.s.isError) || flaggedSteps.has(x.k) || x.k === openStep)
-  const sel = openStep !== null ? turn.steps[openStep] : undefined
-  const bars = (list: typeof indexed) => list.map(({ s, k }) => (
-    <button
-      key={k}
-      type="button"
-      className={`sv-wf-bar ${stepClass(s)}${openStep === k ? ' sel' : ''}`}
-      style={{ left: `${s.start / span * 100}%`, width: `${Math.max(0, s.end - s.start) / span * 100}%` }}
-      aria-label={s.kind === 'model' ? `${t('sessions.why.step.model')} ${s.model} ${formatUsd(s.cost)}` : `${s.name} ${s.label}`}
-      onClick={() => onStep(openStep === k ? null : k)}
-      onMouseMove={e => setTip({ x: e.clientX, y: e.clientY, step: s })}
-      onMouseLeave={() => setTip(null)}
-    />
-  ))
+  const [query, setQuery] = useState('')
+  const [mode, setMode] = useState('all')
+  const [newest, setNewest] = useState(true)
+  const reqs = requestsOf(turn)
+  const longest = Math.max(1, ...turn.steps.map(span))
+  const tk = turn.tokens
+  const toggle = (k: number) => onStep(openStep === k ? null : k)
+  const detail = (k: number) => openStep === k && <StepDetail step={turn.steps[k]!} />
+  const q = query.trim().toLowerCase()
+  const hit = (...xs: string[]) => xs.some(x => x.toLowerCase().includes(q))
+  const shown = reqs.map(r => {
+    const head = !q || hit(t('sessions.why.inspect.request', { n: r.n }), r.s.model)
+    return { r, head, tools: r.tools.filter(x => head || hit(x.s.name, x.s.label)) }
+  }).filter(x => x.head || x.tools.length)
+  if (newest) shown.reverse()
+  const toolRow = ({ s, k }: ToolRef) => (
+    <Fragment key={k}>
+      <button type="button" className={`sv-rq-tool${s.isError ? ' err' : ''}${openStep === k ? ' sel' : ''}`} aria-expanded={openStep === k} onClick={() => toggle(k)}>
+        <span className="nm">{toolName(s)}</span>
+        <span className="lb">{s.name === 'Bash' ? s.label.slice(0, 60) : s.label}</span>
+        <span className="tg">
+          {s.isError && <span className="sv-pill bad">{t('sessions.why.kind.failed')}</span>}
+          {s.parallel && <span className="sv-pill">{t('sessions.why.inspect.parallel', { index: s.parallel.index, of: s.parallel.of })}</span>}
+        </span>
+        <span className="tk">{added(s) > 0 ? `+${tok(added(s))}` : ''}</span>
+        <span className="du">{formatStepDuration(span(s))}</span>
+      </button>
+      {detail(k)}
+    </Fragment>
+  )
   return (
     <div className="sv-td">
       {turn.prompt.text && <p className="sv-td-prompt">{turn.prompt.text}</p>}
-      <p className="sv-td-sum">{turnSummary(turn)}</p>
+      <p className="sv-td-sum">
+        {plural('sessions.why.inspect.summary', turn.calls, { duration: formatStepDuration(turn.wallMs), amount: formatUsd(turn.cost), tokens: tok(tk.input + tk.cacheRead + tk.cacheWrite), reread: tok(tk.cacheRead), fresh: tok(tk.input + tk.cacheWrite), out: tok(tk.output) })}
+        {turn.helperCost > 0 && ' ' + t('sessions.why.turn.helpers', { amount: formatUsd(turn.helperCost) })}
+      </p>
       {findings.length > 0 && (
         <ul className="sv-td-flags">
           {findings.map(f => <li key={f.id}><i className={`sv-dot ${severity(f)}`} aria-hidden="true" />{findingCopy(f, why).title}</li>)}
         </ul>
       )}
-      <div className="sv-wf">
-        <span className="sv-wf-lab">{t('sessions.why.lane.model')}</span>
-        <div className="sv-wf-track">{bars(indexed.filter(x => x.s.kind === 'model'))}</div>
-        <span className="sv-wf-lab">{t('sessions.why.lane.tools')}</span>
-        <div className="sv-wf-track">{bars(tools)}</div>
-        <div className="sv-wf-axis"><span>{clock(turn.ts)}</span><span>{formatStepDuration(span)}</span></div>
-      </div>
-      {tip && (
-        <ChartTip x={tip.x} y={tip.y}>
-          <div className="chart-tip-d">{tip.step.kind === 'model' ? `${t('sessions.why.step.model')} · ${tip.step.model}` : `${tip.step.name}${tip.step.label ? ` · ${tip.step.label.slice(0, 60)}` : ''}`}</div>
-          <div className="chart-tip-v">{tip.step.kind === 'model' ? usdFine(tip.step.cost) : formatStepDuration(tip.step.end - tip.step.start)}</div>
-          <div className="chart-tip-s">+{formatStepDuration(tip.step.start)}{tip.step.kind === 'model' ? ` · ${formatStepDuration(tip.step.end - tip.step.start)}` : ''}</div>
-        </ChartTip>
-      )}
-      {tools.length > 0 && (
-        <div className="sv-steps">
-          {shown.map(({ s, k }) => s.kind === 'tool' && (
-            <button key={k} type="button" className={`sv-st${s.isError ? ' err' : ''}${openStep === k ? ' sel' : ''}`} onClick={() => onStep(openStep === k ? null : k)} aria-expanded={openStep === k}>
-              <i className={`sv-sw ${stepClass(s)}`} aria-hidden="true" />
-              <span className="nm">{s.name.replace(/^mcp__(.+?)__/, '')}</span>
-              <span className="lb">{s.label}</span>
-              {s.helperCost !== undefined && <span className="hc">{formatUsd(s.helperCost)}</span>}
-              <span className="du">{formatStepDuration(s.end - s.start)}</span>
+      {reqs.length > 0 && (
+        <div className="sv-ins">
+          {insightsOf(turn, reqs, why.rules).map(row => (
+            <button key={row.key} type="button" className="sv-ins-row" onClick={() => onStep(row.step)}>
+              <span className="lb">{row.label}</span>
+              <b className={row.tone}>{row.value}</b>
+              <span className="sv-pill">{row.pill}</span>
             </button>
           ))}
-          {shown.length < tools.length && (
-            <button type="button" className="sv-more" onClick={() => setAllSteps(true)}>{t('sessions.why.steps.more', { count: tools.length - shown.length })}</button>
-          )}
         </div>
       )}
-      {sel && <StepDetail step={sel} />}
+      {reqs.length > 0 && (
+        <div className="sv-rq-bar">
+          <input className="sessions-search" type="search" aria-label={t('sessions.why.inspect.search')} placeholder={t('sessions.why.inspect.search')} value={query} onChange={e => setQuery(e.target.value)} />
+          <SegTabs options={[{ value: 'all', label: t('sessions.why.inspect.all') }, { value: 'model', label: t('sessions.why.lane.model') }, { value: 'tools', label: t('sessions.why.lane.tools') }]} value={mode} onChange={setMode} />
+          <button type="button" className="sv-jump" onClick={() => setNewest(!newest)}>{t(newest ? 'sessions.why.inspect.newest' : 'sessions.why.inspect.oldest')}</button>
+        </div>
+      )}
+      {reqs.length > 0 && !shown.length && <p className="sv-note">{t('sessions.why.inspect.noMatch')}</p>}
+      {mode === 'tools'
+        ? shown.some(x => x.tools.length) && <div className="sv-rq">{shown.flatMap(x => (newest ? [...x.tools].reverse() : x.tools).map(toolRow))}</div>
+        : (
+          <div className="sv-rq-list">
+            {shown.map(({ r, tools }) => (
+              <div key={r.k} className={`sv-rq${openStep === r.k ? ' sel' : ''}`}>
+                <button type="button" className="sv-rq-head" aria-expanded={openStep === r.k} onClick={() => toggle(r.k)}>
+                  <span className="ti"><b>{t('sessions.why.inspect.request', { n: r.n })}</b><span>{r.s.model}</span></span>
+                  <span className="pl">
+                    <span className="sv-pill">{t('sessions.why.inspect.out', { tokens: tok(r.s.tokens.output) })}</span>
+                    <span className="sv-pill">{usdFine(r.s.cost)}</span>
+                  </span>
+                  <span className="mt">
+                    {t('sessions.why.inspect.tokens', { in: tok(r.s.tokens.input + r.s.tokens.cacheRead + r.s.tokens.cacheWrite), out: tok(r.s.tokens.output), cached: r.s.cachedPct == null ? '—' : `${Math.round(r.s.cachedPct)}%` })}
+                    {' · '}{roleOf(r)}
+                  </span>
+                  <span className="du"><i><b style={{ width: `${span(r.s) / longest * 100}%` }} /></i>{formatStepDuration(span(r.s))}</span>
+                </button>
+                {detail(r.k)}
+                {mode === 'all' && tools.length > 0 && <div className="sv-rq-tools">{tools.map(toolRow)}</div>}
+              </div>
+            ))}
+          </div>
+        )}
     </div>
   )
 }

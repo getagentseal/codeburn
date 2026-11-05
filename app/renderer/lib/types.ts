@@ -785,8 +785,14 @@ export type WhyError = { exitCode: number | null; cause: string | null; location
 export type WhyHelper = { id: string; description: string; agentType: string; models: string[]; calls: number; cost: number; nested: boolean; loose: boolean }
 export type WhyDetail = { command?: string; description?: string; output?: string; path?: string; diff?: string; lines?: number; input?: string; helper?: WhyHelper }
 export type WhyStep =
-  | { kind: 'model'; start: number; end: number; model: string; cost: number; parts: WhyParts; tokens: WhyTokens; startedBy: 'prompt' | 'tool' | 'message' }
-  | { kind: 'tool'; start: number; end: number; name: string; label: string; isError: boolean; error?: WhyError; helperCost?: number; detail: WhyDetail | null }
+  | {
+    kind: 'model'; start: number; end: number; model: string; cost: number; basis?: 'recorded' | 'calculated' | 'estimated' | 'included' | 'unpriced'; parts: WhyParts; tokens: WhyTokens; startedBy: 'prompt' | 'tool' | 'message'
+    cachedPct?: number | null; delta?: number | null; toolCalls?: number; answer?: boolean
+  }
+  | {
+    kind: 'tool'; start: number; end: number; name: string; label: string; isError: boolean; error?: WhyError; helperCost?: number; detail: WhyDetail | null
+    parent?: number; parallel?: { index: number; of: number }; resultChars?: number
+  }
 export type WhyTurn = {
   i: number
   ts: string

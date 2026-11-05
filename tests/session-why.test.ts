@@ -283,6 +283,35 @@ describe('session cost diagnosis: rules', () => {
   })
 })
 
+describe('session cost diagnosis: request fields', () => {
+  type ModelStep = Extract<SessionWhy['turns'][number]['steps'][number], { kind: 'model' }>
+  type ToolStep = Extract<SessionWhy['turns'][number]['steps'][number], { kind: 'tool' }>
+  const models = (i: number) => why.turns[i]!.steps.filter((s): s is ModelStep => s.kind === 'model')
+  const tools = (i: number) => why.turns[i]!.steps.filter((s): s is ToolStep => s.kind === 'tool')
+
+  it('points each tool step at the model step that asked for it', () => {
+    expect(tools(0).map(s => [s.name, s.parent])).toEqual([['Bash', 0], ['Edit', 2], ['Bash', 4]])
+    expect(tools(1).map(s => [s.name, s.parent, why.turns[1]!.steps[s.parent]!.kind])).toEqual([['Agent', 0, 'model'], ['Agent', 0, 'model'], ['Bash', 3, 'model']])
+  })
+
+  it('marks tool calls that one message asked for together', () => {
+    expect(tools(1).map(s => s.parallel ?? null)).toEqual([{ index: 1, of: 2 }, { index: 2, of: 2 }, null])
+    expect(tools(0).every(s => s.parallel === undefined)).toBe(true)
+    expect(tools(2)[0]!.resultChars).toBe(60_000)
+    expect(tools(0)[1]!.resultChars).toBe('updated'.length)
+  })
+
+  it('gives each model step its context delta, cached share, role and cost basis', () => {
+    const m = models(0)
+    expect(m.map(s => s.delta)).toEqual([1_000, 500, 300, null])
+    expect(m.map(s => [s.toolCalls, s.answer])).toEqual([[1, false], [1, false], [1, false], [0, true]])
+    expect(m[0]!.cachedPct).toBeCloseTo(20_000 / 50_002 * 100, 9)
+    expect(m[0]!.basis).toBe('calculated')
+    expect(models(1).map(s => s.toolCalls)).toEqual([2, 1, 0])
+    expect(models(1).at(-1)!.answer).toBe(true)
+  })
+})
+
 describe('session cost diagnosis: content', () => {
   it('redacts secrets in prompts and output', () => {
     expect(why.turns[0]!.prompt.text).not.toContain('sk-abcdefghijklmnop1234')
