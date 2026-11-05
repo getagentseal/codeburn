@@ -18,7 +18,7 @@ import { toDateString } from './daily-cache.js'
 import { statusSnapshotSemanticKey } from './status-snapshot-semantic.js'
 import { dateKey } from './day-aggregator.js'
 import { foldedSessionRows, sessionCacheHitPercent } from './sessions-report.js'
-import { applyClaudeIdentities, identityLabel, identitySplit, readIdentityLog, resolveIdentity, setIdentityLabel, UNATTRIBUTED } from './claude-identity.js'
+import { applyClaudeIdentities, identityId, identityLabel, identitySplit, multipleIdentities, readIdentityLog, resolveIdentity, setIdentityLabel, UNATTRIBUTED } from './claude-identity.js'
 import { behavioralCallWeight } from './behavioral-weight.js'
 import { CATEGORY_LABELS, type DateRange, type ProjectSummary, type TaskCategory } from './types.js'
 import type { AppliedFix } from './act/types.js'
@@ -513,7 +513,7 @@ async function resolveIdentityFlag(value: string | undefined, command: string): 
   if (value === undefined) return undefined
   const hash = await resolveIdentity(value)
   if (hash) return hash
-  process.stderr.write(`codeburn ${command}: unknown Claude account "${value}". See \`codeburn identity list\`.\n`)
+  process.stderr.write(`codeburn ${command}: unknown Claude identity "${value}". See \`codeburn identity list\`.\n`)
   process.exit(1)
 }
 
@@ -527,15 +527,15 @@ async function runIdentityList(): Promise<void> {
   }
   const { renderTable: renderTextTable } = await import('./text-table.js')
   const observed = renderTextTable(
-    [{ header: 'Observed' }, { header: 'Account' }, { header: 'Label' }, { header: 'Config dir' }],
-    log.entries.map(e => [e.observedAt.replace('T', ' ').slice(0, 16), e.accountHash, identityLabel(log, e.accountHash), e.configDir.replace(homedir(), '~')]),
+    [{ header: 'Observed' }, { header: 'Identity' }, { header: 'Account' }, { header: 'Label' }, { header: 'Config dir' }],
+    log.entries.map(e => [e.observedAt.replace('T', ' ').slice(0, 16), identityId(e), e.accountHash, identityLabel(log, identityId(e)), e.configDir.replace(homedir(), '~')]),
   )
   const split = identitySplit(projects, 1) ?? []
   const attributed = renderTextTable(
-    [{ header: 'Account' }, { header: 'Label' }, { header: 'Sessions', right: true }, { header: 'Cost', right: true }],
+    [{ header: 'Identity' }, { header: 'Label' }, { header: 'Sessions', right: true }, { header: 'Cost', right: true }],
     split.map(row => [row.hash, row.hash === UNATTRIBUTED ? '' : row.label, String(row.sessions), formatCost(row.cost)]),
   )
-  console.log(`\n${observed}\n${attributed}\nSessions go to the account last observed before they started; ${UNATTRIBUTED} ones started before the first observation.\n`)
+  console.log(`\n${observed}\n${attributed}\nSessions go to the identity last observed before they started; ${UNATTRIBUTED} ones started before the first observation.\n`)
 }
 
 // Wrapped in a factory because commander option state is sticky across
@@ -549,7 +549,7 @@ async function runJsonReport(period: Period, provider: string, project: string[]
   const { range, label } = getDateRange(period)
   const durable = await buildDurablePeriod({ range, label }, { provider, project, exclude, identity })
   await reportUnmatchedProjectPatterns(durable.knownProjects, project, exclude)
-  const report: ReturnType<typeof buildJsonReport> & { plan?: JsonPlanSummary; plans?: JsonPlanSummaryMap } = await attachPlanSummaries(buildJsonReport(durable.liveProjects, label, period, durable))
+  const report: ReturnType<typeof buildJsonReport> & { plan?: JsonPlanSummary; plans?: JsonPlanSummaryMap } = await attachPlanSummaries(buildJsonReport(durable.liveProjects, label, period, durable, await multipleIdentities()))
   console.log(JSON.stringify(report, null, 2))
 }
 
@@ -627,7 +627,7 @@ async function reportExcludedGatewayCost(range: DateRange, provider?: string): P
   if (note) process.stderr.write(`codeburn: ${note}\n`)
 }
 
-function buildJsonReport(projects: ProjectSummary[], period: string, periodKey: string, durable: DurablePeriod) {
+function buildJsonReport(projects: ProjectSummary[], period: string, periodKey: string, durable: DurablePeriod, withIdentities = false) {
   const sessions = projects.flatMap(p => p.sessions)
   const { code } = getCurrency()
 
@@ -671,7 +671,7 @@ function buildJsonReport(projects: ProjectSummary[], period: string, periodKey: 
       })
 
   const sessionCountBasis = durable.data.sessionCountBasis
-  const identities = identitySplit(projects)
+  const identities = withIdentities ? identitySplit(projects, 0) : undefined
   // Same durable day set as the headline, so a project's row is what selecting
   // it reports (expired transcripts included), one row per repository.
   const projectList = buildPayloadProjects(projects, durable.days, homedir(), durable.sessionCountCacheDays).map(p => ({
@@ -913,7 +913,7 @@ program
   .option('--format <format>', 'Output format: tui, json', 'tui')
   .option('--project <name>', 'Show only projects matching name (repeatable)', collect, [])
   .option('--exclude <name>', 'Exclude projects matching name (repeatable)', collect, [])
-  .option('--identity <label|hash>', 'JSON only: Claude usage of one account (see `codeburn identity list`)')
+  .option('--identity <label|hash>', 'JSON only: Claude usage of one identity (see `codeburn identity list`)')
   .option('--refresh <seconds>', 'Auto-refresh interval in seconds (minimum 60; 0 to disable)', parseInteger, 60)
   .action(async (opts, command) => {
     assertFormat(opts.format, ['tui', 'json'], 'report')
@@ -947,7 +947,7 @@ program
         const periodKey = daySelection ? 'day' : 'custom'
         const durable = await buildDurablePeriod({ range, label }, { provider: opts.provider, project: opts.project, exclude: opts.exclude, identity })
         await reportUnmatchedProjectPatterns(durable.knownProjects, opts.project, opts.exclude)
-        console.log(JSON.stringify(await attachPlanSummaries(buildJsonReport(durable.liveProjects, label, periodKey, durable)), null, 2))
+        console.log(JSON.stringify(await attachPlanSummaries(buildJsonReport(durable.liveProjects, label, periodKey, durable, await multipleIdentities())), null, 2))
       } else {
         await runJsonReport(period, opts.provider, opts.project, opts.exclude, identity)
       }
@@ -1111,7 +1111,7 @@ program
 
 program
   .command('identity-label <hash> <name>')
-  .description('Name a Claude account from `codeburn identity list` (stored locally, never synced)')
+  .description('Name a Claude identity from `codeburn identity list` (stored locally, never synced)')
   .action(async (hash: string, name: string) => {
     try {
       await setIdentityLabel(hash, name)
@@ -3188,7 +3188,7 @@ program
   .option('--no-pager', 'Print the complete table directly instead of opening the interactive browser')
   .option('--project <name>', 'Show only projects matching name (repeatable)', collect, [])
   .option('--exclude <name>', 'Exclude projects matching name (repeatable)', collect, [])
-  .option('--identity <label|hash>', 'Show only Claude sessions of one account (see `codeburn identity list`)')
+  .option('--identity <label|hash>', 'Show only Claude sessions of one identity (see `codeburn identity list`)')
   .action(async (opts) => {
     assertProvider(opts.provider, 'sessions')
     assertFormat(opts.format, ['table', 'json'], 'sessions')

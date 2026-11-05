@@ -7,7 +7,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import {
-  applyClaudeIdentities, identityAt, identityLogPath, identitySplit, observeClaudeIdentities,
+  applyClaudeIdentities, identityAt, identityId, identityLogPath, identitySplit, observeClaudeIdentities,
   readIdentityLog, setIdentityLabel, type IdentityLog,
 } from '../src/claude-identity.js'
 import { parseAllSessions } from '../src/parser.js'
@@ -98,6 +98,16 @@ describe('observeClaudeIdentities', () => {
     ])
   })
 
+  it('logs one account moving between two organizations as two identities', async () => {
+    await signIn(ACCOUNT_A, ORG_A, 'Personal', new Date('2026-11-01T10:00:00Z'))
+    await observeClaudeIdentities(new Date('2026-11-01T10:00:00Z'))
+    await signIn(ACCOUNT_A, ORG_B, 'Team', new Date('2026-11-01T11:00:00Z'))
+    await observeClaudeIdentities(new Date('2026-11-01T11:00:00Z'))
+    const log = (await readIdentityLog())!
+    expect(log.entries.map(e => [e.accountHash, e.orgHash, e.label])).toEqual([[hash(ACCOUNT_A), hash(ORG_A), 'Personal'], [hash(ACCOUNT_A), hash(ORG_B), 'Team']])
+    expect(new Set(log.entries.map(identityId)).size).toBe(2)
+  })
+
   it('writes nothing for a config without a signed-in account', async () => {
     await writeFile(join(home, '.claude.json'), JSON.stringify({ primaryApiKey: 'sk-test', numStartups: 1 }))
     await observeClaudeIdentities()
@@ -117,21 +127,36 @@ describe('identityAt', () => {
   }
   it('takes the last observation at or before the session start, per config dir', () => {
     expect(identityAt(log, '/c', '2026-11-01T09:59:59.000Z').hash).toBe('unattributed')
-    expect(identityAt(log, '/c', '2026-11-01T10:00:00.000Z')).toEqual({ hash: hash(ACCOUNT_A), label: 'Acme Corp' })
-    expect(identityAt(log, '/c', '2026-11-01T11:59:00.000Z').hash).toBe(hash(ACCOUNT_A))
-    expect(identityAt(log, '/c', '2026-11-01T12:00:00.000Z').hash).toBe(hash(ACCOUNT_B))
-    expect(identityAt(log, '/c', '2026-11-02T00:00:00.000Z').hash).toBe(hash(ACCOUNT_B))
-    expect(identityAt(log, '/other', '2026-11-01T10:00:00.000Z').hash).toBe(hash(ACCOUNT_B))
+    expect(identityAt(log, '/c', '2026-11-01T10:00:00.000Z')).toEqual({ hash: hash(ORG_A), label: 'Acme Corp' })
+    expect(identityAt(log, '/c', '2026-11-01T11:59:00.000Z').hash).toBe(hash(ORG_A))
+    expect(identityAt(log, '/c', '2026-11-01T12:00:00.000Z').hash).toBe(hash(ORG_B))
+    expect(identityAt(log, '/c', '2026-11-02T00:00:00.000Z').hash).toBe(hash(ORG_B))
+    expect(identityAt(log, '/other', '2026-11-01T10:00:00.000Z').hash).toBe(hash(ORG_B))
     expect(identityAt(log, undefined, '2026-11-01T13:00:00.000Z').hash).toBe('unattributed')
+  })
+
+  it('splits one account across two organizations, and falls back to the account without one', () => {
+    const orgs: IdentityLog = {
+      version: 1,
+      labels: {},
+      entries: [
+        entry(ACCOUNT_A, ORG_A, 'Personal', '2026-11-01T10:00:00.000Z', '/c'),
+        entry(ACCOUNT_A, ORG_B, 'Team', '2026-11-01T12:00:00.000Z', '/c'),
+        { accountHash: hash(ACCOUNT_B), label: '', observedAt: '2026-11-01T14:00:00.000Z', configDir: '/c' },
+      ],
+    }
+    expect(identityAt(orgs, '/c', '2026-11-01T11:00:00.000Z')).toEqual({ hash: hash(ORG_A), label: 'Personal' })
+    expect(identityAt(orgs, '/c', '2026-11-01T13:00:00.000Z')).toEqual({ hash: hash(ORG_B), label: 'Team' })
+    expect(identityAt(orgs, '/c', '2026-11-01T15:00:00.000Z')).toEqual({ hash: hash(ACCOUNT_B), label: hash(ACCOUNT_B) })
   })
 
   it('prefers a local label override, without touching the entries', async () => {
     await seedLog(log.entries)
-    await setIdentityLabel(hash(ACCOUNT_A), 'work')
+    await setIdentityLabel(hash(ORG_A), 'work')
     const saved = (await readIdentityLog())!
     expect(identityAt(saved, '/c', '2026-11-01T11:00:00.000Z').label).toBe('work')
     expect(saved.entries).toEqual(log.entries)
-    await expect(setIdentityLabel('ffffffffffff', 'x')).rejects.toThrow(/no Claude account/)
+    await expect(setIdentityLabel('ffffffffffff', 'x')).rejects.toThrow(/no Claude identity/)
   })
 })
 
@@ -159,7 +184,7 @@ describe('applyClaudeIdentities on parsed sessions', () => {
     expect((await readIdentityLog())!.entries).toHaveLength(2)
 
     const wire = JSON.stringify(buildOtlpPayload(collectUnsentCalls(projects).allCalls))
-    for (const leak of [hash(ACCOUNT_A), hash(ACCOUNT_B), 'Acme Corp', 'Home', 'unattributed']) expect(wire).not.toContain(leak)
+    for (const leak of [hash(ACCOUNT_A), hash(ACCOUNT_B), hash(ORG_A), hash(ORG_B), 'Acme Corp', 'Home', 'unattributed']) expect(wire).not.toContain(leak)
   })
 
   it('leaves non-Claude sessions alone', async () => {
@@ -201,13 +226,13 @@ describe('CLI surfaces', () => {
     const work = JSON.parse(run(['report', '--format', 'json', '-p', 'week', '--identity', 'acme corp']).stdout)
     expect(work.overview.sessions).toBe(1)
     expect(work.overview.cost).toBeCloseTo(report.identities.find((r: { label: string }) => r.label === 'Acme Corp').cost, 6)
-    expect(work.identities).toBeUndefined()
+    expect(work.identities.map((r: { label: string }) => r.label)).toEqual(['Acme Corp'])
 
     const rows = JSON.parse(run(['sessions', '--format', 'json', '-p', 'week']).stdout)
     expect(Object.fromEntries(rows.map((r: { sessionId: string; identity: { label: string } }) => [r.sessionId, r.identity.label])))
       .toEqual({ before: 'unattributed', 'during-a': 'Acme Corp', 'during-b': 'Home' })
-    const home2 = JSON.parse(run(['sessions', '--format', 'json', '-p', 'week', '--identity', hash(ACCOUNT_B)]).stdout)
-    expect(home2.map((r: { sessionId: string }) => r.sessionId)).toEqual(['during-b'])
+    const home2 = JSON.parse(run(['sessions', '--format', 'json', '-p', 'week', '--identity', hash(ORG_B)]).stdout)
+    expect(home2.map((r: { sessionId: string; identity: { label: string } }) => [r.sessionId, r.identity.label])).toEqual([['during-b', 'Home']])
 
     const out = join(home, 'export')
     expect(run(['export', '-f', 'csv', '-o', out]).status).toBe(0)
@@ -217,11 +242,11 @@ describe('CLI surfaces', () => {
 
     const unknown = run(['sessions', '--format', 'json', '--identity', 'nobody'])
     expect(unknown.status).toBe(1)
-    expect(unknown.stderr).toContain('unknown Claude account')
+    expect(unknown.stderr).toContain('unknown Claude identity')
 
-    expect(run(['identity-label', hash(ACCOUNT_A), 'work']).status).toBe(0)
+    expect(run(['identity-label', hash(ORG_A), 'work']).status).toBe(0)
     const list = run(['identity', 'list']).stdout
-    expect(list).toContain(hash(ACCOUNT_A))
+    expect(list).toContain(hash(ORG_A))
     expect(list).toContain('work')
     expect(list).toContain('Home')
     expect(list).toContain('unattributed')

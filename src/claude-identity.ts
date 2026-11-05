@@ -93,16 +93,30 @@ export async function observeClaudeIdentities(now = new Date()): Promise<void> {
   }
 }
 
+/** An identity is the organization, or the account when Claude reports no organization. */
+export function identityId(entry: IdentityEntry): string {
+  return entry.orgHash ?? entry.accountHash
+}
+
+function identityIds(log: IdentityLog): string[] {
+  return [...new Set(log.entries.map(identityId))]
+}
+
+export async function multipleIdentities(): Promise<boolean> {
+  const log = await readIdentityLog().catch(() => null)
+  return !!log && identityIds(log).length >= 2
+}
+
 export function identityLabel(log: IdentityLog, hash: string): string {
   if (hash === UNATTRIBUTED) return UNATTRIBUTED
-  return log.labels[hash] || log.entries.filter(e => e.accountHash === hash && e.label).at(-1)?.label || hash
+  return log.labels[hash] || log.entries.filter(e => identityId(e) === hash && e.label).at(-1)?.label || hash
 }
 
 export function identityAt(log: IdentityLog, configDir: string | undefined, startedAt: string): { hash: string; label: string } {
   const start = Date.parse(startedAt)
   let hash = UNATTRIBUTED
   for (const entry of log.entries) {
-    if (entry.configDir === configDir && Date.parse(entry.observedAt) <= start) hash = entry.accountHash
+    if (entry.configDir === configDir && Date.parse(entry.observedAt) <= start) hash = identityId(entry)
   }
   return { hash, label: identityLabel(log, hash) }
 }
@@ -111,7 +125,7 @@ export function identityAt(log: IdentityLog, configDir: string | undefined, star
 export async function applyClaudeIdentities(projects: ProjectSummary[], always = false): Promise<ProjectSummary[]> {
   await observeClaudeIdentities().catch(() => {})
   const log = await readIdentityLog().catch(() => null)
-  if (!log || (!always && new Set(log.entries.map(e => e.accountHash)).size < 2)) return projects
+  if (!log || (!always && identityIds(log).length < 2)) return projects
   const attribute = (session: SessionSummary): SessionSummary => inferSessionProvider(session) !== 'claude' ? session : {
     ...session,
     identity: identityAt(log, session.source?.kind === 'claude-config' ? session.source.path : undefined, session.firstTimestamp),
@@ -140,19 +154,19 @@ export function identitySplit(projects: ProjectSummary[], min = 2): IdentitySpli
     .sort((a, b) => b.cost - a.cost)
 }
 
-/** Resolves a hash or label (case-insensitive) to an account hash. */
+/** Resolves an identity hash or label (case-insensitive) to its identity hash. */
 export async function resolveIdentity(value: string): Promise<string | null> {
   if (value === UNATTRIBUTED) return UNATTRIBUTED
   const log = await readIdentityLog()
   if (!log) return null
-  const hashes = [...new Set(log.entries.map(e => e.accountHash))]
+  const hashes = identityIds(log)
   return hashes.find(h => h === value) ?? hashes.find(h => identityLabel(log, h).toLowerCase() === value.toLowerCase()) ?? null
 }
 
 export async function setIdentityLabel(hash: string, name: string): Promise<void> {
   const log = await readIdentityLog()
   if (!log) throw new Error(`cannot read ${identityLogPath()}`)
-  if (!log.entries.some(e => e.accountHash === hash)) throw new Error(`no Claude account ${hash} in the identity log; see \`codeburn identity list\``)
+  if (!identityIds(log).includes(hash)) throw new Error(`no Claude identity ${hash} in the identity log; see \`codeburn identity list\``)
   const label = cleanName(name)
   if (!label) throw new Error('label must be 1-256 printable characters')
   log.labels[hash] = label

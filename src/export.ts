@@ -5,7 +5,7 @@ import { CATEGORY_LABELS, type ParsedApiCall, type ProjectSummary, type TaskCate
 import { getCurrency, convertCost, roundForActiveCurrency } from './currency.js'
 import { dateKey } from './day-aggregator.js'
 import { behavioralCallWeight, behavioralTurnCount } from './behavioral-weight.js'
-import { identitySplit } from './claude-identity.js'
+import { multipleIdentities } from './claude-identity.js'
 import { aggregateModelEfficiency } from './model-efficiency.js'
 import { callBillableOutputTokens, costBasisShares, countSessions, sessionModelBillableOutputTokens, type CostBasisShares } from './session-output.js'
 import { findUnpricedModels, hasPriceDiscounts } from './models.js'
@@ -132,9 +132,8 @@ function buildDailyRows(projects: ProjectSummary[], period: string, withCostBasi
   }))
 }
 
-function buildRecordRows(projects: ProjectSummary[]): Row[] {
+function buildRecordRows(projects: ProjectSummary[], split = false): Row[] {
   const rows: Row[] = []
-  const split = identitySplit(projects) !== undefined
   const unpricedModels = new Map<string, boolean>()
   const isUnpriced = (model: string, cost: number): boolean => {
     if (cost > 0) return false
@@ -332,9 +331,8 @@ function buildProjectRows(projects: ProjectSummary[]): Row[] {
     }))
 }
 
-function buildSessionRows(projects: ProjectSummary[], withCostBasis = false): Row[] {
+function buildSessionRows(projects: ProjectSummary[], withCostBasis = false, split = false): Row[] {
   const rows: Row[] = []
-  const split = identitySplit(projects) !== undefined
   for (const p of projects) {
     for (const s of p.sessions) {
       const models = new Set(
@@ -410,8 +408,8 @@ function buildReadme(periods: PeriodExport[]): string {
     '                        retained marks a session kept from the cache after its tool removed the transcript;',
     '                        sessions.csv carries the same column.',
     '                        listCost (only with price-discount set) is the list-price cost of a discounted call.',
-    '                        identity (only with two or more Claude accounts in the period) is the account',
-    '                        active when the session started; sessions.csv carries it too.',
+    '                        identity (only once codeburn has seen two or more Claude identities) is the organization',
+    '                        (or account) active when the session started; sessions.csv carries it too.',
     '  projects.csv          Spend per project folder for the selected detail period.',
     '  sessions.csv          One row per session for the selected detail period.',
     '  tools.csv             Tool invocations and share for the selected detail period.',
@@ -454,6 +452,7 @@ async function clearCodeburnExportFolder(path: string): Promise<void> {
 export async function exportCsv(periods: PeriodExport[], outputPath: string): Promise<string> {
   const thirtyDays = periods.find(p => p.label === '30 Days')
   const thirtyDayProjects = thirtyDays?.projects ?? periods[periods.length - 1]?.projects ?? []
+  const split = await multipleIdentities()
 
   let folder = resolve(outputPath)
   if (folder.toLowerCase().endsWith('.csv')) {
@@ -494,9 +493,9 @@ export async function exportCsv(periods: PeriodExport[], outputPath: string): Pr
   await writeFile(join(folder, 'daily.csv'), rowsToCsv(dailyRows), 'utf-8')
   await writeFile(join(folder, 'activity.csv'), rowsToCsv(activityRows), 'utf-8')
   await writeFile(join(folder, 'models.csv'), rowsToCsv(modelRows, { ...csvHeaders(), model: 'Model' }), 'utf-8')
-  await writeFile(join(folder, 'records.csv'), rowsToCsv(buildRecordRows(thirtyDayProjects), {}), 'utf-8')
+  await writeFile(join(folder, 'records.csv'), rowsToCsv(buildRecordRows(thirtyDayProjects, split), {}), 'utf-8')
   await writeFile(join(folder, 'projects.csv'), rowsToCsv(buildProjectRows(thirtyDayProjects)), 'utf-8')
-  await writeFile(join(folder, 'sessions.csv'), rowsToCsv(buildSessionRows(thirtyDayProjects)), 'utf-8')
+  await writeFile(join(folder, 'sessions.csv'), rowsToCsv(buildSessionRows(thirtyDayProjects, false, split)), 'utf-8')
   await writeFile(join(folder, 'tools.csv'), rowsToCsv(buildToolRows(thirtyDayProjects)), 'utf-8')
   await writeFile(join(folder, 'mcp.csv'), rowsToCsv(buildMcpRows(thirtyDayProjects)), 'utf-8')
   await writeFile(join(folder, 'shell-commands.csv'), rowsToCsv(buildBashRows(thirtyDayProjects)), 'utf-8')
@@ -507,6 +506,7 @@ export async function exportCsv(periods: PeriodExport[], outputPath: string): Pr
 export async function exportJson(periods: PeriodExport[], outputPath: string): Promise<string> {
   const thirtyDays = periods.find(p => p.label === '30 Days')
   const thirtyDayProjects = thirtyDays?.projects ?? periods[periods.length - 1]?.projects ?? []
+  const split = await multipleIdentities()
   const { code, rate, symbol } = getCurrency()
 
   const data = {
@@ -521,8 +521,8 @@ export async function exportJson(periods: PeriodExport[], outputPath: string): P
       models: buildModelRows(p.projects, p.label),
     })),
     projects: buildProjectRows(thirtyDayProjects),
-    sessions: buildSessionRows(thirtyDayProjects, true),
-    records: buildRecordRows(thirtyDayProjects),
+    sessions: buildSessionRows(thirtyDayProjects, true, split),
+    records: buildRecordRows(thirtyDayProjects, split),
     tools: buildToolRows(thirtyDayProjects),
     mcp: buildMcpRows(thirtyDayProjects),
     shellCommands: buildBashRows(thirtyDayProjects),
