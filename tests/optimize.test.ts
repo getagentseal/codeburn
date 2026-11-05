@@ -1460,6 +1460,15 @@ describe('renderOptimize grouping', () => {
     expect(out).toContain('1 measured · 2 estimated')
     expect(out).not.toContain('Estimates only.')
   })
+
+  it('omits the savings line for a finding without a figure and keeps it for the rest', () => {
+    const zero = { ...finding('idle-compaction-blocked', 'Window blocks idle compaction'), tokensSaved: 0 }
+    const out = plain(renderOptimize([finding('bash-output-cap', 'Cap bash output'), zero], 0.00001, '7 Days', 10, 5, 100, 80, 'B', [], []))
+    expect(out).toContain('Potential savings: ~1.0K tokens (~$0.010)  estimated')
+    expect(out).not.toContain('Potential savings: ~0 tokens')
+    expect(out).toContain('Fix now (apply-able) · ~1.0K tokens (~$0.010) · 1 finding')
+    expect(out).toContain('Habits · 1 finding')
+  })
 })
 
 describe('renderOptimize applied-fixes section', () => {
