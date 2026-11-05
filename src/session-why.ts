@@ -48,7 +48,7 @@ export type WhyAgent = WhyHelper & {
   parentId: string | null; model: string; background: boolean; state: 'running' | 'done' | 'stopped'; task: string
   delegatedAt: string | null; firstCallAt: string | null; lastCallAt: string | null; handedBackAt: string | null; handedBackIn: number | null
   taskTokensEst: number; reportTokensEst: number; handBackCost: number; cacheSaving: number
-  requests: number; toolCalls: number; parts: WhyParts; tokens: WhyTokens; steps: WhyStep[]
+  requests: number; toolCalls: number; parts: WhyParts; tokens: WhyTokens; steps: WhyStep[]; truncatedSteps?: number
 }
 export type WhyDetail = {
   command?: string
@@ -62,11 +62,11 @@ export type WhyDetail = {
 }
 export type WhyStep =
   | {
-    kind: 'model'; start: number; end: number; model: string; cost: number; basis: CostBasis; parts: WhyParts; tokens: WhyTokens; startedBy: 'prompt' | 'tool' | 'message'
-    cachedPct: number | null; delta: number | null; toolCalls: number; answer: boolean
+    kind: 'model'; start: number; end: number; model: string; cost: number; basis?: CostBasis; parts: WhyParts; tokens: WhyTokens; startedBy: 'prompt' | 'tool' | 'message'
+    cachedPct: number | null; toolCalls: number; answer?: true
   }
   | {
-    kind: 'tool'; start: number; end: number; name: string; label: string; isError: boolean; error?: WhyError; helperCost?: number; detail: WhyDetail | null
+    kind: 'tool'; start: number; end: number; name: string; label: string; isError?: true; error?: WhyError; helperCost?: number; detail?: WhyDetail
     parent: number; parallel?: { index: number; of: number }; resultChars: number
   }
 export type WhyTurn = {
@@ -83,6 +83,7 @@ export type WhyTurn = {
   wallMs: number
   steps: WhyStep[]
   compactions: string[]
+  truncatedSteps?: number
 }
 type Base = { id: string; turn?: number; step?: number; usd: number | null; share: number | null }
 export type WhyFinding = Base & (
@@ -510,10 +511,12 @@ export async function buildSessionWhy(filePath: string): Promise<SessionWhy> {
       const toolUses = isAdvisor || !m ? [] : m.toolUses
       if (turn) allCalls.push({ call, ts: firstTs, turn, toolUse: toolUses.length > 0 })
       const u = call.usage
+      const cachedPct = sessionCacheHitPercent(u.inputTokens, u.cacheReadInputTokens, u.cacheCreationInputTokens)
       const modelStep: WhyStep = {
-        kind: 'model', start: sentAt - start, end: lastTs - start, model: getShortModelName(call.model), cost: call.costUSD, basis: call.costBasis ?? 'calculated', parts: partsOf(call), startedBy,
+        kind: 'model', start: sentAt - start, end: lastTs - start, model: getShortModelName(call.model), cost: call.costUSD,
+        ...(call.costBasis && call.costBasis !== 'calculated' ? { basis: call.costBasis } : {}), parts: partsOf(call), startedBy,
         tokens: { input: u.inputTokens, output: u.outputTokens, cacheRead: u.cacheReadInputTokens, cacheWrite: u.cacheCreationInputTokens },
-        cachedPct: sessionCacheHitPercent(u.inputTokens, u.cacheReadInputTokens, u.cacheCreationInputTokens), delta: null, toolCalls: toolUses.length, answer: false,
+        cachedPct: cachedPct === null ? null : Math.round(cachedPct * 10) / 10, toolCalls: toolUses.length,
       }
       steps.push(modelStep)
       callOf.set(modelStep, call)
@@ -523,14 +526,14 @@ export async function buildSessionWhy(filePath: string): Promise<SessionWhy> {
         const helper = helperByTool.get(tu.id)
         if (helper) seen.push(helper)
         const doneTs = (tu.name === 'Agent' || tu.name === 'Task' ? r.handBacks.get(tu.id)?.ts : undefined) ?? res?.ts ?? tu.ts
-        let detail: WhyDetail | null = toolDetail(tu.name, tu.input, res)
+        let detail: WhyDetail | undefined = toolDetail(tu.name, tu.input, res)
         const size = JSON.stringify(detail).length
         // ponytail: one global budget keeps the payload under the app's 16MB pipe cap; per-turn loading if real sessions hit it.
-        if (size > budget) { detail = null; detailsOmitted = true } else budget -= size
+        if (size > budget) { detail = undefined; detailsOmitted = true } else budget -= size
         if (detail && helper) detail.helper = publicHelper(helper)
         const step: WhyStep = {
           kind: 'tool', start: tu.ts - start, end: doneTs - start, name: tu.name, label: redact(toolLabel(tu.name, tu.input)),
-          isError: res?.isError === true, ...(res?.isError ? { error: errorCause(res.text) } : {}), ...(helper ? { helperCost: helper.cost } : {}), detail,
+          ...(res?.isError ? { isError: true, error: errorCause(res.text) } : {}), ...(helper ? { helperCost: helper.cost } : {}), ...(detail ? { detail } : {}),
           parent: -1, ...(toolUses.length > 1 ? { parallel: { index: j + 1, of: toolUses.length } } : {}), resultChars: res?.text.length ?? 0,
         }
         if (res) stepResult.set(step, res)
@@ -540,13 +543,8 @@ export async function buildSessionWhy(filePath: string): Promise<SessionWhy> {
       })
     }
     steps.sort((a, b) => a.start - b.start)
-    const context = (s: Extract<WhyStep, { kind: 'model' }>) => s.tokens.input + s.tokens.cacheRead + s.tokens.cacheWrite
-    const models = steps.filter((s): s is Extract<WhyStep, { kind: 'model' }> => s.kind === 'model')
-    models.forEach((s, j) => {
-      const next = models[j + 1]
-      s.delta = next ? context(next) - context(s) : null
-      s.answer = !next
-    })
+    const answer = steps.filter((s): s is Extract<WhyStep, { kind: 'model' }> => s.kind === 'model').at(-1)
+    if (answer) answer.answer = true
     for (const s of steps) if (s.kind === 'tool') s.parent = steps.indexOf(parentOf.get(s)!)
     return { steps, seen, end }
   }
@@ -1036,6 +1034,23 @@ export function renderSessionWhyText(why: SessionWhy): string {
   return out.join('\n')
 }
 
+// The desktop reads this JSON through a 16 MiB pipe. Past the budget, whole step
+// lists go, cheapest first, helpers before prompts; totals and findings stay.
+const WHY_JSON_BUDGET_BYTES = 12 * 1024 * 1024
+
+export function fitWhyJson(why: SessionWhy, budget = WHY_JSON_BUDGET_BYTES): SessionWhy {
+  let over = Buffer.byteLength(JSON.stringify(why)) - budget
+  const byCost = <T extends { cost: number }>(xs: T[]) => [...xs].sort((a, b) => a.cost - b.cost)
+  for (const x of [...byCost(why.turns.flatMap(t => t.helpers)), ...byCost(why.turns)]) {
+    if (over <= 0) break
+    if (!x.steps.length) continue
+    over -= Buffer.byteLength(JSON.stringify(x.steps)) - 2
+    x.truncatedSteps = x.steps.length
+    x.steps = []
+  }
+  return why
+}
+
 export async function runSessionWhy(id: string, format: string): Promise<number> {
   const { findClaudeSession } = await import('./context-tree.js')
   const ref = await findClaudeSession(id)
@@ -1044,6 +1059,6 @@ export async function runSessionWhy(id: string, format: string): Promise<number>
     return 1
   }
   const why = await buildSessionWhy(ref.filePath)
-  process.stdout.write((format === 'json' ? JSON.stringify(why) : renderSessionWhyText(why)) + '\n')
+  process.stdout.write((format === 'json' ? JSON.stringify(fitWhyJson(why)) : renderSessionWhyText(why)) + '\n')
   return 0
 }

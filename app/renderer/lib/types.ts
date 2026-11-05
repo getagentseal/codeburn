@@ -787,16 +787,16 @@ export type WhyAgent = WhyHelper & {
   parentId: string | null; model: string; background: boolean; state: 'running' | 'done' | 'stopped'; task: string
   delegatedAt: string | null; firstCallAt: string | null; lastCallAt: string | null; handedBackAt: string | null; handedBackIn: number | null
   taskTokensEst: number; reportTokensEst: number; handBackCost: number; cacheSaving: number
-  requests: number; toolCalls: number; parts: WhyParts; tokens: WhyTokens; steps: WhyStep[]
+  requests: number; toolCalls: number; parts: WhyParts; tokens: WhyTokens; steps: WhyStep[]; truncatedSteps?: number
 }
 export type WhyDetail = { command?: string; description?: string; output?: string; path?: string; diff?: string; lines?: number; input?: string; helper?: WhyHelper }
 export type WhyStep =
   | {
     kind: 'model'; start: number; end: number; model: string; cost: number; basis?: 'recorded' | 'calculated' | 'estimated' | 'included' | 'unpriced'; parts: WhyParts; tokens: WhyTokens; startedBy: 'prompt' | 'tool' | 'message'
-    cachedPct?: number | null; delta?: number | null; toolCalls?: number; answer?: boolean
+    cachedPct?: number | null; toolCalls?: number; answer?: boolean
   }
   | {
-    kind: 'tool'; start: number; end: number; name: string; label: string; isError: boolean; error?: WhyError; helperCost?: number; detail: WhyDetail | null
+    kind: 'tool'; start: number; end: number; name: string; label: string; isError?: boolean; error?: WhyError; helperCost?: number; detail?: WhyDetail | null
     parent?: number; parallel?: { index: number; of: number }; resultChars?: number
   }
 export type WhyTurn = {
@@ -813,6 +813,7 @@ export type WhyTurn = {
   wallMs: number
   steps: WhyStep[]
   compactions?: string[]
+  truncatedSteps?: number
 }
 type WhyBase = { id: string; turn?: number; step?: number; usd: number | null; share: number | null }
 export type WhyFinding = WhyBase & (

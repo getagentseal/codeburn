@@ -443,6 +443,7 @@ function TurnDetail({ turn, findings, why, openStep, onStep, seg }: { turn: WhyT
         </div>
       )}
       {reqs.length > 0 && !shown.length && <p className="sv-note">{t('sessions.why.inspect.noMatch')}</p>}
+      {turn.truncatedSteps ? <p className="sv-note">{plural('sessions.why.step.truncated', turn.truncatedSteps)}</p> : null}
       {mode === 'tools'
         ? shown.some(x => x.tools.length) && <div className="sv-rq">{shown.flatMap(x => (newest ? [...x.tools].reverse() : x.tools).map(toolRow))}</div>
         : (
@@ -523,6 +524,7 @@ function Lifecycle({ h }: { h: WhyAgent }) {
       key: 'run', offset: off(h.lastCallAt), body: (
         <>
           <p>{[plural('sessions.why.agents.requests', h.requests), plural('sessions.why.agents.toolCalls', h.toolCalls), t('sessions.why.agents.cached', { share: pct(context(h.tokens) > 0 ? h.tokens.cacheRead / context(h.tokens) : 0) })].join(', ')}</p>
+          {h.truncatedSteps ? <p className="sv-note">{plural('sessions.why.step.truncated', h.truncatedSteps)}</p> : null}
           <span className="sv-lc-bars" aria-hidden="true">
             {reqs.map((s, j) => (
               <span key={j} style={{ height: `${(context(s.tokens) + s.tokens.output) / peak * 100}%` }}>
@@ -599,7 +601,7 @@ function AgentsView({ turn, why, seg }: { turn: WhyTurn; why: SessionWhy; seg: R
           <Lifecycle h={h} />
           {open === h.id && (
             <TurnDetail
-              turn={{ ...turn, ts: h.delegatedAt ?? turn.ts, prompt: { text: '', kind: 'text' }, cost: h.cost, parts: h.parts, tokens: h.tokens, calls: h.requests, models: h.models, helperCost: 0, helpers: [], wallMs: tookOf(h), steps: h.steps }}
+              turn={{ ...turn, ts: h.delegatedAt ?? turn.ts, prompt: { text: '', kind: 'text' }, cost: h.cost, parts: h.parts, tokens: h.tokens, calls: h.requests, models: h.models, helperCost: 0, helpers: [], wallMs: tookOf(h), steps: h.steps, truncatedSteps: h.truncatedSteps }}
               findings={[]} why={why} openStep={step} onStep={setStep}
             />
           )}
@@ -654,6 +656,7 @@ function StoryView({ turn, why, seg, onOpen }: { turn: WhyTurn; why: SessionWhy;
           </li>
         ))}
       </ol>
+      {turn.truncatedSteps ? <p className="sv-note">{plural('sessions.why.step.truncated', turn.truncatedSteps)}</p> : null}
       <p className="sv-note">{t('sessions.why.story.footer')}</p>
     </div>
   )

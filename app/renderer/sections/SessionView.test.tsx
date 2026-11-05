@@ -269,6 +269,22 @@ describe('SessionView agents', () => {
     expect(texts(card(td, 'agent-k1'), '.sv-rq-head .ti b')).toEqual(['Request 3', 'Request 2', 'Request 1'])
     expect(texts(card(td, 'agent-k1'), '.sv-rq-tool .nm')).toEqual(['Agent'])
   })
+
+  it('says when a session too large to load left out a helper or prompt step list', async () => {
+    const user = userEvent.setup()
+    const helpers = agentsTurn.helpers.map(h => (h.id === 'agent-k2' ? { ...h, steps: [], truncatedSteps: 120 } : h))
+    getSessionWhy.mockResolvedValue({ ...agentsPayload, turns: [...payload.turns, { ...agentsTurn, helpers, steps: [], truncatedSteps: 1 }] })
+    const { container } = render(<SessionView row={row} filters={EMPTY_FILTERS} onBack={() => {}} />)
+    await screen.findByText('1 step was not loaded: this session is too large to load every one.')
+    const td = () => container.querySelector('#sv-turn-6 .sv-td')!
+    const tab = within(td() as HTMLElement).getByRole('tab', { name: 'Agents' })
+    expect(td().querySelector('.sv-note')).toHaveTextContent('1 step was not loaded: this session is too large to load every one.')
+    await user.click(tab)
+    const k2 = card(td(), 'agent-k2')
+    expect(k2.querySelector('[data-stage="run"] .sv-note')).toHaveTextContent('120 steps were not loaded')
+    expect(k2.querySelectorAll('.sv-lc-bars > span')).toHaveLength(0)
+    expect(card(td(), 'agent-k1').querySelector('.sv-note')).toBeNull()
+  })
 })
 
 describe('SessionView story', () => {
