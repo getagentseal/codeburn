@@ -3,6 +3,7 @@ import { basename, join } from 'path'
 
 import type { ClassifiedTurn, DateRange, ProjectSummary } from './types.js'
 import { readSessionLines } from './fs-utils.js'
+import { fileFacts, type FactsPass, type FactsResume } from './scan-facts.js'
 import { behavioralCallWeight, isBehavioralCall } from './behavioral-weight.js'
 import { modelRowKey } from './models.js'
 import { callBillableOutputTokens } from './session-output.js'
@@ -383,13 +384,70 @@ export function projectSessionIds(projects: readonly ProjectSummary[]): Set<stri
   return new Set(projects.flatMap(p => p.sessions.map(s => s.sessionId)))
 }
 
+type CorrectionHit = [model: string, ts: string, atMs: number | null]
+
+/// One transcript's self-corrections, whatever the period: each message that
+/// matched, keyed the way the scan dedupes (model and raw timestamp) and carrying
+/// its instant for the range test. Within a file the first line of a key decides,
+/// as the scan always did.
+async function scanFileCorrections(file: string, resume?: FactsResume<CorrectionHit[]>): Promise<FactsPass<CorrectionHit[]>> {
+  const hits: CorrectionHit[] = resume ? [...resume.facts] : []
+  // ponytail: a resumed read only knows the keys that matched, so a later line
+  // repeating a key an earlier unmatched line claimed would count; measured on
+  // 807k assistant lines, no key ever changes verdict inside a file.
+  const seen = new Set(hits.map(([model, ts]) => `${model}:${ts}`))
+  const tracker = { lastCompleteLineOffset: resume?.fromOffset ?? 0 }
+  // Streamed: a whole-file string read throws past V8's ~512 MiB string limit.
+  const lines = readSessionLines(file, undefined, {
+    byteOffsetTracker: tracker,
+    ...(resume ? { startByteOffset: resume.fromOffset } : {}),
+  })
+  for await (const line of lines) {
+    const trimmed = line.trim()
+    if (!trimmed) continue
+
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(trimmed)
+    } catch {
+      continue
+    }
+
+    const rec = parsed as Record<string, unknown>
+    if (!rec || typeof rec !== 'object' || rec['type'] !== 'assistant') continue
+
+    const ts = rec['timestamp']
+    const msg = rec['message']
+    if (msg === null || typeof msg !== 'object') continue
+
+    const msgRec = msg as Record<string, unknown>
+    const model = msgRec['model']
+    if (typeof model !== 'string' || model === '<synthetic>') continue
+
+    const dedupeKey = `${model}:${ts}`
+    if (seen.has(dedupeKey)) continue
+    seen.add(dedupeKey)
+
+    const text = extractText(msgRec['content'])
+    if (SELF_CORRECTION_PATTERNS.some(p => p.test(text))) {
+      const atMs = new Date(typeof ts === 'string' ? ts : NaN).getTime()
+      hits.push([model, String(ts), Number.isNaN(atMs) ? null : atMs])
+    }
+  }
+  return { facts: hits, offset: tracker.lastCompleteLineOffset }
+}
+
 /// `sessionIds`, when given, restricts the scan to transcripts whose file stem
 /// is one of them; omitted, every file under `projectDirs` is read as before.
 /// `range`, when given, counts only messages timestamped inside it, the same
-/// gate the parser applies to calls.
+/// gate the parser applies to calls. Each transcript is read once per version
+/// of the file (see scan-facts.ts); a message copied into several transcripts
+/// counts once.
 export async function scanSelfCorrections(projectDirs: string[], sessionIds?: ReadonlySet<string>, range?: DateRange): Promise<Map<string, number>> {
   const counts = new Map<string, number>()
   const seen = new Set<string>()
+  const startMs = range?.start.getTime()
+  const endMs = range?.end.getTime()
 
   for (const dir of projectDirs) {
     let entries
@@ -416,45 +474,18 @@ export async function scanSelfCorrections(projectDirs: string[], sessionIds?: Re
 
     for (const file of allFiles) {
       if (sessionIds && !sessionIds.has(basename(file, '.jsonl'))) continue
-      // Streamed: a whole-file string read throws past V8's ~512 MiB string limit.
+      let hits: CorrectionHit[]
       try {
-        for await (const line of readSessionLines(file)) {
-          const trimmed = line.trim()
-          if (!trimmed) continue
-
-          let parsed: unknown
-          try {
-            parsed = JSON.parse(trimmed)
-          } catch {
-            continue
-          }
-
-          const rec = parsed as Record<string, unknown>
-          if (!rec || typeof rec !== 'object' || rec['type'] !== 'assistant') continue
-
-          const ts = rec['timestamp']
-          const msg = rec['message']
-          if (msg === null || typeof msg !== 'object') continue
-
-          const msgRec = msg as Record<string, unknown>
-          const model = msgRec['model']
-          if (typeof model !== 'string' || model === '<synthetic>') continue
-          if (range) {
-            const at = new Date(typeof ts === 'string' ? ts : NaN)
-            if (Number.isNaN(at.getTime()) || at < range.start || at > range.end) continue
-          }
-
-          const dedupeKey = `${model}:${ts}`
-          if (seen.has(dedupeKey)) continue
-          seen.add(dedupeKey)
-
-          const text = extractText(msgRec['content'])
-          if (SELF_CORRECTION_PATTERNS.some(p => p.test(text))) {
-            counts.set(model, (counts.get(model) ?? 0) + 1)
-          }
-        }
+        hits = await fileFacts('corrections', file, resume => scanFileCorrections(file, resume))
       } catch {
         continue
+      }
+      for (const [model, ts, atMs] of hits) {
+        if (range && (atMs === null || atMs < startMs! || atMs > endMs!)) continue
+        const dedupeKey = `${model}:${ts}`
+        if (seen.has(dedupeKey)) continue
+        seen.add(dedupeKey)
+        counts.set(model, (counts.get(model) ?? 0) + 1)
       }
     }
   }
