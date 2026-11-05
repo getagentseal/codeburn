@@ -674,7 +674,9 @@ function AppMain({ transientProject, onTransientProject }: { transientProject: T
       // the visible poll's own result is already under that exact memo key.) The
       // queue is deliberately serial. Results use the exact section memo keys,
       // then persist through usePolled so tomorrow's launch paints them before
-      // revalidation.
+      // revalidation. Compare and Optimize are left out: each runs up to a minute
+      // in the one FIFO serve child, so a click on any section queued behind it,
+      // and their small payloads persist, so a revisit paints from the snapshot.
       const reportTargets: Array<{ key: string; load: () => Promise<unknown> }> = [
         {
           key: reportMemoKey('sessions', targetPeriod, provider),
@@ -687,14 +689,6 @@ function AppMain({ transientProject, onTransientProject }: { transientProject: T
         {
           key: reportMemoKey('models', targetPeriod, provider, null, 'false'),
           load: () => codeburn.getModels(targetPeriod, provider, false, undefined, true),
-        },
-        {
-          key: reportMemoKey('comparemodels', targetPeriod, provider),
-          load: () => codeburn.getCompareModels(targetPeriod, provider, true),
-        },
-        {
-          key: reportMemoKey('optimize', targetPeriod, provider),
-          load: () => codeburn.getOptimizeReport(targetPeriod, provider, undefined, true),
         },
         {
           key: reportMemoKey('yield', targetPeriod, provider),
