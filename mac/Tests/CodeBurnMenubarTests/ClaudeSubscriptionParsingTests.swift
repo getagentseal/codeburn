@@ -39,7 +39,7 @@ struct ClaudeSubscriptionParsingTests {
         #expect(usage.sevenDayPercent == 63.0)
         #expect(usage.sevenDayOpusPercent == nil)
         #expect(usage.sevenDaySonnetPercent == nil)
-        #expect(usage.tier == .max(20))
+        #expect(usage.tier == .ultra)
     }
 
     @Test("session and weekly_all limits are not duplicated as scoped rows")
