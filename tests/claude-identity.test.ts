@@ -8,8 +8,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
   applyClaudeIdentities, identityAt, identityId, identityLogPath, identitySplit, observeClaudeIdentities,
-  readIdentityLog, setIdentityLabel, type IdentityLog,
+  readIdentityLog, recordClaudePlan, setIdentityLabel, type IdentityLog,
 } from '../src/claude-identity.js'
+import { readKeychainPassword } from '../src/quota/security.js'
 import { parseAllSessions } from '../src/parser.js'
 import { buildOtlpPayload } from '../src/sync/otlp.js'
 import { collectUnsentCalls } from '../src/sync/push.js'
@@ -17,7 +18,7 @@ import { setHome } from './setup/home.js'
 
 vi.mock('../src/quota/security.js', async importOriginal => ({
   ...await importOriginal<typeof import('../src/quota/security.js')>(),
-  readKeychainPassword: async () => ({ status: 'notFound' }),
+  readKeychainPassword: vi.fn(async () => ({ status: 'notFound' })),
 }))
 
 const ACCOUNT_A = '11111111-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
@@ -128,6 +129,19 @@ describe('observeClaudeIdentities', () => {
     const log = (await readIdentityLog())!
     expect(log.entries.map(e => e.plan)).toEqual(['Pro', 'Max 5x'])
     expect(identityAt(log, configDir, '2026-11-01T10:30:00.000Z')).toEqual({ hash: hash(ORG_A), label: 'Acme Corp', plan: 'Max 5x' })
+  })
+
+  it('never reads the keychain, and takes the plan from the quota read instead', async () => {
+    await signIn(ACCOUNT_A, ORG_A, 'Acme Corp', new Date('2026-11-01T10:00:00Z'))
+    await observeClaudeIdentities(new Date('2026-11-01T10:00:00Z'))
+    expect(vi.mocked(readKeychainPassword)).not.toHaveBeenCalled()
+    expect((await readIdentityLog())!.entries.map(e => e.plan)).toEqual([undefined])
+
+    await recordClaudePlan(configDir, 'Max 20x', new Date('2026-11-01T11:00:00Z'))
+    await recordClaudePlan(configDir, 'Max 20x', new Date('2026-11-01T12:00:00Z'))
+    const log = (await readIdentityLog())!
+    expect(log.entries.map(e => [e.plan, e.observedAt])).toEqual([[undefined, '2026-11-01T10:00:00.000Z'], ['Max 20x', '2026-11-01T11:00:00.000Z']])
+    expect(identityAt(log, configDir, '2026-11-01T10:30:00.000Z')).toEqual({ hash: hash(ORG_A), label: 'Acme Corp', plan: 'Max 20x' })
   })
 
   it('writes nothing for a config without a signed-in account', async () => {

@@ -145,11 +145,8 @@ export function planLabel(credential: Pick<ClaudeCredential, 'subscriptionType' 
 
 export async function readClaudePlan(configDir: string): Promise<string | undefined> {
   try {
-    let credential = await readSecureFile(path.join(configDir, '.credentials.json')).then(raw => raw ? parseCredential(raw) : null)
-    if ((!credential || (credential.expiresAt !== undefined && credential.expiresAt <= Date.now())) && process.platform === 'darwin') {
-      const outcome = await readClaudeKeychain(claudeKeychainService(configDir))
-      if (outcome.status === 'found') credential = parseCredential(outcome.value) ?? credential
-    }
+    const raw = await readSecureFile(path.join(configDir, '.credentials.json'))
+    const credential = raw ? parseCredential(raw) : null
     return credential ? planLabel(credential) : undefined
   } catch {
     return undefined

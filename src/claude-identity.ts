@@ -95,6 +95,15 @@ export async function observeClaudeIdentities(now = new Date()): Promise<void> {
   }
 }
 
+export async function recordClaudePlan(configDir: string, plan: string, now = new Date()): Promise<void> {
+  await observeClaudeIdentities(now)
+  const log = await readIdentityLog()
+  const last = log?.entries.filter(e => e.configDir === configDir).at(-1)
+  if (!log || !last || last.plan === plan) return
+  log.entries.push({ ...last, plan, observedAt: now.toISOString() })
+  await writeIdentityLog(log)
+}
+
 /** An identity is the organization, or the account when Claude reports no organization. */
 export function identityId(entry: IdentityEntry): string {
   return entry.orgHash ?? entry.accountHash
