@@ -95,7 +95,9 @@ export async function observeClaudeIdentities(now = new Date()): Promise<void> {
   }
 }
 
-export async function recordClaudePlan(configDir: string, plan: string, now = new Date()): Promise<void> {
+export async function recordClaudePlan(configDir: string, name: string, now = new Date()): Promise<void> {
+  const plan = cleanName(name)
+  if (!plan) return
   await observeClaudeIdentities(now)
   const log = await readIdentityLog()
   const last = log?.entries.filter(e => e.configDir === configDir).at(-1)

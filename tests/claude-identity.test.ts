@@ -289,6 +289,13 @@ describe('CLI surfaces', () => {
     expect(list).toContain('unattributed')
   }, 180_000)
 
+  it('records a plan handed over by the menubar', async () => {
+    await fixture(false)
+    expect(run(['identity', 'plan', '--config-dir', configDir, '--plan', 'Max 20x']).status).toBe(0)
+    expect((await readIdentityLog())!.entries.map(e => e.plan)).toEqual(['Max 5x', 'Max 20x'])
+    expect(run(['identity', 'plan', '--config-dir', configDir]).status).toBe(1)
+  }, 120_000)
+
   it('adds nothing for a single identity', async () => {
     await fixture(false)
     const report = JSON.parse(run(['report', '--format', 'json', '-p', 'week']).stdout)
