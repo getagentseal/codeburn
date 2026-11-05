@@ -242,6 +242,7 @@
 "Saved %@ with local models" = "ローカルモデルで%@節約";
 "%1$lld of %2$lld devices" = "%1$lld/%2$lld台のデバイス";
 "%@ · local" = "%@ · ローカル";
+"Unattributed" = "未割り当て";
 
 /* MARK: Period strip and date picker */
 "Clear" = "クリア";

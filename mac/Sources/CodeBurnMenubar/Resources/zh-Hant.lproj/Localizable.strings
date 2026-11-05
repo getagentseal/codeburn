@@ -242,6 +242,7 @@
 "Saved %@ with local models" = "使用本地模型節省了 %@";
 "%1$lld of %2$lld devices" = "%1$lld/%2$lld 臺裝置";
 "%@ · local" = "%@ · 本機";
+"Unattributed" = "未歸屬";
 
 /* MARK: Period strip and date picker */
 "Clear" = "清除";

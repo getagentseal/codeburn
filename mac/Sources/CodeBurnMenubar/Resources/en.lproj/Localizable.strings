@@ -249,6 +249,7 @@
 "Saved %@ with local models" = "Saved %@ with local models";
 "%1$lld of %2$lld devices" = "%1$lld of %2$lld devices";
 "%@ · local" = "%@ · local";
+"Unattributed" = "Unattributed";
 
 /* MARK: Period strip and date picker */
 "Clear" = "Clear";

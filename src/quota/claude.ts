@@ -143,6 +143,19 @@ export function planLabel(credential: Pick<ClaudeCredential, 'subscriptionType' 
   return readable ? readable[0].toUpperCase() + readable.slice(1) : 'Subscription'
 }
 
+export async function readClaudePlan(configDir: string): Promise<string | undefined> {
+  try {
+    let credential = await readSecureFile(path.join(configDir, '.credentials.json')).then(raw => raw ? parseCredential(raw) : null)
+    if ((!credential || (credential.expiresAt !== undefined && credential.expiresAt <= Date.now())) && process.platform === 'darwin') {
+      const outcome = await readClaudeKeychain(claudeKeychainService(configDir))
+      if (outcome.status === 'found') credential = parseCredential(outcome.value) ?? credential
+    }
+    return credential ? planLabel(credential) : undefined
+  } catch {
+    return undefined
+  }
+}
+
 export function decodeClaudeUsage(body: unknown, credential: ClaudeCredential): QuotaProvider {
   const data = body && typeof body === 'object' ? body as Record<string, unknown> : {}
   const five = windowOf('5-hour', data.five_hour)

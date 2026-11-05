@@ -79,6 +79,15 @@ describe('buildMenubarPayload', () => {
     expect(buildMenubarPayload(emptyPeriod('Today'), [], null).current).not.toHaveProperty('costBasis')
   })
 
+  it('emits each Claude identity with its plan, and omits the key when absent', () => {
+    const identities = [
+      { hash: 'aaaaaaaaaaaa', label: 'Acme Corp', plan: 'Max 5x', cost: 3, calls: 4, sessions: 2 },
+      { hash: 'unattributed', label: 'unattributed', cost: 1, calls: 1, sessions: 1 },
+    ]
+    expect(buildMenubarPayload({ ...emptyPeriod('Today'), cost: 4, identities }, [], null).current.identities).toEqual(identities)
+    expect(buildMenubarPayload(emptyPeriod('Today'), [], null).current).not.toHaveProperty('identities')
+  })
+
   it('passes the pull-requests payload (models, categories, cap remainder) through verbatim', () => {
     const period: PeriodData = {
       ...emptyPeriod('7 Days'),
