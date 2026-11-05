@@ -5,7 +5,6 @@ import { useEscape } from '../hooks/useEscape'
 import { formatCompact, formatCount, formatDayLong, formatDuration, formatUsd, sessionCacheHitPercent, shortenProjectPath } from '../lib/format'
 import { DUR, useExitAnimation } from '../lib/motion'
 import { codeburn } from '../lib/ipc'
-import { providerLabel } from '../lib/providers'
 import type { InvestigationFilters } from '../lib/investigation'
 import { contributeRow } from '../lib/investigation'
 import type { SessionDrillRow, SessionRow } from '../lib/types'
@@ -143,7 +142,7 @@ export function SessionDetails({ row, filters, medianCost }: { row: SessionDrill
         <p className="drawer-note">{t('sessions.drawer.subagentPrefix')}<span className="mono">{row.parentSessionId.slice(0, 18)}</span>.</p>
       )}
       {row.retained && (
-        <p className="drawer-note">{t('sessions.list.retainedNote', { tool: providerLabel(row.provider), date: formatDayLong(`${row.retained.since}T00:00`) })}</p>
+        <p className="drawer-note">{t('sessions.list.retainedNote', { date: formatDayLong(`${row.retained.since}T00:00`) })}</p>
       )}
 
       <DrawerBreakdown label={t('sessions.drawer.modelsLabel')} rows={breakdown.models} />

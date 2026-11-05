@@ -268,7 +268,7 @@ const RETAINED_MARK = '*'
 
 function estimatedLegend(rows: SessionRow[]): string {
   return (rows.some(row => row.isEstimated) ? `\n${ESTIMATED_COST_LEGEND}` : '')
-    + (rows.some(row => row.retained) ? `\n${RETAINED_MARK} kept after the tool deleted its transcript` : '')
+    + (rows.some(row => row.retained) ? `\n${RETAINED_MARK} kept from the cache after the tool removed its transcript` : '')
 }
 
 export function renderTable(rows: SessionRow[], opts: SessionTableOptions = {}): string {

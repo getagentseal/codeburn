@@ -401,7 +401,7 @@ function buildReadme(periods: PeriodExport[]): string {
     '                        cost came from: recorded (the tool\'s own figure), calculated (measured',
     '                        tokens at published prices), estimated (guessed tokens), included',
     '                        (covered by a subscription, $0) or unpriced (no known price, $0).',
-    '                        retained marks a session kept after its tool deleted the transcript;',
+    '                        retained marks a session kept from the cache after its tool removed the transcript;',
     '                        sessions.csv carries the same column.',
     '  projects.csv          Spend per project folder for the selected detail period.',
     '  sessions.csv          One row per session for the selected detail period.',
