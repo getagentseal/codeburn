@@ -617,6 +617,24 @@ describe('Sessions', () => {
     expect(ids[1]).toHaveTextContent('claude-untitled')
   })
 
+  it('notes a session kept from the cache after its transcript went missing, in the row and the drawer', async () => {
+    const user = userEvent.setup()
+    getSessions.mockResolvedValue([
+      session({ sessionId: 'codex-kept', project: 'codeburn', provider: 'codex', cost: 5, retained: { since: '2026-09-25' } }),
+      session({ sessionId: 'codex-live', project: 'docs-site', provider: 'codex', cost: 3 }),
+    ])
+    const { container } = render(<Sessions period="30days" provider="all" />)
+    await screen.findByText('2 sessions · $8.00 · 2K tokens')
+
+    const note = `Kept from the cache; the tool's transcript has been missing since ${formatDayLong('2026-09-25T00:00')}`
+    const ids = [...container.querySelectorAll('.session-row .session-project')]
+    expect(ids[0]).toHaveTextContent(note)
+    expect(ids[1]).not.toHaveTextContent('Kept from the cache')
+
+    await user.click(container.querySelectorAll<HTMLButtonElement>('.session-row')[0]!)
+    expect(within(screen.getByRole('dialog')).getByText(note)).toHaveClass('drawer-note')
+  })
+
   it('matches sessions by their captured title', async () => {
     const user = userEvent.setup()
     getSessions.mockResolvedValue([

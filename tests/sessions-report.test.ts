@@ -127,6 +127,17 @@ describe('sessions JSON emitter', () => {
     expect(renderTable(aggregateSessions([makeProject()]), { terminalWidth: 120 })).not.toContain('estimated')
   })
 
+  it('carries the retained marker into JSON rows and the table', () => {
+    const project = makeProject()
+    project.sessions[0]!.retained = { since: '2026-09-25' }
+    const rows = aggregateSessions([project])
+    expect(JSON.parse(renderJson(rows))[0].retained).toEqual({ since: '2026-09-25' })
+    const output = renderTable(rows, { terminalWidth: 120 })
+    expect(output).toContain('2026-07-10 10:00*')
+    expect(output.split('\n').at(-1)).toBe('* kept from the cache after the tool removed its transcript')
+    expect(renderTable(aggregateSessions([makeProject()]), { terminalWidth: 120 })).not.toContain('*')
+  })
+
   it('does not mark a fully estimated session whose cost prints as $0.00', () => {
     const project = makeProject()
     project.sessions[0]!.totalCostUSD = 0.0003

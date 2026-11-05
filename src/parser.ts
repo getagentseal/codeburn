@@ -2340,6 +2340,10 @@ async function scanProjectDirs(
     // under a live root and must not keep serving stale usage. PR-bearing
     // orphans remain the existing intentional legacy exception.
     if (!readOnly && !cached.prLinks?.length && wslStatus !== 'offline' && wslStatus !== 'disabled') continue
+    if (!readOnly && !cached.retainedSince && !['offline', 'disabled'].includes(wslStatus)) {
+      cached.retainedSince = dateKey(new Date().toISOString())
+      markCacheDirty(diskCache, 'claude', filePath)
+    }
     const dirName = cached.canonicalProjectName
       ?? cached.turns[0]?.calls[0]?.project
       ?? basename(dirname(filePath))
@@ -2738,6 +2742,7 @@ async function scanProjectDirs(
       }
       if (prRefsAtRangeStart?.length) session.prRefsAtRangeStart = prRefsAtRangeStart
       if (cachedFile.title) session.title = cachedFile.title
+      if (cachedFile.retainedSince && !allDiscoveredFiles.has(filePath)) session.retained = { since: cachedFile.retainedSince }
       // Sidechain linkage: carry the parent id (the transcript's internal
       // `sessionId`, authoritative even when it disagrees with the owning directory
       // on a resumed session) and derive the agent id from the `agent-<agentId>`
@@ -4220,6 +4225,9 @@ export async function parseProviderSources(
       if (!allDiscoveredFiles.has(cachedPath) && newestTs > 0 && newestTs < cutoffMs) {
         delete section.files[cachedPath]
         markCacheDirty(diskCache, providerName, cachedPath)
+      } else if (!allDiscoveredFiles.has(cachedPath) && !cachedFile.retainedSince && !['offline', 'disabled'].includes(classifyWslCachePath(cachedPath, wslHomesForOrphans))) {
+        cachedFile.retainedSince = dateKey(new Date().toISOString())
+        markCacheDirty(diskCache, providerName, cachedPath)
       }
     }
   }
@@ -4507,7 +4515,7 @@ export async function parseProviderSources(
 
   // Query-time: derive SessionSummary from all cached turns.
   // Uses seenKeys (shared across providers) for cross-provider dedup.
-  const sessionMap = new Map<string, { project: string; projectPath?: string; workingDirectory?: string; turns: ClassifiedTurn[]; prLinks?: Set<string>; title?: string; lineage?: SessionLineage; agentName?: string; agentStartedAt?: string; source?: SessionSourceMetadata }>()
+  const sessionMap = new Map<string, { project: string; projectPath?: string; workingDirectory?: string; turns: ClassifiedTurn[]; prLinks?: Set<string>; title?: string; lineage?: SessionLineage; agentName?: string; agentStartedAt?: string; source?: SessionSourceMetadata; retainedSince?: string }>()
 
   for (const source of servedSources) {
     const cachedFile = section.files[source.path]
@@ -4660,8 +4668,9 @@ export async function parseProviderSources(
           if (!existingEntry.projectPath && slicedTurn.calls[0]?.projectPath) {
             existingEntry.projectPath = slicedTurn.calls[0]!.projectPath
           }
+          existingEntry.retainedSince ??= cachedFile.retainedSince
         } else {
-          sessionMap.set(key, { project, projectPath: slicedTurn.calls[0]?.projectPath, workingDirectory: trustedWorkingDirectory, turns: [classified] })
+          sessionMap.set(key, { project, projectPath: slicedTurn.calls[0]?.projectPath, workingDirectory: trustedWorkingDirectory, turns: [classified], retainedSince: cachedFile.retainedSince })
         }
       }
     }
@@ -4809,7 +4818,7 @@ export async function parseProviderSources(
   // (first projectPath wins) before mergeProjectsByCrossProviderKey could see
   // distinct abs identities.
   const projectMap = new Map<string, { project: string; projectPath?: string; sessions: SessionSummary[] }>()
-  for (const [key, { project, projectPath, workingDirectory, turns, prLinks, title, lineage, agentName, agentStartedAt, source }] of sessionMap) {
+  for (const [key, { project, projectPath, workingDirectory, turns, prLinks, title, lineage, agentName, agentStartedAt, source, retainedSince }] of sessionMap) {
     const sessionId = key.split(':')[1] ?? key
     const assembledTurns = providerName === 'copilot'
       ? foldCopilotSupplementaryTurns(sessionId, turns, copilotRecon?.supplementaryStoreKeys)
@@ -4826,6 +4835,7 @@ export async function parseProviderSources(
     if (lineage) session.lineage = lineage
     if (agentName) session.agentName = agentName
     if (agentStartedAt) session.agentStartedAt = agentStartedAt
+    if (retainedSince) session.retained = { since: retainedSince }
     // Supplementary-only sessions (e.g. a rollup with no per-turn calls) have
     // apiCalls 0 by design but their tokens/cost are real and must serve.
     if (session.apiCalls > 0 || session.totalCostUSD > 0 || session.totalInputTokens + session.totalOutputTokens + session.totalCacheReadTokens + session.totalCacheWriteTokens + session.totalReasoningTokens > 0) {
@@ -5284,6 +5294,7 @@ function carryLinkageFields(rebuilt: SessionSummary, original: SessionSummary): 
   if (original.agentName) rebuilt.agentName = original.agentName
   if (original.agentStartedAt) rebuilt.agentStartedAt = original.agentStartedAt
   if (original.lineage) rebuilt.lineage = original.lineage
+  if (original.retained) rebuilt.retained = original.retained
   if (original.projectSplit) rebuilt.projectSplit = original.projectSplit
 }
 

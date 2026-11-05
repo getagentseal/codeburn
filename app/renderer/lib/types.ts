@@ -723,6 +723,7 @@ export type SessionRow = {
   // Subagent sessions folded into this parent row; their spend is already in
   // the row's totals. Absent when none (and from older CLIs).
   subagents?: SessionRow[]
+  retained?: { since: string }
 }
 
 // ————— src/session-contributions.ts (drill-through, `sessions --contributions`) —————

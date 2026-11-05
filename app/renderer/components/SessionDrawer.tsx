@@ -141,6 +141,9 @@ export function SessionDetails({ row, filters, medianCost }: { row: SessionDrill
       {row.isSidechain && row.parentSessionId && (
         <p className="drawer-note">{t('sessions.drawer.subagentPrefix')}<span className="mono">{row.parentSessionId.slice(0, 18)}</span>.</p>
       )}
+      {row.retained && (
+        <p className="drawer-note">{t('sessions.list.retainedNote', { date: formatDayLong(`${row.retained.since}T00:00`) })}</p>
+      )}
 
       <DrawerBreakdown label={t('sessions.drawer.modelsLabel')} rows={breakdown.models} />
       <DrawerBreakdown label={t('sessions.drawer.categoriesLabel')} rows={breakdown.categories} />

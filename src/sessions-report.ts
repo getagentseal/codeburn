@@ -38,6 +38,7 @@ export type SessionRow = {
   /// Subagent sessions folded into this parent row (already included in its
   /// cost, calls, turns and tokens). Absent on rows with none.
   subagents?: SessionRow[]
+  retained?: { since: string }
 }
 
 function sessionCostLabel(cost: number): string {
@@ -79,6 +80,7 @@ export function aggregateSessions(projects: ProjectSummary[]): SessionRow[] {
     estimatedCost: session.totalEstimatedCostUSD ?? 0,
     isEstimated: isEstimatedCost(session.totalCostUSD, session.totalEstimatedCostUSD, sessionCostLabel(session.totalCostUSD)),
     costBasis: costBasisShares(session.turns.flatMap(turn => turn.assistantCalls)),
+    ...(session.retained ? { retained: session.retained } : {}),
   })))
 }
 
@@ -197,7 +199,7 @@ export function sessionModelLabel(models: string[]): string {
 
 function cellValue(row: SessionRow, key: SessionColumnKey): string {
   switch (key) {
-    case 'started': return row.startedAt ? row.startedAt.replace('T', ' ').slice(0, 16) : '-'
+    case 'started': return (row.startedAt ? row.startedAt.replace('T', ' ').slice(0, 16) : '-') + (row.retained ? RETAINED_MARK : '')
     case 'session': return sessionDisplayName(row)
     // Only the work-unit view carries a Children column, and it renders
     // through workUnitCell; a bare SessionRow has no child count.
@@ -262,8 +264,11 @@ function sessionColumns(hasSavings: boolean, childrenColumn: boolean): SessionCo
   ]
 }
 
+const RETAINED_MARK = '*'
+
 function estimatedLegend(rows: SessionRow[]): string {
-  return rows.some(row => row.isEstimated) ? `\n${ESTIMATED_COST_LEGEND}` : ''
+  return (rows.some(row => row.isEstimated) ? `\n${ESTIMATED_COST_LEGEND}` : '')
+    + (rows.some(row => row.retained) ? `\n${RETAINED_MARK} kept from the cache after the tool removed its transcript` : '')
 }
 
 export function renderTable(rows: SessionRow[], opts: SessionTableOptions = {}): string {
