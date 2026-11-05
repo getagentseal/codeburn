@@ -477,7 +477,6 @@ function TurnDetail({ turn, findings, why, openStep, onStep }: { turn: WhyTurn; 
                 <button type="button" className="sv-rq-head" aria-expanded={openStep === r.k} onClick={() => toggle(r.k)}>
                   <span className="ti"><b>{t('sessions.why.inspect.request', { n: r.n })}</b><span>{r.s.model}</span></span>
                   <span className="pl">
-                    <span className="sv-pill">{t('sessions.why.inspect.out', { tokens: tok(r.s.tokens.output) })}</span>
                     <span className="sv-pill">{usdFine(r.s.cost)}</span>
                   </span>
                   <span className="mt">

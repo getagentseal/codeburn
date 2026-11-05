@@ -130,6 +130,7 @@ describe('SessionView inspect', () => {
     const [last] = td.querySelectorAll('.sv-rq')
     expect(last!.querySelector('.mt')).toHaveTextContent('58K in / 1K out / 86% cached · wrote the answer')
     expect(last!.querySelectorAll('.sv-rq-tool')).toHaveLength(0)
+    expect(texts(last!, '.sv-rq-head .sv-pill')).toEqual(['$0.10'])
     expect(td.querySelector('.sv-rq.sel .sv-sd')).toHaveTextContent('Model call')
     await user.click(screen.getByRole('button', { name: 'Newest first' }))
     const first = td.querySelector('.sv-rq')!
