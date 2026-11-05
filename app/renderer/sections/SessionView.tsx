@@ -7,12 +7,13 @@ import { SessionDetails } from '../components/SessionDrawer'
 import { SegTabs } from '../components/SegTabs'
 import { SectionSkeleton } from '../components/Skeleton'
 import { Usd } from '../components/Usd'
-import { Icon } from '../components/icons'
+import { Icon, type IconName } from '../components/icons'
 import { t } from '../i18n'
 import { formatAxisMoney, niceTicks } from '../lib/chartAxis'
 import { formatCompact, formatDayLong, formatUsd, formatUsdDifference, shortenProjectPath } from '../lib/format'
 import type { InvestigationFilters } from '../lib/investigation'
 import { codeburn, normalizeCliError } from '../lib/ipc'
+import { added, at, context, formatStepDuration, type ModelStep, offset, type Request, requestsOf, span, storyMarkdown, storyOf, type StoryKind, tookOf, type ToolRef, toolName } from '../lib/story'
 import type { CliError, SessionDrillRow, SessionWhy, WhyAgent, WhyFinding, WhyParts, WhyPrWork, WhyStep, WhyTokens, WhyTurn } from '../lib/types'
 
 /** Claude Code main sessions are `<uuid>.jsonl`; `--why` resolves only those. */
@@ -29,16 +30,6 @@ const tok = (n: number) => formatCompact(Math.round(n))
 const usdFine = (n: number) => (n > 0 && n < 0.01 ? `<${formatUsd(0.01)}` : formatUsd(n))
 const plural = (key: string, count: number, vars: Record<string, string | number> = {}) => t(`${key}.${count === 1 ? 'one' : 'other'}`, { count, ...vars })
 const one = (key: string, count: number) => `${key}.${count === 1 ? 'one' : 'other'}`
-
-export function formatStepDuration(ms: number): string {
-  if (ms < 1000) return `${Math.max(0, Math.round(ms))}ms`
-  const s = ms / 1000
-  if (s < 10) return `${s.toFixed(1)}s`
-  if (s < 60) return `${Math.round(s)}s`
-  const m = Math.floor(s / 60)
-  if (m < 60) return `${m}m ${String(Math.round(s % 60)).padStart(2, '0')}s`
-  return `${Math.floor(m / 60)}h ${m % 60}m`
-}
 
 const clock = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 
@@ -358,24 +349,7 @@ function StepDetail({ step }: { step: WhyStep }) {
   )
 }
 
-type ModelStep = Extract<WhyStep, { kind: 'model' }>
-type ToolStep = Extract<WhyStep, { kind: 'tool' }>
-type ToolRef = { s: ToolStep; k: number }
-type Request = { s: ModelStep; k: number; n: number; tools: ToolRef[] }
 type Insight = { key: string; label: string; value: string; pill: string; step: number; tone?: 'top' | 'bad'; flag: boolean }
-
-const toolName = (s: ToolStep) => s.name.replace(/^mcp__(.+?)__/, '')
-const added = (s: ToolStep) => Math.ceil((s.resultChars ?? 0) / 4)
-const span = (s: WhyStep) => Math.max(0, s.end - s.start)
-
-function requestsOf(turn: WhyTurn): Request[] {
-  const out: Request[] = []
-  turn.steps.forEach((s, k) => {
-    if (s.kind === 'model') out.push({ s, k, n: out.length + 1, tools: [] })
-    else (out.find(r => r.k === s.parent) ?? out.at(-1))?.tools.push({ s, k })
-  })
-  return out
-}
 
 function insightsOf(turn: WhyTurn, reqs: Request[], rules: SessionWhy['rules']): Insight[] {
   if (!reqs.length) return []
@@ -496,15 +470,8 @@ function TurnDetail({ turn, findings, why, openStep, onStep, seg }: { turn: WhyT
   )
 }
 
-const at = (iso: string | null) => (iso ? Date.parse(iso) : NaN)
-const context = (k: WhyTokens) => k.input + k.cacheRead + k.cacheWrite
 const KIND_SEGMENTS = [['read', 'cacheRead', 'flagship'], ['written', 'cacheWrite', 'premium'], ['new', 'input', 'fast'], ['out', 'output', 'balanced']] as const
 const AGENT_TONES = ['flagship', 'premium', 'balanced', 'fast', 'other']
-
-function tookOf(h: WhyAgent): number {
-  const d = at(h.handedBackAt ?? h.lastCallAt) - at(h.delegatedAt ?? h.firstCallAt)
-  return Number.isFinite(d) ? Math.max(0, d) : 0
-}
 
 function statsLine(took: number, requests: number, tools: number, tk: WhyTokens, cost: number): string {
   return [formatStepDuration(took), plural('sessions.why.agents.requests', requests), plural('sessions.why.agents.toolCalls', tools),
@@ -655,10 +622,42 @@ function AgentsView({ turn, why, seg }: { turn: WhyTurn; why: SessionWhy; seg: R
   )
 }
 
+const STORY_GLYPHS: Record<StoryKind, IconName> = {
+  prompt: 'arrow-right', model: 'sparkles', tools: 'zap', failed: 'triangle-alert', delegate: 'arrow-up-right',
+  compact: 'box', idle: 'circle', answer: 'circle-check', helperDone: 'arrow-down',
+}
+
+function StoryView({ turn, why, seg, onOpen }: { turn: WhyTurn; why: SessionWhy; seg: ReactNode; onOpen: (k: number) => void }) {
+  const story = storyOf(turn, why.rules.idleMs)
+  return (
+    <div className="sv-td">
+      {seg}
+      <div className="sv-story-head">
+        <p>{story.header}</p>
+        <button type="button" className="sv-jump" onClick={() => void navigator.clipboard.writeText(storyMarkdown(story))}>{t('sessions.why.story.copy')}</button>
+      </div>
+      <ol className="sv-story">
+        {story.lines.map((l, n) => (
+          <li key={n} data-kind={l.kind}>
+            <span className="off">{offset(l.at)}</span>
+            <Icon name={STORY_GLYPHS[l.kind]} />
+            <span className="tx">{l.text}</span>
+            {l.step !== undefined
+              ? <button type="button" className="sv-jump" aria-label={t('sessions.why.story.open')} onClick={() => onOpen(l.step!)}><Icon name="chevron-right" /></button>
+              : <span />}
+          </li>
+        ))}
+      </ol>
+      <p className="sv-note">{t('sessions.why.story.footer')}</p>
+    </div>
+  )
+}
+
 function PromptDetail(props: { turn: WhyTurn; findings: WhyFinding[]; why: SessionWhy; openStep: number | null; onStep: (k: number | null) => void }) {
   const [view, setView] = useState('inspect')
-  if (!props.turn.helpers.length) return <TurnDetail {...props} />
-  const seg = <SegTabs options={[{ value: 'inspect', label: t('sessions.why.view.inspect') }, { value: 'agents', label: t('sessions.why.view.agents') }]} value={view} onChange={setView} style={{ alignSelf: 'flex-start' }} />
+  const options = [{ value: 'inspect', label: t('sessions.why.view.inspect') }, ...(props.turn.helpers.length ? [{ value: 'agents', label: t('sessions.why.view.agents') }] : []), { value: 'story', label: t('sessions.why.view.story') }]
+  const seg = <SegTabs options={options} value={view} onChange={setView} style={{ alignSelf: 'flex-start' }} />
+  if (view === 'story') return <StoryView turn={props.turn} why={props.why} seg={seg} onOpen={k => { setView('inspect'); props.onStep(k) }} />
   return view === 'agents' ? <AgentsView turn={props.turn} why={props.why} seg={seg} /> : <TurnDetail {...props} seg={seg} />
 }
 

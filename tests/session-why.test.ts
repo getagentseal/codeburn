@@ -256,6 +256,7 @@ describe('session cost diagnosis: rules', () => {
     const c = getModelCosts(FABLE)!
     expect(f!.writeUsd).toBeCloseTo(15_000 * c.cacheWriteCostPerToken * 1.6, 12)
     expect(f!.readUsd).toBeCloseTo(15_000 * c.cacheReadCostPerToken, 12)
+    expect(why.turns.map(x => x.compactions.length)).toEqual([0, 0, 1])
   })
 
   it('estimates the starting context from the first call and the later calls that read at least that much', () => {
