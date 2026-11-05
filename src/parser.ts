@@ -6468,7 +6468,7 @@ function canServeCompleteSnapshot(cache: SessionCache, providerFilter?: string, 
 }
 
 export async function isCompleteSessionSnapshotAvailable(dateRange: DateRange, providerFilter?: string): Promise<boolean> {
-  const diskCache = await loadCache(monthScopeForRange(dateRange.start, dateRange.end))
+  const diskCache = await loadCache(monthScopeForRange(dateRange.start, dateRange.end), true)
   return canServeCompleteSnapshot(diskCache, providerFilter, dateRange.start.getTime())
 }
 
@@ -6522,7 +6522,7 @@ async function parseAllSessionsInCacheScope(dateRange?: DateRange, providerFilte
   const loadScope = dateRange ? withinLoadWindow(monthScopeForRange(dateRange.start, dateRange.end)) : undefined
   const rangeStartMs = dateRange?.start.getTime()
   const cacheLoadStarted = performance.now()
-  let diskCache: SessionCache | null = await loadCache(loadScope)
+  let diskCache: SessionCache | null = await loadCache(loadScope, true)
   await cleanupOrphanedTempFiles()
   if (process.env['CODEBURN_VERBOSE'] === '1') {
     process.stderr.write(`codeburn: startup timing cache-load=${(performance.now() - cacheLoadStarted).toFixed(1)}ms complete=${isCacheComplete(diskCache, providerFilter, rangeStartMs)}\n`)
@@ -6538,7 +6538,7 @@ async function parseAllSessionsInCacheScope(dateRange?: DateRange, providerFilte
   // doubt it proceeds unlocked.
   if (!isCacheComplete(diskCache, providerFilter, rangeStartMs)) {
     const hydration = await beginColdHydration(true)
-    if (hydration.waited) diskCache = await loadCache(loadScope)
+    if (hydration.waited) diskCache = await loadCache(loadScope, true)
     const isCold = !isCacheComplete(diskCache, providerFilter, rangeStartMs)
     try {
       return await runParse(key, diskCache, dateRange, providerFilter, { isCold, burstSig, parseStartedAt })
@@ -6582,17 +6582,17 @@ async function parseAllSessionsInCacheScope(dateRange?: DateRange, providerFilte
   // large cache are never held at once.
   diskCache = null
   if (refresh.outcome === 'completed-by-other') {
-    return runParse(key, await loadCache(loadScope), dateRange, providerFilter, { readOnly: true, burstSig, parseStartedAt })
+    return runParse(key, await loadCache(loadScope, true), dateRange, providerFilter, { readOnly: true, burstSig, parseStartedAt })
   }
 
   try {
     // Reload only after ownership is canonical; this closes the lost-update
     // window between the pre-gate read and the holder's completed publication.
-    diskCache = await loadCache(loadScope)
+    diskCache = await loadCache(loadScope, true)
     return await runParse(key, diskCache, dateRange, providerFilter, { refreshLock: refresh.handle, burstSig, parseStartedAt })
   } catch (err) {
     if (!(err instanceof RefreshFenceLostError) && !(err instanceof RefreshPublicationUnavailableError)) throw err
-    return runParse(key, await loadCache(loadScope), dateRange, providerFilter, { readOnly: true, burstSig, parseStartedAt })
+    return runParse(key, await loadCache(loadScope, true), dateRange, providerFilter, { readOnly: true, burstSig, parseStartedAt })
   } finally {
     await refresh.handle.release()
   }

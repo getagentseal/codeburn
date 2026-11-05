@@ -118,6 +118,22 @@ describe('bounded ranged load', () => {
     expect(full.providers['claude']!.files['/p/x.jsonl']).toEqual(fileAt('20', 'x', 1))
   })
 
+  it('a parse load reads only the gone files of a section under an old parse version, and a save keeps the rest', async () => {
+    const present = join(TMP_DIR, 'present.jsonl')
+    await writeFile(present, '')
+    const stale: SessionCache = { version: CACHE_VERSION, complete: true, providers: { claude: { envFingerprint: 'old-parse-version', files: { [present]: fileAt('20', 'p'), '/p/gone.jsonl': fileAt('21', 'g') } } } }
+    markCacheDirty(stale, 'claude')
+    expect(await saveCache(stale)).toBe(true)
+    clearLoadCacheMemo()
+    const before = await pieceOf('20')
+
+    const cache = await loadCache(undefined, true)
+    expect(Object.keys(cache.providers['claude']!.files)).toEqual(['/p/gone.jsonl'])
+    markCacheDirty(cache, 'claude', '/p/gone.jsonl')
+    expect(await saveCache(cache)).toBe(true)
+    expect(await pieceOf('20')).toEqual(before)
+  })
+
   it('re-lays a single-line v9 shard out and still loads stubs from its pieces', async () => {
     const files = { '/p/x.jsonl': fileAt('20', 'x'), '/p/y.jsonl': fileAt('02', 'y') }
     const v9 = join(TMP_DIR, 'session-cache.v9')

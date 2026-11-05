@@ -1830,7 +1830,7 @@ export async function loadShardMemoized(dir: string, name: string): Promise<Reco
  * deliberately not part of any env fingerprint (PROVIDER_ENV_VARS) — setting or
  * unsetting it must never invalidate a cache, only change how much of it is read.
  */
-export async function loadCache(scope?: CacheLoadScope): Promise<SessionCache> {
+export async function loadCache(scope?: CacheLoadScope, dropStale = false): Promise<SessionCache> {
   if (process.env['CODEBURN_CACHE_SCOPE'] === 'all') scope = undefined
   const dir = sessionCacheDir()
   let envelope = await readEnvelope(dir)
@@ -1883,10 +1883,12 @@ export async function loadCache(scope?: CacheLoadScope): Promise<SessionCache> {
     // retires residuals over the complete cached serve set, so a scoped load
     // of a copilot section persisted before the durable stamp landed would
     // make pairing range-dependent. The name check closes that window.
-    const full = !scope || meta.durable === true || DURABLE_PROVIDER_NAMES.has(provider) || meta.envFingerprint !== computeEnvFingerprint(provider)
+    const durable = meta.durable === true || DURABLE_PROVIDER_NAMES.has(provider)
+    const stale = meta.envFingerprint !== computeEnvFingerprint(provider)
+    const full = !scope || durable || stale
     const stubbed = !full && ranged !== null && !FULL_LOAD_PROVIDER_NAMES.has(provider)
     if (stubbed) state.covered = ranged
-    reads.push(loadProvider(state, provider, section, meta.index, full ? null : scope!, stubbed ? ranged : null))
+    reads.push(loadProvider(state, provider, section, meta.index, full ? null : scope!, stubbed ? ranged : null, dropStale && stale && !durable))
   }
   await Promise.all(reads)
   state.scope = scopeKey
@@ -1907,7 +1909,7 @@ function visibleMonths(rows: Map<string, IndexRow>, scope: CacheLoadScope): Set<
   return visible
 }
 
-async function loadProvider(state: CacheState, provider: string, section: ProviderSection, indexName: string, scope: CacheLoadScope | null, ranged: { startMs: number; endMs: number } | null): Promise<void> {
+async function loadProvider(state: CacheState, provider: string, section: ProviderSection, indexName: string, scope: CacheLoadScope | null, ranged: { startMs: number; endMs: number } | null, stale = false): Promise<void> {
   const index = await readIndex(state.dir, indexName)
   const base = index ?? emptyBase()
   state.base.set(provider, base)
@@ -1923,7 +1925,9 @@ async function loadProvider(state: CacheState, provider: string, section: Provid
   const inFull = new Map<string, Array<[string, IndexRow]>>()
   const asStubs = new Map<string, Array<[string, IndexRow]>>()
   for (const [path, row] of base.rows) {
-    if (visible && !visible.has(row.month)) hidden.set(path, row)
+    // The parser replaces a stale section on first use, keeping only entries
+    // whose source is gone (getOrCreateProviderSection), so present ones stay on disk.
+    if ((visible && !visible.has(row.month)) || (stale && existsSync(path))) hidden.set(path, row)
     else if (!ranged || fileNeeded(path, row, ranged.startMs, ranged.endMs)) pushTo(inFull, row.day, [path, row])
     else pushTo(asStubs, row.day, [path, row])
   }
