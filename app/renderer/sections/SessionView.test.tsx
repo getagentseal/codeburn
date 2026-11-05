@@ -271,6 +271,49 @@ describe('SessionView agents', () => {
   })
 })
 
+describe('SessionView story', () => {
+  async function openStory() {
+    const user = userEvent.setup()
+    getSessionWhy.mockResolvedValue(agentsPayload)
+    const { container } = render(<SessionView row={row} filters={EMPTY_FILTERS} onBack={() => {}} />)
+    await screen.findByText('Slowest request')
+    const tr = container.querySelector('#sv-turn-6')!
+    expect(texts(tr, '.sv-td > .seg [role="tab"]')).toEqual(['Inspect', 'Agents', 'Story'])
+    await user.click(within(tr as HTMLElement).getByRole('tab', { name: 'Story' }))
+    return { user, tr, td: tr.querySelector('.sv-td')! }
+  }
+
+  it('tells the prompt in sentences with offsets, a header and the footer', async () => {
+    const { td } = await openStory()
+    expect(td.querySelector('.sv-story-head p')).toHaveTextContent('What happened: done in 1m 05s (answer at 12s) · 2 model requests · 0 tool calls · 4 subagents · $1.45 at API rates')
+    expect(texts(td, '.sv-story .off')).toEqual(['+0s', '+0s', '+3.0s', '+3.0s', '+3.0s', '+9.0s', '+12s', '+1m 05s'])
+    expect(texts(td, '.sv-story .tx')[2]).toBe('It handed “Scan the repo for dead code.” to the Explore subagent, which made 3 requests and 1 tool call in 1m 02s and reported back.')
+    expect(td.querySelector('.sv-story + .sv-note')).toHaveTextContent('Written from the recorded steps alone.')
+  })
+
+  it('opens the step in Inspect from its chevron', async () => {
+    const { user, tr } = await openStory()
+    const line = tr.querySelectorAll('.sv-story li')[5]!
+    await user.click(within(line as HTMLElement).getByRole('button', { name: 'Open in Inspect' }))
+    expect(tr.querySelector('.seg [aria-selected="true"]')).toHaveTextContent('Inspect')
+    expect(tr.querySelector('.sv-rq.sel .sv-sd')).toHaveTextContent('Model call')
+    expect(texts(tr, '.sv-rq.sel .ti b')).toEqual(['Request 2'])
+  })
+
+  it('copies the header and the sentences with offsets as Markdown', async () => {
+    const { user, td } = await openStory()
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
+    await user.click(within(td as HTMLElement).getByRole('button', { name: 'Copy as Markdown' }))
+    const md = writeText.mock.calls[0]![0] as string
+    const lines = md.split('\n')
+    expect(lines[0]).toBe(td.querySelector('.sv-story-head p')!.textContent)
+    expect(lines.slice(2)).toEqual([...td.querySelectorAll('.sv-story li')].map(li => `- ${li.querySelector('.off')!.textContent} ${li.querySelector('.tx')!.textContent}`))
+    expect(lines[2]).toBe('- +0s You asked “Prompt text 6”.')
+    expect(within(td as HTMLElement).getByRole('button', { name: 'Copied' })).toBeInTheDocument()
+  })
+})
+
 describe('SessionView', () => {
   it('opens only for Claude Code main sessions', () => {
     expect(hasSessionView(row)).toBe(true)

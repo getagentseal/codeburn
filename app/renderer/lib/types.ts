@@ -812,6 +812,7 @@ export type WhyTurn = {
   helpers: WhyAgent[]
   wallMs: number
   steps: WhyStep[]
+  compactions?: string[]
 }
 type WhyBase = { id: string; turn?: number; step?: number; usd: number | null; share: number | null }
 export type WhyFinding = WhyBase & (

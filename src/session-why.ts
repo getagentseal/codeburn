@@ -82,6 +82,7 @@ export type WhyTurn = {
   helpers: WhyAgent[]
   wallMs: number
   steps: WhyStep[]
+  compactions: string[]
 }
 type Base = { id: string; turn?: number; step?: number; usd: number | null; share: number | null }
 export type WhyFinding = Base & (
@@ -563,6 +564,7 @@ export async function buildSessionWhy(filePath: string): Promise<SessionWhy> {
       i: ti + 1, ts: new Date(start).toISOString(), prompt: promptOf(pt.userMessage, read.systemTs.has(pt.timestamp)), cost: costOf(pt.assistantCalls), parts, tokens,
       calls: pt.assistantCalls.length, models: [...new Set(pt.assistantCalls.map(c => getShortModelName(c.model)))],
       helperCost: 0, helpers: [], wallMs: wall || end - start, steps,
+      compactions: read.compactions.filter(c => c >= start && c < nextStart).map(c => new Date(c).toISOString()),
     }
   })
   allCalls.sort((a, b) => a.ts - b.ts)

@@ -1923,6 +1923,16 @@ button.pcmp-row-on { background: rgba(128, 128, 128, 0.18); }
 .sv-ag-row b { font-weight: var(--fw-medium); text-align: right; }
 .sv-ag-row .pc { color: var(--mut2); text-align: right; }
 .sv-ag-type { margin: 0; color: var(--mut); font-size: var(--fs-meta); }
+.sv-story-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: var(--sp-2) var(--sp-3); }
+.sv-story-head p { margin: 0; font-size: var(--fs-subhead); line-height: 1.5; }
+.sv-story { display: flex; flex-direction: column; margin: 0; padding: 0; list-style: none; }
+.sv-story li { display: grid; grid-template-columns: 64px 14px minmax(0, 1fr) 28px; align-items: start; column-gap: var(--sp-3); padding: 6px 0; font-size: var(--fs-body); line-height: 22px; }
+.sv-story li + li { border-top: 1px solid var(--line2); }
+.sv-story .off { color: var(--mut2); font-family: var(--mono); font-size: var(--fs-label); text-align: right; }
+.sv-story > li > .icon { width: 14px; height: 14px; margin-top: 4px; color: var(--mut2); }
+.sv-story li[data-kind="failed"] > .icon { color: var(--bad); }
+.sv-story .tx { min-width: 0; overflow-wrap: anywhere; }
+.sv-story .sv-jump { padding: 3px; }
 .sv-sd { display: flex; flex-direction: column; gap: var(--sp-2); }
 .sv-sd-head { display: flex; align-items: baseline; gap: var(--sp-2); font-size: var(--fs-meta); }
 .sv-sd-head .mono { overflow: hidden; color: var(--mut); font-family: var(--mono); font-size: var(--fs-label); text-overflow: ellipsis; white-space: nowrap; }
