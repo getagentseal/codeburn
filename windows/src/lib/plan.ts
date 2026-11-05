@@ -17,7 +17,6 @@ export type PlanUsage =
 export type PlanProjection = {
   percent: number
   willOverflow: boolean
-  hitsLimitAt: Date | null
   source: 'linear' | 'historical'
 }
 
@@ -63,21 +62,13 @@ export function project(
 
   if (elapsedFraction > FRESH_WINDOW_THRESHOLD && percent > 0) {
     const projected = percent / elapsedFraction
-    let hitsLimitAt: Date | null = null
-    if (projected > FULL_PERCENT && percent < FULL_PERCENT) {
-      const percentPerSecond = percent / elapsed
-      if (percentPerSecond > 0) {
-        hitsLimitAt = new Date(now.getTime() + ((FULL_PERCENT - percent) / percentPerSecond) * 1000)
-      }
-    }
-    return { percent: projected, willOverflow: projected > FULL_PERCENT, hitsLimitAt, source: 'linear' }
+    return { percent: projected, willOverflow: projected > FULL_PERCENT, source: 'linear' }
   }
 
   if (previousFinal != null) {
     return {
       percent: previousFinal,
       willOverflow: previousFinal > FULL_PERCENT,
-      hitsLimitAt: null,
       source: 'historical',
     }
   }

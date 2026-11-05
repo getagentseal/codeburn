@@ -146,6 +146,7 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             // `--quit` with nothing running: this launch is the instance being asked to go,
@@ -1275,7 +1276,7 @@ mod commands {
     }
 
     #[tauri::command]
-    pub async fn dock_quota(state: State<'_, AppState>) -> Result<crate::cli::DockQuota, String> {
+    pub async fn dock_quota(app: AppHandle, state: State<'_, AppState>) -> Result<crate::cli::DockQuota, String> {
         // Per-profile reads are opt-in: only a rail in separate mode pays for them.
         let separate = crate::dock::read_prefs().get("claudeProfiles").and_then(|v| v.as_str()) == Some("separate");
         if let Some(fresh) = cached_quota(separate) {
@@ -1287,7 +1288,10 @@ mod commands {
             return Ok(fresh);
         }
         let cli = state.cli.lock().map_err(|e| e.to_string())?.clone();
-        let answer = cli.fetch_quota(separate).await;
+        let mut answer = cli.fetch_quota(separate).await;
+        if let crate::cli::DockQuota::Ready { providers, .. } = &mut answer {
+            crate::quota_crossing::observe(&app, providers);
+        }
         if let Ok(mut guard) = QUOTA_CACHE.lock() {
             *guard = Some((answer.clone(), separate, std::time::Instant::now()));
         }

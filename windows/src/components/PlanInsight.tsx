@@ -6,7 +6,7 @@ import { formatCompactCurrency, formatTokens, plural } from '../lib/currency'
 import { relativeFuture } from '../lib/dates'
 import type { PlanProjection, PlanUsage } from '../lib/plan'
 import { projectQuotaWindow, projectWindow, earliestReset } from '../lib/plan'
-import { displayLabel, refreshQuota, summaryFor, type QuotaState, type QuotaSummary } from '../lib/quota'
+import { displayLabel, refreshQuota, summaryFor, type QuotaState, type QuotaSummary, type QuotaWindow } from '../lib/quota'
 import { ALL_PROVIDER, type Provider } from './AgentTabStrip'
 import { BulbIcon, ChevronRight, KeySlashIcon, PersonDashedIcon, WarningIcon, ArrowUpRight } from './Icons'
 
@@ -14,6 +14,13 @@ import { BulbIcon, ChevronRight, KeySlashIcon, PersonDashedIcon, WarningIcon, Ar
 const USD_PER_MILLION_EFFECTIVE_TOKENS = 9
 const MILLION = 1_000_000
 const PLAN_REFRESH_MS = 5 * 60_000
+/// The label `codeburn quota` gives each credential-file window, which is where the forecast is.
+const CLAUDE_QUOTA_LABELS: Record<string, string> = {
+  five_hour: '5-hour',
+  seven_day: 'Weekly',
+  seven_day_opus: 'Weekly · Opus',
+  seven_day_sonnet: 'Weekly · Sonnet',
+}
 
 type LoadState =
   | { kind: 'idle' }
@@ -50,6 +57,7 @@ export function PlanInsight({ payload, currency, provider, quota, onOpenTerminal
       <ClaudePlan
         payload={payload}
         currency={currency}
+        quotaWindows={summaryFor(quota, 'claude')?.windows ?? []}
         onOpenTerminal={onOpenTerminal}
         onConnectClaude={onConnectClaude}
       />
@@ -60,9 +68,10 @@ export function PlanInsight({ payload, currency, provider, quota, onOpenTerminal
 
 /// The Claude tab keeps its own path: `plan_usage` reads the credential file directly, which
 /// is the only source for the subscription tier and last cycle's final reading.
-function ClaudePlan({ payload, currency, onOpenTerminal, onConnectClaude }: {
+function ClaudePlan({ payload, currency, quotaWindows, onOpenTerminal, onConnectClaude }: {
   payload: MenubarPayload | null
   currency: CurrencyState
+  quotaWindows: QuotaWindow[]
   onOpenTerminal: (args: string[]) => void
   onConnectClaude: () => void
 }) {
@@ -133,7 +142,14 @@ function ClaudePlan({ payload, currency, onOpenTerminal, onConnectClaude }: {
           </div>
           <div className="plan-rows">
             {usage.windows.map(w => (
-              <UtilizationRow key={w.key} label={w.label} percent={w.percent} projection={projectWindow(w, now)} now={now} />
+              <UtilizationRow
+                key={w.key}
+                label={w.label}
+                percent={w.percent}
+                projection={projectWindow(w, now)}
+                forecast={quotaWindows.find(q => q.label === CLAUDE_QUOTA_LABELS[w.key])}
+                now={now}
+              />
             ))}
           </div>
           {payload && payload.optimize.findingCount > 0 && payload.optimize.savingsUSD > 0 && (
@@ -217,6 +233,7 @@ function ProviderPlan({ summary }: { summary: QuotaSummary }) {
             label={`${displayLabel(window.label)} window`}
             percent={window.usedPct}
             projection={projectQuotaWindow(window.label, window.usedPct, window.resetsAt, now)}
+            forecast={window}
             now={now}
           />
         ))}
@@ -229,20 +246,25 @@ function ProviderPlan({ summary }: { summary: QuotaSummary }) {
   )
 }
 
-function UtilizationRow({ label, percent, projection, now }: {
+function UtilizationRow({ label, percent, projection, forecast, now }: {
   label: string
   percent: number
   projection: PlanProjection | null
+  forecast?: QuotaWindow
   now: Date
 }) {
   const clamped = Math.min(Math.max(percent, 0), 100)
   const marker = projection ? Math.min(Math.max(projection.percent, 0), 100) : null
 
+  const runsOutAt = forecast?.runsOutAt ? new Date(forecast.runsOutAt) : null
+  const warn = projection?.willOverflow || runsOutAt !== null
+
   let caption: string | null = null
   if (projection) {
     const pct = Math.round(projection.percent)
     if (projection.source === 'historical') caption = `Based on last cycle: ${pct}%`
-    else if (projection.willOverflow && projection.hitsLimitAt) caption = `On pace: ${pct}% at reset · hits 100% ${relativeFuture(projection.hitsLimitAt, now)}`
+    else if (runsOutAt) caption = `On pace: ${pct}% at reset · hits 100% ${relativeFuture(runsOutAt, now)}`
+    else if (forecast?.lastsUntilReset) caption = `On pace: ${pct}% at reset · lasts until reset`
     else caption = `On pace: ${pct}% at reset`
   }
 
@@ -257,8 +279,8 @@ function UtilizationRow({ label, percent, projection, now }: {
         {marker !== null && <div className="util-bar-marker" style={{ left: `calc(${marker}% - 0.75px)` }} />}
       </div>
       {caption && (
-        <div className={`util-caption ${projection?.willOverflow ? 'util-caption-warn' : ''}`}>
-          {projection?.willOverflow ? <WarningIcon size={8} /> : <ArrowUpRight size={8} />}
+        <div className={`util-caption ${warn ? 'util-caption-warn' : ''}`}>
+          {warn ? <WarningIcon size={8} /> : <ArrowUpRight size={8} />}
           <span>{caption}</span>
         </div>
       )}

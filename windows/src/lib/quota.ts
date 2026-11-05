@@ -26,7 +26,9 @@ export function severity(percent: number): Severity {
   return 'normal'
 }
 
-export type QuotaWindow = { label: string; usedPct: number; resetsAt?: string }
+/// `runsOutAt` and `lastsUntilReset` are the recent-pace forecast Rust writes into the windows
+/// it watches (quota_crossing.rs); a window it does not watch, or cannot date yet, has neither.
+export type QuotaWindow = { label: string; usedPct: number; resetsAt?: string; runsOutAt?: string; lastsUntilReset?: boolean }
 
 /// The glance value: every provider on the same billing horizon, weekly if there is one, else
 /// monthly, else the window nearest exhaustion. Empty stays null rather than posing as 0%.

@@ -6,7 +6,7 @@ import type { CurrencyState } from '../lib/currency'
 import { CURRENCY_CODES, CURRENCY_NAMES, USD } from '../lib/currency'
 import { ACCENT_PRESETS, accentById, applyAccent } from '../lib/accent'
 import {
-  DISPLAY_METRICS, MENUBAR_PERIODS, TERMINALS, USAGE_CADENCES, subscribeSettings, writeSettings,
+  DISPLAY_METRICS, MENUBAR_PERIODS, QUOTA_WARNING_PERCENTS, TERMINALS, USAGE_CADENCES, subscribeSettings, writeSettings,
   type AppSettings, type DisplayMetric, type MenubarPeriod, type MenubarScope, type ThemeChoice,
 } from '../lib/appSettings'
 import { applyTheme } from '../lib/settings'
@@ -619,6 +619,28 @@ function AlertsSection({ settings, currency }: { settings: AppSettings; currency
         />
       )}
       <Note>{help}</Note>
+      <Row
+        label={`Quota crossings (${settings.quotaWarningPercent}% and 100%)`}
+        control={
+          <Switch
+            ariaLabel="Quota crossing notifications"
+            on={settings.quotaCrossingAlerts}
+            onToggle={() => writeSettings({ quotaCrossingAlerts: !settings.quotaCrossingAlerts })}
+          />
+        }
+      />
+      <Row
+        label="Warn at"
+        control={
+          <Select
+            ariaLabel="Quota warning threshold"
+            value={settings.quotaWarningPercent}
+            options={QUOTA_WARNING_PERCENTS.map(percent => ({ id: percent, label: `${percent}%` }))}
+            onChange={percent => writeSettings({ quotaWarningPercent: percent })}
+          />
+        }
+      />
+      <Note>Also once per cycle when the recent pace runs a window out before it resets.</Note>
     </Group>
   )
 }
