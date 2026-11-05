@@ -78,13 +78,13 @@ struct ClaudeSubscriptionParsingTests {
     @Test("plan tier prefers subscriptionType over rateLimitTier")
     func tierPrefersSubscriptionType() {
         let cases: [(String?, String?, SubscriptionUsage.Tier)] = [
-            ("max", "default_claude_max_20x", .max(20)),
+            ("max", "default_claude_max_20x", .ultra),
             ("team", "default_claude_max_5x", .teamPremium),
             ("team", nil, .team),
             ("enterprise", "default_claude_max_5x", .enterprisePremium),
             ("pro", "default_claude_pro", .pro),
             (nil, "max_5x", .max(5)),
-            (nil, "max_20x", .max(20)),
+            (nil, "max_20x", .ultra),
             (nil, "team", .team),
             (nil, "default_claude_max_10x", .max(10)),
             (nil, "default_claude_ultra", .ultra),

@@ -129,6 +129,7 @@ export function planLabel(credential: Pick<ClaudeCredential, 'subscriptionType' 
     return hasMax ? 'Enterprise Premium' : 'Enterprise'
   }
   if (tier.includes('ultra')) return 'Ultra'
+  if (multiplier === '20') return 'Ultra'
   if (multiplier) return `Max ${multiplier}x`
   if (subscriptionType === 'max' || hasMax) return 'Max'
   if (subscriptionType === 'pro' || tier.includes('pro')) {

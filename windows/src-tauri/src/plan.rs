@@ -351,7 +351,7 @@ fn tier_display(subscription_type: Option<&str>, rate_limit_tier: Option<&str>) 
     if subscription_type == "enterprise" || (subscription_type.is_empty() && tier.contains("enterprise")) {
         return if has_max { "Enterprise Premium".into() } else { "Enterprise".into() };
     }
-    if tier.contains("ultra") {
+    if tier.contains("ultra") || multiplier.as_deref() == Some("20") {
         return "Ultra".into();
     }
     if let Some(n) = multiplier {
@@ -688,13 +688,13 @@ mod tests {
     #[test]
     fn tier_display_prefers_subscription_type() {
         let cases: [(Option<&str>, Option<&str>, &str); 14] = [
-            (Some("max"), Some("default_claude_max_20x"), "Max 20x"),
+            (Some("max"), Some("default_claude_max_20x"), "Ultra"),
             (Some("team"), Some("default_claude_max_5x"), "Team Premium"),
             (Some("team"), None, "Team"),
             (Some("enterprise"), Some("default_claude_max_5x"), "Enterprise Premium"),
             (Some("pro"), Some("default_claude_pro"), "Pro"),
             (None, Some("max_5x"), "Max 5x"),
-            (None, Some("max_20x"), "Max 20x"),
+            (None, Some("max_20x"), "Ultra"),
             (None, Some("team"), "Team"),
             (None, Some("default_claude_max_10x"), "Max 10x"),
             (None, Some("default_claude_ultra"), "Ultra"),

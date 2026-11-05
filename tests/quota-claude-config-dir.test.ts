@@ -61,7 +61,7 @@ describe('Claude login of a non-default config dir', () => {
   it("reads a named profile's own file and Keychain item, account first", async () => {
     keychain.mockResolvedValue({ status: 'found', value: login('live', NOW + 3_600_000) })
     const { result, readFile } = run({ configDir: WORK })
-    expect((await result).quota).toMatchObject({ connection: 'connected', planLabel: 'Max 20x' })
+    expect((await result).quota).toMatchObject({ connection: 'connected', planLabel: 'Ultra' })
     expect(readFile.mock.calls.map(call => call[0])).toEqual([path.join(WORK, '.credentials.json')])
     expect(keychain.mock.calls).toEqual([['Claude Code-credentials-f0fc2950', ['alice', null]]])
   })
