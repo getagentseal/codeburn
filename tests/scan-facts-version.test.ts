@@ -28,7 +28,7 @@ describe('FACTS_VERSION', () => {
   it('is bumped whenever a rule that produces stored facts changes', () => {
     const hash = createHash('sha256')
     for (const { file, names } of RULES) {
-      const source = readFileSync(join(__dirname, '..', file), 'utf-8')
+      const source = readFileSync(join(__dirname, '..', file), 'utf-8').replace(/\r\n/g, '\n')
       for (const name of names) hash.update(declaration(source, name)).update('\0')
     }
     expect(hash.digest('hex'), 'a stored-facts rule changed: bump FACTS_VERSION in src/scan-facts.ts and record this digest').toBe(DIGEST_BY_VERSION[FACTS_VERSION])
