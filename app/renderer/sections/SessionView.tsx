@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useState, type ReactNode } from 'react'
 
 import { ChartTip } from '../components/ChartTip'
 import { cliErrorDisplay } from '../components/CliErrorPanel'
@@ -13,7 +13,7 @@ import { formatAxisMoney, niceTicks } from '../lib/chartAxis'
 import { formatCompact, formatDayLong, formatUsd, formatUsdDifference, shortenProjectPath } from '../lib/format'
 import type { InvestigationFilters } from '../lib/investigation'
 import { codeburn, normalizeCliError } from '../lib/ipc'
-import type { CliError, SessionDrillRow, SessionWhy, WhyFinding, WhyParts, WhyPrWork, WhyStep, WhyTokens, WhyTurn } from '../lib/types'
+import type { CliError, SessionDrillRow, SessionWhy, WhyAgent, WhyFinding, WhyParts, WhyPrWork, WhyStep, WhyTokens, WhyTurn } from '../lib/types'
 
 /** Claude Code main sessions are `<uuid>.jsonl`; `--why` resolves only those. */
 const CLAUDE_SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -406,7 +406,7 @@ function roleOf(r: Request): string {
   return t(r.s.answer ? 'sessions.why.inspect.role.answer' : 'sessions.why.inspect.role.none')
 }
 
-function TurnDetail({ turn, findings, why, openStep, onStep }: { turn: WhyTurn; findings: WhyFinding[]; why: SessionWhy; openStep: number | null; onStep: (k: number | null) => void }) {
+function TurnDetail({ turn, findings, why, openStep, onStep, seg }: { turn: WhyTurn; findings: WhyFinding[]; why: SessionWhy; openStep: number | null; onStep: (k: number | null) => void; seg?: ReactNode }) {
   const [query, setQuery] = useState('')
   const [mode, setMode] = useState('all')
   const [newest, setNewest] = useState(true)
@@ -439,6 +439,7 @@ function TurnDetail({ turn, findings, why, openStep, onStep }: { turn: WhyTurn; 
   )
   return (
     <div className="sv-td">
+      {seg}
       {turn.prompt.text && <p className="sv-td-prompt">{turn.prompt.text}</p>}
       <p className="sv-td-sum">
         {plural('sessions.why.inspect.summary', turn.calls, { duration: formatStepDuration(turn.wallMs), amount: formatUsd(turn.cost), tokens: tok(tk.input + tk.cacheRead + tk.cacheWrite), reread: tok(tk.cacheRead), fresh: tok(tk.input + tk.cacheWrite), out: tok(tk.output) })}
@@ -493,6 +494,172 @@ function TurnDetail({ turn, findings, why, openStep, onStep }: { turn: WhyTurn; 
         )}
     </div>
   )
+}
+
+const at = (iso: string | null) => (iso ? Date.parse(iso) : NaN)
+const context = (k: WhyTokens) => k.input + k.cacheRead + k.cacheWrite
+const KIND_SEGMENTS = [['read', 'cacheRead', 'flagship'], ['written', 'cacheWrite', 'premium'], ['new', 'input', 'fast'], ['out', 'output', 'balanced']] as const
+const AGENT_TONES = ['flagship', 'premium', 'balanced', 'fast', 'other']
+
+function tookOf(h: WhyAgent): number {
+  const d = at(h.handedBackAt ?? h.lastCallAt) - at(h.delegatedAt ?? h.firstCallAt)
+  return Number.isFinite(d) ? Math.max(0, d) : 0
+}
+
+function statsLine(took: number, requests: number, tools: number, tk: WhyTokens, cost: number): string {
+  return [formatStepDuration(took), plural('sessions.why.agents.requests', requests), plural('sessions.why.agents.toolCalls', tools),
+    t('sessions.why.agents.in', { tokens: tok(context(tk)) }), t('sessions.why.agents.out', { tokens: tok(tk.output) }), formatUsd(cost)].join(' · ')
+}
+
+function Segments({ items, className }: { items: Array<{ key: string; tone: string; value: number; label: string }>; className: string }) {
+  const total = items.reduce((s, x) => s + x.value, 0)
+  return (
+    <span className={className} aria-hidden="true">
+      {total > 0 && items.filter(x => x.value > 0).map(x => <i key={x.key} className={x.tone} title={x.label} style={{ flexGrow: x.value / total }} />)}
+    </span>
+  )
+}
+
+export function costByAgent(turn: WhyTurn): { main: number; helpers: Array<{ h: WhyAgent; cost: number }>; handBacks: number } {
+  const readBy = (id: string | null) => turn.helpers.filter(h => h.parentId === id).reduce((s, h) => s + h.handBackCost, 0)
+  return {
+    main: turn.cost - readBy(null),
+    helpers: turn.helpers.map(h => ({ h, cost: h.cost - readBy(h.id) })),
+    handBacks: turn.helpers.reduce((s, h) => s + h.handBackCost, 0),
+  }
+}
+
+function treeOf(hs: WhyAgent[]): Array<{ h: WhyAgent; depth: number }> {
+  const ids = new Set(hs.map(h => h.id))
+  const out: Array<{ h: WhyAgent; depth: number }> = []
+  const walk = (parent: string | null, depth: number) => hs
+    .filter(h => (h.parentId && ids.has(h.parentId) ? h.parentId : null) === parent)
+    .forEach(h => { out.push({ h, depth }); walk(h.id, depth + 1) })
+  walk(null, 0)
+  return out
+}
+
+const agentName = (h: WhyAgent) => h.agentType || t('sessions.why.agents.helper')
+
+function Lifecycle({ h }: { h: WhyAgent }) {
+  const base = at(h.delegatedAt ?? h.firstCallAt)
+  const off = (iso: string | null) => (Number.isFinite(at(iso) - base) ? `+${formatStepDuration(at(iso) - base)}` : '—')
+  const reqs = h.steps.filter((s): s is ModelStep => s.kind === 'model')
+  const first = reqs[0]?.tokens
+  const peak = Math.max(1, ...reqs.map(s => context(s.tokens) + s.tokens.output))
+  const inputs = reqs.map(s => tok(context(s.tokens)))
+  const legend = KIND_SEGMENTS.map(([key]) => t(`sessions.why.agents.legend.${key}`))
+  const stages: Array<{ key: string; offset: string; body: ReactNode }> = [
+    { key: 'delegate', offset: h.delegatedAt ? '+0s' : '—', body: <p>{t('sessions.why.agents.delegate', { tokens: tok(h.taskTokensEst) })}</p> },
+    { key: 'initialize', offset: off(h.firstCallAt), body: first && <p>{t('sessions.why.agents.initialize', { tokens: tok(context(first)), written: tok(first.cacheWrite) })}</p> },
+    {
+      key: 'run', offset: off(h.lastCallAt), body: (
+        <>
+          <p>{[plural('sessions.why.agents.requests', h.requests), plural('sessions.why.agents.toolCalls', h.toolCalls), t('sessions.why.agents.cached', { share: pct(context(h.tokens) > 0 ? h.tokens.cacheRead / context(h.tokens) : 0) })].join(', ')}</p>
+          <span className="sv-lc-bars" aria-hidden="true">
+            {reqs.map((s, j) => (
+              <span key={j} style={{ height: `${(context(s.tokens) + s.tokens.output) / peak * 100}%` }}>
+                {KIND_SEGMENTS.map(([key, part, tone]) => <i key={key} className={tone} style={{ flexGrow: s.tokens[part] }} />)}
+              </span>
+            ))}
+          </span>
+          <span className="sv-lc-legend">{legend.map((l, n) => <span key={l}><i className={KIND_SEGMENTS[n]![2]} />{l}</span>)}</span>
+          {inputs.length > 0 && <p className="mono">{inputs.slice(0, 4).join(' → ') + (inputs.length > 4 ? ' → …' : '')}</p>}
+        </>
+      ),
+    },
+    {
+      key: 'handBack', offset: off(h.handedBackAt), body: h.handedBackAt
+        ? <><p>{t('sessions.why.agents.report', { tokens: tok(h.reportTokensEst) })}</p>{h.handedBackIn !== null && <p>{t('sessions.why.agents.readIn', { n: h.handedBackIn })}</p>}</>
+        : <p>{t(`sessions.why.agents.noReport.${h.state === 'running' ? 'running' : 'stopped'}`)}</p>,
+    },
+    {
+      key: 'cost', offset: `+${formatStepDuration(tookOf(h))}`, body: (
+        <>
+          <p>{t('sessions.why.agents.apiRates', { amount: formatUsd(h.cost) })}</p>
+          <Segments className="sv-lc-kind" items={KIND_SEGMENTS.map(([key, part, tone], n) => ({ key, tone, value: h.parts[part], label: legend[n]! }))} />
+          {h.cacheSaving > 0 && <p>{t('sessions.why.agents.saved', { amount: usdFine(h.cacheSaving) })}</p>}
+        </>
+      ),
+    },
+  ]
+  return (
+    <ol className="sv-lc">
+      {stages.map(x => (
+        <li key={x.key} data-stage={x.key}>
+          <span className="pt"><b>{t(`sessions.why.agents.stage.${x.key}`)}</b><span className="off">{x.offset}</span></span>
+          <div className="dt">{x.body}</div>
+        </li>
+      ))}
+    </ol>
+  )
+}
+
+function AgentsView({ turn, why, seg }: { turn: WhyTurn; why: SessionWhy; seg: ReactNode }) {
+  const [open, setOpen] = useState<string | null>(null)
+  const [step, setStep] = useState<number | null>(null)
+  const tree = treeOf(turn.helpers)
+  const nested = tree.some(x => x.depth > 0)
+  const split = costByAgent(turn)
+  const total = turn.cost + turn.helperCost
+  const share = (v: number) => pct(total > 0 ? v / total : 0)
+  const rows = [
+    { key: 'main', tone: 'main', label: t('sessions.why.agents.main'), value: split.main },
+    ...split.helpers.map(({ h, cost }, n) => ({ key: h.id, tone: AGENT_TONES[n % AGENT_TONES.length]!, label: `${agentName(h)} · ${h.description}`, value: cost })),
+    { key: 'handBacks', tone: 'back', label: t('sessions.why.agents.byAgent.handBacks'), value: split.handBacks },
+  ]
+  const byType = new Map<string, number>()
+  for (const h of turn.helpers) byType.set(agentName(h), (byType.get(agentName(h)) ?? 0) + h.cost)
+  return (
+    <div className="sv-td">
+      {seg}
+      <div className="sv-ag-topo">
+        <b>{plural('sessions.why.agents.topology', turn.helpers.length)}</b>
+        {nested
+          ? <ul className="sv-ag-tree">{tree.map(({ h, depth }) => <li key={h.id} data-depth={depth} style={{ paddingLeft: depth * 16 }}>{agentName(h)} <span>{h.description}</span></li>)}</ul>
+          : <span>{tree.map(x => agentName(x.h)).join(' · ')}</span>}
+      </div>
+      <p className="sv-ag-main"><b>{t('sessions.why.agents.main')}</b> <span>{[turn.models.join('/'), statsLine(turn.wallMs, turn.calls, turn.steps.filter(s => s.kind === 'tool').length, turn.tokens, turn.cost)].filter(Boolean).join(' · ')}</span></p>
+      {tree.map(({ h }) => (
+        <div key={h.id} className="sv-ag" data-agent={h.id}>
+          <div className="sv-ag-head">
+            <span className="ti"><b>{agentName(h)}</b><span>{h.description}</span></span>
+            <span className={`sv-pill ${h.state}`}>{t(`sessions.why.agents.state.${h.state}`)}</span>
+            <button type="button" className="sv-jump" aria-expanded={open === h.id} onClick={() => { setOpen(open === h.id ? null : h.id); setStep(null) }}>{t('sessions.why.view.inspect')}<Icon name="chevron-right" /></button>
+          </div>
+          {h.task && <p className="sv-ag-task">{h.task}</p>}
+          <p className="sv-ag-stats">{statsLine(tookOf(h), h.requests, h.toolCalls, h.tokens, h.cost)}</p>
+          <Lifecycle h={h} />
+          {open === h.id && (
+            <TurnDetail
+              turn={{ ...turn, ts: h.delegatedAt ?? turn.ts, prompt: { text: '', kind: 'text' }, cost: h.cost, parts: h.parts, tokens: h.tokens, calls: h.requests, models: h.models, helperCost: 0, helpers: [], wallMs: tookOf(h), steps: h.steps }}
+              findings={[]} why={why} openStep={step} onStep={setStep}
+            />
+          )}
+        </div>
+      ))}
+      <div className="sv-ag-cost">
+        <div className="sv-ag-cost-head"><b>{t('sessions.why.agents.byAgent.title')}</b><span>{formatUsd(total)}</span></div>
+        <Segments className="sv-ag-bar" items={rows} />
+        {rows.filter(r => r.key !== 'handBacks' || r.value > 0).map(r => (
+          <div key={r.key} className="sv-ag-row" data-row={r.key}>
+            <i className={r.tone} aria-hidden="true" />
+            <span>{r.label}</span>
+            <b>{r.key === 'handBacks' ? '≈' : ''}{usdFine(r.value)}</b>
+            <span className="pc">{share(r.value)}</span>
+          </div>
+        ))}
+        <p className="sv-ag-type">{t('sessions.why.agents.byAgent.byType', { list: [...byType].map(([k, v]) => `${k} ${formatUsd(v)}`).join(' · ') })}</p>
+      </div>
+    </div>
+  )
+}
+
+function PromptDetail(props: { turn: WhyTurn; findings: WhyFinding[]; why: SessionWhy; openStep: number | null; onStep: (k: number | null) => void }) {
+  const [view, setView] = useState('inspect')
+  if (!props.turn.helpers.length) return <TurnDetail {...props} />
+  const seg = <SegTabs options={[{ value: 'inspect', label: t('sessions.why.view.inspect') }, { value: 'agents', label: t('sessions.why.view.agents') }]} value={view} onChange={setView} style={{ alignSelf: 'flex-start' }} />
+  return view === 'agents' ? <AgentsView turn={props.turn} why={props.why} seg={seg} /> : <TurnDetail {...props} seg={seg} />
 }
 
 const prLabel = (url: string) => url.replace(/^https:\/\/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+).*$/, '$1/$2#$3')
@@ -708,7 +875,7 @@ export function SessionView({ row, filters, medianCost, onBack }: {
                   </span>
                   <span className="sv-tr-dur">{formatStepDuration(turn.wallMs)}</span>
                 </button>
-                {isOpen && <TurnDetail turn={turn} findings={fs} why={why} openStep={openStep} onStep={setOpenStep} />}
+                {isOpen && <PromptDetail turn={turn} findings={fs} why={why} openStep={openStep} onStep={setOpenStep} />}
               </div>
             </Fragment>
           )

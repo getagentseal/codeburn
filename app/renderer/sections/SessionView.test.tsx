@@ -4,8 +4,8 @@ import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { EMPTY_FILTERS } from '../lib/investigation'
-import type { SessionRow, SessionWhy, WhyParts, WhyStep, WhyTurn } from '../lib/types'
-import { hasSessionView, SessionView } from './SessionView'
+import type { SessionRow, SessionWhy, WhyAgent, WhyParts, WhyStep, WhyTurn } from '../lib/types'
+import { costByAgent, hasSessionView, SessionView } from './SessionView'
 import { Sessions } from './Sessions'
 
 const { getSessionWhy, getSessions } = vi.hoisted(() => ({
@@ -168,6 +168,106 @@ describe('SessionView inspect', () => {
     await user.click(within(td as HTMLElement).getByRole('tab', { name: 'Tools' }))
     expect(td.querySelectorAll('.sv-rq-head')).toHaveLength(0)
     expect(texts(td, '.sv-rq-tool .nm')).toEqual(['Edit', 'Bash', 'Grep', 'Read'])
+  })
+})
+
+const T0 = Date.parse('2026-10-02T08:16:00.000Z')
+const iso = (ms: number | null) => (ms === null ? null : new Date(T0 + ms).toISOString())
+const usage = (input: number, cacheRead: number, cacheWrite: number, output: number) => ({ input, cacheRead, cacheWrite, output })
+function helper(id: string, description: string, agentType: string, cost: number, times: [number, number, number, number | null], extra: Partial<WhyAgent> = {}): WhyAgent {
+  return {
+    id, description, agentType, models: ['Sonnet 5'], calls: 1, cost, nested: false, loose: false, parentId: null, model: 'Sonnet 5', background: true, state: 'done', task: '',
+    delegatedAt: iso(times[0]), firstCallAt: iso(times[1]), lastCallAt: iso(times[2]), handedBackAt: iso(times[3]), handedBackIn: null,
+    taskTokensEst: 100, reportTokensEst: 0, handBackCost: 0, cacheSaving: 0, requests: 1, toolCalls: 0, parts: parts(cost), tokens: usage(2, 0, 5_000, 100),
+    steps: [model(500, 3_000, cost, { tokens: usage(2, 0, 5_000, 100) })], ...extra,
+  }
+}
+const scan = helper('agent-k1', 'Scan repo', 'Explore', 0.3, [3_000, 3_500, 32_505, 65_015], {
+  calls: 3, requests: 3, toolCalls: 1, task: 'Scan the repo for dead code.', taskTokensEst: 1_000, reportTokensEst: 500, handedBackIn: 3, handBackCost: 0.01, cacheSaving: 0.08,
+  tokens: usage(3_004, 31_000, 13_900, 2_000),
+  steps: [
+    model(500, 3_500, 0.1, { tokens: usage(3_000, 0, 12_000, 1_000), toolCalls: 0 }),
+    model(4_500, 6_500, 0.1, { tokens: usage(2, 15_000, 1_000, 400), toolCalls: 1 }),
+    tool(6_500, 26_505, 'Agent', 'Deep scan', 1, 40),
+    model(27_505, 29_505, 0.1, { tokens: usage(2, 16_000, 900, 600), answer: true }),
+  ],
+})
+const agentsTurn = turn(6, 0.9, {
+  helperCost: 0.55,
+  helpers: [
+    scan,
+    helper('agent-k2', 'Write docs', 'general-purpose', 0.12, [3_000, 5_000, 8_000, null], { state: 'stopped' }),
+    helper('agent-k5', 'Lint', 'general-purpose', 0.08, [3_000, 5_000, 9_000, null], { state: 'running' }),
+    helper('agent-k3', 'Deep scan', 'Explore', 0.05, [6_500, 10_000, 13_000, 26_505], { parentId: 'agent-k1', nested: true, reportTokensEst: 300, handedBackIn: 3, handBackCost: 0.004 }),
+  ],
+})
+const agentsPayload: SessionWhy = {
+  ...payload,
+  turns: [...payload.turns, agentsTurn],
+  findings: [{ id: 'f1', kind: 'slowCall', turn: 6, step: 1, usd: null, share: null, timeMs: 66_500, model: 'Fable 5.1', outputTokens: 1_000 }],
+}
+
+describe('SessionView agents', () => {
+  async function openAgents() {
+    const user = userEvent.setup()
+    getSessionWhy.mockResolvedValue(agentsPayload)
+    const { container } = render(<SessionView row={row} filters={EMPTY_FILTERS} onBack={() => {}} />)
+    await screen.findByText('Slowest request')
+    await user.click(within(container.querySelector('#sv-turn-6')!).getByRole('tab', { name: 'Agents' }))
+    return { user, td: container.querySelector('#sv-turn-6 .sv-td')!, container }
+  }
+  const card = (td: Element, id: string) => td.querySelector(`[data-agent="${id}"]`)!
+
+  it('shows the helpers as a tree, the main agent, and a card per helper with its state', async () => {
+    const { td } = await openAgents()
+    expect(td.querySelector('.sv-ag-topo b')).toHaveTextContent('4 subagents')
+    expect([...td.querySelectorAll('.sv-ag-tree li')].map(li => [li.textContent, li.getAttribute('data-depth')])).toEqual([
+      ['Explore Scan repo', '0'], ['Explore Deep scan', '1'], ['general-purpose Write docs', '0'], ['general-purpose Lint', '0'],
+    ])
+    expect(td.querySelector('.sv-ag-main')).toHaveTextContent('Main agent Fable 5.1 · 1m 00s · 2 requests · 0 tool calls · 58K in · 1K out · $0.90')
+    expect(texts(td, '.sv-ag .sv-ag-head .sv-pill')).toEqual(['done', 'done', 'stopped', 'running'])
+    expect(texts(td, '.sv-ag .sv-ag-head .ti b')).toEqual(['Explore', 'Explore', 'general-purpose', 'general-purpose'])
+    expect(card(td, 'agent-k1').querySelector('.sv-ag-task')).toHaveTextContent('Scan the repo for dead code.')
+    expect(card(td, 'agent-k1').querySelector('.sv-ag-stats')).toHaveTextContent('1m 02s · 3 requests · 1 tool call · 47.9K in · 2K out · $0.30')
+  })
+
+  it('draws each helper lifecycle with the elapsed offset and the detail of every stage', async () => {
+    const { td } = await openAgents()
+    const k1 = card(td, 'agent-k1')
+    expect(texts(k1, '.sv-lc .pt b')).toEqual(['Delegate', 'Initialize', 'Run', 'Hand back', 'Cost'])
+    expect(texts(k1, '.sv-lc .off')).toEqual(['+0s', '+500ms', '+30s', '+1m 02s', '+1m 02s'])
+    expect(texts(k1, '.sv-lc .dt p')).toEqual([
+      '≈1K tokens of task text handed over',
+      'Started with 15K tokens, 12K written to cache',
+      '3 requests, 1 tool call, 65% of input read from cache',
+      '15K → 16K → 16.9K',
+      'Report ≈500 tokens',
+      'Handed back in request 3',
+      '$0.30 at API rates',
+      'Reading from cache saved ≈$0.08 against sending that input uncached',
+    ])
+    expect(k1.querySelectorAll('.sv-lc-bars > span')).toHaveLength(3)
+    expect(k1.querySelectorAll('.sv-lc-bars > span:first-child i')).toHaveLength(4)
+    expect(card(td, 'agent-k2').querySelector('[data-stage="handBack"]')).toHaveTextContent('Hand back—The session ended without a hand-back')
+    expect(card(td, 'agent-k5').querySelector('[data-stage="handBack"] .dt')).toHaveTextContent('Still working')
+  })
+
+  it('splits the prompt by agent so the parts add up to the prompt total, and opens a helper own request cards', async () => {
+    const split = costByAgent(agentsTurn)
+    expect(split.main + split.helpers.reduce((s, x) => s + x.cost, 0) + split.handBacks).toBeCloseTo(agentsTurn.cost + agentsTurn.helperCost, 12)
+    expect(split.main).toBeCloseTo(0.89, 12)
+    expect(split.helpers.map(x => Number(x.cost.toFixed(3)))).toEqual([0.296, 0.12, 0.08, 0.05])
+    const { user, td } = await openAgents()
+    const panel = td.querySelector('.sv-ag-cost')!
+    expect(panel.querySelector('.sv-ag-cost-head')).toHaveTextContent('Cost by agent$1.45')
+    expect(texts(panel, '.sv-ag-row')).toEqual([
+      'Main agent$0.8961%', 'Explore · Scan repo$0.3020%', 'general-purpose · Write docs$0.128%', 'general-purpose · Lint$0.086%', 'Explore · Deep scan$0.053%', 'Hand-backs≈$0.01<1%',
+    ])
+    expect(panel.querySelectorAll('.sv-ag-bar i')).toHaveLength(6)
+    expect(panel.querySelector('.sv-ag-type')).toHaveTextContent('By type: Explore $0.35 · general-purpose $0.20')
+    await user.click(within(card(td, 'agent-k1') as HTMLElement).getByRole('button', { name: 'Inspect' }))
+    expect(texts(card(td, 'agent-k1'), '.sv-rq-head .ti b')).toEqual(['Request 3', 'Request 2', 'Request 1'])
+    expect(texts(card(td, 'agent-k1'), '.sv-rq-tool .nm')).toEqual(['Agent'])
   })
 })
 
