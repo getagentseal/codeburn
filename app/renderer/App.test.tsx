@@ -1152,7 +1152,7 @@ describe('freshness: hidden-window polling', () => {
   // app's dominant idle drain, so the interval stops while hidden and catches up
   // on return.
   it('stops interval refreshes while hidden and catches up on return', async () => {
-    vi.useFakeTimers()
+    vi.useFakeTimers({ now: new Date(2026, 10, 4, 12) })
     try {
       setVisibility('visible')
       render(<App />)
