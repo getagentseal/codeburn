@@ -10,7 +10,20 @@
 // same tree is valid for every arch.
 
 const { join } = require('node:path')
-const { cpSync, existsSync } = require('node:fs')
+const { cpSync, existsSync, writeFileSync } = require('node:fs')
+
+// A codeburn the menubar can run straight out of the bundle, so a desktop-only install has one
+// even when nothing was recorded for it (#1825). It finds its own bundle, so ~/Applications works.
+function writeMacCliLauncher(cliDir, executableName) {
+  writeFileSync(join(cliDir, 'codeburn'), [
+    '#!/bin/sh',
+    'here=$(cd "$(dirname "$0")" && pwd -P)',
+    `ELECTRON_RUN_AS_NODE=1 exec "$here/../../MacOS/${executableName}" "$here/dist/launch.js" "$@"`,
+    '',
+  ].join('\n'), { mode: 0o755 })
+}
+
+exports.writeMacCliLauncher = writeMacCliLauncher
 
 exports.default = async function afterPack(context) {
   const { appOutDir, electronPlatformName, packager } = context
@@ -26,5 +39,6 @@ exports.default = async function afterPack(context) {
   const dest = join(resources, 'cli')
 
   cpSync(src, dest, { recursive: true, dereference: true })
+  if (electronPlatformName === 'darwin') writeMacCliLauncher(dest, packager.appInfo.productFilename)
   console.log(`after-pack: bundled CLI copied -> ${dest}`)
 }

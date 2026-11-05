@@ -794,7 +794,9 @@ async function persistCodeburnPath(): Promise<void> {
     // and a person who only ever installed the .dmg has no global command to find. A recorded
     // launcher that still runs is a better answer than refusing the install.
     if (await hasRunnableRecordedCli()) return
-    throw err
+    const bundled = await desktopAppCli()
+    if (!bundled) throw err
+    cliPath = bundled
   }
   await mkdir(join(homedir(), 'Library', 'Application Support', 'CodeBurn'), { recursive: true, mode: 0o700 })
   await writeFile(PERSISTED_CLI_PATH, `${cliPath}\n`, { mode: 0o600 })
@@ -806,12 +808,29 @@ async function persistCodeburnPath(): Promise<void> {
 export async function hasRunnableRecordedCli(recordPath: string = PERSISTED_CLI_PATH): Promise<boolean> {
   try {
     const recorded = (await readFile(recordPath, 'utf-8')).trim()
-    if (!isAbsolute(recorded)) return false
-    await access(recorded, fsConstants.X_OK)
-    return (await stat(recorded)).isFile()
+    return isAbsolute(recorded) && await isRunnableFile(recorded)
   } catch {
     return false
   }
+}
+
+async function isRunnableFile(path: string): Promise<boolean> {
+  try {
+    await access(path, fsConstants.X_OK)
+    return (await stat(path)).isFile()
+  } catch {
+    return false
+  }
+}
+
+/// The launcher a packaged desktop app carries (app/scripts/after-pack.cjs), in the same two
+/// folders the menubar looks in (CodeburnCLI.desktopAppCLIs).
+export async function desktopAppCli(dirs: string[] = ['/Applications', join(homedir(), 'Applications')]): Promise<string | null> {
+  for (const dir of dirs) {
+    const candidate = join(dir, 'CodeBurn.app', 'Contents', 'Resources', 'cli', 'codeburn')
+    if (await isRunnableFile(candidate)) return candidate
+  }
+  return null
 }
 
 /// `-x`, not `-f`: the executable inside the bundle is named exactly CodeBurnMenubar, and

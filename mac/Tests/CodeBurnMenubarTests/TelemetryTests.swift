@@ -207,20 +207,21 @@ struct TelemetryTests {
         #expect(Telemetry.parseDesktopState(Data(#"{"version":1,"installId":"x"}"#.utf8)) == nil)
     }
 
-    @Test("standalone defaults on outside the default-off region, off inside it and off when unknown")
-    func standaloneRegionDefaults() {
-        let us = Scratch("us")
-        #expect(Self.client(us, region: "US").status().enabled)
+    @Test("standalone defaults on in every region and when the region is unknown")
+    func standaloneDefaultsOn() {
+        for region in ["US", "DE", "GB", nil, "419"] as [String?] {
+            let scratch = Scratch("default-\(region ?? "unknown")")
+            #expect(Self.client(scratch, region: region).status().enabled, "\(region ?? "unknown")")
+        }
+    }
 
-        let de = Scratch("de")
-        #expect(Self.client(de, region: "DE").status().enabled == false)
-
-        let unknown = Scratch("unknown")
-        #expect(Self.client(unknown, region: nil).status().enabled == false)
-
-        // A UN M.49 region is nobody's country code, so it reads as unknown.
-        let m49 = Scratch("m49")
-        #expect(Self.client(m49, region: "419").status().enabled == false)
+    @Test("a stored standalone choice, off or on, is kept whatever the region")
+    func standaloneStoredChoiceKept() {
+        for stored in [false, true] {
+            let scratch = Scratch("stored-\(stored)")
+            scratch.defaults.set(stored, forKey: Telemetry.enabledKey)
+            #expect(Self.client(scratch, region: "DE").status().enabled == stored)
+        }
     }
 
     @Test("standalone mints and keeps one install id")
@@ -367,7 +368,7 @@ struct TelemetryTests {
         let id = scratch.defaults.string(forKey: Telemetry.installIDKey)
 
         #expect(first.source == .app)
-        #expect(first.enabled, "a desktop yes is a decision too, even in a default-off region")
+        #expect(first.enabled, "a desktop yes is a decision too")
         #expect(id != nil && id != "desk-1")
         _ = telemetry.status()
         _ = telemetry.status()
@@ -379,10 +380,10 @@ struct TelemetryTests {
     func standaloneExplicitDecisionSwitch() {
         // Both settings of Telemetry.standaloneRequiresExplicitDecision, so the
         // product call is a one-line change with tests already standing.
-        let regionDecides = Scratch("regionDecides")
-        let deciding = Self.client(regionDecides, region: "US", requiresExplicitDecision: false)
+        let defaultDecides = Scratch("defaultDecides")
+        let deciding = Self.client(defaultDecides, region: "US", requiresExplicitDecision: false)
         deciding.track("app_open")
-        #expect(deciding.queuedEvents.count == 1, "the region default is itself the answer")
+        #expect(deciding.queuedEvents.count == 1, "the default is itself the answer")
 
         let mustBeAsked = Scratch("mustBeAsked")
         let waiting = Self.client(mustBeAsked, region: "US", requiresExplicitDecision: true)
@@ -393,20 +394,6 @@ struct TelemetryTests {
         waiting.track("app_open")
         #expect(waiting.queuedEvents.count == 1)
         #expect(mustBeAsked.defaults.bool(forKey: Telemetry.decidedKey))
-    }
-
-    @Test("the default-off region list is still the desktop app's list")
-    func regionListMatchesDesktop() {
-        // Copied from app/electron/telemetry.ts DEFAULT_OFF_COUNTRIES: EU-27 +
-        // EEA (IS, LI, NO) + UK + CH. Drift here fails rather than silently
-        // opting a region in or out on one platform only.
-        let desktop: Set<String> = [
-            "AT", "BE", "BG", "HR", "CY", "CZ", "DK", "EE", "FI", "FR", "DE", "GR",
-            "HU", "IE", "IT", "LV", "LT", "LU", "MT", "NL", "PL", "PT", "RO", "SK",
-            "SI", "ES", "SE", "IS", "LI", "NO", "GB", "CH",
-        ]
-        #expect(desktop.count == 32)
-        #expect(Telemetry.defaultOffCountries == desktop)
     }
 
     // MARK: - Events
@@ -704,8 +691,9 @@ struct TelemetryTests {
     @Test("a quit with the toggle off posts nothing at all")
     func quitFlushRespectsConsent() {
         let scratch = Scratch()
+        scratch.defaults.set(false, forKey: Telemetry.enabledKey)
         let transport = RecordingTransport(.pending)
-        let telemetry = Self.client(scratch, region: "DE", transport: transport)
+        let telemetry = Self.client(scratch, transport: transport)
 
         telemetry.track("app_open")
         telemetry.flushOnQuit(timeout: 0.2)

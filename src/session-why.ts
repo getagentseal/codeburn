@@ -14,8 +14,9 @@ import {
   type ToolResultMeta,
 } from './parser.js'
 import { callCommands, createHead, ghPrCommands, isCommit, namedPrNumber, pushes, readPrNumbers, readsCode, rounds } from './pr-signals.js'
+import { sessionCacheHitPercent } from './sessions-report.js'
 import { estimateTokensFromChars } from './token-estimate.js'
-import type { JournalEntry, ParsedApiCall } from './types.js'
+import type { CostBasis, JournalEntry, ParsedApiCall } from './types.js'
 
 // One Claude Code session, read on demand: where its money went, prompt by
 // prompt and step by step. Money comes from the parser's own dedupe, turn
@@ -54,8 +55,14 @@ export type WhyDetail = {
   helper?: WhyHelper
 }
 export type WhyStep =
-  | { kind: 'model'; start: number; end: number; model: string; cost: number; parts: WhyParts; tokens: WhyTokens; startedBy: 'prompt' | 'tool' | 'message' }
-  | { kind: 'tool'; start: number; end: number; name: string; label: string; isError: boolean; error?: WhyError; helperCost?: number; detail: WhyDetail | null }
+  | {
+    kind: 'model'; start: number; end: number; model: string; cost: number; basis: CostBasis; parts: WhyParts; tokens: WhyTokens; startedBy: 'prompt' | 'tool' | 'message'
+    cachedPct: number | null; delta: number | null; toolCalls: number; answer: boolean
+  }
+  | {
+    kind: 'tool'; start: number; end: number; name: string; label: string; isError: boolean; error?: WhyError; helperCost?: number; detail: WhyDetail | null
+    parent: number; parallel?: { index: number; of: number }; resultChars: number
+  }
 export type WhyTurn = {
   i: number
   ts: string
@@ -457,6 +464,7 @@ export async function buildSessionWhy(filePath: string): Promise<SessionWhy> {
     const firstCallTs = ms(pt.assistantCalls[0]?.timestamp)
     const start = Number.isFinite(ms(pt.timestamp)) ? ms(pt.timestamp) : firstCallTs
     const steps: WhyStep[] = []
+    const parentOf = new Map<WhyStep, WhyStep>()
     const turnHelpers: WhyHelper[] = []
     let end = start
     for (const call of pt.assistantCalls) {
@@ -468,14 +476,17 @@ export async function buildSessionWhy(filePath: string): Promise<SessionWhy> {
       const sentAt = input && input.ts >= start ? input.ts : start
       const startedBy = !input || input.ts <= start ? 'prompt' : input.kind
       const isAdvisor = call.deduplicationKey.includes(':advisor:')
-      allCalls.push({ call, ts: firstTs, turn: ti + 1, toolUse: !isAdvisor && (m?.toolUses.length ?? 0) > 0 })
-      steps.push({
-        kind: 'model', start: sentAt - start, end: lastTs - start, model: getShortModelName(call.model), cost: call.costUSD, parts: partsOf(call), startedBy,
-        tokens: { input: call.usage.inputTokens, output: call.usage.outputTokens, cacheRead: call.usage.cacheReadInputTokens, cacheWrite: call.usage.cacheCreationInputTokens },
-      })
+      const toolUses = isAdvisor || !m ? [] : m.toolUses
+      allCalls.push({ call, ts: firstTs, turn: ti + 1, toolUse: toolUses.length > 0 })
+      const u = call.usage
+      const modelStep: WhyStep = {
+        kind: 'model', start: sentAt - start, end: lastTs - start, model: getShortModelName(call.model), cost: call.costUSD, basis: call.costBasis ?? 'calculated', parts: partsOf(call), startedBy,
+        tokens: { input: u.inputTokens, output: u.outputTokens, cacheRead: u.cacheReadInputTokens, cacheWrite: u.cacheCreationInputTokens },
+        cachedPct: sessionCacheHitPercent(u.inputTokens, u.cacheReadInputTokens, u.cacheCreationInputTokens), delta: null, toolCalls: toolUses.length, answer: false,
+      }
+      steps.push(modelStep)
       end = Math.max(end, lastTs)
-      if (isAdvisor || !m) continue
-      for (const tu of m.toolUses) {
+      toolUses.forEach((tu, j) => {
         const res = read.results.get(tu.id)
         const helper = helperByTool.get(tu.id)
         if (helper) turnHelpers.push(helper)
@@ -487,13 +498,23 @@ export async function buildSessionWhy(filePath: string): Promise<SessionWhy> {
         const step: WhyStep = {
           kind: 'tool', start: tu.ts - start, end: (res?.ts ?? tu.ts) - start, name: tu.name, label: redact(toolLabel(tu.name, tu.input)),
           isError: res?.isError === true, ...(res?.isError ? { error: errorCause(res.text) } : {}), ...(helper ? { helperCost: helper.cost } : {}), detail,
+          parent: -1, ...(toolUses.length > 1 ? { parallel: { index: j + 1, of: toolUses.length } } : {}), resultChars: res?.text.length ?? 0,
         }
         if (res) stepResult.set(step, res)
+        parentOf.set(step, modelStep)
         steps.push(step)
         end = Math.max(end, res?.ts ?? tu.ts)
-      }
+      })
     }
     steps.sort((a, b) => a.start - b.start)
+    const context = (s: Extract<WhyStep, { kind: 'model' }>) => s.tokens.input + s.tokens.cacheRead + s.tokens.cacheWrite
+    const models = steps.filter((s): s is Extract<WhyStep, { kind: 'model' }> => s.kind === 'model')
+    models.forEach((s, j) => {
+      const next = models[j + 1]
+      s.delta = next ? context(next) - context(s) : null
+      s.answer = !next
+    })
+    for (const s of steps) if (s.kind === 'tool') s.parent = steps.indexOf(parentOf.get(s)!)
     const nextStart = Number.isFinite(ms(read.turns[ti + 1]?.timestamp)) ? ms(read.turns[ti + 1]!.timestamp) : Infinity
     const wall = Math.max(0, ...read.durations.filter(d => d.ts >= start && d.ts < nextStart).map(d => d.ms))
     const { parts, tokens } = sumParts(pt.assistantCalls)

@@ -223,4 +223,49 @@ struct CodeburnCLIPathTests {
             #expect(!entries.contains(bin.path))
         }
     }
+
+    /// #1825: a desktop-only install has no codeburn on PATH and may have no usable record, but
+    /// the CodeBurn.app it does have carries one.
+    @Test("resolution order: record, package-manager directories, then a desktop app's CLI")
+    func resolutionOrder() {
+        let home = "/Users/test"
+        let recorded = "\(home)/Library/Application Support/codeburn-desktop/codeburn-desktop-cli.sh"
+        let homebrew = "/opt/homebrew/bin/codeburn"
+        let volta = "\(home)/.volta/bin/codeburn"
+        let system = "/Applications/CodeBurn.app/Contents/Resources/cli/codeburn"
+        let user = "\(home)/Applications/CodeBurn.app/Contents/Resources/cli/codeburn"
+        func resolve(_ present: Set<String>) -> (path: String?, tried: [String]) {
+            CodeburnCLI.resolveInstalledCLI(
+                recorded: recorded,
+                homeDirectory: home,
+                environment: [:],
+                isExecutable: { present.contains($0) }
+            )
+        }
+
+        #expect(resolve([recorded, volta, system]).path == recorded)
+        #expect(resolve([volta, system]).path == volta)
+        #expect(resolve([system, user]).path == system)
+        #expect(resolve([user]).path == user)
+
+        let none = resolve([])
+        #expect(none.path == nil)
+        #expect(none.tried.first == recorded)
+        #expect(Array(none.tried.suffix(2)) == [system, user])
+        #expect(none.tried.firstIndex(of: homebrew)! < none.tried.firstIndex(of: volta)!)
+        #expect(Set(none.tried).count == none.tried.count)
+    }
+
+    @Test("a missing CLI names every path tried; any other failure passes through")
+    func missingCLINamesEveryPath() {
+        let tried = ["/opt/homebrew/bin/codeburn", "/Applications/CodeBurn.app/Contents/Resources/cli/codeburn"]
+        let message = CodeburnCLI.explainedFailure(
+            code: 127,
+            stderr: "env: codeburn: No such file or directory\n",
+            tried: { tried }
+        )
+        #expect(message.hasPrefix("No CodeBurn CLI found"))
+        #expect(message.contains("Tried: /opt/homebrew/bin/codeburn, /Applications/CodeBurn.app/Contents/Resources/cli/codeburn."))
+        #expect(CodeburnCLI.explainedFailure(code: 1, stderr: "boom", tried: { tried }) == "boom")
+    }
 }

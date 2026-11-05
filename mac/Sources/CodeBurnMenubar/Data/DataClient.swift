@@ -84,7 +84,10 @@ struct DataClient {
             qualityOfService: qualityOfService
         )
         guard result.exitCode == 0 else {
-            throw DataClientError.nonZeroExit(code: result.exitCode, stderr: result.stderr)
+            throw DataClientError.nonZeroExit(
+                code: result.exitCode,
+                stderr: CodeburnCLI.explainedFailure(code: result.exitCode, stderr: result.stderr)
+            )
         }
         do {
             let payload = try JSONDecoder().decode(MenubarPayload.self, from: result.stdout)

@@ -93,20 +93,49 @@ enum CodeburnCLI {
     }
 
     private static func installedArgv() -> [String] {
-        if let persisted = persistedCLIPath(), isSafe(persisted), FileManager.default.isExecutableFile(atPath: persisted) {
-            return [persisted]
-        }
-        let environment = ProcessInfo.processInfo.environment
-        let userPaths = userNodePaths(
+        [installedCLI().path ?? "codeburn"]
+    }
+
+    static func installedCLI() -> (path: String?, tried: [String]) {
+        resolveInstalledCLI(
+            recorded: persistedCLIPath(),
             homeDirectory: FileManager.default.homeDirectoryForCurrentUser.path,
-            environment: environment
+            environment: ProcessInfo.processInfo.environment,
+            isExecutable: FileManager.default.isExecutableFile(atPath:)
         )
-        for candidate in (additionalPathEntries + userPaths).map({ "\($0)/codeburn" }) {
-            if isSafe(candidate), FileManager.default.isExecutableFile(atPath: candidate) {
-                return [candidate]
-            }
+    }
+
+    /// The launcher a packaged desktop app carries inside its bundle (app/scripts/after-pack.cjs).
+    private static let desktopAppCLI = "CodeBurn.app/Contents/Resources/cli/codeburn"
+
+    /// The recorded path first (the desktop app or `codeburn menubar` wrote it), then the
+    /// package-manager directories a GUI launch's PATH misses, then the CLI inside a CodeBurn
+    /// desktop app, which is the only one a desktop-only install has. Returns the first that
+    /// runs, and every path checked so a failure can name them.
+    static func resolveInstalledCLI(
+        recorded: String?,
+        homeDirectory: String,
+        environment: [String: String],
+        isExecutable: (String) -> Bool
+    ) -> (path: String?, tried: [String]) {
+        let directories = additionalPathEntries + userNodePaths(homeDirectory: homeDirectory, environment: environment)
+        var candidates: [String] = recorded.map { [$0] } ?? []
+        candidates += directories.map { "\($0)/codeburn" }
+        candidates += ["/Applications", "\(homeDirectory)/Applications"].map { "\($0)/\(desktopAppCLI)" }
+        var tried: [String] = []
+        for candidate in candidates where !tried.contains(candidate) {
+            tried.append(candidate)
+            if isSafe(candidate), isExecutable(candidate) { return (candidate, tried) }
         }
-        return ["codeburn"]
+        return (nil, tried)
+    }
+
+    /// `env: codeburn: No such file or directory` is what the bare-name fallback says when
+    /// nothing was found; this names every path that was checked instead.
+    static func explainedFailure(code: Int32, stderr: String, tried: () -> [String] = { CodeburnCLI.installedCLI().tried }) -> String {
+        guard code == 127, stderr.contains("env: codeburn: No such file or directory") else { return stderr }
+        return "No CodeBurn CLI found: nothing on PATH, and no CodeBurn desktop app to borrow one from. "
+            + "Tried: \(tried().joined(separator: ", ")). Install the desktop app, or run `npm install -g codeburn`."
     }
 
     private static func persistedCLIPath() -> String? {

@@ -13,8 +13,8 @@ import { compareSemver } from './updates'
 // Privacy invariants (enforced here, not by the caller):
 // - Nothing is ever sent before the user completes the onboarding consent
 //   screen, and nothing is sent while the toggle is off.
-// - EU/EEA/UK/CH installs default the toggle OFF; everywhere else defaults ON.
-//   Either way the user decides on the consent screen.
+// - The toggle defaults ON in every region. The consent screen and the
+//   Settings toggle can turn it off at any time.
 // - The only identifier is a random UUID minted locally. No fingerprinting.
 // - Events carry day-granularity timestamps only, and props pass a whitelist
 //   sanitizer: every leaf is a short string, a finite number or a boolean, and
@@ -28,18 +28,6 @@ import { compareSemver } from './updates'
 
 export const TELEMETRY_ENDPOINT = 'https://api.codeburn.app/v1/telemetry'
 export const TELEMETRY_SCHEMA = 1
-
-// EU-27 + EEA (IS, LI, NO) + UK + CH: conservative "default off" region.
-const DEFAULT_OFF_COUNTRIES = new Set([
-  'AT', 'BE', 'BG', 'HR', 'CY', 'CZ', 'DK', 'EE', 'FI', 'FR', 'DE', 'GR',
-  'HU', 'IE', 'IT', 'LV', 'LT', 'LU', 'MT', 'NL', 'PL', 'PT', 'RO', 'SK',
-  'SI', 'ES', 'SE', 'IS', 'LI', 'NO', 'GB', 'CH',
-])
-
-export function defaultEnabledFor(country: string | null | undefined): boolean {
-  if (!country) return false // unknown region: be conservative
-  return !DEFAULT_OFF_COUNTRIES.has(country.toUpperCase())
-}
 
 /// Average CPU of the app over a session, as a percent of one core. Coarse
 /// enough that a session is never recognisable from it; the point is only
@@ -291,7 +279,7 @@ export class Telemetry {
         }
       }
     } catch { /* first run or unreadable — start fresh */ }
-    return { version: 1, installId: randomUUID(), enabled: defaultEnabledFor(this.deps.country) }
+    return { version: 1, installId: randomUUID(), enabled: true }
   }
 
   /** Returns whether the state reached disk. Atomic because the macOS menu bar
@@ -311,7 +299,7 @@ export class Telemetry {
       installId: this.state.installId,
       country: this.deps.country,
       enabled: this.state.enabled,
-      defaultEnabled: defaultEnabledFor(this.deps.country),
+      defaultEnabled: true,
       onboarded: this.state.onboardedAt !== undefined,
     }
   }
