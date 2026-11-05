@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 
 import { getModelCosts, loadPricing } from '../src/models.js'
 import { buildSessionWhy, errorCause, findingText, redact, renderSessionWhyText, type SessionWhy, type WhyFinding } from '../src/session-why.js'
@@ -394,5 +394,108 @@ describe('session cost diagnosis: prompt boundaries, helpers waiting, dates, rou
   it('shows a saving that is the difference of the shown figures', () => {
     const f = { id: 'x', kind: 'hotspot', turn: 1, usd: 1.006, share: 0.5, calls: 2, toolCalls: 0, models: ['Fable 5.1'], median: 0.4, parts: { input: 0, output: 1.006, cacheRead: 0, cacheWrite: 0, webSearch: 0 }, tokens: { input: 0, output: 1, cacheRead: 0, cacheWrite: 0 }, alt: { model: 'Opus 5.5', cost: 0.504 } } as WhyFinding
     expect(findingText(f, why2).lines.join(' ')).toContain('the same tokens cost $0.50 (−$0.51)')
+  })
+})
+
+describe('session cost diagnosis: agents', () => {
+  const SID3 = '5e2b7c40-1111-4e43-9d0e-2b1f7a6c9e12'
+  const notice = (toolUseId: string, status: string, result: string) =>
+    `<task-notification>\n<task-id>t-${toolUseId}</task-id>\n<tool-use-id>${toolUseId}</tool-use-id>\n<output-file>/tmp/${toolUseId}.output</output-file>\n<status>${status}</status>\n<summary>Agent finished</summary>\n<result>${result}</result>\n<usage><subagent_tokens>1</subagent_tokens></usage>\n</task-notification>`
+  const launched = (agentId: string) => ({ tur: { isAsync: true, status: 'async_launched', agentId } })
+  let dir = ''
+  let why3: SessionWhy
+  type Agent = SessionWhy['turns'][number]['helpers'][number]
+  const agent = (w: SessionWhy, id: string) => w.turns[0]!.helpers.find(h => h.id === id) as Agent
+
+  beforeAll(async () => {
+    dir = join(home, '.claude', 'projects', '-work-agents')
+    await mkdir(join(dir, SID3, 'subagents'), { recursive: true })
+    const m = transcript('2026-09-10T10:00:00.000Z')
+    m.prompt('Scan and document the repo.')
+    m.wait(1000)
+    m.call(FABLE, { out: 200, cr: 40_000, cw: 2_000 }, [
+      { id: 'q1', name: 'Agent', input: { description: 'Scan repo', prompt: 'Scan the repo for dead code.\n' + 'x'.repeat(3_970), subagent_type: 'Explore', run_in_background: true } },
+      { id: 'q2', name: 'Agent', input: { description: 'Write docs', prompt: 'y'.repeat(800), subagent_type: 'general-purpose', run_in_background: true } },
+      { id: 'q4', name: 'Agent', input: { description: 'Lint', prompt: 'lint', subagent_type: 'general-purpose', run_in_background: true } },
+    ])
+    m.result('q1', 'Async agent launched successfully.', 5, launched('k1'))
+    m.result('q2', 'Async agent launched successfully.', 5, launched('k2'))
+    m.result('q4', 'Async agent launched successfully.', 5, launched('k4'))
+    m.call(FABLE, { out: 50, cr: 42_000, cw: 300 })
+    m.wait(20_000)
+    m.raw({ type: 'queue-operation', operation: 'enqueue', content: notice('q4', 'killed', '') })
+    m.wait(40_000)
+    m.raw({ type: 'queue-operation', operation: 'enqueue', content: notice('q1', 'completed', 'r'.repeat(2_000)) })
+    m.raw({ type: 'queue-operation', operation: 'dequeue' })
+    m.wait(3_000)
+    m.raw({ type: 'user', origin: { kind: 'task-notification' }, message: { role: 'user', content: notice('q1', 'completed', 'r'.repeat(2_000)) } })
+    m.call(FABLE, { out: 300, cr: 42_300, cw: 600 })
+    await writeFile(join(dir, `${SID3}.jsonl`), m.lines.join('\n') + '\n')
+
+    const helper = async (agentId: string, meta: Record<string, string>, start: string, write: (h: ReturnType<typeof transcript>) => void) => {
+      const h = transcript(start)
+      h.raw({ type: 'user', isSidechain: true, message: { role: 'user', content: 'task' } })
+      write(h)
+      await writeFile(join(dir, SID3, 'subagents', `agent-${agentId}.jsonl`), h.lines.join('\n') + '\n')
+      await writeFile(join(dir, SID3, 'subagents', `agent-${agentId}.meta.json`), JSON.stringify(meta))
+    }
+    await helper('k1', { agentType: 'Explore', description: 'Scan repo', toolUseId: 'q1' }, '2026-09-10T10:00:03.500Z', h => {
+      h.wait(1000); h.call(SONNET, { in: 3_000, out: 1_000, cr: 0, cw: 12_000 })
+      h.wait(1000); h.call(SONNET, { out: 400, cr: 15_000, cw: 1_000 }, [{ id: 'nn1', name: 'Agent', input: { description: 'Deep scan', prompt: 'z'.repeat(400), subagent_type: 'Explore', run_in_background: true } }])
+      h.result('nn1', 'Async agent launched successfully.', 5, launched('k3'))
+      h.wait(20_000)
+      h.raw({ type: 'user', origin: { kind: 'task-notification' }, message: { role: 'user', content: notice('nn1', 'completed', 'w'.repeat(1_200)) } })
+      h.wait(1000); h.call(SONNET, { out: 600, cr: 16_000, cw: 900 })
+    })
+    await helper('k3', { agentType: 'Explore', description: 'Deep scan', toolUseId: 'nn1' }, '2026-09-10T10:00:10.000Z', h => { h.wait(1000); h.call(SONNET, { out: 700, cr: 0, cw: 9_000 }) })
+    await helper('k2', { agentType: 'general-purpose', description: 'Write docs', toolUseId: 'q2' }, '2026-09-10T10:00:04.000Z', h => { h.wait(1000); h.call(SONNET, { out: 300, cr: 0, cw: 6_000 }) })
+    await helper('k4', { agentType: 'general-purpose', description: 'Lint', toolUseId: 'q4' }, '2026-09-10T10:00:04.000Z', h => { h.wait(1000); h.call(SONNET, { out: 100, cr: 0, cw: 5_000 }) })
+    why3 = await buildSessionWhy(join(dir, `${SID3}.jsonl`))
+  })
+
+  it('reads the hand-back from the queued notification and from the notification line, and ends the step there', () => {
+    const k1 = agent(why3, 'agent-k1')
+    expect(k1).toMatchObject({ parentId: null, agentType: 'Explore', background: true, state: 'done', task: 'Scan the repo for dead code.', taskTokensEst: 1_000, reportTokensEst: 500, handedBackIn: 3 })
+    expect([k1.delegatedAt, k1.handedBackAt]).toEqual(['2026-09-10T10:00:03.000Z', '2026-09-10T10:01:05.015Z'])
+    const k3 = agent(why3, 'agent-k3')
+    expect(k3).toMatchObject({ parentId: 'agent-k1', nested: true, state: 'done', reportTokensEst: 300, handedBackIn: 3, handedBackAt: '2026-09-10T10:00:29.505Z' })
+    const spawn = why3.turns[0]!.steps.find(s => s.kind === 'tool' && s.label === 'Scan repo')!
+    expect(spawn.end - spawn.start).toBe(62_015)
+    const nested = k1.steps.find(s => s.kind === 'tool')!
+    expect(nested.end - nested.start).toBe(20_005)
+    expect(k1.toolCalls).toBe(1)
+  })
+
+  it('marks helpers done, stopped by a kill or by the session ending, or still running', () => {
+    expect(['agent-k1', 'agent-k2', 'agent-k3', 'agent-k4'].map(id => agent(why3, id).state)).toEqual(['done', 'stopped', 'done', 'stopped'])
+    expect(agent(why3, 'agent-k4').handedBackAt).toBe('2026-09-10T10:00:25.015Z')
+    expect(agent(why3, 'agent-k2')).toMatchObject({ handedBackAt: null, handedBackIn: null, handBackCost: 0, reportTokensEst: 0 })
+  })
+
+  it('calls a helper with no hand-back running while it was active minutes ago', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-09-10T10:05:00.000Z'))
+    try {
+      const live = await buildSessionWhy(join(dir, `${SID3}.jsonl`))
+      expect(agent(live, 'agent-k2').state).toBe('running')
+    } finally { vi.useRealTimers() }
+  })
+
+  it('gives each request its usage row in order, and splits the cost by kind', () => {
+    const k1 = agent(why3, 'agent-k1')
+    const rows = k1.steps.filter(s => s.kind === 'model')
+    expect(rows.map(s => s.tokens)).toEqual([
+      { input: 3_000, output: 1_000, cacheRead: 0, cacheWrite: 12_000 }, { input: 2, output: 400, cacheRead: 15_000, cacheWrite: 1_000 }, { input: 2, output: 600, cacheRead: 16_000, cacheWrite: 900 },
+    ])
+    expect(rows.reduce((s, r) => s + r.cost, 0)).toBeCloseTo(k1.cost, 12)
+    expect(k1.requests).toBe(3)
+    expect(k1.firstCallAt).toBe('2026-09-10T10:00:03.500Z')
+    const p = k1.parts
+    expect(p.input + p.output + p.cacheRead + p.cacheWrite + p.webSearch).toBeCloseTo(k1.cost, 12)
+    const c = getModelCosts(SONNET)!
+    expect(k1.cacheSaving).toBeCloseTo(31_000 * (c.inputCostPerToken - c.cacheReadCostPerToken), 12)
+    expect(k1.handBackCost).toBeCloseTo(500 * getModelCosts(FABLE)!.cacheWriteCostPerToken, 12)
+    const t = why3.turns[0]!
+    expect(t.helperCost).toBeCloseTo(t.helpers.reduce((s, h) => s + h.cost, 0), 12)
   })
 })

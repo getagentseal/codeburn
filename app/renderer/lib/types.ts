@@ -783,6 +783,12 @@ export type WhyTokens = { input: number; output: number; cacheRead: number; cach
 export type WhyAlt = { model: string; cost: number }
 export type WhyError = { exitCode: number | null; cause: string | null; location: string | null; secondary: string[] }
 export type WhyHelper = { id: string; description: string; agentType: string; models: string[]; calls: number; cost: number; nested: boolean; loose: boolean }
+export type WhyAgent = WhyHelper & {
+  parentId: string | null; model: string; background: boolean; state: 'running' | 'done' | 'stopped'; task: string
+  delegatedAt: string | null; firstCallAt: string | null; lastCallAt: string | null; handedBackAt: string | null; handedBackIn: number | null
+  taskTokensEst: number; reportTokensEst: number; handBackCost: number; cacheSaving: number
+  requests: number; toolCalls: number; parts: WhyParts; tokens: WhyTokens; steps: WhyStep[]
+}
 export type WhyDetail = { command?: string; description?: string; output?: string; path?: string; diff?: string; lines?: number; input?: string; helper?: WhyHelper }
 export type WhyStep =
   | {
@@ -803,7 +809,7 @@ export type WhyTurn = {
   calls: number
   models: string[]
   helperCost: number
-  helpers: WhyHelper[]
+  helpers: WhyAgent[]
   wallMs: number
   steps: WhyStep[]
 }

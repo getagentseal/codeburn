@@ -44,6 +44,12 @@ export type WhyTokens = { input: number; output: number; cacheRead: number; cach
 export type WhyAlt = { model: string; cost: number }
 export type WhyError = { exitCode: number | null; cause: string | null; location: string | null; secondary: string[] }
 export type WhyHelper = { id: string; description: string; agentType: string; models: string[]; calls: number; cost: number; nested: boolean; loose: boolean }
+export type WhyAgent = WhyHelper & {
+  parentId: string | null; model: string; background: boolean; state: 'running' | 'done' | 'stopped'; task: string
+  delegatedAt: string | null; firstCallAt: string | null; lastCallAt: string | null; handedBackAt: string | null; handedBackIn: number | null
+  taskTokensEst: number; reportTokensEst: number; handBackCost: number; cacheSaving: number
+  requests: number; toolCalls: number; parts: WhyParts; tokens: WhyTokens; steps: WhyStep[]
+}
 export type WhyDetail = {
   command?: string
   description?: string
@@ -73,7 +79,7 @@ export type WhyTurn = {
   calls: number
   models: string[]
   helperCost: number
-  helpers: WhyHelper[]
+  helpers: WhyAgent[]
   wallMs: number
   steps: WhyStep[]
 }
@@ -216,6 +222,7 @@ function repriced(calls: ParsedApiCall[]): WhyAlt | null {
 type ToolUse = { id: string; name: string; input: Record<string, unknown>; ts: number }
 type Result = { ts: number; isError: boolean; text: string; tur: Record<string, unknown> }
 type Msg = { firstTs: number; lastTs: number; toolUses: ToolUse[] }
+type HandBack = { ts: number; deliveredTs: number | null; status: string; chars: number }
 type Read = {
   calls: ParsedApiCall[]
   turns: ReturnType<typeof groupIntoTurns>
@@ -230,6 +237,7 @@ type Read = {
   cwd: string
   spawnLinks: Record<string, string>
   spawnIds: string[]
+  handBacks: Map<string, HandBack>
 }
 
 const MAX_CONTENT_LINE_BYTES = 64 * 1024 * 1024
@@ -245,11 +253,27 @@ function blockText(content: unknown): string {
   return content.map(b => (b && typeof b === 'object' && (b as { type?: unknown }).type === 'text' ? String((b as { text?: unknown }).text ?? '') : '')).join('\n')
 }
 
+// An async helper's tool_result only acknowledges the launch. Its hand-back is a
+// `<task-notification>` naming the spawn's `<tool-use-id>` and a `<status>`, with
+// the report in `<result>`: first a `queue-operation` enqueue line when the helper
+// finished, then a user line (string content) when the parent read it.
+function noteHandBack(r: Read, text: string, ts: number, delivered: boolean): void {
+  const id = /<tool-use-id>([^<]+)<\/tool-use-id>/.exec(text)?.[1]
+  if (!id || !Number.isFinite(ts)) return
+  const prev = r.handBacks.get(id)
+  r.handBacks.set(id, {
+    ts: Math.min(prev?.ts ?? ts, ts),
+    deliveredTs: prev?.deliveredTs ?? (delivered ? ts : null),
+    status: prev?.status || (/<status>([^<]*)<\/status>/.exec(text)?.[1] ?? ''),
+    chars: Math.max(prev?.chars ?? 0, /<result>([\s\S]*)<\/result>/.exec(text)?.[1]?.length ?? 0),
+  })
+}
+
 async function readTranscript(filePath: string): Promise<Read> {
   const compacted: JournalEntry[] = []
   const toolMeta = new Map<string, ToolResultMeta>()
   const sessionMeta = emptySessionMeta()
-  const r: Read = { calls: [], turns: [], msgs: new Map(), results: new Map(), inputs: [], durations: [], compactions: [], pastes: new Map(), systemTs: new Set(), title: '', cwd: '', spawnLinks: {}, spawnIds: [] }
+  const r: Read = { calls: [], turns: [], msgs: new Map(), results: new Map(), inputs: [], durations: [], compactions: [], pastes: new Map(), systemTs: new Set(), title: '', cwd: '', spawnLinks: {}, spawnIds: [], handBacks: new Map() }
   for await (const line of readSessionLines(filePath, undefined, { largeLineAsBuffer: true })) {
     const parsed = parseJsonlLine(line)
     if (!parsed) continue
@@ -261,6 +285,10 @@ async function readTranscript(filePath: string): Promise<Read> {
     const e = Buffer.isBuffer(line) && line.length <= MAX_CONTENT_LINE_BYTES ? fullEntry(line) ?? parsed : parsed
     const ts = ms(e.timestamp)
     if (typeof e.cwd === 'string' && e.cwd) r.cwd = e.cwd
+    if (e.type === 'queue-operation') {
+      if (e['operation'] === 'enqueue' && typeof e['content'] === 'string') noteHandBack(r, e['content'], ts, false)
+      continue
+    }
     if (e.type === 'system') {
       if (e['subtype'] === 'turn_duration' && typeof e['durationMs'] === 'number') r.durations.push({ ts, ms: e['durationMs'] })
       if (e['subtype'] === 'compact_boundary') r.compactions.push(ts)
@@ -293,6 +321,7 @@ async function readTranscript(filePath: string): Promise<Read> {
       }
     } else {
       const text = blockText(content)
+      if (/^\s*<task-notification>/.test(text)) noteHandBack(r, text, ts, true)
       if (e['isMeta'] === true || e['isCompactSummary'] === true || SYSTEM_PROMPT.test(text)) r.systemTs.add(String(e.timestamp))
       const pasted = text.match(/<pasted_content[\s\S]*?(<\/pasted_content>|$)/g)
       if (pasted) r.pastes.set(ts, pasted.join('').length)
@@ -314,7 +343,7 @@ async function readTranscript(filePath: string): Promise<Read> {
 
 // ── helpers (sub-agent transcripts) ─────────────────────────────────────
 
-type HelperRun = WhyHelper & { toolUseId: string; startTs: number; callList: ParsedApiCall[]; spawnIds: string[]; opens: PrOpen[]; mentioned: number | null }
+type HelperRun = WhyHelper & { toolUseId: string; startTs: number; callList: ParsedApiCall[]; spawnIds: string[]; opens: PrOpen[]; mentioned: number | null; read: Read }
 
 async function jsonlUnder(dir: string, out: string[] = []): Promise<string[]> {
   for (const e of await readdir(dir, { withFileTypes: true }).catch(() => [])) {
@@ -349,6 +378,7 @@ async function readHelpers(sessionFile: string, spawnLinks: Record<string, strin
       spawnIds: read.spawnIds,
       opens: prOpens(read),
       mentioned: namedPrNumber(typeof meta.description === 'string' ? meta.description : ''),
+      read,
     })
   }
   return helpers
@@ -428,6 +458,7 @@ function toolDetail(name: string, input: Record<string, unknown>, res: Result | 
 }
 
 const DETAIL_BUDGET_CHARS = 6_000_000
+const STILL_RUNNING_MS = 10 * 60_000
 
 // ── the view model ──────────────────────────────────────────────────────
 
@@ -460,24 +491,23 @@ export async function buildSessionWhy(filePath: string): Promise<SessionWhy> {
 
   // Every priced call in time order, for "later calls" math.
   const allCalls: Array<{ call: ParsedApiCall; ts: number; turn: number; toolUse: boolean }> = []
-  const turns: WhyTurn[] = read.turns.map((pt, ti) => {
-    const firstCallTs = ms(pt.assistantCalls[0]?.timestamp)
-    const start = Number.isFinite(ms(pt.timestamp)) ? ms(pt.timestamp) : firstCallTs
+  const callOf = new Map<WhyStep, ParsedApiCall>()
+  const stepsOf = (r: Read, calls: ParsedApiCall[], start: number, turn: number) => {
     const steps: WhyStep[] = []
     const parentOf = new Map<WhyStep, WhyStep>()
-    const turnHelpers: WhyHelper[] = []
+    const seen: HelperRun[] = []
     let end = start
-    for (const call of pt.assistantCalls) {
+    for (const call of calls) {
       const id = call.deduplicationKey.split(':advisor:')[0]!
-      const m = read.msgs.get(id)
+      const m = r.msgs.get(id)
       const firstTs = m?.firstTs ?? ms(call.timestamp)
       const lastTs = m?.lastTs ?? firstTs
-      const input = read.inputs.filter(x => x.ts <= firstTs).at(-1)
+      const input = r.inputs.filter(x => x.ts <= firstTs).at(-1)
       const sentAt = input && input.ts >= start ? input.ts : start
       const startedBy = !input || input.ts <= start ? 'prompt' : input.kind
       const isAdvisor = call.deduplicationKey.includes(':advisor:')
       const toolUses = isAdvisor || !m ? [] : m.toolUses
-      allCalls.push({ call, ts: firstTs, turn: ti + 1, toolUse: toolUses.length > 0 })
+      if (turn) allCalls.push({ call, ts: firstTs, turn, toolUse: toolUses.length > 0 })
       const u = call.usage
       const modelStep: WhyStep = {
         kind: 'model', start: sentAt - start, end: lastTs - start, model: getShortModelName(call.model), cost: call.costUSD, basis: call.costBasis ?? 'calculated', parts: partsOf(call), startedBy,
@@ -485,25 +515,27 @@ export async function buildSessionWhy(filePath: string): Promise<SessionWhy> {
         cachedPct: sessionCacheHitPercent(u.inputTokens, u.cacheReadInputTokens, u.cacheCreationInputTokens), delta: null, toolCalls: toolUses.length, answer: false,
       }
       steps.push(modelStep)
+      callOf.set(modelStep, call)
       end = Math.max(end, lastTs)
       toolUses.forEach((tu, j) => {
-        const res = read.results.get(tu.id)
+        const res = r.results.get(tu.id)
         const helper = helperByTool.get(tu.id)
-        if (helper) turnHelpers.push(helper)
+        if (helper) seen.push(helper)
+        const doneTs = (tu.name === 'Agent' || tu.name === 'Task' ? r.handBacks.get(tu.id)?.ts : undefined) ?? res?.ts ?? tu.ts
         let detail: WhyDetail | null = toolDetail(tu.name, tu.input, res)
         const size = JSON.stringify(detail).length
         // ponytail: one global budget keeps the payload under the app's 16MB pipe cap; per-turn loading if real sessions hit it.
         if (size > budget) { detail = null; detailsOmitted = true } else budget -= size
         if (detail && helper) detail.helper = publicHelper(helper)
         const step: WhyStep = {
-          kind: 'tool', start: tu.ts - start, end: (res?.ts ?? tu.ts) - start, name: tu.name, label: redact(toolLabel(tu.name, tu.input)),
+          kind: 'tool', start: tu.ts - start, end: doneTs - start, name: tu.name, label: redact(toolLabel(tu.name, tu.input)),
           isError: res?.isError === true, ...(res?.isError ? { error: errorCause(res.text) } : {}), ...(helper ? { helperCost: helper.cost } : {}), detail,
           parent: -1, ...(toolUses.length > 1 ? { parallel: { index: j + 1, of: toolUses.length } } : {}), resultChars: res?.text.length ?? 0,
         }
         if (res) stepResult.set(step, res)
         parentOf.set(step, modelStep)
         steps.push(step)
-        end = Math.max(end, res?.ts ?? tu.ts)
+        end = Math.max(end, doneTs)
       })
     }
     steps.sort((a, b) => a.start - b.start)
@@ -515,20 +547,29 @@ export async function buildSessionWhy(filePath: string): Promise<SessionWhy> {
       s.answer = !next
     })
     for (const s of steps) if (s.kind === 'tool') s.parent = steps.indexOf(parentOf.get(s)!)
+    return { steps, seen, end }
+  }
+
+  const turnRuns: HelperRun[][] = []
+  const turns: WhyTurn[] = read.turns.map((pt, ti) => {
+    const firstCallTs = ms(pt.assistantCalls[0]?.timestamp)
+    const start = Number.isFinite(ms(pt.timestamp)) ? ms(pt.timestamp) : firstCallTs
+    const { steps, seen, end } = stepsOf(read, pt.assistantCalls, start, ti + 1)
+    turnRuns.push(seen)
     const nextStart = Number.isFinite(ms(read.turns[ti + 1]?.timestamp)) ? ms(read.turns[ti + 1]!.timestamp) : Infinity
     const wall = Math.max(0, ...read.durations.filter(d => d.ts >= start && d.ts < nextStart).map(d => d.ms))
     const { parts, tokens } = sumParts(pt.assistantCalls)
     return {
       i: ti + 1, ts: new Date(start).toISOString(), prompt: promptOf(pt.userMessage, read.systemTs.has(pt.timestamp)), cost: costOf(pt.assistantCalls), parts, tokens,
       calls: pt.assistantCalls.length, models: [...new Set(pt.assistantCalls.map(c => getShortModelName(c.model)))],
-      helperCost: 0, helpers: turnHelpers, wallMs: wall || end - start, steps,
+      helperCost: 0, helpers: [], wallMs: wall || end - start, steps,
     }
   })
   allCalls.sort((a, b) => a.ts - b.ts)
 
   // Nested helpers go to the prompt whose helper transcript holds the launch call.
   const turnOfHelper = new Map<string, number>()
-  turns.forEach(t => t.helpers.forEach(h => turnOfHelper.set(h.id, t.i)))
+  turnRuns.forEach((hs, ti) => hs.forEach(h => turnOfHelper.set(h.id, ti + 1)))
   for (let changed = true; changed;) {
     changed = false
     for (const h of helpers) {
@@ -548,13 +589,52 @@ export async function buildSessionWhy(filePath: string): Promise<SessionWhy> {
     turnOfHelper.set(h.id, t.i)
   }
   for (const h of helpers) {
-    const t = turns[(turnOfHelper.get(h.id) ?? 0) - 1]
-    if (!t) continue
-    if (!t.helpers.includes(h)) t.helpers.push(h)
+    const hs = turnRuns[(turnOfHelper.get(h.id) ?? 0) - 1]
+    if (hs && !hs.includes(h)) hs.push(h)
+  }
+  const spawns = new Map<string, { r: Read; tu: ToolUse; owner: HelperRun | null }>()
+  for (const [r, owner] of [[read, null] as const, ...helpers.map(h => [h.read, h] as const)]) {
+    for (const m of r.msgs.values()) for (const tu of m.toolUses) if (tu.name === 'Agent' || tu.name === 'Task') spawns.set(tu.id, { r, tu, owner })
+  }
+  const runs = new Map(helpers.map(h => {
+    const base = spawns.get(h.toolUseId)?.tu.ts ?? h.startTs
+    return [h, { base, steps: stepsOf(h.read, h.callList, base, 0).steps }]
+  }))
+  const iso = (n: number) => (Number.isFinite(n) ? new Date(n).toISOString() : null)
+  const agentOf = (h: HelperRun, t: WhyTurn): WhyAgent => {
+    const spawn = spawns.get(h.toolUseId)
+    const res = spawn?.r.results.get(h.toolUseId)
+    const input = spawn?.tu.input ?? {}
+    const background = res?.tur['isAsync'] === true || res?.tur['status'] === 'async_launched' || String(input['run_in_background']) === 'true'
+    const back = spawn?.r.handBacks.get(h.toolUseId)
+      ?? (!background && res ? { ts: res.ts, deliveredTs: res.ts, status: res.isError ? 'failed' : 'completed', chars: res.text.length } : undefined)
+    const { base, steps } = runs.get(h)!
+    const models = steps.filter((s): s is Extract<WhyStep, { kind: 'model' }> => s.kind === 'model')
+    const owner = spawn?.owner ? runs.get(spawn.owner)! : spawn ? { base: Date.parse(t.ts), steps: t.steps } : null
+    const ownerModels = owner?.steps.filter((s): s is Extract<WhyStep, { kind: 'model' }> => s.kind === 'model') ?? []
+    const readAt = back ? back.deliveredTs ?? back.ts : Infinity
+    const k = ownerModels.findIndex(s => owner!.base + s.start >= readAt)
+    const reportTokensEst = estimateTokensFromChars(back?.chars ?? 0)
+    const reader = k >= 0 ? callOf.get(ownerModels[k]!) : undefined
+    const lastSeen = Math.max(models.length ? base + models.at(-1)!.end : 0, h.read.inputs.at(-1)?.ts ?? 0)
+    const state = back ? (/killed|stopped/.test(back.status) ? 'stopped' : 'done') : Date.now() - lastSeen < STILL_RUNNING_MS ? 'running' : 'stopped'
+    const { parts, tokens } = sumParts(h.callList)
+    return {
+      ...publicHelper(h),
+      agentType: h.agentType || str(input['subagent_type']),
+      parentId: spawn?.owner?.id ?? null, model: h.models[0] ?? '', background, state,
+      task: redact(str(input['prompt']).split('\n').find(l => l.trim())?.trim().slice(0, 200) ?? ''),
+      delegatedAt: spawn ? iso(spawn.tu.ts) : null, firstCallAt: models[0] ? iso(base + models[0].start) : null, lastCallAt: models.length ? iso(base + models.at(-1)!.end) : null,
+      handedBackAt: back ? iso(back.ts) : null, handedBackIn: k >= 0 ? k + 1 : null,
+      taskTokensEst: estimateTokensFromChars(str(input['prompt']).length), reportTokensEst,
+      handBackCost: reader ? Math.min(reader.costUSD, calculateCost(reader.model, 0, 0, reportTokensEst, 0, 0, reader.speed)) : 0,
+      cacheSaving: h.callList.reduce((s, c) => s + calculateCost(c.model, c.usage.cacheReadInputTokens, 0, 0, 0, 0, c.speed) - calculateCost(c.model, 0, 0, 0, c.usage.cacheReadInputTokens, 0, c.speed), 0),
+      requests: h.calls, toolCalls: steps.filter(s => s.kind === 'tool').length, parts, tokens, steps,
+    }
   }
   for (const t of turns) {
+    t.helpers = turnRuns[t.i - 1]!.map(h => agentOf(h, t))
     t.helperCost = t.helpers.reduce((s, h) => s + h.cost, 0)
-    t.helpers = t.helpers.map(h => publicHelper(h as HelperRun))
   }
 
   const total = costOf(read.calls)
