@@ -796,7 +796,7 @@ export type WhyStep =
     cachedPct?: number | null; toolCalls?: number; answer?: boolean
   }
   | {
-    kind: 'tool'; start: number; end: number; name: string; label: string; isError?: boolean; error?: WhyError; helperCost?: number; detail?: WhyDetail | null
+    kind: 'tool'; start: number; end: number; name: string; label: string; isError: boolean; error?: WhyError; helperCost?: number; detail: WhyDetail | null
     parent?: number; parallel?: { index: number; of: number }; resultChars?: number
   }
 export type WhyTurn = {
