@@ -9,6 +9,9 @@ import { getCodeburnCacheDir } from './cache-dir.js'
 // The facts are computed when written, so a change to any rule that produces
 // them must bump this number, or old facts keep answering under the new rule:
 //   corrections: scanFileCorrections, extractText, SELF_CORRECTION_PATTERNS (compare-stats.ts)
+//   optimize: scanFileRecord, compactOptimizeInput, commandNames, the opener
+//     rules, storeScan/loadScan and their caps (optimize.ts), isReadShapedBashCommand
+//     (bash-utils.ts), parseJsonlLine/parseLargeJsonl (parser.ts)
 // tests/scan-facts-version.test.ts pins those sources to this number.
 export const FACTS_VERSION = 1
 

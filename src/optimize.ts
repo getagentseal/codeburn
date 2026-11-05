@@ -1,12 +1,13 @@
 import chalk from 'chalk'
 import stripAnsi from 'strip-ansi'
 import { createHash } from 'crypto'
-import { open, readdir, stat, type FileHandle } from 'fs/promises'
+import { readdir, stat } from 'fs/promises'
 import { existsSync, statSync } from 'fs'
 import { basename, join } from 'path'
 import { homedir } from 'os'
 
 import { isReadShapedBashCommand } from './bash-utils.js'
+import { fileFacts, type FactsPass } from './scan-facts.js'
 import { EDIT_TOOLS } from './classifier.js'
 import { readSessionLines, readSessionFileSync } from './fs-utils.js'
 import { discoverAllSessions, providerDisplayName } from './providers/index.js'
@@ -865,7 +866,8 @@ export async function scanJsonlFile(
 /// lets one entry serve every period.
 type ScanFileRecord = {
   calls: ToolCall[]
-  cwds: Array<{ value: string; tsMs: number }>
+  /// Consecutive lines naming the same cwd, with the instant of each.
+  cwds: Array<{ value: string; tsMs: number[] }>
   apiCalls: Array<{ call: ApiCallMeta; versionIndex: number }>
   /// The version each line carried, in order, one entry per CHANGE of version:
   /// a run of lines repeating one version collapses to a single event whose
@@ -957,7 +959,11 @@ async function scanFileRecord(
     const ts = typeof entry.timestamp === 'string' ? entry.timestamp : undefined
     const tsMs = ts === undefined ? Number.NaN : Date.parse(ts)
 
-    if (entry.cwd && typeof entry.cwd === 'string') record.cwds.push({ value: entry.cwd, tsMs })
+    if (entry.cwd && typeof entry.cwd === 'string') {
+      const run = record.cwds[record.cwds.length - 1]
+      if (run && run.value === entry.cwd) run.tsMs.push(tsMs)
+      else record.cwds.push({ value: entry.cwd, tsMs: [tsMs] })
+    }
 
     if (entry.type === 'user') {
       const msg = entry.message as Record<string, unknown> | undefined
@@ -1075,7 +1081,7 @@ function projectRecord(record: ScanFileRecord, dateRange: DateRange | undefined)
     calls.push(call)
   }
   const cwds: string[] = []
-  for (const cwd of record.cwds) if (within(cwd.tsMs)) cwds.push(cwd.value)
+  for (const run of record.cwds) for (const tsMs of run.tsMs) if (within(tsMs)) cwds.push(run.value)
   const apiCalls: ApiCallMeta[] = []
   // The version a call carried is the last version line before it that the
   // range's own skip threshold would have left in place. Resolved for every
@@ -1121,11 +1127,10 @@ export function providerCoversClaude(provider?: string): boolean {
 // for. The scan re-read every Claude transcript overlapping the period on every
 // request - about six of the seven seconds a desktop period switch cost - while
 // all but the handful of files written since the last request produce exactly
-// the same result. An unchanged file is served as it is; a file that only grew
-// is read from the byte after the last complete line the previous read consumed
-// and the new lines are merged in, which is what keeps a live transcript from
-// costing its whole length on every request. Anything else - a file that shrank,
-// or whose opening bytes changed - is read in full. The recency flag is stamped
+// the same result. An unchanged file is served as it is; any other comes from
+// the stored record (scan-facts.ts), which reads only what a file appended since
+// it was stored, so a live transcript does not cost its whole length on every
+// request, and a new process does not re-read the corpus. The recency flag is stamped
 // afterwards, so a kept result is not pinned to the cutoff it was first scanned
 // under. Bounded by bytes with age and least-recently-used eviction, like the
 // shard memo.
@@ -1135,27 +1140,17 @@ export function providerCoversClaude(provider?: string): boolean {
 // which then drops every memo and hands the next request a cold scan.
 const SCAN_RETAINED_FACTOR = 1.8
 const CALL_SAMPLE_STRIDE = 16
-// How recently a file must have been written to be worth the digest that lets a
-// later read resume from an offset.
-const SCAN_RESUMABLE_AGE_MS = 24 * 60 * 60 * 1000
 // The desktop rotates through six named periods; holding a selection for each
 // of them per file is references only, and past that the oldest is dropped.
 const MAX_PROJECTIONS_PER_FILE = 6
 const SCAN_MEMO_MAX_BYTES = 160 * 1024 * 1024
 const SCAN_MEMO_MAX_AGE_MS = 10 * 60 * 1000
-// `head` is the digest of the file's first bytes as of the stored offset: the
-// cheapest proof that the bytes already consumed are still the same bytes, and
-// the one an in-place rewrite that happens to grow the file cannot fake.
-const SCAN_HEAD_BYTES = 4096
 type ScanMemoEntry = {
   record: ScanFileRecord
   // Least-recently-used order; `bytes` below counts these too.
   projections: Map<string, ScanProjection>
-  carry: ScanCarry
-  offset: number
   size: number
   mtimeMs: number
-  head: string
   /// The record plus every selection currently held for it.
   bytes: number
   usedAt: number
@@ -1192,7 +1187,8 @@ export function evictScanFileMemo(now: number, maxBytes: number = SCAN_MEMO_MAX_
 /// plus a flat per-record overhead, scaled by the measured retention factor,
 /// tracks the real footprint closely enough to bound it.
 function scanResultBytes(record: ScanFileRecord): number {
-  let bytes = record.apiCalls.length * 96 + record.cwds.length * 80
+  let bytes = record.apiCalls.length * 96
+  for (const run of record.cwds) bytes += 80 + run.tsMs.length * 8
   // Sampled, not exhaustive: measuring every tool input meant serializing the
   // whole corpus on every scan, which cost more than the memo saved.
   let sampled = 0
@@ -1209,23 +1205,6 @@ function scanResultBytes(record: ScanFileRecord): number {
     if (user.opener) bytes += user.opener.preview.length + 96
   }
   return Math.round(bytes * SCAN_RETAINED_FACTOR)
-}
-
-/// Digest of a file's opening bytes, or null when they cannot be read.
-async function headDigest(filePath: string): Promise<string | null> {
-  let handle: FileHandle
-  try {
-    handle = await open(filePath, 'r')
-  } catch { return null }
-  try {
-    const buffer = Buffer.allocUnsafe(SCAN_HEAD_BYTES)
-    const { bytesRead } = await handle.read(buffer, 0, SCAN_HEAD_BYTES, 0)
-    return createHash('sha256').update(buffer.subarray(0, bytesRead)).digest('hex')
-  } catch {
-    return null
-  } finally {
-    await handle.close()
-  }
 }
 
 /// What one range's selection costs to keep: slots holding references, not the
@@ -1265,6 +1244,78 @@ function rangeProjection(entry: ScanMemoEntry, dateRange: DateRange | undefined,
   return useProjection(projection, recentCutoffMs)
 }
 
+/// The stored form of a file's record (scan-facts.ts). Per-call session and
+/// project are the file's own, so they are not repeated; an instant that did not
+/// parse is NaN in memory and null in JSON, so it is written as null and read
+/// back as NaN, never as 0.
+type StoredScan = {
+  project: string
+  carry: ScanCarry
+  sidechainAlways: boolean
+  sidechainMaxTs: string | null
+  versionEvents: ScanFileRecord['versionEvents']
+  calls: Array<[name: string, input: Record<string, unknown>, tsMs: number | null]>
+  cwds: Array<[value: string, tsMs: Array<number | null>]>
+  apiCalls: Array<[cacheCreationTokens: number, tsMs: number | null, versionIndex: number]>
+  users: Array<[tsMs: number | null, commands: string[], opener: SessionOpener | null]>
+}
+
+const storedMs = (tsMs: number | undefined): number | null => tsMs === undefined || Number.isNaN(tsMs) ? null : tsMs
+const loadedMs = (tsMs: number | null): number => tsMs === null ? Number.NaN : tsMs
+
+function storeScan(project: string, pass: ScanPass): FactsPass<StoredScan> {
+  const { record, carry } = pass
+  return {
+    offset: pass.offset,
+    facts: {
+      project,
+      carry,
+      sidechainAlways: record.sidechainAlways,
+      sidechainMaxTs: record.sidechainMaxTs,
+      versionEvents: record.versionEvents,
+      calls: record.calls.map(c => [c.name, c.input, storedMs(c.tsMs)]),
+      cwds: record.cwds.map(run => [run.value, run.tsMs.map(storedMs)]),
+      apiCalls: record.apiCalls.map(a => [a.call.cacheCreationTokens, storedMs(a.call.tsMs), a.versionIndex]),
+      users: record.users.map(u => [storedMs(u.tsMs), u.commands, u.opener]),
+    },
+  }
+}
+
+function loadScan(filePath: string, stored: StoredScan): { record: ScanFileRecord; carry: ScanCarry } {
+  const sessionId = basename(filePath, '.jsonl')
+  const { project } = stored
+  return {
+    carry: { ...stored.carry },
+    record: {
+      calls: stored.calls.map(([name, input, tsMs]) => ({ name, input, sessionId, project, tsMs: loadedMs(tsMs) })),
+      cwds: stored.cwds.map(([value, tsMs]) => ({ value, tsMs: tsMs.map(loadedMs) })),
+      apiCalls: stored.apiCalls.map(([cacheCreationTokens, tsMs, versionIndex]) => ({
+        call: { cacheCreationTokens, version: '', sessionId, tsMs: loadedMs(tsMs) },
+        versionIndex,
+      })),
+      versionEvents: stored.versionEvents.map(e => ({ ...e })),
+      users: stored.users.map(([tsMs, commands, opener]) => ({ tsMs: loadedMs(tsMs), commands, opener })),
+      sidechainAlways: stored.sidechainAlways,
+      sidechainMaxTs: stored.sidechainMaxTs,
+    },
+  }
+}
+
+/// A file's record from the facts store, scanned (or resumed) only when the
+/// stored one no longer matches the file. Always read back through the stored
+/// form, so a record served from disk is the very one a fresh scan would use.
+async function storedRecord(filePath: string, project: string): Promise<ScanFileRecord> {
+  const stored = await fileFacts<StoredScan>('optimize', filePath, async resume => {
+    if (resume && resume.facts.project === project) {
+      const { record, carry } = loadScan(filePath, resume.facts)
+      return storeScan(project, await scanFileRecord(filePath, project, { fromOffset: resume.fromOffset, carry, into: record }))
+    }
+    return storeScan(project, await scanFileRecord(filePath, project))
+  })
+  if (stored.project !== project) return (await scanFileRecord(filePath, project)).record
+  return loadScan(filePath, stored).record
+}
+
 export async function scanJsonlFileMemoized(
   filePath: string,
   project: string,
@@ -1284,39 +1335,18 @@ export async function scanJsonlFileMemoized(
     scanFileMemo.set(key, hit)
     return rangeProjection(hit, dateRange, recentCutoffMs)
   }
-
-  // Only growth past a still-intact head can be read as an append. A file that
-  // shrank, or whose offset now sits past its end, is a different file as far
-  // as this scan is concerned and is read from the top.
-  let resume: { fromOffset: number; carry: ScanCarry; into: ScanFileRecord } | undefined
-  if (hit && hit.head !== '' && identity.size > hit.size && hit.offset <= identity.size) {
-    const head = await headDigest(filePath)
-    if (head !== null && head === hit.head) {
-      resume = { fromOffset: hit.offset, carry: hit.carry, into: hit.record }
-    }
-  }
   if (hit) {
     scanFileMemo.delete(key)
     scanFileMemoBytes -= hit.bytes
   }
 
-  const pass = await scanFileRecord(filePath, project, resume)
-  // Only a file that could still be written to is worth a head digest. Digesting
-  // every file in the window meant opening the whole corpus a second time on
-  // every scan, which cost more than the resume it enables; a file untouched for
-  // a day that then grows simply gets a full read.
-  const mayGrow = now - identity.mtimeMs < SCAN_RESUMABLE_AGE_MS
-  const head = resume ? hit!.head : mayGrow ? await headDigest(filePath) : null
-  if (head === null && mayGrow) return useProjection(projectRecord(pass.record, dateRange), recentCutoffMs)
-  const bytes = scanResultBytes(pass.record)
+  const record = await storedRecord(filePath, project)
+  const bytes = scanResultBytes(record)
   const entry: ScanMemoEntry = {
-    record: pass.record,
+    record,
     projections: new Map(),
-    carry: pass.carry,
-    offset: pass.offset,
     size: identity.size,
     mtimeMs: identity.mtimeMs,
-    head: head ?? '',
     bytes,
     usedAt: now,
   }
