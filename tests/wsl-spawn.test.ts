@@ -6,8 +6,12 @@ const execFileSync = vi.fn()
 const readdirSync = vi.fn()
 const existsSync = vi.fn()
 
-vi.mock('child_process', () => ({ execFileSync: (...a: unknown[]) => execFileSync(...a) }))
-vi.mock('fs', () => ({
+vi.mock('child_process', async () => ({
+  ...(await vi.importActual<typeof import('child_process')>('child_process')),
+  execFileSync: (...a: unknown[]) => execFileSync(...a),
+}))
+vi.mock('fs', async () => ({
+  ...(await vi.importActual<typeof import('fs')>('fs')),
   readdirSync: (...a: unknown[]) => readdirSync(...a),
   existsSync: (...a: unknown[]) => existsSync(...a),
 }))
