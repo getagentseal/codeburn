@@ -332,9 +332,10 @@ type CompareViewProps = {
   // validated to exist in `projects`' aggregated stats by the caller). When
   // set, comparison results load immediately instead of showing the picker.
   presetModels?: [string, string]
+  range: DateRange
 }
 
-export function CompareView({ projects, onBack, presetModels }: CompareViewProps) {
+export function CompareView({ projects, onBack, presetModels, range }: CompareViewProps) {
   const { exit } = useApp()
   const [phase, setPhase] = useState<'select' | 'loading' | 'results'>('select')
   const [models, setModels] = useState<ModelStats[]>(() => aggregateModelStats(projects))
@@ -420,7 +421,7 @@ export function CompareView({ projects, onBack, presetModels }: CompareViewProps
         const sessions = await safeDiscoverSessions(p)
         for (const s of sessions) dirs.push(s.path)
       }
-      const corrections = await scanSelfCorrections(dirs, projectSessionIds(projectsRef.current))
+      const corrections = await scanSelfCorrections(dirs, projectSessionIds(projectsRef.current), range)
       if (cancelled) return
 
       const currentProjects = projectsRef.current
@@ -539,7 +540,7 @@ export async function renderCompare(range: DateRange, provider: string, modelA?:
   const stopUserTimingGuard = startUserTimingGuard()
   try {
     const { waitUntilExit } = render(
-      <CompareView projects={projects} onBack={() => process.exit(0)} presetModels={presetModels} />
+      <CompareView projects={projects} onBack={() => process.exit(0)} presetModels={presetModels} range={range} />
     )
     await waitUntilExit()
   } finally {

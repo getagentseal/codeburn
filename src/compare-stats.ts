@@ -1,7 +1,7 @@
 import { readdir } from 'fs/promises'
 import { basename, join } from 'path'
 
-import type { ClassifiedTurn, ProjectSummary } from './types.js'
+import type { ClassifiedTurn, DateRange, ProjectSummary } from './types.js'
 import { readSessionLines } from './fs-utils.js'
 import { behavioralCallWeight, isBehavioralCall } from './behavioral-weight.js'
 import { modelRowKey } from './models.js'
@@ -385,7 +385,9 @@ export function projectSessionIds(projects: readonly ProjectSummary[]): Set<stri
 
 /// `sessionIds`, when given, restricts the scan to transcripts whose file stem
 /// is one of them; omitted, every file under `projectDirs` is read as before.
-export async function scanSelfCorrections(projectDirs: string[], sessionIds?: ReadonlySet<string>): Promise<Map<string, number>> {
+/// `range`, when given, counts only messages timestamped inside it, the same
+/// gate the parser applies to calls.
+export async function scanSelfCorrections(projectDirs: string[], sessionIds?: ReadonlySet<string>, range?: DateRange): Promise<Map<string, number>> {
   const counts = new Map<string, number>()
   const seen = new Set<string>()
 
@@ -437,6 +439,10 @@ export async function scanSelfCorrections(projectDirs: string[], sessionIds?: Re
           const msgRec = msg as Record<string, unknown>
           const model = msgRec['model']
           if (typeof model !== 'string' || model === '<synthetic>') continue
+          if (range) {
+            const at = new Date(typeof ts === 'string' ? ts : NaN)
+            if (Number.isNaN(at.getTime()) || at < range.start || at > range.end) continue
+          }
 
           const dedupeKey = `${model}:${ts}`
           if (seen.has(dedupeKey)) continue

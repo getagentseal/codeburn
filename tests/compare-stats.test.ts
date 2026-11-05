@@ -416,6 +416,19 @@ describe('scanSelfCorrections', () => {
     expect((await scanSelfCorrections([tmpDir])).get('opus-4-6')).toBe(3)
   })
 
+  it('counts a correction only when its message falls inside the range', async () => {
+    await writeFile(join(tmpDir, 's.jsonl'), [
+      jsonlLine('assistant', 'opus-4-6', 'My bad.', '2026-04-14T23:30:00Z'),
+      jsonlLine('assistant', 'opus-4-6', 'I was wrong.', '2026-04-15T00:30:00Z'),
+    ].join('\n') + '\n')
+    const ids = new Set(['s'])
+    const secondDay = { start: new Date('2026-04-15T00:00:00Z'), end: new Date('2026-04-15T23:59:59.999Z') }
+    const bothDays = { start: new Date('2026-04-14T00:00:00Z'), end: secondDay.end }
+
+    expect((await scanSelfCorrections([tmpDir], ids, secondDay)).get('opus-4-6')).toBe(1)
+    expect((await scanSelfCorrections([tmpDir], ids, bothDays)).get('opus-4-6')).toBe(2)
+  })
+
   it('streamed read counts the same as a whole-file read', async () => {
     const filler = 'x'.repeat(200_000)
     const lines: string[] = []
