@@ -860,6 +860,37 @@ function getPriceOverrideCaseInsensitive(canonical: string, withPrefix: string):
   return lowerIndex.get(canonical.toLowerCase()) ?? lowerIndex.get(withPrefix.toLowerCase()) ?? null
 }
 
+export const DISCOUNT_KINDS = ['input', 'output', 'cacheWrite', 'cacheRead'] as const
+type DiscountKind = typeof DISCOUNT_KINDS[number]
+type DiscountFactors = Record<DiscountKind | 'other', number>
+const NO_DISCOUNT: DiscountFactors = { input: 1, output: 1, cacheWrite: 1, cacheRead: 1, other: 1 }
+let userDiscounts: Record<string, number> = {}
+
+export function isValidDiscountPercent(percent: unknown): percent is number {
+  return typeof percent === 'number' && Number.isFinite(percent) && percent >= 0 && percent <= 100
+}
+
+export function setPriceDiscounts(discounts: Record<string, number>): void {
+  userDiscounts = Object.fromEntries(Object.entries(discounts).filter(([scope, percent]) => scope && isValidDiscountPercent(percent)))
+}
+
+export function hasPriceDiscounts(): boolean {
+  return Object.keys(userDiscounts).length > 0
+}
+
+function discountFactors(model: string, provider: string | undefined): DiscountFactors {
+  const canonicalName = getCanonicalName(model)
+  const ids = [model, model.replace(/@.*$/, '').replace(/-\d{8}$/, ''), canonicalName, resolveAlias(canonicalName)]
+  const factor = (scopes: string[]) => {
+    const hit = scopes.find(scope => Object.hasOwn(userDiscounts, scope))
+    return hit === undefined ? 1 : 1 - userDiscounts[hit]! / 100
+  }
+  const base = [...ids, ...(provider ? [provider] : [])]
+  const out = { ...NO_DISCOUNT, other: factor(base) }
+  for (const kind of DISCOUNT_KINDS) out[kind] = factor([...ids.map(id => `${id}:${kind}`), ...base])
+  return out
+}
+
 // Local-model savings config. Kept separate from userAliases: a `modelAliases`
 // entry rewrites a model's identity for actual cost; a `localModelSavings`
 // entry keeps the model cost at $0 and reports the *avoided* spend against a
@@ -1047,7 +1078,7 @@ export function getPriceOverridesConfigHash(): string {
   // release invalidates cached daily costs the same way a user override does.
   const builtin = `builtin:${JSON.stringify(BUILTIN_PRICE_OVERRIDES)}`
   const keys = Object.keys(userPriceOverridesConfig).sort()
-  if (keys.length === 0) return builtin
+  const discounts = Object.keys(userDiscounts).sort().map(k => `discount:${k}\u0001${userDiscounts[k]}`)
   const parts = keys.map(k => {
     const rates = userPriceOverridesConfig[k]
     return [
@@ -1058,7 +1089,7 @@ export function getPriceOverridesConfigHash(): string {
       rates.cacheCreation ?? '',
     ].join('\u0001')
   })
-  return [builtin, ...parts].join('\u0002')
+  return [builtin, ...parts, ...discounts].join('\u0002')
 }
 
 // Absolute directory prefixes whose sessions are routed through a
@@ -1530,6 +1561,7 @@ export function calculateCost(
   speed: 'standard' | 'fast' | 'flex' | 'ultrafast' = 'standard',
   oneHourCacheCreationTokens = 0,
   provider?: string,
+  applyDiscount = false,
 ): number {
   const costs = getModelCosts(model)
   if (!costs) {
@@ -1560,13 +1592,14 @@ export function calculateCost(
   // from real spend in aggregate totals. NaN is also handled here; the
   // arithmetic below short-circuits to 0 when any operand is non-finite.
   const cacheWriteRate = cacheWriteCostPerToken(model, tieredCosts)
+  const d = applyDiscount && hasPriceDiscounts() ? discountFactors(model, provider) : NO_DISCOUNT
   return multiplier * (
-    safe(inputTokens) * tieredCosts.inputCostPerToken +
-    safe(outputTokens) * tieredCosts.outputCostPerToken +
-    safeFiveMinuteCacheCreation * cacheWriteRate +
-    safeOneHourCacheCreation * cacheWriteRate * ONE_HOUR_CACHE_WRITE_MULTIPLIER_FROM_FIVE_MINUTE_RATE +
-    safe(cacheReadTokens) * tieredCosts.cacheReadCostPerToken +
-    safe(webSearchRequests) * tieredCosts.webSearchCostPerRequest
+    safe(inputTokens) * tieredCosts.inputCostPerToken * d.input +
+    safe(outputTokens) * tieredCosts.outputCostPerToken * d.output +
+    safeFiveMinuteCacheCreation * cacheWriteRate * d.cacheWrite +
+    safeOneHourCacheCreation * cacheWriteRate * ONE_HOUR_CACHE_WRITE_MULTIPLIER_FROM_FIVE_MINUTE_RATE * d.cacheWrite +
+    safe(cacheReadTokens) * tieredCosts.cacheReadCostPerToken * d.cacheRead +
+    safe(webSearchRequests) * tieredCosts.webSearchCostPerRequest * d.other
   )
 }
 
@@ -2016,6 +2049,7 @@ export type PricingSnapshot = {
   localModelSavings: Record<string, string>
   flatRateModels?: string[]
   flatRateModelsRemoved?: string[]
+  discounts?: Record<string, number>
 }
 
 export function snapshotPricingState(): PricingSnapshot {
@@ -2026,6 +2060,7 @@ export function snapshotPricingState(): PricingSnapshot {
     localModelSavings: userLocalModelSavings,
     flatRateModels: getFlatRateModels(),
     flatRateModelsRemoved: getFlatRateRemoved(),
+    discounts: userDiscounts,
   }
 }
 
@@ -2039,4 +2074,5 @@ export function restorePricingState(snapshot: PricingSnapshot): void {
   setLocalModelSavings(snapshot.localModelSavings)
   setFlatRateModels(snapshot.flatRateModels ?? [])
   setFlatRateRemoved(snapshot.flatRateModelsRemoved ?? [])
+  setPriceDiscounts(snapshot.discounts ?? {})
 }

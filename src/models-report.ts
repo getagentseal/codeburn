@@ -26,6 +26,7 @@ export type ModelReportRow = {
   cacheReadTokens: number
   totalTokens: number
   costUSD: number
+  listCostUSD?: number
   /// Portion of `costUSD` from calls flagged `isEstimated`. Never subtracted
   /// from `costUSD`; `isEstimatedCost` decides whether the row is marked.
   estimatedCostUSD: number
@@ -98,6 +99,7 @@ type Bucket = {
   cacheWriteTokens: number
   cacheReadTokens: number
   costUSD: number
+  listCostUSD: number
   estimatedCostUSD: number
   savingsUSD: number
   savingsBaselineModel: string
@@ -223,6 +225,7 @@ export async function aggregateModels(projects: ProjectSummary[], opts: Aggregat
               cacheWriteTokens: 0,
               cacheReadTokens: 0,
               costUSD: 0,
+              listCostUSD: 0,
               estimatedCostUSD: 0,
               savingsUSD: 0,
               savingsBaselineModel: '',
@@ -246,6 +249,7 @@ export async function aggregateModels(projects: ProjectSummary[], opts: Aggregat
           // provider that fills both fields.
           bucket.cacheReadTokens += Math.max(call.usage.cacheReadInputTokens, call.usage.cachedInputTokens)
           bucket.costUSD += call.costUSD
+          bucket.listCostUSD += call.listCostUSD ?? call.costUSD
           if (call.isEstimated) bucket.estimatedCostUSD += call.costUSD
           bucket.savingsUSD += call.savingsUSD ?? 0
           // outputTokens is the billable output (for Codex that includes
@@ -353,6 +357,7 @@ export async function aggregateModels(projects: ProjectSummary[], opts: Aggregat
       existing.cacheReadTokens += bucket.cacheReadTokens
       existing.totalTokens += total
       existing.costUSD += bucket.costUSD
+      existing.listCostUSD = (existing.listCostUSD ?? 0) + bucket.listCostUSD
       existing.estimatedCostUSD += bucket.estimatedCostUSD
       existing.savingsUSD += bucket.savingsUSD
       existing.calls += bucket.calls
@@ -378,6 +383,7 @@ export async function aggregateModels(projects: ProjectSummary[], opts: Aggregat
         cacheReadTokens: bucket.cacheReadTokens,
         totalTokens: total,
         costUSD: bucket.costUSD,
+        listCostUSD: bucket.listCostUSD,
         estimatedCostUSD: bucket.estimatedCostUSD,
         savingsUSD: bucket.savingsUSD,
         savingsBaselineModel: resolvedBaseline,
@@ -698,7 +704,7 @@ export function renderTable(
       case 'cacheWrite': return formatTokens(row.cacheWriteTokens)
       case 'cacheRead':  return formatTokens(row.cacheReadTokens)
       case 'total':      return formatTokens(row.totalTokens)
-      case 'cost':       return markEstimated(formatCost(row.costUSD), isEstimatedCost(row.costUSD, row.estimatedCostUSD))
+      case 'cost':       return markEstimated(formatCost(row.costUSD), isEstimatedCost(row.costUSD, row.estimatedCostUSD)) + (isDiscounted(row) ? chalk.dim(` -${discountPercent(row)}%`) : '')
       case 'saved':      return row.savingsUSD > 0 ? formatCost(row.savingsUSD) : chalk.dim('-')
       case 'peak':
         return (row.peakUSD != null || row.offPeakUSD != null) ? formatPeakSplit(row) : chalk.dim('-')
@@ -815,6 +821,14 @@ export function renderTable(
   return lines.join('\n')
 }
 
+export function isDiscounted(row: Pick<ModelReportRow, 'costUSD' | 'listCostUSD'>): boolean {
+  return row.listCostUSD !== undefined && row.listCostUSD > row.costUSD
+}
+
+function discountPercent(row: Pick<ModelReportRow, 'costUSD' | 'listCostUSD'>): number {
+  return Math.round((1 - row.costUSD / row.listCostUSD!) * 1000) / 10
+}
+
 export function renderJson(rows: ModelReportRow[]): string {
   return JSON.stringify(
     rows.map(r => ({
@@ -841,6 +855,7 @@ export function renderJson(rows: ModelReportRow[]): string {
       creditsIncomplete: r.creditsIncomplete === true,
       estimatedCostUSD: r.estimatedCostUSD,
       isEstimated: isEstimatedCost(r.costUSD, r.estimatedCostUSD),
+      ...(isDiscounted(r) ? { listCostUSD: r.listCostUSD, discountPercent: discountPercent(r) } : {}),
       // Peak keys exist only on rows that carry a split: a report with no
       // DeepSeek/Z.ai first-party usage keeps its exact historical shape,
       // instead of five null keys on every row.

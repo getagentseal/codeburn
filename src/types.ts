@@ -150,6 +150,7 @@ export type ParsedApiCall = {
   /// as `estimatedCostUSD`; it is display/metadata only and never changes totals.
   isEstimated?: boolean
   costBasis?: CostBasis
+  listCostUSD?: number
   /// Lines added/removed by this call's edits, counted from tool-result diffs
   /// (Claude: `toolUseResult.structuredPatch`). Numbers only, never patch text;
   /// omitted when zero. Rich-session-capture (capture-only; no report yet).
