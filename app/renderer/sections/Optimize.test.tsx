@@ -218,6 +218,23 @@ describe('Optimize', () => {
     expect(screen.getByRole('button', { name: 'Copied' })).toBeInTheDocument()
   })
 
+  it('omits the figures of a finding without savings and keeps them on the rest', async () => {
+    const report = makeOptimizeReport()
+    report.findings.push({
+      id: 'idle-compaction-blocked', title: 'Auto-compact window blocks idle compaction', explanation: 'why',
+      severity: 'low', trend: null, tokensSaved: 0, estimatedSavingsUSD: 0, class: 'nudge', basis: 'estimated',
+      fix: { type: 'paste', label: 'Lower the threshold', text: 'x', destination: 'manual' },
+    })
+    getOptimizeReport.mockResolvedValue(report)
+    render(<Optimize period="30days" provider="all" />)
+
+    const row = await screen.findByRole('button', { name: /Auto-compact window blocks idle compaction/ })
+    expect(row.querySelector('.opt-finding-savings')).toBeEmptyDOMElement()
+    expect(row.querySelector('.opt-finding-tokens')).toBeEmptyDOMElement()
+    expect(screen.getByText('$9.10')).toHaveClass('opt-finding-savings')
+    expect(screen.getByText('18.2K tokens · estimated')).toBeInTheDocument()
+  })
+
   it('keeps only one finding expanded and renders file-content path and content', async () => {
     render(<Optimize period="30days" provider="all" />)
     const first = await screen.findByRole('button', { name: /Opus is doing your small talk/ })

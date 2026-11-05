@@ -3165,10 +3165,14 @@ function parseAutoCompactWindow(value: unknown): number | null {
 }
 
 export function detectIdleCompactionBlocked(
+  projects: ProjectSummary[],
   projectCwds: Set<string>,
   apiCalls: ApiCallMeta[],
   homeDir = homedir(),
 ): WasteFinding | null {
+  const onOneHourCache = projects.some(p => p.sessions.some(s => s.turns.some(t =>
+    t.assistantCalls.some(c => c.provider === 'claude' && (c.cacheCreationOneHourTokens ?? 0) > 0))))
+  if (!onOneHourCache) return null
   if (!apiCalls.some(c => parseVersion(c.version) && !versionPredates(c.version, IDLE_COMPACTION_MIN_VERSION))) return null
   if (findClaudeSetting('idleCompaction', projectCwds, homeDir)?.value === false) return null
   if (findClaudeSetting('autoCompactEnabled', projectCwds, homeDir)?.value === false) return null
@@ -3201,7 +3205,8 @@ export function detectIdleCompactionBlocked(
       `${windowSetting} in ${windowHit.scope} (${shortHomePath(windowHit.path)}) compacts at ${formatTokens(window)} tokens, ` +
       `at or below the ${formatTokens(threshold)}-token idle compaction threshold (${thresholdWhere}). ` +
       `Idle compaction (on by default since Claude Code v${IDLE_COMPACTION_MIN_VERSION}) only runs once the context reaches that threshold, so it never runs: ` +
-      `a conversation left for about an hour is not compacted before its prompt cache expires, and the next message writes the whole context to the cache again.`,
+      `a conversation left for about an hour is not compacted before its prompt cache expires, and the next message writes the whole context to the cache again. ` +
+      `Unsetting the window does not help on a 200K-context model, which compacts before 200K too; \`/autocompact\` with no argument shows the window in use.`,
     impact: 'low',
     tokensSaved: 0,
     fix: window > IDLE_COMPACT_FLOOR_TOKENS
@@ -4504,7 +4509,7 @@ export async function scanAndDetect(
     claudeOnly(() => detectMcpDeferralOff(toolCalls, projects, projectCwds, apiCalls, undefined, pricing)),
     claudeOnly(() => detectMcpAlwaysLoadHygiene(projects, projectCwds, apiCalls, mcpCoverage, undefined, pricing)),
     claudeOnly(() => detectMcpDeferThreshold(projects, projectCwds, undefined, pricing)),
-    claudeOnly(() => detectIdleCompactionBlocked(projectCwds, apiCalls)),
+    claudeOnly(() => detectIdleCompactionBlocked(projects, projectCwds, apiCalls)),
     () => detectCapabilityReliability(behavioralProjects, provider),
     () => detectLowWorthSessions(behavioralProjects, provider),
     () => detectContextBloat(behavioralProjects, lowWorthSessionIds, provider),
@@ -4612,8 +4617,10 @@ function renderFinding(n: number, f: WasteFinding, costRate: number, copy: Optim
   lines.push('')
   lines.push(wrap(f.explanation, PANEL_WIDTH - 4, '  '))
   lines.push('')
-  lines.push(chalk.hex(GOLD)(`  Potential savings: ${savings}`) + chalk.dim(`  ${findingBasis(f)}`))
-  lines.push('')
+  if (f.tokensSaved > 0 || costSaved > 0) {
+    lines.push(chalk.hex(GOLD)(`  Potential savings: ${savings}`) + chalk.dim(`  ${findingBasis(f)}`))
+    lines.push('')
+  }
 
   // Destination header — issue #277. Tells the user where each suggestion
   // belongs (CLAUDE.md / session opener / current chat / shell config) so

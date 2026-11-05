@@ -2,11 +2,11 @@ import { homedir } from 'os'
 import { PassThrough } from 'stream'
 
 import React from 'react'
-import { render } from 'ink'
+import { render, renderToString } from 'ink'
 import stripAnsi from 'strip-ansi'
 import { describe, it, expect, onTestFinished, vi } from 'vitest'
 
-import { DAILY_ACTIVITY_PAGE_SIZE, INTERACTIVE_RENDER_OPTIONS, dailyActivityFooter, getDailyActivityPageSize, getDailyActivityRows, getDashboardMaxWidth, getDashboardScanRange, getLayout, getRefreshIntervalMs, InteractiveDashboard, pageHistoryCursor, scrollHistoryCursor, selectDashboardPeriodProjects, shortProject, showEmptyState } from '../src/dashboard.js'
+import { FindingPanel, DAILY_ACTIVITY_PAGE_SIZE, INTERACTIVE_RENDER_OPTIONS, dailyActivityFooter, getDailyActivityPageSize, getDailyActivityRows, getDashboardMaxWidth, getDashboardScanRange, getLayout, getRefreshIntervalMs, InteractiveDashboard, pageHistoryCursor, scrollHistoryCursor, selectDashboardPeriodProjects, shortProject, showEmptyState } from '../src/dashboard.js'
 import { getDateRange } from '../src/cli-date.js'
 import { formatCost } from '../src/format.js'
 import type { ProjectSummary, SessionSummary } from '../src/types.js'
@@ -862,4 +862,18 @@ describe('InteractiveDashboard refresh', () => {
     expect(frame).not.toContain('Scanning Today')
 
   }, 30_000)
+})
+
+describe('FindingPanel', () => {
+  const panel = (tokensSaved: number) => stripAnsi(renderToString(React.createElement(FindingPanel, {
+    index: 1,
+    finding: { id: 'bash-output-cap', title: 'Cap bash output', explanation: 'why', impact: 'low', tokensSaved, fix: { type: 'paste', destination: 'manual', label: 'do', text: 'x' } },
+    costRate: 0.00001,
+    width: 80,
+  })))
+
+  it('shows the savings figure only when the finding has one', () => {
+    expect(panel(1000)).toContain('Savings: ~1.0K tokens (~$0.010)')
+    expect(panel(0)).not.toContain('Savings:')
+  })
 })
