@@ -11,8 +11,8 @@
 //! - The tray can be installed on its own or beside the desktop app. When the desktop app's
 //!   own state file exists, its decision and its install id are used and this app never
 //!   writes that file: one decision covers both, and the two apps' events join on one id.
-//!   Standalone, the decision lives in this app's own settings file and defaults off for
-//!   EU / EEA / UK / CH and for an unknown region, on elsewhere.
+//!   Standalone, the decision lives in this app's own settings file and defaults on in every
+//!   region; the first-launch notice asks, and the settings toggle turns it off.
 //! - The only identifier is a random id minted locally. Switching the toggle off mints a
 //!   fresh one so past and future data cannot be linked.
 //! - Events carry a day-granularity date only, and every prop goes through the whitelist
@@ -34,14 +34,6 @@ pub const TELEMETRY_ENDPOINT: &str = "https://api.codeburn.app/v1/telemetry";
 pub const TELEMETRY_SCHEMA: u64 = 1;
 /// What separates these rows from the desktop app's (`codeburn-desktop`) in one table.
 pub const APP_NAME: &str = "codeburn-menubar";
-
-/// EU-27 + EEA (IS, LI, NO) + UK + CH, the same conservative "default off" region the
-/// desktop app uses.
-const DEFAULT_OFF_COUNTRIES: [&str; 32] = [
-    "AT", "BE", "BG", "HR", "CY", "CZ", "DK", "EE", "FI", "FR", "DE", "GR", "HU", "IE", "IT",
-    "LV", "LT", "LU", "MT", "NL", "PL", "PT", "RO", "SK", "SI", "ES", "SE", "IS", "LI", "NO",
-    "GB", "CH",
-];
 
 /// Every event this app may send. An unknown name is dropped rather than forwarded, so a
 /// frontend typo cannot invent a metric.
@@ -187,17 +179,6 @@ fn read_desktop_state() -> Option<DesktopState> {
     parse_desktop_state(&fs::read(desktop_state_path()?).ok()?)
 }
 
-/// An unknown region is the conservative case and defaults off, exactly as the desktop does.
-pub fn default_enabled_for(country: Option<&str>) -> bool {
-    match country {
-        None => false,
-        Some(code) => {
-            let upper = code.to_ascii_uppercase();
-            !DEFAULT_OFF_COUNTRIES.contains(&upper.as_str())
-        }
-    }
-}
-
 /// The region subtag of a BCP-47 or POSIX locale name: `en-GB`, `sr-Latn-RS`,
 /// `de_AT.UTF-8`. Only a two-letter alpha subtag is a region here, so the UN M.49 forms
 /// (`es-419`) come back as unknown rather than as a country nobody can join on.
@@ -213,11 +194,7 @@ pub fn country_from_locale(locale: &str) -> Option<String> {
 
 /// The one decision every send is gated on. `desktop` present and valid wins outright, so a
 /// tray running beside the desktop app never asks its own question.
-pub fn resolve_consent(
-    desktop: Option<DesktopState>,
-    tray: &Map<String, Value>,
-    country: Option<&str>,
-) -> Consent {
+pub fn resolve_consent(desktop: Option<DesktopState>, tray: &Map<String, Value>) -> Consent {
     if let Some(state) = desktop {
         return Consent {
             source: ConsentSource::Desktop,
@@ -237,7 +214,7 @@ pub fn resolve_consent(
         enabled: tray
             .get(KEY_ENABLED)
             .and_then(Value::as_bool)
-            .unwrap_or_else(|| default_enabled_for(country)),
+            .unwrap_or(true),
         onboarded: tray
             .get(KEY_ONBOARDED_AT)
             .and_then(Value::as_str)
@@ -815,11 +792,7 @@ impl Telemetry {
     /// desktop app's file.
     pub fn new(app_version: String) -> Self {
         let country = user_country();
-        let consent = resolve_consent(
-            read_desktop_state(),
-            &crate::settings::read(),
-            country.as_deref(),
-        );
+        let consent = resolve_consent(read_desktop_state(), &crate::settings::read());
         if consent.source == ConsentSource::App {
             persist_install_id(&consent.install_id);
         }
@@ -853,7 +826,7 @@ impl Telemetry {
             onboarded: consent.onboarded,
             source: consent.source,
             country: self.country.clone(),
-            default_enabled: default_enabled_for(self.country.as_deref()),
+            default_enabled: true,
         }
     }
 
@@ -862,7 +835,7 @@ impl Telemetry {
     /// in a different process.
     fn reresolve(&self) -> Consent {
         let stored = crate::settings::read();
-        let mut fresh = resolve_consent(read_desktop_state(), &stored, self.country.as_deref());
+        let mut fresh = resolve_consent(read_desktop_state(), &stored);
         let Ok(mut inner) = self.inner.lock() else {
             return fresh;
         };
@@ -1246,7 +1219,6 @@ mod tests {
                 (KEY_ENABLED, Value::Bool(false)),
                 (KEY_INSTALL_ID, Value::String("tray-1".into())),
             ]),
-            Some("US"),
         );
         assert_eq!(consent.source, ConsentSource::Desktop);
         assert_eq!(consent.install_id, "desk-1");
@@ -1257,7 +1229,7 @@ mod tests {
     #[test]
     fn a_desktop_file_without_a_decision_is_not_a_decision() {
         let desktop = parse_desktop_state(br#"{"version":1,"installId":"desk-1","enabled":true}"#);
-        let consent = resolve_consent(desktop, &Map::new(), Some("US"));
+        let consent = resolve_consent(desktop, &Map::new());
         assert_eq!(consent.source, ConsentSource::Desktop);
         assert!(!consent.onboarded);
     }
@@ -1285,7 +1257,6 @@ mod tests {
                 (KEY_ONBOARDED_AT, Value::String("2026-01-01T00:00:00Z".into())),
                 (KEY_INSTALL_ID, Value::String("tray-1".into())),
             ]),
-            Some("DE"),
         );
         assert_eq!(consent.source, ConsentSource::App);
         assert_eq!(consent.install_id, "tray-1");
@@ -1294,30 +1265,32 @@ mod tests {
     }
 
     #[test]
-    fn a_standalone_install_with_no_stored_decision_takes_the_region_default() {
-        let eu = resolve_consent(None, &Map::new(), Some("FR"));
-        assert_eq!(eu.source, ConsentSource::App);
-        assert!(!eu.enabled);
-        assert!(!eu.onboarded);
-
-        let elsewhere = resolve_consent(None, &Map::new(), Some("US"));
-        assert!(elsewhere.enabled);
-        assert!(!elsewhere.onboarded);
+    fn a_standalone_install_with_no_stored_decision_defaults_on_but_undecided() {
+        let consent = resolve_consent(None, &Map::new());
+        assert_eq!(consent.source, ConsentSource::App);
+        assert!(consent.enabled);
+        assert!(!consent.onboarded);
     }
 
     #[test]
-    fn an_unknown_region_defaults_off() {
-        assert!(!default_enabled_for(None));
-        assert!(!default_enabled_for(Some("gb")));
-        assert!(!default_enabled_for(Some("CH")));
-        assert!(default_enabled_for(Some("us")));
-        assert!(default_enabled_for(Some("JP")));
+    fn a_stored_standalone_choice_is_kept_either_way() {
+        for stored in [false, true] {
+            let consent = resolve_consent(
+                None,
+                &tray(&[
+                    (KEY_ENABLED, Value::Bool(stored)),
+                    (KEY_ONBOARDED_AT, Value::String("2026-01-01T00:00:00Z".into())),
+                ]),
+            );
+            assert_eq!(consent.enabled, stored);
+            assert!(consent.onboarded);
+        }
     }
 
     #[test]
     fn a_fresh_standalone_install_is_given_an_id_of_its_own() {
-        let first = resolve_consent(None, &Map::new(), Some("US")).install_id;
-        let second = resolve_consent(None, &Map::new(), Some("US")).install_id;
+        let first = resolve_consent(None, &Map::new()).install_id;
+        let second = resolve_consent(None, &Map::new()).install_id;
         assert_eq!(first.len(), 36);
         assert_ne!(first, second);
     }

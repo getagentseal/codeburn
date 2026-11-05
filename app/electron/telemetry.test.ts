@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { cliErrorReason, cpuBucket, defaultEnabledFor, durationBucket, EVENT_NAMES, memBucket, Telemetry } from './telemetry'
+import { cliErrorReason, cpuBucket, durationBucket, EVENT_NAMES, memBucket, Telemetry } from './telemetry'
 
 let dir: string
 
@@ -35,19 +35,21 @@ function make(over: Partial<ConstructorParameters<typeof Telemetry>[0]> = {}) {
   return { telemetry, posts, fetchFn }
 }
 
-describe('regional consent defaults', () => {
-  it('defaults OFF in the EU/EEA/UK/CH and for unknown regions, ON elsewhere', () => {
-    for (const c of ['DE', 'FR', 'NL', 'SE', 'GB', 'CH', 'NO', 'IS']) expect(defaultEnabledFor(c), c).toBe(false)
-    for (const c of ['US', 'CA', 'JP', 'AU', 'BR', 'IN']) expect(defaultEnabledFor(c), c).toBe(true)
-    expect(defaultEnabledFor(null)).toBe(false)
-    expect(defaultEnabledFor(undefined)).toBe(false)
+describe('consent defaults', () => {
+  it('a fresh install starts enabled in every region, including an unknown one', () => {
+    for (const country of ['US', 'DE', 'FR', 'GB', 'CH', null]) {
+      const t = new Telemetry({ stateDir: join(dir, String(country)), country, isPackaged: true, appVersion: '1' })
+      expect(t.status(), String(country)).toMatchObject({ enabled: true, defaultEnabled: true, onboarded: false })
+    }
   })
 
-  it('a fresh EU install starts disabled; a fresh US install starts enabled', () => {
-    const eu = new Telemetry({ stateDir: join(dir, 'eu'), country: 'DE', isPackaged: true, appVersion: '1' })
-    expect(eu.status()).toMatchObject({ enabled: false, defaultEnabled: false, onboarded: false })
-    const us = new Telemetry({ stateDir: join(dir, 'us'), country: 'US', isPackaged: true, appVersion: '1' })
-    expect(us.status()).toMatchObject({ enabled: true, defaultEnabled: true, onboarded: false })
+  it('keeps a stored choice, off or on, whatever the region', () => {
+    for (const enabled of [false, true]) {
+      const stateDir = join(dir, `stored-${enabled}`)
+      new Telemetry({ stateDir, country: 'DE', isPackaged: true, appVersion: '1' }).completeOnboarding(enabled)
+      const reloaded = new Telemetry({ stateDir, country: 'DE', isPackaged: true, appVersion: '1' })
+      expect(reloaded.status()).toMatchObject({ enabled, onboarded: true })
+    }
   })
 })
 
