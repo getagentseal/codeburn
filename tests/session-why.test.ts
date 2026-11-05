@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 
 import { getModelCosts, loadPricing } from '../src/models.js'
-import { buildSessionWhy, errorCause, findingText, redact, renderSessionWhyText, type SessionWhy, type WhyFinding } from '../src/session-why.js'
+import { buildSessionWhy, errorCause, findingText, fitWhyJson, redact, renderSessionWhyText, type SessionWhy, type WhyFinding } from '../src/session-why.js'
 import { CLEARED, REDIRECTED } from './setup/env-isolation-vars.js'
 
 const SID = '0c4f6c1e-5a7b-4e43-9d0e-2b1f7a6c9e10'
@@ -302,14 +302,34 @@ describe('session cost diagnosis: request fields', () => {
     expect(tools(0)[1]!.resultChars).toBe('updated'.length)
   })
 
-  it('gives each model step its context delta, cached share, role and cost basis', () => {
+  it('gives each model step its cached share and role, and a cost basis only when not calculated', () => {
     const m = models(0)
-    expect(m.map(s => s.delta)).toEqual([1_000, 500, 300, null])
-    expect(m.map(s => [s.toolCalls, s.answer])).toEqual([[1, false], [1, false], [1, false], [0, true]])
-    expect(m[0]!.cachedPct).toBeCloseTo(20_000 / 50_002 * 100, 9)
-    expect(m[0]!.basis).toBe('calculated')
+    expect(m.map(s => [s.toolCalls, s.answer])).toEqual([[1, undefined], [1, undefined], [1, undefined], [0, true]])
+    expect(m[0]!.cachedPct).toBe(40)
+    expect(m.every(s => !('basis' in s))).toBe(true)
     expect(models(1).map(s => s.toolCalls)).toEqual([2, 1, 0])
     expect(models(1).at(-1)!.answer).toBe(true)
+  })
+})
+
+describe('session cost diagnosis: payload budget', () => {
+  const size = (w: SessionWhy) => Buffer.byteLength(JSON.stringify(w))
+
+  it('leaves a payload under budget alone and omits default step fields', () => {
+    expect(fitWhyJson(structuredClone(why))).toEqual(why)
+    const steps = why.turns.flatMap(t => [...t.steps, ...t.helpers.flatMap(h => h.steps)])
+    expect(steps.some(s => s.kind === 'tool' && 'isError' in s && !s.isError)).toBe(false)
+    expect(steps.some(s => s.kind === 'tool' && 'detail' in s && !s.detail)).toBe(false)
+  })
+
+  it('drops whole step lists, cheapest helper first, then prompts, keeping totals and findings', () => {
+    const cheapest = why.turns.flatMap(t => t.helpers).filter(h => h.steps.length).sort((a, b) => a.cost - b.cost)[0]!
+    const fit = fitWhyJson(structuredClone(why), size(why) - 1)
+    expect(fit.turns.flatMap(t => t.helpers).find(h => h.id === cheapest.id)).toMatchObject({ steps: [], truncatedSteps: cheapest.steps.length })
+    expect(fit.turns.map(t => t.steps.length)).toEqual(why.turns.map(t => t.steps.length))
+    const all = fitWhyJson(structuredClone(why), 0)
+    expect(all.turns.every(t => t.steps.length === 0 && t.truncatedSteps && t.helpers.every(h => h.steps.length === 0))).toBe(true)
+    expect([all.cost, all.helperCost, all.findings]).toEqual([why.cost, why.helperCost, why.findings])
   })
 })
 
