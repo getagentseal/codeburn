@@ -242,6 +242,7 @@
 "Saved %@ with local models" = "%@ économisés avec des modèles locaux";
 "%1$lld of %2$lld devices" = "%1$lld appareil(s) sur %2$lld";
 "%@ · local" = "%@ · local";
+"Unattributed" = "Non attribué";
 
 /* MARK: Period strip and date picker */
 "Clear" = "Effacer";

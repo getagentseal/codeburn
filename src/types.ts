@@ -377,7 +377,7 @@ export type SessionSummary = {
   retained?: { since: string }
   /// Claude only, set when sessions are read and the identity log holds two
   /// or more accounts: the account active when the session started.
-  identity?: { hash: string; label: string }
+  identity?: { hash: string; label: string; plan?: string }
 }
 
 export type ProjectSummary = {

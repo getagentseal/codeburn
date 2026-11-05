@@ -6,12 +6,13 @@ import { dirname, join, resolve } from 'path'
 import { readExistingTextFile } from './cache-dir.js'
 import { getConfigDir } from './config.js'
 import { getClaudeConfigDirs } from './providers/claude.js'
+import { readClaudePlan } from './quota/claude.js'
 import { inferSessionProvider } from './session-output.js'
 import type { ProjectSummary, SessionSummary } from './types.js'
 
-export type IdentityEntry = { accountHash: string; orgHash?: string; label: string; observedAt: string; configDir: string }
+export type IdentityEntry = { accountHash: string; orgHash?: string; label: string; plan?: string; observedAt: string; configDir: string }
 export type IdentityLog = { version: 1; entries: IdentityEntry[]; labels: Record<string, string> }
-export type IdentitySplitRow = { hash: string; label: string; cost: number; calls: number; sessions: number }
+export type IdentitySplitRow = { hash: string; label: string; plan?: string; cost: number; calls: number; sessions: number }
 
 export const UNATTRIBUTED = 'unattributed'
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -86,11 +87,23 @@ export async function observeClaudeIdentities(now = new Date()): Promise<void> {
     if (!log) return
     const accountHash = shortHash(account.accountUuid)
     const orgHash = account.organizationUuid ? shortHash(account.organizationUuid) : undefined
+    const plan = await readClaudePlan(configDir)
     const last = log.entries.filter(e => e.configDir === configDir).at(-1)
-    if (last?.accountHash === accountHash && last.orgHash === orgHash) continue
-    log.entries.push({ accountHash, ...(orgHash ? { orgHash } : {}), label: account.organizationName ?? '', observedAt: now.toISOString(), configDir })
+    if (last?.accountHash === accountHash && last.orgHash === orgHash && (!plan || last.plan === plan)) continue
+    log.entries.push({ accountHash, ...(orgHash ? { orgHash } : {}), label: account.organizationName ?? '', ...(plan ? { plan } : {}), observedAt: now.toISOString(), configDir })
     await writeIdentityLog(log)
   }
+}
+
+export async function recordClaudePlan(configDir: string, name: string, now = new Date()): Promise<void> {
+  const plan = cleanName(name)
+  if (!plan) return
+  await observeClaudeIdentities(now)
+  const log = await readIdentityLog()
+  const last = log?.entries.filter(e => e.configDir === configDir).at(-1)
+  if (!log || !last || last.plan === plan) return
+  log.entries.push({ ...last, plan, observedAt: now.toISOString() })
+  await writeIdentityLog(log)
 }
 
 /** An identity is the organization, or the account when Claude reports no organization. */
@@ -112,13 +125,14 @@ export function identityLabel(log: IdentityLog, hash: string): string {
   return log.labels[hash] || log.entries.filter(e => identityId(e) === hash && e.label).at(-1)?.label || hash
 }
 
-export function identityAt(log: IdentityLog, configDir: string | undefined, startedAt: string): { hash: string; label: string } {
+export function identityAt(log: IdentityLog, configDir: string | undefined, startedAt: string): { hash: string; label: string; plan?: string } {
   const start = Date.parse(startedAt)
   let hash = UNATTRIBUTED
   for (const entry of log.entries) {
     if (entry.configDir === configDir && Date.parse(entry.observedAt) <= start) hash = identityId(entry)
   }
-  return { hash, label: identityLabel(log, hash) }
+  const plan = log.entries.filter(e => identityId(e) === hash && e.plan).at(-1)?.plan
+  return { hash, label: identityLabel(log, hash), ...(plan ? { plan } : {}) }
 }
 
 /** Observes, then stamps every Claude session with the account active at its start. Without `always`, a log of fewer than two accounts leaves sessions untouched. */

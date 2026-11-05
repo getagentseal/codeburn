@@ -242,6 +242,7 @@
 "Saved %@ with local models" = "로컬 모델로 %@ 절약";
 "%1$lld of %2$lld devices" = "%2$lld대 중 %1$lld대 기기";
 "%@ · local" = "%@ · 로컬";
+"Unattributed" = "미할당";
 
 /* MARK: Period strip and date picker */
 "Clear" = "지우기";

@@ -4,16 +4,22 @@ import { mkdir, mkdtemp, readFile, rm, stat, utimes, writeFile } from 'node:fs/p
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
   applyClaudeIdentities, identityAt, identityId, identityLogPath, identitySplit, observeClaudeIdentities,
-  readIdentityLog, setIdentityLabel, type IdentityLog,
+  readIdentityLog, recordClaudePlan, setIdentityLabel, type IdentityLog,
 } from '../src/claude-identity.js'
+import { readKeychainPassword } from '../src/quota/security.js'
 import { parseAllSessions } from '../src/parser.js'
 import { buildOtlpPayload } from '../src/sync/otlp.js'
 import { collectUnsentCalls } from '../src/sync/push.js'
 import { setHome } from './setup/home.js'
+
+vi.mock('../src/quota/security.js', async importOriginal => ({
+  ...await importOriginal<typeof import('../src/quota/security.js')>(),
+  readKeychainPassword: vi.fn(async () => ({ status: 'notFound' })),
+}))
 
 const ACCOUNT_A = '11111111-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const ORG_A = '22222222-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
@@ -45,11 +51,16 @@ async function signIn(accountUuid: string, orgUuid: string, orgName: string, mti
   await utimes(file, mtime, mtime)
 }
 
+async function writeCredential(subscriptionType: string, rateLimitTier: string): Promise<void> {
+  await mkdir(configDir, { recursive: true })
+  await writeFile(join(configDir, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'token', subscriptionType, rateLimitTier } }), { mode: 0o600 })
+}
+
 function entry(accountUuid: string, orgUuid: string, label: string, observedAt: string, dir = configDir) {
   return { accountHash: hash(accountUuid), orgHash: hash(orgUuid), label, observedAt, configDir: dir }
 }
 
-async function seedLog(entries: ReturnType<typeof entry>[]): Promise<void> {
+async function seedLog(entries: IdentityLog['entries']): Promise<void> {
   await mkdir(join(home, '.config', 'codeburn'), { recursive: true })
   await writeFile(identityLogPath(), JSON.stringify({ version: 1, entries, labels: {} }))
 }
@@ -106,6 +117,31 @@ describe('observeClaudeIdentities', () => {
     const log = (await readIdentityLog())!
     expect(log.entries.map(e => [e.accountHash, e.orgHash, e.label])).toEqual([[hash(ACCOUNT_A), hash(ORG_A), 'Personal'], [hash(ACCOUNT_A), hash(ORG_B), 'Team']])
     expect(new Set(log.entries.map(identityId)).size).toBe(2)
+  })
+
+  it('records the plan of the current login and logs a plan change', async () => {
+    await writeCredential('pro', 'default_claude_pro')
+    await signIn(ACCOUNT_A, ORG_A, 'Acme Corp', new Date('2026-11-01T10:00:00Z'))
+    await observeClaudeIdentities(new Date('2026-11-01T10:00:00Z'))
+    await writeCredential('max', 'default_claude_max_5x')
+    await signIn(ACCOUNT_A, ORG_A, 'Acme Corp', new Date('2026-11-01T11:00:00Z'))
+    await observeClaudeIdentities(new Date('2026-11-01T11:00:00Z'))
+    const log = (await readIdentityLog())!
+    expect(log.entries.map(e => e.plan)).toEqual(['Pro', 'Max 5x'])
+    expect(identityAt(log, configDir, '2026-11-01T10:30:00.000Z')).toEqual({ hash: hash(ORG_A), label: 'Acme Corp', plan: 'Max 5x' })
+  })
+
+  it('never reads the keychain, and takes the plan from the quota read instead', async () => {
+    await signIn(ACCOUNT_A, ORG_A, 'Acme Corp', new Date('2026-11-01T10:00:00Z'))
+    await observeClaudeIdentities(new Date('2026-11-01T10:00:00Z'))
+    expect(vi.mocked(readKeychainPassword)).not.toHaveBeenCalled()
+    expect((await readIdentityLog())!.entries.map(e => e.plan)).toEqual([undefined])
+
+    await recordClaudePlan(configDir, 'Max 20x', new Date('2026-11-01T11:00:00Z'))
+    await recordClaudePlan(configDir, 'Max 20x', new Date('2026-11-01T12:00:00Z'))
+    const log = (await readIdentityLog())!
+    expect(log.entries.map(e => [e.plan, e.observedAt])).toEqual([[undefined, '2026-11-01T10:00:00.000Z'], ['Max 20x', '2026-11-01T11:00:00.000Z']])
+    expect(identityAt(log, configDir, '2026-11-01T10:30:00.000Z')).toEqual({ hash: hash(ORG_A), label: 'Acme Corp', plan: 'Max 20x' })
   })
 
   it('writes nothing for a config without a signed-in account', async () => {
@@ -210,8 +246,9 @@ describe('CLI surfaces', () => {
     await writeSession('before', iso(-180))
     await writeSession('during-a', iso(-90))
     await writeSession('during-b', iso(-30))
-    const a = entry(ACCOUNT_A, ORG_A, 'Acme Corp', iso(-120))
-    await seedLog(twoIdentities ? [a, entry(ACCOUNT_B, ORG_B, 'Home', iso(-60))] : [a])
+    await writeCredential('max', 'default_claude_max_5x')
+    const a = { ...entry(ACCOUNT_A, ORG_A, 'Acme Corp', iso(-120)), plan: twoIdentities ? 'Pro' : 'Max 5x' }
+    await seedLog(twoIdentities ? [a, { ...entry(ACCOUNT_B, ORG_B, 'Home', iso(-60)), plan: 'Max 5x' }] : [a])
     if (twoIdentities) await signIn(ACCOUNT_B, ORG_B, 'Home', new Date(now - 60 * 60_000))
     else await signIn(ACCOUNT_A, ORG_A, 'Acme Corp', new Date(now - 120 * 60_000))
   }
@@ -219,7 +256,7 @@ describe('CLI surfaces', () => {
   it('splits report, sessions and export by account, and filters by label or hash', async () => {
     await fixture(true)
     const report = JSON.parse(run(['report', '--format', 'json', '-p', 'week']).stdout)
-    expect(report.identities.map((r: { label: string; sessions: number }) => [r.label, r.sessions]).sort()).toEqual([['Acme Corp', 1], ['Home', 1], ['unattributed', 1]])
+    expect(report.identities.map((r: { label: string; plan?: string; sessions: number }) => [r.label, r.plan, r.sessions]).sort()).toEqual([['Acme Corp', 'Pro', 1], ['Home', 'Max 5x', 1], ['unattributed', undefined, 1]])
     const sum = report.identities.reduce((s: number, r: { cost: number }) => s + r.cost, 0)
     expect(sum).toBeCloseTo(report.overview.cost, 6)
 
@@ -251,6 +288,13 @@ describe('CLI surfaces', () => {
     expect(list).toContain('Home')
     expect(list).toContain('unattributed')
   }, 180_000)
+
+  it('records a plan handed over by the menubar', async () => {
+    await fixture(false)
+    expect(run(['identity', 'plan', '--config-dir', configDir, '--plan', 'Max 20x']).status).toBe(0)
+    expect((await readIdentityLog())!.entries.map(e => e.plan)).toEqual(['Max 5x', 'Max 20x'])
+    expect(run(['identity', 'plan', '--config-dir', configDir]).status).toBe(1)
+  }, 120_000)
 
   it('adds nothing for a single identity', async () => {
     await fixture(false)

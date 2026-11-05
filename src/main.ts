@@ -1,4 +1,4 @@
-import { isAbsolute } from 'path'
+import { isAbsolute, resolve as resolvePath } from 'path'
 import { Command, Option } from 'commander'
 import { installMenubarApp, uninstallMenubarApp } from './menubar-installer.js'
 import { COMPONENTS, defaultUpdateDeps, runUpdate, type Component } from './update.js'
@@ -18,7 +18,7 @@ import { toDateString } from './daily-cache.js'
 import { statusSnapshotSemanticKey } from './status-snapshot-semantic.js'
 import { dateKey } from './day-aggregator.js'
 import { foldedSessionRows, sessionCacheHitPercent } from './sessions-report.js'
-import { applyClaudeIdentities, identityId, identityLabel, identitySplit, multipleIdentities, readIdentityLog, resolveIdentity, setIdentityLabel, UNATTRIBUTED } from './claude-identity.js'
+import { applyClaudeIdentities, identityId, identityLabel, identitySplit, multipleIdentities, readIdentityLog, recordClaudePlan, resolveIdentity, setIdentityLabel, UNATTRIBUTED } from './claude-identity.js'
 import { behavioralCallWeight } from './behavioral-weight.js'
 import { CATEGORY_LABELS, type DateRange, type ProjectSummary, type TaskCategory } from './types.js'
 import type { AppliedFix } from './act/types.js'
@@ -1090,10 +1090,20 @@ program
   .command('identity [action]')
   .description('Show this device identity for sharing; `identity list` shows the Claude accounts codeburn has observed')
   .option('--format <format>', 'Output format: text, json', 'text')
+  .addOption(new Option('--config-dir <dir>').hideHelp())
+  .addOption(new Option('--plan <label>').hideHelp())
   .action(async (action: string | undefined, opts) => {
     assertFormat(opts.format, ['text', 'json'], 'identity')
     if (action === 'list') {
       await runIdentityList()
+      return
+    }
+    if (action === 'plan') {
+      if (!opts.configDir || !opts.plan) {
+        process.stderr.write('codeburn identity plan: --config-dir and --plan are required\n')
+        process.exit(1)
+      }
+      await recordClaudePlan(resolvePath(opts.configDir), opts.plan)
       return
     }
     if (action !== undefined) {

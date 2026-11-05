@@ -374,6 +374,16 @@ struct CurrentBlock: Codable, Sendable {
     /// but no cost-table floor ever shows them. Empty on older CLI payloads;
     /// absent or empty -> the Models section's unpriced line hides.
     var unpricedModels: [UnpricedModelEntry] = []
+    var identities: [IdentitySplitRow] = []
+}
+
+struct IdentitySplitRow: Codable, Sendable, Equatable {
+    let hash: String
+    let label: String
+    var plan: String? = nil
+    let cost: Double
+    let calls: Int
+    let sessions: Int
 }
 
 struct UnpricedModelEntry: Codable, Sendable, Equatable {
@@ -399,7 +409,7 @@ extension CurrentBlock {
              cacheHitPercent, codexCredits, topActivities, topModels, localModelSavings, providers, providerDetails, topProjects,
              modelEfficiency, topSessions, retryTax, routingWaste,
              tools, skills, subagents, mcpServers,
-             workflow, topReworkedFiles, pullRequests, unpricedModels
+             workflow, topReworkedFiles, pullRequests, unpricedModels, identities
     }
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -431,6 +441,7 @@ extension CurrentBlock {
         topReworkedFiles = try c.decodeIfPresent([ReworkedFileEntry].self, forKey: .topReworkedFiles) ?? []
         pullRequests = try c.decodeIfPresent(PullRequestsBlock.self, forKey: .pullRequests)
         unpricedModels = try c.decodeIfPresent([UnpricedModelEntry].self, forKey: .unpricedModels) ?? []
+        identities = try c.decodeIfPresent([IdentitySplitRow].self, forKey: .identities) ?? []
     }
 }
 
