@@ -217,6 +217,7 @@ struct UnmanagedCliTests {
     @Test("recognizes the desktop app's bundled CLI launcher")
     func desktopLauncher() {
         #expect(UpdateChecker.isDesktopBundledCli("/Users/u/Library/Application Support/CodeBurn/codeburn-desktop-cli.sh"))
+        #expect(UpdateChecker.isDesktopBundledCli("/Applications/CodeBurn.app/Contents/Resources/cli/codeburn"))
         #expect(!UpdateChecker.isDesktopBundledCli("/opt/homebrew/bin/codeburn"))
     }
 
