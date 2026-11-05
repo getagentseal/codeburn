@@ -30,7 +30,7 @@ for (const dir of [home, workspace, other]) mkdirSync(dir, { recursive: true })
 function session(cwd, id, output) {
   const dir = join(home, '.claude', 'projects', cwd.replace(/[^a-zA-Z0-9]/g, '-'))
   mkdirSync(dir, { recursive: true })
-  const at = (minutes) => new Date(Date.now() - minutes * 60_000).toISOString()
+  const at = (minutes) => new Date(Math.max(Date.now() - minutes * 60_000, new Date().setHours(0, 0, 0, 0))).toISOString()
   const lines = [
     { type: 'user', uuid: `${id}-u`, sessionId: id, cwd, timestamp: at(6), message: { role: 'user', content: 'Add a test' } },
     {
