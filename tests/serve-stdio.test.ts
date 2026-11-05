@@ -3,7 +3,7 @@ import { spawn, type ChildProcess } from 'child_process'
 import { appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { classifyRootReuse, createOutputMemoEntry, fileDaySpan, outputMemoKey, servedDayRange } from '../src/serve.js'
+import { classifyRootReuse, createOutputMemoEntry, fileDaySpan, outputMemoKey, scansTranscripts, servedDayRange, serveMemoryPressure } from '../src/serve.js'
 import { noonTz } from './fixtures/clock.js'
 
 it('timestamps a completed output memo before parsing begins', () => {
@@ -27,6 +27,24 @@ it('classifies watcher gaps as unknown without confusing them with dirty roots',
   expect(classifyRootReuse(100, { startedAt: 50, lastEventAt: 100, healthy: false })).toBe('dirty')
   expect(classifyRootReuse(100, { startedAt: 50, lastEventAt: 100, healthy: true })).toBe('dirty')
   expect(classifyRootReuse(100, { startedAt: 50, lastEventAt: 99, healthy: true })).toBe('clean')
+})
+
+it('sheds on heap pressure while resident size is still under its ceiling', () => {
+  const GB = 1024 ** 3
+  const maxRss = 6 * GB
+  // The measured abort: 3.8GB of a 4.2GB heap, 5.4GB resident.
+  expect(serveMemoryPressure({ usedHeap: 3.8 * GB, heapLimit: 4.2 * GB, rss: 5.4 * GB }, 0, 0.7, maxRss)).toBe('heap')
+  expect(serveMemoryPressure({ usedHeap: 2.8 * GB, heapLimit: 4.2 * GB, rss: 5.4 * GB }, 0, 0.7, maxRss)).toBe(null)
+  // The heap check repeats while memos stay over the line; the RSS check keeps its hysteresis.
+  expect(serveMemoryPressure({ usedHeap: 3.8 * GB, heapLimit: 4.2 * GB, rss: 6.1 * GB }, 6.1 * GB, 0.7, maxRss)).toBe('heap')
+  expect(serveMemoryPressure({ usedHeap: 1 * GB, heapLimit: 4.2 * GB, rss: 6.1 * GB }, 0, 0.7, maxRss)).toBe('rss')
+  expect(serveMemoryPressure({ usedHeap: 1 * GB, heapLimit: 4.2 * GB, rss: 6.1 * GB }, 6 * GB, 0.7, maxRss)).toBe(null)
+  // A transcript scan starts only with its own ~1.6GB free.
+  expect(serveMemoryPressure({ usedHeap: 2.5 * GB, heapLimit: 4.2 * GB, rss: 3 * GB }, 0, 0.4, maxRss)).toBe('heap')
+  expect(scansTranscripts(['optimize', '--format', 'json', '--period', 'all'])).toBe(true)
+  expect(scansTranscripts(['status', '--format', 'menubar-json', '--period', '30days'])).toBe(true)
+  expect(scansTranscripts(['status', '--format', 'menubar-json', '--period', 'all', '--no-optimize'])).toBe(false)
+  expect(scansTranscripts(['sessions', '--format', 'json', '--period', 'all'])).toBe(false)
 })
 
 describe('day-scoped invalidation', () => {
