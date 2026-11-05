@@ -147,7 +147,9 @@ enum ClaudeSubscriptionService {
             do {
                 let tier = try ClaudeCredentialStore.subscriptionTier()
                 let subscriptionType = try ClaudeCredentialStore.subscriptionType()
-                return try parseUsage(data, rawTier: tier, subscriptionType: subscriptionType)
+                let usage = try parseUsage(data, rawTier: tier, subscriptionType: subscriptionType)
+                ClaudePlanRecorder.shared.record(plan: usage.tier.displayName)
+                return usage
             } catch {
                 throw FetchError.usageDecodeFailed
             }
@@ -346,5 +348,33 @@ enum ClaudeSubscriptionService {
         if let d = f.date(from: s) { return d }
         f.formatOptions = [.withInternetDateTime]
         return f.date(from: s)
+    }
+}
+
+final class ClaudePlanRecorder: @unchecked Sendable {
+    static let shared = ClaudePlanRecorder()
+
+    private let lock = NSLock()
+    private var recorded: [String: String] = [:]
+    private let run: @Sendable ([String]) -> Void
+
+    init(run: @escaping @Sendable ([String]) -> Void = { ClaudePlanRecorder.spawn($0) }) {
+        self.run = run
+    }
+
+    func record(plan: String, configDir: String = (NSHomeDirectory() as NSString).appendingPathComponent(".claude")) {
+        let changed: Bool = lock.withLock {
+            guard recorded[configDir] != plan else { return false }
+            recorded[configDir] = plan
+            return true
+        }
+        if changed { run(["identity", "plan", "--config-dir", configDir, "--plan", plan]) }
+    }
+
+    static func spawn(_ subcommand: [String]) {
+        let process = CodeburnCLI.makeProcess(subcommand: subcommand, qualityOfService: .utility)
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        try? process.run()
     }
 }

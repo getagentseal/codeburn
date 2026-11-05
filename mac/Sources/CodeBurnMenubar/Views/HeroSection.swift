@@ -56,6 +56,10 @@ struct HeroSection: View {
                 }
             }
 
+            if !accountRows.isEmpty {
+                ClaudeAccountBreakdown(rows: accountRows, sessionCountBasis: totals.sessionCountBasis)
+            }
+
             if !store.isDayMode,
                store.selectedPeriod == .today,
                store.shouldShowDailyBudgetWarning {
@@ -118,6 +122,11 @@ struct HeroSection: View {
 
     private var totals: HeroTotals {
         HeroTotals(payload: store.payload, activeScope: store.activeScope)
+    }
+
+    private var accountRows: [ClaudeAccountRow] {
+        guard store.selectedProvider == .claude else { return [] }
+        return ClaudeAccountRow.rows(store.payload.current.identities)
     }
 
     private func formatTokens(_ n: Double) -> String {
@@ -203,6 +212,59 @@ struct HeroTotals: Equatable {
             totalTokens: current.inputTokens + current.outputTokens,
             sessionCountBasis: current.sessionCountBasis
         )
+    }
+}
+
+struct ClaudeAccountRow: Equatable, Identifiable {
+    let id: String
+    let title: String
+    let cost: Double
+    let calls: Int
+    let sessions: Int
+
+    static func rows(_ identities: [IdentitySplitRow]) -> [ClaudeAccountRow] {
+        guard identities.count >= 2 else { return [] }
+        return identities.sorted { $0.cost > $1.cost }.map { identity in
+            let label = identity.hash == "unattributed" ? L("Unattributed") : identity.label
+            return ClaudeAccountRow(
+                id: identity.hash,
+                title: identity.plan.map { "\(label) · \($0)" } ?? label,
+                cost: identity.cost,
+                calls: identity.calls,
+                sessions: identity.sessions
+            )
+        }
+    }
+}
+
+private struct ClaudeAccountBreakdown: View {
+    let rows: [ClaudeAccountRow]
+    let sessionCountBasis: String?
+
+    var body: some View {
+        VStack(spacing: 3) {
+            ForEach(rows) { row in
+                HStack(spacing: 6) {
+                    Text(row.title)
+                        .font(.system(size: 10.5, weight: .medium))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    Spacer(minLength: 6)
+                    Text(row.calls == 1 ? L("%@ call", row.calls.asThousandsSeparated()) : L("%@ calls", row.calls.asThousandsSeparated()))
+                        .font(.system(size: 10))
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                    Text(SessionCountLabel.compact(sessions: row.sessions, basis: sessionCountBasis))
+                        .font(.system(size: 10))
+                        .monospacedDigit()
+                        .foregroundStyle(.tertiary)
+                    Text(row.cost.asCurrency())
+                        .font(.system(size: 10.5))
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
     }
 }
 

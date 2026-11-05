@@ -11,6 +11,7 @@ import { renderTable } from '../text-table.js'
 import { filterProjectsByClaudeConfigSource, parseAllSessions } from '../parser.js'
 import { discoverClaudeConfigSources, getClaudeConfigDirs, type ClaudeConfigSource } from '../providers/claude.js'
 import { buildPeriodData } from '../usage-aggregator.js'
+import { recordClaudePlan } from '../claude-identity.js'
 import { fetchAntigravityQuota } from './antigravity.js'
 import { fetchClaudeQuota } from './claude.js'
 import { fetchClinePassQuota } from './clinepass.js'
@@ -74,7 +75,10 @@ export type QuotaReport = { providers: QuotaCommandProvider[]; claudeProfiles?: 
 export type ProviderReader = (signal: AbortSignal) => Promise<QuotaProvider>
 
 const READERS: { id: ProviderName; name: string; read: ProviderReader }[] = [
-  { id: 'claude', name: 'Claude', read: async signal => (await fetchClaudeQuota({ signal, allowKeychain: true, configDir: (await getClaudeConfigDirs())[0] })).quota },
+  { id: 'claude', name: 'Claude', read: async signal => {
+    const configDir = (await getClaudeConfigDirs())[0]
+    return withClaudePlan(configDir, (await fetchClaudeQuota({ signal, allowKeychain: true, configDir })).quota)
+  } },
   // No keychain for Codex: it would prefer the menubar's read-only cached token
   // over `~/.codex/auth.json`, which this process may refresh and write back.
   { id: 'codex', name: 'Codex', read: async signal => (await fetchCodexQuota({ signal })).quota },
@@ -161,7 +165,12 @@ function readClaudeProfile(source: ClaudeConfigSource, signal: AbortSignal): Pro
     configDir: source.path,
     wslCredentialPaths: () => [],
     allowKeychain: true,
-  }).then(result => result.quota)
+  }).then(result => withClaudePlan(source.path, result.quota))
+}
+
+async function withClaudePlan(configDir: string | undefined, quota: QuotaProvider): Promise<QuotaProvider> {
+  if (configDir && quota.planLabel) await recordClaudePlan(configDir, quota.planLabel).catch(() => {})
+  return quota
 }
 
 /** Each config directory's own today totals from one Claude-only parse of today's range
