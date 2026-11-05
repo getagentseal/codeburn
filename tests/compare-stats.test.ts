@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rm, writeFile } from 'fs/promises'
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'fs/promises'
 import { join } from 'path'
 import { tmpdir } from 'os'
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
@@ -403,6 +403,57 @@ describe('scanSelfCorrections', () => {
     } finally {
       await rm(dir2, { recursive: true, force: true })
     }
+  })
+
+  it('reads only transcripts whose stem is in sessionIds, subagents included', async () => {
+    await mkdir(join(tmpDir, 'parent', 'subagents'), { recursive: true })
+    await writeFile(join(tmpDir, 'in.jsonl'), jsonlLine('assistant', 'opus-4-6', 'My bad.', '2026-04-15T10:00:00Z') + '\n')
+    await writeFile(join(tmpDir, 'out.jsonl'), jsonlLine('assistant', 'opus-4-6', 'My bad.', '2026-04-15T10:01:00Z') + '\n')
+    await writeFile(join(tmpDir, 'parent', 'subagents', 'agent-x.jsonl'), jsonlLine('assistant', 'opus-4-6', 'I was wrong.', '2026-04-15T10:02:00Z') + '\n')
+
+    expect((await scanSelfCorrections([tmpDir], new Set(['in', 'agent-x']))).get('opus-4-6')).toBe(2)
+    expect((await scanSelfCorrections([tmpDir], new Set())).size).toBe(0)
+    expect((await scanSelfCorrections([tmpDir])).get('opus-4-6')).toBe(3)
+  })
+
+  it('counts a correction only when its message falls inside the range', async () => {
+    await writeFile(join(tmpDir, 's.jsonl'), [
+      jsonlLine('assistant', 'opus-4-6', 'My bad.', '2026-04-14T23:30:00Z'),
+      jsonlLine('assistant', 'opus-4-6', 'I was wrong.', '2026-04-15T00:30:00Z'),
+    ].join('\n') + '\n')
+    const ids = new Set(['s'])
+    const secondDay = { start: new Date('2026-04-15T00:00:00Z'), end: new Date('2026-04-15T23:59:59.999Z') }
+    const bothDays = { start: new Date('2026-04-14T00:00:00Z'), end: secondDay.end }
+
+    expect((await scanSelfCorrections([tmpDir], ids, secondDay)).get('opus-4-6')).toBe(1)
+    expect((await scanSelfCorrections([tmpDir], ids, bothDays)).get('opus-4-6')).toBe(2)
+  })
+
+  it('streamed read counts the same as a whole-file read', async () => {
+    const filler = 'x'.repeat(200_000)
+    const lines: string[] = []
+    for (let i = 0; i < 40; i++) {
+      const ts = `2026-04-15T10:${String(i).padStart(2, '0')}:00Z`
+      lines.push(jsonlLine('assistant', i % 2 ? 'opus-4-6' : 'sonnet-4-6', i % 3 ? `${filler} I apologize.` : 'Done.', ts))
+      if (i % 5 === 0) lines.push('', '   ', 'not json', jsonlLine('assistant', 'opus-4-6', 'My bad.', ts))
+    }
+    const file = join(tmpDir, 's.jsonl')
+    await writeFile(file, lines.join('\r\n'))
+
+    const expected = new Map<string, number>()
+    const seen = new Set<string>()
+    for (const line of (await readFile(file, 'utf8')).split('\n')) {
+      let rec: { type?: string; timestamp?: string; message?: { model: string; content: Array<{ text: string }> } }
+      try { rec = JSON.parse(line.trim()) } catch { continue }
+      if (rec.type !== 'assistant' || !rec.message) continue
+      const key = `${rec.message.model}:${rec.timestamp}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      if (/\bI apologize\b|\bmy bad\b/i.test(rec.message.content[0]!.text)) expected.set(rec.message.model, (expected.get(rec.message.model) ?? 0) + 1)
+    }
+
+    expect(expected.size).toBe(2)
+    expect(await scanSelfCorrections([tmpDir])).toEqual(expected)
   })
 })
 

@@ -1,7 +1,8 @@
-import { readdir, readFile } from 'fs/promises'
+import { readdir } from 'fs/promises'
 import { basename, join } from 'path'
 
-import type { ClassifiedTurn, ProjectSummary } from './types.js'
+import type { ClassifiedTurn, DateRange, ProjectSummary } from './types.js'
+import { readSessionLines } from './fs-utils.js'
 import { behavioralCallWeight, isBehavioralCall } from './behavioral-weight.js'
 import { modelRowKey } from './models.js'
 import { callBillableOutputTokens } from './session-output.js'
@@ -376,15 +377,17 @@ async function collectJsonlFiles(sessionDir: string): Promise<string[]> {
 }
 
 /// Session ids of every session in `projects`. For Claude transcripts the id IS
-/// the `.jsonl` stem, which is what lets a project-filtered compare scope the
-/// self-correction scan to the sessions it actually reported on.
+/// the `.jsonl` stem, which is what lets a compare scope the self-correction
+/// scan to the sessions it actually reported on (period and project filter).
 export function projectSessionIds(projects: readonly ProjectSummary[]): Set<string> {
   return new Set(projects.flatMap(p => p.sessions.map(s => s.sessionId)))
 }
 
 /// `sessionIds`, when given, restricts the scan to transcripts whose file stem
 /// is one of them; omitted, every file under `projectDirs` is read as before.
-export async function scanSelfCorrections(projectDirs: string[], sessionIds?: ReadonlySet<string>): Promise<Map<string, number>> {
+/// `range`, when given, counts only messages timestamped inside it, the same
+/// gate the parser applies to calls.
+export async function scanSelfCorrections(projectDirs: string[], sessionIds?: ReadonlySet<string>, range?: DateRange): Promise<Map<string, number>> {
   const counts = new Map<string, number>()
   const seen = new Set<string>()
 
@@ -413,43 +416,45 @@ export async function scanSelfCorrections(projectDirs: string[], sessionIds?: Re
 
     for (const file of allFiles) {
       if (sessionIds && !sessionIds.has(basename(file, '.jsonl'))) continue
-      let raw: string
+      // Streamed: a whole-file string read throws past V8's ~512 MiB string limit.
       try {
-        raw = await readFile(file, 'utf8')
+        for await (const line of readSessionLines(file)) {
+          const trimmed = line.trim()
+          if (!trimmed) continue
+
+          let parsed: unknown
+          try {
+            parsed = JSON.parse(trimmed)
+          } catch {
+            continue
+          }
+
+          const rec = parsed as Record<string, unknown>
+          if (!rec || typeof rec !== 'object' || rec['type'] !== 'assistant') continue
+
+          const ts = rec['timestamp']
+          const msg = rec['message']
+          if (msg === null || typeof msg !== 'object') continue
+
+          const msgRec = msg as Record<string, unknown>
+          const model = msgRec['model']
+          if (typeof model !== 'string' || model === '<synthetic>') continue
+          if (range) {
+            const at = new Date(typeof ts === 'string' ? ts : NaN)
+            if (Number.isNaN(at.getTime()) || at < range.start || at > range.end) continue
+          }
+
+          const dedupeKey = `${model}:${ts}`
+          if (seen.has(dedupeKey)) continue
+          seen.add(dedupeKey)
+
+          const text = extractText(msgRec['content'])
+          if (SELF_CORRECTION_PATTERNS.some(p => p.test(text))) {
+            counts.set(model, (counts.get(model) ?? 0) + 1)
+          }
+        }
       } catch {
         continue
-      }
-
-      for (const line of raw.split('\n')) {
-        const trimmed = line.trim()
-        if (!trimmed) continue
-
-        let parsed: unknown
-        try {
-          parsed = JSON.parse(trimmed)
-        } catch {
-          continue
-        }
-
-        const rec = parsed as Record<string, unknown>
-        if (!rec || typeof rec !== 'object' || rec['type'] !== 'assistant') continue
-
-        const ts = rec['timestamp']
-        const msg = rec['message']
-        if (msg === null || typeof msg !== 'object') continue
-
-        const msgRec = msg as Record<string, unknown>
-        const model = msgRec['model']
-        if (typeof model !== 'string' || model === '<synthetic>') continue
-
-        const dedupeKey = `${model}:${ts}`
-        if (seen.has(dedupeKey)) continue
-        seen.add(dedupeKey)
-
-        const text = extractText(msgRec['content'])
-        if (SELF_CORRECTION_PATTERNS.some(p => p.test(text))) {
-          counts.set(model, (counts.get(model) ?? 0) + 1)
-        }
       }
     }
   }

@@ -2815,8 +2815,7 @@ program
         const sessions = await safeDiscoverSessions(provider)
         for (const session of sessions) dirs.push(session.path)
       }
-      const scope = opts.project.length > 0 || opts.exclude.length > 0 ? projectSessionIds(projects) : undefined
-      const corrections = await scanSelfCorrections(dirs, scope)
+      const corrections = await scanSelfCorrections(dirs, projectSessionIds(projects), range)
       for (const model of models) {
         model.selfCorrections = corrections.get(model.model) ?? 0
       }

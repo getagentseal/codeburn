@@ -332,12 +332,10 @@ type CompareViewProps = {
   // validated to exist in `projects`' aggregated stats by the caller). When
   // set, comparison results load immediately instead of showing the picker.
   presetModels?: [string, string]
-  // `projects` is already project-filtered: scope the self-correction scan to
-  // its sessions instead of every session on the machine.
-  scopeToProjects?: boolean
+  range: DateRange
 }
 
-export function CompareView({ projects, onBack, presetModels, scopeToProjects }: CompareViewProps) {
+export function CompareView({ projects, onBack, presetModels, range }: CompareViewProps) {
   const { exit } = useApp()
   const [phase, setPhase] = useState<'select' | 'loading' | 'results'>('select')
   const [models, setModels] = useState<ModelStats[]>(() => aggregateModelStats(projects))
@@ -423,7 +421,7 @@ export function CompareView({ projects, onBack, presetModels, scopeToProjects }:
         const sessions = await safeDiscoverSessions(p)
         for (const s of sessions) dirs.push(s.path)
       }
-      const corrections = await scanSelfCorrections(dirs, scopeToProjects ? projectSessionIds(projectsRef.current) : undefined)
+      const corrections = await scanSelfCorrections(dirs, projectSessionIds(projectsRef.current), range)
       if (cancelled) return
 
       const currentProjects = projectsRef.current
@@ -518,7 +516,6 @@ export async function renderCompare(range: DateRange, provider: string, modelA?:
   }
 
   patchStdoutForWindows()
-  const hasProjectFilter = (projectFilter?.length ?? 0) > 0 || (excludeFilter?.length ?? 0) > 0
   const projects = filterProjectsByName(await parseAllSessions(range, provider), projectFilter, excludeFilter)
 
   // --model-a/--model-b: resolve up front (by canonical id or display name,
@@ -543,7 +540,7 @@ export async function renderCompare(range: DateRange, provider: string, modelA?:
   const stopUserTimingGuard = startUserTimingGuard()
   try {
     const { waitUntilExit } = render(
-      <CompareView projects={projects} onBack={() => process.exit(0)} presetModels={presetModels} scopeToProjects={hasProjectFilter} />
+      <CompareView projects={projects} onBack={() => process.exit(0)} presetModels={presetModels} range={range} />
     )
     await waitUntilExit()
   } finally {

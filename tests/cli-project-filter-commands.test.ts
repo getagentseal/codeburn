@@ -170,6 +170,27 @@ describe('--project / --exclude reach the reporting commands', () => {
     expect(filteredStats[0]!.selfCorrections).toBe(2)
   })
 
+  it('compare counts self-corrections only from sessions inside the period', async () => {
+    const home = await seedHomeWithApologies()
+    const old = new Date(Date.now() - 60 * 86_400_000).toISOString()
+    await writeFile(join(home, '.claude', 'projects', SIBLINGS[0]!.dir, 's-old.jsonl'), JSON.stringify({
+      type: 'assistant', timestamp: old, sessionId: 's-old', cwd: SIBLINGS[0]!.cwd,
+      message: {
+        type: 'message', role: 'assistant', model: 'claude-3-5-sonnet-20241022', id: 's-old-m1',
+        content: [{ type: 'text', text: 'I apologize for the confusion.' }],
+        usage: { input_tokens: 90000, output_tokens: 12000, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+      },
+    }) + '\n', 'utf-8')
+
+    const recent = runCli(['compare', '--format', 'json', '--period', '30days'], home)
+    expect(recent.status).toBe(0)
+    expect((JSON.parse(recent.stdout) as Array<{ selfCorrections: number }>)[0]!.selfCorrections).toBe(4)
+
+    const all = runCli(['compare', '--format', 'json', '--period', 'all'], home)
+    expect(all.status).toBe(0)
+    expect((JSON.parse(all.stdout) as Array<{ selfCorrections: number }>)[0]!.selfCorrections).toBe(5)
+  })
+
   it('sessions keeps the sibling an absolute --exclude does not name', async () => {
     const home = await seedHome()
 
