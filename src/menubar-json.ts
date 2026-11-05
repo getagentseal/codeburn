@@ -83,6 +83,9 @@ export type PeriodData = {
   /// Rows are by-reference (a session that switched branches counts toward each),
   /// so never sum them. Absent when no branch data was observed.
   byBranch?: BranchRow[]
+  /// Claude spend per account (see claude-identity.ts). Absent unless the
+  /// period holds two or more identities.
+  identities?: IdentitySplitRow[]
 }
 
 export type PullRequestsPayload = {
@@ -150,6 +153,7 @@ import type { LiveSessionsBlock } from './live-sessions.js'
 import type { CursorSyncStatus } from './cursor-sync.js'
 import { buildTelemetrySnapshot, type TelemetrySnapshot, type TelemetrySnapshotInput } from './telemetry-snapshot.js'
 import type { SessionCountBasis } from './session-count-label.js'
+import type { IdentitySplitRow } from './claude-identity.js'
 
 const TOP_ACTIVITIES_LIMIT = 20
 const TOP_FINDINGS_LIMIT = 10
@@ -519,6 +523,7 @@ export type MenubarPayload = {
     /// branch-bearing session. By-reference like the PR rows. Absent when no
     /// branch data was observed, and on payloads produced before the field.
     byBranch?: BranchRow[]
+    identities?: IdentitySplitRow[]
   }
   optimize: {
     findingCount: number
@@ -855,6 +860,7 @@ export function buildMenubarPayload(
       // predate the fields.
       ...(current.pullRequests ? { pullRequests: current.pullRequests } : {}),
       ...(current.byBranch ? { byBranch: current.byBranch } : {}),
+      ...(current.identities ? { identities: current.identities } : {}),
     },
     optimize: buildOptimize(optimize),
     history: buildHistory(dailyHistory, granularHistory),

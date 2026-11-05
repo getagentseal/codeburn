@@ -5,6 +5,7 @@ import { CATEGORY_LABELS, type ParsedApiCall, type ProjectSummary, type TaskCate
 import { getCurrency, convertCost, roundForActiveCurrency } from './currency.js'
 import { dateKey } from './day-aggregator.js'
 import { behavioralCallWeight, behavioralTurnCount } from './behavioral-weight.js'
+import { identitySplit } from './claude-identity.js'
 import { aggregateModelEfficiency } from './model-efficiency.js'
 import { callBillableOutputTokens, costBasisShares, countSessions, sessionModelBillableOutputTokens, type CostBasisShares } from './session-output.js'
 import { findUnpricedModels, hasPriceDiscounts } from './models.js'
@@ -133,6 +134,7 @@ function buildDailyRows(projects: ProjectSummary[], period: string, withCostBasi
 
 function buildRecordRows(projects: ProjectSummary[]): Row[] {
   const rows: Row[] = []
+  const split = identitySplit(projects) !== undefined
   const unpricedModels = new Map<string, boolean>()
   const isUnpriced = (model: string, cost: number): boolean => {
     if (cost > 0) return false
@@ -173,6 +175,7 @@ function buildRecordRows(projects: ProjectSummary[]): Row[] {
             unpriced: isUnpriced(call.model, call.costUSD) ? true : undefined,
             retained: session.retained ? true : undefined,
             ...(hasPriceDiscounts() ? { listCost: call.listCostUSD !== undefined ? convertCost(call.listCostUSD) : undefined } : {}),
+            ...(split ? { identity: session.identity?.label } : {}),
           })
         }
       }
@@ -331,6 +334,7 @@ function buildProjectRows(projects: ProjectSummary[]): Row[] {
 
 function buildSessionRows(projects: ProjectSummary[], withCostBasis = false): Row[] {
   const rows: Row[] = []
+  const split = identitySplit(projects) !== undefined
   for (const p of projects) {
     for (const s of p.sessions) {
       const models = new Set(
@@ -348,6 +352,7 @@ function buildSessionRows(projects: ProjectSummary[], withCostBasis = false): Ro
         model: models.size === 1 ? [...models][0] : undefined,
         ...(withCostBasis ? { costBasis: costBasisShares(s.turns.flatMap(turn => turn.assistantCalls)) } : {}),
         retained: s.retained ? true : undefined,
+        ...(split ? { identity: s.identity?.label } : {}),
       })
     }
   }
@@ -405,6 +410,8 @@ function buildReadme(periods: PeriodExport[]): string {
     '                        retained marks a session kept from the cache after its tool removed the transcript;',
     '                        sessions.csv carries the same column.',
     '                        listCost (only with price-discount set) is the list-price cost of a discounted call.',
+    '                        identity (only with two or more Claude accounts in the period) is the account',
+    '                        active when the session started; sessions.csv carries it too.',
     '  projects.csv          Spend per project folder for the selected detail period.',
     '  sessions.csv          One row per session for the selected detail period.',
     '  tools.csv             Tool invocations and share for the selected detail period.',

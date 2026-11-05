@@ -164,6 +164,28 @@ describe('Sessions', () => {
     expect(container.querySelectorAll('.session-row')).toHaveLength(6)
   })
 
+  it('filters by Claude account only when the rows carry two or more', async () => {
+    const user = userEvent.setup()
+    getSessions.mockResolvedValue(rows.map((row, index) => row.provider === 'claude'
+      ? { ...row, identity: index === 0 ? { hash: 'a1b2c3d4e5f6', label: 'Acme' } : { hash: 'unattributed', label: 'unattributed' } }
+      : row))
+    const { container } = render(<Sessions period="30days" provider="all" />)
+    const group = await screen.findByRole('group', { name: 'Filter sessions by Claude account' })
+
+    await user.click(within(group).getByRole('button', { name: 'Acme' }))
+    expect(container.querySelectorAll('.session-row')).toHaveLength(1)
+    expect(screen.getByText('projects/codeburn')).toBeInTheDocument()
+    await user.click(within(group).getByRole('button', { name: 'All' }))
+    expect(container.querySelectorAll('.session-row')).toHaveLength(6)
+  })
+
+  it('shows no account filter without identities', async () => {
+    getSessions.mockResolvedValue(rows)
+    render(<Sessions period="30days" provider="all" />)
+    await screen.findByRole('textbox', { name: 'Search sessions' })
+    expect(screen.queryByRole('group', { name: 'Filter sessions by Claude account' })).not.toBeInTheDocument()
+  })
+
   it('reorders rows when the sort changes', async () => {
     const user = userEvent.setup()
     getSessions.mockResolvedValue(rows)

@@ -957,6 +957,29 @@ function TopActivities({ activities, onSelectCategory }: { activities: MenubarPa
   )
 }
 
+function IdentitySplit({ identities }: { identities: NonNullable<MenubarPayload['current']['identities']> }) {
+  const maxCost = identities[0]?.cost ?? 0
+  return (
+    <div className="ov-activities">
+      {identities.map(identity => (
+        <div className="ov-activity" key={identity.hash}>
+          <div className="ov-activity-bar" aria-hidden="true">
+            <span style={{ width: `${maxCost > 0 ? identity.cost / maxCost * 100 : 0}%` }} />
+          </div>
+          <div className="ov-activity-main">
+            <span className="ov-activity-name">{identity.label}</span>
+            <strong>{formatUsd(identity.cost)}</strong>
+          </div>
+          <div className="ov-activity-meta">
+            <span>{formatCount(identity.sessions, 'session')}</span>
+            <span>{formatCount(identity.calls, 'call')}</span>
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 export function Overview({ period, provider }: { period: Period; provider: string }) {
   const overview = usePolled<MenubarPayload>(() => codeburn.getOverview(period, provider), [period, provider])
   return <OverviewContent period={period} provider={provider} overview={overview} />
@@ -1332,6 +1355,12 @@ export function OverviewContent({
             <div className="ov-panel-head"><Icon name="list" /><h3>{t('overview.activities.title')}</h3><span className="r">{t('overview.common.sortedByCost')}</span></div>
             <div className="ov-panel-body"><TopActivities activities={data.current.topActivities} onSelectCategory={onInvestigate ? raw => onInvestigate({ filters: categoryFilters(raw) }) : undefined} /></div>
           </div>
+          {data.current.identities && data.current.identities.length > 1 && (
+            <div className="ov-card ov-panel ov-activities-widget">
+              <div className="ov-panel-head"><Icon name="coins" /><h3>{t('overview.identities.title')}</h3><span className="r">{t('overview.common.sortedByCost')}</span></div>
+              <div className="ov-panel-body"><IdentitySplit identities={data.current.identities} /></div>
+            </div>
+          )}
         </div>
       </div>
     </div>

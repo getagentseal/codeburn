@@ -43,3 +43,24 @@ Providers you are not signed in to are listed with `available: false` and no err
 }
 ```
 
+
+## Claude accounts
+
+If you switch between Claude accounts on one machine (a personal plan and a work login), codeburn can split Claude usage by the account that was signed in.
+
+Claude Code transcripts do not record which account wrote them. What exists is a live snapshot: the account currently signed in to each Claude config directory (`oauthAccount` in its `.claude.json`). So every time codeburn reads sessions (CLI, menubar or desktop refresh), it reads that snapshot and appends a line to `~/.config/codeburn/identity-log.v1.json` when the account or organization differs from the last line for that config directory. The line holds the first 12 hex characters of the sha256 of the account and organization ids, the organization name as the default label, the time, and the config directory. Raw ids, emails and tokens are never written, and the log never leaves the machine: sync and sharing do not send it.
+
+A Claude session belongs to the account of the last observation at or before its first message, in its own config directory. That is as precise as the observations:
+
+- A switch is dated to when codeburn next observed it, not to the moment you logged in. Sessions started in that gap go to the account observed before.
+- Sessions started before codeburn first observed an account are `unattributed`, and stay that way.
+- A config directory without a signed-in account (an API key user) records nothing, so its sessions stay with the last account observed there, or `unattributed`.
+
+With one account nothing changes anywhere. Once a period holds two or more, `codeburn report` (dashboard panel and `--format json` `identities`), `codeburn sessions --format json` (`identity` per row), `codeburn export` (a last `identity` column) and the desktop Overview and Sessions show the split.
+
+```bash
+codeburn identity list                        # observations, and sessions and cost per account
+codeburn identity-label 3f2a9c1d0b7e work     # rename an account locally
+codeburn report --format json --identity work # one account only (label or hash)
+codeburn sessions --identity unattributed
+```

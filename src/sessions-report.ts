@@ -1,5 +1,6 @@
 import { readFileSync, statSync } from 'fs'
 import { behavioralCallCount, behavioralTurnCount } from './behavioral-weight.js'
+import { identitySplit } from './claude-identity.js'
 import { flatString } from './content-utils.js'
 import { ESTIMATED_COST_LEGEND, isEstimatedCost, markEstimated } from './format.js'
 import { modelRowKey } from './models.js'
@@ -39,6 +40,7 @@ export type SessionRow = {
   /// cost, calls, turns and tokens). Absent on rows with none.
   subagents?: SessionRow[]
   retained?: { since: string }
+  identity?: { hash: string; label: string }
 }
 
 function sessionCostLabel(cost: number): string {
@@ -59,6 +61,7 @@ function durationMs(startedAt: string, endedAt: string): number {
 }
 
 export function aggregateSessions(projects: ProjectSummary[]): SessionRow[] {
+  const split = identitySplit(projects) !== undefined
   return projects.flatMap(project => project.sessions.map(session => ({
     sessionId: session.sessionId,
     title: session.title ?? '',
@@ -81,6 +84,7 @@ export function aggregateSessions(projects: ProjectSummary[]): SessionRow[] {
     isEstimated: isEstimatedCost(session.totalCostUSD, session.totalEstimatedCostUSD, sessionCostLabel(session.totalCostUSD)),
     costBasis: costBasisShares(session.turns.flatMap(turn => turn.assistantCalls)),
     ...(session.retained ? { retained: session.retained } : {}),
+    ...(split && session.identity ? { identity: session.identity } : {}),
   })))
 }
 

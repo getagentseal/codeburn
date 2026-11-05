@@ -93,6 +93,15 @@ describe('sanitizeForSharing', () => {
     expect(JSON.stringify(clean)).not.toContain('secret-client/repo#42')
   })
 
+  it('drops the Claude account rows, which name the organization', () => {
+    const payload = fixture()
+    payload.current.identities = [{ hash: 'a1b2c3d4e5f6', label: 'Secret Org', cost: 60, calls: 3, sessions: 1 }, { hash: 'unattributed', label: 'unattributed', cost: 40, calls: 2, sessions: 1 }]
+    const clean = sanitizeForSharing(payload)
+    expect(clean.current.identities).toBeUndefined()
+    expect(JSON.stringify(clean)).not.toContain('a1b2c3d4e5f6')
+    expect(JSON.stringify(clean)).not.toContain('Secret Org')
+  })
+
   it('drops the live-session block, which names the project and branch in flight', () => {
     const withSessions = {
       ...fixture(),
