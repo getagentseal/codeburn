@@ -43,7 +43,7 @@ codeburn price-discount set claude-opus-4-8:output 30  # one model's output toke
 codeburn price-discount list                           # or: price-discount remove <scope>
 ```
 
-On an enterprise agreement you pay a percentage off list price. `price-discount` takes that percentage off every cost CodeBurn calculates from tokens, after long-context tiers and fast or flex rates, so the discount follows LiteLLM's list prices as they change. A scope is a provider id (as in `--provider`), a model id, or a model id and token kind (`input`, `output`, `cacheWrite`, `cacheRead`); the most specific scope wins. Costs a tool recorded itself and subscription-included calls are left as they are. `codeburn models` shows the effective discount per row, and export records carry `listCost`. Discounts are stored under `discounts` in `~/.config/codeburn/config.json` and apply to all history, not from a date.
+On an enterprise agreement you pay a percentage off list price. `price-discount` takes that percentage off every cost CodeBurn calculates from tokens, after long-context tiers and fast or flex rates, so the discount follows LiteLLM's list prices as they change. A scope is a provider id (as in `--provider`), a model id, or a model id and token kind (`input`, `output`, `cacheWrite`, `cacheRead`); the most specific scope wins. Costs a tool recorded itself and subscription-included calls are left as they are. `codeburn models` shows the effective discount per row, and export records carry `listCost`. Discounts are stored under `discounts` in `~/.config/codeburn/config.json` and apply to all history, not from a date. Optimize findings and savings estimates use list prices.
 
 ## Environment variables
 

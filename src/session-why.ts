@@ -2,7 +2,7 @@ import { readdir, readFile } from 'fs/promises'
 import { basename, join } from 'path'
 
 import { readSessionLines } from './fs-utils.js'
-import { calculateCost, getShortModelName } from './models.js'
+import { calculateCost, discountFactors, getShortModelName, NO_DISCOUNT } from './models.js'
 import {
   collectSessionMeta,
   collectToolResultMeta,
@@ -160,12 +160,13 @@ const ZERO_PARTS: WhyParts = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0,
 export function partsOf(c: ParsedApiCall): WhyParts {
   if (c.costUSD === 0) return { ...ZERO_PARTS }
   const { model: m, speed: s, usage: u } = c
+  const d = c.listCostUSD === undefined ? NO_DISCOUNT : discountFactors(m, c.provider)
   return {
-    input: calculateCost(m, u.inputTokens, 0, 0, 0, 0, s),
-    output: calculateCost(m, 0, u.outputTokens, 0, 0, 0, s),
-    cacheRead: calculateCost(m, 0, 0, 0, u.cacheReadInputTokens, 0, s),
-    cacheWrite: calculateCost(m, 0, 0, u.cacheCreationInputTokens, 0, 0, s, c.cacheCreationOneHourTokens ?? 0),
-    webSearch: calculateCost(m, 0, 0, 0, 0, u.webSearchRequests, s),
+    input: calculateCost(m, u.inputTokens, 0, 0, 0, 0, s) * d.input,
+    output: calculateCost(m, 0, u.outputTokens, 0, 0, 0, s) * d.output,
+    cacheRead: calculateCost(m, 0, 0, 0, u.cacheReadInputTokens, 0, s) * d.cacheRead,
+    cacheWrite: calculateCost(m, 0, 0, u.cacheCreationInputTokens, 0, 0, s, c.cacheCreationOneHourTokens ?? 0) * d.cacheWrite,
+    webSearch: calculateCost(m, 0, 0, 0, 0, u.webSearchRequests, s) * d.other,
   }
 }
 

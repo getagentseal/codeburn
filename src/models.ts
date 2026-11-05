@@ -863,7 +863,7 @@ function getPriceOverrideCaseInsensitive(canonical: string, withPrefix: string):
 export const DISCOUNT_KINDS = ['input', 'output', 'cacheWrite', 'cacheRead'] as const
 type DiscountKind = typeof DISCOUNT_KINDS[number]
 type DiscountFactors = Record<DiscountKind | 'other', number>
-const NO_DISCOUNT: DiscountFactors = { input: 1, output: 1, cacheWrite: 1, cacheRead: 1, other: 1 }
+export const NO_DISCOUNT: DiscountFactors = { input: 1, output: 1, cacheWrite: 1, cacheRead: 1, other: 1 }
 let userDiscounts: Record<string, number> = {}
 
 export function isValidDiscountPercent(percent: unknown): percent is number {
@@ -878,7 +878,7 @@ export function hasPriceDiscounts(): boolean {
   return Object.keys(userDiscounts).length > 0
 }
 
-function discountFactors(model: string, provider: string | undefined): DiscountFactors {
+export function discountFactors(model: string, provider: string | undefined): DiscountFactors {
   const canonicalName = getCanonicalName(model)
   const ids = [model, model.replace(/@.*$/, '').replace(/-\d{8}$/, ''), canonicalName, resolveAlias(canonicalName)]
   const factor = (scopes: string[]) => {

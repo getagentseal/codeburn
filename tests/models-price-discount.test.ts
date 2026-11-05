@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 
 import { calculateCost, getPriceOverridesConfigHash, getPricingGenerationKey, setPriceDiscounts } from '../src/models.js'
 import { cachedCallToApiCall } from '../src/parser.js'
+import { partsOf } from '../src/session-why.js'
 import { getDailyCacheConfigHash } from '../src/usage-aggregator.js'
 import type { CachedCall } from '../src/session-cache.js'
 
@@ -81,6 +82,19 @@ describe('price discounts', () => {
     const included = cachedCallToApiCall(cachedCall({ costUSD: 0, billing: 'subscription' }))
     expect(included.costBasis).toBe('included')
     expect(included.listCostUSD).toBeUndefined()
+  })
+
+  it('prices the why-it-cost parts with the discount so they sum to the call', () => {
+    const usage = { inputTokens: 2_000, outputTokens: 3_000, cacheCreationInputTokens: 40_000, cacheReadInputTokens: 90_000, cachedInputTokens: 0, reasoningTokens: 0, webSearchRequests: 0, cacheCreationOneHourTokens: 0 }
+    const recordedList = partsOf(cachedCallToApiCall(cachedCall({ usage, costUSD: 1.23 })))
+    setPriceDiscounts({ claude: 20, 'claude-sonnet-4-6:output': 50 })
+    const call = cachedCallToApiCall(cachedCall({ usage }))
+    const parts = partsOf(call)
+    const sum = parts.input + parts.output + parts.cacheRead + parts.cacheWrite + parts.webSearch
+    expect(call.listCostUSD).toBeGreaterThan(call.costUSD)
+    expect(Math.abs(sum - call.costUSD)).toBeLessThan(0.01)
+    expect(sum).toBeCloseTo(call.costUSD, 12)
+    expect(partsOf(cachedCallToApiCall(cachedCall({ usage, costUSD: 1.23 })))).toEqual(recordedList)
   })
 
   it('changes the pricing config hashes only when a discount changes', () => {
