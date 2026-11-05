@@ -3,6 +3,7 @@ import { readFile, stat } from 'fs/promises'
 import { join } from 'path'
 import { createHash } from 'crypto'
 import { createInterface } from 'readline'
+import { getHeapStatistics } from 'v8'
 
 import type { Command } from 'commander'
 import { getDateRange, parseDayFlag, periodInfoFromQuery } from './cli-date.js'
@@ -53,6 +54,41 @@ const SERVE_MAX_RSS_BYTES = (() => {
 // plateau, but still clear on real unbounded growth.
 const SERVE_RSS_CLEAR_MARGIN_BYTES = 256 * 1024 * 1024
 let lastClearRss = 0
+
+// V8 aborts the whole child when the old space fills, and that happens long
+// before resident size reaches the ceiling above: measured, the child died at
+// 5.4GB RSS against a 4.2GB heap limit, after ten minutes of near-limit GC
+// thrash, with the RSS guard never firing. So the heap is the primary trigger.
+// 70% of a 4GB limit leaves ~1.2GB for the next request, more than one
+// optimize over all time adds on top of the memos, and stays below the point
+// where V8's own collector starts running back-to-back mark-compacts.
+const SERVE_HEAP_PRESSURE_FRACTION = 0.7
+// A request that re-reads the raw transcripts (the optimize scan) allocates
+// 1.1-1.6GB of its own on a 23GB corpus, measured. Started at 70% it ends at
+// the limit, so it starts only with that much room free. The cost is one
+// reload of the memos, a few seconds against a scan of a minute.
+const SERVE_SCAN_START_FRACTION = 0.4
+
+/// Whether this served request runs the optimize transcript scan.
+export function scansTranscripts(args: string[]): boolean {
+  return args[0] === 'optimize' || (args[0] === 'status' && !args.includes('--no-optimize'))
+}
+
+export type ServeMemoryReading = { usedHeap: number; heapLimit: number; rss: number }
+
+/// Why the memos should be dropped now, or null. The heap check has no
+/// hysteresis: memos still held after a release make it fire again, and a
+/// reload per request is the price of not aborting.
+export function serveMemoryPressure(
+  reading: ServeMemoryReading,
+  lastRssClear: number,
+  heapFraction: number = SERVE_HEAP_PRESSURE_FRACTION,
+  maxRss: number = SERVE_MAX_RSS_BYTES,
+): 'heap' | 'rss' | null {
+  if (reading.usedHeap > reading.heapLimit * heapFraction) return 'heap'
+  if (reading.rss > maxRss && reading.rss > lastRssClear + SERVE_RSS_CLEAR_MARGIN_BYTES) return 'rss'
+  return null
+}
 
 // V8 exposes gc() only to a process started with --expose-gc, and no codeburn
 // launcher passes it — so `globalThis.gc` was never there for the release below
@@ -731,6 +767,26 @@ export async function runStdioServe(buildProgram: () => Command): Promise<void> 
     return { cpuSec: (cpu.user + cpu.system) / 1e6, rssMb: Math.round(peakRss / (1024 * 1024)) }
   }
 
+  // Memory guard: a resident process accumulates parse memos that a one-shot
+  // CLI never lives long enough to hold (up to 10 entries of full
+  // ProjectSummary trees, the parsed cache object, up to 32 memoized answers).
+  // Under pressure, drop them; the next request re-parses once (seconds),
+  // which beats an aborted child. The child itself never exits here, so the
+  // client's death counter is untouched.
+  const shedIfPressured = async (heapFraction?: number): Promise<void> => {
+    const { used_heap_size, heap_size_limit } = getHeapStatistics()
+    const rss = process.memoryUsage().rss
+    if (rss > peakRss) peakRss = rss
+    const pressure = serveMemoryPressure({ usedHeap: used_heap_size, heapLimit: heap_size_limit, rss }, lastClearRss, heapFraction)
+    if (pressure === 'heap') outputMemo.clear()
+    if (pressure) {
+      await releaseResidentMemos()
+      lastClearRss = rss
+    } else if (rss <= SERVE_MAX_RSS_BYTES) {
+      lastClearRss = 0
+    }
+  }
+
   // Strict serialization: each request chains on the previous one.
   let queue: Promise<void> = Promise.resolve()
 
@@ -897,6 +953,9 @@ export async function runStdioServe(buildProgram: () => Command): Promise<void> 
       // it lands back-to-back with the parse's own quiet stretches. Wrapping
       // here (rather than at each command's exits) covers every served command
       // at one seam, and runCaptured routes the beats out as progress frames.
+      // Checked before the work as well as after it: what the last request
+      // left behind plus what this one allocates is what has to fit.
+      await shedIfPressured(scansTranscripts(request.args) ? SERVE_SCAN_START_FRACTION : undefined)
       const { startProgressKeepalive, stopProgressKeepalive, withColdFirstPaintFloor } = await import('./parser.js')
       startProgressKeepalive()
       try {
@@ -948,25 +1007,7 @@ export async function runStdioServe(buildProgram: () => Command): Promise<void> 
       } finally {
         stopProgressKeepalive()
       }
-      // Memory guard: a resident process accumulates parse memos that a
-      // one-shot CLI never lives long enough to hold (up to 10 entries of
-      // full ProjectSummary trees plus the parsed cache object). Past the
-      // threshold, drop the in-memory memos — the next request re-parses
-      // once (seconds), which beats an ever-growing child. The child itself
-      // never exits here, so the client's death counter is untouched.
-      const rss = process.memoryUsage().rss
-      if (rss > peakRss) peakRss = rss
-      if (rss > SERVE_MAX_RSS_BYTES) {
-        // Hysteresis: only clear when RSS has grown past the last clear by a
-        // margin, so a warm cache sitting above the ceiling is not dropped on
-        // every request.
-        if (rss > lastClearRss + SERVE_RSS_CLEAR_MARGIN_BYTES) {
-          await releaseResidentMemos()
-          lastClearRss = rss
-        }
-      } else {
-        lastClearRss = 0
-      }
+      await shedIfPressured()
     }).finally(() => {
       if (waitingId !== null) awaiting.delete(waitingId)
     })
