@@ -167,6 +167,9 @@ export type CachedFile = {
   // Absent when no provider-recorded evidence exists - the brief forbids
   // inferring lineage from directory layout or time adjacency.
   lineage?: import('./types.js').SessionLineage
+  // Local date of the first write refresh that kept this entry after its
+  // source file was gone. Absent while the source is still present.
+  retainedSince?: string
 }
 
 export type ProviderSection = {
@@ -1276,6 +1279,7 @@ function validateCachedFile(f: unknown): f is CachedFile {
     && isOptionalStringRecord(o['agentSpawnLinks'])
     && (o['ambiguousSpawnAgentIds'] === undefined || isStringArray(o['ambiguousSpawnAgentIds']))
     && isOptionalLineage(o['lineage'])
+    && isOptionalString(o['retainedSince'])
     && Array.isArray(o['turns'])
     && (o['turns'] as unknown[]).every(validateTurn)
 }

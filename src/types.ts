@@ -373,6 +373,7 @@ export type SessionSummary = {
   /// the source of truth for by-PR subagent folding and are kept populated
   /// independently of this field.
   lineage?: SessionLineage
+  retained?: { since: string }
 }
 
 export type ProjectSummary = {

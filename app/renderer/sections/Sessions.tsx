@@ -11,7 +11,8 @@ import { SessionDrawer } from '../components/SessionDrawer'
 import { StaleBanner } from '../components/StaleBanner'
 import { Icon } from '../components/icons'
 import { usePolled } from '../hooks/usePolled'
-import { formatCompact, formatCount, formatDayShort, formatUsd, isEstimatedCost, shortenProjectPath } from '../lib/format'
+import { formatCompact, formatCount, formatDayLong, formatDayShort, formatUsd, isEstimatedCost, shortenProjectPath } from '../lib/format'
+import { providerLabel } from '../lib/providers'
 import { Usd, tokensOf } from '../components/Usd'
 import { codeburn } from '../lib/ipc'
 import {
@@ -479,6 +480,7 @@ export function Sessions({
                         <span className="session-project">
                           {entry.entry.row.sessionId.slice(0, 18)}
                           {entry.entry.row.subagents?.length ? ` · ${t(`sessions.list.subagents.${entry.entry.row.subagents.length === 1 ? 'one' : 'other'}`, { count: entry.entry.row.subagents.length })}` : null}
+                          {entry.entry.row.retained ? ` · ${t('sessions.list.retainedNote', { tool: providerLabel(entry.entry.row.provider), date: formatDayLong(`${entry.entry.row.retained.since}T00:00`) })}` : null}
                         </span>
                       </span>
                     </span>

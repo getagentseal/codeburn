@@ -532,6 +532,7 @@ describe('(e) 90-day age-out for durable providers', () => {
     // Second parse: orphan with 89d timestamp → retained + counted via orphan pass
     const proj2 = await parseAllSessions(undefined, 'test-synthetic')
     expect(totalOutput(proj2)).toBe(7)
+    expect(proj2.flatMap(p => p.sessions)[0]?.retained?.since).toMatch(/^\d{4}-\d{2}-\d{2}$/)
   })
 })
 
@@ -920,6 +921,53 @@ describe('(h) provider filter excludes claude from the orphan pass', () => {
 
     const after = await parseAllSessions(undefined, 'all')
     expect(totalCost(after)).toBeCloseTo(costBefore, 10)
+  })
+
+  it('marks a kept PR-bearing claude orphan retained with a stable date', async () => {
+    _synthSources = []
+    _synthYields = []
+    const projectDir = join(tmpHome, '.claude', 'projects', 'retained-app')
+    await mkdir(projectDir, { recursive: true })
+    const write = async (id: string, withPr: boolean): Promise<string> => {
+      const filePath = join(projectDir, `${id}.jsonl`)
+      await writeFile(filePath, [
+        JSON.stringify({ type: 'user', sessionId: id, timestamp: '2026-07-18T12:00:00.000Z', message: { role: 'user', content: 'go' } }),
+        JSON.stringify({
+          type: 'assistant', sessionId: id, timestamp: '2026-07-18T12:00:10.000Z',
+          message: { id: `msg-${id}`, type: 'message', role: 'assistant', model: 'claude-sonnet-4-5', content: [{ type: 'text', text: 'ok' }], usage: { input_tokens: 1000, output_tokens: 100 } },
+        }),
+        ...(withPr ? [JSON.stringify({ type: 'pr-link', sessionId: id, timestamp: '2026-07-18T12:00:20.000Z', prUrl: 'https://github.com/getagentseal/codeburn/pull/2' })] : []),
+      ].join('\n') + '\n')
+      return filePath
+    }
+    const withPr = await write('kept-pr', true)
+    const noPr = await write('gone-no-pr', false)
+    await write('still-live', true)
+    const sessionsOf = (projects: Awaited<ReturnType<typeof parseAllSessions>>) =>
+      new Map(projects.flatMap(p => p.sessions).map(s => [s.sessionId, s]))
+
+    const live = sessionsOf(await parseAllSessions(undefined, 'all'))
+    expect([...live.values()].some(s => s.retained)).toBe(false)
+
+    await unlink(withPr)
+    await unlink(noPr)
+    vi.useFakeTimers({ toFake: ['Date'], now: new Date(2026, 9, 1, 12) })
+    try {
+      clearSessionCache()
+      const first = sessionsOf(await parseAllSessions(undefined, 'all'))
+      expect(first.get('kept-pr')?.retained).toEqual({ since: '2026-10-01' })
+      expect(first.has('gone-no-pr')).toBe(false)
+      expect(first.has('still-live')).toBe(true)
+      expect(first.get('still-live')?.retained).toBeUndefined()
+
+      vi.setSystemTime(new Date(2026, 9, 3, 12))
+      clearSessionCache()
+      const second = sessionsOf(await parseAllSessions(undefined, 'all'))
+      expect(second.get('kept-pr')?.retained).toEqual({ since: '2026-10-01' })
+      expect(second.get('still-live')?.retained).toBeUndefined()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 

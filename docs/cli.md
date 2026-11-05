@@ -197,6 +197,8 @@ Every dollar says where it came from. Each record in `export -f json` and `recor
 
 Since `codeburn.export.v3` the JSON export uses fixed camelCase keys on every row (`period`, `date`, `cost`, `saved`, `apiCalls`, `sessions`, `inputTokens`, `outputTokens`, `cacheReadTokens`, `cacheWriteTokens`, `share`, ...), and money keys carry no unit: the values are in the active currency, stated once at the top in `currency.code`. The CSV headers are unchanged. A v2 consumer must rename its keys, for example `Cost (USD)` to `cost` and `API Calls` to `apiCalls`. New keys can still appear under v3.
 
+When a tool deletes a session's transcript, the session's spend stays in every total through the daily cache. The session itself stays in `codeburn sessions` and the per-PR report only when it had PR links (copilot and quickdesk keep theirs for 90 days), and it is marked retained: `sessions --format json` rows carry `retained.since`, the date CodeBurn first found the transcript gone, the table puts `*` after the start time, and `export` adds a `retained` column to records and sessions.
+
 ## Diagnosing detection
 
 When a tool shows zero (or a number that looks wrong), `codeburn doctor` explains why. It runs fully offline and read-only, and never writes to caches or config.

@@ -171,6 +171,7 @@ function buildRecordRows(projects: ProjectSummary[]): Row[] {
             supplementary: call.supplementaryAccounting ? true : undefined,
             estimated: call.isEstimated ? true : undefined,
             unpriced: isUnpriced(call.model, call.costUSD) ? true : undefined,
+            retained: session.retained ? true : undefined,
           })
         }
       }
@@ -345,6 +346,7 @@ function buildSessionRows(projects: ProjectSummary[], withCostBasis = false): Ro
         subagentType: s.agentType?.trim() || undefined,
         model: models.size === 1 ? [...models][0] : undefined,
         ...(withCostBasis ? { costBasis: costBasisShares(s.turns.flatMap(turn => turn.assistantCalls)) } : {}),
+        retained: s.retained ? true : undefined,
       })
     }
   }
@@ -399,6 +401,8 @@ function buildReadme(periods: PeriodExport[]): string {
     '                        cost came from: recorded (the tool\'s own figure), calculated (measured',
     '                        tokens at published prices), estimated (guessed tokens), included',
     '                        (covered by a subscription, $0) or unpriced (no known price, $0).',
+    '                        retained marks a session kept after its tool deleted the transcript;',
+    '                        sessions.csv carries the same column.',
     '  projects.csv          Spend per project folder for the selected detail period.',
     '  sessions.csv          One row per session for the selected detail period.',
     '  tools.csv             Tool invocations and share for the selected detail period.',
