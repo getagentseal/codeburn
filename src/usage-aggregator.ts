@@ -3,7 +3,7 @@ import { CATEGORY_LABELS, type ProjectSummary, type SessionSummary, type TaskCat
 import { behavioralCallWeight } from './behavioral-weight.js'
 import { type PeriodData, type ProviderCost, type BreakdownArrays, type MenubarPayload, type ClaudeConfigSelector, type HydrationState, buildMenubarPayload } from './menubar-json.js'
 import { type SessionCountBasis } from './session-count-label.js'
-import { parseAllSessions, filterProjectsByName, mergeProjectSplits, filterProjectsByDays, filterProjectsByClaudeConfigSource, filterProjectsByDateRange, isSessionHydrationComplete, makeProjectFilter, type ProjectFilterTarget, sessionHydrationSnapshot } from './parser.js'
+import { parseAllSessions, filterProjectsByName, mergeProjectSplits, filterProjectsByDays, filterProjectsByClaudeConfigSource, filterProjectsByIdentity, filterProjectsByDateRange, isSessionHydrationComplete, makeProjectFilter, type ProjectFilterTarget, sessionHydrationSnapshot } from './parser.js'
 type ProjectFilter = (entry: ProjectFilterTarget) => boolean
 
 import { findUnpricedModels, getFlatRateModelsConfigHash, getLocalModelSavingsConfigHash, getPriceOverridesConfigHash, getShortModelName, isExpectedFreeModel, billableOutputTokens, modelRowKey } from './models.js'
@@ -24,6 +24,7 @@ import { getDateRange } from './cli-date.js'
 import { activityStreak } from './streak.js'
 import { getDaysInRange, ensureCacheHydrated, loadDailyCache, cachedProjectIdentities, projectDayIdentity, emptyCache, mergeDayEntries, BACKFILL_DAYS, toDateString, type DailyCache, type DailyEntry, type ProjectDayStats, type ProviderDaySlice } from './daily-cache.js'
 import { buildGranularHistory } from './granular-history.js'
+import { applyClaudeIdentities, identitySplit } from './claude-identity.js'
 import { spendProjectIdentity } from './spend-flow.js'
 import { folderNameOriginKey, isTemporaryProjectPath, linkedOriginKey, originRepoName, projectOriginKey, TEMPORARY_PROJECTS } from './git-origin.js'
 import { AGGREGATE_ONLY_PROVIDER, excludeAggregateOnlyProjects, excludesAggregateOnlyProviders } from './parser.js'
@@ -298,6 +299,9 @@ export type AggregateOpts = {
   daysSelection?: { range: DateRange; label: string; days: Set<string> } | null
   optimize?: boolean
   claudeConfigSourceId?: string | null
+  /// Resolved Claude account hash. Scopes every figure to that account's
+  /// surviving sessions, since the day cache carries no identity.
+  identity?: string
   /// Build the granular per-bucket timeline (`history.timeline`). Defaults to
   /// true. The desktop app never renders it, so it passes `--no-timeline` to
   /// skip the buildGranularHistory pass on every menubar poll.
@@ -1091,7 +1095,10 @@ export async function buildDurablePeriod(periodInfo: PeriodInfo, opts: Aggregate
         }]
       })) as PeriodTotals
     : undefined
-  return { data, days, sessionCountCacheDays, carriedCostUSD, unattributedCostUSD, excludedGateway: excludedGatewayTotals(days, pf), liveProjects, knownProjects, cache, todayAllDays, scanRange, periodTotals }
+  const durable = { data, days, sessionCountCacheDays, carriedCostUSD, unattributedCostUSD, excludedGateway: excludedGatewayTotals(days, pf), liveProjects, knownProjects, cache, todayAllDays, scanRange, periodTotals }
+  if (!opts.identity) return durable
+  const scoped = filterProjectsByIdentity(await applyClaudeIdentities(liveProjects, true), opts.identity)
+  return { ...durable, data: buildPeriodData(periodInfo.label, scoped), days: aggregateProjectsIntoDays(scoped), sessionCountCacheDays: [], carriedCostUSD: 0, unattributedCostUSD: 0, excludedGateway: { costUSD: 0, calls: 0, tokens: 0 }, liveProjects: scoped, periodTotals: undefined }
 }
 
 type PayloadProject = NonNullable<PeriodData['projects']>[number]
@@ -1941,6 +1948,8 @@ export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: 
     const branchRows = aggregateByBranch(scanProjects)
     if (branchRows.length > 0) currentData.byBranch = branchRows.slice(0, TOP_BRANCHES)
   }
+  const identities = identitySplit(scanProjects)
+  if (identities) currentData.identities = identities
 
   // Routing waste: find cheapest reliable model (≥90% 1-shot, ≥5 edits),
   // then compute how much each pricier model overpaid.

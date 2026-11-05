@@ -8,7 +8,7 @@ import { cachedProjectIdentitiesForRange } from './daily-cache.js'
 import { reportUnmatchedProjectPatterns } from './project-filter-warnings.js'
 import { getVercelGatewayApiKey } from './providers/vercel-gateway.js'
 import { BILLING_FILTER_VALUES, ROUTE_FILTER_VALUES, filterProjectsByBillingRoute } from './billing-filter.js'
-import { AGGREGATE_ONLY_PROVIDER, aggregateOnlyCostUSD, excludesAggregateOnlyProviders, parseAllSessions, filterProjectsByName, filterProjectsByDateRange, mergeProjectSplits, clearSessionCache, setInteractiveScanUI, computeCorpusFingerprint, isSessionHydrationComplete, startProgressKeepalive, stopProgressKeepalive, withLoadWindow, setExactProjectPaths } from './parser.js'
+import { AGGREGATE_ONLY_PROVIDER, aggregateOnlyCostUSD, excludesAggregateOnlyProviders, parseAllSessions, filterProjectsByIdentity, filterProjectsByName, filterProjectsByDateRange, mergeProjectSplits, clearSessionCache, setInteractiveScanUI, computeCorpusFingerprint, isSessionHydrationComplete, startProgressKeepalive, stopProgressKeepalive, withLoadWindow, setExactProjectPaths } from './parser.js'
 import { allProviderNames, getAllProviders, safeDiscoverSessions } from './providers/index.js'
 import { getProvider } from './providers/index.js'
 import { getClaudeConfigDirs, getDesktopSessionsDirs } from './providers/claude.js'
@@ -18,6 +18,7 @@ import { toDateString } from './daily-cache.js'
 import { statusSnapshotSemanticKey } from './status-snapshot-semantic.js'
 import { dateKey } from './day-aggregator.js'
 import { foldedSessionRows, sessionCacheHitPercent } from './sessions-report.js'
+import { applyClaudeIdentities, identityId, identityLabel, identitySplit, multipleIdentities, readIdentityLog, resolveIdentity, setIdentityLabel, UNATTRIBUTED } from './claude-identity.js'
 import { behavioralCallWeight } from './behavioral-weight.js'
 import { CATEGORY_LABELS, type DateRange, type ProjectSummary, type TaskCategory } from './types.js'
 import type { AppliedFix } from './act/types.js'
@@ -508,18 +509,47 @@ function assertBilling(value: string | undefined, command: string): void {
   process.exit(1)
 }
 
+async function resolveIdentityFlag(value: string | undefined, command: string): Promise<string | undefined> {
+  if (value === undefined) return undefined
+  const hash = await resolveIdentity(value)
+  if (hash) return hash
+  process.stderr.write(`codeburn ${command}: unknown Claude identity "${value}". See \`codeburn identity list\`.\n`)
+  process.exit(1)
+}
+
+async function runIdentityList(): Promise<void> {
+  await loadPricing()
+  const projects = await applyClaudeIdentities(await parseAllSessions(getDateRange('lifetime').range, 'claude'), true)
+  const log = await readIdentityLog()
+  if (!log || log.entries.length === 0) {
+    console.log('\n  No Claude account observed yet. codeburn records one each time it reads a signed-in Claude config.\n')
+    return
+  }
+  const { renderTable: renderTextTable } = await import('./text-table.js')
+  const observed = renderTextTable(
+    [{ header: 'Observed' }, { header: 'Identity' }, { header: 'Account' }, { header: 'Label' }, { header: 'Config dir' }],
+    log.entries.map(e => [e.observedAt.replace('T', ' ').slice(0, 16), identityId(e), e.accountHash, identityLabel(log, identityId(e)), e.configDir.replace(homedir(), '~')]),
+  )
+  const split = identitySplit(projects, 1) ?? []
+  const attributed = renderTextTable(
+    [{ header: 'Identity' }, { header: 'Label' }, { header: 'Sessions', right: true }, { header: 'Cost', right: true }],
+    split.map(row => [row.hash, row.hash === UNATTRIBUTED ? '' : row.label, String(row.sessions), formatCost(row.cost)]),
+  )
+  console.log(`\n${observed}\n${attributed}\nSessions go to the identity last observed before they started; ${UNATTRIBUTED} ones started before the first observation.\n`)
+}
+
 // Wrapped in a factory because commander option state is sticky across
 // parses: `codeburn serve` executes many requests in one process and must
 // build a FRESH program per request or one request's --period would leak
 // into the next one's defaults. The normal CLI path builds it exactly once.
 function buildProgram(): Command {
 
-async function runJsonReport(period: Period, provider: string, project: string[], exclude: string[]): Promise<void> {
+async function runJsonReport(period: Period, provider: string, project: string[], exclude: string[], identity?: string): Promise<void> {
   await loadPricing()
   const { range, label } = getDateRange(period)
-  const durable = await buildDurablePeriod({ range, label }, { provider, project, exclude })
+  const durable = await buildDurablePeriod({ range, label }, { provider, project, exclude, identity })
   await reportUnmatchedProjectPatterns(durable.knownProjects, project, exclude)
-  const report: ReturnType<typeof buildJsonReport> & { plan?: JsonPlanSummary; plans?: JsonPlanSummaryMap } = await attachPlanSummaries(buildJsonReport(durable.liveProjects, label, period, durable))
+  const report: ReturnType<typeof buildJsonReport> & { plan?: JsonPlanSummary; plans?: JsonPlanSummaryMap } = await attachPlanSummaries(buildJsonReport(durable.liveProjects, label, period, durable, await multipleIdentities()))
   console.log(JSON.stringify(report, null, 2))
 }
 
@@ -597,7 +627,7 @@ async function reportExcludedGatewayCost(range: DateRange, provider?: string): P
   if (note) process.stderr.write(`codeburn: ${note}\n`)
 }
 
-function buildJsonReport(projects: ProjectSummary[], period: string, periodKey: string, durable: DurablePeriod) {
+function buildJsonReport(projects: ProjectSummary[], period: string, periodKey: string, durable: DurablePeriod, withIdentities = false) {
   const sessions = projects.flatMap(p => p.sessions)
   const { code } = getCurrency()
 
@@ -641,6 +671,7 @@ function buildJsonReport(projects: ProjectSummary[], period: string, periodKey: 
       })
 
   const sessionCountBasis = durable.data.sessionCountBasis
+  const identities = withIdentities ? identitySplit(projects, 0) : undefined
   // Same durable day set as the headline, so a project's row is what selecting
   // it reports (expired transcripts included), one row per repository.
   const projectList = buildPayloadProjects(projects, durable.days, homedir(), durable.sessionCountCacheDays).map(p => ({
@@ -848,6 +879,7 @@ function buildJsonReport(projects: ProjectSummary[], period: string, periodKey: 
     },
     daily,
     projects: projectList,
+    ...(identities ? { identities: identities.map(row => ({ ...row, cost: convertCost(row.cost) })) } : {}),
     models,
     // Models with recorded usage that resolve to no pricing data right now
     // (#638). Their calls contribute $0 to every cost figure above, so
@@ -881,10 +913,16 @@ program
   .option('--format <format>', 'Output format: tui, json', 'tui')
   .option('--project <name>', 'Show only projects matching name (repeatable)', collect, [])
   .option('--exclude <name>', 'Exclude projects matching name (repeatable)', collect, [])
+  .option('--identity <label|hash>', 'JSON only: Claude usage of one identity (see `codeburn identity list`)')
   .option('--refresh <seconds>', 'Auto-refresh interval in seconds (minimum 60; 0 to disable)', parseInteger, 60)
   .action(async (opts, command) => {
     assertFormat(opts.format, ['tui', 'json'], 'report')
     assertProvider(opts.provider, 'report')
+    if (opts.identity !== undefined && opts.format !== 'json') {
+      process.stderr.write('codeburn report: --identity requires --format json\n')
+      process.exit(1)
+    }
+    const identity = await resolveIdentityFlag(opts.identity, 'report')
     let customRange: DateRange | null = null
     let daySelection: ReturnType<typeof parseDayFlag> = null
     try {
@@ -907,11 +945,11 @@ program
         const range = daySelection?.range ?? customRange!
         const label = daySelection?.label ?? formatDateRangeLabel(opts.from, opts.to)
         const periodKey = daySelection ? 'day' : 'custom'
-        const durable = await buildDurablePeriod({ range, label }, { provider: opts.provider, project: opts.project, exclude: opts.exclude })
+        const durable = await buildDurablePeriod({ range, label }, { provider: opts.provider, project: opts.project, exclude: opts.exclude, identity })
         await reportUnmatchedProjectPatterns(durable.knownProjects, opts.project, opts.exclude)
-        console.log(JSON.stringify(await attachPlanSummaries(buildJsonReport(durable.liveProjects, label, periodKey, durable)), null, 2))
+        console.log(JSON.stringify(await attachPlanSummaries(buildJsonReport(durable.liveProjects, label, periodKey, durable, await multipleIdentities())), null, 2))
       } else {
-        await runJsonReport(period, opts.provider, opts.project, opts.exclude)
+        await runJsonReport(period, opts.provider, opts.project, opts.exclude, identity)
       }
       return
     }
@@ -1049,11 +1087,19 @@ program
   })
 
 program
-  .command('identity')
-  .description('Show this device identity for sharing')
+  .command('identity [action]')
+  .description('Show this device identity for sharing; `identity list` shows the Claude accounts codeburn has observed')
   .option('--format <format>', 'Output format: text, json', 'text')
-  .action(async (opts) => {
+  .action(async (action: string | undefined, opts) => {
     assertFormat(opts.format, ['text', 'json'], 'identity')
+    if (action === 'list') {
+      await runIdentityList()
+      return
+    }
+    if (action !== undefined) {
+      process.stderr.write(`codeburn identity: unknown action "${action}". Use \`codeburn identity list\`.\n`)
+      process.exit(1)
+    }
     const id = await loadOrCreateIdentity(getSharingDir())
     const publicIdentity = { name: id.name, fingerprint: id.fingerprint }
     if (opts.format === 'json') {
@@ -1061,6 +1107,19 @@ program
       return
     }
     console.log(`\n  Name: ${publicIdentity.name}\n  Fingerprint: ${publicIdentity.fingerprint}\n`)
+  })
+
+program
+  .command('identity-label <hash> <name>')
+  .description('Name a Claude identity from `codeburn identity list` (stored locally, never synced)')
+  .action(async (hash: string, name: string) => {
+    try {
+      await setIdentityLabel(hash, name)
+    } catch (err) {
+      process.stderr.write(`codeburn identity-label: ${err instanceof Error ? err.message : String(err)}\n`)
+      process.exit(1)
+    }
+    console.log(`\n  ${hash} is now labelled "${name.trim()}".\n`)
   })
 
 program
@@ -3129,11 +3188,13 @@ program
   .option('--no-pager', 'Print the complete table directly instead of opening the interactive browser')
   .option('--project <name>', 'Show only projects matching name (repeatable)', collect, [])
   .option('--exclude <name>', 'Exclude projects matching name (repeatable)', collect, [])
+  .option('--identity <label|hash>', 'Show only Claude sessions of one identity (see `codeburn identity list`)')
   .action(async (opts) => {
     assertProvider(opts.provider, 'sessions')
     assertFormat(opts.format, ['table', 'json'], 'sessions')
     assertRoute(opts.route, 'sessions')
     assertBilling(opts.billing, 'sessions')
+    const identity = await resolveIdentityFlag(opts.identity, 'sessions')
     if (opts.why || opts.id) {
       if (!opts.why || !opts.id) {
         process.stderr.write('codeburn sessions: --why and --id go together (codeburn sessions --id <id> --why).\n')
@@ -3173,7 +3234,7 @@ program
     await reportUnmatchedProjectPatterns(parsed, opts.project, opts.exclude, () => cachedProjectIdentitiesForRange(range))
     await reportExcludedGatewayCost(range, opts.provider)
     const projects = mergeProjectSplits(filterProjectsByBillingRoute(
-      filterProjectsByName(parsed, opts.project, opts.exclude),
+      filterProjectsByName(identity ? filterProjectsByIdentity(await applyClaudeIdentities(parsed, true), identity) : parsed, opts.project, opts.exclude),
       { route: opts.route, billing: opts.billing },
     ))
     if (opts.byPr) {

@@ -8,6 +8,7 @@ import { FS_SCAN_CONCURRENCY, mapWithConcurrency, readSessionLines } from './fs-
 import { billableOutputTokens, calculateCost, calculateLocalModelSavings, getShortModelName, modelRowKey, pricingModelAt, isProxiedPath, getProxyPathsConfigHash, getModelAliasesConfigHash, getPriceOverridesConfigHash, getLocalModelSavingsConfigHash, recordedCostFallback, getModelRoute, isStandInPricedAt, findUnpricedModels, hasPriceDiscounts } from './models.js'
 import { resolveSubagentAttribution, sessionIdentity } from './sessions-report.js'
 import { applyCodexSessionNames } from './codex-session-index.js'
+import { applyClaudeIdentities, identityLogPath, observeClaudeIdentities } from './claude-identity.js'
 import { normalizeContentBlocks, flatSlice, flatString } from './content-utils.js'
 import { estimateTokensFromChars } from './token-estimate.js'
 import { discoverAllSessions, discoverAllSessionsWithFailures, getProvider } from './providers/index.js'
@@ -5800,6 +5801,17 @@ export function correlateCrossProviderPrSessions(projects: ProjectSummary[]): vo
   }
 }
 
+export function filterProjectsByIdentity(projects: ProjectSummary[], hash: string): ProjectSummary[] {
+  const filtered: ProjectSummary[] = []
+  for (const project of projects) {
+    const sessions = project.sessions.filter(session => session.identity?.hash === hash)
+    const anchors = (project.subagentAnchors ?? []).filter(anchor => anchor.identity?.hash === hash)
+    if (sessions.length === 0 && anchors.length === 0) continue
+    filtered.push(summarizeProject(project.project, project.projectPath, sessions, anchors))
+  }
+  return filtered.sort((a, b) => b.totalCostUSD - a.totalCostUSD)
+}
+
 export function filterProjectsByClaudeConfigSource(projects: ProjectSummary[], sourceId: string): ProjectSummary[] {
   const filtered: ProjectSummary[] = []
   for (const project of projects) {
@@ -6097,6 +6109,11 @@ export async function computeCorpusFingerprint(providerFilter?: string): Promise
   const resolveProvider = async (name: string): Promise<Provider | undefined> => {
     if (!providerByName.has(name)) providerByName.set(name, await getProvider(name))
     return providerByName.get(name)
+  }
+  if (!providerFilter || providerFilter === 'all' || providerFilter === 'claude') {
+    await observeClaudeIdentities().catch(() => {})
+    const log = await fingerprintFile(identityLogPath())
+    entries.push(`identity-log:${log ? `${log.mtimeMs}|${log.sizeBytes}` : '-'}`)
   }
   // Non-discovery provider env vars (e.g. CODEBURN_CURSOR_MAX_BUBBLES,
   // KIMI_MODEL_NAME — src/doctor.ts's NON_DISCOVERY_ENV_VARS) and a
@@ -6426,7 +6443,7 @@ export function parseAllSessions(
   providerFilter?: string,
   opts?: { includeAggregateOnly?: boolean },
 ): Promise<ProjectSummary[]> {
-  const parsed = parseAllSessionsUnfiltered(dateRange, providerFilter).then(applyCodexSessionNames)
+  const parsed = parseAllSessionsUnfiltered(dateRange, providerFilter).then(applyCodexSessionNames).then(projects => applyClaudeIdentities(projects))
   if (opts?.includeAggregateOnly === true) return parsed
   return parsed.then(projects => excludeAggregateOnlyProjects(projects, providerFilter))
 }

@@ -384,6 +384,9 @@ export type MenubarPayload = {
       attributedCost?: number
       unattributedCost?: number
     }
+    // Claude spend per account (src/claude-identity.ts). Present only when the
+    // period holds two or more identities.
+    identities?: Array<{ hash: string; label: string; cost: number; calls: number; sessions: number }>
   }
   optimize: OptimizeBlock
   history: {
@@ -724,6 +727,9 @@ export type SessionRow = {
   // the row's totals. Absent when none (and from older CLIs).
   subagents?: SessionRow[]
   retained?: { since: string }
+  // The Claude account active when the session started; only when the period
+  // holds two or more.
+  identity?: { hash: string; label: string }
 }
 
 // ————— src/session-contributions.ts (drill-through, `sessions --contributions`) —————

@@ -12,6 +12,7 @@ import { parseAllSessions, excludeAggregateOnlyProjects, filterProjectsByDateRan
 import { findUnpricedModels, isExpectedFreeModel, loadPricing } from './models.js'
 import { aggregateModelTotals } from './model-breakdown.js'
 import { buildDurableOverviewFromNormalizedIndex, buildDurablePeriod, hydrateDailyCacheFromNormalizedProjects, type ExcludedGatewayTotals } from './usage-aggregator.js'
+import { identitySplit } from './claude-identity.js'
 import { loadDailyCache, type DailyCache } from './daily-cache.js'
 import { exitAfterCacheCleanup } from './session-cache.js'
 import { getAllProviders, safeDiscoverSessions } from './providers/index.js'
@@ -1142,6 +1143,21 @@ function ClaudeAgentTypes({ projects, pw, bw }: { projects: ProjectSummary[]; pw
   )
 }
 
+function IdentityBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; pw: number; bw: number }) {
+  const rows = identitySplit(projects)
+  if (!rows) return null
+  const headers = ['sessions', 'cost']
+  const metricWidths = getMetricWidths(headers, rows.map(row => [String(row.sessions), formatCost(row.cost)]))
+  return (
+    <Panel title="By Claude Account" color={PANEL_COLORS.project} width={pw}>
+      <DataRow panelWidth={pw} barWidth={bw} label="" metrics={headers.map(text => ({ text, dimColor: true }))} metricWidths={metricWidths} />
+      {rows.map(row => (
+        <DataRow key={row.hash} panelWidth={pw} barWidth={bw} label={row.label} bar={{ value: row.cost, max: rows[0]!.cost }} metrics={[{ text: String(row.sessions) }, { text: formatCost(row.cost), color: GOLD }]} metricWidths={metricWidths} />
+      ))}
+    </Panel>
+  )
+}
+
 /// Workflow-intelligence figures for the compact Workflow panel. Derived from
 /// the already-parsed projects the other panels render (no re-parse), mirroring
 /// the same helpers `optimize` and the report use so the numbers agree.
@@ -1506,6 +1522,7 @@ function DashboardContent({ projects, period, columns, maxContentWidth, activePr
       <Box flexWrap="wrap" width={dashWidth}>
         <DailyActivity projects={scrollableDailyHistory ? (dailyHistoryProjects ?? []) : projects} days={days} pw={panelWidth} bw={barWidth} scrollable={scrollableDailyHistory} cursor={dailyHistoryCursor} loading={dailyHistoryLoading} />
         <ProjectBreakdown projects={projects} pw={panelWidth} bw={barWidth} budgets={budgets} rows={getProjectBreakdownRowLimit(period, dayMode)} />
+        <IdentityBreakdown projects={projects} pw={panelWidth} bw={barWidth} />
         <ActivityBreakdown projects={projects} pw={panelWidth} bw={barWidth} />
         <ModelBreakdown projects={projects} pw={panelWidth} bw={barWidth} />
         {isCursor

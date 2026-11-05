@@ -375,6 +375,9 @@ export type SessionSummary = {
   /// independently of this field.
   lineage?: SessionLineage
   retained?: { since: string }
+  /// Claude only, set when sessions are read and the identity log holds two
+  /// or more accounts: the account active when the session started.
+  identity?: { hash: string; label: string }
 }
 
 export type ProjectSummary = {

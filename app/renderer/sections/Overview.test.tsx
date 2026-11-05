@@ -423,6 +423,20 @@ describe('Overview', () => {
     expect(screen.queryByText(/across \d+ fix/)).not.toBeInTheDocument()
   })
 
+  it('shows the Claude account card only for two or more accounts', async () => {
+    const payload = makePayload(new Date())
+    const { rerender } = render(<OverviewContent period="30days" provider="all" overview={polled(payload)} />)
+    expect(screen.queryByText('Claude accounts')).not.toBeInTheDocument()
+    payload.current.identities = [
+      { hash: 'a1b2c3d4e5f6', label: 'Acme', cost: 12, calls: 30, sessions: 4 },
+      { hash: 'unattributed', label: 'unattributed', cost: 3, calls: 5, sessions: 1 },
+    ]
+    rerender(<OverviewContent period="30days" provider="all" overview={polled(payload)} />)
+    const card = screen.getByText('Claude accounts').closest('.ov-card')!
+    expect(card).toHaveTextContent('Acme$12.004 sessions30 calls')
+    expect(card).toHaveTextContent('unattributed$3.001 session5 calls')
+  })
+
   it('renders when the act report carries no totals', async () => {
     const now = new Date()
     getOverview.mockResolvedValue(makePayload(now))

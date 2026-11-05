@@ -102,7 +102,7 @@ export function gatewayIncludedInTotals(): boolean {
   return includeGatewayInTotals
 }
 
-function getConfigDir(): string {
+export function getConfigDir(): string {
   return join(homedir(), '.config', 'codeburn')
 }
 

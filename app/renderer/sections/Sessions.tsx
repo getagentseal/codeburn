@@ -190,6 +190,7 @@ export function Sessions({
   }
   const [grouped, setGrouped] = useState(true)
   const [query, setQuery] = useState('')
+  const [identity, setIdentity] = useState('all')
   const investigating = filtersActive(filters)
   const filterKey = filtersToKey(filters)
   const lastOpenerRef = useRef<HTMLButtonElement | null>(null)
@@ -231,17 +232,19 @@ export function Sessions({
   // The search box is a view-level narrowing on top of the selection (it is
   // not part of the investigation state): it filters the list AND the summary
   // totals, exactly like the pre-drill sessions list did.
+  const identities = useMemo(() => [...new Map(rows.flatMap(row => row.identity ? [[row.identity.hash, row.identity] as const] : [])).values()], [rows])
   const q = query.trim().toLowerCase()
   const searched = useMemo(() => {
-    if (q === '') return selection.included
-    return selection.included.filter(({ row }) => [
+    const scoped = identity === 'all' || identities.length < 2 ? selection.included : selection.included.filter(({ row }) => row.identity?.hash === identity)
+    if (q === '') return scoped
+    return scoped.filter(({ row }) => [
       row.title ?? '',
       row.project,
       row.sessionId,
       row.models.join(' '),
       ...(row.subagents ?? []).flatMap(child => [child.title ?? '', child.sessionId]),
     ].some(value => value.toLowerCase().includes(q)))
-  }, [selection, q])
+  }, [selection, q, identity, identities.length])
 
   // "Your usual" for the drawer's lead sentence: the median over the rows the
   // list is actually showing. Under five rows a median is noise, so the drawer
@@ -387,6 +390,15 @@ export function Sessions({
     <div className="sessions-list-view">
       {report.error && <StaleBanner error={report.error} />}
       <ProviderFilterRow provider={provider} detectedProviders={detectedProviders} onProviderChange={onProviderChange} />
+      {identities.length > 1 && (
+        <div className="seg session-provider-filter" role="group" aria-label={t('sessions.identityFilter.ariaLabel')}>
+          {[{ hash: 'all', label: t('sessions.providerFilter.all') }, ...identities].map(entry => (
+            <button key={entry.hash} type="button" className={identity === entry.hash ? 'on' : undefined} aria-pressed={identity === entry.hash} onClick={() => setIdentity(entry.hash)}>
+              {entry.label}
+            </button>
+          ))}
+        </div>
+      )}
       {investigating && <FilterChips filters={filters} onChange={next => onFiltersChange?.(next)} />}
       <div className="sessions-toolbar">
         <input

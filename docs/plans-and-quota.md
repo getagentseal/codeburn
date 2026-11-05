@@ -43,3 +43,24 @@ Providers you are not signed in to are listed with `available: false` and no err
 }
 ```
 
+
+## Claude accounts
+
+If you switch between Claude identities on one machine (a personal plan and a work login, or one login moving between a personal and a team organization), codeburn can split Claude usage by the one that was signed in. An identity is an organization, or the account when Claude reports no organization.
+
+Claude Code transcripts do not record which account wrote them. What exists is a live snapshot: the account currently signed in to each Claude config directory (`oauthAccount` in its `.claude.json`). So every time codeburn reads sessions (CLI, menubar or desktop refresh), it reads that snapshot and appends a line to `~/.config/codeburn/identity-log.v1.json` when the account or organization differs from the last line for that config directory. The line holds the first 12 hex characters of the sha256 of the account and organization ids, the organization name as the default label, the time, and the config directory. Raw ids, emails and tokens are never written, and the log never leaves the machine: sync and sharing do not send it.
+
+A Claude session belongs to the identity of the last observation at or before its first message, in its own config directory. That is as precise as the observations:
+
+- A switch is dated to when codeburn next observed it, not to the moment you logged in. Sessions started in that gap go to the identity observed before.
+- Sessions started before codeburn first observed an identity are `unattributed`, and stay that way.
+- A config directory without a signed-in account (an API key user) records nothing, so its sessions stay with the last identity observed there, or `unattributed`.
+
+With one identity nothing changes anywhere. Once codeburn has seen two or more, `codeburn report --format json` carries `identities`, `codeburn sessions --format json` an `identity` per row and `codeburn export` a last `identity` column, whatever the period or filter. The report dashboard panel and the desktop Overview card and Sessions filter appear when the period itself holds two or more.
+
+```bash
+codeburn identity list                        # observations, and sessions and cost per identity
+codeburn identity-label 3f2a9c1d0b7e work     # rename an identity locally
+codeburn report --format json --identity work # one identity only (label or hash)
+codeburn sessions --identity unattributed
+```

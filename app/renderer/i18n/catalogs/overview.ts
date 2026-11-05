@@ -96,6 +96,7 @@ export const overview: SectionCatalog = {
     'overview.activities.viewSessions': 'View {name} sessions',
     'overview.activities.oneShotSuffix': 'one-shot',
     'overview.activities.title': 'Top activities',
+    'overview.identities.title': 'Claude accounts',
 
     'overview.snapshot.earlier': 'earlier',
     'overview.snapshot.at': 'at {time}',
@@ -241,6 +242,7 @@ export const overview: SectionCatalog = {
     'overview.activities.viewSessions': 'Voir les sessions {name}',
     'overview.activities.oneShotSuffix': 'réussite immédiate',
     'overview.activities.title': 'Principales activités',
+    'overview.identities.title': 'Comptes Claude',
 
     'overview.snapshot.earlier': 'plus tôt',
     'overview.snapshot.at': 'à {time}',
@@ -386,6 +388,7 @@ export const overview: SectionCatalog = {
     'overview.activities.viewSessions': '{name}のセッションを表示',
     'overview.activities.oneShotSuffix': 'ワンショット',
     'overview.activities.title': '主なアクティビティ',
+    'overview.identities.title': 'Claude アカウント',
 
     'overview.snapshot.earlier': '以前',
     'overview.snapshot.at': '{time}',
@@ -531,6 +534,7 @@ export const overview: SectionCatalog = {
     'overview.activities.viewSessions': '{name} 세션 보기',
     'overview.activities.oneShotSuffix': '원샷',
     'overview.activities.title': '주요 활동',
+    'overview.identities.title': 'Claude 계정',
 
     'overview.snapshot.earlier': '이전',
     'overview.snapshot.at': '{time}',
@@ -676,6 +680,7 @@ export const overview: SectionCatalog = {
     'overview.activities.viewSessions': '查看 {name} 的会话',
     'overview.activities.oneShotSuffix': '一次成功',
     'overview.activities.title': '主要活动',
+    'overview.identities.title': 'Claude 账户',
 
     'overview.snapshot.earlier': '早些时候',
     'overview.snapshot.at': '{time}',
@@ -821,6 +826,7 @@ export const overview: SectionCatalog = {
     'overview.activities.viewSessions': '查看 {name} 的工作階段',
     'overview.activities.oneShotSuffix': '一次成功',
     'overview.activities.title': '主要活動',
+    'overview.identities.title': 'Claude 帳戶',
 
     'overview.snapshot.earlier': '早些時候',
     'overview.snapshot.at': '{time}',

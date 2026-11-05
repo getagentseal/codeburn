@@ -17,8 +17,9 @@ export function sanitizeForSharing(payload: MenubarPayload): MenubarPayload {
   // customer names and feature codenames as readily as a project name does, so
   // they leave with the project and session rows rather than travelling verbatim.
   // PR rows carry the repository owner and name in both the full URL and the
-  // `owner/repo#123` label, so they travel with them.
-  const { byBranch: _byBranch, pullRequests: _pullRequests, ...current } = payload.current
+  // `owner/repo#123` label, so they travel with them. Claude account rows stay
+  // on this machine.
+  const { byBranch: _byBranch, pullRequests: _pullRequests, identities: _identities, ...current } = payload.current
   return {
     ...rest,
     current: {
