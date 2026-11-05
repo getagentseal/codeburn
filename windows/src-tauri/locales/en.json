@@ -46,5 +46,9 @@
   "Enjoying CodeBurn?": "Enjoying CodeBurn?",
   "If it has been helping you, a star on GitHub would mean a lot. It keeps the project free and open.": "If it has been helping you, a star on GitHub would mean a lot. It keeps the project free and open.",
   "Not now": "Not now",
-  "Star on GitHub": "Star on GitHub"
+  "Star on GitHub": "Star on GitHub",
+  "%1$@ · %2$@ at %3$lld%%": "%1$@ · %2$@ at %3$lld%%",
+  "%1$@ · %2$@ limit reached": "%1$@ · %2$@ limit reached",
+  "%1$@ %2$@ runs out at %3$@": "%1$@ %2$@ runs out at %3$@",
+  "At this pace. Resets %@.": "At this pace. Resets %@."
 }

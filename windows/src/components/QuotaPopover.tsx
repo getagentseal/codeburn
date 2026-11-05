@@ -1,3 +1,4 @@
+import { clockLabel } from '../lib/dates'
 import { displayLabel, pct, resetsIn, severity, type QuotaSummary, type QuotaWindow } from '../lib/quota'
 
 /// Port of QuotaDetailPopover in mac/Sources/CodeBurnMenubar/Views/AgentTabStrip.swift: the
@@ -40,7 +41,8 @@ export function QuotaPopover({ quota }: { quota: QuotaSummary }) {
 
 function QuotaRow({ window }: { window: QuotaWindow }) {
   const percent = pct(window.usedPct)
-  const resets = resetsIn(window.resetsAt)
+  // A window that runs out before it resets shows that time instead: it is the one that stops work.
+  const resets = window.runsOutAt ? `out ${clockLabel(new Date(window.runsOutAt))}` : resetsIn(window.resetsAt)
   return (
     <div className="quota-row">
       <span className="quota-row-label">{displayLabel(window.label)}</span>

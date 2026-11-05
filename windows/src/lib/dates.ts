@@ -79,6 +79,12 @@ export function relativeFuture(target: Date, now = new Date()): string {
   return `in ${Math.ceil(secs / 86_400)}d`
 }
 
+/// "15:40" when `target` falls today, "Tue 09:10" otherwise.
+export function clockLabel(target: Date, now = new Date()): string {
+  const time = `${pad2(target.getHours())}:${pad2(target.getMinutes())}`
+  return startOfDay(target).getTime() === startOfDay(now).getTime() ? time : `${DAY_NAMES[target.getDay()]} ${time}`
+}
+
 /// "just now", "2 min ago", "1 h ago".
 export function relativePast(target: Date, now = new Date()): string {
   const secs = Math.max(0, (now.getTime() - target.getTime()) / 1000)

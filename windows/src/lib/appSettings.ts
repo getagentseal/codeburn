@@ -99,6 +99,10 @@ export const TERMINALS: Array<{ id: TerminalId; label: string }> = [
   { id: 'commandPrompt', label: 'Command Prompt' },
 ]
 
+/// QuotaCrossingPreference.warningPercentOptions. Rust reads the same two keys before it posts
+/// a quota notice (quota_crossing.rs).
+export const QUOTA_WARNING_PERCENTS = [70, 80, 90]
+
 export type AppSettings = {
   metric: DisplayMetric
   menubarPeriod: MenubarPeriod
@@ -109,6 +113,8 @@ export type AppSettings = {
   usageRefreshSeconds: number
   quotaCadenceSeconds: number
   terminal: TerminalId
+  quotaCrossingAlerts: boolean
+  quotaWarningPercent: number
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -123,6 +129,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   usageRefreshSeconds: -1,
   quotaCadenceSeconds: 120,
   terminal: 'windowsTerminal',
+  quotaCrossingAlerts: true,
+  quotaWarningPercent: 80,
 }
 
 function oneOf<T extends string>(value: unknown, allowed: readonly T[], fallback: T): T {
@@ -146,6 +154,8 @@ export function parseSettings(raw: Record<string, unknown>): AppSettings {
     usageRefreshSeconds: oneOfNumber(raw.usageRefreshSeconds, USAGE_CADENCES.map(c => c.id), DEFAULT_SETTINGS.usageRefreshSeconds),
     quotaCadenceSeconds: oneOfNumber(raw.quotaCadenceSeconds, QUOTA_CADENCES.map(c => c.id), DEFAULT_SETTINGS.quotaCadenceSeconds),
     terminal: oneOf(raw.terminal, TERMINALS.map(t => t.id), DEFAULT_SETTINGS.terminal),
+    quotaCrossingAlerts: typeof raw.quotaCrossingAlerts === 'boolean' ? raw.quotaCrossingAlerts : DEFAULT_SETTINGS.quotaCrossingAlerts,
+    quotaWarningPercent: oneOfNumber(raw.quotaWarningPercent, QUOTA_WARNING_PERCENTS, DEFAULT_SETTINGS.quotaWarningPercent),
   }
 }
 

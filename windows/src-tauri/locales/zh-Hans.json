@@ -46,5 +46,9 @@
   "Enjoying CodeBurn?": "喜欢 CodeBurn 吗？",
   "If it has been helping you, a star on GitHub would mean a lot. It keeps the project free and open.": "如果它对你有帮助，在 GitHub 上点个 Star 对我们意义重大。这能让项目保持免费和开源。",
   "Not now": "以后再说",
-  "Star on GitHub": "在 GitHub 上点 Star"
+  "Star on GitHub": "在 GitHub 上点 Star",
+  "%1$@ · %2$@ at %3$lld%%": "%1$@ · %2$@ 已达 %3$lld%%",
+  "%1$@ · %2$@ limit reached": "%1$@ · %2$@ 已达上限",
+  "%1$@ %2$@ runs out at %3$@": "%1$@ %2$@ 将在 %3$@ 用尽",
+  "At this pace. Resets %@.": "按此速度。%@ 重置。"
 }
