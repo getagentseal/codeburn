@@ -245,11 +245,12 @@ function ActionableFindingRows({ findings, byClass }: { findings: OptimizeFindin
         // Findings arrive class-sorted from the CLI, so a header goes in
         // wherever the class changes.
         const showHeader = finding.class !== findings[i - 1]?.class
+        const hasFigure = finding.tokensSaved > 0 || finding.estimatedSavingsUSD > 0
         return (
           <Fragment key={finding.id}>
             {showHeader && (
               <div className="opt-group">
-                {t('spend.optimize.class.summary', {
+                {t(byClass[finding.class].tokensSaved > 0 || byClass[finding.class].savingsUSD > 0 ? 'spend.optimize.class.summary' : 'spend.optimize.class.summaryNoFigure', {
                   header: classHeader(finding.class),
                   tokens: formatCompact(byClass[finding.class].tokensSaved),
                   savings: formatUsd(byClass[finding.class].savingsUSD),
@@ -273,8 +274,8 @@ function ActionableFindingRows({ findings, byClass }: { findings: OptimizeFindin
                   <span className="opt-trend opt-trend-improving">{t('spend.optimize.trend.improving')}<Icon name="arrow-down" className="opt-impact-mark" /></span>
                 )}
               </span>
-              <span className="opt-finding-savings">{formatUsd(finding.estimatedSavingsUSD)}</span>
-              <span className="opt-finding-tokens">{t('spend.optimize.finding.tokensBasis', { tokens: formatCompact(finding.tokensSaved), basis: finding.basis })}</span>
+              <span className="opt-finding-savings">{hasFigure && formatUsd(finding.estimatedSavingsUSD)}</span>
+              <span className="opt-finding-tokens">{hasFigure && t('spend.optimize.finding.tokensBasis', { tokens: formatCompact(finding.tokensSaved), basis: finding.basis })}</span>
               <span className="opt-finding-chevron" aria-hidden="true"><Icon name="chevron-right" /></span>
             </button>
             {expanded && (

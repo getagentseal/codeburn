@@ -179,6 +179,18 @@ describe('Optimize', () => {
     ])
   })
 
+  it('drops the figure from a group header only when the group has none', async () => {
+    const report = makeOptimizeReport()
+    report.summary.byClass.keep = { tokensSaved: 0, savingsUSD: 0, count: 1 }
+    getOptimizeReport.mockResolvedValue(report)
+    render(<Optimize period="30days" provider="all" />)
+
+    await screen.findByText('Opus is doing your small talk')
+    const groups = [...document.querySelectorAll('.opt-group')].map(g => g.textContent)
+    expect(groups[0]).toBe('Fix now (apply-able) · 18.2K tokens · $9.10 · 1 finding')
+    expect(groups[2]).toBe('FYI · 1 finding')
+  })
+
   it('reports taking a fix as a name-only optimize_apply event', async () => {
     render(<Optimize period="30days" provider="all" />)
     fireEvent.click(await screen.findByRole('button', { name: /Opus is doing your small talk/ }))
@@ -216,6 +228,23 @@ describe('Optimize', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Copy' }))
     await waitFor(() => expect(writeText).toHaveBeenCalledWith('Use Sonnet for routine questions.'))
     expect(screen.getByRole('button', { name: 'Copied' })).toBeInTheDocument()
+  })
+
+  it('omits the figures of a finding without savings and keeps them on the rest', async () => {
+    const report = makeOptimizeReport()
+    report.findings.push({
+      id: 'idle-compaction-blocked', title: 'Auto-compact window blocks idle compaction', explanation: 'why',
+      severity: 'low', trend: null, tokensSaved: 0, estimatedSavingsUSD: 0, class: 'nudge', basis: 'estimated',
+      fix: { type: 'paste', label: 'Lower the threshold', text: 'x', destination: 'manual' },
+    })
+    getOptimizeReport.mockResolvedValue(report)
+    render(<Optimize period="30days" provider="all" />)
+
+    const row = await screen.findByRole('button', { name: /Auto-compact window blocks idle compaction/ })
+    expect(row.querySelector('.opt-finding-savings')).toBeEmptyDOMElement()
+    expect(row.querySelector('.opt-finding-tokens')).toBeEmptyDOMElement()
+    expect(screen.getByText('$9.10')).toHaveClass('opt-finding-savings')
+    expect(screen.getByText('18.2K tokens · estimated')).toBeInTheDocument()
   })
 
   it('keeps only one finding expanded and renders file-content path and content', async () => {

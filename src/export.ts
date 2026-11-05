@@ -7,7 +7,7 @@ import { dateKey } from './day-aggregator.js'
 import { behavioralCallWeight, behavioralTurnCount } from './behavioral-weight.js'
 import { aggregateModelEfficiency } from './model-efficiency.js'
 import { callBillableOutputTokens, costBasisShares, countSessions, sessionModelBillableOutputTokens, type CostBasisShares } from './session-output.js'
-import { findUnpricedModels } from './models.js'
+import { findUnpricedModels, hasPriceDiscounts } from './models.js'
 
 function escCsv(s: string): string {
   const sanitized = /^[\t\r=+\-@]/.test(s) ? `'${s}` : s
@@ -172,6 +172,7 @@ function buildRecordRows(projects: ProjectSummary[]): Row[] {
             estimated: call.isEstimated ? true : undefined,
             unpriced: isUnpriced(call.model, call.costUSD) ? true : undefined,
             retained: session.retained ? true : undefined,
+            ...(hasPriceDiscounts() ? { listCost: call.listCostUSD !== undefined ? convertCost(call.listCostUSD) : undefined } : {}),
           })
         }
       }
@@ -403,6 +404,7 @@ function buildReadme(periods: PeriodExport[]): string {
     '                        (covered by a subscription, $0) or unpriced (no known price, $0).',
     '                        retained marks a session kept from the cache after its tool removed the transcript;',
     '                        sessions.csv carries the same column.',
+    '                        listCost (only with price-discount set) is the list-price cost of a discounted call.',
     '  projects.csv          Spend per project folder for the selected detail period.',
     '  sessions.csv          One row per session for the selected detail period.',
     '  tools.csv             Tool invocations and share for the selected detail period.',

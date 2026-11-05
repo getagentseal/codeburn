@@ -32,6 +32,7 @@ export type CodeburnConfig = {
   modelAliases?: Record<string, string>
   // Rates are stored as USD per 1,000,000 tokens; models.ts converts them to per-token ModelCosts.
   priceOverrides?: Record<string, { input: number; output: number; cacheRead?: number; cacheCreation?: number }>
+  discounts?: Record<string, number>
   // Extra Claude config directories to aggregate usage across (e.g. work /
   // personal accounts). Honored by getClaudeConfigDirs() below the
   // CLAUDE_CONFIG_DIRS/CLAUDE_CONFIG_DIR env vars. Lets the macOS menubar (a

@@ -187,6 +187,13 @@ const DEFER_THRESHOLD_DEFAULT_PERCENT = 10
 const DEFER_THRESHOLD_MAX_PERCENT = 100
 const DEFER_THRESHOLD_MIN_TOKENS_PER_SESSION = 5_000
 const DEFER_THRESHOLD_MEDIUM_IMPACT_TOKENS = 200_000
+// Idle compaction only fires once the context reaches this threshold, so a window at or below it blocks it: https://code.claude.com/docs/en/settings-reference.md#idlecompaction
+const IDLE_COMPACT_DEFAULT_MIN_TOKENS = 200_000
+const IDLE_COMPACT_FLOOR_TOKENS = 100_000
+const IDLE_COMPACTION_MIN_VERSION = '2.1.290'
+const AUTO_COMPACT_WINDOW_MAX_TOKENS = 1_000_000
+const AUTO_COMPACT_WINDOW_VAR = 'CLAUDE_CODE_AUTO_COMPACT_WINDOW'
+const IDLE_COMPACT_MIN_TOKENS_VAR = 'CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS'
 // "recurring-context": the same block opening session after session. 1.5 KB
 // is roughly 400 tokens at BASH_TOKENS_PER_CHAR — below that a repeated
 // opener costs too little to be worth a habit change, and five sessions is
@@ -381,6 +388,7 @@ export type FindingId =
   | 'recurring-context'
   | 'fast-mode-background'
   | 'long-context-premium'
+  | 'idle-compaction-blocked'
 
 /// How a finding is meant to be acted on:
 /// - `fix`   CodeBurn can write the change itself (`codeburn optimize --apply`)
@@ -423,6 +431,7 @@ export const FINDING_CLASS: Record<FindingId, FindingClass> = {
   'recurring-context': 'nudge',
   'fast-mode-background': 'nudge',  // some runs pay for speed on purpose
   'long-context-premium': 'keep',   // the context may be needed
+  'idle-compaction-blocked': 'nudge',
 }
 
 /// Ids whose plan is built from the `apply` payload: without it the plan
@@ -470,6 +479,7 @@ export const FINDING_BASIS: Record<FindingId, FindingBasis> = {
   'recurring-context': 'estimated',        // block chars x BASH_TOKENS_PER_CHAR x repeats
   'fast-mode-background': 'measured',     // priced calls, fast minus standard
   'long-context-premium': 'measured',     // priced calls, tier minus base rates
+  'idle-compaction-blocked': 'estimated',  // config conflict, no tokens counted
 }
 
 /// Scope label for a setting that lives in ~/.zshrc / ~/.bashrc. The MCP
@@ -542,7 +552,8 @@ export function classTotals(findings: WasteFinding[], costRate: number): Record<
 export function classHeaderLine(cls: FindingClass, totals: ClassTotals, costRate: number): string {
   const cost = costRate > 0 ? ` (~${formatCost(totals.savingsUSD)})` : ''
   const suffix = cls === 'fix' ? ' — codeburn optimize --apply' : ''
-  return `${CLASS_HEADERS[cls]} · ~${formatTokens(totals.tokensSaved)} tokens${cost} · ${totals.count} finding${totals.count === 1 ? '' : 's'}${suffix}`
+  const figure = totals.tokensSaved > 0 || totals.savingsUSD > 0 ? ` · ~${formatTokens(totals.tokensSaved)} tokens${cost}` : ''
+  return `${CLASS_HEADERS[cls]}${figure} · ${totals.count} finding${totals.count === 1 ? '' : 's'}${suffix}`
 }
 
 // Cause taxonomy for defer-enable plans (mcp-deferral-off findings).
@@ -2662,11 +2673,7 @@ type DeferralEnvHit = {
 // effect. Shell profiles come last: settings "env" entries override the
 // inherited environment. `homeDir` is injectable for tests (PlanContext
 // style in src/act/plans.ts).
-export function findDeferralEnvSetting(
-  name: string,
-  projectCwds: Iterable<string>,
-  homeDir = homedir(),
-): DeferralEnvHit | null {
+function claudeSettingsScopes(projectCwds: Iterable<string>, homeDir: string): Array<{ scope: string; path: string }> {
   const scopes: Array<{ scope: string; path: string }> = []
   for (const cwd of projectCwds) {
     scopes.push({ scope: 'project local settings', path: join(cwd, '.claude', 'settings.local.json') })
@@ -2674,7 +2681,28 @@ export function findDeferralEnvSetting(
   }
   scopes.push({ scope: 'user local settings', path: join(homeDir, '.claude', 'settings.local.json') })
   scopes.push({ scope: 'user settings', path: join(homeDir, '.claude', 'settings.json') })
-  for (const { scope, path } of scopes) {
+  return scopes
+}
+
+function findClaudeSetting(
+  key: string,
+  projectCwds: Iterable<string>,
+  homeDir: string,
+): { value: unknown; scope: string; path: string } | null {
+  for (const { scope, path } of claudeSettingsScopes(projectCwds, homeDir)) {
+    if (!existsSync(path)) continue
+    const value = readJsonFile(path)?.[key]
+    if (value !== undefined) return { value, scope, path }
+  }
+  return null
+}
+
+export function findDeferralEnvSetting(
+  name: string,
+  projectCwds: Iterable<string>,
+  homeDir = homedir(),
+): DeferralEnvHit | null {
+  for (const { scope, path } of claudeSettingsScopes(projectCwds, homeDir)) {
     if (!existsSync(path)) continue
     const config = readJsonFile(path)
     const env = config?.env as Record<string, unknown> | undefined
@@ -3128,6 +3156,75 @@ export function detectMcpDeferThreshold(
         ? `Remove the ${ENABLE_TOOL_SEARCH_VAR}=${setting.value} override from ${setting.path}; the default auto threshold (${DEFER_THRESHOLD_DEFAULT_PERCENT}%) already defers this volume of tool definitions.`
         : `In ${setting.path}, change ${ENABLE_TOOL_SEARCH_VAR}=${setting.value} to ${ENABLE_TOOL_SEARCH_VAR}=auto:${recommendedPercent} so ~${formatTokens(defsPerSession)} tokens of MCP tool definitions per session are deferred instead of loaded upfront.`,
     },
+  }
+}
+
+function parseAutoCompactWindow(value: unknown): number | null {
+  const match = /^(\d+)(k?)$/i.exec(String(value).trim())
+  const tokens = match ? Number(match[1]) * (match[2] ? 1000 : 1) : NaN
+  return tokens >= IDLE_COMPACT_FLOOR_TOKENS && tokens <= AUTO_COMPACT_WINDOW_MAX_TOKENS ? tokens : null
+}
+
+export function detectIdleCompactionBlocked(
+  projects: ProjectSummary[],
+  projectCwds: Set<string>,
+  apiCalls: ApiCallMeta[],
+  homeDir = homedir(),
+): WasteFinding | null {
+  const onOneHourCache = projects.some(p => p.sessions.some(s => s.turns.some(t =>
+    t.assistantCalls.some(c => c.provider === 'claude' && (c.cacheCreationOneHourTokens ?? 0) > 0))))
+  if (!onOneHourCache) return null
+  if (!apiCalls.some(c => parseVersion(c.version) && !versionPredates(c.version, IDLE_COMPACTION_MIN_VERSION))) return null
+  if (findClaudeSetting('idleCompaction', projectCwds, homeDir)?.value === false) return null
+  if (findClaudeSetting('autoCompactEnabled', projectCwds, homeDir)?.value === false) return null
+  const disableAuto = findDeferralEnvSetting('DISABLE_AUTO_COMPACT', projectCwds, homeDir)
+  if (disableAuto && !isEnvValueFalse(disableAuto.value)) return null
+
+  const envWindow = findDeferralEnvSetting(AUTO_COMPACT_WINDOW_VAR, projectCwds, homeDir)
+  const keyWindow = findClaudeSetting('autoCompactWindow', projectCwds, homeDir)
+  const fromEnv = envWindow !== null && parseAutoCompactWindow(envWindow.value) !== null
+  const windowHit = fromEnv ? envWindow : keyWindow
+  const window = windowHit ? parseAutoCompactWindow(windowHit.value) : null
+  if (!windowHit || window === null) return null
+
+  const thresholdHit = findDeferralEnvSetting(IDLE_COMPACT_MIN_TOKENS_VAR, projectCwds, homeDir)
+  const thresholdSet = thresholdHit !== null && /^\d+$/.test(thresholdHit.value) && Number(thresholdHit.value) > 0
+  const threshold = thresholdSet ? Math.max(IDLE_COMPACT_FLOOR_TOKENS, Number(thresholdHit.value)) : IDLE_COMPACT_DEFAULT_MIN_TOKENS
+  if (window > threshold) return null
+
+  const windowSetting = fromEnv ? `${AUTO_COMPACT_WINDOW_VAR}=${windowHit.value}` : `"autoCompactWindow": ${windowHit.value}`
+  const thresholdWhere = thresholdSet
+    ? `${IDLE_COMPACT_MIN_TOKENS_VAR}=${thresholdHit.value} in ${thresholdHit.scope} (${shortHomePath(thresholdHit.path)})`
+    : 'its default'
+  const thresholdFile = thresholdSet && thresholdHit.scope !== SHELL_PROFILE_SCOPE ? shortHomePath(thresholdHit.path) : '~/.claude/settings.json'
+  const lowerThreshold = `"${IDLE_COMPACT_MIN_TOKENS_VAR}": "${IDLE_COMPACT_FLOOR_TOKENS}"`
+
+  return {
+    id: 'idle-compaction-blocked',
+    title: 'Auto-compact window blocks idle compaction',
+    explanation:
+      `${windowSetting} in ${windowHit.scope} (${shortHomePath(windowHit.path)}) compacts at ${formatTokens(window)} tokens, ` +
+      `at or below the ${formatTokens(threshold)}-token idle compaction threshold (${thresholdWhere}). ` +
+      `Idle compaction (on by default since Claude Code v${IDLE_COMPACTION_MIN_VERSION}) only runs once the context reaches that threshold, so it never runs: ` +
+      `a conversation left for about an hour is not compacted before its prompt cache expires, and the next message writes the whole context to the cache again. ` +
+      `Unsetting the window does not help on a 200K-context model, which compacts before 200K too; \`/autocompact\` with no argument shows the window in use.`,
+    impact: 'low',
+    tokensSaved: 0,
+    fix: window > IDLE_COMPACT_FLOOR_TOKENS
+      ? {
+        type: 'paste',
+        destination: 'manual',
+        label: `Lower the idle compaction threshold below the window, in the "env" block of ${thresholdFile}:`,
+        text: lowerThreshold,
+      }
+      : {
+        type: 'paste',
+        destination: 'manual',
+        label: `The window is at its ${formatTokens(IDLE_COMPACT_FLOOR_TOKENS)} minimum, so no threshold can sit below it. Raise the window in ${shortHomePath(windowHit.path)} and lower the threshold:`,
+        text: fromEnv
+          ? `"env": { "${AUTO_COMPACT_WINDOW_VAR}": "150000", ${lowerThreshold} }`
+          : `"autoCompactWindow": 150000,\n"env": { ${lowerThreshold} }`,
+      },
   }
 }
 
@@ -4413,6 +4510,7 @@ export async function scanAndDetect(
     claudeOnly(() => detectMcpDeferralOff(toolCalls, projects, projectCwds, apiCalls, undefined, pricing)),
     claudeOnly(() => detectMcpAlwaysLoadHygiene(projects, projectCwds, apiCalls, mcpCoverage, undefined, pricing)),
     claudeOnly(() => detectMcpDeferThreshold(projects, projectCwds, undefined, pricing)),
+    claudeOnly(() => detectIdleCompactionBlocked(projects, projectCwds, apiCalls)),
     () => detectCapabilityReliability(behavioralProjects, provider),
     () => detectLowWorthSessions(behavioralProjects, provider),
     () => detectContextBloat(behavioralProjects, lowWorthSessionIds, provider),
@@ -4520,8 +4618,10 @@ function renderFinding(n: number, f: WasteFinding, costRate: number, copy: Optim
   lines.push('')
   lines.push(wrap(f.explanation, PANEL_WIDTH - 4, '  '))
   lines.push('')
-  lines.push(chalk.hex(GOLD)(`  Potential savings: ${savings}`) + chalk.dim(`  ${findingBasis(f)}`))
-  lines.push('')
+  if (f.tokensSaved > 0 || costSaved > 0) {
+    lines.push(chalk.hex(GOLD)(`  Potential savings: ${savings}`) + chalk.dim(`  ${findingBasis(f)}`))
+    lines.push('')
+  }
 
   // Destination header — issue #277. Tells the user where each suggestion
   // belongs (CLAUDE.md / session opener / current chat / shell config) so

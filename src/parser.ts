@@ -5,7 +5,7 @@ import { createHash } from 'crypto'
 import { performance } from 'node:perf_hooks'
 import { basename, dirname, join, resolve, sep } from 'path'
 import { FS_SCAN_CONCURRENCY, mapWithConcurrency, readSessionLines } from './fs-utils.js'
-import { billableOutputTokens, calculateCost, calculateLocalModelSavings, getShortModelName, modelRowKey, pricingModelAt, isProxiedPath, getProxyPathsConfigHash, getModelAliasesConfigHash, getPriceOverridesConfigHash, getLocalModelSavingsConfigHash, recordedCostFallback, getModelRoute, isStandInPricedAt, findUnpricedModels } from './models.js'
+import { billableOutputTokens, calculateCost, calculateLocalModelSavings, getShortModelName, modelRowKey, pricingModelAt, isProxiedPath, getProxyPathsConfigHash, getModelAliasesConfigHash, getPriceOverridesConfigHash, getLocalModelSavingsConfigHash, recordedCostFallback, getModelRoute, isStandInPricedAt, findUnpricedModels, hasPriceDiscounts } from './models.js'
 import { resolveSubagentAttribution, sessionIdentity } from './sessions-report.js'
 import { applyCodexSessionNames } from './codex-session-index.js'
 import { normalizeContentBlocks, flatSlice, flatString } from './content-utils.js'
@@ -3084,12 +3084,14 @@ export function cachedCallToApiCall(call: CachedCall): ParsedApiCall {
   // through billableOutputTokens so a cached read and a cold parse can never
   // disagree about whether reasoning is already inside output (#1075).
   const outputForCost = billableOutputTokens(call.provider, u.outputTokens, u.reasoningTokens)
-  const costUSD = calculateCost(
+  const priceAt = (applyDiscount: boolean) => calculateCost(
     pricingModelAt(call.model, call.timestamp), u.inputTokens, outputForCost,
     u.cacheCreationInputTokens, u.cacheReadInputTokens,
-    u.webSearchRequests, call.speed, u.cacheCreationOneHourTokens, call.provider,
+    u.webSearchRequests, call.speed, u.cacheCreationOneHourTokens, call.provider, applyDiscount,
   )
-  const fallbackCostUSD = call.costUSD === undefined ? recordedCostFallback(call.model, costUSD, call.fallbackCostUSD) : undefined
+  const listCostUSD = priceAt(false)
+  const fallbackCostUSD = call.costUSD === undefined ? recordedCostFallback(call.model, listCostUSD, call.fallbackCostUSD) : undefined
+  const costUSD = call.costUSD === undefined && fallbackCostUSD === undefined && hasPriceDiscounts() ? priceAt(true) : listCostUSD
   const apiCall = applyLocalModelSavings({
     provider: call.provider,
     model: call.model,
@@ -3132,6 +3134,7 @@ export function cachedCallToApiCall(call: CachedCall): ParsedApiCall {
     : call.costUSD !== undefined || fallbackCostUSD !== undefined ? 'recorded'
     : apiCall.costUSD === 0 && findUnpricedModels([{ model: call.model, calls: 1, cost: 0 }]).length > 0 ? 'unpriced'
     : 'calculated'
+  if (costUSD < listCostUSD && !apiCall.isLocalSavings) apiCall.listCostUSD = listCostUSD
   return apiCall
 }
 
@@ -4761,11 +4764,14 @@ export async function parseProviderSources(
           if (Number.isNaN(ts.getTime()) || ts < dateRange.start || ts > dateRange.end) continue
         }
         const calls = residualsBySession.get(sessionId) ?? []
+        const listCostUSD = calculateCost(model, input, output, cacheWrite, cacheRead, 0)
+        const costUSD = calculateCost(model, input, output, cacheWrite, cacheRead, 0, 'standard', 0, 'copilot', true)
         calls.push({
           provider: 'copilot',
           model,
           usage: { inputTokens: input, outputTokens: output, cacheCreationInputTokens: cacheWrite, cacheReadInputTokens: cacheRead, cachedInputTokens: 0, reasoningTokens: reasoning, webSearchRequests: 0 },
-          costUSD: calculateCost(model, input, output, cacheWrite, cacheRead, 0),
+          costUSD,
+          ...(costUSD < listCostUSD ? { listCostUSD } : {}),
           tools: [], mcpTools: [], skills: [], subagentTypes: [],
           hasAgentSpawn: false, hasPlanMode: false,
           speed: 'standard', timestamp: leg.rawTs, bashCommands: [],

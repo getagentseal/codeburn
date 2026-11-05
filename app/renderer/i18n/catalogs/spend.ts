@@ -61,6 +61,7 @@ export const spend: SectionCatalog = {
     'spend.optimize.class.nudge': 'Habits',
     'spend.optimize.class.keep': 'FYI',
     'spend.optimize.class.summary': '{header} · {tokens} tokens · {savings} · {findings}',
+    'spend.optimize.class.summaryNoFigure': '{header} · {findings}',
 
     'spend.optimize.severity.high': 'High',
     'spend.optimize.severity.medium': 'Medium',
@@ -141,6 +142,7 @@ export const spend: SectionCatalog = {
     'spend.optimize.class.nudge': 'Habitudes',
     'spend.optimize.class.keep': 'À noter',
     'spend.optimize.class.summary': '{header} · {tokens} tokens · {savings} · {findings}',
+    'spend.optimize.class.summaryNoFigure': '{header} · {findings}',
 
     'spend.optimize.severity.high': 'Élevé',
     'spend.optimize.severity.medium': 'Moyen',
@@ -221,6 +223,7 @@ export const spend: SectionCatalog = {
     'spend.optimize.class.nudge': '習慣',
     'spend.optimize.class.keep': '参考情報',
     'spend.optimize.class.summary': '{header} ・ {tokens}トークン ・ {savings} ・ {findings}',
+    'spend.optimize.class.summaryNoFigure': '{header} ・ {findings}',
 
     'spend.optimize.severity.high': '高',
     'spend.optimize.severity.medium': '中',
@@ -301,6 +304,7 @@ export const spend: SectionCatalog = {
     'spend.optimize.class.nudge': '습관',
     'spend.optimize.class.keep': '참고',
     'spend.optimize.class.summary': '{header} · {tokens} 토큰 · {savings} · {findings}',
+    'spend.optimize.class.summaryNoFigure': '{header} · {findings}',
 
     'spend.optimize.severity.high': '높음',
     'spend.optimize.severity.medium': '보통',
@@ -381,6 +385,7 @@ export const spend: SectionCatalog = {
     'spend.optimize.class.nudge': '习惯',
     'spend.optimize.class.keep': '仅供参考',
     'spend.optimize.class.summary': '{header} · {tokens} token · {savings} · {findings}',
+    'spend.optimize.class.summaryNoFigure': '{header} · {findings}',
 
     'spend.optimize.severity.high': '高',
     'spend.optimize.severity.medium': '中',
@@ -461,6 +466,7 @@ export const spend: SectionCatalog = {
     'spend.optimize.class.nudge': '習慣',
     'spend.optimize.class.keep': '僅供參考',
     'spend.optimize.class.summary': '{header} · {tokens} token · {savings} · {findings}',
+    'spend.optimize.class.summaryNoFigure': '{header} · {findings}',
 
     'spend.optimize.severity.high': '高',
     'spend.optimize.severity.medium': '中',
