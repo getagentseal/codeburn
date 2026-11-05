@@ -315,11 +315,10 @@ describe('session cost diagnosis: request fields', () => {
 describe('session cost diagnosis: payload budget', () => {
   const size = (w: SessionWhy) => Buffer.byteLength(JSON.stringify(w))
 
-  it('leaves a payload under budget alone and omits default step fields', () => {
+  it('leaves a payload under budget alone and keeps the released tool step shape', () => {
     expect(fitWhyJson(structuredClone(why))).toEqual(why)
-    const steps = why.turns.flatMap(t => [...t.steps, ...t.helpers.flatMap(h => h.steps)])
-    expect(steps.some(s => s.kind === 'tool' && 'isError' in s && !s.isError)).toBe(false)
-    expect(steps.some(s => s.kind === 'tool' && 'detail' in s && !s.detail)).toBe(false)
+    const tools = why.turns.flatMap(t => [...t.steps, ...t.helpers.flatMap(h => h.steps)]).filter(s => s.kind === 'tool')
+    expect(tools.every(s => typeof s.isError === 'boolean' && 'detail' in s)).toBe(true)
   })
 
   it('drops whole step lists, cheapest helper first, then prompts, keeping totals and findings', () => {

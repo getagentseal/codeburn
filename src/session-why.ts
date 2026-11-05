@@ -66,7 +66,7 @@ export type WhyStep =
     cachedPct: number | null; toolCalls: number; answer?: true
   }
   | {
-    kind: 'tool'; start: number; end: number; name: string; label: string; isError?: true; error?: WhyError; helperCost?: number; detail?: WhyDetail
+    kind: 'tool'; start: number; end: number; name: string; label: string; isError: boolean; error?: WhyError; helperCost?: number; detail: WhyDetail | null
     parent: number; parallel?: { index: number; of: number }; resultChars: number
   }
 export type WhyTurn = {
@@ -526,14 +526,14 @@ export async function buildSessionWhy(filePath: string): Promise<SessionWhy> {
         const helper = helperByTool.get(tu.id)
         if (helper) seen.push(helper)
         const doneTs = (tu.name === 'Agent' || tu.name === 'Task' ? r.handBacks.get(tu.id)?.ts : undefined) ?? res?.ts ?? tu.ts
-        let detail: WhyDetail | undefined = toolDetail(tu.name, tu.input, res)
+        let detail: WhyDetail | null = toolDetail(tu.name, tu.input, res)
         const size = JSON.stringify(detail).length
         // ponytail: one global budget keeps the payload under the app's 16MB pipe cap; per-turn loading if real sessions hit it.
-        if (size > budget) { detail = undefined; detailsOmitted = true } else budget -= size
+        if (size > budget) { detail = null; detailsOmitted = true } else budget -= size
         if (detail && helper) detail.helper = publicHelper(helper)
         const step: WhyStep = {
           kind: 'tool', start: tu.ts - start, end: doneTs - start, name: tu.name, label: redact(toolLabel(tu.name, tu.input)),
-          ...(res?.isError ? { isError: true, error: errorCause(res.text) } : {}), ...(helper ? { helperCost: helper.cost } : {}), ...(detail ? { detail } : {}),
+          isError: res?.isError === true, ...(res?.isError ? { error: errorCause(res.text) } : {}), ...(helper ? { helperCost: helper.cost } : {}), detail,
           parent: -1, ...(toolUses.length > 1 ? { parallel: { index: j + 1, of: toolUses.length } } : {}), resultChars: res?.text.length ?? 0,
         }
         if (res) stepResult.set(step, res)
