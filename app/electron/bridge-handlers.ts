@@ -462,6 +462,11 @@ export type Deps = {
 
 export type Handler = (...args: any[]) => Promise<Envelope>
 
+// Measured on a 23GB corpus, the all-time drill-through report is 28MB and its
+// largest single row 4.3MB, which no slicing can split; eight slices keep the
+// largest answer near 7MB, under half the 16MiB cap.
+const CONTRIBUTION_PARTS = 8
+
 /**
  * Maps every CodeburnBridge channel to its `codeburn` argv (plain args, no
  * shell) and returns a result envelope. Pure + injectable so the wiring is
@@ -740,12 +745,26 @@ export function createBridgeHandlers(deps: Deps): Record<string, Handler> {
     // Drill-through report: plain session rows plus per-turn contribution
     // segments (day/category/branch/model/PR). Same filtering semantics as
     // getSessions — one filtering mechanism, additive payload fields only.
-    'codeburn:getSessionsContributions': run((period: string, provider: string, range?: DateRange) => [
-      'sessions', '--format', 'json', '--contributions', '--period', vPeriod(period),
-      ...providerArgs(vProvider(provider)),
-      ...projectArgs(),
-      ...rangeArgs(vRange(range)),
-    ], 3),
+    // The renderer computes every selection over the whole population, which
+    // over all time is ~28MB, past the pipe cap. So it is fetched in fixed
+    // slices, one after another (in parallel they would be parallel spawns on
+    // the fallback path), and put back in report order here.
+    'codeburn:getSessionsContributions': async (period: string, provider: string, range?: DateRange, background?: boolean) => {
+      const entries: Array<{ index: number; row: unknown }> = []
+      for (let part = 0; part < CONTRIBUTION_PARTS; part++) {
+        const slice = await run((p: string, pv: string, r?: DateRange) => [
+          'sessions', '--format', 'json', '--contributions', '--period', vPeriod(p),
+          ...providerArgs(vProvider(pv)),
+          ...projectArgs(),
+          ...rangeArgs(vRange(r)),
+          '--part', `${part}/${CONTRIBUTION_PARTS}`,
+        ], 3)(period, provider, range, background)
+        if (!slice.ok) return slice
+        if (!Array.isArray(slice.value)) return { ok: false, error: { kind: 'bad-json', message: 'codeburn sessions --part did not answer a list' } }
+        entries.push(...slice.value as typeof entries)
+      }
+      return { ok: true, value: entries.sort((a, b) => a.index - b.index).map(entry => entry.row) }
+    },
     // One session's cost diagnosis. Reads that transcript's content on demand;
     // never routed through serve (its output memo would hold the text).
     'codeburn:getSessionWhy': run((id: string) => ['sessions', '--id', vToken(id), '--why', '--format', 'json']),

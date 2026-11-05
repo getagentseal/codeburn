@@ -3192,6 +3192,7 @@ program
   .option('--by-pr', 'Group spend by the pull requests each session referenced')
   .option('--by-work-unit', 'Group sessions into provider-recorded work units: one row per orchestration root with its delegated children folded beneath')
   .option('--contributions', 'JSON only: attach per-session contribution segments (day, category, branch, model, PR) to each row')
+  .option('--part <i/n>', 'With --contributions: only slice i of n (0-based), as {index, row} entries in report order')
   .option('--id <id>', 'With --why: the Claude Code session to explain')
   .option('--why', 'Explain why one session cost what it did: findings, spend by prompt, steps (needs --id; Claude Code only)')
   .option('--no-pager', 'Print the complete table directly instead of opening the interactive browser')
@@ -3220,6 +3221,11 @@ program
     }
     if (opts.contributions && (opts.byPr || opts.byWorkUnit || opts.format !== 'json')) {
       process.stderr.write('codeburn: --contributions requires plain --format json (no --by-pr/--by-work-unit)\n')
+      process.exit(1)
+    }
+    const part = opts.part === undefined ? null : (await import('./session-contributions.js')).parseContributionPart(opts.part)
+    if (opts.part !== undefined && (!opts.contributions || !part)) {
+      process.stderr.write('codeburn: --part takes i/n (0 <= i < n <= 64) and requires --contributions\n')
       process.exit(1)
     }
     const { aggregateSessions, buildPrAttribution, foldSubagentRows, renderJson, renderTable, renderWorkUnitJson, renderWorkUnitTable } = await import('./sessions-report.js')
@@ -3304,8 +3310,9 @@ program
       lineage: session.lineage,
     }))))
     if (opts.contributions) {
-      const { foldContributionRows, withContributions } = await import('./session-contributions.js')
-      process.stdout.write(JSON.stringify(foldContributionRows(withContributions(rows, projects), resolution), null, 2) + '\n')
+      const { foldContributionRows, selectContributionPart, withContributions } = await import('./session-contributions.js')
+      const report = foldContributionRows(withContributions(rows, projects), resolution)
+      process.stdout.write(JSON.stringify(part ? selectContributionPart(report, part) : report, null, 2) + '\n')
       return
     }
     if (opts.byWorkUnit) {

@@ -273,7 +273,7 @@ const SERVE_OPTIONS: Readonly<Record<string, Readonly<Record<string, ServeOption
     '--provider': 'value', '--route': 'value', '--billing': 'value',
     '--format': 'value', '--by-pr': 'flag', '--no-pager': 'flag',
     '--project': 'value', '--exclude': 'value',
-    '--contributions': 'flag',
+    '--contributions': 'flag', '--part': 'value',
   },
   compare: {
     '-p': 'value', '--period': 'value', '--from': 'value', '--to': 'value',
