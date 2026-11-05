@@ -5,7 +5,8 @@ import { join } from 'node:path'
 
 import { describe, expect, it } from 'vitest'
 
-import { buildSessionContributions, withContributions } from '../src/session-contributions.js'
+import { buildSessionContributions, parseContributionPart, selectContributionPart, withContributions } from '../src/session-contributions.js'
+import type { SessionDrillRow } from '../src/session-contributions.js'
 import { aggregateSessions } from '../src/sessions-report.js'
 import { dateKey } from '../src/day-aggregator.js'
 import { aggregateProjectsIntoDays } from '../src/day-aggregator.js'
@@ -325,6 +326,31 @@ describe('withContributions', () => {
     const projects = [projectOf(session)]
     const rows = withContributions(aggregateSessions(projects), projects)
     expect(rows[0]!.contributions).toBeDefined()
+  })
+})
+
+describe('contributions report slices (--part)', () => {
+  const row = (sessionId: string, cost: number) => ({ provider: 'claude', project: 'p', sessionId, cost }) as unknown as SessionDrillRow
+
+  it('partitions the report by identity and keeps each row\'s report position', () => {
+    const report = Array.from({ length: 200 }, (_, i) => row(`s${i}`, i))
+    const slices = [0, 1, 2, 3].map(index => selectContributionPart(report, { index, count: 4 }))
+    expect(slices.every(slice => slice.length > 0)).toBe(true)
+    const joined = slices.flat().sort((a, b) => a.index - b.index)
+    expect(joined.map(entry => entry.row)).toEqual(report)
+  })
+
+  it('keeps a session in its slice when the report is re-derived in another order', () => {
+    const report = Array.from({ length: 50 }, (_, i) => row(`s${i}`, i))
+    const reordered = [...report].reverse()
+    const ids = (rows: SessionDrillRow[]) => new Set(selectContributionPart(rows, { index: 1, count: 4 }).map(entry => entry.row.sessionId))
+    expect(ids(reordered)).toEqual(ids(report))
+  })
+
+  it('accepts only i/n with 0 <= i < n <= 64', () => {
+    expect(parseContributionPart('0/4')).toEqual({ index: 0, count: 4 })
+    expect(parseContributionPart('3/4')).toEqual({ index: 3, count: 4 })
+    for (const bad of ['4/4', '0/0', '1/65', '-1/4', '1', 'a/b', '1/4/2']) expect(parseContributionPart(bad)).toBeNull()
   })
 })
 

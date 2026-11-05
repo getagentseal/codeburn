@@ -129,8 +129,8 @@ const ARGV_CASES: Array<{ channel: string; args: unknown[]; argv: string[] }> = 
   { channel: 'codeburn:getModels', args: ['week', 'all', false], argv: ['models', '--format', 'json', '--period', 'week', '--min-cost', '0'] },
   { channel: 'codeburn:getSessions', args: ['week', 'all'], argv: ['sessions', '--format', 'json', '--period', 'week'] },
   { channel: 'codeburn:getSessions', args: ['30days', 'claude', { from: '2026-07-01', to: '2026-07-11' }], argv: ['sessions', '--format', 'json', '--period', '30days', '--provider', 'claude', '--from', '2026-07-01', '--to', '2026-07-11'] },
-  { channel: 'codeburn:getSessionsContributions', args: ['week', 'all'], argv: ['sessions', '--format', 'json', '--contributions', '--period', 'week'] },
-  { channel: 'codeburn:getSessionsContributions', args: ['30days', 'claude', { from: '2026-07-01', to: '2026-07-11' }], argv: ['sessions', '--format', 'json', '--contributions', '--period', '30days', '--provider', 'claude', '--from', '2026-07-01', '--to', '2026-07-11'] },
+  { channel: 'codeburn:getSessionsContributions', args: ['week', 'all'], argv: ['sessions', '--format', 'json', '--contributions', '--period', 'week', '--part', '0/8'] },
+  { channel: 'codeburn:getSessionsContributions', args: ['30days', 'claude', { from: '2026-07-01', to: '2026-07-11' }], argv: ['sessions', '--format', 'json', '--contributions', '--period', '30days', '--provider', 'claude', '--from', '2026-07-01', '--to', '2026-07-11', '--part', '0/8'] },
   { channel: 'codeburn:getSessionWhy', args: ['7f3c2a91-4be0'], argv: ['sessions', '--id', '7f3c2a91-4be0', '--why', '--format', 'json'] },
   { channel: 'codeburn:getCompareModels', args: ['month', 'codex'], argv: ['compare', '--format', 'json', '--period', 'month', '--provider', 'codex'] },
   { channel: 'codeburn:getCompare', args: ['month', 'all', 'model-a', 'model-b'], argv: ['compare', '--format', 'json', '--period', 'month', '--model-a', 'model-a', '--model-b', 'model-b'] },
@@ -214,11 +214,35 @@ describe('createBridgeHandlers (channel → argv for all channels)', () => {
   })
 
   it.each(ARGV_CASES)('$channel with $args spawns the expected argv', async ({ channel, args, argv }) => {
-    const { spawnCli, spawnCliAction, calls } = fakeSpawn()
+    const { spawnCli, spawnCliAction, calls } = fakeSpawn(channel === 'codeburn:getSessionsContributions' ? [] : undefined)
     const handlers = createBridgeHandlers(deps({ spawnCli, spawnCliAction, resolveCodeburnPath: () => '/bin/codeburn' }))
     const res = await handlers[channel]!(...args)
     expect(calls[0]).toEqual(argv)
     expect(res).toMatchObject({ ok: true })
+  })
+
+  it('codeburn:getSessionsContributions joins its slices back into report order', async () => {
+    const slices: Record<string, unknown> = {
+      '0/8': [{ index: 2, row: { sessionId: 'c' } }],
+      '2/8': [{ index: 0, row: { sessionId: 'a' } }, { index: 3, row: { sessionId: 'd' } }],
+      '7/8': [{ index: 1, row: { sessionId: 'b' } }],
+    }
+    const spawnCli = vi.fn(async (args: string[]) => slices[args[args.length - 1]!] ?? [])
+    const handlers = createBridgeHandlers(deps({ spawnCli }))
+    const res = await handlers['codeburn:getSessionsContributions']!('all', 'all')
+    expect(spawnCli).toHaveBeenCalledTimes(8)
+    expect(res).toEqual({ ok: true, value: [{ sessionId: 'a' }, { sessionId: 'b' }, { sessionId: 'c' }, { sessionId: 'd' }] })
+  })
+
+  it('codeburn:getSessionsContributions fails whole when one slice fails', async () => {
+    const spawnCli = vi.fn(async (args: string[]) => {
+      if (args.includes('1/8')) throw new CliError('timeout', 'slow')
+      return []
+    })
+    const handlers = createBridgeHandlers(deps({ spawnCli }))
+    const res = await handlers['codeburn:getSessionsContributions']!('all', 'all')
+    expect(res).toMatchObject({ ok: false })
+    expect(spawnCli).toHaveBeenCalledTimes(2)
   })
 
   it('codeburn:cliStatus resolves from resolveCodeburnPath without spawning', async () => {
@@ -995,27 +1019,27 @@ describe('project filter', () => {
         .toEqual({ project: ['my-company'], exclude: ['scratch'] })
       expect(readProjectFilter()).toEqual({ project: ['my-company'], exclude: ['scratch'] })
 
-      const { spawnCli, spawnCliAction, calls } = fakeSpawn()
+      const { spawnCli, spawnCliAction, calls } = fakeSpawn([])
       const handlers = createBridgeHandlers(deps({ spawnCli, spawnCliAction, resolveCodeburnPath: () => '/bin/codeburn' }))
       await handlers['codeburn:getSessions']!('week', 'all')
       expect(calls[0]).toEqual(['sessions', '--format', 'json', '--period', 'week', '--project=my-company', '--exclude=scratch'])
       await handlers['codeburn:getSessionsContributions']!('week', 'all')
-      expect(calls[1]).toEqual(['sessions', '--format', 'json', '--contributions', '--period', 'week', '--project=my-company', '--exclude=scratch'])
+      expect(calls.slice(1, 9)).toEqual([0, 1, 2, 3, 4, 5, 6, 7].map(part => ['sessions', '--format', 'json', '--contributions', '--period', 'week', '--project=my-company', '--exclude=scratch', '--part', `${part}/8`]))
       await handlers['codeburn:getBranchSpend']!('week', 'all')
-      expect(calls[2]).toEqual(['spend', '--format', 'branch-json', '--period', 'week', '--project=my-company', '--exclude=scratch'])
+      expect(calls[9]).toEqual(['spend', '--format', 'branch-json', '--period', 'week', '--project=my-company', '--exclude=scratch'])
       const rangeA = { from: '2026-07-01', to: '2026-07-07' }
       const rangeB = { from: '2026-07-08', to: '2026-07-14' }
       await handlers['codeburn:getPeriodCompare']!(rangeA, rangeB, 'all')
-      expect(calls[3]).toEqual(['compare-periods', '--format', 'json', '--from-a', '2026-07-01', '--to-a', '2026-07-07', '--from-b', '2026-07-08', '--to-b', '2026-07-14', '--project=my-company', '--exclude=scratch'])
+      expect(calls[10]).toEqual(['compare-periods', '--format', 'json', '--from-a', '2026-07-01', '--to-a', '2026-07-07', '--from-b', '2026-07-08', '--to-b', '2026-07-14', '--project=my-company', '--exclude=scratch'])
       // The drill-down too: a filtered-out project must not surface behind a
       // contribution row either.
       await handlers['codeburn:getPeriodCompareSessions']!(rangeA, rangeB, 'all', 'model', 'sonnet')
-      expect(calls[4]).toEqual(['compare-periods', '--format', 'sessions', '--from-a', '2026-07-01', '--to-a', '2026-07-07', '--from-b', '2026-07-08', '--to-b', '2026-07-14', '--project=my-company', '--exclude=scratch', '--dimension', 'model', '--key', 'sonnet'])
+      expect(calls[11]).toEqual(['compare-periods', '--format', 'sessions', '--from-a', '2026-07-01', '--to-a', '2026-07-07', '--from-b', '2026-07-08', '--to-b', '2026-07-14', '--project=my-company', '--exclude=scratch', '--dimension', 'model', '--key', 'sonnet'])
       await handlers['codeburn:getCompareCohortModels']!('week', 'all')
-      expect(calls[5]).toEqual(['compare', '--format', 'cohort-json', '--period', 'week', '--project=my-company', '--exclude=scratch'])
+      expect(calls[12]).toEqual(['compare', '--format', 'cohort-json', '--period', 'week', '--project=my-company', '--exclude=scratch'])
       // --project-id narrows WITHIN the saved filter; it never replaces it.
       await handlers['codeburn:getCompareCohort']!('week', 'all', 'model-a', 'model-b', undefined, ['/Users/gone/alpha'])
-      expect(calls[6]).toEqual([
+      expect(calls[13]).toEqual([
         'compare', '--format', 'cohort-json', '--period', 'week', '--project=my-company', '--exclude=scratch',
         '--model-a', 'model-a', '--model-b', 'model-b', '--project-id=/Users/gone/alpha',
       ])

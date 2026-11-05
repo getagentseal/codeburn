@@ -1,3 +1,5 @@
+import { createHash } from 'crypto'
+
 import { behavioralCallWeight } from './behavioral-weight.js'
 import { dateKey } from './day-aggregator.js'
 import { spendProjectIdentity } from './spend-flow.js'
@@ -204,4 +206,26 @@ export function foldContributionRows(rows: SessionDrillRow[], resolution: WorkUn
       subagents: children.map(({ contributions: _contributions, ...child }) => child),
     }
   })
+}
+
+/// `--part i/n`: one of n fixed slices of the contributions report, so a client
+/// can fetch a population too large for one answer in pieces. A row's slice is
+/// keyed by its identity, not its position, so a session stays in one slice
+/// even when the report is re-derived between the slice requests: the slices
+/// always concatenate to the whole population, never a duplicate or a gap.
+/// Each kept row carries its position in the full report so the client can
+/// restore the report order.
+export function parseContributionPart(value: string): { index: number; count: number } | null {
+  const match = /^(\d+)\/(\d+)$/.exec(value)
+  if (!match) return null
+  const index = Number(match[1]), count = Number(match[2])
+  return count >= 1 && count <= 64 && index < count ? { index, count } : null
+}
+
+export function contributionPart(row: SessionRow, count: number): number {
+  return createHash('sha1').update(JSON.stringify([row.provider, row.project, row.sessionId])).digest().readUInt32BE(0) % count
+}
+
+export function selectContributionPart(rows: SessionDrillRow[], part: { index: number; count: number }): Array<{ index: number; row: SessionDrillRow }> {
+  return rows.flatMap((row, index) => contributionPart(row, part.count) === part.index ? [{ index, row }] : [])
 }
