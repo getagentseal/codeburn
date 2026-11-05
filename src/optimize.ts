@@ -1349,15 +1349,20 @@ async function scanSessions(dateRange?: DateRange, provider?: string): Promise<S
   // reads the same window and a memoized file is stamped with the same verdict
   // a freshly read one would get.
   const recentCutoffMs = Date.now() - RECENT_WINDOW_MS
-  await runWithConcurrency(tasks, FILE_READ_CONCURRENCY, async ({ file, project, identity }) => {
-    const { calls, cwds, apiCalls, userMessages, openers } =
-      await scanJsonlFileMemoized(file, project, dateRange, identity, recentCutoffMs)
+  // Joined in discovery order, not in the order the reads finish: sums, ties in
+  // the previews and which settings file wins all follow this order, so a join
+  // by completion made two runs over the same files disagree.
+  const results: ScanFileResult[] = new Array(tasks.length)
+  await runWithConcurrency(tasks.map((task, slot) => ({ ...task, slot })), FILE_READ_CONCURRENCY, async ({ file, project, identity, slot }) => {
+    results[slot] = await scanJsonlFileMemoized(file, project, dateRange, identity, recentCutoffMs)
+  })
+  for (const { calls, cwds, apiCalls, userMessages, openers } of results) {
     allCalls.push(...calls)
     for (const cwd of cwds) allCwds.add(cwd)
     allApiCalls.push(...apiCalls)
     allUserMessages.push(...userMessages)
     allOpeners.push(...openers)
-  })
+  }
 
   return { toolCalls: allCalls, projectCwds: allCwds, apiCalls: allApiCalls, userMessages: allUserMessages, openers: allOpeners }
 }
