@@ -972,12 +972,26 @@ describe('overview idle warming', () => {
       expect(mocks.getSessions.mock.calls.some(call => call[0] === '30days' && call[3] === true)).toBe(true)
       expect(mocks.getSpendFlow.mock.calls.some(call => call[0] === '30days' && call[3] === true)).toBe(true)
       expect(mocks.getModels.mock.calls.some(call => call[0] === '30days' && call[4] === true)).toBe(true)
-      expect(mocks.getCompareModels.mock.calls.some(call => call[0] === '30days' && call[2] === true)).toBe(true)
-      expect(mocks.getOptimizeReport.mock.calls.some(call => call[0] === '30days' && call[3] === true)).toBe(true)
       expect(mocks.getPlans.mock.calls.some(call => call[0] === '30days' && call[1] === true)).toBe(true)
       // Yield is polled by the visible Overview itself, so the sweep finds it
       // already in the memo and skips it — warm either way.
       expect(hasPolledMemo(reportMemoKey('yield', '30days', 'all'))).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('never warms Compare or Optimize, so no click queues behind them in serve', async () => {
+    vi.useFakeTimers()
+    try {
+      setVisibility('visible')
+      render(<App />)
+      await act(async () => { await vi.advanceTimersByTimeAsync(3_000) })
+      await act(async () => { await vi.advanceTimersByTimeAsync(240_000) })
+
+      expect(mocks.getPlans.mock.calls.some(call => call[0] === '30days' && call[1] === true)).toBe(true)
+      expect(mocks.getCompareModels).not.toHaveBeenCalled()
+      expect(mocks.getOptimizeReport).not.toHaveBeenCalled()
     } finally {
       vi.useRealTimers()
     }
