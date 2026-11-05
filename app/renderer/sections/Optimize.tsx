@@ -250,7 +250,7 @@ function ActionableFindingRows({ findings, byClass }: { findings: OptimizeFindin
           <Fragment key={finding.id}>
             {showHeader && (
               <div className="opt-group">
-                {t('spend.optimize.class.summary', {
+                {t(byClass[finding.class].tokensSaved > 0 || byClass[finding.class].savingsUSD > 0 ? 'spend.optimize.class.summary' : 'spend.optimize.class.summaryNoFigure', {
                   header: classHeader(finding.class),
                   tokens: formatCompact(byClass[finding.class].tokensSaved),
                   savings: formatUsd(byClass[finding.class].savingsUSD),

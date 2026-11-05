@@ -552,7 +552,8 @@ export function classTotals(findings: WasteFinding[], costRate: number): Record<
 export function classHeaderLine(cls: FindingClass, totals: ClassTotals, costRate: number): string {
   const cost = costRate > 0 ? ` (~${formatCost(totals.savingsUSD)})` : ''
   const suffix = cls === 'fix' ? ' — codeburn optimize --apply' : ''
-  return `${CLASS_HEADERS[cls]} · ~${formatTokens(totals.tokensSaved)} tokens${cost} · ${totals.count} finding${totals.count === 1 ? '' : 's'}${suffix}`
+  const figure = totals.tokensSaved > 0 || totals.savingsUSD > 0 ? ` · ~${formatTokens(totals.tokensSaved)} tokens${cost}` : ''
+  return `${CLASS_HEADERS[cls]}${figure} · ${totals.count} finding${totals.count === 1 ? '' : 's'}${suffix}`
 }
 
 // Cause taxonomy for defer-enable plans (mcp-deferral-off findings).

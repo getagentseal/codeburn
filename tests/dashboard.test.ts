@@ -9,6 +9,7 @@ import { describe, it, expect, onTestFinished, vi } from 'vitest'
 import { FindingPanel, DAILY_ACTIVITY_PAGE_SIZE, INTERACTIVE_RENDER_OPTIONS, dailyActivityFooter, getDailyActivityPageSize, getDailyActivityRows, getDashboardMaxWidth, getDashboardScanRange, getLayout, getRefreshIntervalMs, InteractiveDashboard, pageHistoryCursor, scrollHistoryCursor, selectDashboardPeriodProjects, shortProject, showEmptyState } from '../src/dashboard.js'
 import { getDateRange } from '../src/cli-date.js'
 import { formatCost } from '../src/format.js'
+import { classHeaderLine } from '../src/optimize.js'
 import type { ProjectSummary, SessionSummary } from '../src/types.js'
 
 const EMPTY_CATEGORY_BREAKDOWN = {
@@ -871,6 +872,11 @@ describe('FindingPanel', () => {
     costRate: 0.00001,
     width: 80,
   })))
+
+  it('drops the figure from a group header only when the group has none', () => {
+    expect(classHeaderLine('nudge', { tokensSaved: 1000, savingsUSD: 0.01, count: 1 }, 0.00001)).toBe('Habits · ~1.0K tokens (~$0.010) · 1 finding')
+    expect(classHeaderLine('nudge', { tokensSaved: 0, savingsUSD: 0, count: 1 }, 0.00001)).toBe('Habits · 1 finding')
+  })
 
   it('shows the savings figure only when the finding has one', () => {
     expect(panel(1000)).toContain('Savings: ~1.0K tokens (~$0.010)')

@@ -179,6 +179,18 @@ describe('Optimize', () => {
     ])
   })
 
+  it('drops the figure from a group header only when the group has none', async () => {
+    const report = makeOptimizeReport()
+    report.summary.byClass.keep = { tokensSaved: 0, savingsUSD: 0, count: 1 }
+    getOptimizeReport.mockResolvedValue(report)
+    render(<Optimize period="30days" provider="all" />)
+
+    await screen.findByText('Opus is doing your small talk')
+    const groups = [...document.querySelectorAll('.opt-group')].map(g => g.textContent)
+    expect(groups[0]).toBe('Fix now (apply-able) · 18.2K tokens · $9.10 · 1 finding')
+    expect(groups[2]).toBe('FYI · 1 finding')
+  })
+
   it('reports taking a fix as a name-only optimize_apply event', async () => {
     render(<Optimize period="30days" provider="all" />)
     fireEvent.click(await screen.findByRole('button', { name: /Opus is doing your small talk/ }))
