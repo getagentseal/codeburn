@@ -147,10 +147,10 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
         const { tools, bashCommands } = extractTools(entry.message?.parts ?? [])
 
         // promptTokenCount includes the cached tokens, as in Gemini CLI.
-        const prompt = usage.promptTokenCount ?? 0
+        const prompt = Math.max(0, usage.promptTokenCount ?? 0)
         const candidates = usage.candidatesTokenCount ?? 0
         const thoughts = usage.thoughtsTokenCount ?? 0
-        const cachedTokens = Math.min(usage.cachedContentTokenCount ?? 0, prompt)
+        const cachedTokens = Math.min(Math.max(0, usage.cachedContentTokenCount ?? 0), prompt)
         const inputTokens = prompt - cachedTokens
         const billedOutput = billedOutputTokens(candidates, thoughts, usage.totalTokenCount ?? 0, prompt, authType)
         const reasoningTokens = Math.min(thoughts, billedOutput)

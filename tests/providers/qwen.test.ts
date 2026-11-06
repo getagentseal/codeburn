@@ -76,4 +76,10 @@ describe('qwen provider', () => {
     expect(call!.cacheReadInputTokens).toBe(1_000)
     expect(call!.costUSD).toBeCloseTo(calculateCost(model, 0, 100, 0, 1_000, 0), 12)
   })
+
+  it('reads a negative cached count as none', async () => {
+    const [call] = await parseUsage({ promptTokenCount: 10, candidatesTokenCount: 5, thoughtsTokenCount: 0, totalTokenCount: 15, cachedContentTokenCount: -20 })
+    expect(call!.inputTokens).toBe(10)
+    expect(call!.cacheReadInputTokens).toBe(0)
+  })
 })
