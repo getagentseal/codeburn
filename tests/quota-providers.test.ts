@@ -185,23 +185,31 @@ describe('Gemini quota', () => {
 
   describe('after a rejected credential', () => {
     const now = () => 1_760_000_000_000
-    const stored = (expiry_date: number) => JSON.stringify({ access_token: 'unchanged', refresh_token: 'r', expiry_date })
-    const rejected = () => vi.fn(async () => new Response('{}', { status: 401 }))
+    const stored = (expiry_date?: number) => JSON.stringify({ access_token: 'unchanged', refresh_token: 'r', expiry_date })
+    const rejectedWith = async (expiry: number | undefined, client: string) => {
+      vi.stubEnv('GEMINI_OAUTH_CLIENT_ID', client)
+      vi.stubEnv('GEMINI_OAUTH_CLIENT_SECRET', client)
+      try {
+        const fetchMock = vi.fn(async () => new Response('{}', { status: 401 }))
+        return (await fetchGeminiQuota({ fetch: fetchMock as unknown as typeof fetch, readFile: (async () => stored(expiry)) as never, now })).quota
+      } finally {
+        vi.unstubAllEnvs()
+      }
+    }
+    const EXPIRED = ['Gemini CLI login expired. Run Gemini CLI once, then refresh.']
 
-    it('reports an expired login nothing could refresh as terminal, with what to do', async () => {
-      vi.stubEnv('GEMINI_OAUTH_CLIENT_ID', '')
-      const fetchMock = rejected()
-      const result = await fetchGeminiQuota({ fetch: fetchMock as unknown as typeof fetch, readFile: (async () => stored(now() - 3_600_000)) as never, now })
-      vi.unstubAllEnvs()
-      expect(result.quota.connection).toBe('terminalFailure')
-      expect(result.quota.footerLines).toEqual(['Gemini CLI login expired. Run Gemini CLI once, then refresh.'])
-      expect(fetchMock).toHaveBeenCalledTimes(1)
+    it('reports a rejected login nothing can refresh as terminal, whatever the stored expiry says', async () => {
+      for (const expiry of [now() - 3_600_000, undefined, now() + 3_600_000]) {
+        const quota = await rejectedWith(expiry, '')
+        expect(quota.connection).toBe('terminalFailure')
+        expect(quota.footerLines).toEqual(EXPIRED)
+      }
     })
 
-    it('keeps a transient failure while the token is still within its life', async () => {
-      const result = await fetchGeminiQuota({ fetch: rejected() as unknown as typeof fetch, readFile: (async () => stored(now() + 3_600_000)) as never, now })
-      expect(result.quota.connection).toBe('transientFailure')
-      expect(result.quota.footerLines).toEqual([])
+    it('keeps a transient failure when a refresher is configured', async () => {
+      const quota = await rejectedWith(now() + 3_600_000, 'client')
+      expect(quota.connection).toBe('transientFailure')
+      expect(quota.footerLines).toEqual([])
     })
   })
 })

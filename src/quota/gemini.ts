@@ -164,17 +164,18 @@ export async function fetchGeminiQuota(options: Partial<GeminiDeps> & { signal?:
 
     if ((credential.expiry_date ?? Infinity) - deps.now() <= 5 * 60_000) {
       const accessToken = await refresh(credential, deps, options.signal)
-      if (accessToken) credential = { ...credential, access_token: accessToken, expiry_date: undefined }
+      if (accessToken) credential = { ...credential, access_token: accessToken }
     }
     const token = credential.access_token!
     let response = await post(token, 'loadCodeAssist', { metadata: { ideType: 'GEMINI_CLI', pluginType: 'GEMINI' } }, deps, options.signal)
     if (response.status === 401) {
       const reread = await credentialFromFile(deps)
       if (!reread || reread.access_token === credential.access_token) {
-        // A token whose life is over and that nothing here could refresh needs
-        // the user to run Gemini CLI; retrying it would read as a blip forever.
-        const expired = credential.expiry_date !== undefined && credential.expiry_date <= deps.now()
-        return { quota: expired ? empty('terminalFailure', EXPIRED_FOOTER) : empty('transientFailure') }
+        // Without a refresher nothing here can mint a new token, whatever the
+        // stored expiry says (it can be missing or skewed): only running Gemini
+        // CLI clears it, so retrying would read as a blip forever.
+        const canRefresh = clientCredentials() !== null && Boolean(credential.refresh_token)
+        return { quota: canRefresh ? empty('transientFailure') : empty('terminalFailure', EXPIRED_FOOTER) }
       }
       credential = reread
       response = await post(credential.access_token!, 'loadCodeAssist', { metadata: { ideType: 'GEMINI_CLI', pluginType: 'GEMINI' } }, deps, options.signal)
