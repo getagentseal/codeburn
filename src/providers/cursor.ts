@@ -377,10 +377,13 @@ const BUBBLE_REQUEST_IDS_QUERY = `
     AND json_extract(value, '$.requestId') IN`
 // Under the 999 bound-parameter limit of older SQLite builds. Each chunk is
 // one table scan, so many unjoined streams on a huge DB cost several scans.
-// About 0.9 s per chunk on a 3.75 GB, 60k-bubble database, so the lookup is
-// capped near 9 s; ids past the cap are billed like ids no bubble carries.
+// About 0.9 s per chunk on a 3.75 GB, 60k-bubble database, so one parse looks
+// up at most 9,000 ids (near 9 s). Ids past the cap are left for the next
+// parse, which resumes in sorted order because resolved ids are remembered.
 const REQUEST_ID_CHUNK = 900
 const MAX_REQUEST_ID_CHUNKS = 10
+// Sidecar key for a looked-up request's newest bubble time.
+const BUBBLE_TIME_KEY = 'bubble:'
 
 // Split into HEAD (predicates we always emit) and TAIL (ORDER BY) so the
 // caller can splice in an optional `ROWID >= ?` cutoff without rewriting
@@ -902,9 +905,16 @@ function parseBubbles(
   // that older conversation, not here; one whose bubbles the scan budget cut
   // takes its newest bubble's time. agentKv stores no timestamps, so a request
   // with no dated bubble takes the DB file's mtime and keeps it on every later
-  // parse; re-stamping would move it to the latest write each time.
+  // parse; re-stamping would move it to the latest write each time. Both
+  // outcomes are kept in `firstSeen`, so each id is looked up once.
+  const billable = [...unjoined].filter(([, stream]) => stream.userChars + stream.contextChars + stream.assistantChars > 0)
   const bubbleTimes = new Map<string, string | null>()
-  const unjoinedIds = [...unjoined.keys()].slice(0, REQUEST_ID_CHUNK * MAX_REQUEST_ID_CHUNKS)
+  const unjoinedIds = billable
+    .map(([requestId]) => requestId)
+    .filter(requestId => !firstSeen.has(requestId) && !firstSeen.has(BUBBLE_TIME_KEY + requestId))
+    .sort()
+    .slice(0, REQUEST_ID_CHUNK * MAX_REQUEST_ID_CHUNKS)
+  const lookedUp = new Set(unjoinedIds)
   try {
     for (let i = 0; i < unjoinedIds.length; i += REQUEST_ID_CHUNK) {
       const chunk = unjoinedIds.slice(i, i + REQUEST_ID_CHUNK)
@@ -920,11 +930,15 @@ function parseBubbles(
   } catch (err) {
     rethrowBusy(err)
   }
-  for (const [requestId, stream] of unjoined) {
+  for (const [requestId, at] of bubbleTimes) {
+    if (at) firstSeen.set(BUBBLE_TIME_KEY + requestId, at)
+  }
+  for (const [requestId, stream] of billable) {
     // Request ids are UUIDs, so a historic bubble sharing one with a billable
     // agent-only stream is not expected.
-    const bubbleTime = bubbleTimes.get(requestId)
+    const bubbleTime = firstSeen.get(BUBBLE_TIME_KEY + requestId)
     if (bubbleTime && bubbleTime <= timeFloor) continue
+    if (!bubbleTime && !firstSeen.has(requestId) && !lookedUp.has(requestId)) continue
     const inputTokens = estimateTokensFromChars(stream.userChars + stream.contextChars)
     const outputTokens = estimateTokensFromChars(stream.assistantChars)
     if (inputTokens === 0 && outputTokens === 0) continue
