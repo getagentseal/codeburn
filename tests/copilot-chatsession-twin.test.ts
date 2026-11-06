@@ -162,7 +162,8 @@ describe('copilot chat-session twins of agent-host sessions', () => {
   })
 
   // Recent stamps: an orphaned cache entry older than 90 days ages out.
-  const at = (minutes: number) => Date.now() - 2 * 86400000 + minutes * 60000
+  const base = Date.now() - 2 * 86400000
+  const at = (minutes: number) => base + minutes * 60000
 
   async function writeRequests(sessionId: string, requests: Array<[string, number]>) {
     const dir = join(tmp, 'global', 'emptyWindowChatSessions')
