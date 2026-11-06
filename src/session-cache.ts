@@ -139,9 +139,12 @@ export type CachedFile = {
   agentStartedAt?: string
   // Negative-result marker: this file threw while parsing at the recorded
   // fingerprint. Cached so we don't re-read + re-throw it on every refresh; it
-  // is re-parsed only when the file changes (fingerprint differs). Carries no
-  // turns, so it contributes no usage. (issue #441 follow-up)
+  // is re-parsed when the file changes (fingerprint differs) and, for provider
+  // sources, once a day after `failedAt`, so a repair that keeps size and
+  // mtime is still picked up. Carries no turns, except for a durable
+  // provider, whose earlier turns stay. (issue #441 follow-up)
   failed?: boolean
+  failedAt?: string
   // Rich-session-capture, Claude session-level.
   // `title` is the LAST `ai-title` entry's text; `prLinks` accumulates every
   // `pr-link` entry's URL. `isSidechain` is true when any entry is a sidechain:
@@ -1281,6 +1284,7 @@ function validateCachedFile(f: unknown): f is CachedFile {
     && isOptionalString(o['agentName'])
     && isOptionalString(o['agentStartedAt'])
     && isOptionalBool(o['failed'])
+    && isOptionalString(o['failedAt'])
     && isOptionalString(o['parentSessionId'])
     && isOptionalStringRecord(o['agentSpawnLinks'])
     && (o['ambiguousSpawnAgentIds'] === undefined || isStringArray(o['ambiguousSpawnAgentIds']))

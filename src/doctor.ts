@@ -427,7 +427,7 @@ function collectSessionCacheIssues(cache: SessionCache): DoctorSessionCacheIssue
   const out: DoctorSessionCacheIssue[] = []
   for (const [provider, section] of Object.entries(cache.providers)) {
     for (const [path, f] of Object.entries(section.files)) {
-      // A failed entry carries no turns by construction; report it once, as failed.
+      // Report a failed entry once, as failed (a durable provider's keeps its turns).
       if (f.failed) out.push({ provider, path, reason: 'failed' })
       else if (Array.isArray(f.turns) && f.turns.length === 0) out.push({ provider, path, reason: 'no-turns' })
     }

@@ -3729,6 +3729,9 @@ function classifiedTurnSlicedToDays(turn: ClassifiedTurn, days: Set<string>): Cl
   return { ...turn, assistantCalls: inRangeCalls, timestamp: inRangeCalls[0]!.timestamp }
 }
 
+// A failed source is re-read at most this often while its fingerprint holds.
+const FAILED_SOURCE_RETRY_MS = 24 * 60 * 60 * 1000
+
 export async function parseProviderSources(
   providerName: string,
   sources: SessionSource[],
@@ -3852,7 +3855,9 @@ export async function parseProviderSources(
     } else if (stub && (readOnly || action.action === 'unchanged')) {
       if (readOnly && action.action !== 'unchanged') readOnlyServedStale = true
       stubServed.add(source.path)
-    } else if (cached && (readOnly || (action.action === 'unchanged' && (cached.failed || !cachedFileNeedsProviderReparse(providerName, source.path, cached))))) {
+    } else if (cached && (readOnly || (action.action === 'unchanged' && (cached.failed
+      ? Date.now() - Date.parse(cached.failedAt ?? '') < FAILED_SOURCE_RETRY_MS
+      : !cachedFileNeedsProviderReparse(providerName, source.path, cached))))) {
       if (readOnly && action.action !== 'unchanged') readOnlyServedStale = true
       unchangedSources.push({ source, cached })
     } else if (!readOnly) {
@@ -4074,6 +4079,7 @@ export async function parseProviderSources(
             existingEntry.turns = [...existingEntry.turns, ...newTurns]
             existingEntry.fingerprint = fp
             delete existingEntry.failed
+            delete existingEntry.failedAt
             if (prLinks.length) existingEntry.prLinks = [...new Set([...(existingEntry.prLinks ?? []), ...prLinks])]
             // Lineage is sticky on the merge: a recorded parent/child on
             // either side stays. A first parse that missed the `state.json`
@@ -4121,9 +4127,10 @@ export async function parseProviderSources(
         // A durable provider's cached turns may be the only record left of
         // rows its source has pruned, so they stay; the marker still stops
         // retries until the file changes and shows the failure in doctor.
+        const failedAt = new Date().toISOString()
         section.files[source.path] = provider.durableSources && priorEntry
-          ? { ...priorEntry, fingerprint: fp, failed: true }
-          : { fingerprint: fp, mcpInventory: [], turns: [], failed: true }
+          ? { ...priorEntry, fingerprint: fp, failed: true, failedAt }
+          : { fingerprint: fp, mcpInventory: [], turns: [], failed: true, failedAt }
         markCacheDirty(diskCache, providerName, source.path)
         warnProviderParseFailure(providerName, source.path, err)
       }
