@@ -94,6 +94,13 @@ describe('Claude login of a non-default config dir', () => {
     expect(await token()).toBeUndefined()
   })
 
+  it('says whether the Keychain prompt was denied or left unanswered', async () => {
+    keychain.mockResolvedValue({ status: 'accessDenied', reason: 'denied' })
+    expect((await run({ configDir: WORK }).result).quota.footerLines).toEqual(['Keychain access to the Claude Code login was denied.'])
+    keychain.mockResolvedValue({ status: 'accessDenied', reason: 'unanswered' })
+    expect((await run({ configDir: WORK }).result).quota.footerLines).toEqual(['The Keychain prompt for the Claude Code login was not answered.'])
+  })
+
   it('never reads the Keychain unless allowed, nor past a live file', async () => {
     const unallowed = run({ configDir: WORK, file: login('stale', NOW - 1), allowKeychain: false })
     expect(await unallowed.token()).toBe('Bearer stale')

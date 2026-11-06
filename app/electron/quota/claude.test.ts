@@ -139,6 +139,12 @@ describe('Claude keychain fallback', () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
+  it('says whether the keychain prompt was denied or left unanswered', async () => {
+    const read = (reason: 'denied' | 'unanswered') => fetchClaudeQuota({ fetch: vi.fn(), readFile: vi.fn(async () => null), allowKeychain: true, keychain: vi.fn(async () => ({ status: 'accessDenied' as const, reason })) })
+    expect((await read('denied')).quota.footerLines).toEqual(['Keychain access to the Claude Code login was denied.'])
+    expect((await read('unanswered')).quota.footerLines).toEqual(['The Keychain prompt for the Claude Code login was not answered.'])
+  })
+
   it('stays disconnected when the keychain has no matching item', async () => {
     const fetchMock = vi.fn()
     const result = await fetchClaudeQuota({ fetch: fetchMock, readFile: vi.fn(async () => null), allowKeychain: true, keychain: vi.fn(async () => ({ status: 'notFound' as const })) })

@@ -17,16 +17,19 @@ const execFileAsync = promisify(execFile)
 export const KEYCHAIN_TIMEOUT_MS = 90_000
 
 /** Outcome of a keychain lookup. `accessDenied` means the item exists but macOS
- * needs the user to grant access (dialog dismissed, denied, or not answered). */
+ * needs the user to grant access; `reason` says when that was the user's own
+ * answer to a prompt (Deny, or the dialog left open until the timeout). */
 export type KeychainOutcome =
   | { status: 'found'; value: string }
   | { status: 'notFound' }
-  | { status: 'accessDenied' }
+  | { status: 'accessDenied'; reason?: KeychainRefusal }
+
+export type KeychainRefusal = 'denied' | 'unanswered'
 
 export type KeychainExec = (
   file: string,
   args: string[],
-  options: { timeout: number; maxBuffer: number },
+  options: { signal: AbortSignal; maxBuffer: number },
 ) => Promise<{ stdout: string }>
 
 // `security -w` hex-encodes password data it can't hand back as a clean C-string
@@ -41,25 +44,38 @@ function decodeKeychainValue(raw: string): string {
   return raw
 }
 
-// exit 44 / "could not be found" is a genuine miss; anything else non-zero
-// (interaction not allowed, user canceled/denied, or a timeout kill while the
-// dialog waited) means the item is there but access wasn't granted.
-function classifyKeychainError(error: unknown): 'notFound' | 'accessDenied' {
+// exit 44 / "could not be found" is a genuine miss. A Deny (exit 128, "User
+// canceled") and our own timer firing while the dialog waited are the user's
+// answer to a prompt. Anything else (interaction not allowed, I/O, a kill or
+// crash we did not cause) means access wasn't granted, but showed no prompt,
+// so the next candidate is tried.
+function classifyKeychainError(error: unknown, timedOut: boolean): 'notFound' | 'denied' | 'unanswered' | 'other' {
+  if (timedOut) return 'unanswered'
   const err = error as { code?: number | string; stderr?: string; message?: string }
-  const code = typeof err.code === 'number' ? err.code : undefined
+  const code = typeof err.code === 'number' || typeof err.code === 'string' ? Number(err.code) : undefined
   const text = `${err.stderr ?? ''} ${err.message ?? ''}`.toLowerCase()
   if (code === 44 || text.includes('could not be found') || text.includes('specified item could not be found')) {
     return 'notFound'
   }
-  return 'accessDenied'
+  if (code === 128 || text.includes('user canceled')) return 'denied'
+  return 'other'
 }
+
+// Items (service plus account) the user refused in this process. A CLI process
+// is one user action, so this holds for exactly that action and is never
+// written anywhere.
+const refusedThisRun = new Map<string, KeychainRefusal>()
 
 /**
  * Reads a generic-password keychain item via the Apple-signed `/usr/bin/security`
  * (which the item's `apple-tool:` partition trusts, avoiding the partition-list
  * prompt on already-consented items). Tries each account candidate in order
- * (`null` = service-only). Never returns or logs the secret to any caller but
- * the direct one.
+ * (`null` = service-only) and stops at a Deny or an unanswered prompt: a later
+ * candidate can match the same item, and asking again is a second prompt the
+ * user already answered. The refusal is kept for the rest of the process: a
+ * later read skips that account (and the service-only lookup, which can match
+ * it) without a prompt. Never returns or logs the secret to any caller but the
+ * direct one.
  */
 export async function readKeychainPassword(
   service: string,
@@ -68,15 +84,32 @@ export async function readKeychainPassword(
 ): Promise<KeychainOutcome> {
   if (process.platform !== 'darwin') return { status: 'notFound' }
   let denied = false
+  let refusal: KeychainRefusal | undefined
   for (const account of accounts) {
+    const item = JSON.stringify([service, account])
+    const remembered = refusedThisRun.get(item)
+    if (remembered) { refusal = remembered; continue }
     const args = ['find-generic-password', '-s', service, ...(account ? ['-a', account] : []), '-w']
+    const controller = new AbortController()
+    let timedOut = false
+    const timer = setTimeout(() => { timedOut = true; controller.abort() }, KEYCHAIN_TIMEOUT_MS)
     try {
-      const { stdout } = await exec('/usr/bin/security', args, { timeout: KEYCHAIN_TIMEOUT_MS, maxBuffer: 64 * 1024 })
+      const { stdout } = await exec('/usr/bin/security', args, { signal: controller.signal, maxBuffer: 64 * 1024 })
       if (stdout && stdout.trim()) return { status: 'found', value: decodeKeychainValue(stdout) }
     } catch (error) {
-      if (classifyKeychainError(error) === 'accessDenied') denied = true
+      const kind = classifyKeychainError(error, timedOut)
+      if (kind === 'denied' || kind === 'unanswered') {
+        refusedThisRun.set(item, kind)
+        // A later service-only lookup can match the refused item and ask again.
+        refusedThisRun.set(JSON.stringify([service, null]), kind)
+        return { status: 'accessDenied', reason: kind }
+      }
+      if (kind === 'other') denied = true
+    } finally {
+      clearTimeout(timer)
     }
   }
+  if (refusal) return { status: 'accessDenied', reason: refusal }
   return denied ? { status: 'accessDenied' } : { status: 'notFound' }
 }
 
