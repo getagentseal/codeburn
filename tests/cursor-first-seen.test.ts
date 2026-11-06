@@ -3,7 +3,7 @@ import { mkdirSync, readdirSync, writeFileSync } from 'fs'
 import { join } from 'path'
 
 import { getCodeburnCacheDir } from '../src/cache-dir.js'
-import { readFirstSeen, writeFirstSeen } from '../src/cursor-cache.js'
+import { CURSOR_CACHE_VERSION, cursorCacheFileName, readFirstSeen, writeFirstSeen } from '../src/cursor-cache.js'
 
 const lockState = vi.hoisted(() => ({ unavailable: false }))
 vi.mock('../src/cache-refresh-lock.js', async (importOriginal) => {
@@ -106,5 +106,10 @@ describe('cursor first-seen sidecar', () => {
       'req-i': '2026-10-09T00:00:00.000Z',
       'req-j': '2026-10-10T00:00:00.000Z',
     })
+  })
+
+  it('retires v7 results, which billed old agent streams at the database mtime', () => {
+    expect(CURSOR_CACHE_VERSION).toBe(8)
+    expect(cursorCacheFileName()).toBe('cursor-results.v8.json')
   })
 })
