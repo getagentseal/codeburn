@@ -280,3 +280,29 @@ describe('grokbot provider', () => {
     expect(computeEnvFingerprint('grokbot')).not.toBe(first)
   })
 })
+
+describe('grokbot sliding mirror', () => {
+  it('keeps requests that slid out of the app\'s mirror window', async () => {
+    const originalCacheDir = process.env['CODEBURN_CACHE_DIR']
+    process.env['CODEBURN_CACHE_DIR'] = join(dir, 'cb-cache')
+    try {
+      const request = (n: number) => [
+        userMessage(`u${n}`, `r${n}`, `question ${n}`, T0 + n * 60_000),
+        botMessage(`b${n}`, `r${n}`, `answer ${n}`.repeat(20), T0 + n * 60_000 + 1000),
+      ]
+      await writeTranscript(BOT_A, [1, 2, 3].flatMap(request))
+      const { clearSessionCache, parseAllSessions } = await import('../../src/parser.js')
+      const servedKeys = async () => (await parseAllSessions(undefined, 'grokbot'))
+        .flatMap(p => p.sessions).flatMap(s => s.turns).flatMap(t => t.assistantCalls).map(c => c.deduplicationKey).sort()
+      clearSessionCache()
+      expect(await servedKeys()).toHaveLength(3)
+
+      await writeTranscript(BOT_A, [2, 3, 4].flatMap(request))
+      clearSessionCache()
+      expect(await servedKeys()).toEqual([1, 2, 3, 4].map(n => `grokbot:${BOT_A}:r${n}`))
+    } finally {
+      if (originalCacheDir === undefined) delete process.env['CODEBURN_CACHE_DIR']
+      else process.env['CODEBURN_CACHE_DIR'] = originalCacheDir
+    }
+  })
+})
