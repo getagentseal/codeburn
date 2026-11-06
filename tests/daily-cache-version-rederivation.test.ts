@@ -314,4 +314,41 @@ describe('re-derive after the November provider fixes (v79)', () => {
 
     expect(providerOn(hydrated.days, daysAgo(10), 'claude')?.calls).toBe(2)
   })
+
+  it('keeps every carried row of a pending provider the fresh parse has no rows for', async () => {
+    await seedV78([entry(daysAgo(12), { codex: slice(3), claude: slice(1) }), entry(daysAgo(10), { codex: slice(2), claude: slice(1) })])
+
+    const hydrated = await hydrate([entry(daysAgo(12), { claude: slice(1) }), entry(daysAgo(10), { claude: slice(1) })])
+
+    expect(providerOn(hydrated.days, daysAgo(12), 'codex')?.calls).toBe(3)
+    expect(providerOn(hydrated.days, daysAgo(10), 'codex')?.calls).toBe(2)
+  })
+
+  it('changes nothing on a second hydration after the entitlement is spent', async () => {
+    const modelled = (calls: number) => ({
+      ...slice(calls),
+      models: { m: { calls, cost: calls, savingsUSD: 0, inputTokens: 100, outputTokens: 20, cacheReadTokens: 30, cacheWriteTokens: 0 } },
+    })
+    const modelledEntry = (date: string, providers: DailyEntry['providers']): DailyEntry => {
+      const e = entry(date, providers)
+      e.inputTokens = Object.values(providers).reduce((sum, p) => sum + (p.inputTokens ?? 0), 0)
+      e.outputTokens = Object.values(providers).reduce((sum, p) => sum + (p.outputTokens ?? 0), 0)
+      e.cacheReadTokens = Object.values(providers).reduce((sum, p) => sum + (p.cacheReadTokens ?? 0), 0)
+      e.models = { m: { calls: e.calls, cost: e.cost, savingsUSD: 0, inputTokens: e.inputTokens, outputTokens: e.outputTokens, cacheReadTokens: e.cacheReadTokens, cacheWriteTokens: 0 } }
+      return e
+    }
+    await seedV78([
+      modelledEntry(daysAgo(12), { codex: modelled(6) }),
+      modelledEntry(daysAgo(10), { codex: modelled(2), claude: modelled(1) }),
+    ])
+    const fresh = [modelledEntry(daysAgo(12), { codex: modelled(6) }), modelledEntry(daysAgo(10), { claude: modelled(1) })]
+
+    const first = await hydrate(fresh)
+    expect(first.pendingRederive).toBeUndefined()
+    expect(providerOn(first.days, daysAgo(10), 'codex')).toBeUndefined()
+    const second = await ensureCacheHydrated(async () => [], () => fresh, 'cfg', () => true)
+    expect(second.days).toEqual(first.days)
+    expect(second.pendingRederive).toBeUndefined()
+    expect(JSON.parse(await readFile(join(cacheRoot, `daily-cache.v${DAILY_CACHE_VERSION}.json`), 'utf-8')).days).toEqual(first.days)
+  })
 })
