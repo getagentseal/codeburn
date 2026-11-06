@@ -181,6 +181,13 @@ describe('copilot chat-session twins of agent-host sessions', () => {
     expect(await servedKeys()).toEqual(['copilot-chatsession:S:r2', 'copilot-otel:s1'])
   })
 
+  it.skipIf(!isSqliteAvailable())('drops every journal request stamped alike when a span shares their stamp', async () => {
+    await writeRequests('S', [['r1', 0], ['r2', 0]])
+    writeOtel('S', ['s1'], at(0))
+
+    expect(await servedKeys()).toEqual(['copilot-otel:s1'])
+  })
+
   it.skipIf(!isSqliteAvailable())('keeps a request added after the trace database is deleted', async () => {
     await writeRequests('S', [['r1', 0]])
     writeOtel('S', ['s1'], at(0.05))

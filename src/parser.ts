@@ -4372,15 +4372,18 @@ export async function parseProviderSources(
       const spans = otelTimes.get(sessionId)
       if (!spans || new Set(candidates.map(c => c.storage)).size !== 1) continue
       for (const transcript of [false, true]) {
-        const list = candidates
-          .filter(c => c.transcript === transcript && !Number.isNaN(c.ts))
-          .sort((a, b) => a.ts - b.ts || a.key.localeCompare(b.key))
-        list.forEach((c, i) => {
-          const from = transcript ? (list[i - 1]?.ts ?? -Infinity) : c.ts
-          const to = transcript ? c.ts : (list[i + 1]?.ts ?? Infinity)
-          const inWindow = (t: number) => transcript ? t > from && t <= to : t >= from && t < to
+        // Calls stamped alike share one window, bounded by the nearest
+        // distinct stamps. The latest journal request's window has no end, so
+        // a stray later span in the session still drops it.
+        const stamps = [...new Set(candidates.filter(c => c.transcript === transcript && !Number.isNaN(c.ts)).map(c => c.ts))].sort((a, b) => a - b)
+        for (const c of candidates) {
+          if (c.transcript !== transcript || Number.isNaN(c.ts)) continue
+          const i = stamps.indexOf(c.ts)
+          const inWindow = transcript
+            ? (t: number) => t > (stamps[i - 1] ?? -Infinity) && t <= c.ts
+            : (t: number) => t >= c.ts && t < (stamps[i + 1] ?? Infinity)
           if (spans.some(inWindow)) otelTwinKeys.add(c.key)
-        })
+        }
       }
     }
     // Session-state per-turn calls carry no per-call project (the serve loop
