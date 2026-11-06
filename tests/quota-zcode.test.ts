@@ -87,6 +87,15 @@ describe('ZCode credential discovery', () => {
     await expect(zcodeAccessToken(deps({ '000003.log': journal }))).resolves.toBe(renewed)
   })
 
+  it('reports a login the newest write cleared as expired, not the older token', async () => {
+    const files = { '000003.log': journalEntry(STORAGE_KEY, TOKEN), '000005.log': journalEntry(STORAGE_KEY, '') }
+    await expect(zcodeAccessToken(deps(files))).resolves.toBe('')
+    const sameFile = Buffer.concat([journalEntry(STORAGE_KEY, TOKEN), journalEntry(STORAGE_KEY, '')])
+    const result = await fetchZcodeQuota({ ...deps({ '000003.log': sameFile }), fetch: neverFetch })
+    expect(result.quota.connection).toBe('terminalFailure')
+    expect(result.quota.footerLines).toEqual(['Login expired. Open the ZCode app and sign in again, then refresh.'])
+  })
+
   it('keeps the most recent write when the key was rotated in place', async () => {
     const journal = Buffer.concat([
       journalEntry(STORAGE_KEY, TOKEN),

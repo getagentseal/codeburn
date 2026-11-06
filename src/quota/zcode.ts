@@ -91,7 +91,8 @@ function varint(data: Buffer, at: number): [number, number] | null {
   return null
 }
 
-/** The last write of the key wins, matching how the journal replays. The key
+/** The last write of the key wins, matching how the journal replays, and an
+ *  empty last write (`''`) means the app cleared the login. The key
  *  is followed by the value's leveldb varint length, then the string flag and
  *  the string itself; the length, not the token alphabet, ends the token,
  *  because the next record's checksum can be token characters too. */
@@ -104,9 +105,9 @@ function tokenAfterKey(data: Buffer): string | null {
       if (!frame) continue
       const [length, start] = frame
       const flag = data[start]
-      if (length < 2 || start + length > data.length || (flag !== 0x00 && flag !== 0x01)) continue
+      if (length < 1 || start + length > data.length || (flag !== 0x00 && flag !== 0x01)) continue
       const value = data.toString(flag === 0x01 ? 'latin1' : 'utf16le', start + 1, start + length)
-      if (at > tokenAt && TOKEN_PATTERN.test(value)) {
+      if (at > tokenAt && (value === '' || TOKEN_PATTERN.test(value))) {
         token = value
         tokenAt = at
       }
@@ -115,7 +116,8 @@ function tokenAfterKey(data: Buffer): string | null {
   return token
 }
 
-/** `null` when no journal holds the login — the same state as never signed in. */
+/** `null` when no journal holds the login — the same state as never signed in;
+ *  `''` when the newest write cleared it. */
 export async function zcodeAccessToken(deps: ZcodeDeps): Promise<string | null> {
   let names: string[]
   try { names = await deps.readDir(deps.storageDir) } catch { return null }
@@ -145,6 +147,7 @@ export async function fetchZcodeQuota(options: Partial<ZcodeDeps> & { signal?: A
   try {
     const token = await zcodeAccessToken(deps)
     if (token === null) return { quota: empty('disconnected') }
+    if (token === '') return { quota: empty('terminalFailure', EXPIRED_FOOTER) }
 
     const response = await deps.fetch(USAGE_ENDPOINT, {
       method: 'GET', signal: quotaRequestSignal(options.signal),
