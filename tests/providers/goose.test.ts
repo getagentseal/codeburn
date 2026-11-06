@@ -38,7 +38,8 @@ sqliteDescribe('Goose timestamps', () => {
     }
     const db = new DatabaseSync(dbPath)
     db.exec(`
-      CREATE TABLE sessions (id TEXT PRIMARY KEY, name TEXT, working_dir TEXT, created_at TIMESTAMP, updated_at TIMESTAMP,
+      CREATE TABLE sessions (id TEXT PRIMARY KEY, name TEXT, working_dir TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         accumulated_input_tokens INTEGER, accumulated_output_tokens INTEGER, provider_name TEXT, model_config_json TEXT);
       CREATE TABLE messages (session_id TEXT, message_id TEXT, role TEXT, content_json TEXT, created_timestamp INTEGER);
       INSERT INTO sessions VALUES ('s1', 't', '/w', '2026-10-01 23:30:00', '2026-10-01 23:30:00', 100, 20, 'openai', '{"model_name":"gpt-5.4"}');
