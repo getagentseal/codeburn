@@ -460,6 +460,25 @@ describe.skipIf(skipReason !== null)('cursor real context tokens (#575)', () => 
     expect(calls.some(c => c.deduplicationKey === 'cursor:agentKv:req-alone')).toBe(true)
   })
 
+  it('skips a structurally malformed JSONB bubble and composer value and keeps the rest', async () => {
+    const composerId = '44449999-1111-2222-3333-444455556666'
+    const malformedJsonb = Buffer.from([0x2c, 0x17, 0x61])
+    const dbPath = buildDb((db) => {
+      insertComposerData(db, { composerId, totalUsedTokens: 10000 })
+      insertBubble(db, { composerId, bubbleUuid: 'b1', type: 1, text: 'prompt' })
+      insertBubble(db, { composerId, bubbleUuid: 'b2', type: 2, text: 'reply', model: 'gpt-5' })
+      const insert = db.prepare('INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)')
+      insert.run(`bubbleId:${composerId}:badjsonb`, malformedJsonb)
+      insert.run('composerData:4444aaaa-1111-2222-3333-444455556666', malformedJsonb)
+    })
+
+    const calls = await collectCalls(createCursorProvider(dbPath), dbPath)
+
+    expect(calls.find(c => c.deduplicationKey === `cursor:composer-input:${composerId}`)?.inputTokens).toBe(10000)
+    expect(calls.some(c => c.deduplicationKey.endsWith(':b2'))).toBe(true)
+    expect(calls.some(c => c.deduplicationKey.endsWith(':badjsonb'))).toBe(false)
+  })
+
   it('reads a bubble stored as JSONB', async () => {
     const composerId = '44446666-1111-2222-3333-444455556666'
     const dbPath = buildDb((db) => {
