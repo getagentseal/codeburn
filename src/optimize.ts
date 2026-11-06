@@ -1422,7 +1422,9 @@ function isReadTool(name: string): boolean {
 
 type McpConfigEntry = {
   normalized: string
-  original: string
+  // Every config name that maps to this namespace: "a.b" and "a:b" both
+  // become "a_b", but each is its own key a plan has to find.
+  originals: string[]
   mtime: number
   // Config files where this server entry carries `"alwaysLoad": true`
   // (union across all readable scopes, so the hygiene fix can name every
@@ -1462,11 +1464,13 @@ export function loadMcpConfigs(projectCwds: Iterable<string>): Map<string, McpCo
       if (!existing || existing.mtime < mtime) {
         servers.set(normalized, {
           normalized,
-          original: name,
+          originals: existing?.originals ?? [],
           mtime,
           alwaysLoadPaths: existing?.alwaysLoadPaths ?? [],
         })
       }
+      const server = servers.get(normalized)!
+      if (!server.originals.includes(name)) server.originals.push(name)
       const entry = rawEntry as Record<string, unknown> | null
       if (entry && typeof entry === 'object' && entry.alwaysLoad === true) {
         servers.get(normalized)!.alwaysLoadPaths.push(p)
@@ -2665,7 +2669,7 @@ export function detectUnusedMcp(
     if (calledServers.has(entry.normalized)) continue
     if (coverageReportedServers.has(entry.normalized)) continue
     if (entry.mtime > 0 && now - entry.mtime < MCP_NEW_CONFIG_GRACE_MS) continue
-    unused.push(entry.original)
+    unused.push(...entry.originals)
   }
 
   if (unused.length === 0) return null
@@ -3084,11 +3088,11 @@ export function detectMcpAlwaysLoadHygiene(
       const sessions = coverage ? allSessions.filter(s => sessionLoadedMcpServer(s, entry.normalized)) : allSessions
       savingsUSD += perSessionSchemaUSD(pricing, sessions, serverTokens)
     }
-    lines.push(`${entry.original}: ${invocations} call${invocations === 1 ? '' : 's'} across ${totalSessions} session${totalSessions === 1 ? '' : 's'}`)
-    fixLines.push(`- Remove "alwaysLoad": true from ${entry.original} in ${entry.alwaysLoadPaths.map(shortHomePath).join(', ')}.`)
+    lines.push(`${entry.originals.join(', ')}: ${invocations} call${invocations === 1 ? '' : 's'} across ${totalSessions} session${totalSessions === 1 ? '' : 's'}`)
+    fixLines.push(`- Remove "alwaysLoad": true from ${entry.originals.join(', ')} in ${entry.alwaysLoadPaths.map(shortHomePath).join(', ')}.`)
     // Original (config-key) name plus the exact files carrying the pin, so
     // the defer-alwaysload plan edits precisely what was observed.
-    applyServers.push({ server: entry.original, paths: entry.alwaysLoadPaths })
+    for (const server of entry.originals) applyServers.push({ server, paths: entry.alwaysLoadPaths })
   }
   if (lines.length === 0) return null
 
