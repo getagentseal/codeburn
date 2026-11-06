@@ -37,9 +37,9 @@ function varint(n: number): Buffer {
 }
 
 /** A put record's tag, key length and key, in the key name's encoding. */
-function recordHead(key: string, encoding: 'latin1' | 'utf16le' = 'latin1'): Buffer {
+function recordHead(key: string, encoding: 'latin1' | 'utf16le' = 'latin1', origin = 'https://zcode.z.ai'): Buffer {
   const dbKey = Buffer.concat([
-    Buffer.from('_https://zcode.z.ai', 'latin1'),
+    Buffer.from(`_${origin}`, 'latin1'),
     Buffer.from([0x00, encoding === 'latin1' ? 0x01 : 0x00]),
     Buffer.from(key, encoding),
   ])
@@ -127,6 +127,28 @@ describe('ZCode credential discovery', () => {
       journalEntry('zcode:settings', `{"tokenKey":"${STORAGE_KEY}","theme":"dark"}`),
     ])
     await expect(zcodeAccessToken(deps({ '000003.log': journal }))).resolves.toBe(TOKEN)
+  })
+
+  it('ignores the same key written under another origin', async () => {
+    const other = 'eyJhbGciOiJIUzU1MiJ9.synthetic-login-of-another-origin.sig'
+    const journal = Buffer.concat([
+      journalEntry(STORAGE_KEY, TOKEN),
+      recordHead(STORAGE_KEY, 'latin1', 'https://chat.z.ai'), varint(other.length + 1), Buffer.from([0x01]), Buffer.from(other, 'latin1'),
+    ])
+    await expect(zcodeAccessToken(deps({ '000003.log': journal }))).resolves.toBe(TOKEN)
+  })
+
+  it('reads an odd-length UTF-16 newest write as unreadable, never as a trimmed token', async () => {
+    const bytes = Buffer.concat([Buffer.from('eyJhbGciOiJIUzU1MiJ9.synthetic-zcode-renewal.sig', 'utf16le'), Buffer.from([0x41])])
+    const journal = Buffer.concat([
+      journalEntry(STORAGE_KEY, TOKEN),
+      recordHead(STORAGE_KEY, 'utf16le'), varint(bytes.length + 1), Buffer.from([0x00]), bytes,
+    ])
+    await expect(zcodeAccessToken(deps({ '000003.log': journal }))).rejects.toThrow('could not be read')
+    const fetchMock = vi.fn()
+    const result = await fetchZcodeQuota({ ...deps({ '000003.log': journal }), fetch: fetchMock as unknown as typeof fetch })
+    expect(result.quota.connection).toBe('transientFailure')
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 
   it('reads a deleted key as a cleared login', async () => {

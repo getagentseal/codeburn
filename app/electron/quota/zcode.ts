@@ -107,20 +107,22 @@ function varint(data: Buffer, at: number): [number, number] | null {
   return null
 }
 
-/** The tag (1 put, 0 delete) of the leveldb record whose key ends in the name
- *  at `at`, or null when those bytes are not a record key: the name can also
- *  sit inside some other entry's value. A record is the tag, a varint key
- *  length, then the key `_<origin>\0<flag><name>`. */
+/** The key the app's coding-plan page writes under: `_`, its origin, a NUL,
+ *  then the string flag and the key name (recorded journal in #1347). */
+const ORIGIN_PREFIX = Buffer.from('_https://zcode.z.ai\0', 'latin1')
+
+/** The tag (1 put, 0 delete) of the leveldb record whose key is ZCode's origin
+ *  plus the name at `at`, or null when those bytes are not such a record key:
+ *  the name can also sit under another origin or inside some other value. A
+ *  record is the tag, a varint key length, then the key. */
 function recordTag(data: Buffer, at: number, name: Buffer, flag: number): number | null {
-  if (data[at - 1] !== flag || data[at - 2] !== 0x00) return null
-  const end = at + name.length
-  for (let keyStart = at - 3; keyStart >= Math.max(2, at - 512); keyStart--) {
-    if (data[keyStart] !== 0x5f) continue
-    for (let n = 1; n <= 3 && keyStart - n >= 1; n++) {
-      const length = varint(data, keyStart - n)
-      const tag = data[keyStart - n - 1]
-      if (length && length[1] === keyStart && length[0] === end - keyStart && (tag === 0x00 || tag === 0x01)) return tag
-    }
+  const keyStart = at - 1 - ORIGIN_PREFIX.length
+  if (keyStart < 2 || data[at - 1] !== flag || !data.subarray(keyStart, at - 1).equals(ORIGIN_PREFIX)) return null
+  const keyLength = at + name.length - keyStart
+  for (let n = 1; n <= 3 && keyStart - n >= 1; n++) {
+    const length = varint(data, keyStart - n)
+    const tag = data[keyStart - n - 1]
+    if (length && length[1] === keyStart && length[0] === keyLength && (tag === 0x00 || tag === 0x01)) return tag
   }
   return null
 }
@@ -145,6 +147,7 @@ function tokenAfterKey(data: Buffer): string | null {
     const [length, start] = frame ?? [0, 0]
     const flag = data[start]
     if (length < 1 || start + length > data.length || (flag !== 0x00 && flag !== 0x01)) throw new Error(UNREADABLE)
+    if (flag === 0x00 && (length - 1) % 2 !== 0) throw new Error(UNREADABLE)
     const value = data.toString(flag === 0x01 ? 'latin1' : 'utf16le', start + 1, start + length)
     if (value !== '' && !TOKEN_PATTERN.test(value)) throw new Error(UNREADABLE)
     return value
