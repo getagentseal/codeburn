@@ -22,11 +22,18 @@ const successBody = {
 
 const okJson = (value: unknown) => new Response(JSON.stringify(value), { status: 200 })
 
+function varint(n: number): Buffer {
+  const out: number[] = []
+  for (; n >= 0x80; n = Math.floor(n / 0x80)) out.push((n % 0x80) | 0x80)
+  out.push(n)
+  return Buffer.from(out)
+}
+
 function journalEntry(key: string, value: string): Buffer {
   return Buffer.concat([
     Buffer.from('META:https://z.ai', 'latin1'),
     Buffer.from(key, 'latin1'),
-    Buffer.from([0xfb, 0x0a, 0x01]), // varint length + Chromium string marker
+    varint(value.length + 1), Buffer.from([0x01]), // frame length + Chromium string marker
     Buffer.from(value, 'latin1'),
   ])
 }
@@ -52,10 +59,15 @@ describe('ZCode journal credential', () => {
   it('reads a UTF-16LE encoded entry as well', async () => {
     const entry = Buffer.concat([
       Buffer.from(STORAGE_KEY, 'utf16le'),
-      Buffer.from([0x01, 0x00]), // Chromium string marker as UTF-16LE \u0001
+      varint(TOKEN.length * 2 + 1), Buffer.from([0x00]), // frame length + UTF-16LE string marker
       Buffer.from(TOKEN, 'utf16le'),
     ])
     await expect(zcodeAccessToken(deps({ '000003.log': entry }))).resolves.toBe(TOKEN)
+  })
+
+  it('ends the token at its frame length, not at the next record\'s checksum bytes', async () => {
+    const journal = Buffer.concat([journalEntry(STORAGE_KEY, TOKEN), Buffer.from([0x41, 0x7a, 0x33, 0x9c, 0x20, 0x00, 0x01])])
+    await expect(zcodeAccessToken(deps({ '000003.log': journal }))).resolves.toBe(TOKEN)
   })
 
   it('keeps the most recent write when the key was rotated in place', async () => {

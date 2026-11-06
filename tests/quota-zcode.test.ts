@@ -26,19 +26,22 @@ const successBody = {
 
 /** Byte-faithful to a recorded ZCode journal (redacted hexdump in the #1347
  *  review thread): the map key is the origin, a NUL, the 0x01 one-byte-string
- *  flag and the key name; the value frame is a varint length, the same 0x01
- *  flag, then the value's Latin-1 bytes. The gap bytes are copied from the
- *  recording — the real login is 1,403 bytes, whose length encodes as
- *  `fb 0a`, neither of which is a token character. That matters: the scanner
- *  reads the frame as key + non-token gap + token, so a length varint that
- *  collided with the token alphabet (only possible for a login under ~130
- *  bytes; the recorded HS512 JWT is ~1,400) could not be matched. */
+ *  flag and the key name; the value frame is a varint length covering the same
+ *  0x01 flag plus the value's Latin-1 bytes. The recorded login's frame length
+ *  encodes as `fb 0a` (1,403). */
+function varint(n: number): Buffer {
+  const out: number[] = []
+  for (; n >= 0x80; n = Math.floor(n / 0x80)) out.push((n % 0x80) | 0x80)
+  out.push(n)
+  return Buffer.from(out)
+}
+
 function journalEntry(key: string, value: string): Buffer {
   return Buffer.concat([
     Buffer.from('https://zcode.z.ai', 'latin1'),
     Buffer.from([0x00, 0x01]),
     Buffer.from(key, 'latin1'),
-    Buffer.from([0xfb, 0x0a]),
+    varint(value.length + 1),
     Buffer.from([0x01]),
     Buffer.from(value, 'latin1'),
   ])
@@ -62,6 +65,17 @@ describe('ZCode credential discovery', () => {
   it('reads the login out of the newest Local Storage journal', async () => {
     const base = deps({ '000003.log': journalEntry(STORAGE_KEY, TOKEN) })
     await expect(zcodeAccessToken(base)).resolves.toBe(TOKEN)
+  })
+
+  it('ends the token at its frame length, not at the next record\'s checksum bytes', async () => {
+    const login = 'eyJhbGciOiJIUzUxMiJ9.' + 'a'.repeat(1377) + '.sig'
+    const journal = Buffer.concat([
+      journalEntry(STORAGE_KEY, login),
+      // The next physical record's header: a CRC whose first bytes read as "Az3", length, type.
+      Buffer.from([0x41, 0x7a, 0x33, 0x9c, 0x20, 0x00, 0x01]),
+    ])
+    expect(journal.includes(Buffer.from([0xfb, 0x0a, 0x01]))).toBe(true)
+    await expect(zcodeAccessToken(deps({ '000003.log': journal }))).resolves.toBe(login)
   })
 
   it('keeps the most recent write when the key was rotated in place', async () => {
