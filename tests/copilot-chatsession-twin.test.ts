@@ -140,4 +140,20 @@ describe('copilot chat-session twins of agent-host sessions', () => {
     const keys = await servedKeys()
     expect(keys).toEqual(['copilot-chatsession:untraced:r1', 'copilot-otel:s1'])
   })
+
+  it.skipIf(!isSqliteAvailable())('drops the transcript of a session agent-traces.db recorded', async () => {
+    writeOtel('traced')
+    const ws = join(tmp, 'ws', 'hash1')
+    await mkdir(join(ws, 'GitHub.copilot-chat', 'transcripts'), { recursive: true })
+    await writeFile(join(ws, 'workspace.json'), JSON.stringify({ folder: 'file:///tmp/projA' }))
+    for (const id of ['traced', 'untraced']) {
+      await writeFile(join(ws, 'GitHub.copilot-chat', 'transcripts', `${id}.jsonl`), [
+        ev('session.start', '2026-08-05T12:00:00Z', { producer: 'copilot-agent' }),
+        ev('assistant.message', '2026-08-05T12:00:01Z', { messageId: 'm1', toolRequests: [{ toolCallId: 'call_1', name: 'readFile' }] }),
+      ].join('\n') + '\n')
+    }
+    process.env['CODEBURN_COPILOT_WS_STORAGE_DIR'] = join(tmp, 'ws')
+
+    expect(await servedKeys()).toEqual(['copilot-otel:s1', 'copilot:untraced:m1'])
+  })
 })

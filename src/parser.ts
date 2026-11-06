@@ -4324,8 +4324,9 @@ export async function parseProviderSources(
     // record of the same requests, so it is left out at serve time. A
     // session-state file with no usage yet keeps the journal.
     const agentHostUsageSessions = new Set<string>()
-    // A chat-session journal of a session agent-traces.db recorded holds the
-    // same requests under other keys; OTel wins for that session only.
+    // A chat-session journal or VS Code transcript of a session
+    // agent-traces.db recorded holds the same requests under other keys; OTel
+    // wins for that session only.
     const otelSessions = new Set<string>()
     for (const cachedFile of Object.values(section.files)) {
       for (const turn of cachedFile.turns) {
@@ -4345,7 +4346,8 @@ export async function parseProviderSources(
         for (const c of turn.calls) {
           if (seenAggKeys.has(c.deduplicationKey)) continue
           seenAggKeys.add(c.deduplicationKey)
-          if (otelSessions.has(turn.sessionId) && c.deduplicationKey.startsWith('copilot-chatsession:')) {
+          if (otelSessions.has(turn.sessionId) &&
+            (c.deduplicationKey.startsWith('copilot-chatsession:') || basename(dirname(cachedPath)) === 'transcripts')) {
             otelTwinKeys.add(c.deduplicationKey)
             continue
           }
