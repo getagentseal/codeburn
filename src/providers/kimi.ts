@@ -248,7 +248,11 @@ function createParser(source: SessionSource, shareDir: string, seenKeys: Set<str
       const tools = new Set<string>()
       const bashCommands = new Set<string>()
       let currentUserMessage = ''
-      const sessionId = basename(dirname(source.path))
+      // Subagent dirs (agent-1, ...) repeat across sessions; prefix the parent session.
+      const dir = dirname(source.path)
+      const sessionId = basename(dirname(dir)) === 'subagents'
+        ? `${basename(dirname(dirname(dir)))}/${basename(dir)}`
+        : basename(dir)
       let index = 0
 
       for await (const line of readSessionLines(source.path)) {
