@@ -28,6 +28,7 @@ const RULES: Array<{ file: string; names: string[] }> = [
 
 const DIGEST_BY_VERSION: Record<number, string> = {
   1: '77acc4ce0a481dd68d44e48d10f51ea91567a9c9898bde727dbaf9e7947ab6b1',
+  2: 'f668c0185a1b654b7743d0b7345058e999edb98124271942f48415b2155a8f8c',
 }
 
 /// A top-level declaration, from its name to the column-0 bracket closing it,

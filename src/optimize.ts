@@ -1422,7 +1422,9 @@ function isReadTool(name: string): boolean {
 
 type McpConfigEntry = {
   normalized: string
-  original: string
+  // Every config name that maps to this namespace: "a.b" and "a:b" both
+  // become "a_b", but each is its own key a plan has to find.
+  originals: string[]
   mtime: number
   // Config files where this server entry carries `"alwaysLoad": true`
   // (union across all readable scopes, so the hygiene fix can name every
@@ -1432,14 +1434,31 @@ type McpConfigEntry = {
   alwaysLoadPaths: string[]
 }
 
-// `homeDir` is injectable for tests (mirrors src/act/plans.ts PlanContext);
-// production callers omit it.
-export function loadMcpConfigs(projectCwds: Iterable<string>, homeDir = homedir()): Map<string, McpConfigEntry> {
+/// A server's name as Claude Code writes it into tool names (mcp__<name>__tool):
+/// every character outside letters, digits, "_" and "-" becomes "_".
+export function mcpNamespace(name: string): string {
+  return name.replace(/[^A-Za-z0-9_-]/g, '_')
+}
+
+/// The server half of an mcp__<server>__<tool> name. Either half may contain
+/// "__", so the longest known server namespace wins; an unknown server falls
+/// back to the first segment, the way the parser keys its MCP breakdown.
+/// With servers "a" and "a__b" both configured, mcp__a__b__c is ambiguous in
+/// Claude Code's own encoding (it joins with "__" and escapes nothing).
+export function mcpServerOf(toolName: string, known: Iterable<string>): string | undefined {
+  const rest = toolName.slice('mcp__'.length)
+  let best: string | undefined
+  for (const ns of known) {
+    if (rest.startsWith(ns + '__') && ns.length > (best?.length ?? 0)) best = ns
+  }
+  return best ?? toolName.split('__')[1]
+}
+
+// Claude Code does not read mcpServers from ~/.claude/settings*.json (user
+// servers live in ~/.claude.json), and the remove plan never edits them.
+export function loadMcpConfigs(projectCwds: Iterable<string>): Map<string, McpConfigEntry> {
   const servers = new Map<string, McpConfigEntry>()
-  const configPaths = [
-    join(homeDir, '.claude', 'settings.json'),
-    join(homeDir, '.claude', 'settings.local.json'),
-  ]
+  const configPaths: string[] = []
   for (const cwd of projectCwds) {
     configPaths.push(join(cwd, '.mcp.json'))
     configPaths.push(join(cwd, '.claude', 'settings.json'))
@@ -1454,16 +1473,18 @@ export function loadMcpConfigs(projectCwds: Iterable<string>, homeDir = homedir(
     try { mtime = statSync(p).mtimeMs } catch {}
     const serversObj = (config.mcpServers ?? {}) as Record<string, unknown>
     for (const [name, rawEntry] of Object.entries(serversObj)) {
-      const normalized = name.replace(/:/g, '_')
+      const normalized = mcpNamespace(name)
       const existing = servers.get(normalized)
       if (!existing || existing.mtime < mtime) {
         servers.set(normalized, {
           normalized,
-          original: name,
+          originals: existing?.originals ?? [],
           mtime,
           alwaysLoadPaths: existing?.alwaysLoadPaths ?? [],
         })
       }
+      const server = servers.get(normalized)!
+      if (!server.originals.includes(name)) server.originals.push(name)
       const entry = rawEntry as Record<string, unknown> | null
       if (entry && typeof entry === 'object' && entry.alwaysLoad === true) {
         servers.get(normalized)!.alwaysLoadPaths.push(p)
@@ -1474,8 +1495,8 @@ export function loadMcpConfigs(projectCwds: Iterable<string>, homeDir = homedir(
 }
 
 /// Server names owned by readable local MCP config, normalized the way
-/// transcript namespaces are (":" -> "_"). `loadMcpConfigs` covers
-/// settings.json and .mcp.json; `~/.claude.json` adds the top-level and
+/// transcript namespaces are (mcpNamespace). `loadMcpConfigs` covers
+/// project settings and .mcp.json; `~/.claude.json` adds the top-level and
 /// per-project `mcpServers` containers the remove plan also edits.
 ///
 /// A `claude_ai_*` namespace listed here is a local server that happens to
@@ -1483,13 +1504,13 @@ export function loadMcpConfigs(projectCwds: Iterable<string>, homeDir = homedir(
 /// read simply contributes no names, which leaves those namespaces on the
 /// conservative connector path.
 export function localMcpServerNames(projectCwds: Iterable<string>, homeDir = homedir()): Set<string> {
-  const names = new Set(loadMcpConfigs(projectCwds, homeDir).keys())
+  const names = new Set(loadMcpConfigs(projectCwds).keys())
   const userJson = readJsonFile(join(homeDir, '.claude.json'))
   const projects = (userJson?.['projects'] ?? {}) as Record<string, { mcpServers?: unknown } | null>
   const containers = [userJson?.['mcpServers'], ...Object.values(projects).map(entry => entry?.mcpServers)]
   for (const container of containers) {
     if (!container || typeof container !== 'object') continue
-    for (const name of Object.keys(container)) names.add(name.replace(/:/g, '_'))
+    for (const name of Object.keys(container)) names.add(mcpNamespace(name))
   }
   return names
 }
@@ -2631,7 +2652,7 @@ export function detectUnusedMcp(
   const calledServers = new Set<string>()
   for (const call of calls) {
     if (!call.name.startsWith('mcp__')) continue
-    const seg = call.name.split('__')[1]
+    const seg = mcpServerOf(call.name, configured.keys())
     if (seg) calledServers.add(seg)
   }
   for (const p of projects) {
@@ -2662,12 +2683,14 @@ export function detectUnusedMcp(
     if (calledServers.has(entry.normalized)) continue
     if (coverageReportedServers.has(entry.normalized)) continue
     if (entry.mtime > 0 && now - entry.mtime < MCP_NEW_CONFIG_GRACE_MS) continue
-    unused.push(entry.original)
+    unused.push(...entry.originals)
   }
 
   if (unused.length === 0) return null
 
-  const totalSessions = countSessions(projects)
+  // The servers come from Claude Code config, so only Claude sessions load them.
+  const claudeProjects = projects.map(p => ({ sessions: p.sessions.filter(isClaudeSession) }))
+  const totalSessions = countSessions(claudeProjects)
   const schemaTokensPerSession = unused.length * TOOLS_PER_MCP_SERVER * TOKENS_PER_MCP_TOOL
   const tokensSaved = schemaTokensPerSession * Math.max(totalSessions, 1)
 
@@ -2677,7 +2700,7 @@ export function detectUnusedMcp(
     explanation: `Never called in this period: ${unused.join(', ')}. Each server loads ~${TOOLS_PER_MCP_SERVER * TOKENS_PER_MCP_TOOL} tokens of tool schema into every session.`,
     impact: unused.length >= UNUSED_MCP_HIGH_THRESHOLD ? 'high' : 'medium',
     tokensSaved,
-    ...(pricing ? { savingsUSD: perSessionSchemaUSD(pricing, projects.flatMap(p => p.sessions), tokensSaved) } : {}),
+    ...(pricing ? { savingsUSD: perSessionSchemaUSD(pricing, claudeProjects.flatMap(p => p.sessions), tokensSaved) } : {}),
     apply: { kind: 'mcp-remove', servers: unused },
     fix: {
       type: 'command',
@@ -2925,12 +2948,13 @@ export function detectMcpDeferralOff(
   apiCalls: ApiCallMeta[],
   homeDir = homedir(),
   pricing?: FindingPricing,
+  unusedMcpServers: Set<string> = new Set(),
 ): WasteFinding | null {
   // Deferral-active evidence anywhere in the window suppresses the finding.
   if (calls.some(c => c.name === TOOL_SEARCH_TOOL_NAME)) return null
   if (anySessionHasMcpInventory(projects)) return null
 
-  const configured = loadMcpConfigs(projectCwds, homeDir)
+  const configured = loadMcpConfigs(projectCwds)
   // Servers pinned with alwaysLoad load upfront BY DESIGN: they are never
   // deferred (so their missing inventory is not evidence deferral is
   // broken), and their schema cost is mcp-alwaysload-hygiene's jurisdiction
@@ -2938,14 +2962,15 @@ export function detectMcpDeferralOff(
   const pinnedServers = new Set(
     [...configured.values()].filter(e => e.alwaysLoadPaths.length > 0).map(e => e.normalized),
   )
-  const configuredUnpinned = [...configured.keys()].filter(s => !pinnedServers.has(s))
+  // unused-mcp already charges a never-called server's schema.
+  const configuredUnpinned = [...configured.keys()].filter(s => !pinnedServers.has(s) && !unusedMcpServers.has(s))
 
   // `calls` comes from scanSessions, which reads Claude Code JSONL only, so
   // it is already Claude-scoped (see isClaudeSession for why that matters).
   const observedServers = new Set<string>()
   for (const call of calls) {
     if (!call.name.startsWith('mcp__')) continue
-    const seg = call.name.split('__')[1]
+    const seg = mcpServerOf(call.name, configured.keys())
     if (seg && !pinnedServers.has(seg)) observedServers.add(seg)
   }
   let invocations = 0
@@ -3029,11 +3054,11 @@ export function detectMcpAlwaysLoadHygiene(
   projectCwds: Set<string>,
   apiCalls: ApiCallMeta[] = [],
   mcpCoverage = aggregateMcpCoverage(projects),
-  homeDir = homedir(),
   pricing?: FindingPricing,
+  unusedMcpServers: Set<string> = new Set(),
 ): WasteFinding | null {
-  const configured = loadMcpConfigs(projectCwds, homeDir)
-  const pinned = [...configured.values()].filter(e => e.alwaysLoadPaths.length > 0)
+  const configured = loadMcpConfigs(projectCwds)
+  const pinned = [...configured.values()].filter(e => e.alwaysLoadPaths.length > 0 && !unusedMcpServers.has(e.normalized))
   if (pinned.length === 0) return null
 
   // When every observed Claude Code version predates server-level
@@ -3077,11 +3102,11 @@ export function detectMcpAlwaysLoadHygiene(
       const sessions = coverage ? allSessions.filter(s => sessionLoadedMcpServer(s, entry.normalized)) : allSessions
       savingsUSD += perSessionSchemaUSD(pricing, sessions, serverTokens)
     }
-    lines.push(`${entry.original}: ${invocations} call${invocations === 1 ? '' : 's'} across ${totalSessions} session${totalSessions === 1 ? '' : 's'}`)
-    fixLines.push(`- Remove "alwaysLoad": true from ${entry.original} in ${entry.alwaysLoadPaths.map(shortHomePath).join(', ')}.`)
+    lines.push(`${entry.originals.join(', ')}: ${invocations} call${invocations === 1 ? '' : 's'} across ${totalSessions} session${totalSessions === 1 ? '' : 's'}`)
+    fixLines.push(`- Remove "alwaysLoad": true from ${entry.originals.join(', ')} in ${entry.alwaysLoadPaths.map(shortHomePath).join(', ')}.`)
     // Original (config-key) name plus the exact files carrying the pin, so
     // the defer-alwaysload plan edits precisely what was observed.
-    applyServers.push({ server: entry.original, paths: entry.alwaysLoadPaths })
+    for (const server of entry.originals) applyServers.push({ server, paths: entry.alwaysLoadPaths })
   }
   if (lines.length === 0) return null
 
@@ -3134,7 +3159,7 @@ export function detectMcpDeferThreshold(
   // and deferral is working; nothing to tune.
   if (anySessionHasMcpInventory(projects)) return null
 
-  const configured = loadMcpConfigs(projectCwds, homeDir)
+  const configured = loadMcpConfigs(projectCwds)
   const servers = new Set(configured.keys())
   // Claude-scoped for the same reason as detectMcpDeferralOff: other
   // providers' sessions carry MCP breakdowns but not this override's cost.
@@ -3557,7 +3582,7 @@ export async function detectGhostSkills(calls: ToolCall[]): Promise<WasteFinding
 export function commandNames(text: string): string[] {
   const names: string[] = []
   for (const m of text.matchAll(COMMAND_PATTERN)) {
-    const name = (m[1] || m[2] || '').trim()
+    const name = (m[1] || m[2] || '').trim().replace(/^\//, '')
     if (name) names.push(name)
   }
   return names
@@ -3590,22 +3615,9 @@ export async function detectGhostCommands(names: string[]): Promise<WasteFinding
   }
 }
 
-function readShellProfileLimit(): number | null {
-  for (const profile of SHELL_PROFILES) {
-    const path = join(homedir(), profile)
-    if (!existsSync(path)) continue
-    const content = readSessionFileSync(path)
-    if (content === null) continue
-    const match = content.match(/^\s*export\s+BASH_MAX_OUTPUT_LENGTH\s*=\s*['"]?(\d+)['"]?/m)
-    if (match) return parseInt(match[1], 10)
-  }
-  return null
-}
-
-export function detectBashBloat(): WasteFinding | null {
-  const profileLimit = readShellProfileLimit()
-  const envLimit = process.env['BASH_MAX_OUTPUT_LENGTH']
-  const configured = profileLimit ?? (envLimit ? parseInt(envLimit, 10) : null)
+export function detectBashBloat(projectCwds: Iterable<string> = []): WasteFinding | null {
+  const setting = findDeferralEnvSetting('BASH_MAX_OUTPUT_LENGTH', projectCwds)?.value ?? process.env['BASH_MAX_OUTPUT_LENGTH']
+  const configured = setting ? parseInt(setting, 10) : null
 
   if (configured !== null && configured <= BASH_RECOMMENDED_LIMIT) return null
 
@@ -4189,7 +4201,6 @@ function plural(n: number, word: string): string {
 
 export function detectFastModeBackground(projects: ProjectSummary[]): WasteFinding | null {
   let calls = 0
-  let outputTokens = 0
   let premiumUSD = 0
   const models = new Set<string>()
   for (const project of projects) {
@@ -4201,7 +4212,6 @@ export function detectFastModeBackground(projects: ProjectSummary[]): WasteFindi
           const premium = call.costUSD - repricedCallUSD(call, 'standard', call.provider)
           if (premium <= 0) continue
           calls++
-          outputTokens += call.usage.outputTokens
           premiumUSD += premium
           models.add(getShortModelName(call.model))
         }
@@ -4215,7 +4225,8 @@ export function detectFastModeBackground(projects: ProjectSummary[]): WasteFindi
     title: `Fast mode cost ${formatCost(premiumUSD)} extra on background agents`,
     explanation: `${plural(calls, 'fast-mode call')} ran inside subagent sessions on ${[...models].sort().join(', ')}, where nobody waits for the reply. At standard speed the same tokens would have cost ${formatCost(premiumUSD)} less. Some background runs need the speed, so this is a habit check, not a rule.`,
     impact: premiumImpact(premiumUSD),
-    tokensSaved: outputTokens,
+    // Standard speed bills the same tokens at a lower rate: dollars saved, no tokens.
+    tokensSaved: 0,
     savingsUSD: premiumUSD,
     fix: {
       type: 'paste',
@@ -4541,17 +4552,19 @@ export async function scanAndDetect(
   // unused when it was simply not measured.
   const claudeOnly = (detect: () => WasteFinding | null): (() => WasteFinding | null) =>
     scanCoversClaude ? detect : () => null
+  const unusedMcp = scanCoversClaude ? detectUnusedMcp(toolCalls, projects, projectCwds, mcpCoverage, pricing) : null
+  const unusedMcpServers = new Set(unusedMcp?.apply?.kind === 'mcp-remove' ? unusedMcp.apply.servers.map(mcpNamespace) : [])
   const syncDetectors: Array<() => WasteFinding | null> = [
     claudeOnly(() => detectCacheBloat(apiCalls, projects, dateRange, pricing)),
     claudeOnly(() => detectLowReadEditRatio(toolCalls)),
     claudeOnly(() => detectJunkReads(toolCalls, dateRange, pricing)),
     claudeOnly(() => detectDuplicateReads(toolCalls, dateRange, pricing)),
-    claudeOnly(() => detectUnusedMcp(toolCalls, projects, projectCwds, mcpCoverage, pricing)),
+    () => unusedMcp,
     () => detectMcpToolCoverage(projects, mcpCoverage, localMcpServerNames(projectCwds), pricing),
     () => detectMcpProfileAdvisor(projects, mcpCoverage, provider, pricing),
     // mcp-deferral-gaps family (#614): detection only, no apply plans yet.
-    claudeOnly(() => detectMcpDeferralOff(toolCalls, projects, projectCwds, apiCalls, undefined, pricing)),
-    claudeOnly(() => detectMcpAlwaysLoadHygiene(projects, projectCwds, apiCalls, mcpCoverage, undefined, pricing)),
+    claudeOnly(() => detectMcpDeferralOff(toolCalls, projects, projectCwds, apiCalls, undefined, pricing, unusedMcpServers)),
+    claudeOnly(() => detectMcpAlwaysLoadHygiene(projects, projectCwds, apiCalls, mcpCoverage, pricing, unusedMcpServers)),
     claudeOnly(() => detectMcpDeferThreshold(projects, projectCwds, undefined, pricing)),
     claudeOnly(() => detectIdleCompactionBlocked(projects, projectCwds, apiCalls)),
     () => detectCapabilityReliability(behavioralProjects, provider),
@@ -4563,7 +4576,7 @@ export async function scanAndDetect(
     () => detectLongContextPremium(projects),
     () => detectOneHourCacheUnused(projects),
     claudeOnly(() => detectBloatedClaudeMd(projectCwds)),
-    claudeOnly(() => detectBashBloat()),
+    claudeOnly(() => detectBashBloat(projectCwds)),
     claudeOnly(() => detectRecurringContext(openers)),
   ]
   for (const detect of syncDetectors) {

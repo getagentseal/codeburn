@@ -462,17 +462,15 @@ describe('detectMcpAlwaysLoadHygiene', () => {
   }
 
   it('returns null when no server sets alwaysLoad', () => {
-    const home = makeDir('codeburn-home-')
     const cwd = makeDir('codeburn-cwd-')
     writeJson(join(cwd, '.mcp.json'), { mcpServers: { pinned: { command: 'x' } } })
-    expect(detectMcpAlwaysLoadHygiene([project(fiveSessions(0))], new Set([cwd]), [], undefined, home)).toBeNull()
+    expect(detectMcpAlwaysLoadHygiene([project(fiveSessions(0))], new Set([cwd]), [])).toBeNull()
   })
 
   it('flags an alwaysLoad server with usage below one call per five sessions', () => {
-    const home = makeDir('codeburn-home-')
     const cwd = makeDir('codeburn-cwd-')
     writeJson(join(cwd, '.mcp.json'), { mcpServers: { pinned: { command: 'x', alwaysLoad: true } } })
-    const finding = detectMcpAlwaysLoadHygiene([project(fiveSessions(0))], new Set([cwd]), [], undefined, home)
+    const finding = detectMcpAlwaysLoadHygiene([project(fiveSessions(0))], new Set([cwd]), [])
     expect(finding).not.toBeNull()
     expect(finding!.id).toBe('mcp-alwaysload-hygiene')
     expect(finding!.explanation).toContain('pinned: 0 calls across 5 sessions')
@@ -483,15 +481,13 @@ describe('detectMcpAlwaysLoadHygiene', () => {
   })
 
   it('does not flag an alwaysLoad server at or above the call-rate threshold', () => {
-    const home = makeDir('codeburn-home-')
     const cwd = makeDir('codeburn-cwd-')
     writeJson(join(cwd, '.mcp.json'), { mcpServers: { pinned: { command: 'x', alwaysLoad: true } } })
     // 1 call / 5 sessions = 0.2 exactly; the threshold flags only strictly below.
-    expect(detectMcpAlwaysLoadHygiene([project(fiveSessions(1))], new Set([cwd]), [], undefined, home)).toBeNull()
+    expect(detectMcpAlwaysLoadHygiene([project(fiveSessions(1))], new Set([cwd]), [])).toBeNull()
   })
 
   it('prefers observed inventory tool counts and loaded sessions when available', () => {
-    const home = makeDir('codeburn-home-')
     const cwd = makeDir('codeburn-cwd-')
     writeJson(join(cwd, '.mcp.json'), { mcpServers: { pinned: { command: 'x', alwaysLoad: true } } })
     const inventory = Array.from({ length: 8 }, (_, i) => `mcp__pinned__t${i}`)
@@ -502,42 +498,38 @@ describe('detectMcpAlwaysLoadHygiene', () => {
       makeSession({ sessionId: 'd' }),
       makeSession({ sessionId: 'e' }),
     ]
-    const finding = detectMcpAlwaysLoadHygiene([project(sessions)], new Set([cwd]), [], undefined, home)
+    const finding = detectMcpAlwaysLoadHygiene([project(sessions)], new Set([cwd]), [])
     expect(finding).not.toBeNull()
     // 8 tools x 400 tokens x 2 loaded sessions
     expect(finding!.tokensSaved).toBe(6400)
   })
 
   it('does not flag an alwaysLoad server clearly over the call-rate threshold', () => {
-    const home = makeDir('codeburn-home-')
     const cwd = makeDir('codeburn-cwd-')
     writeJson(join(cwd, '.mcp.json'), { mcpServers: { pinned: { command: 'x', alwaysLoad: true } } })
     // 5 calls / 5 sessions = 1.0, well over the 0.2 threshold.
-    expect(detectMcpAlwaysLoadHygiene([project(fiveSessions(5))], new Set([cwd]), [], undefined, home)).toBeNull()
+    expect(detectMcpAlwaysLoadHygiene([project(fiveSessions(5))], new Set([cwd]), [])).toBeNull()
   })
 
   it('returns null when there are no sessions in the window', () => {
-    const home = makeDir('codeburn-home-')
     const cwd = makeDir('codeburn-cwd-')
     writeJson(join(cwd, '.mcp.json'), { mcpServers: { pinned: { command: 'x', alwaysLoad: true } } })
-    expect(detectMcpAlwaysLoadHygiene([], new Set([cwd]), [], undefined, home)).toBeNull()
+    expect(detectMcpAlwaysLoadHygiene([], new Set([cwd]), [])).toBeNull()
   })
 
   it('returns null when every observed version predates server-level alwaysLoad (v2.1.121)', () => {
-    const home = makeDir('codeburn-home-')
     const cwd = makeDir('codeburn-cwd-')
     writeJson(join(cwd, '.mcp.json'), { mcpServers: { pinned: { command: 'x', alwaysLoad: true } } })
     // On these versions the key is inert: tools defer normally, no cost.
     const apiCalls = [apiCall('2.1.100'), apiCall('2.1.120')]
-    expect(detectMcpAlwaysLoadHygiene([project(fiveSessions(0))], new Set([cwd]), apiCalls, undefined, home)).toBeNull()
+    expect(detectMcpAlwaysLoadHygiene([project(fiveSessions(0))], new Set([cwd]), apiCalls)).toBeNull()
   })
 
   it('still flags when any observed version supports alwaysLoad', () => {
-    const home = makeDir('codeburn-home-')
     const cwd = makeDir('codeburn-cwd-')
     writeJson(join(cwd, '.mcp.json'), { mcpServers: { pinned: { command: 'x', alwaysLoad: true } } })
     const apiCalls = [apiCall('2.1.100'), apiCall('2.1.121')]
-    expect(detectMcpAlwaysLoadHygiene([project(fiveSessions(0))], new Set([cwd]), apiCalls, undefined, home)).not.toBeNull()
+    expect(detectMcpAlwaysLoadHygiene([project(fiveSessions(0))], new Set([cwd]), apiCalls)).not.toBeNull()
   })
 })
 
@@ -705,11 +697,10 @@ describe('deferral finding apply payloads', () => {
   })
 
   it('alwaysload-hygiene payload names each flagged server and the exact files carrying the pin', () => {
-    const home = makeDir('codeburn-home-')
     const cwd = makeDir('codeburn-cwd-')
     writeJson(join(cwd, '.mcp.json'), { mcpServers: { pinned: { command: 'x', alwaysLoad: true } } })
     const sessions = Array.from({ length: 5 }, (_, i) => makeSession({ sessionId: `s${i}` }))
-    const finding = detectMcpAlwaysLoadHygiene([project(sessions)], new Set([cwd]), [], undefined, home)
+    const finding = detectMcpAlwaysLoadHygiene([project(sessions)], new Set([cwd]), [])
     expect(finding!.apply).toEqual({
       kind: 'defer-alwaysload',
       servers: [{ server: 'pinned', paths: [join(cwd, '.mcp.json')] }],
@@ -767,11 +758,10 @@ describe('deferral family measured dollars', () => {
   })
 
   it('prices mcp-alwaysload-hygiene schema at each session model input rate', () => {
-    const home = makeDir('codeburn-home-')
     const cwd = makeDir('codeburn-cwd-')
     writeJson(join(cwd, '.mcp.json'), { mcpServers: { pinned: { command: 'x', alwaysLoad: true } } })
     const projects = [project(sessions().map(s => ({ ...s, mcpBreakdown: {} })))]
-    const finding = detectMcpAlwaysLoadHygiene(projects, new Set([cwd]), [], undefined, home, findingPricing(projects, BLENDED))!
+    const finding = detectMcpAlwaysLoadHygiene(projects, new Set([cwd]), [], undefined, findingPricing(projects, BLENDED))!
     expect(finding.tokensSaved).toBe(4000)
     expect(finding.savingsUSD).toBeCloseTo(2000 * 4e-6 + 2000 * BLENDED, 12)
   })

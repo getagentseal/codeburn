@@ -207,6 +207,15 @@ describe('model default recommendations', () => {
     expect(recommendModelDefault(recommendationProject({ candidateProvider: 'openai' }), { now: NOW })).toBeNull()
   })
 
+  it('recommends nothing for a non-Claude project, since the plan writes Claude Code settings', () => {
+    const project = projectWithTurns([
+      ...modelTurns({ model: 'gpt-5.4', provider: 'codex', editTurns: 40, oneShotTurns: 36, editCost: 40 }),
+      ...modelTurns({ model: 'gpt-5.4-mini', provider: 'codex', editTurns: 35, oneShotTurns: 32, editCost: 7 }),
+    ])
+
+    expect(recommendModelDefault(project, { now: NOW })).toBeNull()
+  })
+
   it('uses zero tolerance for debugging-heavy projects', () => {
     const project = recommendationProject({ debuggingTurns: 40 })
 

@@ -61,7 +61,7 @@ describe('detectFastModeBackground', () => {
     expect(finding!.id).toBe('fast-mode-background')
     expect(findingClass(finding!)).toBe('nudge')
     expect(finding!.savingsUSD).toBeCloseTo(2.5, 10)
-    expect(finding!.tokensSaved).toBe(100_000)
+    expect(finding!.tokensSaved).toBe(0)
     expect(finding!.impact).toBe('low')
     expect(finding!.title).toContain('$2.50')
     expect(finding!.explanation).toContain('1 fast-mode call ')

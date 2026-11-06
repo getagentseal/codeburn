@@ -224,6 +224,32 @@ describe('mcp realized delta', () => {
     expect(row.note).toMatch(/reverted by user/)
     expect(report.totalRealizedTokens).toBe(0)
   })
+
+  it('matches a server by its tool namespace, so a re-added "docs.local" reads as reverted', async () => {
+    const rec = mcpRecord({ baseline: { windowDays: 14, capturedAt: daysAgo(10), estimatedTokens: 56_000, sessions: 28, metrics: { 'docs.local': 2000 } } })
+    const actionsDir = await writeJournal([rec])
+    const back = sessionsAt(20, daysAgo(5), { mcpInventory: ['mcp__docs_local__search'] })
+    const report = await computeActReport({ actionsDir, now: NOW, loadProjects: load([projectOf(back)]) })
+
+    expect(report.rows[0]!.status).toBe('reverted')
+  })
+
+  it('splits an inventory name by the longest configured server, "a__b" over "a"', async () => {
+    const projectPath = await mkdtemp(join(tmpdir(), 'codeburn-act-ns-'))
+    roots.push(projectPath)
+    await writeFile(join(projectPath, '.mcp.json'), JSON.stringify({ mcpServers: { a: {}, a__b: {} } }))
+    const statusFor = async (server: string, fqn = 'mcp__a__b__c') => {
+      const back = sessionsAt(20, daysAgo(5), { mcpInventory: [fqn] })
+      const rec = mcpRecord({ baseline: { windowDays: 14, capturedAt: daysAgo(10), estimatedTokens: 56_000, sessions: 28, metrics: { [server]: 2000 } } })
+      const actionsDir = await writeJournal([rec])
+      const report = await computeActReport({ actionsDir, now: NOW, loadProjects: load([projectOf(back, { projectPath })]) })
+      return report.rows[0]!.status
+    }
+
+    expect(await statusFor('a__b')).toBe('reverted')
+    expect(await statusFor('a')).toBe('measured')
+    expect(await statusFor('a__b', 'mcp__a__b__c__d')).toBe('reverted')
+  })
 })
 
 describe('realized dollars', () => {

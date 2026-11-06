@@ -19,6 +19,9 @@ const FAKE_HOME_FOR_MOCK = process.env['CODEBURN_TEST_FAKE_HOME']!
 import {
   detectBloatedClaudeMd,
   detectUnusedMcp,
+  detectMcpDeferralOff,
+  detectMcpAlwaysLoadHygiene,
+  mcpNamespace,
   detectBashBloat,
   detectIdleCompactionBlocked,
   commandNames,
@@ -43,6 +46,7 @@ import {
 } from '../src/context-budget.js'
 import type { ProjectSummary } from '../src/types.js'
 import { runOptimizeApply } from '../src/act/optimize-apply.js'
+import { planFor } from '../src/act/plans.js'
 
 // ============================================================================
 // Helpers for filesystem fixtures
@@ -171,7 +175,47 @@ describe('loadMcpConfigs', () => {
     }))
     const servers = loadMcpConfigs([projectDir])
     expect(servers.has('plugin_context7_context7')).toBe(true)
-    expect(servers.get('plugin_context7_context7')!.original).toBe('plugin:context7:context7')
+    expect(servers.get('plugin_context7_context7')!.originals).toEqual(['plugin:context7:context7'])
+  })
+
+  it('normalizes every character outside letters, digits, _ and - the way tool names do', () => {
+    const root = makeFixtureRoot()
+    const projectDir = join(root, 'myapp')
+    mkdirSync(projectDir, { recursive: true })
+    writeFile(join(projectDir, '.mcp.json'), JSON.stringify({ mcpServers: { 'docs.local': { command: 'x' } } }))
+    touchOld(join(projectDir, '.mcp.json'), 30)
+    expect([...loadMcpConfigs([projectDir]).keys()]).toEqual(['docs_local'])
+    const calls = [{ name: 'mcp__docs_local__search', input: {}, sessionId: 's1', project: 'p' }] as unknown as ToolCall[]
+    expect(detectUnusedMcp(calls, [], new Set([projectDir]), [])).toBeNull()
+  })
+
+  it('keeps every config name that maps to one namespace, so removal reaches each file', () => {
+    const root = makeFixtureRoot()
+    const projectDir = join(root, 'myapp')
+    mkdirSync(projectDir, { recursive: true })
+    writeFile(join(projectDir, '.mcp.json'), JSON.stringify({ mcpServers: { 'a.b': { command: 'x' } } }))
+    writeFile(join(projectDir, '.claude', 'settings.json'), JSON.stringify({ mcpServers: { 'a:b': { command: 'y' } } }))
+    touchOld(join(projectDir, '.mcp.json'), 30)
+    touchOld(join(projectDir, '.claude', 'settings.json'), 30)
+    expect(loadMcpConfigs([projectDir]).get('a_b')!.originals.sort()).toEqual(['a.b', 'a:b'])
+    const finding = detectUnusedMcp([], [], new Set([projectDir]), [])!
+    const plan = planFor(finding, { homeDir: root, cwd: projectDir })!
+    expect(plan.changes.map(c => c.path).sort()).toEqual([join(projectDir, '.claude', 'settings.json'), join(projectDir, '.mcp.json')])
+  })
+
+  it('credits a call to the longest configured server, "a__b" over "a"', () => {
+    const root = makeFixtureRoot()
+    const projectDir = join(root, 'myapp')
+    mkdirSync(projectDir, { recursive: true })
+    writeFile(join(projectDir, '.mcp.json'), JSON.stringify({ mcpServers: { a: { command: 'x' }, a__b: { command: 'y' } } }))
+    touchOld(join(projectDir, '.mcp.json'), 30)
+    const unusedAfter = (name: string) => {
+      const calls = [{ name, input: {}, sessionId: 's1', project: 'p' }] as unknown as ToolCall[]
+      const apply = detectUnusedMcp(calls, [], new Set([projectDir]), [])!.apply
+      return apply?.kind === 'mcp-remove' ? apply.servers : []
+    }
+    expect(unusedAfter('mcp__a__b__c')).toEqual(['a'])
+    expect(unusedAfter('mcp__a__c')).toEqual(['a__b'])
   })
 
   it('handles malformed JSON without crashing', () => {
@@ -198,6 +242,12 @@ describe('localMcpServerNames', () => {
     const names = localMcpServerNames([projectDir])
 
     expect([...names].sort()).toEqual(['claude_ai_homegrown', 'fromMcpJson', 'plugin_ctx_ctx', 'scoped'])
+  })
+
+  it('ignores mcpServers in ~/.claude/settings.json, which Claude Code does not read', () => {
+    const home = makeFixtureRoot()
+    writeFile(join(home, '.claude', 'settings.json'), JSON.stringify({ mcpServers: { fromSettings: {} } }))
+    expect(localMcpServerNames([], home).size).toBe(0)
   })
 
   it('contributes no names when ~/.claude.json cannot be parsed', () => {
@@ -231,7 +281,7 @@ describe('detectUnusedMcp', () => {
     mkdirSync(projectDir, { recursive: true })
     writeFile(join(projectDir, '.mcp.json'), JSON.stringify({ mcpServers: { ghost: { command: 'x' } } }))
     touchOld(join(projectDir, '.mcp.json'), 30)
-    const slice = (primary: boolean) => ({ sessionId: 's1', mcpBreakdown: {}, projectSplit: { primaryProject: 'a', primaryProjectPath: '/a', primary } })
+    const slice = (primary: boolean) => ({ sessionId: 's1', mcpBreakdown: {}, turns: [{ assistantCalls: [{ provider: 'claude' }] }], projectSplit: { primaryProject: 'a', primaryProjectPath: '/a', primary } })
     const projects = [
       { project: 'a', projectPath: '/a', sessions: [slice(true)] },
       { project: 'b', projectPath: '/b', sessions: [slice(false)] },
@@ -239,6 +289,40 @@ describe('detectUnusedMcp', () => {
     const split = detectUnusedMcp([], projects, new Set([projectDir]), [])
     const single = detectUnusedMcp([], projects.slice(0, 1), new Set([projectDir]), [])
     expect(split!.tokensSaved).toBe(single!.tokensSaved)
+  })
+
+  it('charges only Claude sessions', () => {
+    const root = makeFixtureRoot()
+    const projectDir = join(root, 'myapp')
+    mkdirSync(projectDir, { recursive: true })
+    writeFile(join(projectDir, '.mcp.json'), JSON.stringify({ mcpServers: { ghost: { command: 'x' } } }))
+    touchOld(join(projectDir, '.mcp.json'), 30)
+    const session = (sessionId: string, provider: string) => ({ sessionId, mcpBreakdown: {}, turns: [{ assistantCalls: [{ provider }] }] })
+    const sessions = [session('c1', 'claude'), ...Array.from({ length: 9 }, (_, i) => session(`x${i}`, 'codex'))]
+    const projects = [{ project: 'a', projectPath: '/a', sessions }] as unknown as ProjectSummary[]
+    expect(detectUnusedMcp([], projects, new Set([projectDir]), [])!.tokensSaved).toBe(2000)
+  })
+
+  it('leaves a never-called server to unused-mcp alone, so its schema is charged once', () => {
+    for (const idle of [{ command: 'x' }, { command: 'x', alwaysLoad: true }]) {
+      const root = makeFixtureRoot()
+      const projectDir = join(root, 'myapp')
+      mkdirSync(projectDir, { recursive: true })
+      writeFile(join(projectDir, '.mcp.json'), JSON.stringify({ mcpServers: { idle, used: { command: 'y' } } }))
+      touchOld(join(projectDir, '.mcp.json'), 30)
+      const session = (sessionId: string) => ({ sessionId, mcpBreakdown: { used: { calls: 3 } }, turns: [{ assistantCalls: [{ provider: 'claude' }] }] })
+      const projects = [{ project: 'a', projectPath: '/a', sessions: ['s1', 's2', 's3'].map(session) }] as unknown as ProjectSummary[]
+      const cwds = new Set([projectDir])
+
+      const unused = detectUnusedMcp([], projects, cwds, [])!
+      const servers = new Set(unused.apply!.kind === 'mcp-remove' ? unused.apply!.servers.map(mcpNamespace) : [])
+      const findings = [
+        unused,
+        detectMcpDeferralOff([], projects, cwds, [], FAKE_HOME_FOR_MOCK, undefined, servers),
+        detectMcpAlwaysLoadHygiene(projects, cwds, [], [], undefined, servers),
+      ]
+      expect(findings.reduce((sum, f) => sum + (f?.tokensSaved ?? 0), 0)).toBe(2 * 2000 * 3)
+    }
   })
 
   describe('measured dollars', () => {
@@ -251,7 +335,7 @@ describe('detectUnusedMcp', () => {
       mkdirSync(projectDir, { recursive: true })
       writeFile(join(projectDir, '.mcp.json'), JSON.stringify({ mcpServers: { ghost: { command: 'x' } } }))
       touchOld(join(projectDir, '.mcp.json'), 30)
-      const session = (sessionId: string, model: string) => ({ sessionId, mcpBreakdown: {}, turns: [{ assistantCalls: [{ model }] }] })
+      const session = (sessionId: string, model: string) => ({ sessionId, mcpBreakdown: {}, turns: [{ assistantCalls: [{ model, provider: 'claude' }] }] })
       const projects = [
         { project: 'a', projectPath: '/a', sessions: [session('s1', 'measured-test-model'), session('s2', 'unpriced-test-model')] },
       ] as unknown as ProjectSummary[]
@@ -305,6 +389,13 @@ describe('detectBashBloat', () => {
   it('does not flag when env var is below recommended', () => {
     process.env['BASH_MAX_OUTPUT_LENGTH'] = '10000'
     expect(detectBashBloat()).toBeNull()
+  })
+
+  it('does not flag when the settings env block sets the cap', () => {
+    delete process.env['BASH_MAX_OUTPUT_LENGTH']
+    const cwd = makeFixtureRoot()
+    writeFile(join(cwd, '.claude', 'settings.json'), JSON.stringify({ env: { BASH_MAX_OUTPUT_LENGTH: '10000' } }))
+    expect(detectBashBloat([cwd])).toBeNull()
   })
 
   it('flags when env var is above 15K', () => {
@@ -397,6 +488,10 @@ describe('detectGhostCommands', () => {
   it('matches <command-name> tags in user messages', async () => {
     const messages = ['<command-name>review</command-name>']
     expect(await detectGhostCommands(messages.flatMap(commandNames))).toBeNull()
+  })
+
+  it('names a <command-name> tag without its leading slash', () => {
+    expect(commandNames('<command-name>/review</command-name>')).toEqual(['review'])
   })
 })
 
