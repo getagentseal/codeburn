@@ -301,13 +301,13 @@ skipUnlessSqlite('hermes provider', () => {
       })
     })
 
-    const cachedDay = (date: string, provider: string, calls: number, cost: number, inputTokens: number): DailyEntry => {
+    const cachedDay = (date: string, provider: string, calls: number, cost: number, inputTokens: number, outputTokens = 0): DailyEntry => {
       const modelStats = {
         calls,
         cost,
         savingsUSD: 0,
         inputTokens,
-        outputTokens: 0,
+        outputTokens,
         cacheReadTokens: 0,
         cacheWriteTokens: 0,
       }
@@ -317,7 +317,7 @@ skipUnlessSqlite('hermes provider', () => {
         savingsUSD: 0,
         sessions: 1,
         inputTokens,
-        outputTokens: 0,
+        outputTokens,
         cacheReadTokens: 0,
         cacheWriteTokens: 0,
         models: { 'gpt-5.5': modelStats },
@@ -330,7 +330,7 @@ skipUnlessSqlite('hermes provider', () => {
         calls,
         sessions: 1,
         inputTokens,
-        outputTokens: 0,
+        outputTokens,
         cacheReadTokens: 0,
         cacheWriteTokens: 0,
         editTurns: 0,
@@ -347,7 +347,7 @@ skipUnlessSqlite('hermes provider', () => {
       tzKey: currentTzKey(),
       lastComputedDate: yesterday,
       days: [
-        cachedDay(hermesDate, 'codex', 2, 0.4, 80),
+        cachedDay(hermesDate, 'codex', 2, 0.4, 80, 20),
         cachedDay(sourceGoneDate, 'claude', 3, 1.2, 300),
       ],
       complete: true,

@@ -231,3 +231,61 @@ describe('copilot re-derive after chat-session twins moved to the agent host (v7
     expect(hydrated.pendingRederive).toBeUndefined()
   })
 })
+
+describe('re-derive after the November provider fixes (v79)', () => {
+  const settled = toDateString(new Date(Date.now() - 10 * 24 * 60 * 60 * 1000))
+  const pruned = toDateString(new Date(Date.now() - 11 * 24 * 60 * 60 * 1000))
+  const yesterday = toDateString(new Date(Date.now() - 24 * 60 * 60 * 1000))
+  const slice = (calls: number, outputTokens = 20, cacheReadTokens = 30) => ({ ...day(settled, calls).providers.grok!, calls, outputTokens, cacheReadTokens })
+  const entry = (date: string, providers: DailyEntry['providers']): DailyEntry => ({
+    ...day(date, 0),
+    cost: Object.values(providers).reduce((sum, s) => sum + s.cost, 0),
+    calls: Object.values(providers).reduce((sum, s) => sum + s.calls, 0),
+    providers,
+    models: {},
+  })
+  const seedV78 = (days: DailyEntry[]) => writeFile(join(cacheRoot, 'daily-cache.v78.json'), JSON.stringify({
+    version: 78,
+    savingsConfigHash: 'cfg',
+    tzKey: currentTzKey(),
+    lastComputedDate: yesterday,
+    days,
+    complete: true,
+    watermarkTrusted: true,
+  }))
+
+  it('lets a settled day shrink for the providers whose calls left it, and guards the rest', async () => {
+    const providers = ['codex', 'copilot', 'cursor', 'goose', 'quickdesk']
+    await seedV78([entry(settled, Object.fromEntries([...providers, 'claude'].map(p => [p, slice(5)])))])
+
+    const hydrated = await ensureCacheHydrated(
+      async () => [],
+      () => [entry(settled, Object.fromEntries([...providers, 'claude'].map(p => [p, slice(3)])))],
+      'cfg',
+      () => true,
+    )
+
+    const settledDay = hydrated.days.find(d => d.date === settled)!
+    for (const p of providers) expect(settledDay.providers[p]?.calls, p).toBe(3)
+    expect(settledDay.providers.claude?.calls).toBe(5)
+    expect(hydrated.pendingRederive).toBeUndefined()
+  })
+
+  it('drops a codex day made only of rate-limit pings and carries one whose rollouts are gone', async () => {
+    await seedV78([
+      entry(pruned, { codex: slice(4), claude: slice(1) }),
+      entry(settled, { codex: slice(2, 0, 0), claude: slice(1) }),
+    ])
+
+    const hydrated = await ensureCacheHydrated(
+      async () => [],
+      () => [entry(pruned, { claude: slice(1) }), entry(settled, { claude: slice(1) })],
+      'cfg',
+      () => true,
+    )
+
+    expect(hydrated.days.find(d => d.date === settled)!.providers.codex).toBeUndefined()
+    expect(hydrated.days.find(d => d.date === settled)!.calls).toBe(1)
+    expect(hydrated.days.find(d => d.date === pruned)!.providers.codex?.calls).toBe(4)
+  })
+})
