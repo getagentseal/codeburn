@@ -29,7 +29,8 @@ import type { CachedCall, ProviderSection } from './session-cache.js'
 // count that already holds them. A v3 cursor that priced reasoning that way is
 // carried with `rebuild` set, and the next snapshot its source still supplies
 // replaces it with one recomputed observation. A cursor whose source is gone
-// gets no such snapshot and keeps the v3 figure.
+// gets no such snapshot and keeps the v3 figure: it holds the tokens but not
+// the model, so there is no rate to reprice its output at.
 export const HERMES_SESSION_LEDGER_FILENAME = 'hermes-session-ledger.v4.json'
 export const HERMES_SESSION_LEDGER_VERSION = 4 as const
 const HERMES_SESSION_LEDGER_V3_FILENAME = 'hermes-session-ledger.v3.json'
