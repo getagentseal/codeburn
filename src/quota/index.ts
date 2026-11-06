@@ -114,7 +114,7 @@ const DEFAULT_TIMEOUT_MS = KEYCHAIN_TIMEOUT_MS + 5_000
 function errorFor(quota: QuotaProvider): string | undefined {
   switch (quota.connection) {
     case 'accessDenied':
-      return quota.footerLines[0] ?? 'Access to the stored credential was denied.'
+      return quota.footerLines[0] ?? 'Access to the stored credential was denied or not answered.'
     case 'terminalFailure':
       return quota.footerLines[0] ?? 'The provider rejected the request.'
     case 'transientFailure':

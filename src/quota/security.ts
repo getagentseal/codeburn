@@ -58,7 +58,9 @@ function classifyKeychainError(error: unknown): 'notFound' | 'accessDenied' {
  * Reads a generic-password keychain item via the Apple-signed `/usr/bin/security`
  * (which the item's `apple-tool:` partition trusts, avoiding the partition-list
  * prompt on already-consented items). Tries each account candidate in order
- * (`null` = service-only). Never returns or logs the secret to any caller but
+ * (`null` = service-only) and stops at the first refusal: a later candidate can
+ * match the same item, and asking again after a Deny is a second prompt the
+ * user already answered. Never returns or logs the secret to any caller but
  * the direct one.
  */
 export async function readKeychainPassword(
@@ -67,17 +69,16 @@ export async function readKeychainPassword(
   exec: KeychainExec = execFileAsync,
 ): Promise<KeychainOutcome> {
   if (process.platform !== 'darwin') return { status: 'notFound' }
-  let denied = false
   for (const account of accounts) {
     const args = ['find-generic-password', '-s', service, ...(account ? ['-a', account] : []), '-w']
     try {
       const { stdout } = await exec('/usr/bin/security', args, { timeout: KEYCHAIN_TIMEOUT_MS, maxBuffer: 64 * 1024 })
       if (stdout && stdout.trim()) return { status: 'found', value: decodeKeychainValue(stdout) }
     } catch (error) {
-      if (classifyKeychainError(error) === 'accessDenied') denied = true
+      if (classifyKeychainError(error) === 'accessDenied') return { status: 'accessDenied' }
     }
   }
-  return denied ? { status: 'accessDenied' } : { status: 'notFound' }
+  return { status: 'notFound' }
 }
 
 export function sanitizeError(error: unknown): string {

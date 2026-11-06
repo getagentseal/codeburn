@@ -47,6 +47,12 @@ describe('readKeychainPassword', () => {
     expect(exec).toHaveBeenCalledTimes(2)
   })
 
+  it('stops at a Deny on the first candidate instead of prompting again for the same item', async () => {
+    const exec = vi.fn(denied('User canceled the operation.'))
+    expect(await readKeychainPassword('svc', ['alice', null], exec)).toEqual({ status: 'accessDenied' })
+    expect(exec).toHaveBeenCalledTimes(1)
+  })
+
   it('reports accessDenied when a later candidate is denied after an earlier miss', async () => {
     const exec = vi.fn(async (_file: string, args: string[]) => {
       if (args.includes('-a')) return notFound()
