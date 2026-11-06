@@ -477,6 +477,24 @@ describe.skipIf(skipReason !== null)('cursor real context tokens (#575)', () => 
     expect(requestIdLookups().map(q => q.params.length)).toEqual([900, 1])
   })
 
+  it('caps the lookup at ten chunks and bills ids past the cap at the first-seen time', async () => {
+    const dbPath = buildDb((db) => {
+      for (let i = 0; i < 9000; i++) {
+        insertAgentKv(db, { blobId: `akv-${i}`, role: 'user', content: 'run the export', requestId: `req-bg-${i}` })
+      }
+      insertBubble(db, { composerId: '77771111-1111-2222-3333-444455556666', bubbleUuid: 'b1', type: 1, text: 'old', createdAt: new Date(Date.now() - 240 * 864e5).toISOString(), requestId: 'req-over' })
+      insertAgentKv(db, { blobId: 'akv-over', role: 'user', content: 'past the cap', requestId: 'req-over' })
+    })
+
+    const calls = await collectCalls(createCursorProvider(dbPath), dbPath)
+
+    expect(requestIdLookups().length).toBe(10)
+    expect(requestIdLookups().some(q => q.params.includes('req-over'))).toBe(false)
+    const over = calls.filter(c => c.deduplicationKey === 'cursor:agentKv:req-over')
+    expect(over.map(c => c.timestamp)).toEqual([new Date(statSync(dbPath).mtimeMs).toISOString()])
+    expect(calls.length).toBe(9001)
+  })
+
   it('skips the request-id lookup when every stream joins a scanned bubble', async () => {
     const composerId = '22220000-1111-2222-3333-444455556666'
     const requestId = 'req-joined'

@@ -377,8 +377,10 @@ const BUBBLE_REQUEST_IDS_QUERY = `
     AND json_extract(value, '$.requestId') IN`
 // Under the 999 bound-parameter limit of older SQLite builds. Each chunk is
 // one table scan, so many unjoined streams on a huge DB cost several scans.
-// Ceiling: about 0.9 s per chunk on a 3.75 GB, 60k-bubble database.
+// About 0.9 s per chunk on a 3.75 GB, 60k-bubble database, so the lookup is
+// capped near 9 s; ids past the cap are billed like ids no bubble carries.
 const REQUEST_ID_CHUNK = 900
+const MAX_REQUEST_ID_CHUNKS = 10
 
 // Split into HEAD (predicates we always emit) and TAIL (ORDER BY) so the
 // caller can splice in an optional `ROWID >= ?` cutoff without rewriting
@@ -902,7 +904,7 @@ function parseBubbles(
   // with no dated bubble takes the DB file's mtime and keeps it on every later
   // parse; re-stamping would move it to the latest write each time.
   const bubbleTimes = new Map<string, string | null>()
-  const unjoinedIds = [...unjoined.keys()]
+  const unjoinedIds = [...unjoined.keys()].slice(0, REQUEST_ID_CHUNK * MAX_REQUEST_ID_CHUNKS)
   try {
     for (let i = 0; i < unjoinedIds.length; i += REQUEST_ID_CHUNK) {
       const chunk = unjoinedIds.slice(i, i + REQUEST_ID_CHUNK)
