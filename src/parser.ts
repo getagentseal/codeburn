@@ -2949,7 +2949,6 @@ function providerCallToCachedCall(call: ParsedProviderCall): CachedCall {
     ...(call.requestMultiplier != null ? { requestMultiplier: call.requestMultiplier } : {}),
     ...(call.compactedAt ? { compactedAt: call.compactedAt } : {}),
     ...(call.initiator ? { initiator: call.initiator } : {}),
-    ...(call.chatStorage ? { chatStorage: call.chatStorage } : {}),
     ...(call.supplementaryAccounting ? { supplementaryAccounting: true } : {}),
     activeDurationMs: call.activeDurationMs,
     activeGeneratedTokens: call.activeGeneratedTokens,
@@ -4333,21 +4332,33 @@ export async function parseProviderSources(
     // session-state file with no usage yet keeps the journal.
     const agentHostUsageSessions = new Set<string>()
     // A chat-session journal or VS Code transcript of a session
-    // agent-traces.db recorded holds the same requests under other keys; OTel
-    // wins for that session in that VS Code storage. '' (an OTel call cached
-    // before chatStorage, or with no journal found) matches any storage.
-    const otelStorages = new Map<string, Set<string>>()
-    for (const cachedFile of Object.values(section.files)) {
+    // agent-traces.db recorded holds the same requests under other keys, so
+    // OTel wins for that session. Spans name no VS Code storage, so when the
+    // session id has copies in more than one storage nothing is dropped: a
+    // possible double count is preferred over dropping the wrong workspace.
+    // Collected in full before the pass below so file order cannot matter.
+    const otelSessions = new Set<string>()
+    const twinKeysByStorage = new Map<string, Map<string, string[]>>()
+    for (const [cachedPath, cachedFile] of Object.entries(section.files)) {
+      const isTranscript = basename(dirname(cachedPath)) === 'transcripts'
       for (const turn of cachedFile.turns) {
         for (const c of turn.calls) {
-          if (!c.deduplicationKey.startsWith('copilot-otel:')) continue
-          const set = otelStorages.get(turn.sessionId) ?? new Set<string>()
-          set.add(c.chatStorage ?? '')
-          otelStorages.set(turn.sessionId, set)
+          if (c.deduplicationKey.startsWith('copilot-otel:')) {
+            otelSessions.add(turn.sessionId)
+          } else if (isTranscript || c.deduplicationKey.startsWith('copilot-chatsession:')) {
+            const byStorage = twinKeysByStorage.get(turn.sessionId) ?? new Map<string, string[]>()
+            const storage = copilotChatStorageKey(cachedPath)
+            byStorage.set(storage, [...(byStorage.get(storage) ?? []), c.deduplicationKey])
+            twinKeysByStorage.set(turn.sessionId, byStorage)
+          }
         }
       }
     }
     const otelTwinKeys = new Set<string>()
+    for (const [sessionId, byStorage] of twinKeysByStorage) {
+      if (!otelSessions.has(sessionId) || byStorage.size !== 1) continue
+      for (const keys of byStorage.values()) for (const k of keys) otelTwinKeys.add(k)
+    }
     // Session-state per-turn calls carry no per-call project (the serve loop
     // takes it from source.project), so resolve it the same way here — every
     // call of the session must serve under the SAME label, whichever of the
@@ -4360,12 +4371,7 @@ export async function parseProviderSources(
         for (const c of turn.calls) {
           if (seenAggKeys.has(c.deduplicationKey)) continue
           seenAggKeys.add(c.deduplicationKey)
-          const storages = otelStorages.get(turn.sessionId)
-          if (storages && (storages.has('') || storages.has(copilotChatStorageKey(cachedPath))) &&
-            (c.deduplicationKey.startsWith('copilot-chatsession:') || basename(dirname(cachedPath)) === 'transcripts')) {
-            otelTwinKeys.add(c.deduplicationKey)
-            continue
-          }
+          if (otelTwinKeys.has(c.deduplicationKey)) continue
           const ts = new Date(c.timestamp).getTime()
           const isStore = c.deduplicationKey.startsWith('copilot-store:')
           if ((isStore || basename(cachedPath) === 'events.jsonl') && (c.nanoAiu != null ||

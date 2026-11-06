@@ -2359,7 +2359,7 @@ describe('copilot provider - OTel workspace attribution (#1529)', () => {
 
     expect(before.map(c => c.project)).toEqual(['copilot-chat', 'copilot-chat'])
     expect(after.map(c => c.project)).toEqual(['proj-a', 'copilot-chat'])
-    expect(after.map(c => ({ ...c, project: '', chatStorage: '' }))).toEqual(before.map(c => ({ ...c, project: '', chatStorage: '' })))
+    expect(after.map(c => ({ ...c, project: '' }))).toEqual(before.map(c => ({ ...c, project: '' })))
   })
 
   it('names a multi-root workspace after its .code-workspace file for chatSessions too', async () => {
