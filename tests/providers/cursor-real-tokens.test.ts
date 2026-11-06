@@ -449,6 +449,21 @@ describe.skipIf(skipReason !== null)('cursor real context tokens (#575)', () => 
     expect(stream.map(c => c.timestamp)).toEqual([new Date(statSync(dbPath).mtimeMs).toISOString()])
   })
 
+  it('times a budget-cut stream by its newest bubble when the request also has an old one', async () => {
+    const recentAt = new Date(Date.now() - 2 * 864e5).toISOString()
+    const dbPath = buildDb((db) => {
+      insertBubble(db, { composerId: '66661111-1111-2222-3333-444455556666', bubbleUuid: 'b1', type: 1, text: 'recent', createdAt: recentAt, requestId: 'req-x' })
+      insertBubble(db, { composerId: '66661111-1111-2222-3333-444455556666', bubbleUuid: 'b0', type: 1, text: 'old', createdAt: new Date(Date.now() - 240 * 864e5).toISOString(), requestId: 'req-x' })
+      insertBubble(db, { composerId: '66662222-1111-2222-3333-444455556666', bubbleUuid: 'b2', type: 2, text: 'kept reply', model: 'gpt-5' })
+      insertAgentKv(db, { blobId: 'akv-1', role: 'user', content: 'recent prompt with context', requestId: 'req-x' })
+    })
+    process.env['CODEBURN_CURSOR_MAX_BUBBLES'] = '1'
+
+    const calls = await collectCalls(createCursorProvider(dbPath), dbPath)
+
+    expect(calls.filter(c => c.deduplicationKey === 'cursor:agentKv:req-x').map(c => c.timestamp)).toEqual([recentAt])
+  })
+
   it('binds at most 900 request ids per lookup', async () => {
     const dbPath = buildDb((db) => {
       for (let i = 0; i < 901; i++) {
