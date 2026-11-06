@@ -513,8 +513,10 @@ describe('spawnCli', () => {
   it('keeps a multi-byte character intact when it straddles a pipe chunk boundary', async () => {
     fakeBin(
       'utf8-split.js',
-      `const prefix = '{"project":"';
-       process.stdout.write(prefix + 'a'.repeat(65535 - prefix.length) + 'üsseldorf"}');`,
+      `const bytes = Buffer.from('{"project":"aüsseldorf"}');
+       const cut = bytes.indexOf(0xc3) + 1;
+       process.stdout.write(bytes.subarray(0, cut));
+       setTimeout(() => process.stdout.write(bytes.subarray(cut)), 100);`,
     )
     const out = await spawnCli(['devices']) as { project: string }
     expect(out.project.endsWith('aüsseldorf')).toBe(true)
@@ -1211,19 +1213,51 @@ describe('resident serve single-flight', { timeout: 30_000 }, () => {
       frame = JSON.stringify({ id: 1, ok: true, output: JSON.stringify(rows, null, 2) }) + '\n'
     }
     const parse = vi.spyOn(JSON, 'parse')
-    const t0 = performance.now()
+    const indexOf = String.prototype.indexOf
+    let scanned = 0
+    const search = vi.spyOn(String.prototype, 'indexOf').mockImplementation(function (this: string, needle: string, from?: number) {
+      if (needle === '\n') {
+        scanned += this.length - (from ?? 0)
+        // Fail fast: the old rescan reaches gigabytes of scanning and exhausts the heap.
+        if (scanned > frame.length) throw new Error('newline search rescanned the buffered frame')
+      }
+      return indexOf.call(this, needle, from)
+    } as typeof String.prototype.indexOf)
     let frameParses: number
     try {
       for (let off = 0; off < frame.length; off += 8192) child.stdout!.emit('data', frame.slice(off, off + 8192))
     } finally {
+      search.mockRestore()
       frameParses = parse.mock.calls.filter(([text]) => String(text).startsWith('{"id":1')).length
       parse.mockRestore()
     }
-    const elapsed = performance.now() - t0
 
     expect(((await read) as unknown[]).length).toBe(rows.length)
     expect(frameParses).toBe(1)
-    expect(elapsed).toBeLessThan(150)
+    expect(scanned).toBeLessThanOrEqual(frame.length)
+  })
+
+  describe('frame boundaries fed as explicit chunks', () => {
+    const progress = JSON.stringify({ id: 1, progress: 'CODEBURN_PROGRESS tick\n' }) + '\n'
+    const answer = JSON.stringify({ id: 1, ok: true, output: JSON.stringify({ framed: true }) }) + '\n'
+    it.each([
+      ['a chunk ending exactly on a newline', [progress, answer]],
+      ['a newline followed by the next frame start', [progress + answer.slice(0, 7), answer.slice(7)]],
+      ['an empty chunk', [progress, '', answer.slice(0, 5), '', answer.slice(5)]],
+      ['a frame over three chunks', [progress, answer.slice(0, 4), answer.slice(4, 20), answer.slice(20)]],
+    ])('%s', async (_name, chunks) => {
+      fakeBin('silent-resident.js', 'process.stdin.resume(); setInterval(() => {}, 1000)')
+      startServe()
+      const child = vi.mocked(spawn).mock.results.at(-1)!.value as ChildProcess
+      const seen: string[] = []
+      const read = spawnCli(['status'], { timeoutMs: 5_000, onStderr: chunk => seen.push(chunk) })
+      await new Promise(resolve => setTimeout(resolve, 50))
+
+      for (const chunk of chunks) child.stdout!.emit('data', chunk)
+
+      await expect(read).resolves.toEqual({ framed: true })
+      expect(seen).toEqual(['CODEBURN_PROGRESS tick\n'])
+    })
   })
 
   it('keeps requests with any non-progress env override on the one-shot path', async () => {
