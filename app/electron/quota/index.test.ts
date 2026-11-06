@@ -4,13 +4,14 @@ import { describe, expect, it, vi } from 'vitest'
 
 import { claudeKeychainService } from './claude'
 import { QuotaService } from './index'
-import { readKeychainPassword } from './security'
+import { forgetKeychainRefusals, readKeychainPassword } from './security'
 import type { ProviderName, QuotaProvider } from './types'
 
 // The real Claude fetcher runs in one test; its Keychain lookup is answered here.
 vi.mock('./security', async importOriginal => ({
   ...await importOriginal<typeof import('./security')>(),
   readKeychainPassword: vi.fn(),
+  forgetKeychainRefusals: vi.fn(),
 }))
 
 const quota = (provider: ProviderName): QuotaProvider => ({
@@ -43,6 +44,18 @@ describe('QuotaService', () => {
     for (const fetcher of Object.values(fetchers)) expect(fetcher).toHaveBeenCalledTimes(1)
     // Antigravity is local-only; it must not receive keychain permission.
     expect(fetchers.antigravity).toHaveBeenCalledWith({ signal: expect.any(AbortSignal), allowKeychain: false })
+  })
+
+  it('lets a keychain-allowed refresh ask again after an earlier refusal, and a background poll not', async () => {
+    const service = new QuotaService({
+      ...noopFetchers(), grokbotInstalled: () => true, now: () => 1000,
+      readFile: vi.fn(async () => null), writeFile: vi.fn(async () => undefined),
+    })
+    vi.mocked(forgetKeychainRefusals).mockClear()
+    await service.getQuota({ force: true })
+    expect(forgetKeychainRefusals).not.toHaveBeenCalled()
+    await service.getQuota({ force: true, allowKeychain: true })
+    expect(forgetKeychainRefusals).toHaveBeenCalledTimes(1)
   })
 
   // A forced refresh is the ONLY thing that reads the keychain, and Plans keeps

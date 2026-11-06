@@ -385,6 +385,17 @@ describe('Plans', () => {
     expect(await screen.findByText(/Not connected/)).toBeInTheDocument()
   })
 
+  it('says which keychain refusal it was when the provider names it', async () => {
+    getPlans.mockResolvedValue(statusWithPlans)
+    getQuota.mockResolvedValue([
+      { provider: 'claude', connection: 'accessDenied', primary: null, details: [], planLabel: null, footerLines: ['The Keychain prompt for the Claude Code login was not answered.'] },
+    ])
+
+    render(<Plans period="30days" />)
+
+    expect(await screen.findByText('The Keychain prompt for the Claude Code login was not answered.')).toBeInTheDocument()
+  })
+
   it('renders the keychain access-denied state with recovery copy and a locked indicator', async () => {
     getPlans.mockResolvedValue(statusWithPlans)
     getQuota.mockResolvedValue([

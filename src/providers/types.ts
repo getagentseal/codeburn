@@ -23,7 +23,18 @@ export type SessionSource = {
   //     #992 that exemption is redundant (only ORPHANS age out) — kept as the
   //     explicit statement of intent, not as the thing enforcing it.
   retainWhilePresent?: boolean
+  // Overrides the provider's durableSources for how a re-parse lands in the
+  // cache: true merges into the cached calls (Grok Bot's sliding mirror keeps
+  // requests that slid out), false replaces them (Quick Desktop's sessions.db
+  // estimates are superseded once metrics land). Orphan handling still
+  // follows the provider.
+  durable?: boolean
 }
+
+// Thrown by a parser whose source is temporarily unreadable (a network fetch
+// that failed transiently). The parse loop treats it like a busy SQLite
+// store: the source's cached rows keep serving and the next refresh retries.
+export class RetryableSourceError extends Error {}
 
 export type SessionParser = {
   parse(): AsyncGenerator<ParsedProviderCall>

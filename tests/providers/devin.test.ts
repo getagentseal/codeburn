@@ -878,3 +878,28 @@ skipUnlessSqlite('devin provider sessions.db enrichment', () => {
   })
 })
 
+
+describe('devin cost basis', () => {
+  it('serves a parse-priced Devin or Antigravity cost as calculated, not recorded', async () => {
+    const { cachedCallToApiCall } = await import('../../src/parser.js')
+    const cached = (provider: string) => ({
+      provider,
+      model: 'Claude Sonnet 4.5',
+      usage: {
+        inputTokens: 1000, outputTokens: 100, cacheCreationInputTokens: 0, cacheReadInputTokens: 0,
+        cachedInputTokens: 0, reasoningTokens: 0, webSearchRequests: 0, cacheCreationOneHourTokens: 0,
+      },
+      costUSD: 0.0045,
+      speed: 'standard' as const,
+      timestamp: '2026-08-16T10:00:00.000Z',
+      tools: [], bashCommands: [], skills: [], subagentTypes: [],
+      deduplicationKey: `${provider}:s:1`,
+    })
+    for (const provider of ['devin', 'antigravity']) {
+      const call = cachedCallToApiCall(cached(provider))
+      expect(call.costUSD).toBe(0.0045)
+      expect(call.costBasis).toBe('calculated')
+    }
+    expect(cachedCallToApiCall(cached('cline-cli')).costBasis).toBe('recorded')
+  })
+})

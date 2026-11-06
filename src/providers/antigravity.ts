@@ -52,7 +52,7 @@ function conversationRoots(): readonly AntigravityConversationRoot[] {
     },
   ]
 }
-const CACHE_VERSION = 10
+const CACHE_VERSION = 11
 export const ANTIGRAVITY_CACHE_VERSION = CACHE_VERSION
 export const ANTIGRAVITY_LEGACY_CACHE_FILE = 'antigravity-results.json'
 export function antigravityCacheFileName(version = CACHE_VERSION): string {
@@ -1010,6 +1010,18 @@ function decodePackedVarints(data: Uint8Array): number[] {
   return values
 }
 
+// ModelUsageStats' output total (field 3, thinking + response) wins over its
+// split when it is present: an absent split (proto3 omits unset fields) takes
+// the total as response, and a split that disagrees, even one whose thinking
+// alone exceeds the total or one beside an explicit 0, is cut back to it. An
+// absent or unreadable total (undefined) keeps the split. Returns
+// [response, thinking].
+function reconcileOutputSplit(total: number | undefined, thinking: number, response: number): [number, number] {
+  if (total === undefined || response + thinking === total) return [response, thinking]
+  const kept = Math.min(thinking, total)
+  return [total - kept, kept]
+}
+
 function buildCallFromSqliteGenMetadataRow(
   cascadeId: string,
   row: AntigravityGenMetadataRow,
@@ -1029,15 +1041,11 @@ function buildCallFromSqliteGenMetadataRow(
   const totalOutputTokens = protoFieldPositiveInteger(firstProtoField(usageFields, 3))
   const cacheWriteTokens = protoFieldPositiveInteger(firstProtoField(usageFields, 4))
   const cacheReadTokens = protoFieldPositiveInteger(firstProtoField(usageFields, 5))
-  let thinkingTokens = protoFieldPositiveInteger(firstProtoField(usageFields, 9))
-  let responseTokens = protoFieldPositiveInteger(firstProtoField(usageFields, 10))
-
-  if (responseTokens === 0 && thinkingTokens === 0) {
-    responseTokens = totalOutputTokens
-  } else if (totalOutputTokens > 0 && responseTokens + thinkingTokens !== totalOutputTokens) {
-    const adjustedResponseTokens = totalOutputTokens - thinkingTokens
-    if (adjustedResponseTokens >= 0) responseTokens = adjustedResponseTokens
-  }
+  const [responseTokens, thinkingTokens] = reconcileOutputSplit(
+    firstProtoField(usageFields, 3)?.value !== undefined ? totalOutputTokens : undefined,
+    protoFieldPositiveInteger(firstProtoField(usageFields, 9)),
+    protoFieldPositiveInteger(firstProtoField(usageFields, 10)),
+  )
 
   if (inputTokens === 0 && totalOutputTokens === 0) return null
 
@@ -1325,8 +1333,11 @@ export function buildCallsFromGeneratorMetadata(
 
     const inputTokens = parseInt(usage.inputTokens ?? '0', 10)
     const outputTokens = parseInt(usage.outputTokens ?? '0', 10)
-    const thinkingTokens = parseInt(usage.thinkingOutputTokens ?? '0', 10)
-    const responseTokens = parseInt(usage.responseOutputTokens ?? '0', 10)
+    const [responseTokens, thinkingTokens] = reconcileOutputSplit(
+      usage.outputTokens !== undefined && Number.isFinite(outputTokens) ? outputTokens : undefined,
+      parseInt(usage.thinkingOutputTokens ?? '0', 10),
+      parseInt(usage.responseOutputTokens ?? '0', 10),
+    )
     const cacheReadTokens = parseInt(usage.cacheReadTokens ?? '0', 10)
     const cacheWriteTokens = parseInt(usage.cacheWriteTokens ?? '0', 10)
 

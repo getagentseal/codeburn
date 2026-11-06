@@ -196,8 +196,10 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
         const userMessage = getFirstUserMessage(db, sessionId)
 
         const raw = session.updated_at || session.created_at || ''
-        let ts = new Date(raw)
-        if (isNaN(ts.getTime())) ts = new Date(raw + 'Z')
+        // Goose writes these with SQLite CURRENT_TIMESTAMP / datetime('now')
+        // (crates/goose/src/session/session_manager.rs): UTC text with no zone,
+        // which Date would read as local time.
+        let ts = new Date(/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(\.\d+)?$/.test(raw) ? raw.replace(' ', 'T') + 'Z' : raw)
         if (isNaN(ts.getTime())) ts = new Date()
 
         yield {

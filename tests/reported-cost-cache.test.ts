@@ -12,7 +12,7 @@
 // modules are first evaluated, so HOME must be set before any import.
 
 import { afterAll, beforeEach, expect, it, vi } from 'vitest'
-import { mkdir, rm, writeFile } from 'fs/promises'
+import { mkdir, rm, stat, writeFile } from 'fs/promises'
 import { mkdirSync } from 'fs'
 import { join } from 'path'
 import { createRequire } from 'node:module'
@@ -254,4 +254,104 @@ it('holds the reported-cost provider set to its documented membership', async ()
     'antigravity', 'cline-cli', 'codewhale', 'devin', 'hermes',
     'kiro', 'mistral-vibe', 'omp', 'quickdesk', 'vercel-gateway',
   ])
+})
+
+it('keeps a Cline request cost, including a recorded zero, cold and warm, and re-prices requests without one', async () => {
+  const tasks = join(HOME, '.cline', 'data', 'tasks')
+  const writeTask = async (id: string, usage: Record<string, number>) => {
+    await mkdir(join(tasks, id), { recursive: true })
+    await writeFile(join(tasks, id, 'ui_messages.json'), JSON.stringify([
+      { type: 'say', say: 'api_req_started', ts: Date.UTC(2026, 7, 16, 10), text: JSON.stringify(usage) },
+    ]))
+    await writeFile(join(tasks, id, 'api_conversation_history.json'), JSON.stringify([
+      { role: 'user', content: [{ type: 'text', text: '<model>anthropic/claude-sonnet-4-6</model>' }] },
+    ]))
+  }
+  await writeTask('reported', { tokensIn: 1000, tokensOut: 200, cost: 0.5 })
+  await writeTask('unreported', { tokensIn: 1000, tokensOut: 200 })
+  await writeTask('free', { tokensIn: 1000, tokensOut: 200, cost: 0 })
+
+  const { clearSessionCache, parseAllSessions } = await import('../src/parser.js')
+  clearSessionCache()
+  const cold = (await parseAllSessions(undefined, 'cline')).reduce((s, p) => s + p.totalCostUSD, 0)
+  clearSessionCache()
+  const warm = (await parseAllSessions(undefined, 'cline')).reduce((s, p) => s + p.totalCostUSD, 0)
+
+  // The free request's recorded $0 stays $0; only the one without a cost is priced.
+  const floor = 1000 * 3e-6 + 200 * 15e-6
+  expect(cold).toBeCloseTo(0.5 + floor, 10)
+  expect(warm).toBeCloseTo(cold, 10)
+})
+
+it('re-reads a Cline task whose ui_messages.json is rewritten in place', async () => {
+  const taskDir = join(HOME, '.cline', 'data', 'tasks', 'growing')
+  await mkdir(taskDir, { recursive: true })
+  const request = { type: 'say', say: 'api_req_started', ts: Date.UTC(2026, 7, 16, 10), text: JSON.stringify({ tokensIn: 1000, tokensOut: 200 }) }
+  const uiPath = join(taskDir, 'ui_messages.json')
+  await writeFile(uiPath, JSON.stringify([request]))
+
+  const { clearSessionCache, parseAllSessions } = await import('../src/parser.js')
+  const calls = async () => (await parseAllSessions(undefined, 'cline')).reduce((s, p) => s + p.totalApiCalls, 0)
+  clearSessionCache()
+  expect(await calls()).toBe(1)
+
+  // Cline saves with an in-place writeFile: the task directory's entries, and
+  // so its own mtime and size, stay exactly as they were.
+  const dirBefore = await stat(taskDir)
+  await writeFile(uiPath, JSON.stringify([request, request, request]))
+  expect((await stat(taskDir)).mtimeMs).toBe(dirBefore.mtimeMs)
+
+  clearSessionCache()
+  expect(await calls()).toBe(3)
+})
+
+it('drops a Cline task cached under its old directory key instead of counting it twice', async () => {
+  const taskDir = join(HOME, '.cline', 'data', 'tasks', 'migrated')
+  await mkdir(taskDir, { recursive: true })
+  await writeFile(join(taskDir, 'ui_messages.json'), JSON.stringify([
+    { type: 'say', say: 'api_req_started', ts: Date.UTC(2026, 7, 16, 10), text: JSON.stringify({ tokensIn: 1000, tokensOut: 200, cost: 0.5 }) },
+  ]))
+  const { clearSessionCache, parseAllSessions } = await import('../src/parser.js')
+  const { loadCache, markCacheDirty, saveCache } = await import('../src/session-cache.js')
+  const total = async () => {
+    clearSessionCache()
+    return (await parseAllSessions(undefined, 'cline')).reduce((s, p) => s + p.totalCostUSD, 0)
+  }
+  expect(await total()).toBeCloseTo(0.5, 10)
+
+  // Rewrite the cache into the shape a build keyed on task directories left.
+  const cache = await loadCache()
+  const files = cache.providers['cline']!.files
+  const fileKey = join(taskDir, 'ui_messages.json')
+  const dirStat = await stat(taskDir)
+  files[taskDir] = { ...files[fileKey]!, fingerprint: { dev: dirStat.dev, ino: dirStat.ino, mtimeMs: dirStat.mtimeMs, sizeBytes: dirStat.size } }
+  delete files[fileKey]
+  markCacheDirty(cache, 'cline')
+  await saveCache(cache)
+  clearSessionCache()
+  expect(Object.keys((await loadCache()).providers['cline']!.files)).toEqual([taskDir])
+
+  expect(await total()).toBeCloseTo(0.5, 10)
+  clearSessionCache()
+  expect(Object.keys((await loadCache()).providers['cline']!.files)).toEqual([fileKey])
+})
+
+it('re-reads a Cline task when api_conversation_history.json appears after the first parse', async () => {
+  const taskDir = join(HOME, '.cline', 'data', 'tasks', 'late-history')
+  await mkdir(taskDir, { recursive: true })
+  await writeFile(join(taskDir, 'ui_messages.json'), JSON.stringify([
+    { type: 'say', say: 'api_req_started', ts: Date.UTC(2026, 7, 16, 10), text: JSON.stringify({ tokensIn: 1000, tokensOut: 200 }) },
+  ]))
+  const { clearSessionCache, parseAllSessions } = await import('../src/parser.js')
+  const models = async () => {
+    clearSessionCache()
+    return (await parseAllSessions(undefined, 'cline'))
+      .flatMap(p => p.sessions).flatMap(s => s.turns).flatMap(t => t.assistantCalls).map(c => c.model)
+  }
+  expect(await models()).toEqual(['cline-auto'])
+
+  await writeFile(join(taskDir, 'api_conversation_history.json'), JSON.stringify([
+    { role: 'user', content: [{ type: 'text', text: '<model>anthropic/claude-sonnet-4-6</model>' }] },
+  ]))
+  expect(await models()).toEqual(['claude-sonnet-4-6'])
 })

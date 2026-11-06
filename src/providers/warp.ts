@@ -6,6 +6,7 @@ import { calculateCost, getShortModelName, ownValue } from '../models.js'
 import { blobToText, getSqliteLoadError, isBlockedDatabaseError, isSqliteAvailable, isSqliteBusyError, openDatabase, type SqliteDatabase } from '../sqlite.js'
 import { estimateTokensFromChars } from '../token-estimate.js'
 import type { ProbeRoot, ParsedProviderCall, Provider, SessionParser, SessionSource } from './types.js'
+import type { CachedFile } from '../session-cache.js'
 import { isPermissionError, safeNumber } from '../parser.js'
 
 const WARP_GROUP_CONTAINER = '2BBY89MBSN.dev.warp'
@@ -124,10 +125,21 @@ function warpDbPath(bundleId: string): string {
   )
 }
 
-function getDbCandidates(dbPathOverride?: string): string[] {
+// Linux and Windows locations from Warp's file-locations docs; Linux Preview
+// appends -preview to the warp-terminal directory.
+export function getDbCandidates(dbPathOverride?: string, platform: string = process.platform): string[] {
   if (dbPathOverride) return [dbPathOverride]
   if (process.env['WARP_DB_PATH']) return [process.env['WARP_DB_PATH']]
-  return [warpDbPath(WARP_STABLE_BUNDLE_ID), warpDbPath(WARP_PREVIEW_BUNDLE_ID)]
+  if (platform === 'win32') {
+    const localAppData = process.env['LOCALAPPDATA'] || join(homedir(), 'AppData', 'Local')
+    return [join(localAppData, 'warp', 'Warp', 'data', 'warp.sqlite')]
+  }
+  if (platform === 'linux') {
+    const stateHome = process.env['XDG_STATE_HOME'] || join(homedir(), '.local', 'state')
+    return [join(stateHome, 'warp-terminal', 'warp.sqlite'), join(stateHome, 'warp-terminal-preview', 'warp.sqlite')]
+  }
+  if (platform === 'darwin') return [warpDbPath(WARP_STABLE_BUNDLE_ID), warpDbPath(WARP_PREVIEW_BUNDLE_ID)]
+  return []
 }
 
 function normalizeModel(rawModel: string): string {
@@ -266,6 +278,47 @@ function allocateCost(weights: number[], totalUsd: number): number[] {
   const totalWeight = normalized.reduce((sum, w) => sum + w, 0)
   if (totalWeight === 0) return normalized.map(() => totalUsd / normalized.length)
   return normalized.map(w => (totalUsd * w) / totalWeight)
+}
+
+// Warp records usage per conversation, not per exchange, so every parse
+// re-splits the running total over all finished exchanges, and a later
+// exchange's spend would move onto earlier days. Exchanges the previous parse
+// cached keep their share; only the growth since then is split, over the new
+// exchanges (or added to the latest one when there is none). A total that
+// shrank, a removed exchange, or a cost that changed rung falls back to the
+// fresh split.
+export function keepCachedWarpShares(prior: CachedFile, calls: ParsedProviderCall[]): ParsedProviderCall[] {
+  const cached = new Map(prior.turns.flatMap(t => t.calls).map(c => [c.deduplicationKey, c]))
+  const current = new Set(calls.map(c => c.deduplicationKey))
+  // An exchange the cache held is gone: the old shares no longer add up to
+  // anything Warp reports, so split the current total fresh.
+  if ([...cached.keys()].some(key => !current.has(key))) return calls
+  const kept = calls.filter(c => cached.has(c.deduplicationKey))
+  if (kept.length === 0) return calls
+  const billed = calls[0]!.costFromBilling === true
+  if (billed && kept.some(c => cached.get(c.deduplicationKey)!.costUSD === undefined)) return calls
+
+  const sum = (values: number[]) => values.reduce((a, b) => a + b, 0)
+  const keptTokens = sum(kept.map(c => cached.get(c.deduplicationKey)!.usage.inputTokens))
+  const keptCost = billed ? sum(kept.map(c => cached.get(c.deduplicationKey)!.costUSD!)) : 0
+  const deltaTokens = sum(calls.map(c => c.inputTokens)) - keptTokens
+  const deltaCost = billed ? sum(calls.map(c => c.costUSD)) - keptCost : 0
+  if (deltaTokens < 0 || deltaCost < -1e-9) return calls
+
+  const fresh = calls.filter(c => !cached.has(c.deduplicationKey))
+  const targets = fresh.length > 0 ? fresh : [calls[calls.length - 1]!]
+  const tokenShares = allocateTokens(targets.map(c => c.inputTokens), deltaTokens)
+  const costShares = allocateCost(targets.map(c => c.costUSD), Math.max(0, deltaCost))
+
+  return calls.map(call => {
+    const prev = cached.get(call.deduplicationKey)
+    const t = targets.indexOf(call)
+    const inputTokens = (prev?.usage.inputTokens ?? 0) + (t >= 0 ? tokenShares[t]! : 0)
+    const costUSD = billed
+      ? (prev?.costUSD ?? 0) + (t >= 0 ? costShares[t]! : 0)
+      : calculateCost(call.model, inputTokens, 0, 0, 0, 0)
+    return { ...call, inputTokens, costUSD }
+  })
 }
 
 function extractUserMessage(rawInput: string): string {

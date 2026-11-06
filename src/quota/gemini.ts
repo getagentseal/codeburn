@@ -20,6 +20,7 @@ import type { QuotaProvider, QuotaWindow } from './types.js'
 
 const CODE_ASSIST_ENDPOINT = 'https://cloudcode-pa.googleapis.com/v1internal'
 const TOKEN_ENDPOINT = 'https://oauth2.googleapis.com/token'
+const EXPIRED_FOOTER = ['Gemini CLI login expired. Run Gemini CLI once, then refresh.']
 
 type GeminiCredential = {
   access_token?: string
@@ -169,7 +170,13 @@ export async function fetchGeminiQuota(options: Partial<GeminiDeps> & { signal?:
     let response = await post(token, 'loadCodeAssist', { metadata: { ideType: 'GEMINI_CLI', pluginType: 'GEMINI' } }, deps, options.signal)
     if (response.status === 401) {
       const reread = await credentialFromFile(deps)
-      if (!reread || reread.access_token === credential.access_token) return { quota: empty('transientFailure') }
+      if (!reread || reread.access_token === credential.access_token) {
+        // Without a refresher nothing here can mint a new token, whatever the
+        // stored expiry says (it can be missing or skewed): only running Gemini
+        // CLI clears it, so retrying would read as a blip forever.
+        const canRefresh = clientCredentials() !== null && Boolean(credential.refresh_token)
+        return { quota: canRefresh ? empty('transientFailure') : empty('terminalFailure', EXPIRED_FOOTER) }
+      }
       credential = reread
       response = await post(credential.access_token!, 'loadCodeAssist', { metadata: { ideType: 'GEMINI_CLI', pluginType: 'GEMINI' } }, deps, options.signal)
     }

@@ -65,8 +65,8 @@ describe('cline provider - discovery', () => {
     expect(sessions.map(s => s.provider)).toEqual(['cline', 'cline'])
     expect(sessions.map(s => s.project)).toEqual(['Cline', 'Cline'])
     expect(sessions.map(s => s.path).sort()).toEqual([
-      join(homeDataDir, 'tasks', 'task-home'),
-      join(vscodeDir, 'tasks', 'task-vscode'),
+      join(homeDataDir, 'tasks', 'task-home', 'ui_messages.json'),
+      join(vscodeDir, 'tasks', 'task-vscode', 'ui_messages.json'),
     ].sort())
   })
 
@@ -82,7 +82,7 @@ describe('cline provider - discovery', () => {
     const sessions = await provider.discoverSessions()
 
     expect(sessions).toHaveLength(1)
-    expect(sessions[0]!.path).toBe(newTask)
+    expect(sessions[0]!.path).toBe(join(newTask, 'ui_messages.json'))
   })
 
   it('skips task directories without ui_messages.json', async () => {
@@ -127,9 +127,9 @@ describe('cline provider - default roots', () => {
     expect(sessions).toHaveLength(3)
     expect(sessions.every(s => s.provider === 'cline')).toBe(true)
     expect(sessions.map(s => s.path).sort()).toEqual([
-      join(stableRoot!, 'tasks', 'task-stable'),
-      join(insidersRoot!, 'tasks', 'task-insiders'),
-      join(codiumRoot!, 'tasks', 'task-codium'),
+      join(stableRoot!, 'tasks', 'task-stable', 'ui_messages.json'),
+      join(insidersRoot!, 'tasks', 'task-insiders', 'ui_messages.json'),
+      join(codiumRoot!, 'tasks', 'task-codium', 'ui_messages.json'),
     ].sort())
   })
 
@@ -143,8 +143,8 @@ describe('cline provider - default roots', () => {
     const sessions = await createClineProvider().discoverSessions()
 
     expect(sessions.map(s => s.path).sort()).toEqual([
-      join(stableRoot, 'tasks', 'task-vscode'),
-      join(clineDataDir, 'tasks', 'task-home'),
+      join(stableRoot, 'tasks', 'task-vscode', 'ui_messages.json'),
+      join(clineDataDir, 'tasks', 'task-home', 'ui_messages.json'),
     ].sort())
   })
 
@@ -160,7 +160,7 @@ describe('cline provider - default roots', () => {
     const sessions = await createClineProvider().discoverSessions()
 
     expect(sessions).toHaveLength(1)
-    expect(sessions[0]!.path).toBe(insidersTask)
+    expect(sessions[0]!.path).toBe(join(insidersTask, 'ui_messages.json'))
   })
 })
 
@@ -182,7 +182,7 @@ describe('cline provider - parsing', () => {
       cost: 0.07,
     })
 
-    const source = { path: taskDir, project: 'Cline', provider: 'cline' }
+    const source = { path: join(taskDir, 'ui_messages.json'), project: 'Cline', provider: 'cline' }
     const calls: ParsedProviderCall[] = []
     for await (const call of cline.createSessionParser(source, new Set()).parse()) calls.push(call)
 

@@ -303,7 +303,7 @@ function QuotaContent({ quota, onReconnect }: { quota: QuotaProvider; onReconnec
     )
   }
   if (quota.connection === 'disconnected' || quota.connection === 'accessDenied') {
-    return <ConnectAffordance provider={quota.provider} connection={quota.connection} onRefresh={onReconnect} />
+    return <ConnectAffordance provider={quota.provider} connection={quota.connection} onRefresh={onReconnect} message={quota.connection === 'accessDenied' ? quota.footerLines[0] : undefined} />
   }
   if (quota.connection === 'loading') return <p className="quota-connection-note">{t('plans.quota.loading')}</p>
   if (quota.connection === 'stale' || quota.connection === 'transientFailure') {
