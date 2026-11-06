@@ -182,6 +182,28 @@ describe('Gemini quota', () => {
     const result = await fetchGeminiQuota({ fetch: neverFetch as unknown as typeof fetch, readFile: noFile })
     expect(result.quota.connection).toBe('disconnected')
   })
+
+  describe('after a rejected credential', () => {
+    const now = () => 1_760_000_000_000
+    const stored = (expiry_date: number) => JSON.stringify({ access_token: 'unchanged', refresh_token: 'r', expiry_date })
+    const rejected = () => vi.fn(async () => new Response('{}', { status: 401 }))
+
+    it('reports an expired login nothing could refresh as terminal, with what to do', async () => {
+      vi.stubEnv('GEMINI_OAUTH_CLIENT_ID', '')
+      const fetchMock = rejected()
+      const result = await fetchGeminiQuota({ fetch: fetchMock as unknown as typeof fetch, readFile: (async () => stored(now() - 3_600_000)) as never, now })
+      vi.unstubAllEnvs()
+      expect(result.quota.connection).toBe('terminalFailure')
+      expect(result.quota.footerLines).toEqual(['Gemini CLI login expired. Run Gemini CLI once, then refresh.'])
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+    })
+
+    it('keeps a transient failure while the token is still within its life', async () => {
+      const result = await fetchGeminiQuota({ fetch: rejected() as unknown as typeof fetch, readFile: (async () => stored(now() + 3_600_000)) as never, now })
+      expect(result.quota.connection).toBe('transientFailure')
+      expect(result.quota.footerLines).toEqual([])
+    })
+  })
 })
 
 describe('Kimi quota', () => {

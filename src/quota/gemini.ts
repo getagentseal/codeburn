@@ -20,6 +20,7 @@ import type { QuotaProvider, QuotaWindow } from './types.js'
 
 const CODE_ASSIST_ENDPOINT = 'https://cloudcode-pa.googleapis.com/v1internal'
 const TOKEN_ENDPOINT = 'https://oauth2.googleapis.com/token'
+const EXPIRED_FOOTER = ['Gemini CLI login expired. Run Gemini CLI once, then refresh.']
 
 type GeminiCredential = {
   access_token?: string
@@ -163,13 +164,18 @@ export async function fetchGeminiQuota(options: Partial<GeminiDeps> & { signal?:
 
     if ((credential.expiry_date ?? Infinity) - deps.now() <= 5 * 60_000) {
       const accessToken = await refresh(credential, deps, options.signal)
-      if (accessToken) credential = { ...credential, access_token: accessToken }
+      if (accessToken) credential = { ...credential, access_token: accessToken, expiry_date: undefined }
     }
     const token = credential.access_token!
     let response = await post(token, 'loadCodeAssist', { metadata: { ideType: 'GEMINI_CLI', pluginType: 'GEMINI' } }, deps, options.signal)
     if (response.status === 401) {
       const reread = await credentialFromFile(deps)
-      if (!reread || reread.access_token === credential.access_token) return { quota: empty('transientFailure') }
+      if (!reread || reread.access_token === credential.access_token) {
+        // A token whose life is over and that nothing here could refresh needs
+        // the user to run Gemini CLI; retrying it would read as a blip forever.
+        const expired = credential.expiry_date !== undefined && credential.expiry_date <= deps.now()
+        return { quota: expired ? empty('terminalFailure', EXPIRED_FOOTER) : empty('transientFailure') }
+      }
       credential = reread
       response = await post(credential.access_token!, 'loadCodeAssist', { metadata: { ideType: 'GEMINI_CLI', pluginType: 'GEMINI' } }, deps, options.signal)
     }
