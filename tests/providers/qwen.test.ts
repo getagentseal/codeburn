@@ -70,6 +70,24 @@ describe('qwen provider', () => {
     expect(unknown!.costUSD).toBeCloseTo(calculateCost(model, 1_000, 200, 0, 0, 0), 12)
   })
 
+  it('a user record without an auth type does not inherit the previous one', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'codeburn-qwen-test-'))
+    dirs.push(dir)
+    const chats = join(dir, '-tmp-demo', 'chats')
+    await mkdir(chats, { recursive: true })
+    const user = (uuid: string, executionContext?: unknown) => ({ uuid, sessionId: 's1', timestamp: '2026-10-20T09:59:59.000Z', type: 'user', message: { role: 'user', parts: [{ text: 'go' }] }, ...(executionContext ? { executionContext } : {}) })
+    await writeFile(join(chats, 's1.jsonl'), [user('u1', { modelId: model, authType: 'gemini' }), user('u2'), {
+      uuid: 'a1', sessionId: 's1', timestamp: '2026-10-20T10:00:00.000Z', type: 'assistant', model,
+      message: { role: 'model', parts: [{ text: 'done' }] },
+      usageMetadata: { promptTokenCount: 1_000, candidatesTokenCount: 200, thoughtsTokenCount: 50, cachedContentTokenCount: 0 },
+    }].map(r => JSON.stringify(r)).join('\n') + '\n')
+    const provider = createQwenProvider(dir)
+    const [source] = await provider.discoverSessions()
+    const calls: ParsedProviderCall[] = []
+    for await (const call of provider.createSessionParser(source!, new Set()).parse()) calls.push(call)
+    expect(calls[0]!.costUSD).toBeCloseTo(calculateCost(model, 1_000, 200, 0, 0, 0), 12)
+  })
+
   it('never bills more cached tokens than the prompt held', async () => {
     const [call] = await parseUsage({ promptTokenCount: 1_000, candidatesTokenCount: 100, thoughtsTokenCount: 0, totalTokenCount: 1_100, cachedContentTokenCount: 5_000 })
     expect(call!.inputTokens).toBe(0)

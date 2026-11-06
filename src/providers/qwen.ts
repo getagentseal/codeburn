@@ -122,7 +122,8 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
         } catch {
           continue
         }
-        if (typeof entry.executionContext?.authType === 'string') authType = entry.executionContext.authType
+        // Qwen Code stamps each user record with the auth type in force then (it can change mid-session).
+        if (entry.type === 'user') authType = typeof entry.executionContext?.authType === 'string' ? entry.executionContext.authType : undefined
 
         if (entry.type === 'user' && entry.message) {
           const texts = (entry.message.parts ?? [])
