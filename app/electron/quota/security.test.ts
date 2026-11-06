@@ -38,7 +38,7 @@ describe('readKeychainPassword', () => {
       }))
       const pending = readKeychainPassword('svc', ['alice', null], exec)
       await vi.advanceTimersByTimeAsync(90_000)
-      expect(await pending).toEqual({ status: 'accessDenied' })
+      expect(await pending).toEqual({ status: 'accessDenied', reason: 'unanswered' })
       expect(exec).toHaveBeenCalledTimes(1)
     } finally {
       vi.useRealTimers()
@@ -56,7 +56,7 @@ describe('readKeychainPassword', () => {
   it('remembers a refusal until the user acts again, without a second prompt', async () => {
     const exec = vi.fn(denied('User canceled the operation.'))
     await readKeychainPassword('svc', ['alice', null], exec)
-    expect(await readKeychainPassword('svc', ['alice', null], exec)).toEqual({ status: 'accessDenied' })
+    expect(await readKeychainPassword('svc', ['alice', null], exec)).toEqual({ status: 'accessDenied', reason: 'denied' })
     expect(exec).toHaveBeenCalledTimes(1)
     forgetKeychainRefusals()
     await readKeychainPassword('svc', ['alice', null], exec)
@@ -65,7 +65,7 @@ describe('readKeychainPassword', () => {
 
   it('classifies "User interaction is not allowed" and user cancel as accessDenied', async () => {
     expect(await readKeychainPassword('svc', [null], vi.fn(denied('SecKeychainItemCopyContent: User interaction is not allowed.')))).toEqual({ status: 'accessDenied' })
-    expect(await readKeychainPassword('svc', [null], vi.fn(denied('User canceled the operation.')))).toEqual({ status: 'accessDenied' })
+    expect(await readKeychainPassword('svc', [null], vi.fn(denied('User canceled the operation.')))).toEqual({ status: 'accessDenied', reason: 'denied' })
   })
 
   it('falls through a user-scoped miss to the service-only lookup', async () => {
@@ -79,7 +79,7 @@ describe('readKeychainPassword', () => {
 
   it('stops at a Deny on the first candidate instead of prompting again for the same item', async () => {
     const exec = vi.fn(denied('User canceled the operation.'))
-    expect(await readKeychainPassword('svc', ['alice', null], exec)).toEqual({ status: 'accessDenied' })
+    expect(await readKeychainPassword('svc', ['alice', null], exec)).toEqual({ status: 'accessDenied', reason: 'denied' })
     expect(exec).toHaveBeenCalledTimes(1)
   })
 

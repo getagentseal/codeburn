@@ -10,6 +10,10 @@ import type { QuotaProvider, QuotaWindow } from './types'
 const ENDPOINT = 'https://api.anthropic.com/api/oauth/usage'
 const KEYCHAIN_SERVICE = 'Claude Code-credentials'
 const EXPIRED_FOOTER = ['Claude Code login expired. Run Claude Code once, then refresh.']
+const REFUSED_FOOTER = {
+  denied: ['Keychain access to the Claude Code login was denied.'],
+  unanswered: ['The Keychain prompt for the Claude Code login was not answered.'],
+}
 
 type ClaudeCredential = { accessToken: string; expiresAt?: number; rateLimitTier?: string; subscriptionType?: string }
 /** Where the credential in hand came from, so a rejected token is re-read from that same place. */
@@ -190,7 +194,7 @@ export async function fetchClaudeQuota(options: Partial<ClaudeDeps> & { signal?:
     const fileExpired = credential?.expiresAt !== undefined && credential.expiresAt <= deps.now()
     if ((!credential || fileExpired) && options.allowKeychain && process.platform === 'darwin') {
       const outcome = await deps.keychain()
-      if (outcome.status === 'accessDenied') return { quota: empty('accessDenied') }
+      if (outcome.status === 'accessDenied') return { quota: empty('accessDenied', outcome.reason ? REFUSED_FOOTER[outcome.reason] : []) }
       const fromKeychain = outcome.status === 'found' ? parseCredential(outcome.value) : null
       if (fromKeychain) {
         credential = fromKeychain

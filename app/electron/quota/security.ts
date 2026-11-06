@@ -17,11 +17,14 @@ const execFileAsync = promisify(execFile)
 const KEYCHAIN_TIMEOUT_MS = 90_000
 
 /** Outcome of a keychain lookup. `accessDenied` means the item exists but macOS
- * needs the user to grant access (dialog dismissed, denied, or not answered). */
+ * needs the user to grant access; `reason` says when that was the user's own
+ * answer to a prompt (Deny, or the dialog left open until the timeout). */
 export type KeychainOutcome =
   | { status: 'found'; value: string }
   | { status: 'notFound' }
-  | { status: 'accessDenied' }
+  | { status: 'accessDenied'; reason?: KeychainRefusal }
+
+export type KeychainRefusal = 'denied' | 'unanswered'
 
 export type KeychainExec = (
   file: string,
@@ -60,7 +63,7 @@ function classifyKeychainError(error: unknown, timedOut: boolean): 'notFound' | 
 
 // Items (service plus account) the user refused since the last user-initiated
 // refresh, which clears them: one prompt per item per action, never persisted.
-const refusedThisRun = new Set<string>()
+const refusedThisRun = new Map<string, KeychainRefusal>()
 
 export function forgetKeychainRefusals(): void {
   refusedThisRun.clear()
@@ -83,12 +86,13 @@ export async function readKeychainPassword(
 ): Promise<KeychainOutcome> {
   if (process.platform !== 'darwin') return { status: 'notFound' }
   let denied = false
-  let refused = false
+  let refusal: KeychainRefusal | undefined
   for (const account of accounts) {
     const item = JSON.stringify([service, account])
-    if (refusedThisRun.has(item)) { refused = true; continue }
+    const remembered = refusedThisRun.get(item)
+    if (remembered) { refusal = remembered; continue }
     // A service-only lookup can match the item just refused and ask again.
-    if (account === null && refused) continue
+    if (account === null && refusal) continue
     const args = ['find-generic-password', '-s', service, ...(account ? ['-a', account] : []), '-w']
     const controller = new AbortController()
     let timedOut = false
@@ -99,15 +103,16 @@ export async function readKeychainPassword(
     } catch (error) {
       const kind = classifyKeychainError(error, timedOut)
       if (kind === 'denied' || kind === 'unanswered') {
-        refusedThisRun.add(item)
-        return { status: 'accessDenied' }
+        refusedThisRun.set(item, kind)
+        return { status: 'accessDenied', reason: kind }
       }
       if (kind === 'other') denied = true
     } finally {
       clearTimeout(timer)
     }
   }
-  return denied || refused ? { status: 'accessDenied' } : { status: 'notFound' }
+  if (refusal) return { status: 'accessDenied', reason: refusal }
+  return denied ? { status: 'accessDenied' } : { status: 'notFound' }
 }
 
 export function sanitizeError(error: unknown): string {
