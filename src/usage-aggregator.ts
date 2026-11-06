@@ -6,7 +6,7 @@ import { type SessionCountBasis } from './session-count-label.js'
 import { parseAllSessions, filterProjectsByName, mergeProjectSplits, filterProjectsByDays, filterProjectsByClaudeConfigSource, filterProjectsByIdentity, filterProjectsByDateRange, isSessionHydrationComplete, makeProjectFilter, type ProjectFilterTarget, sessionHydrationSnapshot } from './parser.js'
 type ProjectFilter = (entry: ProjectFilterTarget) => boolean
 
-import { findUnpricedModels, getFlatRateModelsConfigHash, getLocalModelSavingsConfigHash, getPriceOverridesConfigHash, getShortModelName, isExpectedFreeModel, billableOutputTokens, modelRowKey } from './models.js'
+import { findUnpricedModels, getFlatRateModelsConfigHash, getLocalModelSavingsConfigHash, getModelAliasesConfigHash, getPriceOverridesConfigHash, getShortModelName, isExpectedFreeModel, billableOutputTokens, modelRowKey } from './models.js'
 import { getAllProviders, safeDiscoverSessions } from './providers/index.js'
 import { loadPlugins, pluginPayloadSections } from './plugins/loader.js'
 import { collectLiveSessions } from './live-sessions.js'
@@ -222,7 +222,7 @@ export function getDailyCacheConfigHash(): string {
   const savingsHash = getLocalModelSavingsConfigHash()
   const overridesHash = getPriceOverridesConfigHash()
   const flatRateHash = getFlatRateModelsConfigHash()
-  return `localModelSavings=${savingsHash}\u0002priceOverrides=${overridesHash}\u0002flatRateModels=${flatRateHash}`
+  return `localModelSavings=${savingsHash}\u0002priceOverrides=${overridesHash}\u0002flatRateModels=${flatRateHash}\u0002modelAliases=${getModelAliasesConfigHash()}`
 }
 
 async function hydrateCache(): Promise<DailyCache> {
