@@ -85,7 +85,8 @@ export function recommendModelDefault(project: ProjectSummary, opts: { now?: Dat
 
   const providers = providerByModel(behavioralProject)
   const provider = providers.get(current.model)
-  if (!provider || !isRecent(current.lastSeen, now)) return null
+  // The plan writes .claude/settings.json, which only Claude Code reads.
+  if (provider !== 'claude' || !isRecent(current.lastSeen, now)) return null
 
   const currentRate = oneShotRate(current)
   const currentCost = costPerEdit(current)
