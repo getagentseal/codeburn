@@ -10,7 +10,7 @@ import { createRequire } from 'node:module'
 import { isSqliteAvailable } from '../src/sqlite.js'
 import { clearLoadCacheMemo } from '../src/session-cache.js'
 import { clearSessionCache, isSessionHydrationComplete, parseAllSessions } from '../src/parser.js'
-import { readCacheOnDisk } from './fixtures/session-cache-io.js'
+import { readCacheOnDisk, writeCacheOnDisk } from './fixtures/session-cache-io.js'
 
 const requireForTest = createRequire(import.meta.url)
 type TestDb = { exec(sql: string): void; prepare(sql: string): { run(...p: unknown[]): void }; close(): void }
@@ -277,5 +277,33 @@ describe('copilot chat-session copies in two storages', () => {
     const projects = await parseAllSessions(undefined, 'copilot')
     const served = projects.flatMap(p => p.sessions.flatMap(s => s.turns.flatMap(t => t.assistantCalls.map(() => p.project))))
     expect(served).toEqual([globalName < 'ws' ? 'copilot-chat' : 'proj-ws'])
+  })
+})
+
+describe('copilot JetBrains cache across a parse-version bump', () => {
+  it('serves a re-attributed turn once, not beside its pre-bump copy', async () => {
+    const guid = 'AAAAAAAA-BBBB-CCCC-DDDD-0000000000EF'
+    const store = join(tmp, 'jb', 'iu', 'chat-agent-sessions', 'store1')
+    await mkdir(store, { recursive: true })
+    const md = JSON.stringify({ type: 'Markdown', data: JSON.stringify({ text: 'an uppercase reply' }) })
+    await writeFile(join(store, 'copilot-agent-sessions-nitrite.db'), Buffer.from(
+      `$${guid}\x00\x00name\x00value\x00\x05Upper chatt\x00\x06source{"__first__":{"type":"Subgraph","value":${JSON.stringify(md)}}}`, 'latin1'))
+    process.env['CODEBURN_COPILOT_JETBRAINS_DIR'] = join(tmp, 'jb')
+    expect(await servedKeys()).toEqual([expect.stringMatching(/^copilot:jb:aaaaaaaa-bbbb-cccc-dddd-0000000000ef:/)])
+
+    // Rewrite the cache as the previous parser left it: the uppercase GUID was
+    // not recognised, so the turn sat under the store id, at an older version.
+    const cache = await readCacheOnDisk()
+    const section = cache.providers['copilot']!
+    section.envFingerprint = 'pre-bump'
+    for (const file of Object.values(section.files)) {
+      for (const turn of file.turns) {
+        turn.sessionId = 'store1'
+        for (const c of turn.calls) c.deduplicationKey = c.deduplicationKey.replace(/^copilot:jb:[^:]+:/, 'copilot:jb:store1:')
+      }
+    }
+    await writeCacheOnDisk(cache)
+
+    expect(await servedKeys()).toEqual([expect.stringMatching(/^copilot:jb:aaaaaaaa-bbbb-cccc-dddd-0000000000ef:/)])
   })
 })

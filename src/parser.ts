@@ -3454,7 +3454,7 @@ function getOrCreateProviderSection(cache: SessionCache, provider: string): Prov
         section.files[path] = file
         continue
       }
-      const { lastCompleteLineOffset: _resumeOffset, failed: _failed, ...rest } = file
+      const { lastCompleteLineOffset: _resumeOffset, failed: _failed, failedAt: _failedAt, ...rest } = file
       section.files[path] = { ...rest, fingerprint: { dev: 0, ino: 0, mtimeMs: 0, sizeBytes: -1 } }
     }
   }
@@ -4059,6 +4059,17 @@ export async function parseProviderSources(
           const existingEntry = section.files[source.path]
           if (existingEntry) {
             const freshByKey = new Map(turns.flatMap(t => t.calls).map(c => [c.deduplicationKey, c]))
+            // JetBrains Copilot keys are copilot:jb:<conversation>:<reply hash>:<n>.
+            // A re-read that files a cached reply under another conversation
+            // (better GUID matching) supersedes the cached copy; replies the
+            // store no longer holds have no fresh hash and stay.
+            const jbHash = (key: string): string | undefined => key.startsWith('copilot:jb:') ? key.split(':').at(-2) : undefined
+            const freshJbHashes = new Set([...freshByKey.keys()].map(jbHash).filter(h => h !== undefined))
+            if (freshJbHashes.size > 0) {
+              existingEntry.turns = existingEntry.turns
+                .map(t => ({ ...t, calls: t.calls.filter(c => freshByKey.has(c.deduplicationKey) || !freshJbHashes.has(jbHash(c.deduplicationKey) ?? '')) }))
+                .filter(t => t.calls.length > 0)
+            }
             if (freshByKey.size > 0) {
               existingEntry.turns = existingEntry.turns.map(t => {
                 const calls = t.calls.map(c => freshByKey.get(c.deduplicationKey) ?? c)
