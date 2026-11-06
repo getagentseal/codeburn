@@ -1,5 +1,8 @@
 import type { BillingMode } from './models.js'
 
+export const SPEEDS = ['standard', 'fast', 'flex', 'ultrafast'] as const
+export type Speed = typeof SPEEDS[number]
+
 export type TokenUsage = {
   inputTokens: number
   outputTokens: number
@@ -37,7 +40,7 @@ export type ApiUsage = {
     web_search_requests?: number
     web_fetch_requests?: number
   }
-  speed?: 'standard' | 'fast' | 'flex' | 'ultrafast'
+  speed?: Speed
   // Claude Code advisor tool (/advisor): per-turn sub-usage records. A record
   // with type 'advisor_message' carries the advisor model's own tokens and is
   // NOT included in the top-level totals above; type 'message' records mirror
@@ -60,7 +63,7 @@ export type ApiUsageIteration = {
     web_search_requests?: number
     web_fetch_requests?: number
   }
-  speed?: 'standard' | 'fast' | 'flex' | 'ultrafast'
+  speed?: Speed
 }
 
 export type AssistantMessageContent = {
@@ -123,7 +126,7 @@ export type ParsedApiCall = {
   subagentTypes: string[]
   hasAgentSpawn: boolean
   hasPlanMode: boolean
-  speed: 'standard' | 'fast' | 'flex' | 'ultrafast'
+  speed: Speed
   timestamp: string
   bashCommands: string[]
   deduplicationKey: string

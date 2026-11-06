@@ -810,7 +810,7 @@ describe('codeburn status --format menubar-json', () => {
 
   // Four CLI spawns, the most in this file, against a windows-latest tail of
   // ~12s per spawn: the file-wide 60s is not enough headroom for this one.
-  it('serves a repeat identical query from the status snapshot, debounces a fresh change, then reflects it once settled', async () => {
+  it('serves a repeat identical query from the status snapshot and reflects a fresh change on the next call', async () => {
     const home = await mkdtemp(join(tmpdir(), 'codeburn-menubar-snapshot-'))
 
     try {
@@ -847,11 +847,8 @@ describe('codeburn status --format menubar-json', () => {
       expect(second.status, `stderr: ${second.stderr}`).toBe(0)
       expect(second.stdout).toBe(first.stdout)
 
-      // New session activity moves the corpus fingerprint. A call made right
-      // after — still well inside the (large, forced) settle window — must
-      // debounce: the freshly-touched file may still be mid-write, so it
-      // keeps serving the last SETTLED snapshot rather than recomputing on
-      // every tick of a burst.
+      // New session activity moves the corpus fingerprint: the very next call
+      // must recompute and reflect it, never replay the older snapshot.
       await writeFile(
         join(projectDir, 'session.jsonl'),
         [
@@ -859,14 +856,7 @@ describe('codeburn status --format menubar-json', () => {
           userLine('s1', ts(120_000)), assistantLine('s1', ts(180_000), 'msg-2'),
         ].join('\n'),
       )
-      const debounced = runCli(args, home, { CODEBURN_STATUS_SNAPSHOT_SETTLE_MS: '60000' })
-      expect(debounced.status, `stderr: ${debounced.stderr}`).toBe(0)
-      expect(debounced.stdout).toBe(first.stdout)
-
-      // Once the change is treated as settled (forcing the window to 0), the
-      // very next call must reflect it — the debounce only ever delays
-      // picking up a real update, it never masks one permanently.
-      const settled = runCli(args, home, { CODEBURN_STATUS_SNAPSHOT_SETTLE_MS: '0' })
+      const settled = runCli(args, home)
       expect(settled.status, `stderr: ${settled.stderr}`).toBe(0)
       const settledPayload = JSON.parse(settled.stdout) as { current: { calls: number } }
       expect(settledPayload.current.calls).toBe(2)
@@ -1290,8 +1280,8 @@ describe('codeburn status --format menubar-json', () => {
       expect(third.status, `stderr: ${third.stderr}`).toBe(0)
       expect(JSON.parse(third.stdout)).toEqual(payload)
       // No repeated invalidation: a warm record is served, not rebuilt or
-      // rewritten (loadStatusSnapshot only persists settle-window bookkeeping
-      // on a corpus mismatch, and saveStatusSnapshot only runs on a miss).
+      // rewritten (loadStatusSnapshot never writes, and saveStatusSnapshot
+      // only runs on a miss).
       expect(await readFile(snapshotFiles[0]!, 'utf-8')).toBe(freshRecord)
     } finally {
       await rm(home, { recursive: true, force: true })

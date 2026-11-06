@@ -12,7 +12,7 @@ import {
   type DailyEntry,
   type ProviderDaySlice,
 } from '../src/daily-cache.js'
-import { loadPricing } from '../src/models.js'
+import { loadPricing, setModelAliases } from '../src/models.js'
 import { buildDurablePeriod, buildPeriodData, getDailyCacheConfigHash } from '../src/usage-aggregator.js'
 import { parseAllSessions, filterProjectsByName, clearSessionCache } from '../src/parser.js'
 import type { DateRange } from '../src/types.js'
@@ -266,5 +266,56 @@ describe("mergeDayEntries 'prefer-richer' guard mode", () => {
     // The write path is where the new price does land.
     const written = mergeDayEntries(fresh, cached, true, undefined, true)[0]!
     expect(written.providers['grok']).toMatchObject({ cost: 11.89, calls: 21 })
+  })
+})
+
+describe('a model alias added after a day sealed', () => {
+  it('reprices the sealed day in the headline', async () => {
+    const past = daysAgoStr(3)
+    const projectDir = join(ROOT, 'home', '.claude', 'projects', 'p')
+    await mkdir(projectDir, { recursive: true })
+    const line = (id: string): string => JSON.stringify({
+      type: 'assistant',
+      timestamp: new Date(`${past}T03:30:00`).toISOString(),
+      sessionId: 's-alias',
+      message: {
+        type: 'message', role: 'assistant', model: 'my-internal-model', id,
+        content: [],
+        usage: { input_tokens: 100000, output_tokens: 10000, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+      },
+    })
+    await writeFile(join(projectDir, 's-alias.jsonl'), [line('a'), line('b')].join('\n') + '\n', 'utf-8')
+    const sealed = await liveOnly(weekRange())
+    expect(sealed.cost).toBe(0)
+    await seedCache([dayEntry(past, { claude: slice(0, sealed.calls) })])
+
+    setModelAliases({ 'my-internal-model': 'claude-sonnet-4-5' })
+    try {
+      const live = await liveOnly(weekRange())
+      expect(live.cost).toBeGreaterThan(0)
+      clearSessionCache()
+      const durable = await buildDurablePeriod({ range: weekRange(), label: 'p' })
+      expect(durable.data.cost).toBeCloseTo(live.cost, 10)
+    } finally {
+      setModelAliases({})
+    }
+  })
+})
+
+describe('a past date the sealed cache has no row for', () => {
+  it('is filled in the all-provider headline as it is under a provider filter', async () => {
+    await seedHistoricalSession(daysAgoStr(3))
+    const live = await liveOnly(weekRange())
+    expect(live.calls).toBe(4)
+    await seedCache([dayEntry(daysAgoStr(5), { codex: slice(1, 1) }, { carried: true })])
+
+    clearSessionCache()
+    const all = await buildDurablePeriod({ range: weekRange(), label: 'p' })
+    clearSessionCache()
+    const claudeOnly = await buildDurablePeriod({ range: weekRange(), label: 'p' }, { provider: 'claude' })
+
+    expect(claudeOnly.data.calls).toBe(4)
+    expect(all.data.calls).toBe(5)
+    expect(all.data.cost).toBeCloseTo(claudeOnly.data.cost + 1, 10)
   })
 })

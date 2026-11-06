@@ -691,11 +691,6 @@ describe('codeburn serve --stdio never defers a menubar poll', () => {
         HOME: home, USERPROFILE: home,
         CLAUDE_CONFIG_DIR: join(home, '.claude'),
         CODEBURN_CACHE_DIR: join(home, '.cache', 'codeburn'),
-        // Force the snapshot settle window wide open. The real one is 2s, and
-        // racing a 2s wall clock from a CI runner is how this test would rot;
-        // a window this large makes "the deferral must not happen in serve"
-        // deterministic instead of timing-dependent.
-        CODEBURN_STATUS_SNAPSHOT_SETTLE_MS: '600000',
         TZ: noonTz(),
       },
     })
@@ -736,12 +731,11 @@ describe('codeburn serve --stdio never defers a menubar poll', () => {
     // test - exactly the protocol that pinned the menubar.
     await appendFile(sessionFile, pricedCall(2, 120_000) + '\n', 'utf8')
     // Let the root watcher observe the write before polling, so the poll below
-    // is the one that has to decide between deferring and answering. Generous
-    // rather than tight: nothing here races the settle window.
+    // is the one that has to decide between deferring and answering.
     await new Promise(resolve => setTimeout(resolve, 3000))
 
-    // Inside the settle window: a one-shot CLI may debounce here, the resident
-    // process must not - it has the parse state and cannot be re-asked.
+    // The resident process must answer with the change - it has the parse
+    // state and cannot be re-asked.
     const inWindow = await request(501, args)
     expect(inWindow['ok'], JSON.stringify(inWindow)).toBe(true)
     expect(calls(inWindow)).toBe(2)

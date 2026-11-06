@@ -306,7 +306,11 @@ function periodForBudgetTier(tier: BudgetTier): Extract<Period, 'today' | 'week'
 }
 
 function getBudgetPeriodInfo(tier: BudgetTier): BudgetPeriodInfo {
-  const { range } = getDateRange(periodForBudgetTier(tier))
+  const { range: periodRange } = getDateRange(periodForBudgetTier(tier))
+  // The 'week' period starts at today-7 (8 dates); a weekly budget covers 7.
+  const range = tier === 'weekly'
+    ? { start: new Date(periodRange.start.getFullYear(), periodRange.start.getMonth(), periodRange.start.getDate() + 1), end: periodRange.end }
+    : periodRange
   const progress = getOverviewBudgetProgress(tier, range)
   return { tier, range, ...progress }
 }
@@ -324,20 +328,20 @@ function totalProjectCostUSD(projects: ProjectSummary[]): number {
   return projects.reduce((sum, project) => sum + project.totalCostUSD, 0)
 }
 
-function buildOverviewBudget(projects: ProjectSummary[], budget: CodeburnConfig['budget'], tier: BudgetTier | undefined, range: DateRange): OverviewBudget | undefined {
+function buildOverviewBudget(projects: ProjectSummary[], budget: CodeburnConfig['budget'], tier: BudgetTier | undefined): OverviewBudget | undefined {
   if (!tier) return undefined
   const amount = budgetAmountForTier(budget, tier)
   if (amount === undefined) return undefined
-  const progress = getOverviewBudgetProgress(tier, range)
+  const period = getBudgetPeriodInfo(tier)
   return {
     tier,
     status: computeBudgetStatus({
-      spent: convertCost(totalProjectCostUSD(projects)),
+      spent: convertCost(totalProjectCostUSD(tier === 'weekly' ? filterProjectsByDateRange(projects, period.range) : projects)),
       budget: amount,
-      elapsedDays: progress.elapsedDays,
-      totalDays: progress.totalDays,
+      elapsedDays: period.elapsedDays,
+      totalDays: period.totalDays,
     }),
-    inProgress: progress.inProgress,
+    inProgress: period.inProgress,
   }
 }
 
@@ -1163,7 +1167,7 @@ program
     const config = await readConfig()
     const budget = isOverviewBudgetFilterActive(opts)
       ? undefined
-      : buildOverviewBudget(projects, config.budget, budgetTierForOverview(period, customRange), range)
+      : buildOverviewBudget(projects, config.budget, budgetTierForOverview(period, customRange))
     process.stdout.write(renderOverview(projects, {
       label,
       color: opts.color,
@@ -1327,10 +1331,8 @@ program
       // session-cache.ts's cacheMemo) ever survives between polls. A cheap
       // stat-only pass (no session-cache.json parse, no transcript content
       // read) over the discoverable corpus tells us whether anything changed
-      // since the last identical query; when it hasn't — or the only thing
-      // that changed is still within loadStatusSnapshot's settle window and
-      // may still be mid-write — skip the full parse + aggregation pipeline
-      // entirely and serve the persisted snapshot instead.
+      // since the last identical query; when it hasn't, skip the full parse +
+      // aggregation pipeline entirely and serve the persisted snapshot instead.
       // Single source of truth for the fields that define the query scope,
       // shared between the cache key below and the payload builder options
       // — a field added to only one of the two would otherwise silently
@@ -1412,13 +1414,8 @@ program
       // Inside the resident `serve` child (SERVE_HYDRATION_ENV is set for the
       // life of that process) the snapshot is pure downside: the process
       // already holds the incremental parse state and an output memo, so the
-      // snapshot buys no work back — it only adds `loadStatusSnapshot`'s
-      // settle window, which hands back the deliberately deferred PRE-change
-      // payload. serve then memoizes that answer, and with the roots quiet
-      // again the memo stays "clean", replaying the stale payload until the
-      // next filesystem event or the 5-minute memo cap. One-shot invocations
-      // (a terminal run, the menubar's spawn fallback) keep the snapshot and
-      // its debounce exactly as before.
+      // snapshot buys no work back. One-shot invocations (a terminal run, the
+      // menubar's spawn fallback) keep the snapshot.
       const useSnapshot = !queryScope.optimize && process.env[SERVE_HYDRATION_ENV] !== '1'
       const corpus = useSnapshot ? await computeCorpusFingerprint(pf) : null
       const snapshot = corpus ? await loadStatusSnapshot(corpus.hash, queryKey, STATUS_SNAPSHOT_SEMANTIC_KEY) : null

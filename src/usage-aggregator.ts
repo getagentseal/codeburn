@@ -6,7 +6,7 @@ import { type SessionCountBasis } from './session-count-label.js'
 import { parseAllSessions, filterProjectsByName, mergeProjectSplits, filterProjectsByDays, filterProjectsByClaudeConfigSource, filterProjectsByIdentity, filterProjectsByDateRange, isSessionHydrationComplete, makeProjectFilter, type ProjectFilterTarget, sessionHydrationSnapshot } from './parser.js'
 type ProjectFilter = (entry: ProjectFilterTarget) => boolean
 
-import { findUnpricedModels, getFlatRateModelsConfigHash, getLocalModelSavingsConfigHash, getPriceOverridesConfigHash, getShortModelName, isExpectedFreeModel, billableOutputTokens, modelRowKey, ownValue } from './models.js'
+import { findUnpricedModels, getFlatRateModelsConfigHash, getLocalModelSavingsConfigHash, getModelAliasesConfigHash, getPriceOverridesConfigHash, getShortModelName, isExpectedFreeModel, billableOutputTokens, modelRowKey, ownValue } from './models.js'
 import { getAllProviders, safeDiscoverSessions } from './providers/index.js'
 import { loadPlugins, pluginPayloadSections } from './plugins/loader.js'
 import { collectLiveSessions } from './live-sessions.js'
@@ -222,7 +222,7 @@ export function getDailyCacheConfigHash(): string {
   const savingsHash = getLocalModelSavingsConfigHash()
   const overridesHash = getPriceOverridesConfigHash()
   const flatRateHash = getFlatRateModelsConfigHash()
-  return `localModelSavings=${savingsHash}\u0002priceOverrides=${overridesHash}\u0002flatRateModels=${flatRateHash}`
+  return `localModelSavings=${savingsHash}\u0002priceOverrides=${overridesHash}\u0002flatRateModels=${flatRateHash}\u0002modelAliases=${getModelAliasesConfigHash()}`
 }
 
 async function hydrateCache(): Promise<DailyCache> {
@@ -717,10 +717,12 @@ function unionDaysForPeriod(
   // whichever explains MORE calls: a cached day whose transcripts have expired
   // still wins (nothing live can outbid it), and an under-read cached row stops
   // suppressing evidence that is sitting on disk. Only dates the cache already
-  // holds are reconciled — filling absent dates is a separate decision each
-  // caller makes for itself. The cache day's own `carried` flag is the only
-  // provenance there is: re-flagging here would mark every date the live parse
-  // agrees on (the common case) as preserved from expired logs.
+  // holds are reconciled, and a past date the cache has no row for at all is
+  // filled from the live day, as the provider-scoped overlay does: otherwise
+  // one provider could total more than all providers. The cache day's own
+  // `carried` flag is the only provenance there is: re-flagging here would mark
+  // every date the live parse agrees on (the common case) as preserved from
+  // expired logs.
   // Only days a live slice could actually win are handed to the merge. On a
   // healthy cache that is none, so the lifetime period skips cloning every day
   // it holds — and a date the cache already explains is passed through as the
@@ -729,8 +731,10 @@ function unionDaysForPeriod(
   const cachedByDate = new Map(historicalDays.map(d => [d.date, d]))
   const liveForCachedDates = liveHistoricalDays.filter(d => {
     if (daysSelection && !daysSelection.has(d.date)) return false
+    if (d.date < rangeStartStr || d.date > historicalRangeEndStr) return false
     const cached = cachedByDate.get(d.date)
-    return cached != null && Object.entries(d.providers).some(
+    if (cached == null) return true
+    return Object.entries(d.providers).some(
       ([provider, slice]) => slice.calls > (Object.hasOwn(cached.providers, provider) ? cached.providers[provider].calls : 0),
     )
   })
@@ -786,7 +790,10 @@ export function buildDurableOverviewFromNormalizedIndex(
   const historicalSlice = hasProjectFilter
     ? (day: DailyEntry): DailyEntry => sliceDayToProject(day, matchesFilter)
     : undefined
-  const cachedAllDays = unionDaysForPeriod(
+  // The union fills a historical date the durable cache has no row for from
+  // this same normalized index; existing rows stay authoritative so expired
+  // history is preserved.
+  const allDays = unionDaysForPeriod(
     cache,
     todayDays,
     periodInfo,
@@ -794,23 +801,8 @@ export function buildDurableOverviewFromNormalizedIndex(
     historicalSlice,
     normalizedDays.filter(day => day.date !== todayStr),
   )
-  const cachedDates = new Set(cache.days.map(day => day.date))
   const rangeStartStr = toDateString(periodInfo.range.start)
   const rangeEndStr = toDateString(periodInfo.range.end)
-  // A provider-scoped index deliberately does not rewrite the shared all-
-  // provider durable cache. When that cache has no row for a surviving
-  // historical source, fill the missing date from this same normalized index;
-  // existing durable rows stay authoritative so expired history is preserved.
-  const canFillMissingDates = cache.complete !== true || cache.days.length === 0
-  const normalizedHistoricalDays = canFillMissingDates
-    ? normalizedDays.filter(day =>
-        day.date !== todayStr
-        && day.date >= rangeStartStr
-        && day.date <= rangeEndStr
-        && !cachedDates.has(day.date)
-      )
-    : []
-  const allDays = [...cachedAllDays, ...normalizedHistoricalDays].sort((a, b) => a.date.localeCompare(b.date))
   // The shared cache can be complete yet predate this provider's sources, so a
   // provider-scoped index applies the same overlay as buildDurablePeriod: the
   // headline then matches report and the first paint after every refresh.

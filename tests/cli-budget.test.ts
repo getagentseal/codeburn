@@ -212,27 +212,31 @@ describe('codeburn budget command', () => {
     }
   }, CLI_TIMEOUT_MS)
 
-  it('uses the same weekly spend window for budget --check and overview -p week', async () => {
+  it('counts exactly the last 7 dates for budget --check and overview -p week', async () => {
     const home = await mkdtemp(join(tmpdir(), 'codeburn-cli-budget-'))
     try {
       process.env.TZ = CLI_TZ
       const weekStart = getDateRange('week').range.start
+      const dayMinus6 = new Date(weekStart.getFullYear(), weekStart.getMonth(), weekStart.getDate() + 1)
       await seedClaudeSpend(home, {
-        sessionId: 'weekly-boundary-session',
+        sessionId: 'day-minus-7-session',
         timestamp: timestampFromDate(weekStart, 1),
+      })
+      await seedClaudeSpend(home, {
+        sessionId: 'day-minus-6-session',
+        timestamp: timestampFromDate(dayMinus6, 1),
       })
       expect(runCli(['budget', '--weekly', '100000'], home).status).toBe(0)
 
       const overview = runCli(['overview', '-p', 'week', '--no-color'], home)
       expect(overview.status, `stdout: ${overview.stdout}\nstderr: ${overview.stderr}`).toBe(0)
       const overviewSpent = overview.stdout.match(/Weekly budget: (\$[0-9,]+\.\d{2}) of/)
-      expect(overviewSpent?.[1]).toBeDefined()
-      expect(overviewSpent?.[1]).not.toBe('$0.00')
+      expect(overviewSpent?.[1]).toBe('$4.50')
 
       const check = runCli(['budget', '--check'], home)
       expect(check.status, `stdout: ${check.stdout}\nstderr: ${check.stderr}`).toBe(0)
       const checkSpent = check.stdout.match(/weekly:\s+(\$[0-9,]+\.\d{2}) of/)
-      expect(checkSpent?.[1]).toBe(overviewSpent?.[1])
+      expect(checkSpent?.[1]).toBe('$4.50')
     } finally {
       await rm(home, { recursive: true, force: true })
     }
