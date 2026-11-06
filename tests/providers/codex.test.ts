@@ -846,45 +846,45 @@ describe('codex provider - JSONL parsing', () => {
     const filePath = await writeSession(tmpDir, '2026-04-14', 'rollout-cumulative-reset.jsonl', [
       sessionMeta({ session_id: 'sess-reset', model: 'gpt-5.5' }),
       tokenCount({ timestamp: '2026-04-14T10:00:10Z', total: { input: 8_000, output: 800 } }),
-      tokenCount({ timestamp: '2026-04-14T10:10:10Z', total: { input: 3_000, output: 300 } }),
-      tokenCount({ timestamp: '2026-04-14T10:10:20Z', total: { input: 6_000, output: 600 } }),
+      tokenCount({ timestamp: '2026-04-14T10:10:10Z', total: { input: 300, output: 30 } }),
+      tokenCount({ timestamp: '2026-04-14T10:10:20Z', total: { input: 600, output: 60 } }),
     ])
 
     const provider = createCodexProvider(tmpDir)
     const calls: ParsedProviderCall[] = []
     for await (const call of provider.createSessionParser({ path: filePath, project: 'test', provider: 'codex' }, new Set()).parse()) calls.push(call)
 
-    expect(calls.map(c => [c.inputTokens, c.outputTokens])).toEqual([[8_000, 800], [3_000, 300], [3_000, 300]])
+    expect(calls.map(c => [c.inputTokens, c.outputTokens])).toEqual([[8_000, 800], [300, 30], [300, 30]])
   })
 
   it('counts a cumulative state repeated after a restart as a new call', async () => {
     const filePath = await writeSession(tmpDir, '2026-04-14', 'rollout-cumulative-restart-repeat.jsonl', [
       sessionMeta({ session_id: 'sess-restart-repeat', model: 'gpt-5.5' }),
-      tokenCount({ timestamp: '2026-04-14T10:00:10Z', total: { input: 100, output: 10 } }),
+      tokenCount({ timestamp: '2026-04-14T10:00:10Z', total: { input: 1_000, output: 100 } }),
       tokenCount({ timestamp: '2026-04-14T10:00:20Z', total: { input: 50, output: 5 } }),
-      tokenCount({ timestamp: '2026-04-14T10:00:30Z', total: { input: 100, output: 10 } }),
+      tokenCount({ timestamp: '2026-04-14T10:00:30Z', total: { input: 1_000, output: 100 } }),
     ])
 
     const provider = createCodexProvider(tmpDir)
     const calls: ParsedProviderCall[] = []
     for await (const call of provider.createSessionParser({ path: filePath, project: 'test', provider: 'codex' }, new Set()).parse()) calls.push(call)
 
-    expect(calls.map(c => [c.inputTokens, c.outputTokens])).toEqual([[100, 10], [50, 5], [50, 5]])
+    expect(calls.map(c => [c.inputTokens, c.outputTokens])).toEqual([[1_000, 100], [50, 5], [950, 95]])
   })
 
   it('restarts every counter on a restart, including one the restart record omits', async () => {
     const filePath = await writeSession(tmpDir, '2026-04-14', 'rollout-cumulative-restart-omitted.jsonl', [
       sessionMeta({ session_id: 'sess-restart-omitted', model: 'gpt-5.5' }),
       tokenCount({ timestamp: '2026-04-14T10:00:10Z', total: { input: 8_000, output: 800 } }),
-      JSON.stringify({ type: 'event_msg', timestamp: '2026-04-14T10:00:20Z', payload: { type: 'token_count', info: { total_token_usage: { input_tokens: 3_000, total_tokens: 3_000 } } } }),
-      tokenCount({ timestamp: '2026-04-14T10:00:30Z', total: { input: 6_000, output: 300 } }),
+      JSON.stringify({ type: 'event_msg', timestamp: '2026-04-14T10:00:20Z', payload: { type: 'token_count', info: { total_token_usage: { input_tokens: 300, total_tokens: 300 } } } }),
+      tokenCount({ timestamp: '2026-04-14T10:00:30Z', total: { input: 600, output: 30 } }),
     ])
 
     const provider = createCodexProvider(tmpDir)
     const calls: ParsedProviderCall[] = []
     for await (const call of provider.createSessionParser({ path: filePath, project: 'test', provider: 'codex' }, new Set()).parse()) calls.push(call)
 
-    expect(calls.map(c => [c.inputTokens, c.outputTokens])).toEqual([[8_000, 800], [3_000, 0], [3_000, 300]])
+    expect(calls.map(c => [c.inputTokens, c.outputTokens])).toEqual([[8_000, 800], [300, 0], [300, 30]])
   })
 
   it('keys an omitted cumulative field like the same value written out', async () => {
@@ -907,19 +907,21 @@ describe('codex provider - JSONL parsing', () => {
     expect(keys[0]).toEqual(keys[1])
   })
 
-  it('reads a small drop in every field as a correction, not a restart', async () => {
-    const filePath = await writeSession(tmpDir, '2026-04-14', 'rollout-cumulative-downward.jsonl', [
-      sessionMeta({ session_id: 'sess-downward', model: 'gpt-5.5' }),
-      tokenCount({ timestamp: '2026-04-14T10:00:10Z', total: { input: 8_000, output: 800 } }),
-      tokenCount({ timestamp: '2026-04-14T10:00:20Z', total: { input: 7_900, output: 790 } }),
-    ])
+  for (const [input, output] of [[7_900, 790], [4_000, 400]]) {
+    it(`reads a drop of every field to ${input}/${output} as a correction, not a restart`, async () => {
+      const filePath = await writeSession(tmpDir, '2026-04-14', `rollout-cumulative-downward-${input}.jsonl`, [
+        sessionMeta({ session_id: 'sess-downward', model: 'gpt-5.5' }),
+        tokenCount({ timestamp: '2026-04-14T10:00:10Z', total: { input: 8_000, output: 800 } }),
+        tokenCount({ timestamp: '2026-04-14T10:00:20Z', total: { input, output } }),
+      ])
 
-    const provider = createCodexProvider(tmpDir)
-    const calls: ParsedProviderCall[] = []
-    for await (const call of provider.createSessionParser({ path: filePath, project: 'test', provider: 'codex' }, new Set()).parse()) calls.push(call)
+      const provider = createCodexProvider(tmpDir)
+      const calls: ParsedProviderCall[] = []
+      for await (const call of provider.createSessionParser({ path: filePath, project: 'test', provider: 'codex' }, new Set()).parse()) calls.push(call)
 
-    expect(calls.map(c => [c.inputTokens, c.outputTokens])).toEqual([[8_000, 800]])
-  })
+      expect(calls.map(c => [c.inputTokens, c.outputTokens])).toEqual([[8_000, 800]])
+    })
+  }
 
   it('reads one falling field under a rising total as a correction, not a restart', async () => {
     const filePath = await writeSession(tmpDir, '2026-04-14', 'rollout-cumulative-correction.jsonl', [

@@ -1637,8 +1637,8 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
           } else if (cumulativeTotal > 0) {
             const total = info.total_token_usage
             if (!total) continue
-            // A total at most half the previous one (or, without a previous
-            // total, every reported field at most half) is a counter restart
+            // A total at most a tenth of the previous one (or, without a
+            // previous total, every reported field at most a tenth) is a restart
             // (resume, compaction): every counter, reported or not, starts
             // again from zero. A smaller drop is a correction: a falling field
             // adds nothing. An omitted field is unchanged.
@@ -1649,8 +1649,8 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
             ]
             const present = counters.filter(([now]) => now !== undefined) as Array<[number, number]>
             const restart = prevTotal !== null
-              ? cumulativeTotal * 2 <= prevTotal
-              : present.length > 0 && present.every(([now, prev]) => now * 2 <= prev)
+              ? cumulativeTotal * 10 <= prevTotal
+              : present.length > 0 && present.every(([now, prev]) => now * 10 <= prev)
             if (restart) { restartEpoch++; prevInput = 0; prevCached = 0; prevCacheWrite = 0; prevOutput = 0; prevReasoning = 0 }
             const since = (now: number | undefined, prev: number) => now === undefined ? 0 : Math.max(0, now - prev)
             inputTokens = since(total.input_tokens, prevInput)
