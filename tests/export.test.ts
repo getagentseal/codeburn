@@ -470,6 +470,24 @@ describe('exportJson', () => {
     expect(await readFile(join(folder, 'daily.csv'), 'utf-8')).not.toContain('costBasis')
   })
 
+  it('counts only the estimated part of a partly estimated call in the shares', async () => {
+    const project = makeProject('app')
+    const turn = project.sessions[0]!.turns[0]!
+    const base = turn.assistantCalls[0]!
+    turn.assistantCalls = [
+      { ...base, costUSD: 3, costBasis: 'calculated' },
+      { ...base, costUSD: 1, costBasis: 'estimated', isEstimated: true, estimatedCostUSD: 0.25, deduplicationKey: 'est' },
+    ]
+    project.sessions[0]!.totalCostUSD = 4
+
+    const saved = await exportJson([{ label: '30 Days', projects: [project] }], join(tmpDir, 'basis-split.json'))
+    const data = JSON.parse(await readFile(saved, 'utf-8'))
+
+    expect(data.records.map((r: { costBasis: string }) => r.costBasis)).toEqual(['calculated', 'estimated'])
+    expect(data.sessions[0].costBasis).toEqual({ calculated: 0.9375, estimated: 0.0625 })
+    expect(data.periods[0].daily[0].costBasis).toEqual({ calculated: 0.9375, estimated: 0.0625 })
+  })
+
   it('writes a dated file inside the folder when the destination is an existing folder', async () => {
     // The desktop app passes the folder the user picked; `${dir}.json` wrote a sibling of it.
     await writeFile(join(tmpDir, 'unrelated.txt'), 'keep me', 'utf-8')

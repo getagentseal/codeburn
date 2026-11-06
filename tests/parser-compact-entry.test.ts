@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 
 import { cachedCallToApiCall, compactEntry, dedupeStreamingMessageIds, parseApiCall, parseJsonlLine } from '../src/parser.js'
 import type { CachedCall } from '../src/session-cache.js'
+import { costBasisShares } from '../src/session-output.js'
 import type { JournalEntry } from '../src/types.js'
 
 function entry(overrides: Partial<JournalEntry> & Record<string, unknown>): JournalEntry {
@@ -537,5 +538,16 @@ describe('cachedCallToApiCall costBasis', () => {
     expect(basis({ provider: 'opencode', model: 'acme-unknown-model-9', fallbackCostUSD: 0.02 })).toBe('recorded')
     expect(basis({ model: 'acme-unknown-model-9' })).toBe('unpriced')
     expect(basis({})).toBe('calculated')
+  })
+
+  it('keeps a whole-call estimate when the cost is a recorded fallback or a stand-in price', () => {
+    const fallback = cachedCallToApiCall(call({ model: 'acme-unknown-model-9', fallbackCostUSD: 0.02, isEstimated: true }))
+    const standIn = cachedCallToApiCall(call({ model: 'kimi-for-coding', timestamp: '2026-10-01T10:00:00.000Z', isEstimated: true }))
+    expect(fallback).toMatchObject({ costUSD: 0.02, costBasis: 'estimated' })
+    expect(standIn.costUSD).toBeGreaterThan(0)
+    expect(standIn.costBasis).toBe('estimated')
+    expect(fallback.estimatedCostUSD).toBeUndefined()
+    expect(standIn.estimatedCostUSD).toBeUndefined()
+    expect(costBasisShares([fallback, standIn])).toEqual({ estimated: 1 })
   })
 })
