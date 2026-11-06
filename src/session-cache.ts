@@ -448,7 +448,8 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // thread-id-key-v1: rollouts without payload.session_id key on payload.id,
   // the UUID forks name, so cached double-counted fork replays re-parse.
   // rate-limit-ping-v1: a null-info token_count before any output is not a
-  // call, so cached phantom estimates re-parse away.
+  // call, and measured usage replaces a ping estimate of the same turn, so
+  // cached phantom estimates re-parse away.
   // cumulative-restart-v1: a cumulative-only total below the previous one is a
   // counter restart and an omitted field is unchanged, so cached negative or
   // overcounted token deltas re-parse.

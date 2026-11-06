@@ -77,7 +77,9 @@ import { isWslUncPath } from './wsl.js'
 // calls and double-counted fork replays. Same version: a turn-start
 // rate-limit ping (null info, no output yet) is no longer an estimated call,
 // a cumulative-only total that drops reads as a restart, not negative usage,
-// and a cumulative field the record omits counts as unchanged, not as zero.
+// a cumulative field the record omits counts as unchanged, not as zero, a
+// restart zeroes every counter and starts a new key epoch, and measured usage
+// replaces a ping estimate of the same turn.
 export const CODEX_CACHE_VERSION = 25
 export const CODEX_LEGACY_CACHE_FILE = 'codex-results.json'
 export function codexCacheFileName(version = CODEX_CACHE_VERSION): string {

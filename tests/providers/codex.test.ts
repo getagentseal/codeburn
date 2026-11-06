@@ -919,6 +919,35 @@ describe('codex provider - JSONL parsing', () => {
     expect(calls.map(c => [c.inputTokens, c.outputTokens])).toEqual([[100, 10], [50, 0], [50, 10]])
   })
 
+  describe('a null-info ping after assistant output', () => {
+    const lines = (measured: boolean) => [
+      sessionMeta({ session_id: 'sess-ping-output', model: 'gpt-5.5' }),
+      userMessage('fix the failing test'),
+      JSON.stringify({ type: 'response_item', timestamp: '2026-04-14T10:00:03Z', payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'looking at the test now' }] } }),
+      JSON.stringify({ type: 'event_msg', timestamp: '2026-04-14T10:00:04Z', payload: { type: 'token_count', info: null, rate_limits: { primary: { used_percent: 3 } } } }),
+      ...(measured ? [tokenCount({ timestamp: '2026-04-14T10:00:05Z', last: { input: 5_000, output: 200 }, total: { input: 5_000, output: 200 } })] : []),
+    ]
+    const parse = async (measured: boolean) => {
+      const filePath = await writeSession(tmpDir, '2026-04-14', `rollout-ping-output-${measured}.jsonl`, lines(measured))
+      const calls: ParsedProviderCall[] = []
+      for await (const call of createCodexProvider(tmpDir).createSessionParser({ path: filePath, project: 'test', provider: 'codex' }, new Set()).parse()) calls.push(call)
+      return calls
+    }
+
+    it('yields to measured usage later in the same turn', async () => {
+      const calls = await parse(true)
+      expect(calls).toHaveLength(1)
+      expect(calls[0]).toMatchObject({ inputTokens: 5_000, outputTokens: 200, userMessage: 'fix the failing test' })
+      expect(calls[0]!.costIsEstimated).toBeUndefined()
+    })
+
+    it('stays an estimated call when the turn ends without measured usage', async () => {
+      const calls = await parse(false)
+      expect(calls).toHaveLength(1)
+      expect(calls[0]).toMatchObject({ costIsEstimated: true, userMessage: 'fix the failing test' })
+    })
+  })
+
   it('treats a turn-start rate-limit ping with no usage info as no call and keeps the prompt', async () => {
     const filePath = await writeSession(tmpDir, '2026-04-14', 'rollout-rate-limit-ping.jsonl', [
       sessionMeta({ session_id: 'sess-ping', model: 'gpt-5.5' }),

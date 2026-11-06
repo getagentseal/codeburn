@@ -1012,6 +1012,9 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
       // decodes in agreement instead of back-patching already-emitted calls.
       // Bounded by one task's calls; flushed at the next task_started and at EOF.
       let pendingTaskCalls: ParsedProviderCall[] = []
+      // The last null-info ping estimate. Measured usage later in the same
+      // turn and task replaces it, so the turn is one measured call.
+      let pingEstimate: ParsedProviderCall | null = null
       let taskGeneratedTokens = 0
       let taskToolIntervals: Array<[number, number]> = []
       let taskStartedAt: number | undefined = resume?.state.taskStartedAt
@@ -1048,6 +1051,21 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
         const reasoningTokens = usage.reasoning_output_tokens ?? 0
         const totalTokens = inputTokens + cachedInputTokens + outputTokens + reasoningTokens
         if (totalTokens === 0 || seenKeys.has(dedupKey)) return
+
+        const est = pingEstimate
+        pingEstimate = null
+        const estIndex = est && est.turnId === currentTurnId ? pendingTaskCalls.indexOf(est) : -1
+        if (est && estIndex !== -1) {
+          pendingTaskCalls.splice(estIndex, 1)
+          taskGeneratedTokens -= est.outputTokens
+          pendingTools = [...est.tools, ...pendingTools]
+          pendingToolSequence = [...(est.toolSequence ?? []), ...pendingToolSequence]
+          pendingSkills = [...(est.skills ?? []), ...pendingSkills]
+          pendingUserMessage = est.userMessage || pendingUserMessage
+          pendingLocAdded += est.locAdded ?? 0
+          pendingLocRemoved += est.locRemoved ?? 0
+          pendingEditFailed += est.editFailed ?? 0
+        }
 
         // OpenAI includes cached tokens inside input_tokens; Anthropic does not.
         // Normalize to Anthropic semantics: inputTokens = non-cached only.
@@ -1518,6 +1536,8 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
             // turn start, before any output. That is not a request: leave the
             // prompt pending for the measured call that follows. A turn that
             // ends on such a ping with nothing after it priced nothing: no call.
+            // After output, the ping estimates the turn until measured usage
+            // for it arrives (pingEstimate).
             if (pendingOutputChars === 0) continue
             const estInput = estimateTokensFromChars(pendingUserMessage.length)
             const estOutput = estimateTokensFromChars(pendingOutputChars)
@@ -1563,6 +1583,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
               ...(pendingLocRemoved ? { locRemoved: pendingLocRemoved } : {}),
               ...(pendingEditFailed ? { editFailed: pendingEditFailed } : {}),
             })
+            pingEstimate = pendingTaskCalls.at(-1)!
             taskGeneratedTokens += estOutput
 
             pendingTools = []
