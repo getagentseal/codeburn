@@ -129,12 +129,20 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
         const { tools, bashCommands } = extractTools(entry.message?.parts ?? [])
 
         // promptTokenCount includes the cached tokens, as in Gemini CLI.
+        const prompt = usage.promptTokenCount ?? 0
+        const candidates = usage.candidatesTokenCount ?? 0
+        const thoughts = usage.thoughtsTokenCount ?? 0
         const cachedTokens = usage.cachedContentTokenCount ?? 0
-        const inputTokens = Math.max(0, usage.promptTokenCount - cachedTokens)
-        const outputTokens = usage.candidatesTokenCount
-        const reasoningTokens = usage.thoughtsTokenCount ?? 0
+        const inputTokens = Math.max(0, prompt - cachedTokens)
+        // Thoughts sit inside candidates on OpenAI-compatible and Qwen OAuth
+        // backends and beside them on Gemini; a total in that band says which,
+        // as Qwen Code's own outputTokenCount (telemetry/gen-ai-usage.ts) decides.
+        const derived = (usage.totalTokenCount ?? 0) - prompt
+        const billedOutput = derived >= candidates && derived <= candidates + thoughts ? derived : candidates + thoughts
+        const reasoningTokens = Math.min(thoughts, billedOutput)
+        const outputTokens = billedOutput - reasoningTokens
 
-        const costUSD = calculateCost(model, inputTokens, outputTokens + reasoningTokens, 0, cachedTokens, 0)
+        const costUSD = calculateCost(model, inputTokens, billedOutput, 0, cachedTokens, 0)
 
         yield {
           provider: 'qwen',
