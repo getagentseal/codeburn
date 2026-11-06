@@ -142,6 +142,10 @@ export type CachedFile = {
   // is re-parsed only when the file changes (fingerprint differs). Carries no
   // turns, so it contributes no usage. (issue #441 follow-up)
   failed?: boolean
+  // Network sources: consecutive refreshes whose fetch failed retryably. At
+  // RETRYABLE_FAILURE_LIMIT the entry is marked failed, keeps its rows, and is
+  // not re-fetched again until the next day.
+  retryableFailures?: number
   // Rich-session-capture, Claude session-level.
   // `title` is the LAST `ai-title` entry's text; `prLinks` accumulates every
   // `pr-link` entry's URL. `isSidechain` is true when any entry is a sidechain:
@@ -1281,6 +1285,7 @@ function validateCachedFile(f: unknown): f is CachedFile {
     && isOptionalString(o['agentName'])
     && isOptionalString(o['agentStartedAt'])
     && isOptionalBool(o['failed'])
+    && isOptionalNum(o['retryableFailures'])
     && isOptionalString(o['parentSessionId'])
     && isOptionalStringRecord(o['agentSpawnLinks'])
     && (o['ambiguousSpawnAgentIds'] === undefined || isStringArray(o['ambiguousSpawnAgentIds']))

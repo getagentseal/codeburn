@@ -3513,6 +3513,10 @@ async function resolveProviderLineage(
   return kimicodeLineageForSource(source.path, agentId)
 }
 
+// Consecutive retryable fetch failures after which a network source stops
+// deferring the run and is held as failed (its cached rows kept) for the day.
+const RETRYABLE_FAILURE_LIMIT = 3
+
 const warnedProviderReadFailures = new Set<string>()
 
 function warnProviderReadFailureOnce(providerName: string, err: unknown): void {
@@ -3816,6 +3820,13 @@ export async function parseProviderSources(
     // fingerprint or incrementally cache, so re-fetch every run with a synthetic
     // fingerprint (mtime=now so the date-range filter below never excludes it).
     if (skipFingerprint) {
+      // Held as failed after repeated fetch failures: serve the kept rows and
+      // try the fetch again on the next day, not on every refresh.
+      const held = section.files[source.path]
+      if (held?.failed && dateKey(new Date(held.fingerprint.mtimeMs).toISOString()) === dateKey(new Date().toISOString())) {
+        unchangedSources.push({ source, cached: held })
+        continue
+      }
       changedSources.push({ source, fp: { dev: 0, ino: 0, mtimeMs: Date.now(), sizeBytes: 0 } })
       continue
     }
@@ -4113,6 +4124,20 @@ export async function parseProviderSources(
           // partial hydration — the daily backfill must not finalize history
           // built on it (the same fence a stale read-only serve raises).
           if (priorEntry) section.files[source.path] = priorEntry
+          if (err instanceof RetryableSourceError && provider.network) {
+            const retryableFailures = (priorEntry?.retryableFailures ?? 0) + 1
+            const failed = retryableFailures >= RETRYABLE_FAILURE_LIMIT
+            section.files[source.path] = {
+              ...(priorEntry ?? { fingerprint: fp, mcpInventory: [], turns: [] }),
+              retryableFailures,
+              ...(failed ? { failed: true, fingerprint: fp } : {}),
+            }
+            markCacheDirty(diskCache, providerName, source.path)
+            if (failed) {
+              warnProviderParseFailure(providerName, source.path, err)
+              continue
+            }
+          }
           deferredRetryableSource = true
           warnProviderReadFailureOnce(providerName, err)
           continue
