@@ -170,18 +170,23 @@ function capTail(s: string, n = 40): string {
 
 const ZERO_PARTS: WhyParts = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, webSearch: 0 }
 
-// calculateCost is linear per token kind for Claude (no provider tier), so the
-// parts priced one at a time add up to the call's cost.
+// Tokens priced on a call's behalf take that call's long-context tier, which
+// its whole prompt decides, so the parts priced one at a time add up to its cost.
+function priceFor(c: ParsedApiCall, input: number, output: number, cacheWrite: number, cacheRead: number, webSearch = 0, oneHour = 0, model = c.model): number {
+  const prompt = c.usage.inputTokens + c.usage.cacheReadInputTokens + c.usage.cacheCreationInputTokens
+  return calculateCost(model, input, output, cacheWrite, cacheRead, webSearch, c.speed, oneHour, c.provider, false, prompt)
+}
+
 export function partsOf(c: ParsedApiCall): WhyParts {
   if (c.costUSD === 0) return { ...ZERO_PARTS }
-  const { model: m, speed: s, usage: u } = c
-  const d = c.listCostUSD === undefined ? NO_DISCOUNT : discountFactors(m, c.provider)
+  const u = c.usage
+  const d = c.listCostUSD === undefined ? NO_DISCOUNT : discountFactors(c.model, c.provider)
   return {
-    input: calculateCost(m, u.inputTokens, 0, 0, 0, 0, s) * d.input,
-    output: calculateCost(m, 0, u.outputTokens, 0, 0, 0, s) * d.output,
-    cacheRead: calculateCost(m, 0, 0, 0, u.cacheReadInputTokens, 0, s) * d.cacheRead,
-    cacheWrite: calculateCost(m, 0, 0, u.cacheCreationInputTokens, 0, 0, s, c.cacheCreationOneHourTokens ?? 0) * d.cacheWrite,
-    webSearch: calculateCost(m, 0, 0, 0, 0, u.webSearchRequests, s) * d.other,
+    input: priceFor(c, u.inputTokens, 0, 0, 0) * d.input,
+    output: priceFor(c, 0, u.outputTokens, 0, 0) * d.output,
+    cacheRead: priceFor(c, 0, 0, 0, u.cacheReadInputTokens) * d.cacheRead,
+    cacheWrite: priceFor(c, 0, 0, u.cacheCreationInputTokens, 0, 0, c.cacheCreationOneHourTokens ?? 0) * d.cacheWrite,
+    webSearch: priceFor(c, 0, 0, 0, 0, u.webSearchRequests) * d.other,
   }
 }
 
@@ -214,8 +219,8 @@ function repriced(calls: ParsedApiCall[]): WhyAlt | null {
   const models = new Set(calls.map(c => c.model))
   const alt = models.size === 1 ? tierDown([...models][0]!) : null
   if (!alt) return null
-  const cost = calls.reduce((s, c) => s + calculateCost(alt, c.usage.inputTokens, c.usage.outputTokens, c.usage.cacheCreationInputTokens,
-    c.usage.cacheReadInputTokens, c.usage.webSearchRequests, c.speed, c.cacheCreationOneHourTokens ?? 0), 0)
+  const cost = calls.reduce((s, c) => s + priceFor(c, c.usage.inputTokens, c.usage.outputTokens, c.usage.cacheCreationInputTokens,
+    c.usage.cacheReadInputTokens, c.usage.webSearchRequests, c.cacheCreationOneHourTokens ?? 0, alt), 0)
   return cost > 0 && cost < costOf(calls) ? { model: getShortModelName(alt), cost } : null
 }
 
@@ -627,8 +632,8 @@ export async function buildSessionWhy(filePath: string): Promise<SessionWhy> {
       delegatedAt: spawn ? iso(spawn.tu.ts) : null, firstCallAt: models[0] ? iso(base + models[0].start) : null, lastCallAt: models.length ? iso(base + models.at(-1)!.end) : null,
       handedBackAt: back ? iso(back.ts) : null, handedBackIn: k >= 0 ? k + 1 : null,
       taskTokensEst: estimateTokensFromChars(str(input['prompt']).length), reportTokensEst,
-      handBackCost: reader ? Math.min(reader.costUSD, calculateCost(reader.model, 0, 0, reportTokensEst, 0, 0, reader.speed)) : 0,
-      cacheSaving: h.callList.reduce((s, c) => s + calculateCost(c.model, c.usage.cacheReadInputTokens, 0, 0, 0, 0, c.speed) - calculateCost(c.model, 0, 0, 0, c.usage.cacheReadInputTokens, 0, c.speed), 0),
+      handBackCost: reader ? Math.min(reader.costUSD, priceFor(reader, 0, 0, reportTokensEst, 0)) : 0,
+      cacheSaving: h.callList.reduce((s, c) => s + priceFor(c, c.usage.cacheReadInputTokens, 0, 0, 0) - priceFor(c, 0, 0, 0, c.usage.cacheReadInputTokens), 0),
       requests: h.calls, toolCalls: steps.filter(s => s.kind === 'tool').length, parts, tokens, steps,
     }
   }
@@ -811,8 +816,8 @@ function buildFindings({ read, turns, helpers, turnOfHelper, allCalls, stepResul
     const later = allCalls.filter(c => c.ts >= ts && c.ts < stop)
     if (later.length === 0) return null
     const first = later[0]!.call
-    const writeUsd = calculateCost(first.model, 0, 0, tokens, 0, 0, first.speed, (first.cacheCreationOneHourTokens ?? 0) > 0 ? tokens : 0)
-    const readUsd = later.slice(1).reduce((s, c) => s + calculateCost(c.call.model, 0, 0, 0, tokens, 0, c.call.speed), 0)
+    const writeUsd = priceFor(first, 0, 0, tokens, 0, 0, (first.cacheCreationOneHourTokens ?? 0) > 0 ? tokens : 0)
+    const readUsd = later.slice(1).reduce((s, c) => s + priceFor(c.call, 0, 0, 0, tokens), 0)
     return { tokens, calls: later.length, writeUsd, readUsd }
   }
   for (const x of toolSteps) {
@@ -840,7 +845,7 @@ function buildFindings({ read, turns, helpers, turnOfHelper, allCalls, stepResul
       const cached = first.usage.cacheReadInputTokens + first.usage.cacheCreationInputTokens
       const readers = later.filter(c => c.call.usage.cacheReadInputTokens >= cached)
       const writeUsd = partsOf(first).cacheWrite
-      const readUsd = readers.reduce((s, c) => s + calculateCost(c.call.model, 0, 0, 0, cached, 0, c.call.speed), 0)
+      const readUsd = readers.reduce((s, c) => s + priceFor(c.call, 0, 0, 0, cached), 0)
       out.push({ id: '', kind: 'prefix', estimate: true, turn: 1, usd: writeUsd + readUsd, share: share(writeUsd + readUsd), tokens, cached, uncached: first.usage.cacheCreationInputTokens, writeUsd, readUsd, laterCalls: later.length, readCalls: readers.length })
     }
   }

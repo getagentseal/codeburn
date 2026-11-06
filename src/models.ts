@@ -1568,6 +1568,8 @@ export function calculateCost(
   oneHourCacheCreationTokens = 0,
   provider?: string,
   applyDiscount = false,
+  // A slice of a call (one token class) is priced at the whole call's tier.
+  tierPromptTokens?: number,
 ): number {
   const costs = getModelCosts(model)
   if (!costs) {
@@ -1589,7 +1591,7 @@ export function calculateCost(
   const safeOneHourCacheCreation = safe(oneHourCacheCreationTokens)
   const safeCacheCreation = Math.max(safe(cacheCreationTokens), safeOneHourCacheCreation)
   const safeFiveMinuteCacheCreation = Math.max(0, safeCacheCreation - safeOneHourCacheCreation)
-  const promptTokens = safe(inputTokens) + safe(cacheReadTokens) + safeCacheCreation
+  const promptTokens = tierPromptTokens ?? safe(inputTokens) + safe(cacheReadTokens) + safeCacheCreation
   const tieredCosts = tieredCostsFor(model, speed === 'flex' ? costs.flex ?? costs : costs, promptTokens, provider)
   const multiplier = speed === 'fast' ? tieredCosts.fastMultiplier : speed === 'ultrafast' ? tieredCosts.ultrafastMultiplier ?? 1 : 1
 
