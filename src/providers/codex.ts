@@ -1248,11 +1248,11 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
             if (total) {
               const cumulativeTotal = total.total_tokens ?? 0
               prevCumulativeTotal = reportsCumulative ? cumulativeTotal : null
-              prevInput = total.input_tokens ?? 0
-              prevCached = total.cached_input_tokens ?? 0
-              prevCacheWrite = total.cache_write_input_tokens ?? 0
-              prevOutput = total.output_tokens ?? 0
-              prevReasoning = total.reasoning_output_tokens ?? 0
+              prevInput = total.input_tokens ?? prevInput
+              prevCached = total.cached_input_tokens ?? prevCached
+              prevCacheWrite = total.cache_write_input_tokens ?? prevCacheWrite
+              prevOutput = total.output_tokens ?? prevOutput
+              prevReasoning = total.reasoning_output_tokens ?? prevReasoning
             } else {
               prevCumulativeTotal = null
             }
@@ -1511,7 +1511,8 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
           if (!info) {
             // Codex writes a null-info token_count (a rate-limit snapshot) at
             // turn start, before any output. That is not a request: leave the
-            // prompt pending for the measured call that follows.
+            // prompt pending for the measured call that follows. A turn that
+            // ends on such a ping with nothing after it priced nothing: no call.
             if (pendingOutputChars === 0) continue
             const estInput = estimateTokensFromChars(pendingUserMessage.length)
             const estOutput = estimateTokensFromChars(pendingOutputChars)
@@ -1606,9 +1607,9 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
           } else if (cumulativeTotal > 0) {
             const total = info.total_token_usage
             if (!total) continue
-            // A running counter below its previous value restarted (resume,
-            // compaction): what it holds now is the usage since the restart.
-            const since = (now: number | undefined, prev: number) => (now ?? 0) >= prev ? (now ?? 0) - prev : now ?? 0
+            // An omitted counter is unchanged. One below its previous value
+            // restarted (resume, compaction): it holds the usage since then.
+            const since = (now: number | undefined, prev: number) => now === undefined ? 0 : now >= prev ? now - prev : now
             inputTokens = since(total.input_tokens, prevInput)
             cachedInputTokens = since(total.cached_input_tokens, prevCached)
             cacheWriteTokens = since(total.cache_write_input_tokens, prevCacheWrite)
@@ -1625,11 +1626,11 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
           // event used `last` or fell back to deltas.
           const total = info.total_token_usage
           if (total) {
-            prevInput = total.input_tokens ?? 0
-            prevCached = total.cached_input_tokens ?? 0
-            prevCacheWrite = total.cache_write_input_tokens ?? 0
-            prevOutput = total.output_tokens ?? 0
-            prevReasoning = total.reasoning_output_tokens ?? 0
+            prevInput = total.input_tokens ?? prevInput
+            prevCached = total.cached_input_tokens ?? prevCached
+            prevCacheWrite = total.cache_write_input_tokens ?? prevCacheWrite
+            prevOutput = total.output_tokens ?? prevOutput
+            prevReasoning = total.reasoning_output_tokens ?? prevReasoning
           }
 
           // Forked sessions copy the parent's entire token_count history
@@ -1657,6 +1658,8 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
           // deliberately weakens forkedFromId replay protection past the replay
           // burst (accepted trade-off: the alternative collapsed
           // distinct requests wholesale).
+          // Two rollouts of one thread at identical cumulative totals are the
+          // same calls replayed (resume), so sharing this key is intended.
           const dedupKey = reportsCumulative
             ? `codex:${forkedFromId || threadId}:${cumulativeTotal}:${total?.input_tokens ?? 0}:${total?.cached_input_tokens ?? 0}:${total?.output_tokens ?? 0}:${total?.reasoning_output_tokens ?? 0}`
             : `codex:record:${JSON.stringify([source.path, tracker.lastCompleteLineOffset])}`

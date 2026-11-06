@@ -450,7 +450,8 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // rate-limit-ping-v1: a null-info token_count before any output is not a
   // call, so cached phantom estimates re-parse away.
   // cumulative-restart-v1: a cumulative-only total below the previous one is a
-  // counter restart, so cached negative token deltas re-parse.
+  // counter restart and an omitted field is unchanged, so cached negative or
+  // overcounted token deltas re-parse.
   // Compose every suffix so cached sessions receive all accounting fixes.
   codex: 'mcp-attribution-v5-est-cost-active-timing-mcp-wait-rich-capture-v1-cross-provider-pr-v1-session-meta-model-v1-session-meta-fields-v1-codex-pricing-v1-codex-tps-v1-codex-mcp-skills-v1-activity-price-v1-fork-replay-burst-v1-codex-token-usage-record-v1-codex-priority-tier-v1-codex-auto-review-date-v1-codex-flex-reserve-v1-codex-fork-mask-v1-native-tool-events-v1-mcp-cli-command-v1-thread-id-key-v1-rate-limit-ping-v1-cumulative-restart-v1',
   // reported-cost-v1: cached Crush calls stored costUSD: undefined and must

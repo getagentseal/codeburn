@@ -857,6 +857,24 @@ describe('codex provider - JSONL parsing', () => {
     expect(calls.map(c => [c.inputTokens, c.outputTokens])).toEqual([[8_000, 800], [3_000, 300], [3_000, 300]])
   })
 
+  it('reads a cumulative field the record omits as unchanged', async () => {
+    const total = (timestamp: string, usage: Record<string, number>) => JSON.stringify({
+      type: 'event_msg', timestamp, payload: { type: 'token_count', info: { total_token_usage: usage } },
+    })
+    const filePath = await writeSession(tmpDir, '2026-04-14', 'rollout-cumulative-omitted.jsonl', [
+      sessionMeta({ session_id: 'sess-omitted', model: 'gpt-5.5' }),
+      total('2026-04-14T10:00:10Z', { input_tokens: 100, output_tokens: 10, total_tokens: 110 }),
+      total('2026-04-14T10:00:20Z', { input_tokens: 150, total_tokens: 160 }),
+      total('2026-04-14T10:00:30Z', { input_tokens: 200, output_tokens: 20, total_tokens: 220 }),
+    ])
+
+    const provider = createCodexProvider(tmpDir)
+    const calls: ParsedProviderCall[] = []
+    for await (const call of provider.createSessionParser({ path: filePath, project: 'test', provider: 'codex' }, new Set()).parse()) calls.push(call)
+
+    expect(calls.map(c => [c.inputTokens, c.outputTokens])).toEqual([[100, 10], [50, 0], [50, 10]])
+  })
+
   it('treats a turn-start rate-limit ping with no usage info as no call and keeps the prompt', async () => {
     const filePath = await writeSession(tmpDir, '2026-04-14', 'rollout-rate-limit-ping.jsonl', [
       sessionMeta({ session_id: 'sess-ping', model: 'gpt-5.5' }),

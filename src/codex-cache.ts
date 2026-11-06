@@ -76,7 +76,8 @@ import { isWslUncPath } from './wsl.js'
 // that UUID, so fork replays collide with them; v24 entries hold stem-keyed
 // calls and double-counted fork replays. Same version: a turn-start
 // rate-limit ping (null info, no output yet) is no longer an estimated call,
-// and a cumulative-only total that drops reads as a restart, not negative usage.
+// a cumulative-only total that drops reads as a restart, not negative usage,
+// and a cumulative field the record omits counts as unchanged, not as zero.
 export const CODEX_CACHE_VERSION = 25
 export const CODEX_LEGACY_CACHE_FILE = 'codex-results.json'
 export function codexCacheFileName(version = CODEX_CACHE_VERSION): string {
