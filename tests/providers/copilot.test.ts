@@ -3727,6 +3727,20 @@ describe('copilot provider - JetBrains conversation attribution at scale', () =>
     vi.unstubAllEnvs()
   })
 
+  it('attributes a turn to an uppercase conversation GUID', async () => {
+    const guid = 'AAAAAAAA-BBBB-CCCC-DDDD-0000000000EF'
+    const md = JSON.stringify({ type: 'Markdown', data: JSON.stringify({ text: 'an uppercase reply' }) })
+    const dbPath = join(tmpDir, 'copilot-agent-sessions-nitrite.db')
+    await writeFile(dbPath, Buffer.from(`$${guid}\x00\x00name\x00value\x00\x05Upper chatt\x00\x06source{"__first__":{"type":"Subgraph","value":${JSON.stringify(md)}}}`, 'latin1'))
+
+    const calls = await collectCalls({
+      path: dbPath, project: 'copilot-jetbrains', provider: 'copilot', sourceType: 'jetbrains',
+      sessionId: 'store', storeId: 'store', dbPath, mtime: '2026-07-03T12:00:00.000Z',
+    } as unknown as { path: string; project: string; provider: string; sourceType?: string })
+
+    expect(calls.map(c => [c.sessionId, c.userMessage])).toEqual([[guid, 'Upper chat']])
+  })
+
   it('attributes 1,600 turns across 80 conversations in linear time', async () => {
     const guid = (k: number) => `aaaaaaaa-bbbb-cccc-dddd-${k.toString(16).padStart(12, '0')}`
     const parts: string[] = []

@@ -2121,7 +2121,7 @@ function extractJetBrainsConversations(raw: string): JBConversation[] {
   // keep the LAST meaningful (non-default) one.
   const DEFAULT_TITLES = new Set(['New Agent Session', 'New Session', 'New Chat'])
   const byId = new Map<string, string>()
-  const re = /\$([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})[\s\S]{0,8}name/g
+  const re = /\$([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})[\s\S]{0,8}name/gi
   let m: RegExpExecArray | null
   while ((m = re.exec(raw))) {
     const id = m[1]
@@ -2285,7 +2285,7 @@ function extractRecordStrings(s: string, marker: string, dataKey: string, field:
  */
 function jetBrainsConversationAt(raw: string, convById: Map<string, JBConversation>): (pos: number) => JBConversation | undefined {
   const hits: Array<{ pos: number; conv: JBConversation }> = []
-  const re = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g
+  const re = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi
   let m: RegExpExecArray | null
   while ((m = re.exec(raw))) {
     const conv = convById.get(m[0])
