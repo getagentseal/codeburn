@@ -53,6 +53,14 @@ describe('readKeychainPassword', () => {
     expect(exec).toHaveBeenCalledTimes(1)
   })
 
+  it('moves past an error that showed no prompt to the next candidate', async () => {
+    const exec = vi.fn(async (_file: string, args: string[]) => {
+      if (args.includes('-a')) throw Object.assign(new Error('security: read error'), { code: 1 })
+      return { stdout: '{"ok":true}' }
+    })
+    expect(await readKeychainPassword('svc', ['alice', null], exec)).toEqual({ status: 'found', value: '{"ok":true}' })
+  })
+
   it('reports accessDenied when a later candidate is denied after an earlier miss', async () => {
     const exec = vi.fn(async (_file: string, args: string[]) => {
       if (args.includes('-a')) return notFound()

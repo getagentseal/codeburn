@@ -41,25 +41,29 @@ function decodeKeychainValue(raw: string): string {
   return raw
 }
 
-// exit 44 / "could not be found" is a genuine miss; anything else non-zero
-// (interaction not allowed, user canceled/denied, or a timeout kill while the
-// dialog waited) means the item is there but access wasn't granted.
-function classifyKeychainError(error: unknown): 'notFound' | 'accessDenied' {
-  const err = error as { code?: number | string; stderr?: string; message?: string }
+// exit 44 / "could not be found" is a genuine miss. A Deny (exit 128, "User
+// canceled") and a timeout kill while the dialog waited are the user's answer
+// to a prompt. Anything else non-zero (interaction not allowed, I/O) still
+// means access wasn't granted, but showed no prompt, so the next candidate is
+// tried.
+function classifyKeychainError(error: unknown): 'notFound' | 'denied' | 'unanswered' | 'other' {
+  const err = error as { code?: number | string; stderr?: string; message?: string; killed?: boolean; signal?: string | null }
   const code = typeof err.code === 'number' ? err.code : undefined
   const text = `${err.stderr ?? ''} ${err.message ?? ''}`.toLowerCase()
   if (code === 44 || text.includes('could not be found') || text.includes('specified item could not be found')) {
     return 'notFound'
   }
-  return 'accessDenied'
+  if (err.killed || err.signal) return 'unanswered'
+  if (code === 128 || text.includes('user canceled')) return 'denied'
+  return 'other'
 }
 
 /**
  * Reads a generic-password keychain item via the Apple-signed `/usr/bin/security`
  * (which the item's `apple-tool:` partition trusts, avoiding the partition-list
  * prompt on already-consented items). Tries each account candidate in order
- * (`null` = service-only) and stops at the first refusal: a later candidate can
- * match the same item, and asking again after a Deny is a second prompt the
+ * (`null` = service-only) and stops at a Deny or an unanswered prompt: a later
+ * candidate can match the same item, and asking again is a second prompt the
  * user already answered. Never returns or logs the secret to any caller but
  * the direct one.
  */
@@ -69,16 +73,19 @@ export async function readKeychainPassword(
   exec: KeychainExec = execFileAsync,
 ): Promise<KeychainOutcome> {
   if (process.platform !== 'darwin') return { status: 'notFound' }
+  let denied = false
   for (const account of accounts) {
     const args = ['find-generic-password', '-s', service, ...(account ? ['-a', account] : []), '-w']
     try {
       const { stdout } = await exec('/usr/bin/security', args, { timeout: KEYCHAIN_TIMEOUT_MS, maxBuffer: 64 * 1024 })
       if (stdout && stdout.trim()) return { status: 'found', value: decodeKeychainValue(stdout) }
     } catch (error) {
-      if (classifyKeychainError(error) === 'accessDenied') return { status: 'accessDenied' }
+      const kind = classifyKeychainError(error)
+      if (kind === 'denied' || kind === 'unanswered') return { status: 'accessDenied' }
+      if (kind === 'other') denied = true
     }
   }
-  return { status: 'notFound' }
+  return denied ? { status: 'accessDenied' } : { status: 'notFound' }
 }
 
 export function sanitizeError(error: unknown): string {
