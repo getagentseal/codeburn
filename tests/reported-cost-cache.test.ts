@@ -12,7 +12,7 @@
 // modules are first evaluated, so HOME must be set before any import.
 
 import { afterAll, beforeEach, expect, it, vi } from 'vitest'
-import { mkdir, rm, writeFile } from 'fs/promises'
+import { mkdir, rm, stat, writeFile } from 'fs/promises'
 import { mkdirSync } from 'fs'
 import { join } from 'path'
 import { createRequire } from 'node:module'
@@ -279,4 +279,26 @@ it('keeps a Cline request cost cold and warm, and re-prices requests without one
   const floor = 1000 * 3e-6 + 200 * 15e-6
   expect(cold).toBeCloseTo(0.5 + floor, 10)
   expect(warm).toBeCloseTo(cold, 10)
+})
+
+it('re-reads a Cline task whose ui_messages.json is rewritten in place', async () => {
+  const taskDir = join(HOME, '.cline', 'data', 'tasks', 'growing')
+  await mkdir(taskDir, { recursive: true })
+  const request = { type: 'say', say: 'api_req_started', ts: Date.UTC(2026, 7, 16, 10), text: JSON.stringify({ tokensIn: 1000, tokensOut: 200 }) }
+  const uiPath = join(taskDir, 'ui_messages.json')
+  await writeFile(uiPath, JSON.stringify([request]))
+
+  const { clearSessionCache, parseAllSessions } = await import('../src/parser.js')
+  const calls = async () => (await parseAllSessions(undefined, 'cline')).reduce((s, p) => s + p.totalApiCalls, 0)
+  clearSessionCache()
+  expect(await calls()).toBe(1)
+
+  // Cline saves with an in-place writeFile: the task directory's entries, and
+  // so its own mtime and size, stay exactly as they were.
+  const dirBefore = await stat(taskDir)
+  await writeFile(uiPath, JSON.stringify([request, request, request]))
+  expect((await stat(taskDir)).mtimeMs).toBe(dirBefore.mtimeMs)
+
+  clearSessionCache()
+  expect(await calls()).toBe(3)
 })

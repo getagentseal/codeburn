@@ -39,7 +39,7 @@ describe('kilo-code provider - discovery path differentiation', () => {
       { type: 'say', say: 'api_req_started', text: JSON.stringify({ tokensIn: 200, tokensOut: 100 }), ts: 1700000000000 },
     ]))
 
-    const source = { path: task, project: 'task-kilo-2', provider: 'kilo-code' }
+    const source = { path: join(task, 'ui_messages.json'), project: 'task-kilo-2', provider: 'kilo-code' }
     const calls: ParsedProviderCall[] = []
     for await (const call of kiloCode.createSessionParser(source, new Set()).parse()) calls.push(call)
 
