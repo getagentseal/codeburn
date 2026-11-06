@@ -251,3 +251,24 @@ describe('copilot Auto-mode journal requests at serve time', () => {
     expect(calls.map(c => [c.model, c.costBasis])).toEqual([['unknown', 'unpriced']])
   })
 })
+
+describe('copilot chat-session copies in two storages', () => {
+  it.each(['aa-global', 'zz-global'])('serves the copy under the lowest storage path (%s)', async (globalName) => {
+    const request = { requestId: 'r1', modelId: 'copilot/gpt-4o', timestamp: Date.parse('2026-10-05T12:00:00Z'), promptTokens: 1000, completionTokens: 50 }
+    const journal = JSON.stringify({ kind: 0, v: { sessionId: 'dup', creationDate: request.timestamp, requests: [request] } }) + '\n'
+    const wsHash = join(tmp, 'ws', 'h1')
+    await mkdir(join(wsHash, 'chatSessions'), { recursive: true })
+    await writeFile(join(wsHash, 'workspace.json'), JSON.stringify({ folder: 'file:///tmp/proj-ws' }))
+    await writeFile(join(wsHash, 'chatSessions', 'dup.jsonl'), journal)
+    const globalDir = join(tmp, globalName)
+    await mkdir(join(globalDir, 'emptyWindowChatSessions'), { recursive: true })
+    await writeFile(join(globalDir, 'emptyWindowChatSessions', 'dup.jsonl'), journal)
+    process.env['CODEBURN_COPILOT_WS_STORAGE_DIR'] = join(tmp, 'ws')
+    process.env['CODEBURN_COPILOT_GLOBAL_STORAGE_DIR'] = globalDir
+
+    clearSessionCache()
+    const projects = await parseAllSessions(undefined, 'copilot')
+    const served = projects.flatMap(p => p.sessions.flatMap(s => s.turns.flatMap(t => t.assistantCalls.map(() => p.project))))
+    expect(served).toEqual([globalName < 'ws' ? 'copilot-chat' : 'proj-ws'])
+  })
+})

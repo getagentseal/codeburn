@@ -3825,28 +3825,32 @@ export function createCopilotProvider(
         // JSONL discovery failed
       }
 
-      // 3. Discover VS Code core chatSessions journals. A journal of a session
-      // agent-traces.db also holds is left out at serve time (parser.ts,
-      // otelTwinKeys); sessions OTel never recorded count from the journal.
+      // 3. Discover VS Code core chatSessions journals. A journal request
+      // agent-traces.db also recorded is left out at serve time (parser.ts,
+      // otelTwinKeys); everything OTel never recorded counts from the journal.
+      // Sorted by path: the same session copied into two storages carries the
+      // same dedup keys, and the first parsed copy keeps them, so the lowest
+      // storage path wins whatever order the directories list in.
+      const byPath = (a: SessionSource, b: SessionSource): number => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0)
+      const chatSessionSources: SessionSource[] = []
       try {
-        const chatSessionSources = await discoverWorkspaceChatSessions(getWsDirs())
-        sources.push(...chatSessionSources)
+        chatSessionSources.push(...await discoverWorkspaceChatSessions(getWsDirs()))
       } catch {
         // Workspace chatSessions discovery failed
       }
 
       // 4. Discover VS Code empty-window chatSessions journals
       try {
-        const emptyWindowSources = await discoverEmptyWindowChatSessions(getGlobalDirs())
-        sources.push(...emptyWindowSources)
+        chatSessionSources.push(...await discoverEmptyWindowChatSessions(getGlobalDirs()))
       } catch {
         // Empty-window chatSessions discovery failed
       }
+      sources.push(...chatSessionSources.sort(byPath))
 
       // 5. Discover VS Code workspace transcript sessions
       try {
         const transcriptSources = await discoverTranscriptSessions(getWsDirs())
-        sources.push(...transcriptSources)
+        sources.push(...transcriptSources.sort(byPath))
       } catch {
         // Transcript discovery failed
       }
