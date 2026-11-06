@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mkdtemp, rm } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
@@ -16,6 +16,25 @@ import type { ParsedProviderCall } from '../../src/providers/types.js'
 
 const requireForTest = createRequire(import.meta.url)
 
+const sqlLog = vi.hoisted(() => [] as Array<{ sql: string; params: unknown[] }>)
+vi.mock('../../src/sqlite.js', async (importOriginal) => {
+  const mod = await importOriginal<typeof import('../../src/sqlite.js')>()
+  return {
+    ...mod,
+    openDatabase: (...args: Parameters<typeof mod.openDatabase>) => {
+      const db = mod.openDatabase(...args)
+      return {
+        query: (sql: string, params: unknown[] = []) => {
+          sqlLog.push({ sql, params })
+          return db.query(sql, params)
+        },
+        close: () => db.close(),
+      } as ReturnType<typeof mod.openDatabase>
+    },
+  }
+})
+const requestIdLookups = () => sqlLog.filter(q => q.sql.includes("json_extract(value, '$.requestId') IN"))
+
 const skipReason = isSqliteAvailable()
   ? null
   : 'node:sqlite not available — needs Node 22+; skipping'
@@ -25,6 +44,7 @@ let tmpDir: string
 beforeEach(async () => {
   tmpDir = await mkdtemp(join(tmpdir(), 'cursor-tokens-test-'))
   clearCursorWorkspaceMapCache()
+  sqlLog.length = 0
 })
 
 afterEach(async () => {
@@ -394,6 +414,21 @@ describe.skipIf(skipReason !== null)('cursor real context tokens (#575)', () => 
     const calls = await collectCalls(createCursorProvider(dbPath), dbPath)
 
     expect(calls).toEqual([])
+    expect(requestIdLookups().map(q => q.params)).toEqual([[requestId]])
+  })
+
+  it('skips the request-id lookup when every stream joins a scanned bubble', async () => {
+    const composerId = '22220000-1111-2222-3333-444455556666'
+    const requestId = 'req-joined'
+    const dbPath = buildDb((db) => {
+      insertBubble(db, { composerId, bubbleUuid: 'b1', type: 1, text: 'prompt', requestId })
+      insertAgentKv(db, { blobId: 'akv-1', role: 'user', content: 'prompt', requestId })
+    })
+
+    await collectCalls(createCursorProvider(dbPath), dbPath)
+
+    expect(sqlLog.length).toBeGreaterThan(0)
+    expect(requestIdLookups()).toEqual([])
   })
 
   it('keeps an agent-only session on the time it was first seen after the DB changes and the result cache is cleared', async () => {

@@ -347,7 +347,10 @@ const BUBBLE_REQUEST_IDS_QUERY = `
   SELECT DISTINCT json_extract(value, '$.requestId') as request_id
   FROM cursorDiskKV
   WHERE key LIKE 'bubbleId:%'
+    AND json_extract(value, '$.requestId') IN
 `
+// Well under SQLite's 32766 bound-parameter limit; each chunk is one table scan.
+const REQUEST_ID_CHUNK = 10_000
 
 // Split into HEAD (predicates we always emit) and TAIL (ORDER BY) so the
 // caller can splice in an optional `ROWID >= ?` cutoff without rewriting
@@ -870,16 +873,21 @@ function parseBubbles(
   // timestamps, so a new one takes the DB file's mtime and keeps it on every
   // later parse; re-stamping would move it to the latest write each time.
   const bubbleRequestIds = new Set<string>()
-  if (unjoined.size > 0) {
-    try {
-      for (const row of db.query<{ request_id: string | null }>(BUBBLE_REQUEST_IDS_QUERY)) {
+  const unjoinedIds = [...unjoined.keys()]
+  try {
+    for (let i = 0; i < unjoinedIds.length; i += REQUEST_ID_CHUNK) {
+      const chunk = unjoinedIds.slice(i, i + REQUEST_ID_CHUNK)
+      const sql = `${BUBBLE_REQUEST_IDS_QUERY} (${chunk.map(() => '?').join(',')})`
+      for (const row of db.query<{ request_id: string | null }>(sql, chunk)) {
         if (row.request_id) bubbleRequestIds.add(row.request_id)
       }
-    } catch (err) {
-      rethrowBusy(err)
     }
+  } catch (err) {
+    rethrowBusy(err)
   }
   for (const [requestId, stream] of unjoined) {
+    // Request ids are UUIDs, so a historic bubble sharing one with a billable
+    // agent-only stream is not expected.
     if (bubbleRequestIds.has(requestId)) continue
     const inputTokens = estimateTokensFromChars(stream.userChars + stream.contextChars)
     const outputTokens = estimateTokensFromChars(stream.assistantChars)
