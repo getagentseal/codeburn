@@ -255,3 +255,28 @@ it('holds the reported-cost provider set to its documented membership', async ()
     'kiro', 'mistral-vibe', 'omp', 'quickdesk', 'vercel-gateway',
   ])
 })
+
+it('keeps a Cline request cost cold and warm, and re-prices requests without one', async () => {
+  const tasks = join(HOME, '.cline', 'data', 'tasks')
+  const writeTask = async (id: string, usage: Record<string, number>) => {
+    await mkdir(join(tasks, id), { recursive: true })
+    await writeFile(join(tasks, id, 'ui_messages.json'), JSON.stringify([
+      { type: 'say', say: 'api_req_started', ts: Date.UTC(2026, 7, 16, 10), text: JSON.stringify(usage) },
+    ]))
+    await writeFile(join(tasks, id, 'api_conversation_history.json'), JSON.stringify([
+      { role: 'user', content: [{ type: 'text', text: '<model>anthropic/claude-sonnet-4-6</model>' }] },
+    ]))
+  }
+  await writeTask('reported', { tokensIn: 1000, tokensOut: 200, cost: 0.5 })
+  await writeTask('unreported', { tokensIn: 1000, tokensOut: 200 })
+
+  const { clearSessionCache, parseAllSessions } = await import('../src/parser.js')
+  clearSessionCache()
+  const cold = (await parseAllSessions(undefined, 'cline')).reduce((s, p) => s + p.totalCostUSD, 0)
+  clearSessionCache()
+  const warm = (await parseAllSessions(undefined, 'cline')).reduce((s, p) => s + p.totalCostUSD, 0)
+
+  const floor = 1000 * 3e-6 + 200 * 15e-6
+  expect(cold).toBeCloseTo(0.5 + floor, 10)
+  expect(warm).toBeCloseTo(cold, 10)
+})

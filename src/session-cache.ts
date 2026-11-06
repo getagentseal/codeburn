@@ -389,7 +389,9 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // sidechain-output-estimate-v1: subagent messages from Claude Code before
   // 2.1.307 that never got a final usage row have their output estimated.
   claude: 'advisor-usage-v1-skills-rich-capture-v1-cross-provider-pr-v1-session-lineage-capture-v1-queued-human-prompts-v1-per-call-cwd-v1-streamed-tool-blocks-v1-powershell-shell-tool-v1-thinking-tokens-v1-sidechain-output-estimate-v1',
-  cline: 'worktree-project-grouping-v1',
+  // reported-cost-v1: a request's recorded `cost` is kept through the cache
+  // instead of being re-priced from tokens on every read.
+  cline: 'worktree-project-grouping-v1-reported-cost-v1',
   // reported-cost-v1: the CLI reports its own per-message cost, so entries
   // cached before cline-cli joined the reported-cost allowlist in parser.ts
   // hold costUSD: undefined and get re-priced from tokens on every read.
@@ -554,7 +556,7 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // calls cached at $0 must re-parse to pick up its price.
   devin: 'sessions-db-v1-swe-pricing-v1',
   'lingtai-tui': 'token-ledger-registry-activity-v3',
-  'ibm-bob': 'worktree-project-grouping-v1',
+  'ibm-bob': 'worktree-project-grouping-v1-reported-cost-v1',
   // project-path-v1: the parser now records the session's full working
   // directory as projectPath (CLI meta.cwd, v2 workspacePaths[0], workspace
   // sessions' workspaceDirectory), which sync attribution needs to resolve
@@ -625,7 +627,7 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   kimicode: 'wire-usage-v1-est-cost-session-lineage-capture-v1-cwd-project-v1-tool-sequence-v1',
   // archived-subtree-v1: KiloCode shares the SQLite parser and the same schema.
   // billing-routes-v2: its warm cache must move with both shared route fields.
-  'kilo-code': 'worktree-project-grouping-v1-session-model-v1-archived-subtree-v1-billing-routes-v2-v2-legacy-union-v1-unknown-usage-v1-vertex-fallback-cost-v1',
+  'kilo-code': 'worktree-project-grouping-v1-session-model-v1-archived-subtree-v1-billing-routes-v2-v2-legacy-union-v1-unknown-usage-v1-vertex-fallback-cost-v1-reported-cost-v1',
   // billing-cost-v1: Warp's own billing record (total_provider_cost_in_cents,
   // total_charged_usage, credits_spent) now rides on each call as
   // `costFromBilling` and is preserved by providerCallToCachedCall. Entries

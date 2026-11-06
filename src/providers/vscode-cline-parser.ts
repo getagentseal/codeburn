@@ -204,7 +204,11 @@ export function createClineParser(source: SessionSource, seenKeys: Set<string>, 
         // throw RangeError, which would abort the whole session's parse. Guard it.
         const tsDate = entry.ts ? new Date(entry.ts) : null
         const timestamp = tsDate && !Number.isNaN(tsDate.getTime()) ? tsDate.toISOString() : ''
-        const costUSD = cost ?? calculateCost(model, tokensIn, tokensOut, cacheWrites, cacheReads, 0)
+        // Cline's `cost` is what the request was billed on its real route
+        // (cache writes and gateway prices included); a token re-price would
+        // replace it with a list price for a model the task may not even name.
+        const isReported = typeof cost === 'number' && Number.isFinite(cost) && cost > 0
+        const costUSD = isReported ? cost! : calculateCost(model, tokensIn, tokensOut, cacheWrites, cacheReads, 0)
 
         yield {
           provider: providerName,
@@ -217,6 +221,7 @@ export function createClineParser(source: SessionSource, seenKeys: Set<string>, 
           reasoningTokens: 0,
           webSearchRequests: 0,
           costUSD,
+          ...(isReported ? { costFromBilling: true } : {}),
           tools: [],
           bashCommands: [],
           timestamp,
