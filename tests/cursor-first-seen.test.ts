@@ -112,4 +112,9 @@ describe('cursor first-seen sidecar', () => {
     expect(CURSOR_CACHE_VERSION).toBe(9)
     expect(cursorCacheFileName()).toBe('cursor-results.v9.json')
   })
+
+  it('re-parses session caches whose agent stream was emptied by a value that was not valid JSON', async () => {
+    const { PROVIDER_PARSE_VERSIONS } = await import('../src/session-cache.js')
+    expect(PROVIDER_PARSE_VERSIONS['cursor']).toMatch(/-agentkv-json-valid-v1$/)
+  })
 })
