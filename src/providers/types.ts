@@ -29,6 +29,11 @@ export type SessionSource = {
   snapshot?: boolean
 }
 
+// Thrown by a parser whose source is temporarily unreadable (a network fetch
+// that failed transiently). The parse loop treats it like a busy SQLite
+// store: the source's cached rows keep serving and the next refresh retries.
+export class RetryableSourceError extends Error {}
+
 export type SessionParser = {
   parse(): AsyncGenerator<ParsedProviderCall>
 }

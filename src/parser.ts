@@ -67,7 +67,7 @@ import { folderNameOriginKey, isTemporaryProjectPath, linkedOriginKey, projectOr
 import { behavioralCallWeight, isBehavioralTurn } from './behavioral-weight.js'
 import { gatewayIncludedInTotals } from './config.js'
 import { coverageFor, cursorImportPath, dropImportCoveredCalls, loadCursorImport, replacedProviders } from './cursor-import.js'
-import type { ParsedProviderCall, Provider, SessionSource } from './providers/types.js'
+import { RetryableSourceError, type ParsedProviderCall, type Provider, type SessionSource } from './providers/types.js'
 import type {
   ApiUsageIteration,
   AssistantMessageContent,
@@ -4106,7 +4106,7 @@ export async function parseProviderSources(
         didParse = true
         markCacheDirty(diskCache, providerName, source.path)
       } catch (err) {
-        if (isSqliteBusyError(err) || isHermesLedgerPublicationError(err)) {
+        if (isSqliteBusyError(err) || isHermesLedgerPublicationError(err) || err instanceof RetryableSourceError) {
           // Deferred, not failed: the cache keeps serving this source's
           // previous rows and the next refresh retries. But the data this
           // read would have added is MISSING from this parse, so the run is a

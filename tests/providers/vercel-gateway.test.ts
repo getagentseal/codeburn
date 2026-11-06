@@ -137,6 +137,27 @@ describe('vercel-gateway end-to-end (parseAllSessions network path)', () => {
     expect(stored).toContain('"requestCount":3')
   })
 
+  it('keeps serving the cached report when a refresh cannot reach the gateway', async () => {
+    const day = new Date(Date.now() - 15 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+    globalThis.fetch = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ results: [{ day, model: 'openai/gpt-4o', total_cost: 12.34, input_tokens: 1000, output_tokens: 500 }] }),
+    })) as typeof fetch
+    const range = getDashboardScanRange('week', null, null)
+    const total = async () => (await parseAllSessions(range, 'vercel-gateway')).reduce((sum, p) => sum + p.totalCostUSD, 0)
+    expect(await total()).toBeCloseTo(12.34, 2)
+
+    vi.spyOn(process.stderr, 'write').mockImplementation(() => true)
+    for (const failing of [
+      vi.fn(async () => ({ ok: false, status: 503, text: async () => '' })),
+      vi.fn(async () => { throw new Error('getaddrinfo ENOTFOUND') }),
+    ]) {
+      globalThis.fetch = failing as unknown as typeof fetch
+      clearSessionCache()
+      expect(await total()).toBeCloseTo(12.34, 2)
+    }
+  })
+
   it('emits no gateway rows at all without a credential', async () => {
     delete process.env.AI_GATEWAY_API_KEY
     delete process.env.VERCEL_OIDC_TOKEN
