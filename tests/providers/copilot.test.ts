@@ -3683,6 +3683,45 @@ describe('copilot provider - JetBrains parsing', () => {
   })
 })
 
+describe('copilot provider - JetBrains conversation attribution at scale', () => {
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'copilot-jetbrains-scale-'))
+    vi.stubEnv('CODEBURN_COPILOT_DISABLE_OTEL', '1')
+  })
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true })
+    vi.unstubAllEnvs()
+  })
+
+  it('attributes 1,600 turns across 80 conversations in linear time', async () => {
+    const guid = (k: number) => `aaaaaaaa-bbbb-cccc-dddd-${k.toString(16).padStart(12, '0')}`
+    const parts: string[] = []
+    for (let k = 0; k < 80; k++) {
+      parts.push(`$${guid(k)}\x00\x00name\x00value\x00\x05Chat number ${k}t\x00\x06source`)
+      for (let t = 0; t < 20; t++) {
+        const md = JSON.stringify({ type: 'Markdown', data: JSON.stringify({ text: `reply ${k}-${t} ` + 'w'.repeat(200) }) })
+        parts.push(`{"__first__":{"type":"Subgraph","value":${JSON.stringify(md)}}}` + 'x'.repeat(2000))
+      }
+    }
+    const dbPath = join(tmpDir, 'copilot-agent-sessions-nitrite.db')
+    await writeFile(dbPath, Buffer.from(parts.join(''), 'latin1'))
+
+    const started = performance.now()
+    const calls = await collectCalls({
+      path: dbPath, project: 'copilot-jetbrains', provider: 'copilot', sourceType: 'jetbrains',
+      sessionId: 'store', storeId: 'store', dbPath, mtime: '2026-07-03T12:00:00.000Z',
+    } as unknown as { path: string; project: string; provider: string; sourceType?: string })
+    expect(performance.now() - started).toBeLessThan(2000)
+
+    expect(calls).toHaveLength(1600)
+    for (const c of calls) {
+      const k = Number(/^Chat number (\d+)$/.exec(c.userMessage)![1])
+      expect(c.sessionId).toBe(guid(k))
+    }
+  })
+})
+
 describe('copilot provider - JetBrains dedup key stability across store rewrites', () => {
   beforeEach(async () => {
     tmpDir = await mkdtemp(join(tmpdir(), 'copilot-jetbrains-dedup-'))

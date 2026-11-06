@@ -2264,6 +2264,37 @@ function extractRecordStrings(s: string, marker: string, dataKey: string, field:
 }
 
 /**
+ * Returns a lookup for the conversation whose GUID most recently appears at or
+ * before an offset in `raw`. One pass collects every occurrence; the scan
+ * steps one char past each match so a GUID-shaped neighbour cannot hide one.
+ */
+function jetBrainsConversationAt(raw: string, convById: Map<string, JBConversation>): (pos: number) => JBConversation | undefined {
+  const hits: Array<{ pos: number; conv: JBConversation }> = []
+  const re = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g
+  let m: RegExpExecArray | null
+  while ((m = re.exec(raw))) {
+    const conv = convById.get(m[0])
+    if (conv) hits.push({ pos: m.index, conv })
+    re.lastIndex = m.index + 1
+  }
+  return (pos) => {
+    let lo = 0
+    let hi = hits.length - 1
+    let found: JBConversation | undefined
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1
+      if (hits[mid]!.pos <= pos) {
+        found = hits[mid]!.conv
+        lo = mid + 1
+      } else {
+        hi = mid - 1
+      }
+    }
+    return found
+  }
+}
+
+/**
  * Extract assistant turns from a raw (latin1) Nitrite .db buffer. Each turn is
  * one `{"__first__":{"type":"Subgraph"…}` blob; the per-turn model is recovered
  * from inside the blob when present, else the whole-store default. Each turn is
@@ -2276,6 +2307,7 @@ function extractJetBrainsDbTurns(raw: string): JBDbTurn[] {
   // Precompute the byte offset of each conversation GUID's full form so a turn
   // can be attributed to the conversation whose id most recently precedes it.
   const convById = new Map(conversations.map((c) => [c.id, c]))
+  const conversationAt = jetBrainsConversationAt(raw, convById)
 
   const turns: JBDbTurn[] = []
   const seenReplies = new Set<string>() // keyed by `${conversationId}::${reply}`
@@ -2286,17 +2318,9 @@ function extractJetBrainsDbTurns(raw: string): JBDbTurn[] {
     re.lastIndex = end
 
     // Attribute this turn to the conversation whose GUID last appears before it.
-    let conversationId = ''
-    let conversationTitle = ''
-    let bestPos = -1
-    for (const c of convById.values()) {
-      const p = raw.lastIndexOf(c.id, m.index)
-      if (p > bestPos) {
-        bestPos = p
-        conversationId = c.id
-        conversationTitle = c.title
-      }
-    }
+    const owner = conversationAt(m.index)
+    const conversationId = owner?.id ?? ''
+    const conversationTitle = owner?.title ?? ''
 
     const replyText = extractResponseText(chunk)
     // The files this turn referenced (home-relative common dir) → project label.
@@ -2350,17 +2374,9 @@ function extractJetBrainsDbTurns(raw: string): JBDbTurn[] {
       if (!chunk.includes('AgentRound')) continue
 
       // Attribute to the conversation whose GUID most recently precedes this doc.
-      let conversationId = ''
-      let conversationTitle = ''
-      let bestPos = -1
-      for (const c of convById.values()) {
-        const p = raw.lastIndexOf(c.id, docStart)
-        if (p > bestPos) {
-          bestPos = p
-          conversationId = c.id
-          conversationTitle = c.title
-        }
-      }
+      const owner = conversationAt(docStart)
+      const conversationId = owner?.id ?? ''
+      const conversationTitle = owner?.title ?? ''
 
       // extractResponseText handles the depth-1 unescape needed to surface the
       // AgentRound records, then calls extractAgentRoundReplies for each turn.
