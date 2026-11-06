@@ -129,12 +129,23 @@ describe('identical-call loop', () => {
     expect(edits[7]).toContain('"permissionDecision":"deny"')
   })
 
-  it('never counts sleep-then-check waiting as a loop', async () => {
+  it('never counts a sleep followed by a read-only check as a loop', async () => {
     const env = await setup()
     const outs: string[] = []
     for (let i = 0; i < 8; i++) outs.push(await call(env, 'Bash', { command: 'sleep 30 && gh run view 123' }))
-    for (let i = 0; i < 8; i++) outs.push(await call(env, 'Bash', { command: '  sleep 5; curl -s localhost:3000/health' }))
+    for (let i = 0; i < 8; i++) outs.push(await call(env, 'Bash', { command: '  sleep 150; gh pr view 1895 --json state' }))
+    for (let i = 0; i < 8; i++) outs.push(await call(env, 'Bash', { command: 'sleep 5; git status' }))
+    for (let i = 0; i < 8; i++) outs.push(await call(env, 'Bash', { command: 'sleep 5' }))
     expect(outs.every(o => o === '')).toBe(true)
+  })
+
+  it('still counts a sleep followed by a command that does work', async () => {
+    const env = await setup()
+    const outs: string[] = []
+    for (let i = 0; i < 8; i++) outs.push(await call(env, 'Bash', { command: 'sleep 0; npm test' }, { output: '3 passing' }))
+    expect(outs.slice(0, 3)).toEqual(['', '', ''])
+    expect(outs[3]).toBe(warnJson('codeburn guard: Bash was called 4 times in a row with the same input.'))
+    expect(outs[7]).toContain('"permissionDecision":"deny"')
   })
 
   it('counts identical calls only while they keep getting the same result', async () => {

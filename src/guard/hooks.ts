@@ -36,6 +36,7 @@
 //   is a top-level statusLine: { type: "command", command }.
 // ===========================================================================
 import { BASH_TOOLS } from '../classifier.js'
+import { isReadShapedBashCommand } from '../bash-utils.js'
 import { readGuardConfig } from './store.js'
 import {
   computeSessionUsage,
@@ -76,6 +77,18 @@ function markSignal(cache: GuardCache, signal: 'loop' | 'retry'): void {
 // The reason goes to the model; how to lift the stop goes only to the user, so
 // the agent is never told how to lift its own stop.
 // Hook contract (code.claude.com/docs/en/hooks): systemMessage is a warning shown to the user; on a PreToolUse deny, permissionDecisionReason is what Claude sees.
+// The shared read list leaves gh out (it has mutating subcommands); these only inspect.
+const GH_READ = /^gh\s+[\w-]+\s+(?:view|list|checks|status|diff|watch)\b[^;&|]*$/
+
+// `sleep 30 && gh run view 1` waits on something; it is not a loop as long as
+// what runs after the sleep only reads. `sleep 0; npm test` still counts.
+function isWaitingCheck(command: string): boolean {
+  const m = /^\s*sleep\s+\S+\s*(?:(?:&&|;|\|\|)([\s\S]*))?$/.exec(command)
+  if (!m) return false
+  const rest = m[1]?.trim() ?? ''
+  return !rest || isReadShapedBashCommand(rest) || GH_READ.test(rest)
+}
+
 function deny(reason: string, userNote: string): string {
   return JSON.stringify({
     systemMessage: userNote,
@@ -97,8 +110,7 @@ async function handlePreToolUse(input: unknown, opts: HookOpts): Promise<string>
   const toolInput = (input as { tool_input?: unknown }).tool_input
   const call = toolName ? { id: str(input, 'tool_use_id') ?? '', name: toolName, hash: inputHash(toolInput ?? {}) } : null
   const command = toolName && BASH_TOOLS.has(toolName) ? str(toolInput, 'command') : undefined
-  // `sleep 30 && gh run view 1` is waiting on something, not looping.
-  const waiting = command !== undefined && /^\s*sleep\s/.test(command)
+  const waiting = command !== undefined && isWaitingCheck(command)
   const run = call && !waiting ? identicalRun(cache, call) : 0
   // Without a tool_use_id the transcript copy cannot be told apart from ours,
   // so the call is left for the transcript to record.

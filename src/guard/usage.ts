@@ -230,6 +230,7 @@ async function renameRetrying(tmp: string, target: string): Promise<void> {
       await new Promise(resolve => { setTimeout(resolve, 10 * (attempt + 1)) })
     }
   }
+  // Skipping is safe: the next hook re-folds the transcript from the old cache, so a dropped write costs at most one repeated warning.
 }
 
 const DAY_MS = 86_400_000
