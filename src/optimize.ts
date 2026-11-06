@@ -1438,14 +1438,11 @@ export function mcpNamespace(name: string): string {
   return name.replace(/[^A-Za-z0-9_-]/g, '_')
 }
 
-// `homeDir` is injectable for tests (mirrors src/act/plans.ts PlanContext);
-// production callers omit it.
-export function loadMcpConfigs(projectCwds: Iterable<string>, homeDir = homedir()): Map<string, McpConfigEntry> {
+// Claude Code does not read mcpServers from ~/.claude/settings*.json (user
+// servers live in ~/.claude.json), and the remove plan never edits them.
+export function loadMcpConfigs(projectCwds: Iterable<string>): Map<string, McpConfigEntry> {
   const servers = new Map<string, McpConfigEntry>()
-  const configPaths = [
-    join(homeDir, '.claude', 'settings.json'),
-    join(homeDir, '.claude', 'settings.local.json'),
-  ]
+  const configPaths: string[] = []
   for (const cwd of projectCwds) {
     configPaths.push(join(cwd, '.mcp.json'))
     configPaths.push(join(cwd, '.claude', 'settings.json'))
@@ -1481,7 +1478,7 @@ export function loadMcpConfigs(projectCwds: Iterable<string>, homeDir = homedir(
 
 /// Server names owned by readable local MCP config, normalized the way
 /// transcript namespaces are (mcpNamespace). `loadMcpConfigs` covers
-/// settings.json and .mcp.json; `~/.claude.json` adds the top-level and
+/// project settings and .mcp.json; `~/.claude.json` adds the top-level and
 /// per-project `mcpServers` containers the remove plan also edits.
 ///
 /// A `claude_ai_*` namespace listed here is a local server that happens to
@@ -1489,7 +1486,7 @@ export function loadMcpConfigs(projectCwds: Iterable<string>, homeDir = homedir(
 /// read simply contributes no names, which leaves those namespaces on the
 /// conservative connector path.
 export function localMcpServerNames(projectCwds: Iterable<string>, homeDir = homedir()): Set<string> {
-  const names = new Set(loadMcpConfigs(projectCwds, homeDir).keys())
+  const names = new Set(loadMcpConfigs(projectCwds).keys())
   const userJson = readJsonFile(join(homeDir, '.claude.json'))
   const projects = (userJson?.['projects'] ?? {}) as Record<string, { mcpServers?: unknown } | null>
   const containers = [userJson?.['mcpServers'], ...Object.values(projects).map(entry => entry?.mcpServers)]
@@ -2939,7 +2936,7 @@ export function detectMcpDeferralOff(
   if (calls.some(c => c.name === TOOL_SEARCH_TOOL_NAME)) return null
   if (anySessionHasMcpInventory(projects)) return null
 
-  const configured = loadMcpConfigs(projectCwds, homeDir)
+  const configured = loadMcpConfigs(projectCwds)
   // Servers pinned with alwaysLoad load upfront BY DESIGN: they are never
   // deferred (so their missing inventory is not evidence deferral is
   // broken), and their schema cost is mcp-alwaysload-hygiene's jurisdiction
@@ -3039,11 +3036,10 @@ export function detectMcpAlwaysLoadHygiene(
   projectCwds: Set<string>,
   apiCalls: ApiCallMeta[] = [],
   mcpCoverage = aggregateMcpCoverage(projects),
-  homeDir = homedir(),
   pricing?: FindingPricing,
   unusedMcpServers: Set<string> = new Set(),
 ): WasteFinding | null {
-  const configured = loadMcpConfigs(projectCwds, homeDir)
+  const configured = loadMcpConfigs(projectCwds)
   const pinned = [...configured.values()].filter(e => e.alwaysLoadPaths.length > 0 && !unusedMcpServers.has(e.normalized))
   if (pinned.length === 0) return null
 
@@ -3145,7 +3141,7 @@ export function detectMcpDeferThreshold(
   // and deferral is working; nothing to tune.
   if (anySessionHasMcpInventory(projects)) return null
 
-  const configured = loadMcpConfigs(projectCwds, homeDir)
+  const configured = loadMcpConfigs(projectCwds)
   const servers = new Set(configured.keys())
   // Claude-scoped for the same reason as detectMcpDeferralOff: other
   // providers' sessions carry MCP breakdowns but not this override's cost.
@@ -4550,7 +4546,7 @@ export async function scanAndDetect(
     () => detectMcpProfileAdvisor(projects, mcpCoverage, provider, pricing),
     // mcp-deferral-gaps family (#614): detection only, no apply plans yet.
     claudeOnly(() => detectMcpDeferralOff(toolCalls, projects, projectCwds, apiCalls, undefined, pricing, unusedMcpServers)),
-    claudeOnly(() => detectMcpAlwaysLoadHygiene(projects, projectCwds, apiCalls, mcpCoverage, undefined, pricing, unusedMcpServers)),
+    claudeOnly(() => detectMcpAlwaysLoadHygiene(projects, projectCwds, apiCalls, mcpCoverage, pricing, unusedMcpServers)),
     claudeOnly(() => detectMcpDeferThreshold(projects, projectCwds, undefined, pricing)),
     claudeOnly(() => detectIdleCompactionBlocked(projects, projectCwds, apiCalls)),
     () => detectCapabilityReliability(behavioralProjects, provider),

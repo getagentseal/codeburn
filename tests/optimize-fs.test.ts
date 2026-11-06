@@ -214,6 +214,12 @@ describe('localMcpServerNames', () => {
     expect([...names].sort()).toEqual(['claude_ai_homegrown', 'fromMcpJson', 'plugin_ctx_ctx', 'scoped'])
   })
 
+  it('ignores mcpServers in ~/.claude/settings.json, which Claude Code does not read', () => {
+    const home = makeFixtureRoot()
+    writeFile(join(home, '.claude', 'settings.json'), JSON.stringify({ mcpServers: { fromSettings: {} } }))
+    expect(localMcpServerNames([], home).size).toBe(0)
+  })
+
   it('contributes no names when ~/.claude.json cannot be parsed', () => {
     const root = makeFixtureRoot()
     const projectDir = join(root, 'myapp')
@@ -283,7 +289,7 @@ describe('detectUnusedMcp', () => {
       const findings = [
         unused,
         detectMcpDeferralOff([], projects, cwds, [], FAKE_HOME_FOR_MOCK, undefined, servers),
-        detectMcpAlwaysLoadHygiene(projects, cwds, [], [], FAKE_HOME_FOR_MOCK, undefined, servers),
+        detectMcpAlwaysLoadHygiene(projects, cwds, [], [], undefined, servers),
       ]
       expect(findings.reduce((sum, f) => sum + (f?.tokensSaved ?? 0), 0)).toBe(2 * 2000 * 3)
     }
