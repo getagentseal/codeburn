@@ -4059,15 +4059,19 @@ export async function parseProviderSources(
           const existingEntry = section.files[source.path]
           if (existingEntry) {
             const freshByKey = new Map(turns.flatMap(t => t.calls).map(c => [c.deduplicationKey, c]))
-            // JetBrains Copilot keys are copilot:jb:<conversation>:<reply hash>:<n>.
-            // A re-read that files a cached reply under another conversation
-            // (better GUID matching) supersedes the cached copy; replies the
-            // store no longer holds have no fresh hash and stay.
-            const jbHash = (key: string): string | undefined => key.startsWith('copilot:jb:') ? key.split(':').at(-2) : undefined
-            const freshJbHashes = new Set([...freshByKey.keys()].map(jbHash).filter(h => h !== undefined))
-            if (freshJbHashes.size > 0) {
+            // JetBrains Copilot keys are copilot:jb:<conversation>:<reply hash>:<n>,
+            // stamped with the store's mtime. A re-read that files a cached
+            // reply under another conversation (better GUID matching)
+            // supersedes the cached copy: same hash, index and stamp under
+            // another key. A same-text reply cached at another stamp or index
+            // (a pruned conversation's) stays. A store that changed between
+            // its last parse and the re-read keeps both copies.
+            const jbTurn = (c: CachedCall): string | undefined =>
+              c.deduplicationKey.startsWith('copilot:jb:') ? `${c.deduplicationKey.split(':').slice(-2).join(':')}\0${c.timestamp}` : undefined
+            const freshJbTurns = new Set([...freshByKey.values()].map(jbTurn).filter(id => id !== undefined))
+            if (freshJbTurns.size > 0) {
               existingEntry.turns = existingEntry.turns
-                .map(t => ({ ...t, calls: t.calls.filter(c => freshByKey.has(c.deduplicationKey) || !freshJbHashes.has(jbHash(c.deduplicationKey) ?? '')) }))
+                .map(t => ({ ...t, calls: t.calls.filter(c => freshByKey.has(c.deduplicationKey) || !freshJbTurns.has(jbTurn(c) ?? '')) }))
                 .filter(t => t.calls.length > 0)
             }
             if (freshByKey.size > 0) {

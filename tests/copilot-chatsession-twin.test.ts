@@ -306,4 +306,25 @@ describe('copilot JetBrains cache across a parse-version bump', () => {
 
     expect(await servedKeys()).toEqual([expect.stringMatching(/^copilot:jb:aaaaaaaa-bbbb-cccc-dddd-0000000000ef:/)])
   })
+
+  it('keeps a pruned conversation reply that a live conversation repeats at a later stamp', async () => {
+    const a = 'aaaaaaaa-bbbb-cccc-dddd-00000000000a'
+    const b = 'aaaaaaaa-bbbb-cccc-dddd-00000000000b'
+    const store = join(tmp, 'jb', 'iu', 'chat-agent-sessions', 'store1')
+    const db = join(store, 'copilot-agent-sessions-nitrite.db')
+    await mkdir(store, { recursive: true })
+    const md = JSON.stringify({ type: 'Markdown', data: JSON.stringify({ text: 'OK' }) })
+    const write = async (guid: string, mtime: Date) => {
+      await writeFile(db, Buffer.from(`$${guid}\x00\x00name\x00value\x00\x05Chatt\x00\x06source{"__first__":{"type":"Subgraph","value":${JSON.stringify(md)}}}`, 'latin1'))
+      await utimes(db, mtime, mtime)
+    }
+    process.env['CODEBURN_COPILOT_JETBRAINS_DIR'] = join(tmp, 'jb')
+    await write(a, new Date(Date.now() - 3 * 86400000))
+    expect(await servedKeys()).toEqual([expect.stringMatching(new RegExp(`^copilot:jb:${a}:`))])
+
+    await write(b, new Date(Date.now() - 2 * 86400000))
+    const keys = await servedKeys()
+    expect(keys).toHaveLength(2)
+    expect(keys.map(k => k.split(':')[2]).sort()).toEqual([a, b])
+  })
 })
