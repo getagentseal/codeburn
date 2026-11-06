@@ -1050,7 +1050,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
         const outputTokens = usage.output_tokens ?? 0
         const reasoningTokens = usage.reasoning_output_tokens ?? 0
         const totalTokens = inputTokens + cachedInputTokens + outputTokens + reasoningTokens
-        if (totalTokens === 0 || seenKeys.has(dedupKey)) return
+        if (totalTokens === 0) return
 
         const est = pingEstimate
         pingEstimate = null
@@ -1066,6 +1066,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
           pendingLocRemoved += est.locRemoved ?? 0
           pendingEditFailed += est.editFailed ?? 0
         }
+        if (seenKeys.has(dedupKey)) return
 
         // OpenAI includes cached tokens inside input_tokens; Anthropic does not.
         // Normalize to Anthropic semantics: inputTokens = non-cached only.

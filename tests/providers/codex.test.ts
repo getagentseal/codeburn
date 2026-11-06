@@ -1588,6 +1588,33 @@ describe('codex provider - forked session dedupe', () => {
   }
 })
 
+describe('codex provider - ping estimate against a replayed measured record', () => {
+  it('drops the ping estimate when the turn\'s measured record is a fork replay already counted', async () => {
+    const parentId = '0199aaaa-0000-7000-8000-000000000011'
+    const forkId = '0199bbbb-0000-7000-8000-000000000012'
+    const meta = (id: string, timestamp: string, extra: Record<string, unknown> = {}) =>
+      JSON.stringify({ type: 'session_meta', timestamp, payload: { id, cwd: '/x', model: 'gpt-5.5', ...extra } })
+    await writeSession(tmpDir, '2026-10-01', `rollout-2026-10-01T09-00-00-${parentId}.jsonl`, [
+      meta(parentId, '2026-10-01T09:00:00Z'),
+      tokenUsageRecord({ timestamp: '2026-10-01T09:00:10Z', responseId: 'resp_1', usage: { input: 10_000, output: 1_000 } }),
+    ])
+    await writeSession(tmpDir, '2026-10-01', `rollout-2026-10-01T10-00-00-${forkId}.jsonl`, [
+      meta(forkId, '2026-10-01T10:00:00.000Z', { forked_from_id: parentId }),
+      JSON.stringify({ type: 'response_item', timestamp: '2026-10-01T10:00:01.600Z', payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'replayed answer text' }] } }),
+      JSON.stringify({ type: 'event_msg', timestamp: '2026-10-01T10:00:01.700Z', payload: { type: 'token_count', info: null, rate_limits: { primary: { used_percent: 3 } } } }),
+      tokenUsageRecord({ timestamp: '2026-10-01T10:00:01.800Z', responseId: 'resp_1', usage: { input: 10_000, output: 1_000 } }),
+    ])
+
+    const provider = createCodexProvider(tmpDir)
+    const sessions = (await provider.discoverSessions()).sort((a, b) => (a.path < b.path ? -1 : 1))
+    const seen = new Set<string>()
+    const calls: ParsedProviderCall[] = []
+    for (const s of sessions) for await (const c of provider.createSessionParser(s, seen).parse()) calls.push(c)
+
+    expect(calls.map(c => [c.inputTokens, c.outputTokens, c.costIsEstimated ?? false])).toEqual([[10_000, 1_000, false]])
+  })
+})
+
 describe('codex provider - fork replay masking against the parent rollout', () => {
   const PARENT = '019e0000-0000-7000-8000-000000000001'
   const CHILD = '019e0000-0000-7000-8000-000000000002'
