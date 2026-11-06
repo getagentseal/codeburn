@@ -3,6 +3,7 @@ import { join, resolve } from 'path'
 import { randomBytes } from 'crypto'
 
 import { getCodeburnCacheDir, readExistingTextFile } from './cache-dir.js'
+import { acquireCacheRefreshLock, type RefreshLockOutcome } from './cache-refresh-lock.js'
 import type { ParsedProviderCall } from './providers/types.js'
 
 // Bumped to 3 for the workspace-aware breakdown change: the cursor parser
@@ -117,6 +118,7 @@ export async function readCachedResults(
 // request was first seen is the only stable one, so it is kept outside the
 // versioned result cache and survives its version bumps and clears.
 const FIRST_SEEN_FILE = 'cursor-first-seen.json'
+const FIRST_SEEN_LOCK = 'cursor-first-seen.lock'
 
 export async function readFirstSeen(): Promise<Map<string, string>> {
   const file = await readExistingTextFile(join(getCodeburnCacheDir(), FIRST_SEEN_FILE))
@@ -130,11 +132,23 @@ export async function readFirstSeen(): Promise<Map<string, string>> {
   return new Map()
 }
 
+// Merges into what is on disk now, under a lock, so concurrent parses keep
+// each other's entries and an earlier recorded time always wins.
 export async function writeFirstSeen(firstSeen: Map<string, string>): Promise<void> {
   if (process.env['CODEBURN_SUPPRESS_CACHE_WRITES']) return
   const dir = getCodeburnCacheDir()
   await mkdir(dir, { recursive: true }).catch(() => {})
-  await writeAtomic(join(dir, FIRST_SEEN_FILE), JSON.stringify(Object.fromEntries(firstSeen)))
+  let lock: RefreshLockOutcome = { outcome: 'unavailable' }
+  for (let attempt = 0; attempt < 3; attempt++) {
+    lock = await acquireCacheRefreshLock({ cacheDir: dir, lockFile: FIRST_SEEN_LOCK, waitMs: 2_000, pollMs: 10 })
+    if (lock.outcome !== 'completed-by-other') break
+  }
+  try {
+    const merged = new Map([...firstSeen, ...await readFirstSeen()])
+    await writeAtomic(join(dir, FIRST_SEEN_FILE), JSON.stringify(Object.fromEntries(merged)))
+  } finally {
+    if (lock.outcome === 'acquired') await lock.handle.release().catch(() => {})
+  }
 }
 
 export async function writeCachedResults(
