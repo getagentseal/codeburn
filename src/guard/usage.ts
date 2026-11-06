@@ -160,14 +160,24 @@ function foldToolUses(cache: GuardCache, entry: JournalEntry): void {
 }
 
 export async function readCache(sessionId: string, base?: string): Promise<GuardCache> {
-  let raw: string
-  try {
-    raw = await readFile(sessionCachePath(sessionId, base), 'utf-8')
-  } catch {
-    return emptyCache(sessionId)
-  }
-  try {
-    const parsed = JSON.parse(raw) as Partial<GuardCache>
+  for (let attempt = 0; ; attempt++) {
+    let raw: string
+    try {
+      raw = await readFile(sessionCachePath(sessionId, base), 'utf-8')
+    } catch {
+      return emptyCache(sessionId)
+    }
+    let parsed: Partial<GuardCache>
+    try {
+      parsed = JSON.parse(raw) as Partial<GuardCache>
+    } catch {
+      // A concurrent hook may be mid-write; one short retry before starting over.
+      if (attempt === 0) {
+        await new Promise(resolve => { setTimeout(resolve, 10) })
+        continue
+      }
+      return emptyCache(sessionId)
+    }
     if (
       parsed.version !== GUARD_CACHE_VERSION
       || typeof parsed.byteOffset !== 'number'
@@ -176,8 +186,6 @@ export async function readCache(sessionId: string, base?: string): Promise<Guard
       return emptyCache(sessionId)
     }
     return { ...emptyCache(sessionId), ...parsed, sessionId }
-  } catch {
-    return emptyCache(sessionId)
   }
 }
 
@@ -186,10 +194,9 @@ export async function writeCache(cache: GuardCache, base?: string): Promise<void
   // Parallel tool calls run hooks concurrently; a rename never leaves a torn file.
   const target = sessionCachePath(cache.sessionId, base)
   const tmp = `${target}.${randomBytes(6).toString('hex')}.tmp`
-  const data = JSON.stringify(cache)
   try {
-    await writeFile(tmp, data, 'utf-8')
-    await renameRetrying(tmp, target, data)
+    await writeFile(tmp, JSON.stringify(cache), 'utf-8')
+    await renameRetrying(tmp, target)
   } finally {
     await rm(tmp, { force: true })
   }
@@ -197,8 +204,9 @@ export async function writeCache(cache: GuardCache, base?: string): Promise<void
 }
 
 // Windows refuses a rename over a file another hook has open (EPERM/EBUSY/
-// EACCES), so retry briefly, then write in place rather than fail the hook.
-async function renameRetrying(tmp: string, target: string, data: string): Promise<void> {
+// EACCES), so retry briefly, then keep the previous cache: an in-place write
+// could be read torn and reset the warned flags.
+async function renameRetrying(tmp: string, target: string): Promise<void> {
   for (let attempt = 0; attempt < 5; attempt++) {
     try {
       await rename(tmp, target)
@@ -209,7 +217,6 @@ async function renameRetrying(tmp: string, target: string, data: string): Promis
       await new Promise(resolve => { setTimeout(resolve, 10 * (attempt + 1)) })
     }
   }
-  await writeFile(target, data, 'utf-8').catch(() => {})
 }
 
 const DAY_MS = 86_400_000

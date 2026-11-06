@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, it } from 'vitest'
+import { afterAll, describe, expect, it, vi } from 'vitest'
 import { appendFile, mkdir, mkdtemp, readdir, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -8,6 +8,17 @@ import { runGuardHook, runGuardStatusline } from '../src/guard/hooks.js'
 import { sessionsDir, writeGuardConfig, DEFAULT_GUARD_CONFIG } from '../src/guard/store.js'
 import { buildFlags, matchFlag, writeFlags, type GuardFlags } from '../src/guard/flags.js'
 import type { ProjectSummary } from '../src/types.js'
+
+const renameFails = vi.hoisted(() => ({ on: false }))
+vi.mock('fs/promises', async (importOriginal) => {
+  const fs = await importOriginal<typeof import('fs/promises')>()
+  return {
+    ...fs,
+    rename: (...args: Parameters<typeof fs.rename>) => renameFails.on
+      ? Promise.reject(Object.assign(new Error('EPERM: operation not permitted, rename'), { code: 'EPERM' }))
+      : fs.rename(...args),
+  }
+})
 
 const roots: string[] = []
 async function tmp(): Promise<string> {
@@ -449,11 +460,24 @@ describe('concurrent cache writes', () => {
     const big = Object.fromEntries(Array.from({ length: 5_000 }, (_, i) => [`msg-${i}`, i]))
     for (let i = 0; i < 20; i++) await writeCache({ ...emptyCache(SID), costUSD: i, perMessage: big }, base)
     expect((await stat(path)).ino).not.toBe(before)
-    // Windows may fall back to an in-place write under contention; equal-length
-    // payloads keep that fallback parseable too.
     await Promise.all(Array.from({ length: 20 }, (_, i) =>
-      writeCache({ ...emptyCache(SID), costUSD: 10 + i, perMessage: big }, base)))
+      writeCache({ ...emptyCache(SID), costUSD: i, perMessage: big }, base)))
     expect((await readCache(SID, base)).perMessage['msg-4999']).toBe(4999)
+    expect((await readdir(sessionsDir(base))).filter(n => n.endsWith('.tmp'))).toEqual([])
+  })
+
+  it('keeps the previous cache intact when every rename attempt fails', async () => {
+    const base = await tmp()
+    await writeCache({ ...emptyCache(SID), costUSD: 1, softWarned: true }, base)
+    renameFails.on = true
+    try {
+      await writeCache({ ...emptyCache(SID), costUSD: 2 }, base)
+    } finally {
+      renameFails.on = false
+    }
+    const raw = await readFile(join(sessionsDir(base), `${SID}.json`), 'utf-8')
+    expect(JSON.parse(raw).costUSD).toBe(1)
+    expect((await readCache(SID, base)).softWarned).toBe(true)
     expect((await readdir(sessionsDir(base))).filter(n => n.endsWith('.tmp'))).toEqual([])
   })
 })
