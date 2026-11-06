@@ -126,6 +126,13 @@ describe('droid provider', () => {
     expect(calls[0]!.costUSD).toBeCloseTo(7.5, 6)
   })
 
+  it('strips only a real date from an undated-looking id', () => {
+    const provider = createDroidProvider(factoryDir)
+    expect(provider.modelDisplayName('model-12345678')).toBe('model-12345678')
+    expect(provider.modelDisplayName('model-20260301')).toBe('model')
+    expect(provider.modelDisplayName('model-20260231')).toBe('model-20260231')
+  })
+
   it('strips Droid model wrappers for display', () => {
     const provider = createDroidProvider(factoryDir)
     expect(provider.modelDisplayName('custom:GLM-5.1-[Proxy]-0')).toBe('GLM-5.1')
