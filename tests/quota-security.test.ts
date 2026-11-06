@@ -56,9 +56,8 @@ describe('readKeychainPassword consent', () => {
     await readKeychainPassword('svc-per-account', ['alice'], fail(DENY))
     const bob = vi.fn<KeychainExec>(async () => ({ stdout: '{"bob":true}' }))
     expect(await readKeychainPassword('svc-per-account', ['bob'], bob)).toEqual({ status: 'found', value: '{"bob":true}' })
-    expect(await readKeychainPassword('svc-per-account', [null], bob)).toEqual({ status: 'found', value: '{"bob":true}' })
     expect(await readKeychainPassword('svc-per-account', ['alice', null], bob)).toEqual({ status: 'accessDenied', reason: 'denied' })
-    expect(bob).toHaveBeenCalledTimes(2)
+    expect(bob).toHaveBeenCalledTimes(1)
   })
 
   it('skips a refused account to the next named one on a later read', async () => {
@@ -66,6 +65,13 @@ describe('readKeychainPassword consent', () => {
     const exec = vi.fn<KeychainExec>(async () => ({ stdout: '{"bob":true}' }))
     expect(await readKeychainPassword('svc-skip', ['alice', 'bob'], exec)).toEqual({ status: 'found', value: '{"bob":true}' })
     expect(exec.mock.calls.map(call => call[1])).toEqual([['find-generic-password', '-s', 'svc-skip', '-a', 'bob', '-w']])
+  })
+
+  it('skips a later service-only lookup after an account of the service was refused', async () => {
+    await readKeychainPassword('svc-then-null', ['alice'], fail(DENY))
+    const exec = vi.fn<KeychainExec>(async () => ({ stdout: '{"same-item":true}' }))
+    expect(await readKeychainPassword('svc-then-null', [null], exec)).toEqual({ status: 'accessDenied', reason: 'denied' })
+    expect(exec).not.toHaveBeenCalled()
   })
 
   it('treats a string exit code 128 as a Deny', async () => {

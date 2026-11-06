@@ -89,8 +89,6 @@ export async function readKeychainPassword(
     const item = JSON.stringify([service, account])
     const remembered = refusedThisRun.get(item)
     if (remembered) { refusal = remembered; continue }
-    // A service-only lookup can match the item just refused and ask again.
-    if (account === null && refusal) continue
     const args = ['find-generic-password', '-s', service, ...(account ? ['-a', account] : []), '-w']
     const controller = new AbortController()
     let timedOut = false
@@ -102,6 +100,8 @@ export async function readKeychainPassword(
       const kind = classifyKeychainError(error, timedOut)
       if (kind === 'denied' || kind === 'unanswered') {
         refusedThisRun.set(item, kind)
+        // A later service-only lookup can match the refused item and ask again.
+        refusedThisRun.set(JSON.stringify([service, null]), kind)
         return { status: 'accessDenied', reason: kind }
       }
       if (kind === 'other') denied = true

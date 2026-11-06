@@ -45,6 +45,13 @@ describe('readKeychainPassword', () => {
     }
   })
 
+  it('skips a later service-only lookup after an account of the service was refused', async () => {
+    await readKeychainPassword('svc', ['alice'], vi.fn(denied('User canceled the operation.')))
+    const exec = vi.fn(async () => ({ stdout: '{"same-item":true}' }))
+    expect(await readKeychainPassword('svc', [null], exec)).toEqual({ status: 'accessDenied', reason: 'denied' })
+    expect(exec).not.toHaveBeenCalled()
+  })
+
   it('moves past a kill that was not our timer', async () => {
     const exec = vi.fn(async (_file: string, args: string[]) => {
       if (args.includes('-a')) throw Object.assign(new Error('Command failed'), { killed: true, signal: 'SIGTERM' })
