@@ -439,3 +439,18 @@ describe('session state pruning', () => {
     expect(await readdir(dir)).toContain('later.json')
   })
 })
+
+describe('concurrent cache writes', () => {
+  it('replaces the cache by rename, so parallel writes always leave a parseable file', async () => {
+    const base = await tmp()
+    await writeCache(emptyCache(SID), base)
+    const path = join(sessionsDir(base), `${SID}.json`)
+    const before = (await stat(path)).ino
+    const big = Object.fromEntries(Array.from({ length: 5_000 }, (_, i) => [`msg-${i}`, i]))
+    await Promise.all(Array.from({ length: 20 }, (_, i) =>
+      writeCache({ ...emptyCache(SID), costUSD: i, perMessage: big }, base)))
+    expect((await stat(path)).ino).not.toBe(before)
+    expect((await readCache(SID, base)).perMessage['msg-4999']).toBe(4999)
+    expect((await readdir(sessionsDir(base))).filter(n => n.endsWith('.tmp'))).toEqual([])
+  })
+})

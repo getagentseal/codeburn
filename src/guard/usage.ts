@@ -1,5 +1,5 @@
-import { createHash } from 'crypto'
-import { mkdir, readdir, readFile, rm, stat, writeFile } from 'fs/promises'
+import { createHash, randomBytes } from 'crypto'
+import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'fs/promises'
 import { join } from 'path'
 import { readSessionLines } from '../fs-utils.js'
 import { collectToolResultMeta, parseApiCall, parseAdvisorCalls, parseJsonlLine, type ToolResultMeta } from '../parser.js'
@@ -183,7 +183,15 @@ export async function readCache(sessionId: string, base?: string): Promise<Guard
 
 export async function writeCache(cache: GuardCache, base?: string): Promise<void> {
   await mkdir(sessionsDir(base), { recursive: true })
-  await writeFile(sessionCachePath(cache.sessionId, base), JSON.stringify(cache), 'utf-8')
+  // Parallel tool calls run hooks concurrently; a rename never leaves a torn file.
+  const target = sessionCachePath(cache.sessionId, base)
+  const tmp = `${target}.${randomBytes(6).toString('hex')}.tmp`
+  try {
+    await writeFile(tmp, JSON.stringify(cache), 'utf-8')
+    await rename(tmp, target)
+  } finally {
+    await rm(tmp, { force: true })
+  }
   await pruneSessions(sessionsDir(base)).catch(() => {})
 }
 
