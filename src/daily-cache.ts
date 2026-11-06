@@ -1942,16 +1942,44 @@ export async function ensureCacheHydrated(
         }
       }
       const pendingRederive = c.pendingRederive?.length ? new Set(c.pendingRederive) : undefined
+      const freshProviders = new Map(freshDays.map(d => [d.date, d.providers]))
       // v73 moved Cursor IDE chat transcripts from cursor-agent to cursor. A day
       // the fresh parse explains with a cursor slice and no cursor-agent slice
       // is that move, not pruned history, so the old cursor-agent slice goes.
       if (parseWasComplete && pendingRederive?.has('cursor-agent')) {
-        const freshProviders = new Map(freshDays.map(d => [d.date, d.providers]))
         carriedBaseline = carriedBaseline.flatMap(day => {
           const fresh = freshProviders.get(day.date)
           if (!day.providers['cursor-agent'] || !fresh || fresh['cursor-agent'] || !fresh['cursor'] || !hasSliceData(fresh['cursor'])) return [day]
           const copy = structuredClone(day)
           subtractSliceFromDay(copy, 'cursor-agent', copy.providers['cursor-agent'])
+          return hasPositiveDayContent(copy) ? [copy] : []
+        })
+      }
+      // A pending provider's new accounting can empty a settled day outright (a
+      // Codex day of rate-limit pings, a Goose session moved across midnight,
+      // a Quick Desktop estimate its metrics replaced), and the merge would
+      // carry that slice as pruned history. Sources are pruned oldest first,
+      // so a day on or after the provider's earliest fresh day still has its
+      // sources: its missing slice goes on this one re-derive. Days before it
+      // stay carried. TRADE-OFF: a user who deleted one mid-history source
+      // file loses that day's carried slice once.
+      if (parseWasComplete && pendingRederive) {
+        const earliestFresh = new Map<string, string>()
+        for (const d of freshDays) {
+          for (const [provider, slice] of Object.entries(d.providers)) {
+            const seen = earliestFresh.get(provider)
+            if (pendingRederive.has(provider) && hasSliceData(slice) && (seen === undefined || d.date < seen)) earliestFresh.set(provider, d.date)
+          }
+        }
+        carriedBaseline = carriedBaseline.flatMap(day => {
+          const fresh = freshProviders.get(day.date)
+          const emptied = Object.keys(day.providers).filter(provider => {
+            const earliest = earliestFresh.get(provider)
+            return earliest !== undefined && day.date >= earliest && !fresh?.[provider]
+          })
+          if (emptied.length === 0) return [day]
+          const copy = structuredClone(day)
+          for (const provider of emptied) subtractSliceFromDay(copy, provider, copy.providers[provider])
           return hasPositiveDayContent(copy) ? [copy] : []
         })
       }

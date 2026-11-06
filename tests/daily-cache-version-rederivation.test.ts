@@ -269,4 +269,49 @@ describe('re-derive after the November provider fixes (v79)', () => {
     expect(settledDay.providers.claude?.calls).toBe(5)
     expect(hydrated.pendingRederive).toBeUndefined()
   })
+
+  const daysAgo = (n: number) => toDateString(new Date(Date.now() - n * 24 * 60 * 60 * 1000))
+  const hydrate = (fresh: DailyEntry[]) => ensureCacheHydrated(async () => [], () => fresh, 'cfg', () => true)
+  const providerOn = (days: DailyEntry[], date: string, provider: string) => days.find(d => d.date === date)?.providers[provider]
+
+  it('drops a codex day the pings emptied inside the fresh span and carries pruned days before it', async () => {
+    await seedV78([
+      entry(daysAgo(14), { codex: slice(4), claude: slice(1) }),
+      entry(daysAgo(12), { codex: slice(6) }),
+      entry(daysAgo(10), { codex: slice(2), claude: slice(1) }),
+    ])
+
+    const hydrated = await hydrate([entry(daysAgo(12), { codex: slice(6) }), entry(daysAgo(10), { claude: slice(1) })])
+
+    expect(providerOn(hydrated.days, daysAgo(14), 'codex')?.calls).toBe(4)
+    expect(providerOn(hydrated.days, daysAgo(10), 'codex')).toBeUndefined()
+    expect(hydrated.days.find(d => d.date === daysAgo(10))!.calls).toBe(1)
+  })
+
+  it('moves a goose session across midnight once and drops a superseded quickdesk estimate', async () => {
+    await seedV78([
+      entry(daysAgo(12), { quickdesk: slice(1) }),
+      entry(daysAgo(10), { goose: slice(1), quickdesk: slice(2), claude: slice(1) }),
+    ])
+
+    const hydrated = await hydrate([
+      entry(daysAgo(12), { quickdesk: slice(1) }),
+      entry(daysAgo(11), { goose: slice(1) }),
+      entry(daysAgo(10), { claude: slice(1) }),
+    ])
+
+    const gooseCalls = hydrated.days.reduce((sum, d) => sum + (d.providers.goose?.calls ?? 0), 0)
+    expect(gooseCalls).toBe(1)
+    expect(providerOn(hydrated.days, daysAgo(11), 'goose')?.calls).toBe(1)
+    expect(providerOn(hydrated.days, daysAgo(10), 'quickdesk')).toBeUndefined()
+    expect(providerOn(hydrated.days, daysAgo(10), 'claude')?.calls).toBe(1)
+  })
+
+  it('still carries a vanished slice of a provider that is not pending', async () => {
+    await seedV78([entry(daysAgo(12), { claude: slice(3) }), entry(daysAgo(10), { claude: slice(2), codex: slice(1) })])
+
+    const hydrated = await hydrate([entry(daysAgo(12), { claude: slice(3) }), entry(daysAgo(10), { codex: slice(1) })])
+
+    expect(providerOn(hydrated.days, daysAgo(10), 'claude')?.calls).toBe(2)
+  })
 })
