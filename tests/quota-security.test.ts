@@ -34,6 +34,30 @@ describe('readKeychainPassword consent', () => {
     expect(allowed).not.toHaveBeenCalled()
   })
 
+  it('remembers a refusal per account, so another account of the service is still read', async () => {
+    await readKeychainPassword('svc-per-account', ['alice'], fail(DENY))
+    const bob = vi.fn<KeychainExec>(async () => ({ stdout: '{"bob":true}' }))
+    expect(await readKeychainPassword('svc-per-account', ['bob'], bob)).toEqual({ status: 'found', value: '{"bob":true}' })
+    expect(await readKeychainPassword('svc-per-account', [null], bob)).toEqual({ status: 'found', value: '{"bob":true}' })
+    expect(await readKeychainPassword('svc-per-account', ['alice', null], bob)).toEqual({ status: 'accessDenied', reason: 'denied' })
+    expect(bob).toHaveBeenCalledTimes(2)
+  })
+
+  it('treats a string exit code 128 as a Deny', async () => {
+    const exec = fail({ code: '128' })
+    expect(await readKeychainPassword('svc-string-code', ['alice', null], exec)).toEqual({ status: 'accessDenied', reason: 'denied' })
+    expect(exec).toHaveBeenCalledTimes(1)
+  })
+
+  it('moves past a crash that was not our timeout kill', async () => {
+    const exec = vi.fn<KeychainExec>(async (_file, args) => {
+      if (args.includes('-a')) throw Object.assign(new Error('Command failed'), { killed: false, signal: 'SIGSEGV', code: null })
+      return { stdout: '{"ok":true}' }
+    })
+    expect(await readKeychainPassword('svc-crash', ['alice', null], exec)).toEqual({ status: 'found', value: '{"ok":true}' })
+    expect(exec).toHaveBeenCalledTimes(2)
+  })
+
   it('moves past an error that showed no prompt to the next account', async () => {
     const exec = vi.fn<KeychainExec>(async (_file, args) => {
       if (args.includes('-a')) throw Object.assign(new Error('security: read error'), { code: 1 })

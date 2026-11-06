@@ -42,18 +42,18 @@ function decodeKeychainValue(raw: string): string {
 }
 
 // exit 44 / "could not be found" is a genuine miss. A Deny (exit 128, "User
-// canceled") and a timeout kill while the dialog waited are the user's answer
-// to a prompt. Anything else non-zero (interaction not allowed, I/O) still
+// canceled") and our own timeout kill while the dialog waited are the user's
+// answer to a prompt. Anything else (interaction not allowed, I/O, a crash)
 // means access wasn't granted, but showed no prompt, so the next candidate is
 // tried.
 function classifyKeychainError(error: unknown): 'notFound' | 'denied' | 'unanswered' | 'other' {
   const err = error as { code?: number | string; stderr?: string; message?: string; killed?: boolean; signal?: string | null }
-  const code = typeof err.code === 'number' ? err.code : undefined
+  const code = typeof err.code === 'number' || typeof err.code === 'string' ? Number(err.code) : undefined
   const text = `${err.stderr ?? ''} ${err.message ?? ''}`.toLowerCase()
   if (code === 44 || text.includes('could not be found') || text.includes('specified item could not be found')) {
     return 'notFound'
   }
-  if (err.killed || err.signal) return 'unanswered'
+  if (err.killed === true) return 'unanswered'
   if (code === 128 || text.includes('user canceled')) return 'denied'
   return 'other'
 }

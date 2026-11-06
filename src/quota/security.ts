@@ -45,24 +45,25 @@ function decodeKeychainValue(raw: string): string {
 }
 
 // exit 44 / "could not be found" is a genuine miss. A Deny (exit 128, "User
-// canceled") and a timeout kill while the dialog waited are the user's answer
-// to a prompt. Anything else non-zero (interaction not allowed, I/O) still
+// canceled") and our own timeout kill while the dialog waited are the user's
+// answer to a prompt. Anything else (interaction not allowed, I/O, a crash)
 // means access wasn't granted, but showed no prompt, so the next candidate is
 // tried.
 function classifyKeychainError(error: unknown): 'notFound' | 'denied' | 'unanswered' | 'other' {
   const err = error as { code?: number | string; stderr?: string; message?: string; killed?: boolean; signal?: string | null }
-  const code = typeof err.code === 'number' ? err.code : undefined
+  const code = typeof err.code === 'number' || typeof err.code === 'string' ? Number(err.code) : undefined
   const text = `${err.stderr ?? ''} ${err.message ?? ''}`.toLowerCase()
   if (code === 44 || text.includes('could not be found') || text.includes('specified item could not be found')) {
     return 'notFound'
   }
-  if (err.killed || err.signal) return 'unanswered'
+  if (err.killed === true) return 'unanswered'
   if (code === 128 || text.includes('user canceled')) return 'denied'
   return 'other'
 }
 
-// Services the user refused in this process. A CLI process is one user action,
-// so this holds for exactly that action and is never written anywhere.
+// Items (service plus account) the user refused in this process. A CLI process
+// is one user action, so this holds for exactly that action and is never
+// written anywhere.
 const refusedThisRun = new Map<string, KeychainRefusal>()
 
 /**
@@ -72,7 +73,7 @@ const refusedThisRun = new Map<string, KeychainRefusal>()
  * (`null` = service-only) and stops at a Deny or an unanswered prompt: a later
  * candidate can match the same item, and asking again is a second prompt the
  * user already answered. The refusal is kept for the rest of the process, so a
- * second read of the service returns it without a prompt. Never returns or
+ * second read of that service and account returns it without a prompt. Never returns or
  * logs the secret to any caller but the direct one.
  */
 export async function readKeychainPassword(
@@ -81,10 +82,11 @@ export async function readKeychainPassword(
   exec: KeychainExec = execFileAsync,
 ): Promise<KeychainOutcome> {
   if (process.platform !== 'darwin') return { status: 'notFound' }
-  const refused = refusedThisRun.get(service)
-  if (refused) return { status: 'accessDenied', reason: refused }
   let denied = false
   for (const account of accounts) {
+    const item = JSON.stringify([service, account])
+    const refused = refusedThisRun.get(item)
+    if (refused) return { status: 'accessDenied', reason: refused }
     const args = ['find-generic-password', '-s', service, ...(account ? ['-a', account] : []), '-w']
     try {
       const { stdout } = await exec('/usr/bin/security', args, { timeout: KEYCHAIN_TIMEOUT_MS, maxBuffer: 64 * 1024 })
@@ -92,7 +94,7 @@ export async function readKeychainPassword(
     } catch (error) {
       const kind = classifyKeychainError(error)
       if (kind === 'denied' || kind === 'unanswered') {
-        refusedThisRun.set(service, kind)
+        refusedThisRun.set(item, kind)
         return { status: 'accessDenied', reason: kind }
       }
       if (kind === 'other') denied = true
