@@ -2525,10 +2525,22 @@ function createOtelParser(
   return {
     async *parse(): AsyncGenerator<ParsedProviderCall> {
       // Lazy-load the SQLite module (same pattern as Cursor/OpenCode providers)
-      const { openDatabase } = await import('../sqlite.js')
+      const { openDatabase, isSqliteBusyError } = await import('../sqlite.js')
+
+      // Any read failure defers like the busy case, as in the session-store
+      // parser: a failed parse would replace the cached entry, and that entry
+      // is the only record left of spans the extension has since pruned.
+      const deferral = (err: unknown): unknown => isSqliteBusyError(err)
+        ? err
+        : Object.assign(new Error('copilot agent-traces.db unreadable; deferring'), { code: 'SQLITE_BUSY' })
 
       // One DB open handles ALL conversations — avoids N opens for N conversations.
-      const db = openDatabase(source.path)
+      let db: ReturnType<typeof openDatabase>
+      try {
+        db = openDatabase(source.path)
+      } catch (err) {
+        throw deferral(err)
+      }
 
       try {
         // ---------------------------------------------------------------
@@ -2794,6 +2806,8 @@ function createOtelParser(
             }
           }
         }
+      } catch (err) {
+        throw deferral(err)
       } finally {
         db.close()
       }

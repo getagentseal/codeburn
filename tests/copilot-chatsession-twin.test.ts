@@ -2,7 +2,7 @@
 // the agent host. Decided at serve time over the whole cached Copilot set.
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { mkdir, mkdtemp, rm, writeFile } from 'fs/promises'
+import { mkdir, mkdtemp, rm, utimes, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { createRequire } from 'node:module'
@@ -53,14 +53,16 @@ function writeStore(sessionId: string) {
   db.close()
 }
 
-function writeOtel(conversationId: string) {
+function writeOtel(conversationId: string, spanIds = ['s1']) {
   const { DatabaseSync } = requireForTest('node:sqlite') as { DatabaseSync: new (path: string) => TestDb }
   const db = new DatabaseSync(join(tmp, 'agent-traces.db'))
   db.exec(`CREATE TABLE spans (span_id TEXT PRIMARY KEY, trace_id TEXT, operation_name TEXT, start_time_ms INTEGER, response_model TEXT);
     CREATE TABLE span_attributes (id INTEGER PRIMARY KEY AUTOINCREMENT, span_id TEXT, key TEXT, value TEXT);`)
-  db.prepare(`INSERT INTO spans VALUES ('s1', 't1', 'chat', ?, 'gpt-4o')`).run(Date.parse('2026-08-05T12:00:00Z'))
-  for (const [k, v] of Object.entries({ 'gen_ai.conversation.id': conversationId, 'gen_ai.usage.input_tokens': '1000', 'gen_ai.usage.output_tokens': '50' })) {
-    db.prepare(`INSERT INTO span_attributes (span_id, key, value) VALUES ('s1', ?, ?)`).run(k, v)
+  for (const id of spanIds) {
+    db.prepare(`INSERT INTO spans VALUES (?, ?, 'chat', ?, 'gpt-4o')`).run(id, `t-${id}`, Date.parse('2026-08-05T12:00:00Z'))
+    for (const [k, v] of Object.entries({ 'gen_ai.conversation.id': conversationId, 'gen_ai.usage.input_tokens': '1000', 'gen_ai.usage.output_tokens': '50' })) {
+      db.prepare(`INSERT INTO span_attributes (span_id, key, value) VALUES (?, ?, ?)`).run(id, k, v)
+    }
   }
   db.close()
   process.env['CODEBURN_COPILOT_OTEL_DB'] = join(tmp, 'agent-traces.db')
@@ -155,5 +157,23 @@ describe('copilot chat-session twins of agent-host sessions', () => {
     process.env['CODEBURN_COPILOT_WS_STORAGE_DIR'] = join(tmp, 'ws')
 
     expect(await servedKeys()).toEqual(['copilot-otel:s1', 'copilot:untraced:m1'])
+  })
+})
+
+describe('copilot agent-traces.db durability', () => {
+  it.skipIf(!isSqliteAvailable())('keeps cached spans through an unreadable read and a later prune', async () => {
+    const db = join(tmp, 'agent-traces.db')
+    writeOtel('conv', ['old', 'new'])
+    expect(await servedKeys()).toEqual(['copilot-otel:new', 'copilot-otel:old'])
+
+    await rm(db)
+    await writeFile(db, 'not a database '.repeat(400))
+    await utimes(db, new Date(), new Date(Date.now() + 5000))
+    expect(await servedKeys()).toEqual(['copilot-otel:new', 'copilot-otel:old'])
+
+    await rm(db)
+    writeOtel('conv', ['new'])
+    await utimes(db, new Date(), new Date(Date.now() + 10000))
+    expect(await servedKeys()).toEqual(['copilot-otel:new', 'copilot-otel:old'])
   })
 })
