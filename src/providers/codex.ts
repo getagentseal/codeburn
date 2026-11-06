@@ -1355,6 +1355,12 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
           pendingTools.push(mapped)
           const call: ToolCall = { tool: mapped }
           const rawArgs = (entry.payload as Record<string, unknown>)['arguments']
+          // The model generated this call, so a tool-only turn still has output
+          // for the null-ping estimate.
+          const rawInput = (entry.payload as Record<string, unknown>)['input']
+          pendingOutputChars += rawName.length
+            + (typeof rawArgs === 'string' ? rawArgs.length : rawArgs ? JSON.stringify(rawArgs).length : 0)
+            + (typeof rawInput === 'string' ? rawInput.length : 0)
           const args = typeof rawArgs === 'string'
             ? (() => { try { return JSON.parse(rawArgs) as Record<string, unknown> } catch { return null } })()
             : typeof rawArgs === 'object' && rawArgs ? rawArgs as Record<string, unknown> : null

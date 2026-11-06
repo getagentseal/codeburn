@@ -987,6 +987,21 @@ describe('codex provider - JSONL parsing', () => {
       expect(calls[0]).toMatchObject({ inputTokens: 5_000, outputTokens: 200, userMessage: 'fix the failing test' })
     })
 
+    it('keeps a tool-only turn that ends without measured usage as one estimated call', async () => {
+      const filePath = await writeSession(tmpDir, '2026-04-14', 'rollout-ping-tool-only.jsonl', [
+        sessionMeta({ session_id: 'sess-ping-tool-only', model: 'gpt-5.5' }),
+        userMessage('run the test suite'),
+        JSON.stringify({ type: 'response_item', timestamp: '2026-04-14T10:00:03Z', payload: { type: 'function_call', name: 'exec_command', arguments: JSON.stringify({ cmd: 'npm test' }), call_id: 'call-1' } }),
+        JSON.stringify({ type: 'event_msg', timestamp: '2026-04-14T10:00:04Z', payload: { type: 'token_count', info: null, rate_limits: { primary: { used_percent: 3 } } } }),
+      ])
+      const calls: ParsedProviderCall[] = []
+      for await (const call of createCodexProvider(tmpDir).createSessionParser({ path: filePath, project: 'test', provider: 'codex' }, new Set()).parse()) calls.push(call)
+
+      expect(calls).toHaveLength(1)
+      expect(calls[0]).toMatchObject({ costIsEstimated: true, tools: ['Bash'], userMessage: 'run the test suite' })
+      expect(calls[0]!.outputTokens).toBeGreaterThan(0)
+    })
+
     it('stays an estimated call when the turn ends without measured usage', async () => {
       const calls = await parse(false)
       expect(calls).toHaveLength(1)
