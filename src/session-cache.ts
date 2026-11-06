@@ -451,8 +451,16 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // cached turns and append checkpoints.
   // mcp-cli-command-v1: mcp-cli counts only in command position, so cached
   // fake mcp__ tools from commit messages or echoes re-parse away.
+  // thread-id-key-v1: rollouts without payload.session_id key on payload.id,
+  // the UUID forks name, so cached double-counted fork replays re-parse.
+  // rate-limit-ping-v1: a null-info token_count before any output is not a
+  // call, and measured usage replaces a ping estimate of the same turn, so
+  // cached phantom estimates re-parse away.
+  // cumulative-restart-v1: a cumulative-only total below the previous one is a
+  // counter restart and an omitted field is unchanged, so cached negative or
+  // overcounted token deltas re-parse.
   // Compose every suffix so cached sessions receive all accounting fixes.
-  codex: 'mcp-attribution-v5-est-cost-active-timing-mcp-wait-rich-capture-v1-cross-provider-pr-v1-session-meta-model-v1-session-meta-fields-v1-codex-pricing-v1-codex-tps-v1-codex-mcp-skills-v1-activity-price-v1-fork-replay-burst-v1-codex-token-usage-record-v1-codex-priority-tier-v1-codex-auto-review-date-v1-codex-flex-reserve-v1-codex-fork-mask-v1-native-tool-events-v1-mcp-cli-command-v1',
+  codex: 'mcp-attribution-v5-est-cost-active-timing-mcp-wait-rich-capture-v1-cross-provider-pr-v1-session-meta-model-v1-session-meta-fields-v1-codex-pricing-v1-codex-tps-v1-codex-mcp-skills-v1-activity-price-v1-fork-replay-burst-v1-codex-token-usage-record-v1-codex-priority-tier-v1-codex-auto-review-date-v1-codex-flex-reserve-v1-codex-fork-mask-v1-native-tool-events-v1-mcp-cli-command-v1-thread-id-key-v1-rate-limit-ping-v1-cumulative-restart-v1',
   // reported-cost-v1: cached Crush calls stored costUSD: undefined and must
   // re-parse to keep the recorded session cost.
   crush: 'reported-cost-v1',
@@ -529,6 +537,9 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // Estimated from message text: Grok Bot's local mirror records no tokens.
   // import-guess-est-v1: synced Grok Bot rows with no dollar amount are estimated.
   grokbot: 'estimated-usage-v1-import-guess-est-v1',
+  // sqlite-utc-timestamp-v1: zoneless SQLite timestamps are UTC, so cached
+  // sessions stamped as local time re-parse.
+  goose: 'sqlite-utc-timestamp-v1',
   // v0-v4 generations, embedded attempt streams, retry accounting, and the
   // version-specific inherited-prefix rules all change cached DSH calls.
   dsh: 'session-formats-v0-v4-attempts-v6',
@@ -640,6 +651,9 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // tool-sequence-v1: calls carry each tool call's path and shell command, so
   // optimize sees commits/PRs and retries per file. Costs are unchanged.
   kimicode: 'wire-usage-v1-est-cost-session-lineage-capture-v1-cwd-project-v1-tool-sequence-v1',
+  // subagent-session-id-v1: subagent wire logs take `<session>/<subagent>` as
+  // their session id, so cached subagents merged across sessions re-parse.
+  kimi: 'subagent-session-id-v1',
   // archived-subtree-v1: KiloCode shares the SQLite parser and the same schema.
   // billing-routes-v2: its warm cache must move with both shared route fields.
   'kilo-code': 'worktree-project-grouping-v1-session-model-v1-archived-subtree-v1-billing-routes-v2-v2-legacy-union-v1-unknown-usage-v1-vertex-fallback-cost-v1-reported-cost-v1',

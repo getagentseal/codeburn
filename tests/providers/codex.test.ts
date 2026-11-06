@@ -842,6 +842,190 @@ describe('codex provider - JSONL parsing', () => {
     expect(calls[0]!.outputTokens).toBeGreaterThan(0)
   })
 
+  it('reads a cumulative-only total that drops as a counter restart, never as negative usage', async () => {
+    const filePath = await writeSession(tmpDir, '2026-04-14', 'rollout-cumulative-reset.jsonl', [
+      sessionMeta({ session_id: 'sess-reset', model: 'gpt-5.5' }),
+      tokenCount({ timestamp: '2026-04-14T10:00:10Z', total: { input: 8_000, output: 800 } }),
+      tokenCount({ timestamp: '2026-04-14T10:10:10Z', total: { input: 300, output: 30 } }),
+      tokenCount({ timestamp: '2026-04-14T10:10:20Z', total: { input: 600, output: 60 } }),
+    ])
+
+    const provider = createCodexProvider(tmpDir)
+    const calls: ParsedProviderCall[] = []
+    for await (const call of provider.createSessionParser({ path: filePath, project: 'test', provider: 'codex' }, new Set()).parse()) calls.push(call)
+
+    expect(calls.map(c => [c.inputTokens, c.outputTokens])).toEqual([[8_000, 800], [300, 30], [300, 30]])
+  })
+
+  it('counts a cumulative state repeated after a restart as a new call', async () => {
+    const filePath = await writeSession(tmpDir, '2026-04-14', 'rollout-cumulative-restart-repeat.jsonl', [
+      sessionMeta({ session_id: 'sess-restart-repeat', model: 'gpt-5.5' }),
+      tokenCount({ timestamp: '2026-04-14T10:00:10Z', total: { input: 1_000, output: 100 } }),
+      tokenCount({ timestamp: '2026-04-14T10:00:20Z', total: { input: 50, output: 5 } }),
+      tokenCount({ timestamp: '2026-04-14T10:00:30Z', total: { input: 1_000, output: 100 } }),
+    ])
+
+    const provider = createCodexProvider(tmpDir)
+    const calls: ParsedProviderCall[] = []
+    for await (const call of provider.createSessionParser({ path: filePath, project: 'test', provider: 'codex' }, new Set()).parse()) calls.push(call)
+
+    expect(calls.map(c => [c.inputTokens, c.outputTokens])).toEqual([[1_000, 100], [50, 5], [950, 95]])
+  })
+
+  it('restarts every counter on a restart, including one the restart record omits', async () => {
+    const filePath = await writeSession(tmpDir, '2026-04-14', 'rollout-cumulative-restart-omitted.jsonl', [
+      sessionMeta({ session_id: 'sess-restart-omitted', model: 'gpt-5.5' }),
+      tokenCount({ timestamp: '2026-04-14T10:00:10Z', total: { input: 8_000, output: 800 } }),
+      JSON.stringify({ type: 'event_msg', timestamp: '2026-04-14T10:00:20Z', payload: { type: 'token_count', info: { total_token_usage: { input_tokens: 300, total_tokens: 300 } } } }),
+      tokenCount({ timestamp: '2026-04-14T10:00:30Z', total: { input: 600, output: 30 } }),
+    ])
+
+    const provider = createCodexProvider(tmpDir)
+    const calls: ParsedProviderCall[] = []
+    for await (const call of provider.createSessionParser({ path: filePath, project: 'test', provider: 'codex' }, new Set()).parse()) calls.push(call)
+
+    expect(calls.map(c => [c.inputTokens, c.outputTokens])).toEqual([[8_000, 800], [300, 0], [300, 30]])
+  })
+
+  it('keys an omitted cumulative field like the same value written out', async () => {
+    const total = (timestamp: string, usage: Record<string, number>) => JSON.stringify({
+      type: 'event_msg', timestamp, payload: { type: 'token_count', info: { total_token_usage: usage } },
+    })
+    const keys: string[][] = []
+    for (const [name, second] of [['omitted', { input_tokens: 150, total_tokens: 160 }], ['explicit', { input_tokens: 150, output_tokens: 10, total_tokens: 160 }]] as const) {
+      const filePath = await writeSession(tmpDir, '2026-04-14', `rollout-key-${name}.jsonl`, [
+        sessionMeta({ session_id: 'sess-key-form', model: 'gpt-5.5' }),
+        total('2026-04-14T10:00:10Z', { input_tokens: 100, output_tokens: 10, total_tokens: 110 }),
+        total('2026-04-14T10:00:20Z', second),
+      ])
+      const calls: ParsedProviderCall[] = []
+      for await (const call of createCodexProvider(tmpDir).createSessionParser({ path: filePath, project: 'test', provider: 'codex' }, new Set()).parse()) calls.push(call)
+      keys.push(calls.map(c => c.deduplicationKey))
+    }
+
+    expect(keys[0]).toHaveLength(2)
+    expect(keys[0]).toEqual(keys[1])
+  })
+
+  for (const [input, output] of [[7_900, 790], [4_000, 400]]) {
+    it(`reads a drop of every field to ${input}/${output} as a correction, not a restart`, async () => {
+      const filePath = await writeSession(tmpDir, '2026-04-14', `rollout-cumulative-downward-${input}.jsonl`, [
+        sessionMeta({ session_id: 'sess-downward', model: 'gpt-5.5' }),
+        tokenCount({ timestamp: '2026-04-14T10:00:10Z', total: { input: 8_000, output: 800 } }),
+        tokenCount({ timestamp: '2026-04-14T10:00:20Z', total: { input, output } }),
+      ])
+
+      const provider = createCodexProvider(tmpDir)
+      const calls: ParsedProviderCall[] = []
+      for await (const call of provider.createSessionParser({ path: filePath, project: 'test', provider: 'codex' }, new Set()).parse()) calls.push(call)
+
+      expect(calls.map(c => [c.inputTokens, c.outputTokens])).toEqual([[8_000, 800]])
+    })
+  }
+
+  it('reads one falling field under a rising total as a correction, not a restart', async () => {
+    const filePath = await writeSession(tmpDir, '2026-04-14', 'rollout-cumulative-correction.jsonl', [
+      sessionMeta({ session_id: 'sess-correction', model: 'gpt-5.5' }),
+      tokenCount({ timestamp: '2026-04-14T10:00:10Z', total: { input: 8_000, output: 800 } }),
+      tokenCount({ timestamp: '2026-04-14T10:00:20Z', total: { input: 9_000, output: 790, total: 9_790 } }),
+    ])
+
+    const provider = createCodexProvider(tmpDir)
+    const calls: ParsedProviderCall[] = []
+    for await (const call of provider.createSessionParser({ path: filePath, project: 'test', provider: 'codex' }, new Set()).parse()) calls.push(call)
+
+    expect(calls.map(c => [c.inputTokens, c.outputTokens])).toEqual([[8_000, 800], [1_000, 0]])
+  })
+
+  it('reads a cumulative field the record omits as unchanged', async () => {
+    const total = (timestamp: string, usage: Record<string, number>) => JSON.stringify({
+      type: 'event_msg', timestamp, payload: { type: 'token_count', info: { total_token_usage: usage } },
+    })
+    const filePath = await writeSession(tmpDir, '2026-04-14', 'rollout-cumulative-omitted.jsonl', [
+      sessionMeta({ session_id: 'sess-omitted', model: 'gpt-5.5' }),
+      total('2026-04-14T10:00:10Z', { input_tokens: 100, output_tokens: 10, total_tokens: 110 }),
+      total('2026-04-14T10:00:20Z', { input_tokens: 150, total_tokens: 160 }),
+      total('2026-04-14T10:00:30Z', { input_tokens: 200, output_tokens: 20, total_tokens: 220 }),
+    ])
+
+    const provider = createCodexProvider(tmpDir)
+    const calls: ParsedProviderCall[] = []
+    for await (const call of provider.createSessionParser({ path: filePath, project: 'test', provider: 'codex' }, new Set()).parse()) calls.push(call)
+
+    expect(calls.map(c => [c.inputTokens, c.outputTokens])).toEqual([[100, 10], [50, 0], [50, 10]])
+  })
+
+  describe('a null-info ping after assistant output', () => {
+    const textThenPing = (s: string) => [
+      JSON.stringify({ type: 'response_item', timestamp: `2026-04-14T10:00:0${s}Z`, payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'looking at the test now' }] } }),
+      JSON.stringify({ type: 'event_msg', timestamp: `2026-04-14T10:00:0${s}.5Z`, payload: { type: 'token_count', info: null, rate_limits: { primary: { used_percent: 3 } } } }),
+    ]
+    const lines = (measured: boolean, pings: number) => [
+      sessionMeta({ session_id: 'sess-ping-output', model: 'gpt-5.5' }),
+      userMessage('fix the failing test'),
+      ...textThenPing('3'),
+      ...(pings > 1 ? textThenPing('4') : []),
+      ...(measured ? [tokenCount({ timestamp: '2026-04-14T10:00:05Z', last: { input: 5_000, output: 200 }, total: { input: 5_000, output: 200 } })] : []),
+    ]
+    const parse = async (measured: boolean, pings = 1) => {
+      const filePath = await writeSession(tmpDir, '2026-04-14', `rollout-ping-output-${measured}-${pings}.jsonl`, lines(measured, pings))
+      const calls: ParsedProviderCall[] = []
+      for await (const call of createCodexProvider(tmpDir).createSessionParser({ path: filePath, project: 'test', provider: 'codex' }, new Set()).parse()) calls.push(call)
+      return calls
+    }
+
+    it('yields to measured usage later in the same turn', async () => {
+      const calls = await parse(true)
+      expect(calls).toHaveLength(1)
+      expect(calls[0]).toMatchObject({ inputTokens: 5_000, outputTokens: 200, userMessage: 'fix the failing test' })
+      expect(calls[0]!.costIsEstimated).toBeUndefined()
+    })
+
+    it('yields every ping estimate of the turn to the measured usage', async () => {
+      const calls = await parse(true, 2)
+      expect(calls).toHaveLength(1)
+      expect(calls[0]).toMatchObject({ inputTokens: 5_000, outputTokens: 200, userMessage: 'fix the failing test' })
+    })
+
+    it('keeps a tool-only turn that ends without measured usage as one estimated call', async () => {
+      const filePath = await writeSession(tmpDir, '2026-04-14', 'rollout-ping-tool-only.jsonl', [
+        sessionMeta({ session_id: 'sess-ping-tool-only', model: 'gpt-5.5' }),
+        userMessage('run the test suite'),
+        JSON.stringify({ type: 'response_item', timestamp: '2026-04-14T10:00:03Z', payload: { type: 'function_call', name: 'exec_command', arguments: JSON.stringify({ cmd: 'npm test' }), call_id: 'call-1' } }),
+        JSON.stringify({ type: 'event_msg', timestamp: '2026-04-14T10:00:04Z', payload: { type: 'token_count', info: null, rate_limits: { primary: { used_percent: 3 } } } }),
+      ])
+      const calls: ParsedProviderCall[] = []
+      for await (const call of createCodexProvider(tmpDir).createSessionParser({ path: filePath, project: 'test', provider: 'codex' }, new Set()).parse()) calls.push(call)
+
+      expect(calls).toHaveLength(1)
+      expect(calls[0]).toMatchObject({ costIsEstimated: true, tools: ['Bash'], userMessage: 'run the test suite' })
+      expect(calls[0]!.outputTokens).toBeGreaterThan(0)
+    })
+
+    it('stays an estimated call when the turn ends without measured usage', async () => {
+      const calls = await parse(false)
+      expect(calls).toHaveLength(1)
+      expect(calls[0]).toMatchObject({ costIsEstimated: true, userMessage: 'fix the failing test' })
+    })
+  })
+
+  it('treats a turn-start rate-limit ping with no usage info as no call and keeps the prompt', async () => {
+    const filePath = await writeSession(tmpDir, '2026-04-14', 'rollout-rate-limit-ping.jsonl', [
+      sessionMeta({ session_id: 'sess-ping', model: 'gpt-5.5' }),
+      userMessage('fix the failing test in src/foo.ts please, and run the suite after'),
+      JSON.stringify({ type: 'event_msg', timestamp: '2026-04-14T10:00:02Z', payload: { type: 'token_count', info: null, rate_limits: { primary: { used_percent: 3 } } } }),
+      tokenCount({ timestamp: '2026-04-14T10:00:05Z', last: { input: 5_000, output: 200 }, total: { input: 5_000, output: 200 } }),
+    ])
+
+    const provider = createCodexProvider(tmpDir)
+    const calls: ParsedProviderCall[] = []
+    for await (const call of provider.createSessionParser({ path: filePath, project: 'test', provider: 'codex' }, new Set()).parse()) calls.push(call)
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]).toMatchObject({ inputTokens: 5_000, outputTokens: 200, userMessage: 'fix the failing test in src/foo.ts please, and run the suite after' })
+    expect(calls[0]!.costIsEstimated).toBeUndefined()
+  })
+
   it('attributes MCP calls emitted as event_msg/mcp_tool_call_end', async () => {
     const filePath = await writeSession(tmpDir, '2026-04-14', 'rollout-mcp.jsonl', [
       sessionMeta({ session_id: 'sess-mcp', model: 'gpt-5.5' }),
@@ -1438,6 +1622,58 @@ describe('codex provider - forked session dedupe', () => {
 
     const { tokens } = await aggregateTokens(tmpDir)
     expect(tokens).toBe(200)
+  })
+
+  // Older Codex builds name the thread only as payload.id; a parent can also
+  // carry a session_id that differs from the id forks reference. Oversized
+  // metas take the compact decoder, so pad one past the large-line threshold too.
+  for (const [padded, parentSessionId] of [[false, undefined], [true, undefined], [false, 'rollout-A']] as const) {
+    it(`drops a fork replay past the burst when the fork names the parent's payload.id${padded ? ' (oversized meta)' : ''}${parentSessionId ? ' (parent also carries a different session_id)' : ''}`, async () => {
+      const parentId = '0199aaaa-0000-7000-8000-000000000001'
+      const meta = (id: string, timestamp: string, extra: Record<string, unknown> = {}) => JSON.stringify({
+        type: 'session_meta',
+        timestamp,
+        payload: { id, cwd: '/x', model: 'gpt-5.5', ...extra, ...(padded ? { base_instructions: { text: 'x'.repeat(40_000) } } : {}) },
+      })
+      await writeSession(tmpDir, '2026-10-01', `rollout-2026-10-01T09-00-00-${parentId}.jsonl`, [
+        meta(parentId, '2026-10-01T09:00:00Z', parentSessionId ? { session_id: parentSessionId } : {}),
+        tokenUsageRecord({ timestamp: '2026-10-01T09:00:10Z', responseId: 'resp_1', usage: { input: 10_000, output: 1_000 } }),
+      ])
+      const forkId = '0199bbbb-0000-7000-8000-000000000002'
+      await writeSession(tmpDir, '2026-10-01', `rollout-2026-10-01T10-00-00-${forkId}.jsonl`, [
+        meta(forkId, '2026-10-01T10:00:00.000Z', { forked_from_id: parentId }),
+        tokenUsageRecord({ timestamp: '2026-10-01T10:00:01.600Z', responseId: 'resp_1', usage: { input: 10_000, output: 1_000 } }),
+      ])
+
+      expect(await aggregateTokens(tmpDir)).toEqual({ tokens: 11_000, calls: 1 })
+    })
+  }
+})
+
+describe('codex provider - ping estimate against a replayed measured record', () => {
+  it('drops the ping estimate when the turn\'s measured record is a fork replay already counted', async () => {
+    const parentId = '0199aaaa-0000-7000-8000-000000000011'
+    const forkId = '0199bbbb-0000-7000-8000-000000000012'
+    const meta = (id: string, timestamp: string, extra: Record<string, unknown> = {}) =>
+      JSON.stringify({ type: 'session_meta', timestamp, payload: { id, cwd: '/x', model: 'gpt-5.5', ...extra } })
+    await writeSession(tmpDir, '2026-10-01', `rollout-2026-10-01T09-00-00-${parentId}.jsonl`, [
+      meta(parentId, '2026-10-01T09:00:00Z'),
+      tokenUsageRecord({ timestamp: '2026-10-01T09:00:10Z', responseId: 'resp_1', usage: { input: 10_000, output: 1_000 } }),
+    ])
+    await writeSession(tmpDir, '2026-10-01', `rollout-2026-10-01T10-00-00-${forkId}.jsonl`, [
+      meta(forkId, '2026-10-01T10:00:00.000Z', { forked_from_id: parentId }),
+      JSON.stringify({ type: 'response_item', timestamp: '2026-10-01T10:00:01.600Z', payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'replayed answer text' }] } }),
+      JSON.stringify({ type: 'event_msg', timestamp: '2026-10-01T10:00:01.700Z', payload: { type: 'token_count', info: null, rate_limits: { primary: { used_percent: 3 } } } }),
+      tokenUsageRecord({ timestamp: '2026-10-01T10:00:01.800Z', responseId: 'resp_1', usage: { input: 10_000, output: 1_000 } }),
+    ])
+
+    const provider = createCodexProvider(tmpDir)
+    const sessions = (await provider.discoverSessions()).sort((a, b) => (a.path < b.path ? -1 : 1))
+    const seen = new Set<string>()
+    const calls: ParsedProviderCall[] = []
+    for (const s of sessions) for await (const c of provider.createSessionParser(s, seen).parse()) calls.push(c)
+
+    expect(calls.map(c => [c.inputTokens, c.outputTokens, c.costIsEstimated ?? false])).toEqual([[10_000, 1_000, false]])
   })
 })
 
