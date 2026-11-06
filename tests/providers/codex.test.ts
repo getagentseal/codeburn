@@ -887,6 +887,20 @@ describe('codex provider - JSONL parsing', () => {
     expect(calls.map(c => [c.inputTokens, c.outputTokens])).toEqual([[8_000, 800], [3_000, 0], [3_000, 300]])
   })
 
+  it('reads a small drop in every field as a correction, not a restart', async () => {
+    const filePath = await writeSession(tmpDir, '2026-04-14', 'rollout-cumulative-downward.jsonl', [
+      sessionMeta({ session_id: 'sess-downward', model: 'gpt-5.5' }),
+      tokenCount({ timestamp: '2026-04-14T10:00:10Z', total: { input: 8_000, output: 800 } }),
+      tokenCount({ timestamp: '2026-04-14T10:00:20Z', total: { input: 7_900, output: 790 } }),
+    ])
+
+    const provider = createCodexProvider(tmpDir)
+    const calls: ParsedProviderCall[] = []
+    for await (const call of provider.createSessionParser({ path: filePath, project: 'test', provider: 'codex' }, new Set()).parse()) calls.push(call)
+
+    expect(calls.map(c => [c.inputTokens, c.outputTokens])).toEqual([[8_000, 800]])
+  })
+
   it('reads one falling field under a rising total as a correction, not a restart', async () => {
     const filePath = await writeSession(tmpDir, '2026-04-14', 'rollout-cumulative-correction.jsonl', [
       sessionMeta({ session_id: 'sess-correction', model: 'gpt-5.5' }),
