@@ -2124,7 +2124,7 @@ function extractJetBrainsConversations(raw: string): JBConversation[] {
   const re = /\$([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})[\s\S]{0,8}name/gi
   let m: RegExpExecArray | null
   while ((m = re.exec(raw))) {
-    const id = m[1]
+    const id = m[1]!.toLowerCase()
     const window = raw.slice(m.index, m.index + 400)
     // The title is the Java-UTF string between the `value` marker and `source`.
     const tm = window.match(/value.{1,6}?([\x20-\x7e]{3,80}?)t\x00\x06source/)
@@ -2288,7 +2288,7 @@ function jetBrainsConversationAt(raw: string, convById: Map<string, JBConversati
   const re = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi
   let m: RegExpExecArray | null
   while ((m = re.exec(raw))) {
-    const conv = convById.get(m[0])
+    const conv = convById.get(m[0].toLowerCase())
     if (conv) hits.push({ pos: m.index, conv })
     re.lastIndex = m.index + 1
   }

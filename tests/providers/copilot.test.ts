@@ -3738,7 +3738,23 @@ describe('copilot provider - JetBrains conversation attribution at scale', () =>
       sessionId: 'store', storeId: 'store', dbPath, mtime: '2026-07-03T12:00:00.000Z',
     } as unknown as { path: string; project: string; provider: string; sourceType?: string })
 
-    expect(calls.map(c => [c.sessionId, c.userMessage])).toEqual([[guid, 'Upper chat']])
+    expect(calls.map(c => [c.sessionId, c.userMessage])).toEqual([[guid.toLowerCase(), 'Upper chat']])
+  })
+
+  it('matches a conversation GUID referenced in another case than it was declared', async () => {
+    const a = 'AAAAAAAA-BBBB-CCCC-DDDD-00000000000A'
+    const b = 'AAAAAAAA-BBBB-CCCC-DDDD-00000000000B'
+    const declare = (guid: string, title: string) => `$${guid}\x00\x00name\x00value\x00\x05${title}t\x00\x06source`
+    const md = JSON.stringify({ type: 'Markdown', data: JSON.stringify({ text: 'a reply for A' }) })
+    const dbPath = join(tmpDir, 'copilot-agent-sessions-nitrite.db')
+    await writeFile(dbPath, Buffer.from(`${declare(a, 'Chat A')}${declare(b, 'Chat B')}ref ${a.toLowerCase()} {"__first__":{"type":"Subgraph","value":${JSON.stringify(md)}}}`, 'latin1'))
+
+    const calls = await collectCalls({
+      path: dbPath, project: 'copilot-jetbrains', provider: 'copilot', sourceType: 'jetbrains',
+      sessionId: 'store', storeId: 'store', dbPath, mtime: '2026-07-03T12:00:00.000Z',
+    } as unknown as { path: string; project: string; provider: string; sourceType?: string })
+
+    expect(calls.map(c => [c.sessionId, c.userMessage])).toEqual([[a.toLowerCase(), 'Chat A']])
   })
 
   it('attributes 1,600 turns across 80 conversations in linear time', async () => {
