@@ -78,6 +78,15 @@ describe('ZCode credential discovery', () => {
     await expect(zcodeAccessToken(deps({ '000003.log': journal }))).resolves.toBe(login)
   })
 
+  it('keeps the most recent write when the rotation changed the string encoding', async () => {
+    const renewed = 'eyJhbGciOiJIUzU1MiJ9.synthetic-zcode-renewal-with-no-meaning.sig'
+    const journal = Buffer.concat([
+      journalEntry(STORAGE_KEY, TOKEN),
+      Buffer.from(STORAGE_KEY, 'utf16le'), varint(renewed.length * 2 + 1), Buffer.from([0x00]), Buffer.from(renewed, 'utf16le'),
+    ])
+    await expect(zcodeAccessToken(deps({ '000003.log': journal }))).resolves.toBe(renewed)
+  })
+
   it('keeps the most recent write when the key was rotated in place', async () => {
     const journal = Buffer.concat([
       journalEntry(STORAGE_KEY, TOKEN),

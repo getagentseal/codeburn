@@ -111,8 +111,9 @@ function varint(data: Buffer, at: number): [number, number] | null {
  *  the string itself; the length, not the token alphabet, ends the token,
  *  because the next record's checksum can be token characters too. */
 function tokenAfterKey(data: Buffer): string | null {
+  let token: string | null = null
+  let tokenAt = -1
   for (const key of KEY_ENCODINGS) {
-    let token: string | null = null
     for (let at = data.indexOf(key); at !== -1; at = data.indexOf(key, at + 1)) {
       const frame = varint(data, at + key.length)
       if (!frame) continue
@@ -120,11 +121,13 @@ function tokenAfterKey(data: Buffer): string | null {
       const flag = data[start]
       if (length < 2 || start + length > data.length || (flag !== 0x00 && flag !== 0x01)) continue
       const value = data.toString(flag === 0x01 ? 'latin1' : 'utf16le', start + 1, start + length)
-      if (TOKEN_PATTERN.test(value)) token = value
+      if (at > tokenAt && TOKEN_PATTERN.test(value)) {
+        token = value
+        tokenAt = at
+      }
     }
-    if (token !== null) return token
   }
-  return null
+  return token
 }
 
 /** `null` when no journal holds the login — the same state as never signed in. */
