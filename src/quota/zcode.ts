@@ -77,7 +77,7 @@ function empty(connection: QuotaProvider['connection'], footerLines: string[] = 
  *  (Latin-1) characters, 0x00 marks UTF-16LE — recorded journals show the
  *  z.ai login stored the first way, other entries the other way, so the key is
  *  looked for in both encodings. */
-const KEY_ENCODINGS = [Buffer.from(STORAGE_KEY, 'latin1'), Buffer.from(STORAGE_KEY, 'utf16le')]
+const KEY_ENCODINGS: [Buffer, number][] = [[Buffer.from(STORAGE_KEY, 'latin1'), 0x01], [Buffer.from(STORAGE_KEY, 'utf16le'), 0x00]]
 const TOKEN_PATTERN = /^[A-Za-z0-9_\-.=+/]{24,}$/
 const UNREADABLE = 'the newest ZCode login entry could not be read'
 
@@ -92,27 +92,49 @@ function varint(data: Buffer, at: number): [number, number] | null {
   return null
 }
 
-/** Only the last write of the key counts, matching how the journal replays; an
- *  empty one (`''`) means the app cleared the login. The key is followed by the
- *  value's leveldb varint length, then the string flag and the string itself;
- *  the length, not the token alphabet, ends the token, because the next
+/** The tag (1 put, 0 delete) of the leveldb record whose key ends in the name
+ *  at `at`, or null when those bytes are not a record key: the name can also
+ *  sit inside some other entry's value. A record is the tag, a varint key
+ *  length, then the key `_<origin>\0<flag><name>`. */
+function recordTag(data: Buffer, at: number, name: Buffer, flag: number): number | null {
+  if (data[at - 1] !== flag || data[at - 2] !== 0x00) return null
+  const end = at + name.length
+  for (let keyStart = at - 3; keyStart >= Math.max(2, at - 512); keyStart--) {
+    if (data[keyStart] !== 0x5f) continue
+    for (let n = 1; n <= 3 && keyStart - n >= 1; n++) {
+      const length = varint(data, keyStart - n)
+      const tag = data[keyStart - n - 1]
+      if (length && length[1] === keyStart && length[0] === end - keyStart && (tag === 0x00 || tag === 0x01)) return tag
+    }
+  }
+  return null
+}
+
+/** Only the last write of the key counts, matching how the journal replays; a
+ *  delete or an empty value (`''`) means the app cleared the login. After the
+ *  key comes the value's varint length, then the string flag and the string
+ *  itself; the length, not the token alphabet, ends the token, because the next
  *  record's checksum can be token characters too. A last write that does not
  *  parse throws rather than falling back to an older, replaced token. */
 function tokenAfterKey(data: Buffer): string | null {
-  let at = -1
-  let key = KEY_ENCODINGS[0]!
-  for (const candidate of KEY_ENCODINGS) {
-    const found = data.lastIndexOf(candidate)
-    if (found > at) [at, key] = [found, candidate]
+  const hits: { at: number; name: Buffer; flag: number }[] = []
+  for (const [name, flag] of KEY_ENCODINGS) {
+    for (let at = data.indexOf(name); at !== -1; at = data.indexOf(name, at + 1)) hits.push({ at, name, flag })
   }
-  if (at === -1) return null
-  const frame = varint(data, at + key.length)
-  const [length, start] = frame ?? [0, 0]
-  const flag = data[start]
-  if (length < 1 || start + length > data.length || (flag !== 0x00 && flag !== 0x01)) throw new Error(UNREADABLE)
-  const value = data.toString(flag === 0x01 ? 'latin1' : 'utf16le', start + 1, start + length)
-  if (value !== '' && !TOKEN_PATTERN.test(value)) throw new Error(UNREADABLE)
-  return value
+  hits.sort((a, b) => b.at - a.at)
+  for (const { at, name, flag: keyFlag } of hits) {
+    const tag = recordTag(data, at, name, keyFlag)
+    if (tag === null) continue
+    if (tag === 0x00) return ''
+    const frame = varint(data, at + name.length)
+    const [length, start] = frame ?? [0, 0]
+    const flag = data[start]
+    if (length < 1 || start + length > data.length || (flag !== 0x00 && flag !== 0x01)) throw new Error(UNREADABLE)
+    const value = data.toString(flag === 0x01 ? 'latin1' : 'utf16le', start + 1, start + length)
+    if (value !== '' && !TOKEN_PATTERN.test(value)) throw new Error(UNREADABLE)
+    return value
+  }
+  return null
 }
 
 /** `null` when no journal holds the login — the same state as never signed in;
