@@ -1300,6 +1300,26 @@ describe('copilot provider - chatSessions parsing', () => {
     expect(calls[0]!.userMessage).toBe('Run the checks')
   })
 
+  it('prices an Auto-mode journal request without resolvedModel from its tool-call ids', async () => {
+    const filePath = join(tmpDir, 'auto.jsonl')
+    await createChatSessionFile(filePath, [
+      { kind: 0, v: { version: 3, creationDate: 1780157113020, sessionId: 'chat-auto', requests: [
+        { requestId: 'r1', modelId: 'copilot/auto', promptTokens: 80000, completionTokens: 2000,
+          result: { metadata: { toolCallRounds: [{ response: '', toolCalls: [{ id: 'call_abc', name: 'readFile', arguments: '{}' }] }] } } },
+        { requestId: 'r2', modelId: 'copilot/auto', promptTokens: 1000, completionTokens: 10, copilotCredits: 1 },
+      ] } },
+    ])
+
+    const calls = await collectCalls({ path: filePath, project: 'myproject', provider: 'copilot', sourceType: 'chatsession' })
+
+    expect(calls.map(c => [c.model, c.costIsEstimated])).toEqual([
+      ['copilot-openai-auto', true],
+      ['copilot-openai-auto', undefined],
+    ])
+    expect(calls[0]!.costUSD).toBe(calculateCost('copilot-openai-auto', 80000, 2000, 0, 0, 0))
+    expect(calls[0]!.costUSD).toBeGreaterThan(0)
+  })
+
   it('returns no calls for an empty reconstructed requests array', async () => {
     const filePath = join(tmpDir, 'empty.jsonl')
     await createChatSessionFile(filePath, [

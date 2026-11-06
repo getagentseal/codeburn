@@ -1249,12 +1249,20 @@ function readString(raw: unknown): string {
   return typeof raw === 'string' ? raw : ''
 }
 
-function modelFromChatSessionRequest(req: ChatSessionRequest, metadata: Record<string, unknown>): string {
+// An Auto request without resolvedModel names no priceable model; infer one the
+// way the legacy JSON path does and report the cost as estimated.
+function modelFromChatSessionRequest(
+  req: ChatSessionRequest,
+  metadata: Record<string, unknown>,
+  session: Record<string, unknown>,
+): { model: string; inferred: boolean } {
   const resolved = readString(metadata['resolvedModel'])
-  if (resolved) return resolved
+  if (resolved) return { model: resolved, inferred: false }
 
   const modelId = readString(req['modelId']).replace(/^copilot\//, '')
-  return modelId || 'unknown'
+  if (modelId !== 'auto' && modelId !== 'copilot-auto') return { model: modelId || 'unknown', inferred: false }
+  const inferred = extractModelFromRequest(req as unknown as LegacyChatRequest, session as LegacyChatSession)
+  return { model: inferred === 'unknown' ? modelId : inferred, inferred: true }
 }
 
 function parseStructuredArguments(raw: unknown): Record<string, unknown> | null {
@@ -1852,7 +1860,7 @@ function createChatSessionParser(
         if (seenKeys.has(dedupKey)) continue
         seenKeys.add(dedupKey)
 
-        const model = modelFromChatSessionRequest(rawReq, metadata)
+        const { model, inferred } = modelFromChatSessionRequest(rawReq, metadata, root)
         const costUSD = nanoAiu !== undefined
           ? creditsToUsd(nanoAiuToCredits(nanoAiu))
           : calculateCost(model, inputTokens, outputTokens, 0, cacheReadTokens, 0)
@@ -1874,6 +1882,7 @@ function createChatSessionParser(
           reasoningTokens: 0,
           webSearchRequests: 0,
           costUSD,
+          ...(inferred && nanoAiu === undefined ? { costIsEstimated: true } : {}),
           tools: extracted.tools,
           bashCommands: extracted.bashCommands,
           skills: extracted.skills.length > 0 ? extracted.skills : undefined,
