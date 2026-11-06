@@ -710,7 +710,10 @@ function parseLegacyChatSession(
       const toolResultTokens = Math.ceil(toolResultText.length / CHARS_PER_TOKEN_LEGACY)
 
       totalInputTokens = inputTokens + toolResultTokens
-      outputTokens = Math.ceil(outputText.length / CHARS_PER_TOKEN_LEGACY)
+      // Copilot output counts include reasoning (models.ts
+      // REASONING_INCLUDED_IN_OUTPUT), so the estimate does too; reasoningTokens
+      // stays as metadata.
+      outputTokens = Math.ceil(outputText.length / CHARS_PER_TOKEN_LEGACY) + reasoningTokens
 
       if (outputTokens === 0 && totalInputTokens === 0 && cacheCreationInputTokens === 0 && reasoningTokens === 0) {
         continue
@@ -725,7 +728,7 @@ function parseLegacyChatSession(
     const costUSD = nanoAiu !== undefined ? creditsToUsd(nanoAiuToCredits(nanoAiu)) : calculateCost(
       model,
       totalInputTokens,
-      outputTokens + reasoningTokens,
+      outputTokens,
       cacheCreationInputTokens,
       cacheReadInputTokens,
       0,

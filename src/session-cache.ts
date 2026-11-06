@@ -513,7 +513,10 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // otel-cache-inclusive-input-v1: cached OTel calls hold inputTokens with
   // cache reads and writes still inside it, so they must re-parse. Calls whose
   // spans agent-traces.db already pruned keep the old input.
-  copilot: 'cli-shutdown-cost-v1-skills-source-provenance-v1-session-store-v3-chatsession-otel-skills-v1-otel-trace-metadata-once-v1-transcript-unknown-usage-v1-otel-workspace-project-v1-journal-request-input-v1-tokenless-turns-v1-store-row-output-v1-jetbrains-opus-4-7-v1-chatsession-agent-totals-v1-otel-cache-inclusive-input-v1',
+  // legacy-estimated-reasoning-in-output-v1: estimated thinking tokens in
+  // legacy chat JSON now ride inside outputTokens, so the served price keeps
+  // them; cached calls must re-parse once.
+  copilot: 'cli-shutdown-cost-v1-skills-source-provenance-v1-session-store-v3-chatsession-otel-skills-v1-otel-trace-metadata-once-v1-transcript-unknown-usage-v1-otel-workspace-project-v1-journal-request-input-v1-tokenless-turns-v1-store-row-output-v1-jetbrains-opus-4-7-v1-chatsession-agent-totals-v1-otel-cache-inclusive-input-v1-legacy-estimated-reasoning-in-output-v1',
   // authoritative-usage-v4: persist one Grok session call from top-level
   // authoritative totals, use modelUsage only for priced attribution, clamp
   // reasoning per record, and label mixed sessions estimated.

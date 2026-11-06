@@ -4017,6 +4017,10 @@ describe('copilot provider - legacy JSON format', () => {
     // Cost must be ~0.03, definitely NOT >= $1 (which would happen if billed as web search)
     expect(calls[0]!.costUSD).toBeLessThan(0.1)
     expect(calls[0]!.costUSD).toBeGreaterThan(0.02)
+    // Copilot output includes reasoning, and serving re-prices from outputTokens
+    // alone, so the estimate must already hold the reasoning.
+    expect(calls[0]!.outputTokens).toBeGreaterThan(2001)
+    expect(calls[0]!.costUSD).toBe(calculateCost('claude-sonnet-4.6', calls[0]!.inputTokens, calls[0]!.outputTokens, 0, 0, 0))
   })
 
   it('extracts split tokens in .jsonl (metadata.promptTokens + root completionTokens) and skips 0-token rows', async () => {
