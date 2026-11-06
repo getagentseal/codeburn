@@ -13,7 +13,7 @@ import { getCodeburnCacheDir } from './cache-dir.js'
 //     rules, storeScan/loadScan and their caps (optimize.ts), isReadShapedBashCommand
 //     (bash-utils.ts), parseJsonlLine/parseLargeJsonl (parser.ts)
 // tests/scan-facts-version.test.ts pins those sources to this number.
-export const FACTS_VERSION = 1
+export const FACTS_VERSION = 2
 
 // The digest of a file's first bytes as of the stored offset: the proof that the
 // bytes already read are still the same bytes before only the new ones are read.

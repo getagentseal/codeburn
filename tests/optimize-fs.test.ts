@@ -398,6 +398,10 @@ describe('detectGhostCommands', () => {
     const messages = ['<command-name>review</command-name>']
     expect(await detectGhostCommands(messages.flatMap(commandNames))).toBeNull()
   })
+
+  it('names a <command-name> tag without its leading slash', () => {
+    expect(commandNames('<command-name>/review</command-name>')).toEqual(['review'])
+  })
 })
 
 // ============================================================================

@@ -3557,7 +3557,7 @@ export async function detectGhostSkills(calls: ToolCall[]): Promise<WasteFinding
 export function commandNames(text: string): string[] {
   const names: string[] = []
   for (const m of text.matchAll(COMMAND_PATTERN)) {
-    const name = (m[1] || m[2] || '').trim()
+    const name = (m[1] || m[2] || '').trim().replace(/^\//, '')
     if (name) names.push(name)
   }
   return names
