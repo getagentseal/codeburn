@@ -19,6 +19,7 @@ cp "${SCRIPT_DIR}/metadata.json" "${INSTALL_DIR}/"
 cp "${SCRIPT_DIR}/extension.js" "${INSTALL_DIR}/"
 cp "${SCRIPT_DIR}/indicator.js" "${INSTALL_DIR}/"
 cp "${SCRIPT_DIR}/dataClient.js" "${INSTALL_DIR}/"
+cp "${SCRIPT_DIR}/refreshCadence.js" "${INSTALL_DIR}/"
 cp "${SCRIPT_DIR}/prefs.js" "${INSTALL_DIR}/"
 cp "${SCRIPT_DIR}/stylesheet.css" "${INSTALL_DIR}/"
 

@@ -7,6 +7,7 @@ import Soup from 'gi://Soup?version=3.0';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import { DataClient } from './dataClient.js';
+import { refreshIntervalSeconds } from './refreshCadence.js';
 
 const CACHE_TTL_MS = 300_000;
 const TOP_ACTIVITIES = 10;
@@ -285,6 +286,10 @@ class CodeBurnIndicator extends PanelMenu.Button {
     this._inFlightKeys = new Set();
     this._refreshGen = 0;
     this._refreshSourceId = 0;
+    this._menuOpenId = 0;
+    this._onBattery = false;
+    this._lowPowerMode = false;
+    this._powerWatches = [];
     this._chartSummaryText = '';
     this._destroyed = false;
 
@@ -295,8 +300,10 @@ class CodeBurnIndicator extends PanelMenu.Button {
 
     this._buildPanelButton();
     this._buildPopup();
+    this._connectMenu();
     this._connectSettings();
-    this._startRefreshLoop();
+    this._watchPower();
+    this._armRefreshTimer();
     this._refresh();
   }
 
@@ -659,7 +666,7 @@ class CodeBurnIndicator extends PanelMenu.Button {
       const id = this._settings.connect(`changed::${key}`, cb);
       this._settingsChangedIds.push(id);
     };
-    watch('refresh-interval', () => this._restartRefreshLoop());
+    watch('refresh-interval', () => this._armRefreshTimer());
     watch('compact-mode', () => { this._panelLabel.visible = !this._settings.get_boolean('compact-mode'); });
     watch('codeburn-path', () => {
       this._dataClient.setCodeburnPath(this._settings.get_string('codeburn-path'));
@@ -718,21 +725,130 @@ class CodeBurnIndicator extends PanelMenu.Button {
   }
 
   // -- Refresh loop --
+  //
+  // Opening the menu fetches immediately. Between opens a timer ticks every
+  // 120s on AC, 150s on battery and 300s in power saver (or the
+  // refresh-interval setting, if slower). A tick goes through the 5-minute
+  // payload cache, so it only spawns the CLI once the cached payload is stale.
 
-  _startRefreshLoop() {
-    const interval = this._settings.get_uint('refresh-interval') || 30;
-    this._refreshSourceId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, interval, () => {
-      this._refresh();
-      return GLib.SOURCE_CONTINUE;
+  _connectMenu() {
+    this._menuOpenId = this.menu.connect('open-state-changed', (_menu, open) => {
+      if (open) this._refresh(true);
     });
   }
 
-  _restartRefreshLoop() {
+  _currentRefreshIntervalSeconds() {
+    return refreshIntervalSeconds({
+      onBattery: this._onBattery,
+      lowPowerMode: this._lowPowerMode,
+      configuredSeconds: this._settings.get_uint('refresh-interval'),
+    });
+  }
+
+  _armRefreshTimer() {
+    this._clearRefreshTimer();
+    if (this._destroyed) return;
+    const seconds = this._currentRefreshIntervalSeconds();
+    this._refreshSourceId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, seconds, () => {
+      this._refreshSourceId = 0;
+      if (!this._destroyed) {
+        this._refresh();
+        this._armRefreshTimer();
+      }
+      return GLib.SOURCE_REMOVE;
+    });
+  }
+
+  _clearRefreshTimer() {
     if (this._refreshSourceId) {
       GLib.Source.remove(this._refreshSourceId);
       this._refreshSourceId = 0;
     }
-    this._startRefreshLoop();
+  }
+
+  // UPower is optional. A missing service leaves both flags false, which is
+  // the AC idle interval: the extension used to have no battery penalty, and
+  // a machine that cannot answer should not grow one.
+  _watchPower() {
+    this._watchBusProxy(
+      'org.freedesktop.UPower',
+      '/org/freedesktop/UPower',
+      'org.freedesktop.UPower',
+    );
+    this._watchBusProxy(
+      'org.freedesktop.UPower.PowerProfiles',
+      '/org/freedesktop/UPower/PowerProfiles',
+      'org.freedesktop.UPower.PowerProfiles',
+    );
+  }
+
+  _watchBusProxy(name, path, iface) {
+    try {
+      Gio.DBusProxy.new_for_bus(
+        Gio.BusType.SYSTEM,
+        Gio.DBusProxyFlags.NONE,
+        null,
+        name,
+        path,
+        iface,
+        null,
+        (_source, result) => {
+          if (this._destroyed) return;
+          try {
+            const proxy = Gio.DBusProxy.new_for_bus_finish(result);
+            const signalId = proxy.connect('g-properties-changed', () => this._applyPowerState(true));
+            this._powerWatches.push({ proxy, signalId });
+            this._applyPowerState(true);
+          } catch (e) {
+            log(`CodeBurn: ${name} unavailable: ${e.message}`);
+          }
+        },
+      );
+    } catch (e) {
+      log(`CodeBurn: ${name} watch failed: ${e.message}`);
+    }
+  }
+
+  _readPowerFlags() {
+    let onBattery = false;
+    let lowPowerMode = false;
+    for (const { proxy } of this._powerWatches) {
+      let iface = '';
+      try {
+        iface = proxy.get_interface_name?.() || '';
+      } catch (e) {
+        continue;
+      }
+      if (iface === 'org.freedesktop.UPower') {
+        try {
+          const battery = proxy.get_cached_property('OnBattery');
+          if (battery) onBattery = battery.unpack() === true;
+        } catch (e) { /* a missing answer stays on the AC interval */ }
+      } else if (iface === 'org.freedesktop.UPower.PowerProfiles') {
+        try {
+          const profile = proxy.get_cached_property('ActiveProfile');
+          if (profile) lowPowerMode = profile.unpack() === 'power-saver';
+        } catch (e) { /* a missing answer stays out of power saver */ }
+      }
+    }
+    return { onBattery, lowPowerMode };
+  }
+
+  _applyPowerState(rearm) {
+    const next = this._readPowerFlags();
+    const changed = next.onBattery !== this._onBattery || next.lowPowerMode !== this._lowPowerMode;
+    this._onBattery = next.onBattery;
+    this._lowPowerMode = next.lowPowerMode;
+    if (rearm && changed && !this._destroyed) this._armRefreshTimer();
+  }
+
+  _stopPowerWatch() {
+    for (const { proxy, signalId } of this._powerWatches) {
+      try {
+        if (signalId) proxy.disconnect(signalId);
+      } catch (e) { /* proxy may already be gone */ }
+    }
+    this._powerWatches = [];
   }
 
   // -- Data fetching with cache --
@@ -1293,10 +1409,12 @@ class CodeBurnIndicator extends PanelMenu.Button {
 
   destroy() {
     this._destroyed = true;
-    if (this._refreshSourceId) {
-      GLib.Source.remove(this._refreshSourceId);
-      this._refreshSourceId = 0;
+    this._clearRefreshTimer();
+    if (this._menuOpenId) {
+      this.menu.disconnect(this._menuOpenId);
+      this._menuOpenId = 0;
     }
+    this._stopPowerWatch();
     if (this._themeSettings && this._themeSignal) {
       this._themeSettings.disconnect(this._themeSignal);
       this._themeSignal = null;
