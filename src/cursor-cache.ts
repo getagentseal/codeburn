@@ -113,16 +113,28 @@ export async function readCachedResults(
   }
 }
 
-// The last parse of this DB whatever its fingerprint now, so calls with no
-// timestamp of their own can keep the one they were first given.
-export async function readPriorResults(dbPath: string): Promise<ParsedProviderCall[]> {
-  const file = await readExistingTextFile(getCachePath())
-  if (file.status !== 'ok') return []
+// Agent-only Cursor sessions carry no timestamp of their own. The time a
+// request was first seen is the only stable one, so it is kept outside the
+// versioned result cache and survives its version bumps and clears.
+const FIRST_SEEN_FILE = 'cursor-first-seen.json'
+
+export async function readFirstSeen(): Promise<Map<string, string>> {
+  const file = await readExistingTextFile(join(getCodeburnCacheDir(), FIRST_SEEN_FILE))
+  if (file.status !== 'ok') return new Map()
   try {
-    const cache = JSON.parse(file.text) as ResultCache
-    if (cache?.version === CURSOR_CACHE_VERSION && cache.dbPath === resolve(dbPath) && Array.isArray(cache.calls)) return cache.calls
+    const parsed = JSON.parse(file.text) as unknown
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return new Map(Object.entries(parsed).filter((e): e is [string, string] => typeof e[1] === 'string'))
+    }
   } catch {}
-  return []
+  return new Map()
+}
+
+export async function writeFirstSeen(firstSeen: Map<string, string>): Promise<void> {
+  if (process.env['CODEBURN_SUPPRESS_CACHE_WRITES']) return
+  const dir = getCodeburnCacheDir()
+  await mkdir(dir, { recursive: true }).catch(() => {})
+  await writeAtomic(join(dir, FIRST_SEEN_FILE), JSON.stringify(Object.fromEntries(firstSeen)))
 }
 
 export async function writeCachedResults(
@@ -148,16 +160,19 @@ export async function writeCachedResults(
     calls,
   }
 
-  // Atomic write: stage to a randomized temp file in the same directory,
-  // then rename onto the final path. rename() is atomic on POSIX, so a
-  // crash mid-write never leaves a half-written cache, and concurrent
-  // CLI invocations using their own random temp names cannot interleave
-  // bytes in the destination file (they only race on the final rename,
-  // last-writer-wins, both with valid content).
-  const target = getCachePath()
+  await writeAtomic(getCachePath(), JSON.stringify(cache))
+}
+
+// Atomic write: stage to a randomized temp file in the same directory,
+// then rename onto the final path. rename() is atomic on POSIX, so a
+// crash mid-write never leaves a half-written cache, and concurrent
+// CLI invocations using their own random temp names cannot interleave
+// bytes in the destination file (they only race on the final rename,
+// last-writer-wins, both with valid content).
+async function writeAtomic(target: string, text: string): Promise<void> {
   const tempPath = `${target}.${randomBytes(8).toString('hex')}.tmp`
   try {
-    await writeFile(tempPath, JSON.stringify(cache), 'utf-8')
+    await writeFile(tempPath, text, 'utf-8')
     await rename(tempPath, target)
   } catch {
     await unlink(tempPath).catch(() => {})

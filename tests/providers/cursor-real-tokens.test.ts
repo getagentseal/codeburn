@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { mkdtemp, rm } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { utimesSync } from 'fs'
+import { rmSync, utimesSync } from 'fs'
 import { createRequire } from 'node:module'
 
 import {
@@ -10,6 +10,8 @@ import {
   clearCursorWorkspaceMapCache,
 } from '../../src/providers/cursor.js'
 import { isSqliteAvailable } from '../../src/sqlite.js'
+import { getCodeburnCacheDir } from '../../src/cache-dir.js'
+import { cursorCacheFileName } from '../../src/cursor-cache.js'
 import type { ParsedProviderCall } from '../../src/providers/types.js'
 
 const requireForTest = createRequire(import.meta.url)
@@ -394,7 +396,7 @@ describe.skipIf(skipReason !== null)('cursor real context tokens (#575)', () => 
     expect(calls).toEqual([])
   })
 
-  it('keeps an agent-only session on the time it was first seen after the DB changes', async () => {
+  it('keeps an agent-only session on the time it was first seen after the DB changes and the result cache is cleared', async () => {
     const requestId = 'req-headless-2'
     const dbPath = buildDb((db) => {
       insertAgentKv(db, { blobId: 'akv-1', role: 'user', content: 'run the export', requestId })
@@ -405,6 +407,7 @@ describe.skipIf(skipReason !== null)('cursor real context tokens (#575)', () => 
 
     const first = await collectCalls(createCursorProvider(dbPath), dbPath)
     utimesSync(dbPath, new Date(), new Date())
+    rmSync(join(getCodeburnCacheDir(), cursorCacheFileName()))
     const second = await collectCalls(createCursorProvider(dbPath), dbPath)
 
     const key = `cursor:agentKv:${requestId}`

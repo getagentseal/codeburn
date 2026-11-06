@@ -5,7 +5,7 @@ import { getEditorDataDir } from '../editor-data-dir.js'
 
 import { calculateCost, ownValue } from '../models.js'
 import { extractBashCommands } from '../bash-utils.js'
-import { readCachedResults, readPriorResults, writeCachedResults } from '../cursor-cache.js'
+import { readCachedResults, readFirstSeen, writeCachedResults, writeFirstSeen } from '../cursor-cache.js'
 import { importSource, importSourceParser } from '../cursor-import.js'
 import {
   isSqliteAvailable,
@@ -635,7 +635,7 @@ function parseBubbles(
   seenKeys: Set<string>,
   timeFloor: string,
   agentKvTimestamp: string,
-  priorTimestamps: Map<string, string>,
+  firstSeen: Map<string, string>,
 ): { calls: ParsedProviderCall[] } {
   const results: ParsedProviderCall[] = []
   let skipped = 0
@@ -888,6 +888,7 @@ function parseBubbles(
     const dedupKey = `cursor:agentKv:${requestId}`
     if (seenKeys.has(dedupKey)) continue
     seenKeys.add(dedupKey)
+    if (!firstSeen.has(requestId)) firstSeen.set(requestId, agentKvTimestamp)
 
     emit({
       model: modelForDisplay(stream.model),
@@ -896,7 +897,7 @@ function parseBubbles(
       costUSD: calculateCost(resolveModel(stream.model), inputTokens, outputTokens, 0, 0, 0),
       tools: stream.tools,
       bashCommands: stream.bash,
-      timestamp: priorTimestamps.get(dedupKey) ?? agentKvTimestamp,
+      timestamp: firstSeen.get(requestId)!,
       deduplicationKey: dedupKey,
       userMessage: '',
       sessionId: requestId,
@@ -985,8 +986,10 @@ function createParser(
           } catch {
             agentKvTimestamp = new Date().toISOString()
           }
-          const priorTimestamps = new Map((await readPriorResults(dbPath)).map(c => [c.deduplicationKey, c.timestamp]))
-          const { calls: bubbleCalls } = parseBubbles(db, localSeen, timeFloor, agentKvTimestamp, priorTimestamps)
+          const firstSeen = await readFirstSeen()
+          const knownFirstSeen = firstSeen.size
+          const { calls: bubbleCalls } = parseBubbles(db, localSeen, timeFloor, agentKvTimestamp, firstSeen)
+          if (firstSeen.size > knownFirstSeen) await writeFirstSeen(firstSeen)
           allCalls = bubbleCalls
           await writeCachedResults(dbPath, allCalls, timeFloor)
         } finally {
