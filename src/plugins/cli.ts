@@ -20,7 +20,7 @@ import { createHash } from 'crypto'
 import { tmpdir } from 'os'
 
 import { defaultPluginsDir, loadPlugins, currentCliVersion, verifyPlugin, readPluginManifestRaw, type PluginLoad } from './loader.js'
-import { parsePluginManifest, type PluginManifest } from './manifest.js'
+import { parsePluginManifest, PLUGIN_NAME, type PluginManifest } from './manifest.js'
 import { readSyncConfig } from '../sync/config.js'
 import { createCredentialStore } from '../sync/credentials.js'
 import { fetchOidcConfig, refreshToken } from '../sync/auth.js'
@@ -89,6 +89,7 @@ export function registerPluginCommands(program: Command): void {
     .option('--dir <path>', 'Override the plugins directory')
     .option('--json', 'Output as machine-readable JSON')
     .action(async (name: string, opts: { dir?: string; json?: boolean }) => {
+      if (!PLUGIN_NAME.test(name)) return rejectName(name)
       const loads = await loadPlugins(opts.dir)
       const loaded = loads.find((l): l is Extract<typeof l, { status: 'loaded' }> => l.status === 'loaded' && l.manifest.name === name)
       if (loaded) {
@@ -127,6 +128,7 @@ export function registerPluginCommands(program: Command): void {
     .description('Re-run the verification hook for a named plugin and print the result (release-key signing lands in 9b)')
     .option('--dir <path>', 'Override the plugins directory')
     .action(async (name: string, opts: { dir?: string }) => {
+      if (!PLUGIN_NAME.test(name)) return rejectName(name)
       const dir = join(opts.dir ?? defaultPluginsDir(), name)
       const manifest = await readManifestForVerify(dir, name)
       if (!manifest) {
@@ -178,6 +180,7 @@ export function registerPluginCommands(program: Command): void {
     .option('--dir <path>', 'Override the plugins directory')
     .option('--confirm', 'Confirm removal')
     .action(async (name: string, opts: { dir?: string, confirm?: boolean }) => {
+      if (!PLUGIN_NAME.test(name)) return rejectName(name)
       const pluginsDir = opts.dir ?? defaultPluginsDir()
       const destDir = join(pluginsDir, name)
       if (!opts.confirm) {
@@ -188,6 +191,11 @@ export function registerPluginCommands(program: Command): void {
       await rm(destDir, { recursive: true, force: true })
       process.stdout.write(`Plugin "${name}" removed.\n`)
     })
+}
+
+function rejectName(name: string): void {
+  process.stderr.write(`Error: Invalid plugin name "${name}".\n`)
+  process.exitCode = 1
 }
 
 /// Reads the manifest at <dir>/codeburn-plugin.json and parses it via the
