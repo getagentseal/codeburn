@@ -100,6 +100,12 @@ const MAX_OUTPUT_BYTES = 16 * 1024 * 1024
 // Serve wraps the output as an escaped JSON string (pretty JSON grows ~17%), so
 // the raw frame gets headroom; the decoded output is still held to MAX_OUTPUT_BYTES.
 const MAX_SERVE_FRAME_BYTES = 2 * MAX_OUTPUT_BYTES
+
+// An answer over the cap by its decoded size: a one-shot would hit the same cap,
+// so this one is never retried cold.
+class ServeAnswerTooLarge extends CliError {
+  constructor() { super('too-large', `codeburn serve produced more than ${MAX_OUTPUT_BYTES} bytes`) }
+}
 // A cold-cache CLI spawn costs seconds at ~120% CPU; letting every poll +
 // prefetch launch at once saturates the machine. Cap how many children run
 // concurrently — the rest queue and drain as slots free (interactive first).
@@ -907,7 +913,7 @@ class ServeClient {
     if (waiter.decodedBytes <= MAX_OUTPUT_BYTES) return true
     this.pending.delete(id)
     waiter.clear()
-    waiter.reject(new CliError('too-large', `codeburn serve produced more than ${MAX_OUTPUT_BYTES} bytes`))
+    waiter.reject(new ServeAnswerTooLarge())
     this.armIdle()
     return false
   }
@@ -1196,7 +1202,7 @@ export function spawnCli(
         .catch(err => {
           // App shutdown is terminal: never turn rejected resident requests
           // into brand-new one-shot children after killAll() has reaped them.
-          if (serve.isDestroyed()) throw err
+          if (serve.isDestroyed() || err instanceof ServeAnswerTooLarge) throw err
           return runScheduledCli(
             spec,
             args[0] ?? '',

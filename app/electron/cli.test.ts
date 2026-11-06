@@ -1079,7 +1079,7 @@ describe('resident serve single-flight', { timeout: 30_000 }, () => {
     expect(readMaybe(oneShotsFile)).toBe('')
   })
 
-  it('falls back to a one-shot for an over-cap answer and keeps the warm resident', async () => {
+  it('fails an over-cap answer without a one-shot retry and keeps the warm resident', async () => {
     const startsFile = join(dir, 'over-cap-starts')
     const oneShotsFile = join(dir, 'over-cap-one-shots')
     fakeBin(
@@ -1102,10 +1102,11 @@ describe('resident serve single-flight', { timeout: 30_000 }, () => {
     )
     startServe()
 
-    await expect(spawnCli(['status', '--big'], { timeoutMs: 5_000 })).resolves.toEqual({ via: 'spawn' })
+    await expect(spawnCli(['status', '--big'], { timeoutMs: 5_000 }))
+      .rejects.toMatchObject({ kind: 'too-large' } satisfies Partial<CliError>)
     await expect(spawnCli(['status', '--small'], { timeoutMs: 5_000 })).resolves.toEqual({ via: 'serve' })
     expect(readMaybe(startsFile)).toBe('s')
-    expect(readMaybe(oneShotsFile)).toBe('o')
+    expect(readMaybe(oneShotsFile)).toBe('')
   })
 
   it('kills a resident whose frame exceeds the raw bound and still fails the read safely', async () => {
