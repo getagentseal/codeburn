@@ -308,6 +308,18 @@ describe('Stop nudge after a loop', () => {
   })
 })
 
+describe('Stop nudge after failed runs', () => {
+  it('names the longest streak, even after an edit broke it', async () => {
+    const env = await setup({ checkpointUSD: null, loopWarnAfter: null, loopStopAfter: null, retryStopAfter: null })
+    for (let i = 0; i < 4; i++) await call(env, 'Bash', { command: 'npm test' }, { fails: true })
+    await call(env, 'Edit', { file_path: '/a.ts', old_string: 'a', new_string: 'b' })
+    await call(env, 'Bash', { command: 'npm test' }, { fails: true })
+    const stop = JSON.stringify({ session_id: SID, transcript_path: env.path, hook_event_name: 'Stop' })
+    expect(JSON.parse(await runGuardHook('stop', stop, { base: env.base })).systemMessage)
+      .toContain('codeburn guard: a longest streak of 4 failed runs of one command;')
+  })
+})
+
 describe('hook time', () => {
   it('stays fast on a 20 MB transcript once the tail is cached', async () => {
     const env = await setup()

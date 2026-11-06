@@ -75,6 +75,7 @@ function markSignal(cache: GuardCache, signal: 'loop' | 'retry'): void {
 
 // The reason goes to the model; how to lift the stop goes only to the user, so
 // the agent is never told how to lift its own stop.
+// Hook contract (code.claude.com/docs/en/hooks): systemMessage is a warning shown to the user; on a PreToolUse deny, permissionDecisionReason is what Claude sees.
 function deny(reason: string, userNote: string): string {
   return JSON.stringify({
     systemMessage: userNote,
@@ -198,7 +199,7 @@ async function handleStop(input: unknown, opts: HookOpts): Promise<string> {
     cache.signalStopNotified = true
     const what: string[] = []
     if (cache.loopWarned) what.push(`${cache.loopRun} identical tool calls in a row`)
-    if (cache.retryWarned) what.push(`${cache.retryRun} failed runs of one command`)
+    if (cache.retryWarned) what.push(`a longest streak of ${cache.retryRun} failed runs of one command`)
     lines.push(
       `codeburn guard: ${what.join(' and ')}; the calls after the first warning cost ${usd(Math.max(0, cache.costUSD - cache.signalWarnCostUSD))}.`,
     )
