@@ -4,7 +4,7 @@ import { tmpdir, homedir } from 'os'
 import { createRequire } from 'node:module'
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { calculateCost } from '../../src/models.js'
+import { billableOutputTokens, calculateCost } from '../../src/models.js'
 import { createHermesProvider } from '../../src/providers/hermes.js'
 import { isSqliteAvailable } from '../../src/sqlite.js'
 import { aggregateProjectsIntoDays } from '../../src/day-aggregator.js'
@@ -541,8 +541,10 @@ skipUnlessSqlite('hermes provider', () => {
 
     const calls = await collectCalls(tmpDir, `${dbPath}#hermes-session=no-cost-session`)
     expect(calls).toHaveLength(1)
-    expect(calls[0]!.costUSD).toBe(calculateCost('claude-sonnet-4-20250514', 1000, 250, 0, 0, 0))
+    // Output already includes the reasoning tokens.
+    expect(calls[0]!.costUSD).toBe(calculateCost('claude-sonnet-4-20250514', 1000, 200, 0, 0, 0))
     expect(calls[0]!.reasoningTokens).toBe(50)
+    expect(billableOutputTokens('hermes', calls[0]!.outputTokens, calls[0]!.reasoningTokens)).toBe(200)
   })
 
   it('carries the billing route the session recorded, and stays silent for every other door', async () => {

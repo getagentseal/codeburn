@@ -60,7 +60,8 @@ export type LongContextTier = {
 /// top bills it twice.
 /// DSH TokenUsage includes reasoning in output too; see the pinned contract:
 /// https://github.com/deepseek-ai/deepseek-harness/blob/c291e7961a515f6d7af9304e7fd1d257929aef26/docs/subsystems/llm-streaming.md#tokenusage
-const REASONING_INCLUDED_IN_OUTPUT = new Set(['claude', 'codex', 'copilot', 'dsh'])
+/// Hermes stores completion/output tokens as the API reports them, reasoning inside.
+const REASONING_INCLUDED_IN_OUTPUT = new Set(['claude', 'codex', 'copilot', 'dsh', 'hermes'])
 
 /// Output tokens to bill and display for one call. Single source of truth so
 /// the pricing sites and the display sums can never disagree about whether a
