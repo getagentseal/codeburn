@@ -11,6 +11,7 @@ import { fetchWithTimeout } from '../fetch-utils.js'
 // headline totals unless `includeGatewayInTotals` is set — see
 // `excludeProviderFromDay` in src/usage-aggregator.ts.
 const REPORT_URL = 'https://ai-gateway.vercel.sh/v1/report'
+const RETRYABLE_STATUSES: ReadonlySet<number> = new Set([408, 409, 425, 429])
 
 type ReportRow = {
   day?: string
@@ -65,9 +66,11 @@ export async function fetchVercelGatewayReport(
           'Requires AI_GATEWAY_API_KEY or VERCEL_OIDC_TOKEN (Pro/Enterprise for /v1/report). ' +
           `${detail.slice(0, 200)}\n`,
       )
-      // A rate limit or server error says nothing about the spend: keep the
-      // cached report and retry. Other statuses (no access) mean no report.
-      if (res.status === 429 || res.status >= 500) throw new RetryableSourceError(`Vercel AI Gateway report HTTP ${res.status}`)
+      // A timeout, conflict, rate limit or server error says nothing about the
+      // spend: keep the cached report and retry. 408/409/429/5xx are the
+      // statuses Vercel's own AI SDK retries; 425 asks for a retry by
+      // definition. Other statuses (no access) mean no report.
+      if (RETRYABLE_STATUSES.has(res.status) || res.status >= 500) throw new RetryableSourceError(`Vercel AI Gateway report HTTP ${res.status}`)
       return []
     }
 

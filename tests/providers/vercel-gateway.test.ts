@@ -150,6 +150,7 @@ describe('vercel-gateway end-to-end (parseAllSessions network path)', () => {
     vi.spyOn(process.stderr, 'write').mockImplementation(() => true)
     for (const failing of [
       vi.fn(async () => ({ ok: false, status: 503, text: async () => '' })),
+      vi.fn(async () => ({ ok: false, status: 408, text: async () => '' })),
       vi.fn(async () => { throw new Error('getaddrinfo ENOTFOUND') }),
     ]) {
       globalThis.fetch = failing as unknown as typeof fetch
