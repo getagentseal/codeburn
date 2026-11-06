@@ -1,6 +1,6 @@
 import { getShortModelName } from '../models.js'
 import type { DateRange } from '../types.js'
-import type { Provider, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
+import { RetryableSourceError, type Provider, type SessionSource, type SessionParser, type ParsedProviderCall } from './types.js'
 import { fetchWithTimeout } from '../fetch-utils.js'
 
 // The report is a DAILY AGGREGATE per model: no request ids, no timestamps, no
@@ -11,6 +11,7 @@ import { fetchWithTimeout } from '../fetch-utils.js'
 // headline totals unless `includeGatewayInTotals` is set — see
 // `excludeProviderFromDay` in src/usage-aggregator.ts.
 const REPORT_URL = 'https://ai-gateway.vercel.sh/v1/report'
+const RETRYABLE_STATUSES: ReadonlySet<number> = new Set([408, 409, 425, 429])
 
 type ReportRow = {
   day?: string
@@ -65,16 +66,22 @@ export async function fetchVercelGatewayReport(
           'Requires AI_GATEWAY_API_KEY or VERCEL_OIDC_TOKEN (Pro/Enterprise for /v1/report). ' +
           `${detail.slice(0, 200)}\n`,
       )
+      // A timeout, conflict, rate limit or server error says nothing about the
+      // spend: keep the cached report and retry. 408/409/429/5xx are the
+      // statuses Vercel's own AI SDK retries; 425 asks for a retry by
+      // definition. Other statuses (no access) mean no report.
+      if (RETRYABLE_STATUSES.has(res.status) || res.status >= 500) throw new RetryableSourceError(`Vercel AI Gateway report HTTP ${res.status}`)
       return []
     }
 
     const body = (await res.json()) as { results?: ReportRow[] }
     return body.results ?? []
   } catch (err) {
+    if (err instanceof RetryableSourceError) throw err
     process.stderr.write(
       `codeburn: Vercel AI Gateway report unreachable (${err instanceof Error ? err.message : String(err)}).\n`,
     )
-    return []
+    throw new RetryableSourceError('Vercel AI Gateway report unreachable', { cause: err })
   }
 }
 

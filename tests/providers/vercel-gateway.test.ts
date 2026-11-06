@@ -137,6 +137,87 @@ describe('vercel-gateway end-to-end (parseAllSessions network path)', () => {
     expect(stored).toContain('"requestCount":3')
   })
 
+  it('keeps serving the cached report when a refresh cannot reach the gateway', async () => {
+    const day = new Date(Date.now() - 15 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+    globalThis.fetch = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ results: [{ day, model: 'openai/gpt-4o', total_cost: 12.34, input_tokens: 1000, output_tokens: 500 }] }),
+    })) as typeof fetch
+    const range = getDashboardScanRange('week', null, null)
+    const total = async () => (await parseAllSessions(range, 'vercel-gateway')).reduce((sum, p) => sum + p.totalCostUSD, 0)
+    expect(await total()).toBeCloseTo(12.34, 2)
+
+    vi.spyOn(process.stderr, 'write').mockImplementation(() => true)
+    for (const failing of [
+      vi.fn(async () => ({ ok: false, status: 503, text: async () => '' })),
+      vi.fn(async () => ({ ok: false, status: 408, text: async () => '' })),
+      vi.fn(async () => { throw new Error('getaddrinfo ENOTFOUND') }),
+    ]) {
+      globalThis.fetch = failing as unknown as typeof fetch
+      clearSessionCache()
+      expect(await total()).toBeCloseTo(12.34, 2)
+    }
+  })
+
+  it('holds a gateway that keeps failing as failed for the day, keeping its rows', async () => {
+    const day = new Date(Date.now() - 15 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+    globalThis.fetch = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ results: [{ day, model: 'openai/gpt-4o', total_cost: 12.34, input_tokens: 1000, output_tokens: 500 }] }),
+    })) as typeof fetch
+    const range = getDashboardScanRange('week', null, null)
+    const total = async () => {
+      clearSessionCache()
+      return (await parseAllSessions(range, 'vercel-gateway')).reduce((sum, p) => sum + p.totalCostUSD, 0)
+    }
+    expect(await total()).toBeCloseTo(12.34, 2)
+
+    vi.spyOn(process.stderr, 'write').mockImplementation(() => true)
+    const failing = vi.fn(async () => ({ ok: false, status: 500, text: async () => '' }))
+    globalThis.fetch = failing as unknown as typeof fetch
+    for (let run = 1; run <= 4; run++) expect(await total()).toBeCloseTo(12.34, 2)
+    // Three failures mark it failed; the fourth refresh serves the kept rows
+    // without fetching again.
+    expect(failing).toHaveBeenCalledTimes(3)
+
+    const { loadCache } = await import('../../src/session-cache.js')
+    const entry = (await loadCache()).providers['vercel-gateway']?.files['vercel-ai-gateway:report']
+    expect(entry?.failed).toBe(true)
+    expect(entry?.retryableFailures).toBe(3)
+  })
+
+  it.each([408, 409, 425, 429, 500, 503])('keeps the cached report on HTTP %i', async (status) => {
+    const day = new Date(Date.now() - 15 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+    globalThis.fetch = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ results: [{ day, model: 'openai/gpt-4o', total_cost: 12.34, input_tokens: 1000, output_tokens: 500 }] }),
+    })) as typeof fetch
+    const range = getDashboardScanRange('week', null, null)
+    const total = async () => {
+      clearSessionCache()
+      return (await parseAllSessions(range, 'vercel-gateway')).reduce((sum, p) => sum + p.totalCostUSD, 0)
+    }
+    expect(await total()).toBeCloseTo(12.34, 2)
+    vi.spyOn(process.stderr, 'write').mockImplementation(() => true)
+    globalThis.fetch = vi.fn(async () => ({ ok: false, status, text: async () => '' })) as unknown as typeof fetch
+    expect(await total()).toBeCloseTo(12.34, 2)
+  })
+
+  it('reads a refused credential (HTTP 403) as no report', async () => {
+    const day = new Date(Date.now() - 15 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+    globalThis.fetch = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ results: [{ day, model: 'openai/gpt-4o', total_cost: 12.34, input_tokens: 1000, output_tokens: 500 }] }),
+    })) as typeof fetch
+    const range = getDashboardScanRange('week', null, null)
+    clearSessionCache()
+    await parseAllSessions(range, 'vercel-gateway')
+    vi.spyOn(process.stderr, 'write').mockImplementation(() => true)
+    globalThis.fetch = vi.fn(async () => ({ ok: false, status: 403, text: async () => '' })) as unknown as typeof fetch
+    clearSessionCache()
+    expect((await parseAllSessions(range, 'vercel-gateway')).reduce((sum, p) => sum + p.totalCostUSD, 0)).toBe(0)
+  })
+
   it('emits no gateway rows at all without a credential', async () => {
     delete process.env.AI_GATEWAY_API_KEY
     delete process.env.VERCEL_OIDC_TOKEN

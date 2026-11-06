@@ -1,6 +1,6 @@
 import { stat } from 'fs/promises'
 import { homedir } from 'os'
-import { basename, join } from 'path'
+import { basename, dirname, join } from 'path'
 
 import { discoverClineTasks, createClineParser, clineTaskRoots } from './vscode-cline-parser.js'
 import type { ProbeRoot, Provider, SessionSource, SessionParser } from './types.js'
@@ -20,14 +20,14 @@ function normalizeOverrideDirs(overrideDirs?: string | string[]): string[] | und
 async function dedupeTaskSources(sources: SessionSource[]): Promise<SessionSource[]> {
   const candidates = await Promise.all(sources.map(async source => ({
     source,
-    mtimeMs: (await stat(join(source.path, 'ui_messages.json')).catch(() => null))?.mtimeMs ?? 0,
+    mtimeMs: (await stat(source.path).catch(() => null))?.mtimeMs ?? 0,
   })))
 
   const seenTaskIds = new Set<string>()
   const deduped: SessionSource[] = []
 
   for (const { source } of candidates.sort((a, b) => b.mtimeMs - a.mtimeMs)) {
-    const taskId = basename(source.path)
+    const taskId = basename(dirname(source.path))
     if (seenTaskIds.has(taskId)) continue
     seenTaskIds.add(taskId)
     deduped.push(source)

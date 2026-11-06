@@ -98,7 +98,7 @@ describe('ibm-bob provider - discovery and parsing', () => {
     }))
     await writeFile(join(taskDir, 'api_conversation_history.json'), makeApiHistory('anthropic/claude-sonnet-4-6'))
 
-    const source = { path: taskDir, project: 'IBM Bob', provider: 'ibm-bob' }
+    const source = { path: join(taskDir, 'ui_messages.json'), project: 'IBM Bob', provider: 'ibm-bob' }
     const calls: ParsedProviderCall[] = []
     for await (const call of ibmBob.createSessionParser(source, new Set()).parse()) calls.push(call)
 
@@ -123,7 +123,7 @@ describe('ibm-bob provider - discovery and parsing', () => {
     await writeFile(join(taskDir, 'ui_messages.json'), makeUiMessages({ tokensIn: 100, tokensOut: 50 }))
     await writeFile(join(taskDir, 'api_conversation_history.json'), makeApiHistory())
 
-    const source = { path: taskDir, project: 'IBM Bob', provider: 'ibm-bob' }
+    const source = { path: join(taskDir, 'ui_messages.json'), project: 'IBM Bob', provider: 'ibm-bob' }
     const calls: ParsedProviderCall[] = []
     for await (const call of ibmBob.createSessionParser(source, new Set()).parse()) calls.push(call)
 
@@ -137,7 +137,7 @@ describe('ibm-bob provider - discovery and parsing', () => {
     await mkdir(taskDir, { recursive: true })
     await writeFile(join(taskDir, 'ui_messages.json'), makeUiMessages({ tokensIn: 100, tokensOut: 50 }))
 
-    const source = { path: taskDir, project: 'IBM Bob', provider: 'ibm-bob' }
+    const source = { path: join(taskDir, 'ui_messages.json'), project: 'IBM Bob', provider: 'ibm-bob' }
     const seenKeys = new Set<string>()
 
     const calls1: ParsedProviderCall[] = []

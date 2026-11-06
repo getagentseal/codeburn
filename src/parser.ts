@@ -14,6 +14,7 @@ import { estimateTokensFromChars } from './token-estimate.js'
 import { discoverAllSessions, discoverAllSessionsWithFailures, getProvider } from './providers/index.js'
 import { evictCachedCodexResults, flushCodexCache, readCachedCodexResults, withCodexCacheDirectory, writeCachedCodexResults } from './codex-cache.js'
 import { antigravityCascadeIdFromPath, flushAntigravityCache, preloadAntigravityCache, shouldReparseAntigravitySource } from './providers/antigravity.js'
+import { keepCachedWarpShares } from './providers/warp.js'
 import { getClaudeConfigDirs, getDesktopSessionsDirs } from './providers/claude.js'
 import { kimicodeLineageForSource } from './providers/kimicode.js'
 import { isSqliteBusyError } from './sqlite.js'
@@ -66,7 +67,7 @@ import { folderNameOriginKey, isTemporaryProjectPath, linkedOriginKey, projectOr
 import { behavioralCallWeight, isBehavioralTurn } from './behavioral-weight.js'
 import { gatewayIncludedInTotals } from './config.js'
 import { coverageFor, cursorImportPath, dropImportCoveredCalls, loadCursorImport, replacedProviders } from './cursor-import.js'
-import type { ParsedProviderCall, Provider, SessionSource } from './providers/types.js'
+import { RetryableSourceError, type ParsedProviderCall, type Provider, type SessionSource } from './providers/types.js'
 import type {
   ApiUsageIteration,
   AssistantMessageContent,
@@ -2908,6 +2909,11 @@ export const REPORTED_COST_PROVIDERS: ReadonlySet<string> = new Set([
   'omp',
 ])
 
+// Members of REPORTED_COST_PROVIDERS whose stored cost CodeBurn itself priced
+// from tokens at parse time (the cached `model` is not always the id it was
+// priced as). The cost is kept, but it is not the tool's own figure.
+const PARSE_PRICED_COST_PROVIDERS: ReadonlySet<string> = new Set(['devin', 'antigravity'])
+
 function providerCallToCachedCall(call: ParsedProviderCall): CachedCall {
   return {
     provider: call.provider,
@@ -3134,7 +3140,7 @@ export function cachedCallToApiCall(call: CachedCall): ParsedApiCall {
   })
   apiCall.costBasis = call.billing === 'subscription' && call.costUSD === 0 ? 'included'
     : apiCall.isEstimated ? 'estimated'
-    : call.costUSD !== undefined || fallbackCostUSD !== undefined ? 'recorded'
+    : (call.costUSD !== undefined && !PARSE_PRICED_COST_PROVIDERS.has(call.provider)) || fallbackCostUSD !== undefined ? 'recorded'
     : apiCall.costUSD === 0 && findUnpricedModels([{ model: call.model, calls: 1, cost: 0 }]).length > 0 ? 'unpriced'
     : 'calculated'
   // A cached Claude call is flagged only for its estimated placeholder output;
@@ -3507,6 +3513,10 @@ async function resolveProviderLineage(
   return kimicodeLineageForSource(source.path, agentId)
 }
 
+// Consecutive retryable fetch failures after which a network source stops
+// deferring the run and is held as failed (its cached rows kept) for the day.
+const RETRYABLE_FAILURE_LIMIT = 3
+
 const warnedProviderReadFailures = new Set<string>()
 
 function warnProviderReadFailureOnce(providerName: string, err: unknown): void {
@@ -3810,6 +3820,13 @@ export async function parseProviderSources(
     // fingerprint or incrementally cache, so re-fetch every run with a synthetic
     // fingerprint (mtime=now so the date-range filter below never excludes it).
     if (skipFingerprint) {
+      // Held as failed after repeated fetch failures: serve the kept rows and
+      // try the fetch again on the next day, not on every refresh.
+      const held = section.files[source.path]
+      if (held?.failed && dateKey(new Date(held.fingerprint.mtimeMs).toISOString()) === dateKey(new Date().toISOString())) {
+        unchangedSources.push({ source, cached: held })
+        continue
+      }
       changedSources.push({ source, fp: { dev: 0, ino: 0, mtimeMs: Date.now(), sizeBytes: 0 } })
       continue
     }
@@ -3976,7 +3993,7 @@ export async function parseProviderSources(
       // Durable providers (e.g. copilot OTel) never clear existing entries so
       // that pruned-away data is preserved for monotonic monthly totals.
       const priorEntry = section.files[source.path]
-      if (!provider.durableSources && !clearedPaths.has(source.path)) {
+      if (!(source.durable ?? provider.durableSources) && !clearedPaths.has(source.path)) {
         delete section.files[source.path]
         markCacheDirty(diskCache, providerName, source.path)
         clearedPaths.add(source.path)
@@ -4019,6 +4036,7 @@ export async function parseProviderSources(
           for await (const call of parser.parse()) {
             providerCalls.push(call)
           }
+          if (providerName === 'warp' && priorEntry) providerCalls = keepCachedWarpShares(priorEntry, providerCalls)
         }
         const canonicalCalls = await Promise.all(providerCalls.map(canonicalizeProviderCallProject))
         const turns = providerCallsToCachedTurns(canonicalCalls)
@@ -4049,7 +4067,7 @@ export async function parseProviderSources(
         // migrated cache with an anchor the virgin cache had - dropping the
         // post-compaction residual (#946 validation round 6, see (c6)).
         // Non-durable providers keep the original overwrite-or-append behaviour.
-        if (provider.durableSources) {
+        if (source.durable ?? provider.durableSources) {
           const existingEntry = section.files[source.path]
           if (existingEntry) {
             const freshByKey = new Map(turns.flatMap(t => t.calls).map(c => [c.deduplicationKey, c]))
@@ -4099,13 +4117,27 @@ export async function parseProviderSources(
         didParse = true
         markCacheDirty(diskCache, providerName, source.path)
       } catch (err) {
-        if (isSqliteBusyError(err) || isHermesLedgerPublicationError(err)) {
+        if (isSqliteBusyError(err) || isHermesLedgerPublicationError(err) || err instanceof RetryableSourceError) {
           // Deferred, not failed: the cache keeps serving this source's
           // previous rows and the next refresh retries. But the data this
           // read would have added is MISSING from this parse, so the run is a
           // partial hydration — the daily backfill must not finalize history
           // built on it (the same fence a stale read-only serve raises).
           if (priorEntry) section.files[source.path] = priorEntry
+          if (err instanceof RetryableSourceError && provider.network) {
+            const retryableFailures = (priorEntry?.retryableFailures ?? 0) + 1
+            const failed = retryableFailures >= RETRYABLE_FAILURE_LIMIT
+            section.files[source.path] = {
+              ...(priorEntry ?? { fingerprint: fp, mcpInventory: [], turns: [] }),
+              retryableFailures,
+              ...(failed ? { failed: true, fingerprint: fp } : {}),
+            }
+            markCacheDirty(diskCache, providerName, source.path)
+            if (failed) {
+              warnProviderParseFailure(providerName, source.path, err)
+              continue
+            }
+          }
           deferredRetryableSource = true
           warnProviderReadFailureOnce(providerName, err)
           continue

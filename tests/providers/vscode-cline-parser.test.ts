@@ -51,8 +51,8 @@ describe('VS Code Cline-family storage discovery', () => {
 
     expect(sessions).toHaveLength(2)
     expect(sessions.map(s => s.path).sort()).toEqual([
-      join(codeRoot, 'tasks', 'task-code'),
-      join(codiumRoot, 'tasks', 'task-codium'),
+      join(codeRoot, 'tasks', 'task-code', 'ui_messages.json'),
+      join(codiumRoot, 'tasks', 'task-codium', 'ui_messages.json'),
     ].sort())
   })
 })
@@ -73,7 +73,7 @@ describe('VS Code Cline-family parse hardening', () => {
       { role: 'user', content: [{ type: 'text', text: 'hi\n<environment_details>\n</environment_details>' }] },
     ]))
 
-    const source = { path: taskDir, project: 'p', provider: 'cline' }
+    const source = { path: join(taskDir, 'ui_messages.json'), project: 'p', provider: 'cline' }
     const calls: ParsedProviderCall[] = []
     for await (const call of createClineParser(source, new Set(), 'cline').parse()) calls.push(call)
 

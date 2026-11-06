@@ -1,5 +1,5 @@
 import { readdir, readFile, stat } from 'fs/promises'
-import { basename, join, posix, win32 } from 'path'
+import { basename, dirname, join, posix, win32 } from 'path'
 import { homedir } from 'os'
 
 import { calculateCost } from '../models.js'
@@ -89,7 +89,9 @@ async function discoverClineTasksInBaseDir(baseDir: string, providerName: string
     const uiStat = await stat(uiPath).catch(() => null)
     if (!uiStat?.isFile()) continue
 
-    sources.push({ path: taskDir, project: displayName, provider: providerName })
+    // The file, not the task directory: Cline rewrites ui_messages.json in
+    // place, which never moves the directory's own mtime or size.
+    sources.push({ path: uiPath, project: displayName, provider: providerName })
   }
 
   return sources
@@ -135,12 +137,12 @@ function workspaceToProject(workspace: string): string {
 export function createClineParser(source: SessionSource, seenKeys: Set<string>, providerName: string, fallbackModel = 'cline-auto'): SessionParser {
   return {
     async *parse(): AsyncGenerator<ParsedProviderCall> {
-      const taskDir = source.path
+      const taskDir = dirname(source.path)
       const taskId = basename(taskDir)
 
       let uiRaw: string
       try {
-        uiRaw = await readFile(join(taskDir, 'ui_messages.json'), 'utf-8')
+        uiRaw = await readFile(source.path, 'utf-8')
       } catch {
         return
       }
@@ -204,7 +206,12 @@ export function createClineParser(source: SessionSource, seenKeys: Set<string>, 
         // throw RangeError, which would abort the whole session's parse. Guard it.
         const tsDate = entry.ts ? new Date(entry.ts) : null
         const timestamp = tsDate && !Number.isNaN(tsDate.getTime()) ? tsDate.toISOString() : ''
-        const costUSD = cost ?? calculateCost(model, tokensIn, tokensOut, cacheWrites, cacheReads, 0)
+        // Cline's `cost` is what the request was billed on its real route
+        // (cache writes and gateway prices included, 0 for a free model); a
+        // token re-price would replace it with a list price for a model the
+        // task may not even name. Only a missing cost is priced from tokens.
+        const isReported = typeof cost === 'number' && Number.isFinite(cost) && cost >= 0
+        const costUSD = isReported ? cost! : calculateCost(model, tokensIn, tokensOut, cacheWrites, cacheReads, 0)
 
         yield {
           provider: providerName,
@@ -217,6 +224,7 @@ export function createClineParser(source: SessionSource, seenKeys: Set<string>, 
           reasoningTokens: 0,
           webSearchRequests: 0,
           costUSD,
+          ...(isReported ? { costFromBilling: true } : {}),
           tools: [],
           bashCommands: [],
           timestamp,
