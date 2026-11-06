@@ -28,7 +28,7 @@ import { allowPath, sessionCachePath, sessionsDir } from './store.js'
 // hash until its tool_result arrives, and `failedCommands` counts consecutive
 // is_error results per command hash: a passing run resets that command, and an
 // edit resets every command, since a rerun after an edit is a new attempt.
-export type ToolCallKey = { id: string; name: string; hash: string }
+export type ToolCallKey = { id: string; name: string; hash: string; result?: string }
 
 export type GuardCache = {
   version: number
@@ -117,15 +117,21 @@ export function recordToolCall(cache: GuardCache, call: ToolCallKey): void {
 // Waiting on a background shell or task repeats the same input by design.
 const POLL_TOOLS = new Set(['BashOutput', 'TaskOutput', 'Monitor'])
 
-// How many calls in a row, the incoming one included, share its name and input.
-// Polling tools never count as a loop.
+// How many calls in a row, the incoming one included, share its name and input
+// and got the same answer; a changing result is progress, not a loop. A call
+// whose result has not landed yet matches any. Polling tools never count.
 export function identicalRun(cache: GuardCache, call: ToolCallKey): number {
   if (POLL_TOOLS.has(call.name)) return 0
   let run = 1
+  let result: string | undefined
   for (let i = cache.recentCalls.length - 1; i >= 0; i--) {
     const c = cache.recentCalls[i]!
     if (call.id && c.id === call.id) continue
     if (c.name !== call.name || c.hash !== call.hash) break
+    if (c.result !== undefined) {
+      if (result !== undefined && c.result !== result) break
+      result = c.result
+    }
     run++
   }
   return run
@@ -134,6 +140,13 @@ export function identicalRun(cache: GuardCache, call: ToolCallKey): number {
 function foldToolResults(cache: GuardCache, entry: JournalEntry): void {
   const results = new Map<string, ToolResultMeta>()
   collectToolResultMeta(entry, results)
+  if (results.size === 0) return
+  const content = (entry.message as { content?: unknown } | undefined)?.content
+  for (const b of Array.isArray(content) ? content as { type?: unknown; tool_use_id?: unknown; content?: unknown }[] : []) {
+    if (b?.type !== 'tool_result') continue
+    const recent = cache.recentCalls.find(c => c.id === b.tool_use_id)
+    if (recent) recent.result = inputHash(b.content ?? null)
+  }
   for (const [id, meta] of results) {
     const cmd = cache.shellPending[id]
     if (cmd === undefined) continue

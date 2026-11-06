@@ -96,12 +96,14 @@ async function handlePreToolUse(input: unknown, opts: HookOpts): Promise<string>
   const toolName = str(input, 'tool_name')
   const toolInput = (input as { tool_input?: unknown }).tool_input
   const call = toolName ? { id: str(input, 'tool_use_id') ?? '', name: toolName, hash: inputHash(toolInput ?? {}) } : null
-  const run = call ? identicalRun(cache, call) : 0
+  const command = toolName && BASH_TOOLS.has(toolName) ? str(toolInput, 'command') : undefined
+  // `sleep 30 && gh run view 1` is waiting on something, not looping.
+  const waiting = command !== undefined && /^\s*sleep\s/.test(command)
+  const run = call && !waiting ? identicalRun(cache, call) : 0
   // Without a tool_use_id the transcript copy cannot be told apart from ours,
   // so the call is left for the transcript to record.
   if (call?.id) recordToolCall(cache, call)
   cache.loopRun = Math.max(cache.loopRun, run)
-  const command = toolName && BASH_TOOLS.has(toolName) ? str(toolInput, 'command') : undefined
   const failures = command !== undefined ? cache.failedCommands[inputHash(command)] ?? 0 : 0
   const shown = command?.slice(0, 60) ?? ''
 

@@ -35,11 +35,11 @@ function useLine(id: string, name: string, input: Record<string, unknown>, outTo
   }) + '\n'
 }
 
-function resultLine(id: string, isError: boolean): string {
+function resultLine(id: string, isError: boolean, output?: string): string {
   return JSON.stringify({
     type: 'user',
     timestamp: '2026-07-01T00:00:01.000Z',
-    message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: isError ? 'exit 1' : 'ok', is_error: isError }] },
+    message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: output ?? (isError ? 'exit 1' : 'ok'), is_error: isError }] },
   }) + '\n'
 }
 
@@ -57,13 +57,13 @@ async function call(
   env: { base: string; path: string },
   name: string,
   input: Record<string, unknown>,
-  o: { fails?: boolean; outTok?: number } = {},
+  o: { fails?: boolean; outTok?: number; output?: string } = {},
 ): Promise<string> {
   const id = `toolu_${++seq}`
   const out = await runGuardHook('pretooluse', JSON.stringify({
     session_id: SID, transcript_path: env.path, hook_event_name: 'PreToolUse', tool_name: name, tool_input: input, tool_use_id: id,
   }), { base: env.base })
-  await appendFile(env.path, useLine(id, name, input, o.outTok) + resultLine(id, o.fails ?? false))
+  await appendFile(env.path, useLine(id, name, input, o.outTok) + resultLine(id, o.fails ?? false, o.output))
   return out
 }
 
@@ -127,6 +127,27 @@ describe('identical-call loop', () => {
     const edits: string[] = []
     for (let i = 0; i < 8; i++) edits.push(await call(env, 'Edit', { file_path: '/a.ts', old_string: 'x', new_string: 'y' }))
     expect(edits[7]).toContain('"permissionDecision":"deny"')
+  })
+
+  it('never counts sleep-then-check waiting as a loop', async () => {
+    const env = await setup()
+    const outs: string[] = []
+    for (let i = 0; i < 8; i++) outs.push(await call(env, 'Bash', { command: 'sleep 30 && gh run view 123' }))
+    for (let i = 0; i < 8; i++) outs.push(await call(env, 'Bash', { command: '  sleep 5; curl -s localhost:3000/health' }))
+    expect(outs.every(o => o === '')).toBe(true)
+  })
+
+  it('counts identical calls only while they keep getting the same result', async () => {
+    const env = await setup()
+    const changing: string[] = []
+    for (let i = 0; i < 8; i++) changing.push(await call(env, 'Bash', { command: 'cat x' }, { output: `line ${i}` }))
+    expect(changing.every(o => o === '')).toBe(true)
+
+    const same: string[] = []
+    for (let i = 0; i < 8; i++) same.push(await call(env, 'Bash', { command: 'ls' }, { output: 'a.ts b.ts' }))
+    expect(same.slice(0, 3)).toEqual(['', '', ''])
+    expect(same[3]).toBe(warnJson('codeburn guard: Bash was called 4 times in a row with the same input.'))
+    expect(same[7]).toContain('"permissionDecision":"deny"')
   })
 
   it('warns once per session', async () => {
