@@ -54,13 +54,13 @@ function writeStore(sessionId: string) {
   db.close()
 }
 
-function writeOtel(conversationId: string, spanIds = ['s1']) {
+function writeOtel(conversationId: string, spanIds = ['s1'], startMs = Date.parse('2026-08-05T12:00:00Z')) {
   const { DatabaseSync } = requireForTest('node:sqlite') as { DatabaseSync: new (path: string) => TestDb }
   const db = new DatabaseSync(join(tmp, 'agent-traces.db'))
   db.exec(`CREATE TABLE spans (span_id TEXT PRIMARY KEY, trace_id TEXT, operation_name TEXT, start_time_ms INTEGER, response_model TEXT);
     CREATE TABLE span_attributes (id INTEGER PRIMARY KEY AUTOINCREMENT, span_id TEXT, key TEXT, value TEXT);`)
   for (const id of spanIds) {
-    db.prepare(`INSERT INTO spans VALUES (?, ?, 'chat', ?, 'gpt-4o')`).run(id, `t-${id}`, Date.parse('2026-08-05T12:00:00Z'))
+    db.prepare(`INSERT INTO spans VALUES (?, ?, 'chat', ?, 'gpt-4o')`).run(id, `t-${id}`, startMs)
     for (const [k, v] of Object.entries({ 'gen_ai.conversation.id': conversationId, 'gen_ai.usage.input_tokens': '1000', 'gen_ai.usage.output_tokens': '50' })) {
       db.prepare(`INSERT INTO span_attributes (span_id, key, value) VALUES (?, ?, ?)`).run(id, k, v)
     }
@@ -159,6 +159,44 @@ describe('copilot chat-session twins of agent-host sessions', () => {
     writeOtel('shared')
 
     expect(await servedKeys()).toEqual(['copilot-chatsession:shared:ra', 'copilot-chatsession:shared:rb', 'copilot-otel:s1'])
+  })
+
+  // Recent stamps: an orphaned cache entry older than 90 days ages out.
+  const at = (minutes: number) => Date.now() - 2 * 86400000 + minutes * 60000
+
+  async function writeRequests(sessionId: string, requests: Array<[string, number]>) {
+    const dir = join(tmp, 'global', 'emptyWindowChatSessions')
+    await mkdir(dir, { recursive: true })
+    const path = join(dir, `${sessionId}.jsonl`)
+    await writeFile(path, JSON.stringify({ kind: 0, v: { sessionId, creationDate: at(0), requests: requests.map(([requestId, minute]) => ({
+      requestId, modelId: 'copilot/gpt-4o', timestamp: at(minute), promptTokens: 1000, completionTokens: 50,
+    })) } }) + '\n')
+    await utimes(path, new Date(), new Date(Date.now() + requests.length * 1000))
+  }
+
+  it.skipIf(!isSqliteAvailable())('keeps a journal request the trace never recorded', async () => {
+    await writeRequests('S', [['r1', 0], ['r2', 10]])
+    writeOtel('S', ['s1'], at(0.05))
+
+    expect(await servedKeys()).toEqual(['copilot-chatsession:S:r2', 'copilot-otel:s1'])
+  })
+
+  it.skipIf(!isSqliteAvailable())('keeps a request added after the trace database is deleted', async () => {
+    await writeRequests('S', [['r1', 0]])
+    writeOtel('S', ['s1'], at(0.05))
+    expect(await servedKeys()).toEqual(['copilot-otel:s1'])
+
+    await rm(join(tmp, 'agent-traces.db'))
+    await writeRequests('S', [['r1', 0], ['r2', 10]])
+    expect(await servedKeys()).toEqual(['copilot-chatsession:S:r2', 'copilot-otel:s1'])
+  })
+
+  it.skipIf(!isSqliteAvailable())('never drops a request that shares no time with the trace', async () => {
+    writeOtel('S', ['s1'], at(0))
+    await writeRequests('S', [['r1', 60]])
+    await writeRequests('T', [['r1', 0]])
+
+    expect(await servedKeys()).toEqual(['copilot-chatsession:S:r1', 'copilot-chatsession:T:r1', 'copilot-otel:s1'])
   })
 
   it.skipIf(!isSqliteAvailable())('drops the transcript of a session agent-traces.db recorded', async () => {

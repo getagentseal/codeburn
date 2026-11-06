@@ -4331,33 +4331,50 @@ export async function parseProviderSources(
     // record of the same requests, so it is left out at serve time. A
     // session-state file with no usage yet keeps the journal.
     const agentHostUsageSessions = new Set<string>()
-    // A chat-session journal or VS Code transcript of a session
-    // agent-traces.db recorded holds the same requests under other keys, so
-    // OTel wins for that session. Spans name no VS Code storage, so when the
+    // A chat-session journal or VS Code transcript request that agent-traces.db
+    // also recorded holds the same usage under another key, so OTel wins for
+    // that request. Spans carry no VS Code request id, so the match is by time
+    // within the session: a journal request owns the spans from its timestamp
+    // up to the next request's, a transcript message the spans since the
+    // previous message. A request with no span in its window is kept, so
+    // requests the trace never recorded (before it was enabled, after it was
+    // deleted) still count. Spans name no VS Code storage either, so when the
     // session id has copies in more than one storage nothing is dropped: a
     // possible double count is preferred over dropping the wrong workspace.
     // Collected in full before the pass below so file order cannot matter.
-    const otelSessions = new Set<string>()
-    const twinKeysByStorage = new Map<string, Map<string, string[]>>()
+    const otelTimes = new Map<string, number[]>()
+    type TwinCandidate = { key: string; ts: number; storage: string; transcript: boolean }
+    const twinCandidates = new Map<string, TwinCandidate[]>()
     for (const [cachedPath, cachedFile] of Object.entries(section.files)) {
-      const isTranscript = basename(dirname(cachedPath)) === 'transcripts'
+      const transcript = basename(dirname(cachedPath)) === 'transcripts'
       for (const turn of cachedFile.turns) {
         for (const c of turn.calls) {
+          const ts = new Date(c.timestamp).getTime()
           if (c.deduplicationKey.startsWith('copilot-otel:')) {
-            otelSessions.add(turn.sessionId)
-          } else if (isTranscript || c.deduplicationKey.startsWith('copilot-chatsession:')) {
-            const byStorage = twinKeysByStorage.get(turn.sessionId) ?? new Map<string, string[]>()
-            const storage = copilotChatStorageKey(cachedPath)
-            byStorage.set(storage, [...(byStorage.get(storage) ?? []), c.deduplicationKey])
-            twinKeysByStorage.set(turn.sessionId, byStorage)
+            if (!Number.isNaN(ts)) otelTimes.set(turn.sessionId, [...(otelTimes.get(turn.sessionId) ?? []), ts])
+          } else if (transcript || c.deduplicationKey.startsWith('copilot-chatsession:')) {
+            const list = twinCandidates.get(turn.sessionId) ?? []
+            list.push({ key: c.deduplicationKey, ts, storage: copilotChatStorageKey(cachedPath), transcript })
+            twinCandidates.set(turn.sessionId, list)
           }
         }
       }
     }
     const otelTwinKeys = new Set<string>()
-    for (const [sessionId, byStorage] of twinKeysByStorage) {
-      if (!otelSessions.has(sessionId) || byStorage.size !== 1) continue
-      for (const keys of byStorage.values()) for (const k of keys) otelTwinKeys.add(k)
+    for (const [sessionId, candidates] of twinCandidates) {
+      const spans = otelTimes.get(sessionId)
+      if (!spans || new Set(candidates.map(c => c.storage)).size !== 1) continue
+      for (const transcript of [false, true]) {
+        const list = candidates
+          .filter(c => c.transcript === transcript && !Number.isNaN(c.ts))
+          .sort((a, b) => a.ts - b.ts || a.key.localeCompare(b.key))
+        list.forEach((c, i) => {
+          const from = transcript ? (list[i - 1]?.ts ?? -Infinity) : c.ts
+          const to = transcript ? c.ts : (list[i + 1]?.ts ?? Infinity)
+          const inWindow = (t: number) => transcript ? t > from && t <= to : t >= from && t < to
+          if (spans.some(inWindow)) otelTwinKeys.add(c.key)
+        })
+      }
     }
     // Session-state per-turn calls carry no per-call project (the serve loop
     // takes it from source.project), so resolve it the same way here — every
