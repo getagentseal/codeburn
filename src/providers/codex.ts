@@ -733,6 +733,7 @@ function isValidCodexTokenUsage(value: unknown): value is CodexTokenUsage {
 type CodexResumeState = {
   sessionModel?: string
   sessionId: string
+  threadId?: string
   sessionCwd?: string
   forkedFromId: string
   forkReplayState?: CodexForkReplayState
@@ -811,6 +812,7 @@ function isResumeState(value: unknown): value is CodexResumeState {
     })
   )
   return typeof v['sessionId'] === 'string'
+    && (v['threadId'] === undefined || typeof v['threadId'] === 'string')
     && typeof v['forkedFromId'] === 'string'
     && (v['forkReplayState'] === undefined || isCodexForkReplayState(v['forkReplayState']))
     && (v['prevCumulativeTotal'] === null || typeof v['prevCumulativeTotal'] === 'number')
@@ -869,6 +871,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
 
       let sessionModel: string | undefined = resume?.state.sessionModel
       let sessionId = resume?.state.sessionId ?? ''
+      let threadId = resume?.state.threadId ?? sessionId
       let sessionCwd: string | undefined = resume?.state.sessionCwd
       let forkedFromId = resume?.state.forkedFromId ?? ''
       let forkReplayState = resume?.state.forkReplayState ? { ...resume.state.forkReplayState } : undefined
@@ -1143,10 +1146,11 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
         if (!entry) continue
 
         if (entry.type === 'session_meta') {
+          sessionId = entry.payload?.session_id ?? rolloutStem(basename(source.path))
           // Rollouts from before Codex wrote `session_id` carry only `id`, the
-          // same thread UUID a fork names in `forked_from_id`; keying on it lets
-          // a fork's replayed history collide with the parent's own records.
-          sessionId = entry.payload?.session_id ?? entry.payload?.id ?? rolloutStem(basename(source.path))
+          // thread UUID a fork names in `forked_from_id`. Dedup keys use it so a
+          // fork's replayed history collides with the parent's own records.
+          threadId = entry.payload?.session_id ?? entry.payload?.id ?? sessionId
           // Guarded for the same reason as discoverSessionFile: parseCodexLine
           // hands back an unchecked JSON.parse cast, and a non-string cwd would
           // ride into projectPath/workingDirectory where the parser's path
@@ -1279,6 +1283,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
           resumeState = {
             ...(sessionModel !== undefined ? { sessionModel } : {}),
             sessionId,
+            threadId,
             ...(sessionCwd !== undefined ? { sessionCwd } : {}),
             forkedFromId,
             ...(forkReplayState ? { forkReplayState: { ...forkReplayState } } : {}),
@@ -1490,7 +1495,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
           hasTokenUsageRecord = true
 
           const dedupKey = typeof responseId === 'string' && responseId
-            ? `codex:${forkedFromId || sessionId}:response:${responseId}`
+            ? `codex:${forkedFromId || threadId}:response:${responseId}`
             : `codex:usage-record:${JSON.stringify([source.path, tracker.lastCompleteLineOffset])}`
           accountUsage(entry, usage, dedupKey)
           continue
@@ -1647,7 +1652,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
           // burst (accepted trade-off: the alternative collapsed
           // distinct requests wholesale).
           const dedupKey = reportsCumulative
-            ? `codex:${forkedFromId || sessionId}:${cumulativeTotal}:${total?.input_tokens ?? 0}:${total?.cached_input_tokens ?? 0}:${total?.output_tokens ?? 0}:${total?.reasoning_output_tokens ?? 0}`
+            ? `codex:${forkedFromId || threadId}:${cumulativeTotal}:${total?.input_tokens ?? 0}:${total?.cached_input_tokens ?? 0}:${total?.output_tokens ?? 0}:${total?.reasoning_output_tokens ?? 0}`
             : `codex:record:${JSON.stringify([source.path, tracker.lastCompleteLineOffset])}`
 
           accountUsage(entry, {
