@@ -266,6 +266,9 @@ async function discoverSessions(dir: string): Promise<SessionSource[]> {
       project: botName ?? agentId,
       provider: 'grokbot',
       sourceId: agentId,
+      // The mirror is a sliding window: requests that slid out of it stay
+      // cached, or the bot's history would shrink as it works.
+      durable: true,
       ...(botName ? { sourceLabel: botName, agentName: botName } : {}),
     })
   }
@@ -280,9 +283,6 @@ export function createGrokbotProvider(persistenceDir?: string): Provider {
   return {
     name: 'grokbot',
     displayName: 'Grok Bot',
-    // The mirror is a sliding window: requests that slide out of it are kept
-    // from the cache, or the bot's history would shrink as it works.
-    durableSources: true,
 
     async probeRoots(): Promise<ProbeRoot[]> {
       return [{ path: resolveDir(), label: 'client persistence' }]

@@ -176,7 +176,7 @@ async function discoverSources(): Promise<SessionSource[]> {
         provider: 'quickdesk',
         sourceId: 'sessions-db',
         sourcePath: base.path,
-        snapshot: true,
+        durable: false,
       })
     }
   }
