@@ -304,3 +304,34 @@ it('re-reads a Cline task whose ui_messages.json is rewritten in place', async (
   clearSessionCache()
   expect(await calls()).toBe(3)
 })
+
+it('drops a Cline task cached under its old directory key instead of counting it twice', async () => {
+  const taskDir = join(HOME, '.cline', 'data', 'tasks', 'migrated')
+  await mkdir(taskDir, { recursive: true })
+  await writeFile(join(taskDir, 'ui_messages.json'), JSON.stringify([
+    { type: 'say', say: 'api_req_started', ts: Date.UTC(2026, 7, 16, 10), text: JSON.stringify({ tokensIn: 1000, tokensOut: 200, cost: 0.5 }) },
+  ]))
+  const { clearSessionCache, parseAllSessions } = await import('../src/parser.js')
+  const { loadCache, markCacheDirty, saveCache } = await import('../src/session-cache.js')
+  const total = async () => {
+    clearSessionCache()
+    return (await parseAllSessions(undefined, 'cline')).reduce((s, p) => s + p.totalCostUSD, 0)
+  }
+  expect(await total()).toBeCloseTo(0.5, 10)
+
+  // Rewrite the cache into the shape a build keyed on task directories left.
+  const cache = await loadCache()
+  const files = cache.providers['cline']!.files
+  const fileKey = join(taskDir, 'ui_messages.json')
+  const dirStat = await stat(taskDir)
+  files[taskDir] = { ...files[fileKey]!, fingerprint: { dev: dirStat.dev, ino: dirStat.ino, mtimeMs: dirStat.mtimeMs, sizeBytes: dirStat.size } }
+  delete files[fileKey]
+  markCacheDirty(cache, 'cline')
+  await saveCache(cache)
+  clearSessionCache()
+  expect(Object.keys((await loadCache()).providers['cline']!.files)).toEqual([taskDir])
+
+  expect(await total()).toBeCloseTo(0.5, 10)
+  clearSessionCache()
+  expect(Object.keys((await loadCache()).providers['cline']!.files)).toEqual([fileKey])
+})
