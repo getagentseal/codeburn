@@ -132,12 +132,16 @@ export function countSessions(projects: ReadonlyArray<{ sessions: SessionSummary
 
 export type CostBasisShares = Partial<Record<CostBasis, number>>
 
-export function costBasisShares(calls: Iterable<{ costBasis?: CostBasis; costUSD: number }>): CostBasisShares | undefined {
+export function costBasisShares(calls: Iterable<{ costBasis?: CostBasis; costUSD: number; estimatedCostUSD?: number }>): CostBasisShares | undefined {
   const shares: CostBasisShares = {}
   let total = 0
-  for (const { costBasis, costUSD } of calls) {
+  const add = (basis: CostBasis, usd: number) => { if (usd > 0) shares[basis] = (shares[basis] ?? 0) + usd }
+  for (const { costBasis, costUSD, estimatedCostUSD } of calls) {
     if (!costBasis || costUSD <= 0) continue
-    shares[costBasis] = (shares[costBasis] ?? 0) + costUSD
+    if (costBasis === 'estimated' && estimatedCostUSD !== undefined) {
+      add('estimated', estimatedCostUSD)
+      add('calculated', costUSD - estimatedCostUSD)
+    } else add(costBasis, costUSD)
     total += costUSD
   }
   if (total <= 0) return undefined

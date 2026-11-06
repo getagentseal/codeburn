@@ -54,6 +54,20 @@ describe('price discounts', () => {
     expect(cost('claude-opus-4-8', 1_000, 1_000, 0, 0, 'fast')).toBeCloseTo(2 * (1_000 * 5e-6 * 0.75 + 1_000 * 25e-6 * 0.6), 12)
   })
 
+  it('counts only the discounted output of an estimated placeholder call as estimated', () => {
+    setPriceDiscounts({ claude: 20, 'claude-sonnet-4-6:output': 50 })
+    const call = cachedCallToApiCall(cachedCall({ isEstimated: true }))
+    expect(call.costUSD).toBeCloseTo(cost('claude-sonnet-4-6', 1_000, 1_000, 0, 0), 15)
+    expect(call.estimatedCostUSD).toBeCloseTo(cost('claude-sonnet-4-6', 0, 1_000, 0, 0, 'standard', 'claude', false) * 0.5, 15)
+  })
+
+  it('prices the estimated output of a long-context call at its tier', () => {
+    const usage = { ...cachedCall().usage, inputTokens: 300_000, outputTokens: 1_000 }
+    const call = cachedCallToApiCall(cachedCall({ model: 'claude-sonnet-4-5', usage, isEstimated: true }))
+    expect(call.estimatedCostUSD).toBeCloseTo(1_000 * 22.5e-6, 12)
+    expect(call.costUSD - call.estimatedCostUSD!).toBeCloseTo(300_000 * 6e-6, 12)
+  })
+
   it('handles the 0 and 100 percent edges and ignores invalid entries', () => {
     const list = cost('claude-sonnet-4-6', 1_000, 1_000, 0, 0)
     setPriceDiscounts({ claude: 0 })

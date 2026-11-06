@@ -116,6 +116,14 @@ describe('sessions JSON emitter', () => {
     expect(folded!.subagents![0]!.costBasis).toEqual({ recorded: 0.5, estimated: 0.5 })
   })
 
+  it('counts only the estimated part of a partly estimated call in the costBasis', () => {
+    const project = makeProject()
+    Object.assign(project.sessions[0]!.turns[0]!.assistantCalls[0]!, { costBasis: 'estimated', isEstimated: true, estimatedCostUSD: 0.03 })
+    const [row] = aggregateSessions([project])
+    expect(row!.costBasis!.estimated).toBeCloseTo(0.25)
+    expect(row!.costBasis!.calculated).toBeCloseTo(0.75)
+  })
+
   it('marks an estimated session row and explains the marker under the table', () => {
     const project = makeProject()
     project.sessions[0]!.totalEstimatedCostUSD = 0.12
