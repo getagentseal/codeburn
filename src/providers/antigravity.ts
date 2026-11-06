@@ -1011,11 +1011,12 @@ function decodePackedVarints(data: Uint8Array): number[] {
 }
 
 // ModelUsageStats' output total (field 3, thinking + response) wins over its
-// split whenever it is set: an absent split (proto3 omits unset fields) takes
-// the total as response, and a split that disagrees, even one whose thinking
-// alone exceeds the total, is cut back to it. Returns [response, thinking].
+// split: an absent split (proto3 omits unset fields) takes the total as
+// response, and a split that disagrees, even one whose thinking alone exceeds
+// the total or one beside a total of 0, is cut back to it. Returns
+// [response, thinking].
 function reconcileOutputSplit(total: number, thinking: number, response: number): [number, number] {
-  if (total <= 0 || response + thinking === total) return [response, thinking]
+  if (response + thinking === total) return [response, thinking]
   const kept = Math.min(thinking, total)
   return [total - kept, kept]
 }
