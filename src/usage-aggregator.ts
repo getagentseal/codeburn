@@ -133,7 +133,7 @@ export function buildPeriodData(label: string, projects: ProjectSummary[]): Peri
     outputTokens: number
     cacheReadTokens: number
     cacheWriteTokens: number
-  }> = {}
+  }> = Object.create(null)
   let inputTokens = 0, outputTokens = 0, cacheReadTokens = 0, cacheWriteTokens = 0
 
   for (const sess of sessions) {
@@ -1975,9 +1975,9 @@ export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: 
   }
 
   const breakdowns: BreakdownArrays = (() => {
-    const toolMap: Record<string, number> = {}
-    const skillMap: Record<string, { turns: number; cost: number }> = {}
-    const subagentMap: Record<string, { calls: number; cost: number }> = {}
+    const toolMap: Record<string, number> = Object.create(null)
+    const skillMap: Record<string, { turns: number; cost: number }> = Object.create(null)
+    const subagentMap: Record<string, { calls: number; cost: number }> = Object.create(null)
     const ompSubagentMap = new Map<string, {
       agentName: string
       model: string
@@ -1989,7 +1989,7 @@ export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: 
       cacheReadTokens: number
       cacheWriteTokens: number
     }>()
-    const mcpMap: Record<string, number> = {}
+    const mcpMap: Record<string, number> = Object.create(null)
     // Local-model savings rollup: avoided spend (cost forced to $0, baseline
     // recorded) grouped by model and provider. Mirrors the per-call savingsUSD
     // that applyLocalModelSavings stamps in the parser.

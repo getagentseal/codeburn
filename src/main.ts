@@ -693,7 +693,7 @@ function buildJsonReport(projects: ProjectSummary[], period: string, periodKey: 
     ...(p.checkouts ? { checkouts: p.checkouts.map(c => ({ path: c.id, cost: convertCost(c.cost), ...(c.matchedByFolderName ? { matchedByFolderName: true } : {}) })), checkoutCount: p.checkoutCount } : {}),
   }))
 
-  const modelMap: Record<string, { calls: number; cost: number; savings: number; estimatedCost: number; inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; baselineModel: string }> = {}
+  const modelMap: Record<string, { calls: number; cost: number; savings: number; estimatedCost: number; inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; baselineModel: string }> = Object.create(null)
   const modelEfficiency = aggregateModelEfficiency(projects)
   // Same durable day set as the headline and `daily`, so the rows sum to it:
   // days whose transcripts have expired keep their models, and the pre-v14 ones
@@ -780,11 +780,11 @@ function buildJsonReport(projects: ProjectSummary[], period: string, periodKey: 
       oneShotRate: d.editTurns > 0 ? Math.round((d.oneShotTurns / d.editTurns) * 1000) / 10 : null,
     }))
 
-  const toolMap: Record<string, number> = {}
-  const mcpMap: Record<string, number> = {}
-  const bashMap: Record<string, number> = {}
-  const skillMap: Record<string, { turns: number; cost: number; savings: number }> = {}
-  const subagentMap: Record<string, { calls: number; cost: number; savings: number }> = {}
+  const toolMap: Record<string, number> = Object.create(null)
+  const mcpMap: Record<string, number> = Object.create(null)
+  const bashMap: Record<string, number> = Object.create(null)
+  const skillMap: Record<string, { turns: number; cost: number; savings: number }> = Object.create(null)
+  const subagentMap: Record<string, { calls: number; cost: number; savings: number }> = Object.create(null)
   // Claude Code only: real subagent-transcript spend grouped by agentType
   // (workflow-subagent / Explore / general-purpose / …). Distinct from
   // subagentMap, which is Task-tool-input based and never sees workflow agents.

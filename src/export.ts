@@ -207,7 +207,7 @@ function buildActivityRows(projects: ProjectSummary[], period: string): Row[] {
 }
 
 function buildModelRows(projects: ProjectSummary[], period: string): Row[] {
-  const modelTotals: Record<string, { calls: number; cost: number; savings: number; input: number; output: number; cacheRead: number; cacheWrite: number }> = {}
+  const modelTotals: Record<string, { calls: number; cost: number; savings: number; input: number; output: number; cacheRead: number; cacheWrite: number }> = Object.create(null)
   const modelEfficiency = aggregateModelEfficiency(projects)
   const ensure = (model: string) => {
     if (!Object.hasOwn(modelTotals, model)) modelTotals[model] = { calls: 0, cost: 0, savings: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
@@ -259,7 +259,7 @@ function buildModelRows(projects: ProjectSummary[], period: string): Row[] {
 }
 
 function buildToolRows(projects: ProjectSummary[]): Row[] {
-  const toolTotals: Record<string, number> = {}
+  const toolTotals: Record<string, number> = Object.create(null)
   for (const project of projects) {
     for (const session of project.sessions) {
       for (const [tool, d] of Object.entries(session.toolBreakdown)) {
@@ -278,7 +278,7 @@ function buildToolRows(projects: ProjectSummary[]): Row[] {
 }
 
 function buildMcpRows(projects: ProjectSummary[]): Row[] {
-  const mcpTotals: Record<string, number> = {}
+  const mcpTotals: Record<string, number> = Object.create(null)
   for (const project of projects) {
     for (const session of project.sessions) {
       for (const [server, d] of Object.entries(session.mcpBreakdown)) {
@@ -297,7 +297,7 @@ function buildMcpRows(projects: ProjectSummary[]): Row[] {
 }
 
 function buildBashRows(projects: ProjectSummary[]): Row[] {
-  const bashTotals: Record<string, number> = {}
+  const bashTotals: Record<string, number> = Object.create(null)
   for (const project of projects) {
     for (const session of project.sessions) {
       for (const [cmd, d] of Object.entries(session.bashBreakdown)) {

@@ -18,7 +18,7 @@ function emptyEntry(date: string): DailyEntry {
     cacheWriteTokens: 0,
     editTurns: 0,
     oneShotTurns: 0,
-    models: {},
+    models: Object.create(null),
     categories: {},
     providers: {},
   }
@@ -50,7 +50,7 @@ function emptySlice(): ProviderDaySlice {
   return {
     calls: 0, cost: 0, savingsUSD: 0,
     sessions: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0,
-    editTurns: 0, oneShotTurns: 0, models: {}, categories: {},
+    editTurns: 0, oneShotTurns: 0, models: Object.create(null), categories: {},
   }
 }
 
@@ -291,7 +291,7 @@ export function buildPeriodDataFromDays(days: DailyEntry[], label: string): Peri
     outputTokens: number
     cacheReadTokens: number
     cacheWriteTokens: number
-  }> = {}
+  }> = Object.create(null)
 
   for (const d of days) {
     cost += d.cost

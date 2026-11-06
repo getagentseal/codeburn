@@ -46,7 +46,7 @@ export function resolveModelBreakdownKey(
  */
 export function sessionBillableOutput(session: SessionSummary): { total: number, byModel: Record<string, number> } {
   const breakdown = session.modelBreakdown ?? {}
-  const byModel: Record<string, number> = {}
+  const byModel: Record<string, number> = Object.create(null)
   let total = 0
   let sawUsage = false
   for (const turn of session.turns ?? []) {

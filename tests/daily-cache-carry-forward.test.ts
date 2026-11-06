@@ -686,7 +686,7 @@ describe('adoption union across older cache files', () => {
     expect(loaded.days[0]!.categories).toEqual({})
   })
 
-  it('drops inherited provider and model keys before period aggregation', async () => {
+  it('drops inherited provider keys and keeps a model named constructor through period aggregation', async () => {
     const target = daysAgoStr(20)
     const modelStats = {
       calls: 1,
@@ -729,7 +729,8 @@ describe('adoption union across older cache files', () => {
     }
 
     expect(Object.hasOwn(loadedDay.providers, 'toString')).toBe(false)
-    expect(Object.hasOwn(loadedDay.models, 'constructor')).toBe(false)
+    expect(Object.hasOwn(loadedDay.models, 'constructor')).toBe(true)
+    expect(period.models.find(m => m.name === 'constructor')?.calls).toBe(modelStats.calls)
     const assertFiniteNumbers = (value: unknown): void => {
       if (typeof value === 'number') {
         expect(Number.isFinite(value)).toBe(true)

@@ -1,5 +1,5 @@
 import { mkdtempSync } from 'fs'
-import { mkdir, rm, writeFile } from 'fs/promises'
+import { mkdir, readFile, rm, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { afterAll, beforeEach, expect, it } from 'vitest'
@@ -45,7 +45,7 @@ beforeEach(async () => {
     type: 'assistant', timestamp: at('03:30:00'), sessionId: 's1',
     message: { type: 'message', role: 'assistant', model, id, content: [], usage: { input_tokens: 1000, output_tokens: 100, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 } },
   })
-  await writeFile(join(claudeDir, 's1.jsonl'), [line('a', 'claude-sonnet-4-5'), line('b', 'toString')].join('\n') + '\n')
+  await writeFile(join(claudeDir, 's1.jsonl'), [line('a', 'claude-sonnet-4-5'), line('b', 'toString'), line('c', '__proto__')].join('\n') + '\n')
 })
 
 async function load() {
@@ -65,7 +65,7 @@ it('a Codex tool named constructor parses and leaves every provider total intact
   expect(codex[0]!.tools).toEqual(['constructor'])
   expect(codex[0]!.costUSD).toBeGreaterThan(0)
   const claude = calls.filter(c => c.provider === 'claude')
-  expect(claude).toHaveLength(2)
+  expect(claude).toHaveLength(3)
   expect(claude.find(c => c.model === 'claude-sonnet-4-5')!.costUSD).toBeGreaterThan(0)
   const session = projects.flatMap(p => p.sessions).find(s => s.turns.some(t => t.assistantCalls.some(c => c.provider === 'codex')))!
   expect(session.toolBreakdown['constructor']).toEqual({ calls: 1 })
@@ -87,6 +87,23 @@ it('the models report and the menubar payload build with a toString model', asyn
   const rows = await aggregateModels(await parseAllSessions(range, 'all'), { minCost: 0 })
   expect(rows.find(r => r.model === 'toString')?.calls).toBe(1)
   const payload = await buildMenubarPayloadForRange({ range, label: 'w' }, { optimize: false, timeline: false })
-  expect(payload.current.calls).toBe(3)
+  expect(payload.current.calls).toBe(4)
   expect(payload.current.topModels.find(m => m.name === 'toString')?.calls).toBe(1)
+})
+
+it('a model named __proto__ keeps its row in the models report, the menubar payload and the export', async () => {
+  const { parseAllSessions } = await load()
+  const { aggregateModels } = await import('../src/models-report.js')
+  const { buildMenubarPayloadForRange } = await import('../src/usage-aggregator.js')
+  const { exportJson } = await import('../src/export.js')
+  const projects = await parseAllSessions(range, 'all')
+  const rows = await aggregateModels(projects, { minCost: 0 })
+  expect(rows.find(r => r.model === '__proto__')?.calls).toBe(1)
+  const payload = await buildMenubarPayloadForRange({ range, label: 'w' }, { optimize: false, timeline: false })
+  expect(payload.current.topModels.find(m => m.name === '__proto__')?.calls).toBe(1)
+  const out = await exportJson([{ label: '30 Days', projects }], join(ROOT, 'export.json'))
+  const exported = JSON.parse(await readFile(out, 'utf-8'))
+  expect(exported.periods[0].models.find((m: { model?: string }) => m.model === '__proto__')).toBeTruthy()
+  expect(exported.tools.find((t: { tool?: string }) => t.tool === 'constructor')?.calls).toBe(1)
+  expect(({} as Record<string, unknown>)['calls']).toBeUndefined()
 })
