@@ -899,7 +899,7 @@ function parseBubbles(
   // their requestId). A request whose bubbles predate the window belongs to
   // that older conversation, not here; one whose bubbles the scan budget cut
   // takes its newest bubble's time. agentKv stores no timestamps, so a request
-  // with no bubble takes the DB file's mtime and keeps it on every later
+  // with no dated bubble takes the DB file's mtime and keeps it on every later
   // parse; re-stamping would move it to the latest write each time.
   const bubbleTimes = new Map<string, string | null>()
   const unjoinedIds = [...unjoined.keys()]
@@ -918,7 +918,7 @@ function parseBubbles(
     // Request ids are UUIDs, so a historic bubble sharing one with a billable
     // agent-only stream is not expected.
     const bubbleTime = bubbleTimes.get(requestId)
-    if (bubbleTimes.has(requestId) && !(bubbleTime && bubbleTime > timeFloor)) continue
+    if (bubbleTime && bubbleTime <= timeFloor) continue
     const inputTokens = estimateTokensFromChars(stream.userChars + stream.contextChars)
     const outputTokens = estimateTokensFromChars(stream.assistantChars)
     if (inputTokens === 0 && outputTokens === 0) continue

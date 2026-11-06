@@ -433,6 +433,22 @@ describe.skipIf(skipReason !== null)('cursor real context tokens (#575)', () => 
     expect(calls.some(c => c.deduplicationKey.endsWith(':b1'))).toBe(false)
   })
 
+  it('bills an agent-only stream whose only bubble has no createdAt, at the first-seen time', async () => {
+    const requestId = 'req-undated'
+    const dbPath = buildDb((db) => {
+      db.prepare('INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)').run(
+        'bubbleId:55551111-1111-2222-3333-444455556666:b1',
+        JSON.stringify({ type: 1, text: 'undated prompt', requestId }),
+      )
+      insertAgentKv(db, { blobId: 'akv-1', role: 'user', content: 'undated prompt with context', requestId })
+    })
+
+    const calls = await collectCalls(createCursorProvider(dbPath), dbPath)
+
+    const stream = calls.filter(c => c.deduplicationKey === `cursor:agentKv:${requestId}`)
+    expect(stream.map(c => c.timestamp)).toEqual([new Date(statSync(dbPath).mtimeMs).toISOString()])
+  })
+
   it('binds at most 900 request ids per lookup', async () => {
     const dbPath = buildDb((db) => {
       for (let i = 0; i < 901; i++) {
