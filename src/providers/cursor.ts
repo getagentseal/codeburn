@@ -5,7 +5,7 @@ import { getEditorDataDir } from '../editor-data-dir.js'
 
 import { calculateCost, ownValue } from '../models.js'
 import { extractBashCommands } from '../bash-utils.js'
-import { readCachedResults, writeCachedResults } from '../cursor-cache.js'
+import { readCachedResults, readPriorResults, writeCachedResults } from '../cursor-cache.js'
 import { importSource, importSourceParser } from '../cursor-import.js'
 import {
   isSqliteAvailable,
@@ -341,6 +341,12 @@ const AGENTKV_QUERY = `
   WHERE key LIKE 'agentKv:blob:%'
     AND hex(substr(value, 1, 1)) = '7B'
   ORDER BY ROWID ASC
+`
+
+const BUBBLE_REQUEST_IDS_QUERY = `
+  SELECT DISTINCT json_extract(value, '$.requestId') as request_id
+  FROM cursorDiskKV
+  WHERE key LIKE 'bubbleId:%'
 `
 
 const USER_MESSAGES_QUERY = `
@@ -683,6 +689,7 @@ function parseBubbles(
   seenKeys: Set<string>,
   timeFloor: string,
   agentKvTimestamp: string,
+  priorTimestamps: Map<string, string>,
 ): { calls: ParsedProviderCall[] } {
   const results: ParsedProviderCall[] = []
   let skipped = 0
@@ -913,9 +920,22 @@ function parseBubbles(
   }
 
   // Sessions recorded only in the agent stream (no bubble carries their
-  // requestId). agentKv stores no timestamps, so these reuse the DB file's
-  // mtime as a bounded "last write" time, like the pre-composer parser did.
+  // requestId). A request whose bubbles fall outside the scanned window
+  // belongs to that older conversation, not here. agentKv stores no
+  // timestamps, so a new one takes the DB file's mtime and keeps it on every
+  // later parse; re-stamping would move it to the latest write each time.
+  const bubbleRequestIds = new Set<string>()
+  if (unjoined.size > 0) {
+    try {
+      for (const row of db.query<{ request_id: string | null }>(BUBBLE_REQUEST_IDS_QUERY)) {
+        if (row.request_id) bubbleRequestIds.add(row.request_id)
+      }
+    } catch (err) {
+      rethrowBusy(err)
+    }
+  }
   for (const [requestId, stream] of unjoined) {
+    if (bubbleRequestIds.has(requestId)) continue
     const inputTokens = estimateTokensFromChars(stream.userChars + stream.contextChars)
     const outputTokens = estimateTokensFromChars(stream.assistantChars)
     if (inputTokens === 0 && outputTokens === 0) continue
@@ -931,7 +951,7 @@ function parseBubbles(
       costUSD: calculateCost(resolveModel(stream.model), inputTokens, outputTokens, 0, 0, 0),
       tools: stream.tools,
       bashCommands: stream.bash,
-      timestamp: agentKvTimestamp,
+      timestamp: priorTimestamps.get(dedupKey) ?? agentKvTimestamp,
       deduplicationKey: dedupKey,
       userMessage: '',
       sessionId: requestId,
@@ -1020,7 +1040,8 @@ function createParser(
           } catch {
             agentKvTimestamp = new Date().toISOString()
           }
-          const { calls: bubbleCalls } = parseBubbles(db, localSeen, timeFloor, agentKvTimestamp)
+          const priorTimestamps = new Map((await readPriorResults(dbPath)).map(c => [c.deduplicationKey, c.timestamp]))
+          const { calls: bubbleCalls } = parseBubbles(db, localSeen, timeFloor, agentKvTimestamp, priorTimestamps)
           allCalls = bubbleCalls
           await writeCachedResults(dbPath, allCalls, timeFloor)
         } finally {

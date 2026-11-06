@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { mkdtemp, rm } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
+import { utimesSync } from 'fs'
 import { createRequire } from 'node:module'
 
 import {
@@ -375,6 +376,40 @@ describe.skipIf(skipReason !== null)('cursor real context tokens (#575)', () => 
     expect(session).toBeDefined()
     expect(session!.inputTokens).toBe(Math.ceil(prompt.length / 4))
     expect(session!.outputTokens).toBe(Math.ceil(reply.length / 4))
+  })
+
+  it('does not bill the stream of a conversation older than the lookback as a new session', async () => {
+    const composerId = '44440000-1111-2222-3333-444455556666'
+    const requestId = 'req-old'
+    const oldAt = new Date(Date.now() - 240 * 864e5).toISOString()
+    const dbPath = buildDb((db) => {
+      insertBubble(db, { composerId, bubbleUuid: 'b1', type: 1, text: 'old prompt', createdAt: oldAt, requestId })
+      insertBubble(db, { composerId, bubbleUuid: 'b2', type: 2, text: 'old reply', model: 'gpt-5', createdAt: oldAt, requestId })
+      insertAgentKv(db, { blobId: 'akv-1', role: 'user', content: 'x'.repeat(40_000), requestId })
+      insertAgentKv(db, { blobId: 'akv-2', role: 'assistant', content: [{ type: 'text', text: 'y'.repeat(4_000) }] })
+    })
+
+    const calls = await collectCalls(createCursorProvider(dbPath), dbPath)
+
+    expect(calls).toEqual([])
+  })
+
+  it('keeps an agent-only session on the time it was first seen after the DB changes', async () => {
+    const requestId = 'req-headless-2'
+    const dbPath = buildDb((db) => {
+      insertAgentKv(db, { blobId: 'akv-1', role: 'user', content: 'run the export', requestId })
+      insertAgentKv(db, { blobId: 'akv-2', role: 'assistant', content: [{ type: 'text', text: 'done' }] })
+    })
+    const firstSeen = new Date(Date.now() - 3 * 864e5)
+    utimesSync(dbPath, firstSeen, firstSeen)
+
+    const first = await collectCalls(createCursorProvider(dbPath), dbPath)
+    utimesSync(dbPath, new Date(), new Date())
+    const second = await collectCalls(createCursorProvider(dbPath), dbPath)
+
+    const key = `cursor:agentKv:${requestId}`
+    expect(first.filter(c => c.deduplicationKey === key).map(c => c.timestamp)).toEqual([firstSeen.toISOString()])
+    expect(second.filter(c => c.deduplicationKey === key).map(c => c.timestamp)).toEqual([firstSeen.toISOString()])
   })
 
   it('pairs each assistant reply with its own turn\'s user question', async () => {

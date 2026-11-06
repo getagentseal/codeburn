@@ -113,6 +113,18 @@ export async function readCachedResults(
   }
 }
 
+// The last parse of this DB whatever its fingerprint now, so calls with no
+// timestamp of their own can keep the one they were first given.
+export async function readPriorResults(dbPath: string): Promise<ParsedProviderCall[]> {
+  const file = await readExistingTextFile(getCachePath())
+  if (file.status !== 'ok') return []
+  try {
+    const cache = JSON.parse(file.text) as ResultCache
+    if (cache?.version === CURSOR_CACHE_VERSION && cache.dbPath === resolve(dbPath) && Array.isArray(cache.calls)) return cache.calls
+  } catch {}
+  return []
+}
+
 export async function writeCachedResults(
   dbPath: string,
   calls: ParsedProviderCall[],
