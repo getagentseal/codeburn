@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mkdtemp, rm } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { rmSync, utimesSync } from 'fs'
+import { readFileSync, rmSync, utimesSync } from 'fs'
 import { createRequire } from 'node:module'
 
 import {
@@ -446,8 +446,11 @@ describe.skipIf(skipReason !== null)('cursor real context tokens (#575)', () => 
     const second = await collectCalls(createCursorProvider(dbPath), dbPath)
 
     const key = `cursor:agentKv:${requestId}`
-    expect(first.filter(c => c.deduplicationKey === key).map(c => c.timestamp)).toEqual([firstSeen.toISOString()])
-    expect(second.filter(c => c.deduplicationKey === key).map(c => c.timestamp)).toEqual([firstSeen.toISOString()])
+    const firstStamps = first.filter(c => c.deduplicationKey === key).map(c => c.timestamp)
+    const recorded = JSON.parse(readFileSync(join(getCodeburnCacheDir(), 'cursor-first-seen.json'), 'utf-8'))[requestId]
+    expect(firstStamps).toEqual([recorded])
+    expect(Date.parse(recorded)).toBeLessThan(Date.now() - 864e5)
+    expect(second.filter(c => c.deduplicationKey === key).map(c => c.timestamp)).toEqual([recorded])
   })
 
   it('pairs each assistant reply with its own turn\'s user question', async () => {
