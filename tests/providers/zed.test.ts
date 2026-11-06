@@ -225,6 +225,22 @@ describe.skipIf(skipReason !== null)('zed provider (#480)', () => {
     expect((await collectCalls(dbPath)).length).toBe(0)
   })
 
+  it('rethrows a locked database instead of parsing it as empty', async () => {
+    const dbPath = buildDb(db => insertThread(db, {
+      id: 't1',
+      thread: { model: { model: 'claude-sonnet-4-6' }, request_token_usage: { r1: { input_tokens: 10, output_tokens: 5 } } },
+    }))
+    const { DatabaseSync: Database } = requireForTest('node:sqlite')
+    const writer = new Database(dbPath)
+    writer.exec('BEGIN EXCLUSIVE')
+    try {
+      await expect(collectCalls(dbPath)).rejects.toThrow(/locked|busy/i)
+    } finally {
+      writer.exec('ROLLBACK')
+      writer.close()
+    }
+  })
+
   it('discovers nothing when the database does not exist', async () => {
     const provider = createZedProvider(join(tmpDir, 'missing.db'))
     expect(await provider.discoverSessions()).toEqual([])
