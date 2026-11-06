@@ -19,6 +19,9 @@ const FAKE_HOME_FOR_MOCK = process.env['CODEBURN_TEST_FAKE_HOME']!
 import {
   detectBloatedClaudeMd,
   detectUnusedMcp,
+  detectMcpDeferralOff,
+  detectMcpAlwaysLoadHygiene,
+  mcpNamespace,
   detectBashBloat,
   detectIdleCompactionBlocked,
   commandNames,
@@ -250,6 +253,28 @@ describe('detectUnusedMcp', () => {
     const split = detectUnusedMcp([], projects, new Set([projectDir]), [])
     const single = detectUnusedMcp([], projects.slice(0, 1), new Set([projectDir]), [])
     expect(split!.tokensSaved).toBe(single!.tokensSaved)
+  })
+
+  it('leaves a never-called server to unused-mcp alone, so its schema is charged once', () => {
+    for (const idle of [{ command: 'x' }, { command: 'x', alwaysLoad: true }]) {
+      const root = makeFixtureRoot()
+      const projectDir = join(root, 'myapp')
+      mkdirSync(projectDir, { recursive: true })
+      writeFile(join(projectDir, '.mcp.json'), JSON.stringify({ mcpServers: { idle, used: { command: 'y' } } }))
+      touchOld(join(projectDir, '.mcp.json'), 30)
+      const session = (sessionId: string) => ({ sessionId, mcpBreakdown: { used: { calls: 3 } }, turns: [{ assistantCalls: [{ provider: 'claude' }] }] })
+      const projects = [{ project: 'a', projectPath: '/a', sessions: ['s1', 's2', 's3'].map(session) }] as unknown as ProjectSummary[]
+      const cwds = new Set([projectDir])
+
+      const unused = detectUnusedMcp([], projects, cwds, [])!
+      const servers = new Set(unused.apply!.kind === 'mcp-remove' ? unused.apply!.servers.map(mcpNamespace) : [])
+      const findings = [
+        unused,
+        detectMcpDeferralOff([], projects, cwds, [], FAKE_HOME_FOR_MOCK, undefined, servers),
+        detectMcpAlwaysLoadHygiene(projects, cwds, [], [], FAKE_HOME_FOR_MOCK, undefined, servers),
+      ]
+      expect(findings.reduce((sum, f) => sum + (f?.tokensSaved ?? 0), 0)).toBe(2 * 2000 * 3)
+    }
   })
 
   describe('measured dollars', () => {

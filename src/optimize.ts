@@ -2931,6 +2931,7 @@ export function detectMcpDeferralOff(
   apiCalls: ApiCallMeta[],
   homeDir = homedir(),
   pricing?: FindingPricing,
+  unusedMcpServers: Set<string> = new Set(),
 ): WasteFinding | null {
   // Deferral-active evidence anywhere in the window suppresses the finding.
   if (calls.some(c => c.name === TOOL_SEARCH_TOOL_NAME)) return null
@@ -2944,7 +2945,8 @@ export function detectMcpDeferralOff(
   const pinnedServers = new Set(
     [...configured.values()].filter(e => e.alwaysLoadPaths.length > 0).map(e => e.normalized),
   )
-  const configuredUnpinned = [...configured.keys()].filter(s => !pinnedServers.has(s))
+  // unused-mcp already charges a never-called server's schema.
+  const configuredUnpinned = [...configured.keys()].filter(s => !pinnedServers.has(s) && !unusedMcpServers.has(s))
 
   // `calls` comes from scanSessions, which reads Claude Code JSONL only, so
   // it is already Claude-scoped (see isClaudeSession for why that matters).
@@ -3037,9 +3039,10 @@ export function detectMcpAlwaysLoadHygiene(
   mcpCoverage = aggregateMcpCoverage(projects),
   homeDir = homedir(),
   pricing?: FindingPricing,
+  unusedMcpServers: Set<string> = new Set(),
 ): WasteFinding | null {
   const configured = loadMcpConfigs(projectCwds, homeDir)
-  const pinned = [...configured.values()].filter(e => e.alwaysLoadPaths.length > 0)
+  const pinned = [...configured.values()].filter(e => e.alwaysLoadPaths.length > 0 && !unusedMcpServers.has(e.normalized))
   if (pinned.length === 0) return null
 
   // When every observed Claude Code version predates server-level
@@ -4547,17 +4550,19 @@ export async function scanAndDetect(
   // unused when it was simply not measured.
   const claudeOnly = (detect: () => WasteFinding | null): (() => WasteFinding | null) =>
     scanCoversClaude ? detect : () => null
+  const unusedMcp = scanCoversClaude ? detectUnusedMcp(toolCalls, projects, projectCwds, mcpCoverage, pricing) : null
+  const unusedMcpServers = new Set(unusedMcp?.apply?.kind === 'mcp-remove' ? unusedMcp.apply.servers.map(mcpNamespace) : [])
   const syncDetectors: Array<() => WasteFinding | null> = [
     claudeOnly(() => detectCacheBloat(apiCalls, projects, dateRange, pricing)),
     claudeOnly(() => detectLowReadEditRatio(toolCalls)),
     claudeOnly(() => detectJunkReads(toolCalls, dateRange, pricing)),
     claudeOnly(() => detectDuplicateReads(toolCalls, dateRange, pricing)),
-    claudeOnly(() => detectUnusedMcp(toolCalls, projects, projectCwds, mcpCoverage, pricing)),
+    () => unusedMcp,
     () => detectMcpToolCoverage(projects, mcpCoverage, localMcpServerNames(projectCwds), pricing),
     () => detectMcpProfileAdvisor(projects, mcpCoverage, provider, pricing),
     // mcp-deferral-gaps family (#614): detection only, no apply plans yet.
-    claudeOnly(() => detectMcpDeferralOff(toolCalls, projects, projectCwds, apiCalls, undefined, pricing)),
-    claudeOnly(() => detectMcpAlwaysLoadHygiene(projects, projectCwds, apiCalls, mcpCoverage, undefined, pricing)),
+    claudeOnly(() => detectMcpDeferralOff(toolCalls, projects, projectCwds, apiCalls, undefined, pricing, unusedMcpServers)),
+    claudeOnly(() => detectMcpAlwaysLoadHygiene(projects, projectCwds, apiCalls, mcpCoverage, undefined, pricing, unusedMcpServers)),
     claudeOnly(() => detectMcpDeferThreshold(projects, projectCwds, undefined, pricing)),
     claudeOnly(() => detectIdleCompactionBlocked(projects, projectCwds, apiCalls)),
     () => detectCapabilityReliability(behavioralProjects, provider),
