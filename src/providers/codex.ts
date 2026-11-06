@@ -1012,9 +1012,9 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
       // decodes in agreement instead of back-patching already-emitted calls.
       // Bounded by one task's calls; flushed at the next task_started and at EOF.
       let pendingTaskCalls: ParsedProviderCall[] = []
-      // The last null-info ping estimate. Measured usage later in the same
-      // turn and task replaces it, so the turn is one measured call.
-      let pingEstimate: ParsedProviderCall | null = null
+      // Null-info ping estimates. Measured usage later in the same turn and
+      // task replaces all of them, so the turn is measured calls only.
+      let pingEstimates: ParsedProviderCall[] = []
       let taskGeneratedTokens = 0
       let taskToolIntervals: Array<[number, number]> = []
       let taskStartedAt: number | undefined = resume?.state.taskStartedAt
@@ -1052,19 +1052,20 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
         const totalTokens = inputTokens + cachedInputTokens + outputTokens + reasoningTokens
         if (totalTokens === 0) return
 
-        const est = pingEstimate
-        pingEstimate = null
-        const estIndex = est && est.turnId === currentTurnId ? pendingTaskCalls.indexOf(est) : -1
-        if (est && estIndex !== -1) {
-          pendingTaskCalls.splice(estIndex, 1)
-          taskGeneratedTokens -= est.outputTokens
-          pendingTools = [...est.tools, ...pendingTools]
-          pendingToolSequence = [...(est.toolSequence ?? []), ...pendingToolSequence]
-          pendingSkills = [...(est.skills ?? []), ...pendingSkills]
-          pendingUserMessage = est.userMessage || pendingUserMessage
-          pendingLocAdded += est.locAdded ?? 0
-          pendingLocRemoved += est.locRemoved ?? 0
-          pendingEditFailed += est.editFailed ?? 0
+        const ests = pingEstimates.filter(est => est.turnId === currentTurnId && pendingTaskCalls.includes(est))
+        pingEstimates = []
+        if (ests.length > 0) {
+          pendingTaskCalls = pendingTaskCalls.filter(call => !ests.includes(call))
+          for (const est of ests) taskGeneratedTokens -= est.outputTokens
+          pendingTools = [...ests.flatMap(est => est.tools), ...pendingTools]
+          pendingToolSequence = [...ests.flatMap(est => est.toolSequence ?? []), ...pendingToolSequence]
+          pendingSkills = [...ests.flatMap(est => est.skills ?? []), ...pendingSkills]
+          pendingUserMessage = ests.find(est => est.userMessage)?.userMessage || pendingUserMessage
+          for (const est of ests) {
+            pendingLocAdded += est.locAdded ?? 0
+            pendingLocRemoved += est.locRemoved ?? 0
+            pendingEditFailed += est.editFailed ?? 0
+          }
         }
         if (seenKeys.has(dedupKey)) return
 
@@ -1293,6 +1294,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
           attachPendingNativeToolEvents(pendingTaskCalls.at(-1))
           results.push(...pendingTaskCalls)
           pendingTaskCalls = []
+          pingEstimates = []
           taskGeneratedTokens = 0
           taskToolIntervals = []
           const startedAt = entry.timestamp ? Date.parse(entry.timestamp) : NaN
@@ -1538,7 +1540,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
             // prompt pending for the measured call that follows. A turn that
             // ends on such a ping with nothing after it priced nothing: no call.
             // After output, the ping estimates the turn until measured usage
-            // for it arrives (pingEstimate).
+            // for it arrives (pingEstimates).
             if (pendingOutputChars === 0) continue
             const estInput = estimateTokensFromChars(pendingUserMessage.length)
             const estOutput = estimateTokensFromChars(pendingOutputChars)
@@ -1584,7 +1586,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
               ...(pendingLocRemoved ? { locRemoved: pendingLocRemoved } : {}),
               ...(pendingEditFailed ? { editFailed: pendingEditFailed } : {}),
             })
-            pingEstimate = pendingTaskCalls.at(-1)!
+            pingEstimates.push(pendingTaskCalls.at(-1)!)
             taskGeneratedTokens += estOutput
 
             pendingTools = []
