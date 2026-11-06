@@ -301,3 +301,21 @@ describe('a model alias added after a day sealed', () => {
     }
   })
 })
+
+describe('a past date the sealed cache has no row for', () => {
+  it('is filled in the all-provider headline as it is under a provider filter', async () => {
+    await seedHistoricalSession(daysAgoStr(3))
+    const live = await liveOnly(weekRange())
+    expect(live.calls).toBe(4)
+    await seedCache([dayEntry(daysAgoStr(5), { codex: slice(1, 1) }, { carried: true })])
+
+    clearSessionCache()
+    const all = await buildDurablePeriod({ range: weekRange(), label: 'p' })
+    clearSessionCache()
+    const claudeOnly = await buildDurablePeriod({ range: weekRange(), label: 'p' }, { provider: 'claude' })
+
+    expect(claudeOnly.data.calls).toBe(4)
+    expect(all.data.calls).toBe(5)
+    expect(all.data.cost).toBeCloseTo(claudeOnly.data.cost + 1, 10)
+  })
+})
