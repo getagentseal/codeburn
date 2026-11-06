@@ -880,8 +880,11 @@ describe('antigravity provider helpers', () => {
     const calls = buildCallsFromGeneratorMetadata('split-less', [
       { chatModel: { model: 'gemini-3-pro', usage: { model: 'gemini-3-pro', inputTokens: '1000', outputTokens: '4000', responseId: 'r1' } } },
       { chatModel: { model: 'gemini-3-pro', usage: { model: 'gemini-3-pro', inputTokens: '1000', outputTokens: '4000', thinkingOutputTokens: '1000', responseId: 'r2' } } },
+      { chatModel: { model: 'gemini-3-pro', usage: { model: 'gemini-3-pro', inputTokens: '1000', outputTokens: '100', thinkingOutputTokens: '200', responseOutputTokens: '50', responseId: 'r3' } } },
     ], {})
-    expect(calls.map(c => [c.outputTokens, c.reasoningTokens])).toEqual([[4000, 0], [3000, 1000]])
+    // The output total wins over a split that disagrees, even when thinking
+    // alone is larger than the total.
+    expect(calls.map(c => [c.outputTokens, c.reasoningTokens])).toEqual([[4000, 0], [3000, 1000], [0, 100]])
     expect(calls[0]!.costUSD).toBeCloseTo(calls[1]!.costUSD, 12)
     expect(calls[0]!.costUSD).toBeGreaterThan(0.04)
   })

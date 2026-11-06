@@ -1010,6 +1010,16 @@ function decodePackedVarints(data: Uint8Array): number[] {
   return values
 }
 
+// ModelUsageStats' output total (field 3, thinking + response) wins over its
+// split whenever it is set: an absent split (proto3 omits unset fields) takes
+// the total as response, and a split that disagrees, even one whose thinking
+// alone exceeds the total, is cut back to it. Returns [response, thinking].
+function reconcileOutputSplit(total: number, thinking: number, response: number): [number, number] {
+  if (total <= 0 || response + thinking === total) return [response, thinking]
+  const kept = Math.min(thinking, total)
+  return [total - kept, kept]
+}
+
 function buildCallFromSqliteGenMetadataRow(
   cascadeId: string,
   row: AntigravityGenMetadataRow,
@@ -1029,15 +1039,11 @@ function buildCallFromSqliteGenMetadataRow(
   const totalOutputTokens = protoFieldPositiveInteger(firstProtoField(usageFields, 3))
   const cacheWriteTokens = protoFieldPositiveInteger(firstProtoField(usageFields, 4))
   const cacheReadTokens = protoFieldPositiveInteger(firstProtoField(usageFields, 5))
-  let thinkingTokens = protoFieldPositiveInteger(firstProtoField(usageFields, 9))
-  let responseTokens = protoFieldPositiveInteger(firstProtoField(usageFields, 10))
-
-  if (responseTokens === 0 && thinkingTokens === 0) {
-    responseTokens = totalOutputTokens
-  } else if (totalOutputTokens > 0 && responseTokens + thinkingTokens !== totalOutputTokens) {
-    const adjustedResponseTokens = totalOutputTokens - thinkingTokens
-    if (adjustedResponseTokens >= 0) responseTokens = adjustedResponseTokens
-  }
+  const [responseTokens, thinkingTokens] = reconcileOutputSplit(
+    totalOutputTokens,
+    protoFieldPositiveInteger(firstProtoField(usageFields, 9)),
+    protoFieldPositiveInteger(firstProtoField(usageFields, 10)),
+  )
 
   if (inputTokens === 0 && totalOutputTokens === 0) return null
 
@@ -1325,20 +1331,15 @@ export function buildCallsFromGeneratorMetadata(
 
     const inputTokens = parseInt(usage.inputTokens ?? '0', 10)
     const outputTokens = parseInt(usage.outputTokens ?? '0', 10)
-    const thinkingTokens = parseInt(usage.thinkingOutputTokens ?? '0', 10)
-    let responseTokens = parseInt(usage.responseOutputTokens ?? '0', 10)
+    const [responseTokens, thinkingTokens] = reconcileOutputSplit(
+      outputTokens,
+      parseInt(usage.thinkingOutputTokens ?? '0', 10),
+      parseInt(usage.responseOutputTokens ?? '0', 10),
+    )
     const cacheReadTokens = parseInt(usage.cacheReadTokens ?? '0', 10)
     const cacheWriteTokens = parseInt(usage.cacheWriteTokens ?? '0', 10)
 
     if (inputTokens === 0 && outputTokens === 0) continue
-
-    // Proto3 JSON omits unset fields, so the response/thinking split can be
-    // missing while outputTokens holds the total. Same rule as the SQLite path.
-    if (responseTokens === 0 && thinkingTokens === 0) {
-      responseTokens = outputTokens
-    } else if (outputTokens > 0 && responseTokens + thinkingTokens !== outputTokens && outputTokens - thinkingTokens >= 0) {
-      responseTokens = outputTokens - thinkingTokens
-    }
 
     const responseId = usage.responseId || String(i)
     const dedupKey = `antigravity:${cascadeId}:${responseId}`
