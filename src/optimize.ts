@@ -1,12 +1,13 @@
 import chalk from 'chalk'
 import stripAnsi from 'strip-ansi'
 import { createHash } from 'crypto'
-import { open, readdir, stat, type FileHandle } from 'fs/promises'
+import { readdir, stat } from 'fs/promises'
 import { existsSync, statSync } from 'fs'
 import { basename, join } from 'path'
 import { homedir } from 'os'
 
 import { isReadShapedBashCommand } from './bash-utils.js'
+import { fileFacts, type FactsPass } from './scan-facts.js'
 import { EDIT_TOOLS } from './classifier.js'
 import { readSessionLines, readSessionFileSync } from './fs-utils.js'
 import { discoverAllSessions, providerDisplayName } from './providers/index.js'
@@ -703,7 +704,7 @@ type ScanData = {
   toolCalls: ToolCall[]
   projectCwds: Set<string>
   apiCalls: ApiCallMeta[]
-  userMessages: string[]
+  commandNames: string[]
   openers: SessionOpener[]
 }
 
@@ -715,16 +716,18 @@ function cappedString(value: unknown, cap = OPTIMIZE_FIELD_CAP): string | undefi
   return typeof value === 'string' ? value.slice(0, cap) : undefined
 }
 
-function compactOptimizeInput(name: string, input: unknown): Record<string, unknown> {
+export function compactOptimizeInput(name: string, input: unknown): Record<string, unknown> {
   if (!input || typeof input !== 'object') return {}
   const raw = input as Record<string, unknown>
   if (isReadTool(name)) {
     const filePath = cappedString(raw['file_path'], OPTIMIZE_TEXT_CAP)
     return filePath ? { file_path: filePath } : {}
   }
+  // Only whether the command reads is ever asked of it, so that is all a call
+  // keeps: the command text was most of what a scan held.
   if (BASH_TOOL_NAMES.has(name)) {
     const command = cappedString(raw['command'], OPTIMIZE_TEXT_CAP)
-    return command ? { command } : {}
+    return command && isReadShapedBashCommand(command) ? { readShaped: true } : {}
   }
   if (name === 'Agent' || name === 'Task') {
     const subagentType = cappedString(raw['subagent_type'])
@@ -791,7 +794,7 @@ type ScanFileResult = {
   calls: ToolCall[]
   cwds: string[]
   apiCalls: ApiCallMeta[]
-  userMessages: string[]
+  commandNames: string[]
   openers: SessionOpener[]
 }
 
@@ -863,7 +866,8 @@ export async function scanJsonlFile(
 /// lets one entry serve every period.
 type ScanFileRecord = {
   calls: ToolCall[]
-  cwds: Array<{ value: string; tsMs: number }>
+  /// Consecutive lines naming the same cwd, with the instant of each.
+  cwds: Array<{ value: string; tsMs: number[] }>
   apiCalls: Array<{ call: ApiCallMeta; versionIndex: number }>
   /// The version each line carried, in order, one entry per CHANGE of version:
   /// a run of lines repeating one version collapses to a single event whose
@@ -873,7 +877,9 @@ type ScanFileRecord = {
   /// file that changed version partway through resolves exactly as a scan
   /// carrying that range would have.
   versionEvents: Array<{ version: string; anchor: string | null }>
-  users: Array<{ tsMs: number; messages: string[]; opener: SessionOpener | null }>
+  /// Each user entry that carried text: the slash commands it names, which is
+  /// all of its text a detector reads, and its opening block when it is one.
+  users: Array<{ tsMs: number; commands: string[]; opener: SessionOpener | null }>
   /// A line marking the file as a sidechain qualifies unless the range filter
   /// would have skipped it: `always` is one that can never be skipped, `maxTs`
   /// the latest timestamp among those that can.
@@ -953,7 +959,11 @@ async function scanFileRecord(
     const ts = typeof entry.timestamp === 'string' ? entry.timestamp : undefined
     const tsMs = ts === undefined ? Number.NaN : Date.parse(ts)
 
-    if (entry.cwd && typeof entry.cwd === 'string') record.cwds.push({ value: entry.cwd, tsMs })
+    if (entry.cwd && typeof entry.cwd === 'string') {
+      const run = record.cwds[record.cwds.length - 1]
+      if (run && run.value === entry.cwd) run.tsMs.push(tsMs)
+      else record.cwds.push({ value: entry.cwd, tsMs: [tsMs] })
+    }
 
     if (entry.type === 'user') {
       const msg = entry.message as Record<string, unknown> | undefined
@@ -982,7 +992,7 @@ async function scanFileRecord(
       }
       // An entry with no text at all is not recorded: the opening block is the
       // first user message that carries text, and this one never claims it.
-      if (messages.length > 0) record.users.push({ tsMs, messages, opener })
+      if (messages.length > 0) record.users.push({ tsMs, commands: messages.flatMap(commandNames), opener })
       continue
     }
 
@@ -1071,7 +1081,7 @@ function projectRecord(record: ScanFileRecord, dateRange: DateRange | undefined)
     calls.push(call)
   }
   const cwds: string[] = []
-  for (const cwd of record.cwds) if (within(cwd.tsMs)) cwds.push(cwd.value)
+  for (const run of record.cwds) for (const tsMs of run.tsMs) if (within(tsMs)) cwds.push(run.value)
   const apiCalls: ApiCallMeta[] = []
   // The version a call carried is the last version line before it that the
   // range's own skip threshold would have left in place. Resolved for every
@@ -1090,18 +1100,18 @@ function projectRecord(record: ScanFileRecord, dateRange: DateRange | undefined)
     versions.push(versionBefore[entry.versionIndex]!)
     apiCalls.push(entry.call)
   }
-  const userMessages: string[] = []
+  const commandNamesInRange: string[] = []
   const openers: SessionOpener[] = []
   let sawUserText = false
   for (const user of record.users) {
     if (!within(user.tsMs)) continue
-    for (const message of user.messages) userMessages.push(message)
+    for (const name of user.commands) commandNamesInRange.push(name)
     if (!sawUserText) {
       sawUserText = true
       if (user.opener) openers.push(user.opener)
     }
   }
-  return { result: { calls, cwds, apiCalls, userMessages, openers }, sidechain: isSidechain, versions }
+  return { result: { calls, cwds, apiCalls, commandNames: commandNamesInRange, openers }, sidechain: isSidechain, versions }
 }
 
 // The session scan reads Claude Code transcripts only, so a `--provider` that
@@ -1117,11 +1127,10 @@ export function providerCoversClaude(provider?: string): boolean {
 // for. The scan re-read every Claude transcript overlapping the period on every
 // request - about six of the seven seconds a desktop period switch cost - while
 // all but the handful of files written since the last request produce exactly
-// the same result. An unchanged file is served as it is; a file that only grew
-// is read from the byte after the last complete line the previous read consumed
-// and the new lines are merged in, which is what keeps a live transcript from
-// costing its whole length on every request. Anything else - a file that shrank,
-// or whose opening bytes changed - is read in full. The recency flag is stamped
+// the same result. An unchanged file is served as it is; any other comes from
+// the stored record (scan-facts.ts), which reads only what a file appended since
+// it was stored, so a live transcript does not cost its whole length on every
+// request, and a new process does not re-read the corpus. The recency flag is stamped
 // afterwards, so a kept result is not pinned to the cutoff it was first scanned
 // under. Bounded by bytes with age and least-recently-used eviction, like the
 // shard memo.
@@ -1131,27 +1140,17 @@ export function providerCoversClaude(provider?: string): boolean {
 // which then drops every memo and hands the next request a cold scan.
 const SCAN_RETAINED_FACTOR = 1.8
 const CALL_SAMPLE_STRIDE = 16
-// How recently a file must have been written to be worth the digest that lets a
-// later read resume from an offset.
-const SCAN_RESUMABLE_AGE_MS = 24 * 60 * 60 * 1000
 // The desktop rotates through six named periods; holding a selection for each
 // of them per file is references only, and past that the oldest is dropped.
 const MAX_PROJECTIONS_PER_FILE = 6
 const SCAN_MEMO_MAX_BYTES = 160 * 1024 * 1024
 const SCAN_MEMO_MAX_AGE_MS = 10 * 60 * 1000
-// `head` is the digest of the file's first bytes as of the stored offset: the
-// cheapest proof that the bytes already consumed are still the same bytes, and
-// the one an in-place rewrite that happens to grow the file cannot fake.
-const SCAN_HEAD_BYTES = 4096
 type ScanMemoEntry = {
   record: ScanFileRecord
   // Least-recently-used order; `bytes` below counts these too.
   projections: Map<string, ScanProjection>
-  carry: ScanCarry
-  offset: number
   size: number
   mtimeMs: number
-  head: string
   /// The record plus every selection currently held for it.
   bytes: number
   usedAt: number
@@ -1188,7 +1187,8 @@ export function evictScanFileMemo(now: number, maxBytes: number = SCAN_MEMO_MAX_
 /// plus a flat per-record overhead, scaled by the measured retention factor,
 /// tracks the real footprint closely enough to bound it.
 function scanResultBytes(record: ScanFileRecord): number {
-  let bytes = record.apiCalls.length * 96 + record.cwds.length * 80
+  let bytes = record.apiCalls.length * 96
+  for (const run of record.cwds) bytes += 80 + run.tsMs.length * 8
   // Sampled, not exhaustive: measuring every tool input meant serializing the
   // whole corpus on every scan, which cost more than the memo saved.
   let sampled = 0
@@ -1201,34 +1201,17 @@ function scanResultBytes(record: ScanFileRecord): number {
   bytes += record.calls.length * (128 + averageInput)
   for (const user of record.users) {
     bytes += 96
-    for (const message of user.messages) bytes += message.length
+    for (const name of user.commands) bytes += name.length
     if (user.opener) bytes += user.opener.preview.length + 96
   }
   return Math.round(bytes * SCAN_RETAINED_FACTOR)
 }
 
-/// Digest of a file's opening bytes, or null when they cannot be read.
-async function headDigest(filePath: string): Promise<string | null> {
-  let handle: FileHandle
-  try {
-    handle = await open(filePath, 'r')
-  } catch { return null }
-  try {
-    const buffer = Buffer.allocUnsafe(SCAN_HEAD_BYTES)
-    const { bytesRead } = await handle.read(buffer, 0, SCAN_HEAD_BYTES, 0)
-    return createHash('sha256').update(buffer.subarray(0, bytesRead)).digest('hex')
-  } catch {
-    return null
-  } finally {
-    await handle.close()
-  }
-}
-
 /// What one range's selection costs to keep: slots holding references, not the
 /// items themselves, which is the whole reason a period can have its own.
 function projectionBytes(projection: ScanProjection): number {
-  const { calls, cwds, apiCalls, userMessages, openers } = projection.result
-  const slots = calls.length + cwds.length + apiCalls.length + userMessages.length
+  const { calls, cwds, apiCalls, commandNames, openers } = projection.result
+  const slots = calls.length + cwds.length + apiCalls.length + commandNames.length
     + openers.length + projection.versions.length
   return slots * 24
 }
@@ -1261,6 +1244,78 @@ function rangeProjection(entry: ScanMemoEntry, dateRange: DateRange | undefined,
   return useProjection(projection, recentCutoffMs)
 }
 
+/// The stored form of a file's record (scan-facts.ts). Per-call session and
+/// project are the file's own, so they are not repeated; an instant that did not
+/// parse is NaN in memory and null in JSON, so it is written as null and read
+/// back as NaN, never as 0.
+type StoredScan = {
+  project: string
+  carry: ScanCarry
+  sidechainAlways: boolean
+  sidechainMaxTs: string | null
+  versionEvents: ScanFileRecord['versionEvents']
+  calls: Array<[name: string, input: Record<string, unknown>, tsMs: number | null]>
+  cwds: Array<[value: string, tsMs: Array<number | null>]>
+  apiCalls: Array<[cacheCreationTokens: number, tsMs: number | null, versionIndex: number]>
+  users: Array<[tsMs: number | null, commands: string[], opener: SessionOpener | null]>
+}
+
+const storedMs = (tsMs: number | undefined): number | null => tsMs === undefined || Number.isNaN(tsMs) ? null : tsMs
+const loadedMs = (tsMs: number | null): number => tsMs === null ? Number.NaN : tsMs
+
+function storeScan(project: string, pass: ScanPass): FactsPass<StoredScan> {
+  const { record, carry } = pass
+  return {
+    offset: pass.offset,
+    facts: {
+      project,
+      carry,
+      sidechainAlways: record.sidechainAlways,
+      sidechainMaxTs: record.sidechainMaxTs,
+      versionEvents: record.versionEvents,
+      calls: record.calls.map(c => [c.name, c.input, storedMs(c.tsMs)]),
+      cwds: record.cwds.map(run => [run.value, run.tsMs.map(storedMs)]),
+      apiCalls: record.apiCalls.map(a => [a.call.cacheCreationTokens, storedMs(a.call.tsMs), a.versionIndex]),
+      users: record.users.map(u => [storedMs(u.tsMs), u.commands, u.opener]),
+    },
+  }
+}
+
+function loadScan(filePath: string, stored: StoredScan): { record: ScanFileRecord; carry: ScanCarry } {
+  const sessionId = basename(filePath, '.jsonl')
+  const { project } = stored
+  return {
+    carry: { ...stored.carry },
+    record: {
+      calls: stored.calls.map(([name, input, tsMs]) => ({ name, input, sessionId, project, tsMs: loadedMs(tsMs) })),
+      cwds: stored.cwds.map(([value, tsMs]) => ({ value, tsMs: tsMs.map(loadedMs) })),
+      apiCalls: stored.apiCalls.map(([cacheCreationTokens, tsMs, versionIndex]) => ({
+        call: { cacheCreationTokens, version: '', sessionId, tsMs: loadedMs(tsMs) },
+        versionIndex,
+      })),
+      versionEvents: stored.versionEvents.map(e => ({ ...e })),
+      users: stored.users.map(([tsMs, commands, opener]) => ({ tsMs: loadedMs(tsMs), commands, opener })),
+      sidechainAlways: stored.sidechainAlways,
+      sidechainMaxTs: stored.sidechainMaxTs,
+    },
+  }
+}
+
+/// A file's record from the facts store, scanned (or resumed) only when the
+/// stored one no longer matches the file. Always read back through the stored
+/// form, so a record served from disk is the very one a fresh scan would use.
+async function storedRecord(filePath: string, project: string): Promise<ScanFileRecord> {
+  const stored = await fileFacts<StoredScan>('optimize', filePath, async resume => {
+    if (resume && resume.facts.project === project) {
+      const { record, carry } = loadScan(filePath, resume.facts)
+      return storeScan(project, await scanFileRecord(filePath, project, { fromOffset: resume.fromOffset, carry, into: record }))
+    }
+    return storeScan(project, await scanFileRecord(filePath, project))
+  })
+  if (stored.project !== project) return (await scanFileRecord(filePath, project)).record
+  return loadScan(filePath, stored).record
+}
+
 export async function scanJsonlFileMemoized(
   filePath: string,
   project: string,
@@ -1280,39 +1335,18 @@ export async function scanJsonlFileMemoized(
     scanFileMemo.set(key, hit)
     return rangeProjection(hit, dateRange, recentCutoffMs)
   }
-
-  // Only growth past a still-intact head can be read as an append. A file that
-  // shrank, or whose offset now sits past its end, is a different file as far
-  // as this scan is concerned and is read from the top.
-  let resume: { fromOffset: number; carry: ScanCarry; into: ScanFileRecord } | undefined
-  if (hit && hit.head !== '' && identity.size > hit.size && hit.offset <= identity.size) {
-    const head = await headDigest(filePath)
-    if (head !== null && head === hit.head) {
-      resume = { fromOffset: hit.offset, carry: hit.carry, into: hit.record }
-    }
-  }
   if (hit) {
     scanFileMemo.delete(key)
     scanFileMemoBytes -= hit.bytes
   }
 
-  const pass = await scanFileRecord(filePath, project, resume)
-  // Only a file that could still be written to is worth a head digest. Digesting
-  // every file in the window meant opening the whole corpus a second time on
-  // every scan, which cost more than the resume it enables; a file untouched for
-  // a day that then grows simply gets a full read.
-  const mayGrow = now - identity.mtimeMs < SCAN_RESUMABLE_AGE_MS
-  const head = resume ? hit!.head : mayGrow ? await headDigest(filePath) : null
-  if (head === null && mayGrow) return useProjection(projectRecord(pass.record, dateRange), recentCutoffMs)
-  const bytes = scanResultBytes(pass.record)
+  const record = await storedRecord(filePath, project)
+  const bytes = scanResultBytes(record)
   const entry: ScanMemoEntry = {
-    record: pass.record,
+    record,
     projections: new Map(),
-    carry: pass.carry,
-    offset: pass.offset,
     size: identity.size,
     mtimeMs: identity.mtimeMs,
-    head: head ?? '',
     bytes,
     usedAt: now,
   }
@@ -1324,13 +1358,13 @@ export async function scanJsonlFileMemoized(
 
 async function scanSessions(dateRange?: DateRange, provider?: string): Promise<ScanData> {
   if (!providerCoversClaude(provider)) {
-    return { toolCalls: [], projectCwds: new Set(), apiCalls: [], userMessages: [], openers: [] }
+    return { toolCalls: [], projectCwds: new Set(), apiCalls: [], commandNames: [], openers: [] }
   }
   const sources = await discoverAllSessions('claude')
   const allCalls: ToolCall[] = []
   const allCwds = new Set<string>()
   const allApiCalls: ApiCallMeta[] = []
-  const allUserMessages: string[] = []
+  const allCommandNames: string[] = []
   const allOpeners: SessionOpener[] = []
 
   const tasks: Array<{ file: string; project: string; identity: { size: number; mtimeMs: number } | null }> = []
@@ -1349,17 +1383,22 @@ async function scanSessions(dateRange?: DateRange, provider?: string): Promise<S
   // reads the same window and a memoized file is stamped with the same verdict
   // a freshly read one would get.
   const recentCutoffMs = Date.now() - RECENT_WINDOW_MS
-  await runWithConcurrency(tasks, FILE_READ_CONCURRENCY, async ({ file, project, identity }) => {
-    const { calls, cwds, apiCalls, userMessages, openers } =
-      await scanJsonlFileMemoized(file, project, dateRange, identity, recentCutoffMs)
+  // Joined in discovery order, not in the order the reads finish: sums, ties in
+  // the previews and which settings file wins all follow this order, so a join
+  // by completion made two runs over the same files disagree.
+  const results: ScanFileResult[] = new Array(tasks.length)
+  await runWithConcurrency(tasks.map((task, slot) => ({ ...task, slot })), FILE_READ_CONCURRENCY, async ({ file, project, identity, slot }) => {
+    results[slot] = await scanJsonlFileMemoized(file, project, dateRange, identity, recentCutoffMs)
+  })
+  for (const { calls, cwds, apiCalls, commandNames, openers } of results) {
     allCalls.push(...calls)
     for (const cwd of cwds) allCwds.add(cwd)
     allApiCalls.push(...apiCalls)
-    allUserMessages.push(...userMessages)
+    allCommandNames.push(...commandNames)
     allOpeners.push(...openers)
-  })
+  }
 
-  return { toolCalls: allCalls, projectCwds: allCwds, apiCalls: allApiCalls, userMessages: allUserMessages, openers: allOpeners }
+  return { toolCalls: allCalls, projectCwds: allCwds, apiCalls: allApiCalls, commandNames: allCommandNames, openers: allOpeners }
 }
 
 // ============================================================================
@@ -3309,7 +3348,7 @@ export function detectLowReadEditRatio(calls: ToolCall[]): WasteFinding | null {
     if (READ_TOOL_NAMES.has(call.name)) {
       reads++
       if (call.recent) recentReads++
-    } else if (BASH_TOOL_NAMES.has(call.name) && typeof call.input['command'] === 'string' && isReadShapedBashCommand(call.input['command'])) {
+    } else if (BASH_TOOL_NAMES.has(call.name) && call.input['readShaped'] === true) {
       // A session that looks things up with rg/cat/git log IS reading (#941):
       // ignoring shell reads scored disciplined rg-first workflows as
       // reckless editors (90%+ of real reads were invisible to this ratio).
@@ -3513,18 +3552,22 @@ export async function detectGhostSkills(calls: ToolCall[]): Promise<WasteFinding
   }
 }
 
-export async function detectGhostCommands(userMessages: string[]): Promise<WasteFinding | null> {
+/// The slash commands a user message names, as the ghost-command detector
+/// counts them: `<command-name>` tags and `/name` tokens.
+export function commandNames(text: string): string[] {
+  const names: string[] = []
+  for (const m of text.matchAll(COMMAND_PATTERN)) {
+    const name = (m[1] || m[2] || '').trim()
+    if (name) names.push(name)
+  }
+  return names
+}
+
+export async function detectGhostCommands(names: string[]): Promise<WasteFinding | null> {
   const defined = await listMarkdownFiles(join(homedir(), '.claude', 'commands'))
   if (defined.length === 0) return null
 
-  const invoked = new Set<string>()
-  for (const msg of userMessages) {
-    COMMAND_PATTERN.lastIndex = 0
-    for (const m of msg.matchAll(COMMAND_PATTERN)) {
-      const name = (m[1] || m[2] || '').trim()
-      if (name) invoked.add(name)
-    }
-  }
+  const invoked = new Set(names)
 
   const ghosts = defined.filter(name => !invoked.has(name))
   if (ghosts.length === 0) return null
@@ -4476,7 +4519,7 @@ export async function scanAndDetect(
   const pricing = findingPricing(projects, costRate)
   const behavioralProjects = userStartedProjects(projects)
   const scanCoversClaude = providerCoversClaude(provider)
-  const { toolCalls, projectCwds, apiCalls, userMessages, openers } = await scanSessions(dateRange, provider)
+  const { toolCalls, projectCwds, apiCalls, commandNames, openers } = await scanSessions(dateRange, provider)
   const mcpCoverage = aggregateMcpCoverage(projects)
 
   const findings: WasteFinding[] = []
@@ -4532,7 +4575,7 @@ export async function scanAndDetect(
     ? await Promise.all([
       detectGhostAgents(toolCalls),
       detectGhostSkills(toolCalls),
-      detectGhostCommands(userMessages),
+      detectGhostCommands(commandNames),
     ])
     : []
   for (const f of ghostResults) if (f) findings.push(f)
