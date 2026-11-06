@@ -4185,7 +4185,6 @@ function plural(n: number, word: string): string {
 
 export function detectFastModeBackground(projects: ProjectSummary[]): WasteFinding | null {
   let calls = 0
-  let outputTokens = 0
   let premiumUSD = 0
   const models = new Set<string>()
   for (const project of projects) {
@@ -4197,7 +4196,6 @@ export function detectFastModeBackground(projects: ProjectSummary[]): WasteFindi
           const premium = call.costUSD - repricedCallUSD(call, 'standard', call.provider)
           if (premium <= 0) continue
           calls++
-          outputTokens += call.usage.outputTokens
           premiumUSD += premium
           models.add(getShortModelName(call.model))
         }
@@ -4211,7 +4209,8 @@ export function detectFastModeBackground(projects: ProjectSummary[]): WasteFindi
     title: `Fast mode cost ${formatCost(premiumUSD)} extra on background agents`,
     explanation: `${plural(calls, 'fast-mode call')} ran inside subagent sessions on ${[...models].sort().join(', ')}, where nobody waits for the reply. At standard speed the same tokens would have cost ${formatCost(premiumUSD)} less. Some background runs need the speed, so this is a habit check, not a rule.`,
     impact: premiumImpact(premiumUSD),
-    tokensSaved: outputTokens,
+    // Standard speed bills the same tokens at a lower rate: dollars saved, no tokens.
+    tokensSaved: 0,
     savingsUSD: premiumUSD,
     fix: {
       type: 'paste',
