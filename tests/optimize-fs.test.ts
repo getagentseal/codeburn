@@ -203,6 +203,21 @@ describe('loadMcpConfigs', () => {
     expect(plan.changes.map(c => c.path).sort()).toEqual([join(projectDir, '.claude', 'settings.json'), join(projectDir, '.mcp.json')])
   })
 
+  it('credits a call to the longest configured server, "a__b" over "a"', () => {
+    const root = makeFixtureRoot()
+    const projectDir = join(root, 'myapp')
+    mkdirSync(projectDir, { recursive: true })
+    writeFile(join(projectDir, '.mcp.json'), JSON.stringify({ mcpServers: { a: { command: 'x' }, a__b: { command: 'y' } } }))
+    touchOld(join(projectDir, '.mcp.json'), 30)
+    const unusedAfter = (name: string) => {
+      const calls = [{ name, input: {}, sessionId: 's1', project: 'p' }] as unknown as ToolCall[]
+      const apply = detectUnusedMcp(calls, [], new Set([projectDir]), [])!.apply
+      return apply?.kind === 'mcp-remove' ? apply.servers : []
+    }
+    expect(unusedAfter('mcp__a__b__c')).toEqual(['a'])
+    expect(unusedAfter('mcp__a__c')).toEqual(['a__b'])
+  })
+
   it('handles malformed JSON without crashing', () => {
     const root = makeFixtureRoot()
     const projectDir = join(root, 'myapp')

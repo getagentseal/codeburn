@@ -20,7 +20,9 @@ import {
   mcpLowCoverageSchemaPerSession,
   mcpProjectScopeSchemaPerSession,
   findingPricing,
+  localMcpServerNames,
   mcpNamespace,
+  mcpServerOf,
   sessionTokensUSD,
   type FindingPricing,
   type McpServerCoverage,
@@ -188,16 +190,18 @@ function countBashCalls(sessions: SessionSummary[]): number {
   return n
 }
 
-// Inventory names are mcp__<server>__<tool>, and a server name may itself
-// contain "__", so the tool is cut off from the right.
-function inventoryServer(fqn: string): string {
-  return fqn.slice('mcp__'.length, fqn.lastIndexOf('__'))
+// Server namespaces in the projects' MCP config, to split inventory names
+// whose server or tool contains "__" (see mcpServerOf).
+function knownMcpServers(projects: ProjectSummary[]): Set<string> {
+  return localMcpServerNames(projects.map(p => p.projectPath))
 }
 
-function sessionLoadsAny(s: SessionSummary, servers: string[]): boolean {
+function sessionLoadsAny(s: SessionSummary, servers: string[], known: ReadonlySet<string>): boolean {
   const names = servers.map(mcpNamespace)
+  const candidates = [...known, ...names]
   for (const fqn of s.mcpInventory ?? []) {
-    if (names.includes(inventoryServer(fqn))) return true
+    const server = mcpServerOf(fqn, candidates)
+    if (server && names.includes(server)) return true
   }
   for (const server of Object.keys(s.mcpBreakdown)) {
     if (names.includes(server)) return true
@@ -205,8 +209,8 @@ function sessionLoadsAny(s: SessionSummary, servers: string[]): boolean {
   return false
 }
 
-function countSessionsLoading(projects: ProjectSummary[], servers: string[]): number {
-  return allSessions(projects).filter(s => sessionLoadsAny(s, servers)).length
+function countSessionsLoading(projects: ProjectSummary[], servers: string[], known: ReadonlySet<string>): number {
+  return allSessions(projects).filter(s => sessionLoadsAny(s, servers, known)).length
 }
 
 // Deferral is active in a session exactly when Claude Code emitted a
@@ -219,10 +223,13 @@ function sessionHasDeferralActive(s: SessionSummary): boolean {
 // MCP servers observed loading in the window (via inventory or invocation).
 // defer-enable / defer-threshold re-enable deferral for the whole MCP surface
 // rather than a named set, so the affected servers are derived here.
-function observedMcpServers(projects: ProjectSummary[]): string[] {
+function observedMcpServers(projects: ProjectSummary[], known: ReadonlySet<string>): string[] {
   const servers = new Set<string>()
   for (const s of allSessions(projects)) {
-    for (const fqn of s.mcpInventory ?? []) servers.add(inventoryServer(fqn))
+    for (const fqn of s.mcpInventory ?? []) {
+      const server = mcpServerOf(fqn, known)
+      if (server) servers.add(server)
+    }
     for (const server of Object.keys(s.mcpBreakdown)) servers.add(server)
   }
   return [...servers]
@@ -261,7 +268,7 @@ function realizedUSD(
 
 function mcpRow(
   base: ActReportRow, rec: ActionRecord, sessions: SessionSummary[],
-  baseline: ActionBaseline, afterStart: Date, now: Date, pricing: FindingPricing,
+  baseline: ActionBaseline, afterStart: Date, now: Date, pricing: FindingPricing, known: ReadonlySet<string>,
 ): ActReportRow {
   const servers = Object.keys(baseline.metrics)
   const perSessionTokens = Object.values(baseline.metrics).reduce((a, b) => a + b, 0)
@@ -272,7 +279,7 @@ function mcpRow(
   // (and the revert check), so the pair is derived from session counts, not
   // independently measured.
   const estimatedForWindow = Math.floor(perSessionTokens * sessions.length)
-  const saved = sessions.filter(s => !sessionLoadsAny(s, servers))
+  const saved = sessions.filter(s => !sessionLoadsAny(s, servers, known))
   const stillLoading = sessions.length - saved.length
   const confidence = confidenceFor(sessions.length, baseline, afterStart, now)
   if (rec.kind === 'mcp-remove' && stillLoading > 0) {
@@ -475,7 +482,8 @@ async function modelDefaultRow(
 
 async function computeRow(
   rec: ActionRecord, sessions: SessionSummary[], afterStart: Date, now: Date,
-  mcpClaimedServers: ReadonlySet<string>, pricing: FindingPricing, opts: ActReportOptions, modelDefaultProjectFound = true,
+  mcpClaimedServers: ReadonlySet<string>, pricing: FindingPricing, opts: ActReportOptions, knownServers: ReadonlySet<string>,
+  modelDefaultProjectFound = true,
 ): Promise<ActReportRow> {
   const estimatedAtApply = rec.baseline?.estimatedTokens ?? 0
   const base: ActReportRow = {
@@ -495,7 +503,7 @@ async function computeRow(
   const baseline = rec.baseline
   if (!baseline) return { ...base, note: 'not measurable: no baseline captured at apply time' }
 
-  if (MCP_KINDS.has(rec.kind)) return mcpRow(base, rec, sessions, baseline, afterStart, now, pricing)
+  if (MCP_KINDS.has(rec.kind)) return mcpRow(base, rec, sessions, baseline, afterStart, now, pricing, knownServers)
   if (DEFER_KINDS.has(rec.kind)) return deferRow(base, rec, sessions, baseline, afterStart, now, mcpClaimedServers, pricing)
   if (rec.kind in ARCHIVE_DEF_TOKENS) return archiveRow(base, rec, sessions, baseline, afterStart, now, pricing)
   if (rec.kind === 'claude-md-rule') return readEditRow(base, rec, sessions, baseline, afterStart, now, pricing)
@@ -611,6 +619,7 @@ export async function computeActReport(opts: ActReportOptions = {}): Promise<Act
   const projects = await loadProjects({ start: windowStart, end: now })
   const costRate = computeInputCostRate(projects)
   const pricing = findingPricing(projects, costRate)
+  const knownServers = knownMcpServers(projects)
 
   // Servers a same-journal MCP row (mcp-remove / mcp-project-scope) already
   // measures. Deferral baselines for defer-enable / defer-threshold span the
@@ -633,7 +642,7 @@ export async function computeActReport(opts: ActReportOptions = {}): Promise<Act
       ? modelDefaultSessionsInWindow(rec, projects, afterStart, now)
       : undefined
     const sessions = modelDefaultWindow?.sessions ?? sessionsInWindow(projects, afterStart, now)
-    rows.push(await computeRow(rec, sessions, afterStart, now, mcpClaimedServers, pricing, opts, modelDefaultWindow?.projectFound))
+    rows.push(await computeRow(rec, sessions, afterStart, now, mcpClaimedServers, pricing, opts, knownServers, modelDefaultWindow?.projectFound))
   }
 
   const measuredRows = rows.filter(r => r.status === 'measured' && isTokenKind(r.kind))
@@ -772,6 +781,7 @@ type CaptureCtx = {
   coverage: McpServerCoverage[]
   windowDays: number
   now: Date
+  knownServers?: ReadonlySet<string>
 }
 
 function mcpServersFromApply(finding: WasteFinding, affectedMcpServers?: string[]): string[] {
@@ -790,7 +800,7 @@ function needsConfigBaseline(kind: ActionKind): boolean {
 // observed MCP surface.
 function deferServers(finding: WasteFinding, ctx: CaptureCtx): string[] {
   if (finding.apply?.kind === 'defer-alwaysload') return finding.apply.servers.map(s => s.server)
-  return observedMcpServers(ctx.projects)
+  return observedMcpServers(ctx.projects, ctx.knownServers ?? new Set())
 }
 
 export function captureBaseline(
@@ -823,7 +833,7 @@ export function captureBaseline(
     const estimatedTokens = finding.applyTokensSavedByServer
       ? Math.round(servers.reduce((sum, server) => sum + (finding.applyTokensSavedByServer?.[server] ?? 0), 0))
       : common.estimatedTokens
-    return { ...common, estimatedTokens, sessions: countSessionsLoading(ctx.projects, servers), metrics }
+    return { ...common, estimatedTokens, sessions: countSessionsLoading(ctx.projects, servers, ctx.knownServers ?? new Set()), metrics }
   }
 
   if (DEFER_KINDS.has(kind)) {
@@ -836,7 +846,7 @@ export function captureBaseline(
       const tools = cov && cov.toolsAvailable > 0 ? cov.toolsAvailable : TOOLS_PER_MCP_SERVER
       metrics[server] = tools * TOKENS_PER_MCP_TOOL
     }
-    return { ...common, sessions: countSessionsLoading(ctx.projects, servers), metrics }
+    return { ...common, sessions: countSessionsLoading(ctx.projects, servers, ctx.knownServers ?? new Set()), metrics }
   }
 
   const defTokens = ARCHIVE_DEF_TOKENS[kind]
@@ -870,7 +880,7 @@ export async function captureBaselinesForPlans(
   const start = new Date(now.getTime() - BASELINE_WINDOW_DAYS * DAY_MS)
   const loadProjects = opts.loadProjects ?? ((range: DateRange) => parseAllSessions(range, 'claude'))
   const projects = await loadProjects({ start, end: now })
-  const ctx: CaptureCtx = { projects, coverage: aggregateMcpCoverage(projects), windowDays: BASELINE_WINDOW_DAYS, now }
+  const ctx: CaptureCtx = { projects, coverage: aggregateMcpCoverage(projects), windowDays: BASELINE_WINDOW_DAYS, now, knownServers: knownMcpServers(projects) }
   for (const fp of applicable) {
     if (fp.plan!.mcpSavingsUncertain) continue
     const baseline = captureBaseline(fp.finding, fp.plan!.kind, ctx, fp.plan!.affectedMcpServers)

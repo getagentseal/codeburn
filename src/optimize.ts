@@ -1440,6 +1440,18 @@ export function mcpNamespace(name: string): string {
   return name.replace(/[^A-Za-z0-9_-]/g, '_')
 }
 
+/// The server half of an mcp__<server>__<tool> name. Either half may contain
+/// "__", so the longest known server namespace wins; an unknown server falls
+/// back to the first segment, the way the parser keys its MCP breakdown.
+export function mcpServerOf(toolName: string, known: Iterable<string>): string | undefined {
+  const rest = toolName.slice('mcp__'.length)
+  let best: string | undefined
+  for (const ns of known) {
+    if (rest.startsWith(ns + '__') && ns.length > (best?.length ?? 0)) best = ns
+  }
+  return best ?? toolName.split('__')[1]
+}
+
 // Claude Code does not read mcpServers from ~/.claude/settings*.json (user
 // servers live in ~/.claude.json), and the remove plan never edits them.
 export function loadMcpConfigs(projectCwds: Iterable<string>): Map<string, McpConfigEntry> {
@@ -2638,7 +2650,7 @@ export function detectUnusedMcp(
   const calledServers = new Set<string>()
   for (const call of calls) {
     if (!call.name.startsWith('mcp__')) continue
-    const seg = call.name.split('__')[1]
+    const seg = mcpServerOf(call.name, configured.keys())
     if (seg) calledServers.add(seg)
   }
   for (const p of projects) {
@@ -2956,7 +2968,7 @@ export function detectMcpDeferralOff(
   const observedServers = new Set<string>()
   for (const call of calls) {
     if (!call.name.startsWith('mcp__')) continue
-    const seg = call.name.split('__')[1]
+    const seg = mcpServerOf(call.name, configured.keys())
     if (seg && !pinnedServers.has(seg)) observedServers.add(seg)
   }
   let invocations = 0
