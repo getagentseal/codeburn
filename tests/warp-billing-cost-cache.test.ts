@@ -288,3 +288,24 @@ itUnlessNoSqlite('allocates two conversations in one database independently', as
   expect(costs.get('warp:B:B1')).toBeCloseTo(7.5, 10)
   expect(costs.get('warp:B:B2')).toBeCloseTo(0, 10)
 })
+
+it('bumps the warp parse version for the per-exchange share rule', async () => {
+  const { PROVIDER_PARSE_VERSIONS } = await import('../src/session-cache.js')
+  expect(PROVIDER_PARSE_VERSIONS['warp']).toContain('exchange-share-v1')
+})
+
+itUnlessNoSqlite('clears a conversation whose exchanges are no longer finished', async () => {
+  writeWarpDb('2026-08-16 10:00:00.000000')
+  const { clearSessionCache, parseAllSessions } = await import('../src/parser.js')
+  const calls = async () => {
+    clearSessionCache()
+    return (await parseAllSessions(undefined, 'warp')).reduce((sum, p) => sum + p.totalApiCalls, 0)
+  }
+  expect(await calls()).toBe(3)
+
+  const { DatabaseSync } = requireForTest('node:sqlite')
+  const db = new DatabaseSync(DB_PATH)
+  db.prepare(`UPDATE ai_queries SET output_status = '"InProgress"' WHERE conversation_id = 'conv-credits'`).run()
+  db.close()
+  expect(await calls()).toBe(2)
+})

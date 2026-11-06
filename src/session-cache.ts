@@ -642,7 +642,10 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // to land.
   // billed-cost-v1: total_billed_cost_in_cents prices conversations that carry
   // no provider cost or charged usage.
-  warp: 'worktree-project-grouping-v1-est-cost-billing-cost-v1-billed-cost-v1',
+  // exchange-share-v1: cached exchanges keep their share of a conversation's
+  // cost and only new spend goes to new exchanges (parser.ts
+  // keepCachedWarpShares); unchanged databases re-parse once onto that rule.
+  warp: 'worktree-project-grouping-v1-est-cost-billing-cost-v1-billed-cost-v1-exchange-share-v1',
   // cache-read-v1-est-cost: gen_metadata and RPC usage now carry cache-read
   // tokens, fields 9/10 read as thinking/response (they were swapped), and
   // placeholder-only models are priced and flagged costIsEstimated.
