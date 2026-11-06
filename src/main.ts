@@ -306,7 +306,11 @@ function periodForBudgetTier(tier: BudgetTier): Extract<Period, 'today' | 'week'
 }
 
 function getBudgetPeriodInfo(tier: BudgetTier): BudgetPeriodInfo {
-  const { range } = getDateRange(periodForBudgetTier(tier))
+  const { range: periodRange } = getDateRange(periodForBudgetTier(tier))
+  // The 'week' period starts at today-7 (8 dates); a weekly budget covers 7.
+  const range = tier === 'weekly'
+    ? { start: new Date(periodRange.start.getFullYear(), periodRange.start.getMonth(), periodRange.start.getDate() + 1), end: periodRange.end }
+    : periodRange
   const progress = getOverviewBudgetProgress(tier, range)
   return { tier, range, ...progress }
 }
@@ -324,20 +328,20 @@ function totalProjectCostUSD(projects: ProjectSummary[]): number {
   return projects.reduce((sum, project) => sum + project.totalCostUSD, 0)
 }
 
-function buildOverviewBudget(projects: ProjectSummary[], budget: CodeburnConfig['budget'], tier: BudgetTier | undefined, range: DateRange): OverviewBudget | undefined {
+function buildOverviewBudget(projects: ProjectSummary[], budget: CodeburnConfig['budget'], tier: BudgetTier | undefined): OverviewBudget | undefined {
   if (!tier) return undefined
   const amount = budgetAmountForTier(budget, tier)
   if (amount === undefined) return undefined
-  const progress = getOverviewBudgetProgress(tier, range)
+  const period = getBudgetPeriodInfo(tier)
   return {
     tier,
     status: computeBudgetStatus({
-      spent: convertCost(totalProjectCostUSD(projects)),
+      spent: convertCost(totalProjectCostUSD(tier === 'weekly' ? filterProjectsByDateRange(projects, period.range) : projects)),
       budget: amount,
-      elapsedDays: progress.elapsedDays,
-      totalDays: progress.totalDays,
+      elapsedDays: period.elapsedDays,
+      totalDays: period.totalDays,
     }),
-    inProgress: progress.inProgress,
+    inProgress: period.inProgress,
   }
 }
 
@@ -1163,7 +1167,7 @@ program
     const config = await readConfig()
     const budget = isOverviewBudgetFilterActive(opts)
       ? undefined
-      : buildOverviewBudget(projects, config.budget, budgetTierForOverview(period, customRange), range)
+      : buildOverviewBudget(projects, config.budget, budgetTierForOverview(period, customRange))
     process.stdout.write(renderOverview(projects, {
       label,
       color: opts.color,
