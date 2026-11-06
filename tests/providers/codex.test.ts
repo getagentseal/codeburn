@@ -857,6 +857,20 @@ describe('codex provider - JSONL parsing', () => {
     expect(calls.map(c => [c.inputTokens, c.outputTokens])).toEqual([[8_000, 800], [3_000, 300], [3_000, 300]])
   })
 
+  it('reads one falling field under a rising total as a correction, not a restart', async () => {
+    const filePath = await writeSession(tmpDir, '2026-04-14', 'rollout-cumulative-correction.jsonl', [
+      sessionMeta({ session_id: 'sess-correction', model: 'gpt-5.5' }),
+      tokenCount({ timestamp: '2026-04-14T10:00:10Z', total: { input: 8_000, output: 800 } }),
+      tokenCount({ timestamp: '2026-04-14T10:00:20Z', total: { input: 9_000, output: 790, total: 9_790 } }),
+    ])
+
+    const provider = createCodexProvider(tmpDir)
+    const calls: ParsedProviderCall[] = []
+    for await (const call of provider.createSessionParser({ path: filePath, project: 'test', provider: 'codex' }, new Set()).parse()) calls.push(call)
+
+    expect(calls.map(c => [c.inputTokens, c.outputTokens])).toEqual([[8_000, 800], [1_000, 0]])
+  })
+
   it('reads a cumulative field the record omits as unchanged', async () => {
     const total = (timestamp: string, usage: Record<string, number>) => JSON.stringify({
       type: 'event_msg', timestamp, payload: { type: 'token_count', info: { total_token_usage: usage } },

@@ -1589,6 +1589,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
           if (infoIdentity === prevInfoIdentity) continue
           prevInfoIdentity = infoIdentity
           if (reportsCumulative && prevCumulativeTotal !== null && cumulativeTotal === prevCumulativeTotal) continue
+          const prevTotal = prevCumulativeTotal
           prevCumulativeTotal = reportsCumulative ? cumulativeTotal : null
 
           const last = info.last_token_usage
@@ -1607,9 +1608,22 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
           } else if (cumulativeTotal > 0) {
             const total = info.total_token_usage
             if (!total) continue
-            // An omitted counter is unchanged. One below its previous value
-            // restarted (resume, compaction): it holds the usage since then.
-            const since = (now: number | undefined, prev: number) => now === undefined ? 0 : now >= prev ? now - prev : now
+            // A total below the previous one (or, without a previous total,
+            // every reported field falling) is a counter restart (resume,
+            // compaction): each field holds the usage since then. Otherwise a
+            // single falling field is a correction and adds nothing. An
+            // omitted field is unchanged.
+            const counters: Array<[number | undefined, number]> = [
+              [total.input_tokens, prevInput], [total.cached_input_tokens, prevCached],
+              [total.cache_write_input_tokens, prevCacheWrite], [total.output_tokens, prevOutput],
+              [total.reasoning_output_tokens, prevReasoning],
+            ]
+            const present = counters.filter(([now]) => now !== undefined) as Array<[number, number]>
+            const restart = prevTotal !== null
+              ? cumulativeTotal < prevTotal
+              : present.length > 0 && present.every(([now, prev]) => now < prev)
+            const since = (now: number | undefined, prev: number) =>
+              now === undefined ? 0 : restart ? now : Math.max(0, now - prev)
             inputTokens = since(total.input_tokens, prevInput)
             cachedInputTokens = since(total.cached_input_tokens, prevCached)
             cacheWriteTokens = since(total.cache_write_input_tokens, prevCacheWrite)
