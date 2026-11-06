@@ -354,11 +354,12 @@ const BUBBLE_QUERY_BASE = `
     json_extract(value, '$.type') as bubble_type,
     CAST(json_extract(value, '$.codeBlocks') AS BLOB) as code_blocks
   FROM cursorDiskKV
-  WHERE key LIKE 'bubbleId:%' AND json_valid(value)
+  WHERE key LIKE 'bubbleId:%' AND json_valid(value, 6)
 `
 
 // agentKv blobs are content-addressed and also hold JSONL logs and files that
 // start with '{'; one of them makes json_extract throw for the whole query.
+// json_valid flag 6 (JSON5 text or JSONB) admits everything json_extract reads.
 const AGENTKV_WHERE = `
   FROM cursorDiskKV
   WHERE key LIKE 'agentKv:blob:%'
@@ -370,17 +371,17 @@ const AGENTKV_QUERY = `
     json_extract(value, '$.providerOptions.cursor.requestId') as request_id,
     json_extract(value, '$.providerOptions.cursor.modelName') as model
   ${AGENTKV_WHERE}
-    AND json_valid(value)
+    AND json_valid(value, 6)
   ORDER BY ROWID ASC
 `
-const AGENTKV_MALFORMED_QUERY = `SELECT COUNT(*) as cnt ${AGENTKV_WHERE} AND NOT json_valid(value)`
+const AGENTKV_MALFORMED_QUERY = `SELECT COUNT(*) as cnt ${AGENTKV_WHERE} AND NOT json_valid(value, 6)`
 
 const BUBBLE_REQUEST_IDS_QUERY = `
   SELECT json_extract(value, '$.requestId') as request_id,
     json_extract(value, '$.createdAt') as created_at
   FROM cursorDiskKV
   WHERE key LIKE 'bubbleId:%'
-    AND json_valid(value)
+    AND json_valid(value, 6)
     AND json_extract(value, '$.requestId') IN`
 // Under the 999 bound-parameter limit of older SQLite builds. Each chunk is
 // one table scan, so many unjoined streams on a huge DB cost several scans.
@@ -423,7 +424,7 @@ const BUBBLE_QUERY_PAGE = `
     json_extract(value, '$.type') as bubble_type,
     CAST(json_extract(value, '$.codeBlocks') AS BLOB) as code_blocks
   FROM cursorDiskKV
-  WHERE key LIKE 'bubbleId:%' AND ROWID < ? AND json_valid(value)
+  WHERE key LIKE 'bubbleId:%' AND ROWID < ? AND json_valid(value, 6)
   ORDER BY ROWID DESC
   LIMIT ?
 `
@@ -499,7 +500,7 @@ const COMPOSER_META_QUERY = `
     json_extract(value, '$.contextTokensUsed') as ctx,
     json_extract(value, '$.createdAt') as created_at
   FROM cursorDiskKV
-  WHERE key >= 'composerData:' AND key < 'composerData;' AND json_valid(value)
+  WHERE key >= 'composerData:' AND key < 'composerData;' AND json_valid(value, 6)
 `
 
 type ComposerMeta = { tokens: number; createdAt: number | null }

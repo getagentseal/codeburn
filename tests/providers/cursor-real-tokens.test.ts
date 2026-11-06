@@ -425,6 +425,10 @@ describe.skipIf(skipReason !== null)('cursor real context tokens (#575)', () => 
       insertAgentKv(db, { blobId: 'akv-2', role: 'assistant', content: [{ type: 'tool-call', toolName: 'Shell', args: { command: 'npm test' } }] })
       db.prepare('INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)').run('agentKv:blob:jsonl', '{"kind":"a"}\n{"kind":"b"}\n')
       insertAgentKv(db, { blobId: 'akv-3', role: 'user', content: 'run the export', requestId: 'req-alone' })
+      db.prepare('INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)').run(
+        'agentKv:blob:json5',
+        "{role: 'user', content: 'run the json5 export', providerOptions: {cursor: {requestId: 'req-json5'}},}",
+      )
     })
     const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true)
 
@@ -432,6 +436,7 @@ describe.skipIf(skipReason !== null)('cursor real context tokens (#575)', () => 
 
     expect(calls.flatMap(c => c.bashCommands)).toEqual(['npm'])
     expect(calls.some(c => c.deduplicationKey === 'cursor:agentKv:req-alone')).toBe(true)
+    expect(calls.find(c => c.deduplicationKey === 'cursor:agentKv:req-json5')?.inputTokens).toBe(Math.ceil('run the json5 export'.length / 4))
     expect(stderr.mock.calls.map(c => String(c[0]))).toContain('codeburn: skipped 1 unreadable Cursor entries\n')
     stderr.mockRestore()
   })
@@ -453,6 +458,48 @@ describe.skipIf(skipReason !== null)('cursor real context tokens (#575)', () => 
     expect(calls.find(c => c.deduplicationKey === `cursor:composer-input:${composerId}`)?.inputTokens).toBe(10000)
     expect(calls.some(c => c.deduplicationKey.endsWith(':b2'))).toBe(true)
     expect(calls.some(c => c.deduplicationKey === 'cursor:agentKv:req-alone')).toBe(true)
+  })
+
+  it('reads a bubble stored as JSONB', async () => {
+    const composerId = '44446666-1111-2222-3333-444455556666'
+    const dbPath = buildDb((db) => {
+      db.prepare('INSERT INTO cursorDiskKV (key, value) VALUES (?, jsonb(?))').run(
+        `bubbleId:${composerId}:jb`,
+        JSON.stringify({ type: 2, createdAt: new Date().toISOString(), text: 'jsonb reply', modelInfo: { modelName: 'gpt-5' } }),
+      )
+    })
+
+    const calls = await collectCalls(createCursorProvider(dbPath), dbPath)
+
+    expect(calls.find(c => c.deduplicationKey.endsWith(':jb'))?.outputTokens).toBe(Math.ceil('jsonb reply'.length / 4))
+  })
+
+  it('still finds an agent-only stream\'s old bubble when another bubble is not valid JSON', async () => {
+    const oldAt = new Date(Date.now() - 240 * 864e5).toISOString()
+    const dbPath = buildDb((db) => {
+      insertBubble(db, { composerId: '44447777-1111-2222-3333-444455556666', bubbleUuid: 'b1', type: 1, text: 'old prompt', createdAt: oldAt, requestId: 'req-old-beside-broken' })
+      db.prepare('INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)').run('bubbleId:44447777-1111-2222-3333-444455556666:broken', '{"type":2,')
+      insertAgentKv(db, { blobId: 'akv-1', role: 'user', content: 'x'.repeat(4_000), requestId: 'req-old-beside-broken' })
+    })
+
+    const calls = await collectCalls(createCursorProvider(dbPath), dbPath)
+
+    expect(requestIdLookups().map(q => q.params)).toEqual([['req-old-beside-broken']])
+    expect(calls).toEqual([])
+  })
+
+  it('pages bubbles past one that is not valid JSON', async () => {
+    const composerId = '44448888-1111-2222-3333-444455556666'
+    const dbPath = buildDb((db) => {
+      insertBubble(db, { composerId, bubbleUuid: 'b1', type: 2, text: 'first reply', model: 'gpt-5' })
+      db.prepare('INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)').run(`bubbleId:${composerId}:broken`, '{"type":2,')
+      insertBubble(db, { composerId, bubbleUuid: 'b2', type: 2, text: 'second reply', model: 'gpt-5' })
+    })
+    process.env['CODEBURN_CURSOR_MAX_BUBBLES'] = '2'
+
+    const calls = await collectCalls(createCursorProvider(dbPath), dbPath)
+
+    expect(calls.map(c => c.deduplicationKey.split(':').pop()).sort()).toEqual(['b1', 'b2'])
   })
 
   it('does not bill the stream of a conversation older than the lookback as a new session', async () => {
