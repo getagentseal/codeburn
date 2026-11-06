@@ -14,6 +14,7 @@ import { estimateTokensFromChars } from './token-estimate.js'
 import { discoverAllSessions, discoverAllSessionsWithFailures, getProvider } from './providers/index.js'
 import { evictCachedCodexResults, flushCodexCache, readCachedCodexResults, withCodexCacheDirectory, writeCachedCodexResults } from './codex-cache.js'
 import { antigravityCascadeIdFromPath, flushAntigravityCache, preloadAntigravityCache, shouldReparseAntigravitySource } from './providers/antigravity.js'
+import { keepCachedWarpShares } from './providers/warp.js'
 import { getClaudeConfigDirs, getDesktopSessionsDirs } from './providers/claude.js'
 import { kimicodeLineageForSource } from './providers/kimicode.js'
 import { isSqliteBusyError } from './sqlite.js'
@@ -4024,6 +4025,7 @@ export async function parseProviderSources(
           for await (const call of parser.parse()) {
             providerCalls.push(call)
           }
+          if (providerName === 'warp' && priorEntry) providerCalls = keepCachedWarpShares(priorEntry, providerCalls)
         }
         const canonicalCalls = await Promise.all(providerCalls.map(canonicalizeProviderCallProject))
         const turns = providerCallsToCachedTurns(canonicalCalls)

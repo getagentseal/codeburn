@@ -132,3 +132,42 @@ itUnlessNoSqlite('persists only the billing-derived cost, leaving the token floo
   expect(costByKey.has('warp:conv-floor:ex-conv-floor')).toBe(true)
   expect(costByKey.get('warp:conv-floor:ex-conv-floor')).toBeUndefined()
 })
+
+itUnlessNoSqlite('puts a conversation\'s later spend on the new exchange, not back on earlier days', async () => {
+  const { DatabaseSync } = requireForTest('node:sqlite')
+  const db = new DatabaseSync(DB_PATH)
+  db.exec(`CREATE TABLE agent_conversations (id INTEGER PRIMARY KEY AUTOINCREMENT, conversation_id TEXT NOT NULL, conversation_data TEXT NOT NULL, last_modified_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)`)
+  db.exec(`CREATE TABLE ai_queries (id INTEGER PRIMARY KEY AUTOINCREMENT, exchange_id TEXT NOT NULL, conversation_id TEXT NOT NULL, start_ts DATETIME NOT NULL, input TEXT NOT NULL, working_directory TEXT, output_status TEXT NOT NULL, model_id TEXT NOT NULL DEFAULT '', planning_model_id TEXT NOT NULL DEFAULT '', coding_model_id TEXT NOT NULL DEFAULT '')`)
+  db.exec(`CREATE TABLE blocks (id INTEGER PRIMARY KEY AUTOINCREMENT, pane_leaf_uuid BLOB NOT NULL, stylized_command BLOB NOT NULL, stylized_output BLOB NOT NULL, exit_code INTEGER NOT NULL, did_execute BOOLEAN NOT NULL, completed_ts DATETIME, start_ts DATETIME, block_id TEXT NOT NULL DEFAULT '', ai_metadata TEXT)`)
+  const conversation = (credits: number) => JSON.stringify({ conversation_usage_metadata: { credits_spent: credits, token_usage: tokenUsage() } })
+  const exchange = (id: string, startTs: string, text: string) => db.prepare(`INSERT INTO ai_queries (exchange_id, conversation_id, start_ts, input, working_directory, output_status, model_id) VALUES (?,?,?,?,?,?,?)`)
+    .run(id, 'conv', startTs, JSON.stringify([{ Query: { text } }]), '/tmp/warpproj', '"Completed"', 'auto-efficient')
+  db.prepare('INSERT INTO agent_conversations (conversation_id, conversation_data, last_modified_at) VALUES (?,?,?)').run('conv', conversation(750), '2026-08-16 10:00:00')
+  exchange('a', '2026-08-16 10:00:00.000000', 'x'.repeat(400))
+  exchange('b', '2026-08-16 11:00:00.000000', 'x'.repeat(400))
+
+  const { clearSessionCache, parseAllSessions } = await import('../src/parser.js')
+  const { loadCache } = await import('../src/session-cache.js')
+  const cachedCosts = async () => {
+    const out = new Map<string, number | undefined>()
+    for (const file of Object.values((await loadCache()).providers['warp']?.files ?? {})) {
+      for (const turn of file.turns) for (const call of turn.calls) out.set(call.deduplicationKey, call.costUSD)
+    }
+    return out
+  }
+  clearSessionCache()
+  await parseAllSessions(undefined, 'warp')
+  const day1 = await cachedCosts()
+
+  // Next day: a short prompt that costs 375 more credits.
+  db.prepare('UPDATE agent_conversations SET conversation_data = ? WHERE conversation_id = ?').run(conversation(1125), 'conv')
+  exchange('c', '2026-08-17 10:00:00.000000', 'x'.repeat(40))
+  db.close()
+  clearSessionCache()
+  await parseAllSessions(undefined, 'warp')
+  const day2 = await cachedCosts()
+
+  expect(day2.get('warp:conv:a')).toBeCloseTo(day1.get('warp:conv:a')!, 10)
+  expect(day2.get('warp:conv:b')).toBeCloseTo(day1.get('warp:conv:b')!, 10)
+  expect(day2.get('warp:conv:c')).toBeCloseTo(375 * CREDIT_USD_RATE, 10)
+})
