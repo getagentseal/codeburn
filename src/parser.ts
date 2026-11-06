@@ -2908,6 +2908,11 @@ export const REPORTED_COST_PROVIDERS: ReadonlySet<string> = new Set([
   'omp',
 ])
 
+// Members of REPORTED_COST_PROVIDERS whose stored cost CodeBurn itself priced
+// from tokens at parse time (the cached `model` is not always the id it was
+// priced as). The cost is kept, but it is not the tool's own figure.
+const PARSE_PRICED_COST_PROVIDERS: ReadonlySet<string> = new Set(['devin', 'antigravity'])
+
 function providerCallToCachedCall(call: ParsedProviderCall): CachedCall {
   return {
     provider: call.provider,
@@ -3134,7 +3139,7 @@ export function cachedCallToApiCall(call: CachedCall): ParsedApiCall {
   })
   apiCall.costBasis = call.billing === 'subscription' && call.costUSD === 0 ? 'included'
     : apiCall.isEstimated ? 'estimated'
-    : call.costUSD !== undefined || fallbackCostUSD !== undefined ? 'recorded'
+    : (call.costUSD !== undefined && !PARSE_PRICED_COST_PROVIDERS.has(call.provider)) || fallbackCostUSD !== undefined ? 'recorded'
     : apiCall.costUSD === 0 && findUnpricedModels([{ model: call.model, calls: 1, cost: 0 }]).length > 0 ? 'unpriced'
     : 'calculated'
   // A cached Claude call is flagged only for its estimated placeholder output;
