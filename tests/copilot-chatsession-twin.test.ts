@@ -9,7 +9,8 @@ import { createRequire } from 'node:module'
 
 import { isSqliteAvailable } from '../src/sqlite.js'
 import { clearLoadCacheMemo } from '../src/session-cache.js'
-import { clearSessionCache, parseAllSessions } from '../src/parser.js'
+import { clearSessionCache, isSessionHydrationComplete, parseAllSessions } from '../src/parser.js'
+import { readCacheOnDisk } from './fixtures/session-cache-io.js'
 
 const requireForTest = createRequire(import.meta.url)
 type TestDb = { exec(sql: string): void; prepare(sql: string): { run(...p: unknown[]): void }; close(): void }
@@ -170,11 +171,15 @@ describe('copilot agent-traces.db durability', () => {
     await writeFile(db, 'not a database '.repeat(400))
     await utimes(db, new Date(), new Date(Date.now() + 5000))
     expect(await servedKeys()).toEqual(['copilot-otel:new', 'copilot-otel:old'])
+    expect(isSessionHydrationComplete()).toBe(true)
+    expect(Object.values((await readCacheOnDisk()).providers['copilot']!.files).filter(f => f.failed)).toHaveLength(1)
+    expect(await servedKeys()).toEqual(['copilot-otel:new', 'copilot-otel:old'])
 
     await rm(db)
     writeOtel('conv', ['new'])
     await utimes(db, new Date(), new Date(Date.now() + 10000))
     expect(await servedKeys()).toEqual(['copilot-otel:new', 'copilot-otel:old'])
+    expect(Object.values((await readCacheOnDisk()).providers['copilot']!.files).filter(f => f.failed)).toHaveLength(0)
   })
 })
 

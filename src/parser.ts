@@ -4072,6 +4072,7 @@ export async function parseProviderSources(
               .filter(t => t.calls.length > 0)
             existingEntry.turns = [...existingEntry.turns, ...newTurns]
             existingEntry.fingerprint = fp
+            delete existingEntry.failed
             if (prLinks.length) existingEntry.prLinks = [...new Set([...(existingEntry.prLinks ?? []), ...prLinks])]
             // Lineage is sticky on the merge: a recorded parent/child on
             // either side stays. A first parse that missed the `state.json`
@@ -4116,7 +4117,12 @@ export async function parseProviderSources(
         // current fingerprint so we don't re-read + re-throw this unchanged file
         // on every refresh; it re-parses only if it changes. Empty turns => no
         // usage contributed.
-        section.files[source.path] = { fingerprint: fp, mcpInventory: [], turns: [], failed: true }
+        // A durable provider's cached turns may be the only record left of
+        // rows its source has pruned, so they stay; the marker still stops
+        // retries until the file changes and shows the failure in doctor.
+        section.files[source.path] = provider.durableSources && priorEntry
+          ? { ...priorEntry, fingerprint: fp, failed: true }
+          : { fingerprint: fp, mcpInventory: [], turns: [], failed: true }
         markCacheDirty(diskCache, providerName, source.path)
         warnProviderParseFailure(providerName, source.path, err)
       }
