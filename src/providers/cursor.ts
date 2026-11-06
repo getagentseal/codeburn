@@ -368,14 +368,15 @@ const AGENTKV_QUERY = `
 `
 
 const BUBBLE_REQUEST_IDS_QUERY = `
-  SELECT DISTINCT json_extract(value, '$.requestId') as request_id
+  SELECT json_extract(value, '$.requestId') as request_id,
+    MAX(json_extract(value, '$.createdAt')) as created_at
   FROM cursorDiskKV
   WHERE key LIKE 'bubbleId:%'
-    AND json_extract(value, '$.requestId') IN
-`
+    AND json_extract(value, '$.requestId') IN`
 // Under the 999 bound-parameter limit of older SQLite builds. Each chunk is
 // one table scan, so many unjoined streams on a huge DB cost several scans.
 const REQUEST_ID_CHUNK = 900
+const BUBBLE_REQUEST_IDS_TAIL = 'GROUP BY request_id'
 
 // Split into HEAD (predicates we always emit) and TAIL (ORDER BY) so the
 // caller can splice in an optional `ROWID >= ?` cutoff without rewriting
@@ -892,19 +893,20 @@ function parseBubbles(
     })
   }
 
-  // Sessions recorded only in the agent stream (no bubble carries their
-  // requestId). A request whose bubbles fall outside the scanned window
-  // belongs to that older conversation, not here. agentKv stores no
-  // timestamps, so a new one takes the DB file's mtime and keeps it on every
-  // later parse; re-stamping would move it to the latest write each time.
-  const bubbleRequestIds = new Set<string>()
+  // Sessions recorded only in the agent stream (no scanned bubble carries
+  // their requestId). A request whose bubbles predate the window belongs to
+  // that older conversation, not here; one whose bubbles the scan budget cut
+  // takes its newest bubble's time. agentKv stores no timestamps, so a request
+  // with no bubble takes the DB file's mtime and keeps it on every later
+  // parse; re-stamping would move it to the latest write each time.
+  const bubbleTimes = new Map<string, string | null>()
   const unjoinedIds = [...unjoined.keys()]
   try {
     for (let i = 0; i < unjoinedIds.length; i += REQUEST_ID_CHUNK) {
       const chunk = unjoinedIds.slice(i, i + REQUEST_ID_CHUNK)
-      const sql = `${BUBBLE_REQUEST_IDS_QUERY} (${chunk.map(() => '?').join(',')})`
-      for (const row of db.query<{ request_id: string | null }>(sql, chunk)) {
-        if (row.request_id) bubbleRequestIds.add(row.request_id)
+      const sql = `${BUBBLE_REQUEST_IDS_QUERY} (${chunk.map(() => '?').join(',')}) ${BUBBLE_REQUEST_IDS_TAIL}`
+      for (const row of db.query<{ request_id: string | null; created_at: string | null }>(sql, chunk)) {
+        if (row.request_id) bubbleTimes.set(row.request_id, row.created_at)
       }
     }
   } catch (err) {
@@ -913,7 +915,8 @@ function parseBubbles(
   for (const [requestId, stream] of unjoined) {
     // Request ids are UUIDs, so a historic bubble sharing one with a billable
     // agent-only stream is not expected.
-    if (bubbleRequestIds.has(requestId)) continue
+    const bubbleTime = bubbleTimes.get(requestId)
+    if (bubbleTimes.has(requestId) && !(bubbleTime && bubbleTime > timeFloor)) continue
     const inputTokens = estimateTokensFromChars(stream.userChars + stream.contextChars)
     const outputTokens = estimateTokensFromChars(stream.assistantChars)
     if (inputTokens === 0 && outputTokens === 0) continue
@@ -921,7 +924,7 @@ function parseBubbles(
     const dedupKey = `cursor:agentKv:${requestId}`
     if (seenKeys.has(dedupKey)) continue
     seenKeys.add(dedupKey)
-    if (!firstSeen.has(requestId)) firstSeen.set(requestId, agentKvTimestamp)
+    if (!bubbleTime && !firstSeen.has(requestId)) firstSeen.set(requestId, agentKvTimestamp)
 
     emit({
       model: modelForDisplay(stream.model),
@@ -930,7 +933,7 @@ function parseBubbles(
       costUSD: calculateCost(resolveModel(stream.model), inputTokens, outputTokens, 0, 0, 0),
       tools: stream.tools,
       bashCommands: stream.bash,
-      timestamp: firstSeen.get(requestId)!,
+      timestamp: bubbleTime ?? firstSeen.get(requestId)!,
       deduplicationKey: dedupKey,
       userMessage: '',
       sessionId: requestId,

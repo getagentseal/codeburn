@@ -417,6 +417,22 @@ describe.skipIf(skipReason !== null)('cursor real context tokens (#575)', () => 
     expect(requestIdLookups().map(q => q.params)).toEqual([[requestId]])
   })
 
+  it('bills a recent stream whose bubbles the scan budget cut, at its bubble\'s time', async () => {
+    const cutAt = new Date(Date.now() - 2 * 864e5).toISOString()
+    const dbPath = buildDb((db) => {
+      insertBubble(db, { composerId: '44441111-1111-2222-3333-444455556666', bubbleUuid: 'b1', type: 1, text: 'cut prompt', createdAt: cutAt, requestId: 'req-cut' })
+      insertBubble(db, { composerId: '44442222-1111-2222-3333-444455556666', bubbleUuid: 'b2', type: 2, text: 'kept reply', model: 'gpt-5' })
+      insertAgentKv(db, { blobId: 'akv-1', role: 'user', content: 'cut prompt with context', requestId: 'req-cut' })
+    })
+    process.env['CODEBURN_CURSOR_MAX_BUBBLES'] = '1'
+
+    const calls = await collectCalls(createCursorProvider(dbPath), dbPath)
+
+    const cut = calls.filter(c => c.deduplicationKey === 'cursor:agentKv:req-cut')
+    expect(cut.map(c => [c.timestamp, c.inputTokens])).toEqual([[cutAt, Math.ceil('cut prompt with context'.length / 4)]])
+    expect(calls.some(c => c.deduplicationKey.endsWith(':b1'))).toBe(false)
+  })
+
   it('binds at most 900 request ids per lookup', async () => {
     const dbPath = buildDb((db) => {
       for (let i = 0; i < 901; i++) {
