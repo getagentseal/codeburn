@@ -285,9 +285,14 @@ function allocateCost(weights: number[], totalUsd: number): number[] {
 // exchange's spend would move onto earlier days. Exchanges the previous parse
 // cached keep their share; only the growth since then is split, over the new
 // exchanges (or added to the latest one when there is none). A total that
-// shrank, or a cost that changed rung, falls back to the fresh split.
+// shrank, a removed exchange, or a cost that changed rung falls back to the
+// fresh split.
 export function keepCachedWarpShares(prior: CachedFile, calls: ParsedProviderCall[]): ParsedProviderCall[] {
   const cached = new Map(prior.turns.flatMap(t => t.calls).map(c => [c.deduplicationKey, c]))
+  const current = new Set(calls.map(c => c.deduplicationKey))
+  // An exchange the cache held is gone: the old shares no longer add up to
+  // anything Warp reports, so split the current total fresh.
+  if ([...cached.keys()].some(key => !current.has(key))) return calls
   const kept = calls.filter(c => cached.has(c.deduplicationKey))
   if (kept.length === 0) return calls
   const billed = calls[0]!.costFromBilling === true

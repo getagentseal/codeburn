@@ -213,3 +213,42 @@ itUnlessNoSqlite('keeps each conversation\'s growth on its own new exchanges', a
   expect(costs.get('warp:flat:flat-a')).toBeCloseTo(750 * CREDIT_USD_RATE, 10)
   expect(costs.get('warp:flat:flat-b')).toBeCloseTo(0, 10)
 })
+
+for (const [label, credits] of [['an unchanged total', 225], ['a smaller total', 150]] as const) {
+  itUnlessNoSqlite(`splits ${label} fresh when a cached exchange disappears`, async () => {
+    const { DatabaseSync } = requireForTest('node:sqlite')
+    const db = new DatabaseSync(DB_PATH)
+    db.exec(`CREATE TABLE agent_conversations (id INTEGER PRIMARY KEY AUTOINCREMENT, conversation_id TEXT NOT NULL, conversation_data TEXT NOT NULL, last_modified_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)`)
+    db.exec(`CREATE TABLE ai_queries (id INTEGER PRIMARY KEY AUTOINCREMENT, exchange_id TEXT NOT NULL, conversation_id TEXT NOT NULL, start_ts DATETIME NOT NULL, input TEXT NOT NULL, working_directory TEXT, output_status TEXT NOT NULL, model_id TEXT NOT NULL DEFAULT '', planning_model_id TEXT NOT NULL DEFAULT '', coding_model_id TEXT NOT NULL DEFAULT '')`)
+    db.exec(`CREATE TABLE blocks (id INTEGER PRIMARY KEY AUTOINCREMENT, pane_leaf_uuid BLOB NOT NULL, stylized_command BLOB NOT NULL, stylized_output BLOB NOT NULL, exit_code INTEGER NOT NULL, did_execute BOOLEAN NOT NULL, completed_ts DATETIME, start_ts DATETIME, block_id TEXT NOT NULL DEFAULT '', ai_metadata TEXT)`)
+    const data = (c: number) => JSON.stringify({ conversation_usage_metadata: { credits_spent: c, token_usage: tokenUsage() } })
+    db.prepare('INSERT INTO agent_conversations (conversation_id, conversation_data, last_modified_at) VALUES (?,?,?)').run('conv', data(225), '2026-08-16 10:00:00')
+    for (const id of ['a', 'b', 'c']) {
+      db.prepare(`INSERT INTO ai_queries (exchange_id, conversation_id, start_ts, input, working_directory, output_status, model_id) VALUES (?,?,?,?,?,?,?)`)
+        .run(id, 'conv', `2026-08-16 1${['a', 'b', 'c'].indexOf(id)}:00:00.000000`, JSON.stringify([{ Query: { text: 'x'.repeat(400) } }]), '/tmp/warpproj', '"Completed"', 'auto-efficient')
+    }
+
+    const { clearSessionCache, parseAllSessions } = await import('../src/parser.js')
+    const { loadCache } = await import('../src/session-cache.js')
+    const cachedCosts = async () => {
+      const out = new Map<string, number | undefined>()
+      for (const file of Object.values((await loadCache()).providers['warp']?.files ?? {})) {
+        for (const turn of file.turns) for (const call of turn.calls) out.set(call.deduplicationKey, call.costUSD)
+      }
+      return out
+    }
+    clearSessionCache()
+    await parseAllSessions(undefined, 'warp')
+    expect((await cachedCosts()).get('warp:conv:a')).toBeCloseTo(75 * CREDIT_USD_RATE, 10)
+
+    db.prepare("DELETE FROM ai_queries WHERE exchange_id = 'c'").run()
+    db.prepare('UPDATE agent_conversations SET conversation_data = ? WHERE conversation_id = ?').run(data(credits), 'conv')
+    db.close()
+    clearSessionCache()
+    await parseAllSessions(undefined, 'warp')
+    const costs = await cachedCosts()
+    expect(costs.get('warp:conv:a')).toBeCloseTo((credits / 2) * CREDIT_USD_RATE, 10)
+    expect(costs.get('warp:conv:b')).toBeCloseTo((credits / 2) * CREDIT_USD_RATE, 10)
+    expect(costs.has('warp:conv:c')).toBe(false)
+  })
+}
