@@ -846,13 +846,22 @@ function getPriceOverrideExact(...keys: string[]): ModelCosts | null {
   return null
 }
 
-function getPriceOverridePrefix(canonical: string): ModelCosts | null {
-  for (const key of getSortedPriceOverrideKeys()) {
-    if (canonical.startsWith(key + '-') || canonical === key) {
-      return userPriceOverrides.get(key)!
+// Keys run longest first. A 1-2 digit segment after the longest dash prefix is
+// a minor version (claude-opus-4-9 is not claude-opus-4), the boundary
+// modelKeyMatches applies to display names; every shorter key crosses it too.
+function longestPricingPrefix(canonical: string, keys: string[]): string | null {
+  for (const key of keys) {
+    if (canonical === key) return key
+    if (canonical.startsWith(key + '-')) {
+      return /^\d{1,2}(?:$|[-.])/.test(canonical.slice(key.length + 1)) ? null : key
     }
   }
   return null
+}
+
+function getPriceOverridePrefix(canonical: string): ModelCosts | null {
+  const key = longestPricingPrefix(canonical, getSortedPriceOverrideKeys())
+  return key === null ? null : userPriceOverrides.get(key)!
 }
 
 function getPriceOverrideCaseInsensitive(canonical: string, withPrefix: string): ModelCosts | null {
@@ -1367,11 +1376,8 @@ export function getModelCosts(model: string): ModelCosts | null {
   // Iterate keys longest-first so a model id like `gpt-5-mini` matches the
   // `gpt-5-mini` entry rather than collapsing to the shorter `gpt-5` entry
   // due to dictionary insertion order.
-  for (const key of getSortedPricingKeys()) {
-    if (canonical.startsWith(key + '-') || canonical === key) {
-      return pricingCache.get(key)!
-    }
-  }
+  const prefixKey = longestPricingPrefix(canonical, getSortedPricingKeys())
+  if (prefixKey !== null) return pricingCache.get(prefixKey)!
 
   const caseInsensitiveOverride = getPriceOverrideCaseInsensitive(canonical, withPrefix)
   if (caseInsensitiveOverride) return caseInsensitiveOverride
