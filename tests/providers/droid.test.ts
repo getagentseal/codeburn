@@ -119,6 +119,20 @@ describe('droid provider', () => {
     expect(await parseAll(path, seen)).toHaveLength(0)
   })
 
+  it('keeps the minor version of an undated model id', async () => {
+    const path = await writeSession({ settings: { model: 'claude-opus-4-6', tokenUsage: { inputTokens: 1_000_000, outputTokens: 100_000, cacheCreationTokens: 0, cacheReadTokens: 0, thinkingTokens: 0 } } })
+    const calls = await parseAll(path)
+    expect(calls[0]!.model).toBe('claude-opus-4-6')
+    expect(calls[0]!.costUSD).toBeCloseTo(7.5, 6)
+  })
+
+  it('strips only a real date from an undated-looking id', () => {
+    const provider = createDroidProvider(factoryDir)
+    expect(provider.modelDisplayName('model-12345678')).toBe('model-12345678')
+    expect(provider.modelDisplayName('model-20260301')).toBe('model')
+    expect(provider.modelDisplayName('model-20260231')).toBe('model-20260231')
+  })
+
   it('strips Droid model wrappers for display', () => {
     const provider = createDroidProvider(factoryDir)
     expect(provider.modelDisplayName('custom:GLM-5.1-[Proxy]-0')).toBe('GLM-5.1')

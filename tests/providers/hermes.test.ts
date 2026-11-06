@@ -4,7 +4,7 @@ import { tmpdir, homedir } from 'os'
 import { createRequire } from 'node:module'
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { calculateCost } from '../../src/models.js'
+import { billableOutputTokens, calculateCost } from '../../src/models.js'
 import { createHermesProvider } from '../../src/providers/hermes.js'
 import { isSqliteAvailable } from '../../src/sqlite.js'
 import { aggregateProjectsIntoDays } from '../../src/day-aggregator.js'
@@ -541,8 +541,34 @@ skipUnlessSqlite('hermes provider', () => {
 
     const calls = await collectCalls(tmpDir, `${dbPath}#hermes-session=no-cost-session`)
     expect(calls).toHaveLength(1)
-    expect(calls[0]!.costUSD).toBe(calculateCost('claude-sonnet-4-20250514', 1000, 250, 0, 0, 0))
+    // Output already includes the reasoning tokens.
+    expect(calls[0]!.costUSD).toBe(calculateCost('claude-sonnet-4-20250514', 1000, 200, 0, 0, 0))
     expect(calls[0]!.reasoningTokens).toBe(50)
+    expect(billableOutputTokens('hermes', calls[0]!.outputTokens, calls[0]!.reasoningTokens)).toBe(200)
+  })
+
+  it('recomputes a v3 ledger cursor that priced reasoning on top of output, and keeps one whose source is gone', async () => {
+    const model = 'claude-sonnet-4-20250514'
+    const tokens = { inputTokens: 1000, outputTokens: 200, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 50 }
+    const v3Cursor = (sessionId: string, costUSD: number) => ({
+      profile: 'default', sessionId,
+      lastSeen: { ...tokens, costUSD, costBasis: 'calculated' },
+      observations: [{ index: 0, timestamp: '2026-05-23T12:33:20.000Z', ...tokens, costUSD, costBasis: 'calculated', supplementaryAccounting: false }],
+    })
+    await writeFile(join(cacheDir, 'hermes-session-ledger.v3.json'), JSON.stringify({
+      version: 3,
+      cursors: { default: { 'live-session': v3Cursor('live-session', calculateCost(model, 1000, 250, 0, 0, 0)), 'gone-session': v3Cursor('gone-session', 9.99) } },
+    }))
+    const dbPath = createHermesDb(tmpDir)
+    withTestDb(dbPath, (db) => {
+      insertSession(db, { id: 'live-session', model, ...tokens, estimatedCost: null, actualCost: null, startedAt: 1779539600 })
+    })
+
+    const live = await collectCalls(tmpDir, `${dbPath}#hermes-session=live-session`)
+    expect(live).toHaveLength(1)
+    expect(live[0]!.costUSD).toBe(calculateCost(model, 1000, 200, 0, 0, 0))
+    const gone = await collectCalls(tmpDir, `${dbPath}#hermes-session=gone-session`)
+    expect(gone.reduce((sum, call) => sum + call.costUSD, 0)).toBe(9.99)
   })
 
   it('carries the billing route the session recorded, and stays silent for every other door', async () => {
