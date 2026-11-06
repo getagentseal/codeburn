@@ -909,3 +909,32 @@ describe('resident shard memo', () => {
     expect(await loadShardMemoized(dir, 'claude.2026-07.cccc.json')).not.toBeNull()
   })
 })
+
+describe('ultrafast speed', () => {
+  it('round-trips an ultrafast call without dropping its day piece', async () => {
+    const codexFile = (speed: 'standard' | 'ultrafast', key: string, ino: number): CachedFile => {
+      const base = cachedFile({ fingerprint: { dev: 1, ino, mtimeMs: 3, sizeBytes: 4 } })
+      const turn = base.turns[0]!
+      return { ...base, turns: [{ ...turn, calls: [{ ...turn.calls[0]!, provider: 'codex', model: 'gpt-5.5', speed, deduplicationKey: key }] }] }
+    }
+    const cache: SessionCache = {
+      version: CACHE_VERSION,
+      complete: true,
+      providers: { codex: { envFingerprint: 'fp', files: {
+        '/a/standard.jsonl': codexFile('standard', 'k1', 10),
+        '/a/ultra.jsonl': codexFile('ultrafast', 'k2', 11),
+      } } },
+    }
+    markCacheDirty(cache, 'codex')
+    await saveCache(cache)
+
+    clearLoadCacheMemo()
+    const full = await loadCache()
+    expect(Object.keys(full.providers['codex']!.files).sort()).toEqual(['/a/standard.jsonl', '/a/ultra.jsonl'])
+    expect(full.providers['codex']!.files['/a/ultra.jsonl']!.turns[0]!.calls[0]!.speed).toBe('ultrafast')
+
+    clearLoadCacheMemo()
+    const ranged = await loadCache(monthScopeForRange(new Date('2026-05-01T00:00:00Z'), new Date('2026-05-31T23:59:59Z')))
+    expect(Object.keys(ranged.providers['codex']!.files).sort()).toEqual(['/a/standard.jsonl', '/a/ultra.jsonl'])
+  })
+})

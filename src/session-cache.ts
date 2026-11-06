@@ -7,7 +7,7 @@ import { StringDecoder } from 'string_decoder'
 import { getCodeburnCacheDir, RETIRED_PROVIDER_NAMES } from './cache-dir.js'
 import { acquireCacheRefreshLock, releaseOwnedRefreshLocksForExit } from './cache-refresh-lock.js'
 import { parseBillingMode, type BillingMode } from './models.js'
-import type { ToolCall } from './types.js'
+import { SPEEDS, type Speed, type ToolCall } from './types.js'
 import { isWslUncPath } from './wsl.js'
 
 // ── Types ──────────────────────────────────────────────────────────────
@@ -33,7 +33,7 @@ export type CachedCall = {
   /// True when `costUSD` (or the tokens it is priced from) is estimated rather
   /// than metered. Persisted so the estimated-cost marker survives the cache.
   isEstimated?: boolean
-  speed: 'standard' | 'fast' | 'flex' | 'ultrafast'
+  speed: Speed
   timestamp: string
   tools: string[]
   bashCommands: string[]
@@ -1212,7 +1212,7 @@ function validateCall(c: unknown): c is CachedCall {
     && typeof o['model'] === 'string'
     && typeof o['deduplicationKey'] === 'string'
     && typeof o['timestamp'] === 'string'
-    && (o['speed'] === 'standard' || o['speed'] === 'fast' || o['speed'] === 'flex')
+    && (SPEEDS as readonly unknown[]).includes(o['speed'])
     && isOptionalNum(o['costUSD'])
     && isOptionalNum(o['fallbackCostUSD'])
     && isOptionalBool(o['isEstimated'])
