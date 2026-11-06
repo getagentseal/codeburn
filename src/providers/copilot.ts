@@ -43,9 +43,9 @@
 //   CODEBURN_COPILOT_SESSION_STORE_DB — Override the ~/.copilot/session-store.db path
 //
 // ARCHITECTURE:
-//   discoverSessions() returns OTel sessions and legacy JSONL sessions. When
-//   OTel is present, VS Code core chatSessions are skipped because they mirror
-//   the same Copilot turns under different IDs. OTel sessions carry the full
+//   discoverSessions() returns OTel sessions and legacy JSONL sessions. A VS
+//   Code chatSessions journal of a session OTel also recorded is dropped at
+//   serve time, so each session counts once. OTel sessions carry the full
 //   token breakdown; JSONL sessions only carry output tokens (the original
 //   behaviour, as a fallback).
 //
@@ -710,7 +710,10 @@ function parseLegacyChatSession(
       const toolResultTokens = Math.ceil(toolResultText.length / CHARS_PER_TOKEN_LEGACY)
 
       totalInputTokens = inputTokens + toolResultTokens
-      outputTokens = Math.ceil(outputText.length / CHARS_PER_TOKEN_LEGACY)
+      // Copilot output counts include reasoning (models.ts
+      // REASONING_INCLUDED_IN_OUTPUT), so the estimate does too; reasoningTokens
+      // stays as metadata.
+      outputTokens = Math.ceil(outputText.length / CHARS_PER_TOKEN_LEGACY) + reasoningTokens
 
       if (outputTokens === 0 && totalInputTokens === 0 && cacheCreationInputTokens === 0 && reasoningTokens === 0) {
         continue
@@ -725,7 +728,7 @@ function parseLegacyChatSession(
     const costUSD = nanoAiu !== undefined ? creditsToUsd(nanoAiuToCredits(nanoAiu)) : calculateCost(
       model,
       totalInputTokens,
-      outputTokens + reasoningTokens,
+      outputTokens,
       cacheCreationInputTokens,
       cacheReadInputTokens,
       0,
@@ -1246,12 +1249,23 @@ function readString(raw: unknown): string {
   return typeof raw === 'string' ? raw : ''
 }
 
-function modelFromChatSessionRequest(req: ChatSessionRequest, metadata: Record<string, unknown>): string {
+// An Auto request without resolvedModel names no priceable model. Unless
+// copilotCredits price it (then its label stays), infer one the way the legacy
+// JSON path does and report the cost as estimated; with nothing to infer from
+// it is 'unknown', which reports as unpriced rather than as a $0 estimate.
+function modelFromChatSessionRequest(
+  req: ChatSessionRequest,
+  metadata: Record<string, unknown>,
+  session: Record<string, unknown>,
+  billed: boolean,
+): { model: string; inferred: boolean } {
   const resolved = readString(metadata['resolvedModel'])
-  if (resolved) return resolved
+  if (resolved) return { model: resolved, inferred: false }
 
   const modelId = readString(req['modelId']).replace(/^copilot\//, '')
-  return modelId || 'unknown'
+  if (billed || (modelId !== 'auto' && modelId !== 'copilot-auto')) return { model: modelId || 'unknown', inferred: false }
+  const inferred = extractModelFromRequest(req as unknown as LegacyChatRequest, session as LegacyChatSession)
+  return { model: inferred, inferred: inferred !== 'unknown' }
 }
 
 function parseStructuredArguments(raw: unknown): Record<string, unknown> | null {
@@ -1849,7 +1863,7 @@ function createChatSessionParser(
         if (seenKeys.has(dedupKey)) continue
         seenKeys.add(dedupKey)
 
-        const model = modelFromChatSessionRequest(rawReq, metadata)
+        const { model, inferred } = modelFromChatSessionRequest(rawReq, metadata, root, nanoAiu !== undefined)
         const costUSD = nanoAiu !== undefined
           ? creditsToUsd(nanoAiuToCredits(nanoAiu))
           : calculateCost(model, inputTokens, outputTokens, 0, cacheReadTokens, 0)
@@ -1871,6 +1885,7 @@ function createChatSessionParser(
           reasoningTokens: 0,
           webSearchRequests: 0,
           costUSD,
+          ...(inferred ? { costIsEstimated: true } : {}),
           tools: extracted.tools,
           bashCommands: extracted.bashCommands,
           skills: extracted.skills.length > 0 ? extracted.skills : undefined,
@@ -2106,10 +2121,10 @@ function extractJetBrainsConversations(raw: string): JBConversation[] {
   // keep the LAST meaningful (non-default) one.
   const DEFAULT_TITLES = new Set(['New Agent Session', 'New Session', 'New Chat'])
   const byId = new Map<string, string>()
-  const re = /\$([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})[\s\S]{0,8}name/g
+  const re = /\$([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})[\s\S]{0,8}name/gi
   let m: RegExpExecArray | null
   while ((m = re.exec(raw))) {
-    const id = m[1]
+    const id = m[1]!.toLowerCase()
     const window = raw.slice(m.index, m.index + 400)
     // The title is the Java-UTF string between the `value` marker and `source`.
     const tm = window.match(/value.{1,6}?([\x20-\x7e]{3,80}?)t\x00\x06source/)
@@ -2264,6 +2279,37 @@ function extractRecordStrings(s: string, marker: string, dataKey: string, field:
 }
 
 /**
+ * Returns a lookup for the conversation whose GUID most recently appears at or
+ * before an offset in `raw`. One pass collects every occurrence; the scan
+ * steps one char past each match so a GUID-shaped neighbour cannot hide one.
+ */
+function jetBrainsConversationAt(raw: string, convById: Map<string, JBConversation>): (pos: number) => JBConversation | undefined {
+  const hits: Array<{ pos: number; conv: JBConversation }> = []
+  const re = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi
+  let m: RegExpExecArray | null
+  while ((m = re.exec(raw))) {
+    const conv = convById.get(m[0].toLowerCase())
+    if (conv) hits.push({ pos: m.index, conv })
+    re.lastIndex = m.index + 1
+  }
+  return (pos) => {
+    let lo = 0
+    let hi = hits.length - 1
+    let found: JBConversation | undefined
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1
+      if (hits[mid]!.pos <= pos) {
+        found = hits[mid]!.conv
+        lo = mid + 1
+      } else {
+        hi = mid - 1
+      }
+    }
+    return found
+  }
+}
+
+/**
  * Extract assistant turns from a raw (latin1) Nitrite .db buffer. Each turn is
  * one `{"__first__":{"type":"Subgraph"…}` blob; the per-turn model is recovered
  * from inside the blob when present, else the whole-store default. Each turn is
@@ -2276,6 +2322,7 @@ function extractJetBrainsDbTurns(raw: string): JBDbTurn[] {
   // Precompute the byte offset of each conversation GUID's full form so a turn
   // can be attributed to the conversation whose id most recently precedes it.
   const convById = new Map(conversations.map((c) => [c.id, c]))
+  const conversationAt = jetBrainsConversationAt(raw, convById)
 
   const turns: JBDbTurn[] = []
   const seenReplies = new Set<string>() // keyed by `${conversationId}::${reply}`
@@ -2286,17 +2333,9 @@ function extractJetBrainsDbTurns(raw: string): JBDbTurn[] {
     re.lastIndex = end
 
     // Attribute this turn to the conversation whose GUID last appears before it.
-    let conversationId = ''
-    let conversationTitle = ''
-    let bestPos = -1
-    for (const c of convById.values()) {
-      const p = raw.lastIndexOf(c.id, m.index)
-      if (p > bestPos) {
-        bestPos = p
-        conversationId = c.id
-        conversationTitle = c.title
-      }
-    }
+    const owner = conversationAt(m.index)
+    const conversationId = owner?.id ?? ''
+    const conversationTitle = owner?.title ?? ''
 
     const replyText = extractResponseText(chunk)
     // The files this turn referenced (home-relative common dir) → project label.
@@ -2350,17 +2389,9 @@ function extractJetBrainsDbTurns(raw: string): JBDbTurn[] {
       if (!chunk.includes('AgentRound')) continue
 
       // Attribute to the conversation whose GUID most recently precedes this doc.
-      let conversationId = ''
-      let conversationTitle = ''
-      let bestPos = -1
-      for (const c of convById.values()) {
-        const p = raw.lastIndexOf(c.id, docStart)
-        if (p > bestPos) {
-          bestPos = p
-          conversationId = c.id
-          conversationTitle = c.title
-        }
-      }
+      const owner = conversationAt(docStart)
+      const conversationId = owner?.id ?? ''
+      const conversationTitle = owner?.title ?? ''
 
       // extractResponseText handles the depth-1 unescape needed to surface the
       // AgentRound records, then calls extractAgentRoundReplies for each turn.
@@ -3503,6 +3534,16 @@ async function mapChatSessionWorkspaces(workspaceStorageDirs: string[]): Promise
   return new Map([...found].map(([id, v]) => [id, v.project]))
 }
 
+// The VS Code storage a chat session file lives in: the workspaceStorage hash
+// dir for chatSessions journals and transcripts, the directory itself for
+// empty-window journals.
+export function copilotChatStorageKey(path: string): string {
+  const dir = dirname(path)
+  const name = basename(dir)
+  if (name === 'transcripts') return dirname(dirname(dir))
+  return name === 'chatSessions' ? dirname(dir) : dir
+}
+
 async function hasChatSessionFiles(chatSessionsDir: string): Promise<boolean> {
   let files: string[]
   try {
@@ -3784,30 +3825,32 @@ export function createCopilotProvider(
         // JSONL discovery failed
       }
 
-      // Prefer OTel over chatSessions: they can mirror the same turns under
-      // incompatible IDs, and OTel carries richer token/cache data.
-      if (!discoveredOtel) {
-        // 3. Discover VS Code core chatSessions journals
-        try {
-          const chatSessionSources = await discoverWorkspaceChatSessions(getWsDirs())
-          sources.push(...chatSessionSources)
-        } catch {
-          // Workspace chatSessions discovery failed
-        }
-
-        // 4. Discover VS Code empty-window chatSessions journals
-        try {
-          const emptyWindowSources = await discoverEmptyWindowChatSessions(getGlobalDirs())
-          sources.push(...emptyWindowSources)
-        } catch {
-          // Empty-window chatSessions discovery failed
-        }
+      // 3. Discover VS Code core chatSessions journals. A journal request
+      // agent-traces.db also recorded is left out at serve time (parser.ts,
+      // otelTwinKeys); everything OTel never recorded counts from the journal.
+      // Sorted by path: the same session copied into two storages carries the
+      // same dedup keys, and the first parsed copy keeps them, so the lowest
+      // storage path wins whatever order the directories list in.
+      const byPath = (a: SessionSource, b: SessionSource): number => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0)
+      const chatSessionSources: SessionSource[] = []
+      try {
+        chatSessionSources.push(...await discoverWorkspaceChatSessions(getWsDirs()))
+      } catch {
+        // Workspace chatSessions discovery failed
       }
+
+      // 4. Discover VS Code empty-window chatSessions journals
+      try {
+        chatSessionSources.push(...await discoverEmptyWindowChatSessions(getGlobalDirs()))
+      } catch {
+        // Empty-window chatSessions discovery failed
+      }
+      sources.push(...chatSessionSources.sort(byPath))
 
       // 5. Discover VS Code workspace transcript sessions
       try {
         const transcriptSources = await discoverTranscriptSessions(getWsDirs())
-        sources.push(...transcriptSources)
+        sources.push(...transcriptSources.sort(byPath))
       } catch {
         // Transcript discovery failed
       }

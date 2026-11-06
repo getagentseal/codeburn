@@ -139,9 +139,12 @@ export type CachedFile = {
   agentStartedAt?: string
   // Negative-result marker: this file threw while parsing at the recorded
   // fingerprint. Cached so we don't re-read + re-throw it on every refresh; it
-  // is re-parsed only when the file changes (fingerprint differs). Carries no
-  // turns, so it contributes no usage. (issue #441 follow-up)
+  // is re-parsed when the file changes (fingerprint differs) and, for provider
+  // sources, once a day after `failedAt`, so a repair that keeps size and
+  // mtime is still picked up. Carries no turns, except for a durable
+  // provider, whose earlier turns stay. (issue #441 follow-up)
   failed?: boolean
+  failedAt?: string
   // Network sources: consecutive refreshes whose fetch failed retryably. At
   // RETRYABLE_FAILURE_LIMIT the entry is marked failed, keeps its rows, and is
   // not re-fetched again until the next day.
@@ -530,7 +533,15 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // otel-cache-inclusive-input-v1: cached OTel calls hold inputTokens with
   // cache reads and writes still inside it, so they must re-parse. Calls whose
   // spans agent-traces.db already pruned keep the old input.
-  copilot: 'cli-shutdown-cost-v1-skills-source-provenance-v1-session-store-v3-chatsession-otel-skills-v1-otel-trace-metadata-once-v1-transcript-unknown-usage-v1-otel-workspace-project-v1-journal-request-input-v1-tokenless-turns-v1-store-row-output-v1-jetbrains-opus-4-7-v1-chatsession-agent-totals-v1-otel-cache-inclusive-input-v1',
+  // legacy-estimated-reasoning-in-output-v1: estimated thinking tokens in
+  // legacy chat JSON now ride inside outputTokens, so the served price keeps
+  // them; cached calls must re-parse once.
+  // journal-auto-model-v1: chatSessions journal requests in Auto mode with no
+  // resolvedModel take the legacy path's inferred model and an estimated cost
+  // instead of model 'auto' at $0.
+  // jetbrains-guid-case-v1: JetBrains conversation GUIDs match in any case, so
+  // a store using uppercase or mixed-case ids re-attributes its turns.
+  copilot: 'cli-shutdown-cost-v1-skills-source-provenance-v1-session-store-v3-chatsession-otel-skills-v1-otel-trace-metadata-once-v1-transcript-unknown-usage-v1-otel-workspace-project-v1-journal-request-input-v1-tokenless-turns-v1-store-row-output-v1-jetbrains-opus-4-7-v1-chatsession-agent-totals-v1-otel-cache-inclusive-input-v1-legacy-estimated-reasoning-in-output-v1-journal-auto-model-v1-jetbrains-guid-case-v1',
   // authoritative-usage-v4: persist one Grok session call from top-level
   // authoritative totals, use modelUsage only for priced attribution, clamp
   // reasoning per record, and label mixed sessions estimated.
@@ -1314,6 +1325,7 @@ function validateCachedFile(f: unknown): f is CachedFile {
     && isOptionalString(o['agentName'])
     && isOptionalString(o['agentStartedAt'])
     && isOptionalBool(o['failed'])
+    && isOptionalString(o['failedAt'])
     && isOptionalNum(o['retryableFailures'])
     && isOptionalString(o['parentSessionId'])
     && isOptionalStringRecord(o['agentSpawnLinks'])

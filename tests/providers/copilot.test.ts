@@ -1300,6 +1300,39 @@ describe('copilot provider - chatSessions parsing', () => {
     expect(calls[0]!.userMessage).toBe('Run the checks')
   })
 
+  it('prices an Auto-mode journal request without resolvedModel from its tool-call ids', async () => {
+    const filePath = join(tmpDir, 'auto.jsonl')
+    await createChatSessionFile(filePath, [
+      { kind: 0, v: { version: 3, creationDate: 1780157113020, sessionId: 'chat-auto', requests: [
+        { requestId: 'r1', modelId: 'copilot/auto', promptTokens: 80000, completionTokens: 2000,
+          result: { metadata: { toolCallRounds: [{ response: '', toolCalls: [{ id: 'call_abc', name: 'readFile', arguments: '{}' }] }] } } },
+        { requestId: 'r2', modelId: 'copilot/auto', promptTokens: 1000, completionTokens: 10, copilotCredits: 1 },
+      ] } },
+    ])
+
+    const calls = await collectCalls({ path: filePath, project: 'myproject', provider: 'copilot', sourceType: 'chatsession' })
+
+    expect(calls.map(c => [c.model, c.costIsEstimated])).toEqual([
+      ['copilot-openai-auto', true],
+      ['auto', undefined],
+    ])
+    expect(calls[0]!.costUSD).toBe(calculateCost('copilot-openai-auto', 80000, 2000, 0, 0, 0))
+    expect(calls[0]!.costUSD).toBeGreaterThan(0)
+  })
+
+  it('reports an Auto-mode journal request with nothing to infer from as unknown, not estimated', async () => {
+    const filePath = join(tmpDir, 'auto-bare.jsonl')
+    await createChatSessionFile(filePath, [
+      { kind: 0, v: { version: 3, creationDate: 1780157113020, sessionId: 'chat-auto-bare', requests: [
+        { requestId: 'r1', modelId: 'copilot/auto', promptTokens: 80000, completionTokens: 2000 },
+      ] } },
+    ])
+
+    const calls = await collectCalls({ path: filePath, project: 'myproject', provider: 'copilot', sourceType: 'chatsession' })
+
+    expect(calls.map(c => [c.model, c.costIsEstimated, c.costUSD])).toEqual([['unknown', undefined, 0]])
+  })
+
   it('returns no calls for an empty reconstructed requests array', async () => {
     const filePath = join(tmpDir, 'empty.jsonl')
     await createChatSessionFile(filePath, [
@@ -1334,7 +1367,7 @@ describe('copilot provider - chatSessions parsing', () => {
     expect(calls[0]!.inputTokens).toBe(32543)
   })
 
-  it('skips chatSessions discovery when an OTel source is present', async () => {
+  it('still discovers chatSessions when an OTel source is present', async () => {
     if (!isSqliteAvailable()) return
 
     vi.unstubAllEnvs()
@@ -1376,7 +1409,7 @@ describe('copilot provider - chatSessions parsing', () => {
     const sources = await provider.discoverSessions()
 
     expect(sources.filter(s => (s as { sourceType?: string }).sourceType === 'otel')).toHaveLength(1)
-    expect(sources.filter(s => (s as { sourceType?: string }).sourceType === 'chatsession')).toHaveLength(0)
+    expect(sources.filter(s => (s as { sourceType?: string }).sourceType === 'chatsession')).toHaveLength(2)
   })
 
   it('applies append-then-edit journal updates', async () => {
@@ -3683,6 +3716,75 @@ describe('copilot provider - JetBrains parsing', () => {
   })
 })
 
+describe('copilot provider - JetBrains conversation attribution at scale', () => {
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'copilot-jetbrains-scale-'))
+    vi.stubEnv('CODEBURN_COPILOT_DISABLE_OTEL', '1')
+  })
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true })
+    vi.unstubAllEnvs()
+  })
+
+  it('attributes a turn to an uppercase conversation GUID', async () => {
+    const guid = 'AAAAAAAA-BBBB-CCCC-DDDD-0000000000EF'
+    const md = JSON.stringify({ type: 'Markdown', data: JSON.stringify({ text: 'an uppercase reply' }) })
+    const dbPath = join(tmpDir, 'copilot-agent-sessions-nitrite.db')
+    await writeFile(dbPath, Buffer.from(`$${guid}\x00\x00name\x00value\x00\x05Upper chatt\x00\x06source{"__first__":{"type":"Subgraph","value":${JSON.stringify(md)}}}`, 'latin1'))
+
+    const calls = await collectCalls({
+      path: dbPath, project: 'copilot-jetbrains', provider: 'copilot', sourceType: 'jetbrains',
+      sessionId: 'store', storeId: 'store', dbPath, mtime: '2026-07-03T12:00:00.000Z',
+    } as unknown as { path: string; project: string; provider: string; sourceType?: string })
+
+    expect(calls.map(c => [c.sessionId, c.userMessage])).toEqual([[guid.toLowerCase(), 'Upper chat']])
+  })
+
+  it('matches a conversation GUID referenced in another case than it was declared', async () => {
+    const a = 'AAAAAAAA-BBBB-CCCC-DDDD-00000000000A'
+    const b = 'AAAAAAAA-BBBB-CCCC-DDDD-00000000000B'
+    const declare = (guid: string, title: string) => `$${guid}\x00\x00name\x00value\x00\x05${title}t\x00\x06source`
+    const md = JSON.stringify({ type: 'Markdown', data: JSON.stringify({ text: 'a reply for A' }) })
+    const dbPath = join(tmpDir, 'copilot-agent-sessions-nitrite.db')
+    await writeFile(dbPath, Buffer.from(`${declare(a, 'Chat A')}${declare(b, 'Chat B')}ref ${a.toLowerCase()} {"__first__":{"type":"Subgraph","value":${JSON.stringify(md)}}}`, 'latin1'))
+
+    const calls = await collectCalls({
+      path: dbPath, project: 'copilot-jetbrains', provider: 'copilot', sourceType: 'jetbrains',
+      sessionId: 'store', storeId: 'store', dbPath, mtime: '2026-07-03T12:00:00.000Z',
+    } as unknown as { path: string; project: string; provider: string; sourceType?: string })
+
+    expect(calls.map(c => [c.sessionId, c.userMessage])).toEqual([[a.toLowerCase(), 'Chat A']])
+  })
+
+  it('attributes 1,600 turns across 80 conversations in linear time', async () => {
+    const guid = (k: number) => `aaaaaaaa-bbbb-cccc-dddd-${k.toString(16).padStart(12, '0')}`
+    const parts: string[] = []
+    for (let k = 0; k < 80; k++) {
+      parts.push(`$${guid(k)}\x00\x00name\x00value\x00\x05Chat number ${k}t\x00\x06source`)
+      for (let t = 0; t < 20; t++) {
+        const md = JSON.stringify({ type: 'Markdown', data: JSON.stringify({ text: `reply ${k}-${t} ` + 'w'.repeat(200) }) })
+        parts.push(`{"__first__":{"type":"Subgraph","value":${JSON.stringify(md)}}}` + 'x'.repeat(2000))
+      }
+    }
+    const dbPath = join(tmpDir, 'copilot-agent-sessions-nitrite.db')
+    await writeFile(dbPath, Buffer.from(parts.join(''), 'latin1'))
+
+    const started = performance.now()
+    const calls = await collectCalls({
+      path: dbPath, project: 'copilot-jetbrains', provider: 'copilot', sourceType: 'jetbrains',
+      sessionId: 'store', storeId: 'store', dbPath, mtime: '2026-07-03T12:00:00.000Z',
+    } as unknown as { path: string; project: string; provider: string; sourceType?: string })
+    expect(performance.now() - started).toBeLessThan(2000)
+
+    expect(calls).toHaveLength(1600)
+    for (const c of calls) {
+      const k = Number(/^Chat number (\d+)$/.exec(c.userMessage)![1])
+      expect(c.sessionId).toBe(guid(k))
+    }
+  })
+})
+
 describe('copilot provider - JetBrains dedup key stability across store rewrites', () => {
   beforeEach(async () => {
     tmpDir = await mkdtemp(join(tmpdir(), 'copilot-jetbrains-dedup-'))
@@ -3978,6 +4080,10 @@ describe('copilot provider - legacy JSON format', () => {
     // Cost must be ~0.03, definitely NOT >= $1 (which would happen if billed as web search)
     expect(calls[0]!.costUSD).toBeLessThan(0.1)
     expect(calls[0]!.costUSD).toBeGreaterThan(0.02)
+    // Copilot output includes reasoning, and serving re-prices from outputTokens
+    // alone, so the estimate must already hold the reasoning.
+    expect(calls[0]!.outputTokens).toBeGreaterThan(2001)
+    expect(calls[0]!.costUSD).toBe(calculateCost('claude-sonnet-4.6', calls[0]!.inputTokens, calls[0]!.outputTokens, 0, 0, 0))
   })
 
   it('extracts split tokens in .jsonl (metadata.promptTokens + root completionTokens) and skips 0-token rows', async () => {

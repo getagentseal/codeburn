@@ -104,3 +104,7 @@ it('repairs a pre-fix session cache and finalized daily cache without duplicatin
   expect(hydrated.version).toBe(DAILY_CACHE_VERSION)
   expect(hydrated.days.find(day => day.date === date)).toMatchObject({ calls: 3, inputTokens: 13345, outputTokens: 688 })
 })
+
+it('pins the Copilot parse version that re-parses JetBrains stores for GUID case', () => {
+  expect(PROVIDER_PARSE_VERSIONS.copilot).toBe('cli-shutdown-cost-v1-skills-source-provenance-v1-session-store-v3-chatsession-otel-skills-v1-otel-trace-metadata-once-v1-transcript-unknown-usage-v1-otel-workspace-project-v1-journal-request-input-v1-tokenless-turns-v1-store-row-output-v1-jetbrains-opus-4-7-v1-chatsession-agent-totals-v1-otel-cache-inclusive-input-v1-legacy-estimated-reasoning-in-output-v1-journal-auto-model-v1-jetbrains-guid-case-v1')
+})

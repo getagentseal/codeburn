@@ -12,6 +12,7 @@ import { applyClaudeIdentities, identityLogPath, observeClaudeIdentities } from 
 import { normalizeContentBlocks, flatSlice, flatString } from './content-utils.js'
 import { estimateTokensFromChars } from './token-estimate.js'
 import { discoverAllSessions, discoverAllSessionsWithFailures, getProvider } from './providers/index.js'
+import { copilotChatStorageKey } from './providers/copilot.js'
 import { evictCachedCodexResults, flushCodexCache, readCachedCodexResults, withCodexCacheDirectory, writeCachedCodexResults } from './codex-cache.js'
 import { antigravityCascadeIdFromPath, flushAntigravityCache, preloadAntigravityCache, shouldReparseAntigravitySource } from './providers/antigravity.js'
 import { keepCachedWarpShares } from './providers/warp.js'
@@ -3459,7 +3460,7 @@ function getOrCreateProviderSection(cache: SessionCache, provider: string): Prov
         section.files[path] = file
         continue
       }
-      const { lastCompleteLineOffset: _resumeOffset, failed: _failed, ...rest } = file
+      const { lastCompleteLineOffset: _resumeOffset, failed: _failed, failedAt: _failedAt, ...rest } = file
       section.files[path] = { ...rest, fingerprint: { dev: 0, ino: 0, mtimeMs: 0, sizeBytes: -1 } }
     }
   }
@@ -3738,6 +3739,9 @@ function classifiedTurnSlicedToDays(turn: ClassifiedTurn, days: Set<string>): Cl
   return { ...turn, assistantCalls: inRangeCalls, timestamp: inRangeCalls[0]!.timestamp }
 }
 
+// A failed source is re-read at most this often while its fingerprint holds.
+const FAILED_SOURCE_RETRY_MS = 24 * 60 * 60 * 1000
+
 export async function parseProviderSources(
   providerName: string,
   sources: SessionSource[],
@@ -3868,7 +3872,9 @@ export async function parseProviderSources(
     } else if (stub && (readOnly || action.action === 'unchanged')) {
       if (readOnly && action.action !== 'unchanged') readOnlyServedStale = true
       stubServed.add(source.path)
-    } else if (cached && (readOnly || (action.action === 'unchanged' && (cached.failed || !cachedFileNeedsProviderReparse(providerName, source.path, cached))))) {
+    } else if (cached && (readOnly || (action.action === 'unchanged' && (cached.failed
+      ? Date.now() - Date.parse(cached.failedAt ?? '') < FAILED_SOURCE_RETRY_MS
+      : !cachedFileNeedsProviderReparse(providerName, source.path, cached))))) {
       if (readOnly && action.action !== 'unchanged') readOnlyServedStale = true
       unchangedSources.push({ source, cached })
     } else if (!readOnly) {
@@ -4071,6 +4077,21 @@ export async function parseProviderSources(
           const existingEntry = section.files[source.path]
           if (existingEntry) {
             const freshByKey = new Map(turns.flatMap(t => t.calls).map(c => [c.deduplicationKey, c]))
+            // JetBrains Copilot keys are copilot:jb:<conversation>:<reply hash>:<n>,
+            // stamped with the store's mtime. A re-read that files a cached
+            // reply under another conversation (better GUID matching)
+            // supersedes the cached copy: same hash, index and stamp under
+            // another key. A same-text reply cached at another stamp or index
+            // (a pruned conversation's) stays. A store that changed between
+            // its last parse and the re-read keeps both copies.
+            const jbTurn = (c: CachedCall): string | undefined =>
+              c.deduplicationKey.startsWith('copilot:jb:') ? `${c.deduplicationKey.split(':').slice(-2).join(':')}\0${c.timestamp}` : undefined
+            const freshJbTurns = new Set([...freshByKey.values()].map(jbTurn).filter(id => id !== undefined))
+            if (freshJbTurns.size > 0) {
+              existingEntry.turns = existingEntry.turns
+                .map(t => ({ ...t, calls: t.calls.filter(c => freshByKey.has(c.deduplicationKey) || !freshJbTurns.has(jbTurn(c) ?? '')) }))
+                .filter(t => t.calls.length > 0)
+            }
             if (freshByKey.size > 0) {
               existingEntry.turns = existingEntry.turns.map(t => {
                 const calls = t.calls.map(c => freshByKey.get(c.deduplicationKey) ?? c)
@@ -4090,6 +4111,8 @@ export async function parseProviderSources(
               .filter(t => t.calls.length > 0)
             existingEntry.turns = [...existingEntry.turns, ...newTurns]
             existingEntry.fingerprint = fp
+            delete existingEntry.failed
+            delete existingEntry.failedAt
             if (prLinks.length) existingEntry.prLinks = [...new Set([...(existingEntry.prLinks ?? []), ...prLinks])]
             // Lineage is sticky on the merge: a recorded parent/child on
             // either side stays. A first parse that missed the `state.json`
@@ -4148,7 +4171,13 @@ export async function parseProviderSources(
         // current fingerprint so we don't re-read + re-throw this unchanged file
         // on every refresh; it re-parses only if it changes. Empty turns => no
         // usage contributed.
-        section.files[source.path] = { fingerprint: fp, mcpInventory: [], turns: [], failed: true }
+        // A durable provider's cached turns may be the only record left of
+        // rows its source has pruned, so they stay; the marker still stops
+        // retries until the file changes and shows the failure in doctor.
+        const failedAt = new Date().toISOString()
+        section.files[source.path] = provider.durableSources && priorEntry
+          ? { ...priorEntry, fingerprint: fp, failed: true, failedAt }
+          : { fingerprint: fp, mcpInventory: [], turns: [], failed: true, failedAt }
         markCacheDirty(diskCache, providerName, source.path)
         warnProviderParseFailure(providerName, source.path, err)
       }
@@ -4324,6 +4353,7 @@ export async function parseProviderSources(
     nanRollupFallbackTs: Map<string, string>
     sessionEarliestValidTs: Map<string, string>
     agentHostUsageSessions: Set<string>
+    otelTwinKeys: Set<string>
   } | null = null
   if (providerName === 'copilot') {
     // DEPENDS on the durable full-load exemption in session-cache.ts
@@ -4355,6 +4385,54 @@ export async function parseProviderSources(
     // record of the same requests, so it is left out at serve time. A
     // session-state file with no usage yet keeps the journal.
     const agentHostUsageSessions = new Set<string>()
+    // A chat-session journal or VS Code transcript request that agent-traces.db
+    // also recorded holds the same usage under another key, so OTel wins for
+    // that request. Spans carry no VS Code request id, so the match is by time
+    // within the session: a journal request owns the spans from its timestamp
+    // up to the next request's, a transcript message the spans since the
+    // previous message. A request with no span in its window is kept, so
+    // requests the trace never recorded (before it was enabled, after it was
+    // deleted) still count. Spans name no VS Code storage either, so when the
+    // session id has copies in more than one storage nothing is dropped: a
+    // possible double count is preferred over dropping the wrong workspace.
+    // Collected in full before the pass below so file order cannot matter.
+    const otelTimes = new Map<string, number[]>()
+    type TwinCandidate = { key: string; ts: number; storage: string; transcript: boolean }
+    const twinCandidates = new Map<string, TwinCandidate[]>()
+    for (const [cachedPath, cachedFile] of Object.entries(section.files)) {
+      const transcript = basename(dirname(cachedPath)) === 'transcripts'
+      for (const turn of cachedFile.turns) {
+        for (const c of turn.calls) {
+          const ts = new Date(c.timestamp).getTime()
+          if (c.deduplicationKey.startsWith('copilot-otel:')) {
+            if (!Number.isNaN(ts)) otelTimes.set(turn.sessionId, [...(otelTimes.get(turn.sessionId) ?? []), ts])
+          } else if (transcript || c.deduplicationKey.startsWith('copilot-chatsession:')) {
+            const list = twinCandidates.get(turn.sessionId) ?? []
+            list.push({ key: c.deduplicationKey, ts, storage: copilotChatStorageKey(cachedPath), transcript })
+            twinCandidates.set(turn.sessionId, list)
+          }
+        }
+      }
+    }
+    const otelTwinKeys = new Set<string>()
+    for (const [sessionId, candidates] of twinCandidates) {
+      const spans = otelTimes.get(sessionId)
+      if (!spans || new Set(candidates.map(c => c.storage)).size !== 1) continue
+      for (const transcript of [false, true]) {
+        // Calls stamped alike share one window, bounded by the nearest
+        // distinct stamps. The latest journal request's window has no end, so
+        // a stray later span in the session still drops it.
+        const stamps = [...new Set(candidates.filter(c => c.transcript === transcript && !Number.isNaN(c.ts)).map(c => c.ts))].sort((a, b) => a - b)
+        for (const c of candidates) {
+          if (c.transcript !== transcript || Number.isNaN(c.ts)) continue
+          const i = stamps.indexOf(c.ts)
+          const inWindow = transcript
+            ? (t: number) => t > (stamps[i - 1] ?? -Infinity) && t <= c.ts
+            : (t: number) => t >= c.ts && t < (stamps[i + 1] ?? Infinity)
+          if (spans.some(inWindow)) otelTwinKeys.add(c.key)
+        }
+      }
+    }
     // Session-state per-turn calls carry no per-call project (the serve loop
     // takes it from source.project), so resolve it the same way here — every
     // call of the session must serve under the SAME label, whichever of the
@@ -4367,6 +4445,7 @@ export async function parseProviderSources(
         for (const c of turn.calls) {
           if (seenAggKeys.has(c.deduplicationKey)) continue
           seenAggKeys.add(c.deduplicationKey)
+          if (otelTwinKeys.has(c.deduplicationKey)) continue
           const ts = new Date(c.timestamp).getTime()
           const isStore = c.deduplicationKey.startsWith('copilot-store:')
           if ((isStore || basename(cachedPath) === 'events.jsonl') && (c.nanoAiu != null ||
@@ -4476,7 +4555,7 @@ export async function parseProviderSources(
         }
       }
     }
-    copilotRecon = { storeKeys, storeCalls, rollupLegs, supplementaryStoreKeys, turnOwnedOutputKeys, sessionProject, storeProject, nanRollupFallbackTs, sessionEarliestValidTs, agentHostUsageSessions }
+    copilotRecon = { storeKeys, storeCalls, rollupLegs, supplementaryStoreKeys, turnOwnedOutputKeys, sessionProject, storeProject, nanRollupFallbackTs, sessionEarliestValidTs, agentHostUsageSessions, otelTwinKeys }
   }
   const copilotServeProject = (sessionId: string): string | undefined =>
     copilotRecon
@@ -4488,7 +4567,8 @@ export async function parseProviderSources(
     let changed = false
     const kept: CachedCall[] = []
     for (const c of turn.calls) {
-      if (c.deduplicationKey.startsWith('copilot-chatsession:') && copilotRecon.agentHostUsageSessions.has(turn.sessionId)) {
+      if (copilotRecon.otelTwinKeys.has(c.deduplicationKey) ||
+        (c.deduplicationKey.startsWith('copilot-chatsession:') && copilotRecon.agentHostUsageSessions.has(turn.sessionId))) {
         changed = true
         continue
       }
