@@ -2549,7 +2549,10 @@ final class AppStore {
         // user's explicit disconnect.
         capacityDockProviderDeselector(provider)
         if explicit { ProviderExplicitDisconnect.mark(provider.id, defaults: capacityDockDefaults) }
-        if explicit, provider.id == "cursor" { CursorSafeStorage.forget(defaults: capacityDockDefaults) }
+        if explicit, provider.id == "cursor" {
+            CursorSafeStorage.forget(defaults: capacityDockDefaults)
+            CursorCLISession.forget(defaults: capacityDockDefaults)
+        }
     }
 
     func connectCapacityDockProvider(_ provider: CapacityDockProvider) async {

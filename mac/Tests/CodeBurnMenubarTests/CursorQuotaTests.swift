@@ -13,6 +13,12 @@ final class CursorQuotaTests: XCTestCase {
         func record(_ request: URLRequest) { requests.append(request) }
     }
 
+    /// Lets a @Sendable seam carry a test UserDefaults suite into the
+    /// detached store read.
+    private struct DefaultsBox: @unchecked Sendable {
+        let defaults: UserDefaults
+    }
+
     nonisolated private static let successBody = """
     {
       "billingCycleStart": "2026-08-01T00:00:00Z",
@@ -53,6 +59,7 @@ final class CursorQuotaTests: XCTestCase {
         let token = Self.syntheticJWT()
         let deps = CursorSubscriptionService.Deps(
             loadAccessToken: { token },
+            loadCLIAccessToken: { _ in nil },
             fetch: { request in
                 recorder.record(request)
                 return (
@@ -85,6 +92,7 @@ final class CursorQuotaTests: XCTestCase {
     func testMissingOrExpiredCursorSessionIsTerminal() async throws {
         let missing = CursorSubscriptionService.Deps(
             loadAccessToken: { nil },
+            loadCLIAccessToken: { _ in nil },
             fetch: { request in
                 XCTFail("Network must not run without a Cursor app session")
                 return (Data(), Self.httpResponse(request, status: 500))
@@ -94,6 +102,7 @@ final class CursorQuotaTests: XCTestCase {
 
         let expired = CursorSubscriptionService.Deps(
             loadAccessToken: { Self.syntheticJWT(expiresAt: Date(timeIntervalSinceNow: -60)) },
+            loadCLIAccessToken: { _ in nil },
             fetch: { request in
                 XCTFail("Network must not run with an expired Cursor app session")
                 return (Data(), Self.httpResponse(request, status: 500))
@@ -121,10 +130,89 @@ final class CursorQuotaTests: XCTestCase {
         }
     }
 
+    /// The locked gate never reaches the keychain read at all; one granted
+    /// user-initiated read is then remembered until a refused read drops it.
+    func testCLIKeychainReadNeedsAUserGestureAndRemembersOneConsent() throws {
+        let (defaults, suiteName) = TestDefaults.make("CodeBurnMenubarTests.CursorQuota.\(#function)")
+        defer { TestDefaults.forget(suiteName) }
+
+        var itemInstalled = true
+        var readCalls = 0
+        let read: () -> String? = {
+            readCalls += 1
+            return itemInstalled ? "header.payload.signature" : nil
+        }
+
+        XCTAssertThrowsError(try CursorCLISession.loadToken(allowPrompt: false, defaults: defaults, read: read)) { error in
+            XCTAssertEqual(error as? CursorSubscriptionService.FetchError, .cliSessionLocked)
+        }
+        XCTAssertEqual(readCalls, 0)
+
+        XCTAssertEqual(try CursorCLISession.loadToken(allowPrompt: true, defaults: defaults, read: read), "header.payload.signature")
+        XCTAssertTrue(defaults.bool(forKey: CursorCLISession.consentKey))
+        // The remembered consent lets a background refresh read silently.
+        XCTAssertEqual(try CursorCLISession.loadToken(allowPrompt: false, defaults: defaults, read: read), "header.payload.signature")
+        XCTAssertEqual(readCalls, 2)
+
+        // A refused or empty read drops the consent again.
+        itemInstalled = false
+        XCTAssertNil(try CursorCLISession.loadToken(allowPrompt: false, defaults: defaults, read: read))
+        XCTAssertFalse(defaults.bool(forKey: CursorCLISession.consentKey))
+        XCTAssertThrowsError(try CursorCLISession.loadToken(allowPrompt: false, defaults: defaults, read: read)) { error in
+            XCTAssertEqual(error as? CursorSubscriptionService.FetchError, .cliSessionLocked)
+        }
+    }
+
+    /// A CLI-only install connects through the consent-gated keychain item,
+    /// and the footer says the session came from the CLI, not the app.
+    func testCLIOnlyInstallConnectsThroughTheKeychainAfterAUserGesture() async throws {
+        let (defaults, suiteName) = TestDefaults.make("CodeBurnMenubarTests.CursorQuota.\(#function)")
+        defer { TestDefaults.forget(suiteName) }
+        let token = Self.syntheticJWT()
+        let box = DefaultsBox(defaults: defaults)
+        let deps = CursorSubscriptionService.Deps(
+            loadAccessToken: { nil },
+            loadCLIAccessToken: { allowPrompt in
+                try CursorCLISession.loadToken(allowPrompt: allowPrompt, defaults: box.defaults) { token }
+            },
+            fetch: { request in
+                (Data(Self.successBody.utf8), Self.httpResponse(request, status: 200))
+            }
+        )
+
+        await assertFetchError(.cliSessionLocked, deps: deps)
+
+        let summary = try await CapacityDockProviderRefreshInteraction.userInitiated {
+            try await CursorSubscriptionService.refresh(deps: deps)
+        }
+        XCTAssertEqual(summary.connection, .connected)
+        XCTAssertEqual(summary.footerLines, ["Source: cursor-agent CLI"])
+        XCTAssertTrue(defaults.bool(forKey: CursorCLISession.consentKey))
+
+        let background = try await CursorSubscriptionService.refresh(deps: deps)
+        XCTAssertEqual(background.connection, .connected)
+    }
+
+    func testTheAppSessionStillSkipsTheCLIKeychainEntirely() async throws {
+        let deps = CursorSubscriptionService.Deps(
+            loadAccessToken: { Self.syntheticJWT() },
+            loadCLIAccessToken: { _ in
+                XCTFail("the CLI keychain must not be read while the app session exists")
+                return nil
+            },
+            fetch: { request in
+                (Data(Self.successBody.utf8), Self.httpResponse(request, status: 200))
+            }
+        )
+        let summary = try await CursorSubscriptionService.refresh(deps: deps)
+        XCTAssertEqual(summary.footerLines, ["Source: Cursor app"])
+    }
+
     func testUnreadableLocalStoreIsReportedHonestlyWithoutNetwork() async throws {
         struct SyntheticStoreFailure: Error {}
         let deps = CursorSubscriptionService.Deps(
             loadAccessToken: { throw SyntheticStoreFailure() },
+            loadCLIAccessToken: { _ in nil },
             fetch: { request in
                 XCTFail("Network must not run when the local store is unreadable")
                 return (Data(), Self.httpResponse(request, status: 500))
@@ -196,6 +284,7 @@ final class CursorQuotaTests: XCTestCase {
         for status in [401, 403] {
             let deps = CursorSubscriptionService.Deps(
                 loadAccessToken: { Self.syntheticJWT() },
+                loadCLIAccessToken: { _ in nil },
                 fetch: { request in (Data(), Self.httpResponse(request, status: status)) }
             )
             await assertFetchError(.authenticationRejected, deps: deps)
@@ -205,12 +294,14 @@ final class CursorQuotaTests: XCTestCase {
     func testCursorRateLimitAndMalformedPayloadRemainRetryable() async throws {
         let rateLimited = CursorSubscriptionService.Deps(
             loadAccessToken: { Self.syntheticJWT() },
+            loadCLIAccessToken: { _ in nil },
             fetch: { request in (Data(), Self.httpResponse(request, status: 429)) }
         )
         await assertFetchError(.rateLimited, deps: rateLimited)
 
         let malformed = CursorSubscriptionService.Deps(
             loadAccessToken: { Self.syntheticJWT() },
+            loadCLIAccessToken: { _ in nil },
             fetch: { request in (Data("not-json".utf8), Self.httpResponse(request, status: 200)) }
         )
         await assertFetchError(.parseFailure, deps: malformed)
