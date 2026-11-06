@@ -882,12 +882,36 @@ describe('antigravity provider helpers', () => {
       { chatModel: { model: 'gemini-3-pro', usage: { model: 'gemini-3-pro', inputTokens: '1000', outputTokens: '4000', thinkingOutputTokens: '1000', responseId: 'r2' } } },
       { chatModel: { model: 'gemini-3-pro', usage: { model: 'gemini-3-pro', inputTokens: '1000', outputTokens: '100', thinkingOutputTokens: '200', responseOutputTokens: '50', responseId: 'r3' } } },
       { chatModel: { model: 'gemini-3-pro', usage: { model: 'gemini-3-pro', inputTokens: '1000', outputTokens: '0', thinkingOutputTokens: '100', responseOutputTokens: '50', responseId: 'r4' } } },
+      { chatModel: { model: 'gemini-3-pro', usage: { model: 'gemini-3-pro', inputTokens: '1000', thinkingOutputTokens: '100', responseOutputTokens: '50', responseId: 'r5' } } },
     ], {})
     // The output total wins over a split that disagrees, even when thinking
-    // alone is larger than the total, or the total is 0.
-    expect(calls.map(c => [c.outputTokens, c.reasoningTokens])).toEqual([[4000, 0], [3000, 1000], [0, 100], [0, 0]])
+    // alone is larger than the total, or the total is an explicit 0. With no
+    // total at all the split stands.
+    expect(calls.map(c => [c.outputTokens, c.reasoningTokens])).toEqual([[4000, 0], [3000, 1000], [0, 100], [0, 0], [50, 100]])
     expect(calls[0]!.costUSD).toBeCloseTo(calls[1]!.costUSD, 12)
     expect(calls[0]!.costUSD).toBeGreaterThan(0.04)
+  })
+
+  it('keeps a SQLite split when the output total is absent, and caps it at an explicit 0', async () => {
+    if (!isSqliteAvailable()) return
+
+    await withTempAntigravityHome('codeburn-antigravity-split-', async (tempHome) => {
+      const varint = (n: number): number[] => { const out: number[] = []; while (n > 127) { out.push((n & 127) | 128); n >>>= 7 } out.push(n); return out }
+      const num = (field: number, value: number) => [...varint(field << 3), ...varint(value)]
+      const msg = (field: number, data: number[]) => [...varint((field << 3) | 2), ...varint(data.length), ...data]
+      const row = (idx: number, usage: number[]) => ({ idx, hex: Buffer.from(msg(1, msg(4, usage))).toString('hex') })
+      const split = [...num(2, 1000), ...num(9, 100), ...num(10, 50)]
+      const conversationsDir = join(tempHome, '.gemini', 'antigravity-cli', 'conversations')
+      await mkdir(conversationsDir, { recursive: true })
+      const dbPath = join(conversationsDir, 'split-shapes.db')
+      createCurrentAntigravityCliDb(dbPath, {
+        conversationId: 'split-shapes',
+        rows: [row(0, split), row(1, [...num(3, 0), ...split])],
+      })
+
+      const calls = await collectAntigravityCalls({ path: dbPath, project: 'antigravity-cli', provider: 'antigravity' })
+      expect(calls.map(c => [c.outputTokens, c.reasoningTokens])).toEqual([[50, 100], [0, 0]])
+    })
   })
 
   it('stamps file mtime as fallback timestamp for SQLite-parsed calls', async () => {
