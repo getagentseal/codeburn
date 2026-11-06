@@ -1,6 +1,6 @@
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { readKeychainPassword, sanitizeError } from './security'
+import { forgetKeychainRefusals, readKeychainPassword, sanitizeError, type KeychainExec } from './security'
 
 // readKeychainPassword short-circuits off darwin; pin the platform so the
 // classification logic is exercised on any CI host.
@@ -12,6 +12,8 @@ const denied = (message: string) => () => { throw new Error(message) }
 const notFound = () => { const error = new Error('The specified item could not be found in the keychain.') as Error & { code: number }; error.code = 44; throw error }
 
 describe('readKeychainPassword', () => {
+  beforeEach(() => forgetKeychainRefusals())
+
   it('decodes a hex-dumped security(1) payload back to its JSON text', async () => {
     const json = JSON.stringify({ claudeAiOauth: { accessToken: 'x' } })
     const hex = Buffer.from(json, 'utf8').toString('hex')
@@ -28,14 +30,49 @@ describe('readKeychainPassword', () => {
     expect(await readKeychainPassword('svc', [null], vi.fn(notFound))).toEqual({ status: 'notFound' })
   })
 
-  it('classifies a timeout kill left open on the dialog as accessDenied', async () => {
-    const exec = vi.fn(async () => { const error = new Error('Command failed') as Error & { killed: boolean; signal: string }; error.killed = true; error.signal = 'SIGTERM'; throw error })
-    expect(await readKeychainPassword('svc', [null], exec)).toEqual({ status: 'accessDenied' })
+  it('stops at a prompt our own timer gave up on', async () => {
+    vi.useFakeTimers()
+    try {
+      const exec = vi.fn<KeychainExec>((_file, _args, { signal }) => new Promise((_resolve, reject) => {
+        signal.addEventListener('abort', () => reject(Object.assign(new Error('The operation was aborted'), { name: 'AbortError' })))
+      }))
+      const pending = readKeychainPassword('svc', ['alice', null], exec)
+      await vi.advanceTimersByTimeAsync(90_000)
+      expect(await pending).toEqual({ status: 'accessDenied', reason: 'unanswered' })
+      expect(exec).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('skips a later service-only lookup after an account of the service was refused', async () => {
+    await readKeychainPassword('svc', ['alice'], vi.fn(denied('User canceled the operation.')))
+    const exec = vi.fn(async () => ({ stdout: '{"same-item":true}' }))
+    expect(await readKeychainPassword('svc', [null], exec)).toEqual({ status: 'accessDenied', reason: 'denied' })
+    expect(exec).not.toHaveBeenCalled()
+  })
+
+  it('moves past a kill that was not our timer', async () => {
+    const exec = vi.fn(async (_file: string, args: string[]) => {
+      if (args.includes('-a')) throw Object.assign(new Error('Command failed'), { killed: true, signal: 'SIGTERM' })
+      return { stdout: '{"ok":true}' }
+    })
+    expect(await readKeychainPassword('svc', ['alice', null], exec)).toEqual({ status: 'found', value: '{"ok":true}' })
+  })
+
+  it('remembers a refusal until the user acts again, without a second prompt', async () => {
+    const exec = vi.fn(denied('User canceled the operation.'))
+    await readKeychainPassword('svc', ['alice', null], exec)
+    expect(await readKeychainPassword('svc', ['alice', null], exec)).toEqual({ status: 'accessDenied', reason: 'denied' })
+    expect(exec).toHaveBeenCalledTimes(1)
+    forgetKeychainRefusals()
+    await readKeychainPassword('svc', ['alice', null], exec)
+    expect(exec).toHaveBeenCalledTimes(2)
   })
 
   it('classifies "User interaction is not allowed" and user cancel as accessDenied', async () => {
     expect(await readKeychainPassword('svc', [null], vi.fn(denied('SecKeychainItemCopyContent: User interaction is not allowed.')))).toEqual({ status: 'accessDenied' })
-    expect(await readKeychainPassword('svc', [null], vi.fn(denied('User canceled the operation.')))).toEqual({ status: 'accessDenied' })
+    expect(await readKeychainPassword('svc', [null], vi.fn(denied('User canceled the operation.')))).toEqual({ status: 'accessDenied', reason: 'denied' })
   })
 
   it('falls through a user-scoped miss to the service-only lookup', async () => {
@@ -45,6 +82,20 @@ describe('readKeychainPassword', () => {
     })
     expect(await readKeychainPassword('svc', ['alice', null], exec)).toEqual({ status: 'found', value: '{"ok":true}' })
     expect(exec).toHaveBeenCalledTimes(2)
+  })
+
+  it('stops at a Deny on the first candidate instead of prompting again for the same item', async () => {
+    const exec = vi.fn(denied('User canceled the operation.'))
+    expect(await readKeychainPassword('svc', ['alice', null], exec)).toEqual({ status: 'accessDenied', reason: 'denied' })
+    expect(exec).toHaveBeenCalledTimes(1)
+  })
+
+  it('moves past an error that showed no prompt to the next candidate', async () => {
+    const exec = vi.fn(async (_file: string, args: string[]) => {
+      if (args.includes('-a')) throw Object.assign(new Error('security: read error'), { code: 1 })
+      return { stdout: '{"ok":true}' }
+    })
+    expect(await readKeychainPassword('svc', ['alice', null], exec)).toEqual({ status: 'found', value: '{"ok":true}' })
   })
 
   it('reports accessDenied when a later candidate is denied after an earlier miss', async () => {

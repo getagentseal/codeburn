@@ -25,22 +25,34 @@ const successBody = {
 }
 
 /** Byte-faithful to a recorded ZCode journal (redacted hexdump in the #1347
- *  review thread): the map key is the origin, a NUL, the 0x01 one-byte-string
- *  flag and the key name; the value frame is a varint length, the same 0x01
- *  flag, then the value's Latin-1 bytes. The gap bytes are copied from the
- *  recording — the real login is 1,403 bytes, whose length encodes as
- *  `fb 0a`, neither of which is a token character. That matters: the scanner
- *  reads the frame as key + non-token gap + token, so a length varint that
- *  collided with the token alphabet (only possible for a login under ~130
- *  bytes; the recorded HS512 JWT is ~1,400) could not be matched. */
-function journalEntry(key: string, value: string): Buffer {
+ *  review thread), framed as a leveldb put record: tag 0x01, the key length,
+ *  the key (`_` + origin, a NUL, the 0x01 one-byte-string flag and the key
+ *  name), then a varint length covering the same flag plus the value's Latin-1
+ *  bytes. The recorded login's frame length encodes as `fb 0a` (1,403). */
+function varint(n: number): Buffer {
+  const out: number[] = []
+  for (; n >= 0x80; n = Math.floor(n / 0x80)) out.push((n % 0x80) | 0x80)
+  out.push(n)
+  return Buffer.from(out)
+}
+
+/** A put record's tag, key length and key, in the key name's encoding. */
+function recordHead(key: string, encoding: 'latin1' | 'utf16le' = 'latin1', origin = 'https://zcode.z.ai'): Buffer {
+  const dbKey = Buffer.concat([
+    Buffer.from(`_${origin}`, 'latin1'),
+    Buffer.from([0x00, encoding === 'latin1' ? 0x01 : 0x00]),
+    Buffer.from(key, encoding),
+  ])
+  return Buffer.concat([Buffer.from([0x01]), varint(dbKey.length), dbKey])
+}
+
+function journalEntry(key: string, value: string, encoding: 'latin1' | 'utf16le' = 'latin1'): Buffer {
+  const bytes = Buffer.from(value, encoding)
   return Buffer.concat([
-    Buffer.from('https://zcode.z.ai', 'latin1'),
-    Buffer.from([0x00, 0x01]),
-    Buffer.from(key, 'latin1'),
-    Buffer.from([0xfb, 0x0a]),
-    Buffer.from([0x01]),
-    Buffer.from(value, 'latin1'),
+    recordHead(key, encoding),
+    varint(bytes.length + 1),
+    Buffer.from([encoding === 'latin1' ? 0x01 : 0x00]),
+    bytes,
   ])
 }
 
@@ -62,6 +74,87 @@ describe('ZCode credential discovery', () => {
   it('reads the login out of the newest Local Storage journal', async () => {
     const base = deps({ '000003.log': journalEntry(STORAGE_KEY, TOKEN) })
     await expect(zcodeAccessToken(base)).resolves.toBe(TOKEN)
+  })
+
+  it('ends the token at its frame length, not at the next record\'s checksum bytes', async () => {
+    const login = 'eyJhbGciOiJIUzUxMiJ9.' + 'a'.repeat(1377) + '.sig'
+    const journal = Buffer.concat([
+      journalEntry(STORAGE_KEY, login),
+      // The next physical record's header: a CRC whose first bytes read as "Az3", length, type.
+      Buffer.from([0x41, 0x7a, 0x33, 0x9c, 0x20, 0x00, 0x01]),
+    ])
+    expect(journal.includes(Buffer.from([0xfb, 0x0a, 0x01]))).toBe(true)
+    await expect(zcodeAccessToken(deps({ '000003.log': journal }))).resolves.toBe(login)
+  })
+
+  it('keeps the most recent write when the rotation changed the string encoding', async () => {
+    const renewed = 'eyJhbGciOiJIUzU1MiJ9.synthetic-zcode-renewal-with-no-meaning.sig'
+    const journal = Buffer.concat([
+      journalEntry(STORAGE_KEY, TOKEN),
+      journalEntry(STORAGE_KEY, renewed, 'utf16le'),
+    ])
+    await expect(zcodeAccessToken(deps({ '000003.log': journal }))).resolves.toBe(renewed)
+  })
+
+  it('reports a login the newest write cleared as expired, not the older token', async () => {
+    const files = { '000003.log': journalEntry(STORAGE_KEY, TOKEN), '000005.log': journalEntry(STORAGE_KEY, '') }
+    await expect(zcodeAccessToken(deps(files))).resolves.toBe('')
+    const sameFile = Buffer.concat([journalEntry(STORAGE_KEY, TOKEN), journalEntry(STORAGE_KEY, '')])
+    const result = await fetchZcodeQuota({ ...deps({ '000003.log': sameFile }), fetch: neverFetch })
+    expect(result.quota.connection).toBe('terminalFailure')
+    expect(result.quota.footerLines).toEqual(['Login expired. Open the ZCode app and sign in again, then refresh.'])
+  })
+
+  it('reads a malformed newest write as unreadable for this poll, never as the older token', async () => {
+    const older = journalEntry(STORAGE_KEY, TOKEN)
+    const head = recordHead(STORAGE_KEY)
+    const malformed = [
+      Buffer.concat([older, head, varint(5000), Buffer.from([0x01]), Buffer.from('eyJhbGciOiJIUzU1MiJ9.cut', 'latin1')]),
+      Buffer.concat([older, head, varint(0)]),
+    ]
+    for (const journal of malformed) {
+      const fetchMock = vi.fn()
+      await expect(zcodeAccessToken(deps({ '000003.log': journal }))).rejects.toThrow('could not be read')
+      const result = await fetchZcodeQuota({ ...deps({ '000003.log': journal }), fetch: fetchMock as unknown as typeof fetch })
+      expect(result.quota.connection).toBe('transientFailure')
+      expect(fetchMock).not.toHaveBeenCalled()
+    }
+  })
+
+  it('reads past the key name inside a later entry\'s value, which is not a write of the key', async () => {
+    const journal = Buffer.concat([
+      journalEntry(STORAGE_KEY, TOKEN),
+      journalEntry('zcode:settings', `{"tokenKey":"${STORAGE_KEY}","theme":"dark"}`),
+    ])
+    await expect(zcodeAccessToken(deps({ '000003.log': journal }))).resolves.toBe(TOKEN)
+  })
+
+  it('ignores the same key written under another origin', async () => {
+    const other = 'eyJhbGciOiJIUzU1MiJ9.synthetic-login-of-another-origin.sig'
+    const journal = Buffer.concat([
+      journalEntry(STORAGE_KEY, TOKEN),
+      recordHead(STORAGE_KEY, 'latin1', 'https://chat.z.ai'), varint(other.length + 1), Buffer.from([0x01]), Buffer.from(other, 'latin1'),
+    ])
+    await expect(zcodeAccessToken(deps({ '000003.log': journal }))).resolves.toBe(TOKEN)
+  })
+
+  it('reads an odd-length UTF-16 newest write as unreadable, never as a trimmed token', async () => {
+    const bytes = Buffer.concat([Buffer.from('eyJhbGciOiJIUzU1MiJ9.synthetic-zcode-renewal.sig', 'utf16le'), Buffer.from([0x41])])
+    const journal = Buffer.concat([
+      journalEntry(STORAGE_KEY, TOKEN),
+      recordHead(STORAGE_KEY, 'utf16le'), varint(bytes.length + 1), Buffer.from([0x00]), bytes,
+    ])
+    await expect(zcodeAccessToken(deps({ '000003.log': journal }))).rejects.toThrow('could not be read')
+    const fetchMock = vi.fn()
+    const result = await fetchZcodeQuota({ ...deps({ '000003.log': journal }), fetch: fetchMock as unknown as typeof fetch })
+    expect(result.quota.connection).toBe('transientFailure')
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('reads a deleted key as a cleared login', async () => {
+    const dbKey = recordHead(STORAGE_KEY).subarray(1)
+    const journal = Buffer.concat([journalEntry(STORAGE_KEY, TOKEN), Buffer.from([0x00]), dbKey])
+    await expect(zcodeAccessToken(deps({ '000003.log': journal }))).resolves.toBe('')
   })
 
   it('keeps the most recent write when the key was rotated in place', async () => {

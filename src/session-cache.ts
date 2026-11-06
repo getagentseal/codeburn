@@ -142,6 +142,10 @@ export type CachedFile = {
   // is re-parsed only when the file changes (fingerprint differs). Carries no
   // turns, so it contributes no usage. (issue #441 follow-up)
   failed?: boolean
+  // Network sources: consecutive refreshes whose fetch failed retryably. At
+  // RETRYABLE_FAILURE_LIMIT the entry is marked failed, keeps its rows, and is
+  // not re-fetched again until the next day.
+  retryableFailures?: number
   // Rich-session-capture, Claude session-level.
   // `title` is the LAST `ai-title` entry's text; `prLinks` accumulates every
   // `pr-link` entry's URL. `isSidechain` is true when any entry is a sidechain:
@@ -323,7 +327,7 @@ export const PROVIDER_ENV_VARS: Record<string, string[]> = {
   grok: ['GROK_HOME'],
   grokbot: ['CODEBURN_GROKBOT_DIR', 'APPDATA'],
   crush: ['XDG_DATA_HOME', 'CRUSH_GLOBAL_DATA', 'LOCALAPPDATA'],
-  warp: ['WARP_DB_PATH'],
+  warp: ['WARP_DB_PATH', 'XDG_STATE_HOME', 'LOCALAPPDATA'],
   antigravity: ['CODEBURN_CACHE_DIR'],
   'kilo-code': ['XDG_DATA_HOME'],
   kimi: ['KIMI_SHARE_DIR', 'KIMI_MODEL_NAME'],
@@ -389,7 +393,9 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // sidechain-output-estimate-v1: subagent messages from Claude Code before
   // 2.1.307 that never got a final usage row have their output estimated.
   claude: 'advisor-usage-v1-skills-rich-capture-v1-cross-provider-pr-v1-session-lineage-capture-v1-queued-human-prompts-v1-per-call-cwd-v1-streamed-tool-blocks-v1-powershell-shell-tool-v1-thinking-tokens-v1-sidechain-output-estimate-v1',
-  cline: 'worktree-project-grouping-v1',
+  // reported-cost-v1: a request's recorded `cost` is kept through the cache
+  // instead of being re-priced from tokens on every read.
+  cline: 'worktree-project-grouping-v1-reported-cost-v1',
   // reported-cost-v1: the CLI reports its own per-message cost, so entries
   // cached before cline-cli joined the reported-cost allowlist in parser.ts
   // hold costUSD: undefined and get re-priced from tokens on every read.
@@ -445,8 +451,16 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // cached turns and append checkpoints.
   // mcp-cli-command-v1: mcp-cli counts only in command position, so cached
   // fake mcp__ tools from commit messages or echoes re-parse away.
+  // thread-id-key-v1: rollouts without payload.session_id key on payload.id,
+  // the UUID forks name, so cached double-counted fork replays re-parse.
+  // rate-limit-ping-v1: a null-info token_count before any output is not a
+  // call, and measured usage replaces a ping estimate of the same turn, so
+  // cached phantom estimates re-parse away.
+  // cumulative-restart-v1: a cumulative-only total below the previous one is a
+  // counter restart and an omitted field is unchanged, so cached negative or
+  // overcounted token deltas re-parse.
   // Compose every suffix so cached sessions receive all accounting fixes.
-  codex: 'mcp-attribution-v5-est-cost-active-timing-mcp-wait-rich-capture-v1-cross-provider-pr-v1-session-meta-model-v1-session-meta-fields-v1-codex-pricing-v1-codex-tps-v1-codex-mcp-skills-v1-activity-price-v1-fork-replay-burst-v1-codex-token-usage-record-v1-codex-priority-tier-v1-codex-auto-review-date-v1-codex-flex-reserve-v1-codex-fork-mask-v1-native-tool-events-v1-mcp-cli-command-v1',
+  codex: 'mcp-attribution-v5-est-cost-active-timing-mcp-wait-rich-capture-v1-cross-provider-pr-v1-session-meta-model-v1-session-meta-fields-v1-codex-pricing-v1-codex-tps-v1-codex-mcp-skills-v1-activity-price-v1-fork-replay-burst-v1-codex-token-usage-record-v1-codex-priority-tier-v1-codex-auto-review-date-v1-codex-flex-reserve-v1-codex-fork-mask-v1-native-tool-events-v1-mcp-cli-command-v1-thread-id-key-v1-rate-limit-ping-v1-cumulative-restart-v1',
   // reported-cost-v1: cached Crush calls stored costUSD: undefined and must
   // re-parse to keep the recorded session cost.
   crush: 'reported-cost-v1',
@@ -526,6 +540,9 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // Estimated from message text: Grok Bot's local mirror records no tokens.
   // import-guess-est-v1: synced Grok Bot rows with no dollar amount are estimated.
   grokbot: 'estimated-usage-v1-import-guess-est-v1',
+  // sqlite-utc-timestamp-v1: zoneless SQLite timestamps are UTC, so cached
+  // sessions stamped as local time re-parse.
+  goose: 'sqlite-utc-timestamp-v1',
   // v0-v4 generations, embedded attempt streams, retry accounting, and the
   // version-specific inherited-prefix rules all change cached DSH calls.
   dsh: 'session-formats-v0-v4-attempts-v6',
@@ -562,7 +579,7 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // calls cached at $0 must re-parse to pick up its price.
   devin: 'sessions-db-v1-swe-pricing-v1',
   'lingtai-tui': 'token-ledger-registry-activity-v3',
-  'ibm-bob': 'worktree-project-grouping-v1',
+  'ibm-bob': 'worktree-project-grouping-v1-reported-cost-v1',
   // project-path-v1: the parser now records the session's full working
   // directory as projectPath (CLI meta.cwd, v2 workspacePaths[0], workspace
   // sessions' workspaceDirectory), which sync attribution needs to resolve
@@ -621,7 +638,9 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // output-thoughts-v1: thoughts already inside candidates are not added again.
   qwen: 'cached-prompt-v1-output-thoughts-v1',
   opencode: 'session-model-v1-archived-subtree-v1-billing-routes-v2-v2-legacy-union-v1-unknown-usage-v1-vertex-fallback-cost-v1',
-  quickdesk: 'emf-sqlite-v2-est-cost',
+  // snapshot-db-v1: sessions.db estimates are replaced on re-parse, so an
+  // estimate superseded by metrics no longer stays cached beside them.
+  quickdesk: 'emf-sqlite-v2-est-cost-snapshot-db-v1',
   // session-lineage-capture-v1: SessionLineage (CB-1, slice 1) is now carried
   // on the cached file for every kimicode wire. Child evidence is the
   // provider-recorded `state.json` `agents[<id>].parentAgentId === 'main'`
@@ -635,9 +654,12 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // tool-sequence-v1: calls carry each tool call's path and shell command, so
   // optimize sees commits/PRs and retries per file. Costs are unchanged.
   kimicode: 'wire-usage-v1-est-cost-session-lineage-capture-v1-cwd-project-v1-tool-sequence-v1',
+  // subagent-session-id-v1: subagent wire logs take `<session>/<subagent>` as
+  // their session id, so cached subagents merged across sessions re-parse.
+  kimi: 'subagent-session-id-v1',
   // archived-subtree-v1: KiloCode shares the SQLite parser and the same schema.
   // billing-routes-v2: its warm cache must move with both shared route fields.
-  'kilo-code': 'worktree-project-grouping-v1-session-model-v1-archived-subtree-v1-billing-routes-v2-v2-legacy-union-v1-unknown-usage-v1-vertex-fallback-cost-v1',
+  'kilo-code': 'worktree-project-grouping-v1-session-model-v1-archived-subtree-v1-billing-routes-v2-v2-legacy-union-v1-unknown-usage-v1-vertex-fallback-cost-v1-reported-cost-v1',
   // billing-cost-v1: Warp's own billing record (total_provider_cost_in_cents,
   // total_charged_usage, credits_spent) now rides on each call as
   // `costFromBilling` and is preserved by providerCallToCachedCall. Entries
@@ -646,7 +668,10 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // to land.
   // billed-cost-v1: total_billed_cost_in_cents prices conversations that carry
   // no provider cost or charged usage.
-  warp: 'worktree-project-grouping-v1-est-cost-billing-cost-v1-billed-cost-v1',
+  // exchange-share-v1: cached exchanges keep their share of a conversation's
+  // cost and only new spend goes to new exchanges (parser.ts
+  // keepCachedWarpShares); unchanged databases re-parse once onto that rule.
+  warp: 'worktree-project-grouping-v1-est-cost-billing-cost-v1-billed-cost-v1-exchange-share-v1',
   // cache-read-v1-est-cost: gen_metadata and RPC usage now carry cache-read
   // tokens, fields 9/10 read as thinking/response (they were swapped), and
   // placeholder-only models are priced and flagged costIsEstimated.
@@ -658,7 +683,9 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // cli-workspace-v1: Antigravity CLI (.db) conversations now attribute
   // projectPath and project from trajectory_metadata_blob instead of collapsing
   // into a generic antigravity-cli bucket.
-  antigravity: 'worktree-project-grouping-v7-cache-read-v1-est-cost-model-fallback-v1-user-msg-v1-cli-workspace-v1',
+  // rpc-output-total-v1: RPC calls without a response/thinking split now keep
+  // outputTokens as their output instead of 0 (results cache v11 in lockstep).
+  antigravity: 'worktree-project-grouping-v7-cache-read-v1-est-cost-model-fallback-v1-user-msg-v1-cli-workspace-v1-rpc-output-total-v1',
   // pr-attribution-v1: the parser now reads the `message`/`part` tables for
   // per-turn user prompt text and the GitHub PR URLs it references. Cached
   // ZCode sessions hold empty userMessage turns and no session prLinks, so
@@ -1287,6 +1314,7 @@ function validateCachedFile(f: unknown): f is CachedFile {
     && isOptionalString(o['agentName'])
     && isOptionalString(o['agentStartedAt'])
     && isOptionalBool(o['failed'])
+    && isOptionalNum(o['retryableFailures'])
     && isOptionalString(o['parentSessionId'])
     && isOptionalStringRecord(o['agentSpawnLinks'])
     && (o['ambiguousSpawnAgentIds'] === undefined || isStringArray(o['ambiguousSpawnAgentIds']))
@@ -2634,6 +2662,19 @@ export async function fingerprintFile(filePath: string): Promise<FileFingerprint
       // Composite identity changes even when a non-newest segment is rewritten;
       // keep sizeBytes real because the parser also uses it for workload sizing.
       return { dev: s.dev, ino: parseInt(hash.digest('hex').slice(0, 12), 16), mtimeMs, sizeBytes }
+    }
+    // Cline-family tasks key on ui_messages.json, but the model and workspace
+    // come from api_conversation_history.json, which can appear or change
+    // without ui_messages.json moving. A missing sibling hashes as undefined.
+    if (basename(filePath) === 'ui_messages.json') {
+      const sibling = await stat(join(dirname(filePath), 'api_conversation_history.json')).catch(() => null)
+      const hash = createHash('sha256').update(`${s.ino}:${s.mtimeMs}:${s.size}\0${sibling?.ino}:${sibling?.mtimeMs}:${sibling?.size}`)
+      return {
+        dev: s.dev,
+        ino: parseInt(hash.digest('hex').slice(0, 12), 16),
+        mtimeMs: Math.max(s.mtimeMs, sibling?.mtimeMs ?? 0),
+        sizeBytes: s.size + (sibling?.size ?? 0),
+      }
     }
     // A source path that IS a SQLite database (copilot OTel's agent-traces.db)
     // needs the same WAL fold as the virtual-suffix forms below.

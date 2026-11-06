@@ -22,13 +22,20 @@ const successBody = {
 
 const okJson = (value: unknown) => new Response(JSON.stringify(value), { status: 200 })
 
-function journalEntry(key: string, value: string): Buffer {
-  return Buffer.concat([
-    Buffer.from('META:https://z.ai', 'latin1'),
-    Buffer.from(key, 'latin1'),
-    Buffer.from([0xfb, 0x0a, 0x01]), // varint length + Chromium string marker
-    Buffer.from(value, 'latin1'),
-  ])
+function varint(n: number): Buffer {
+  const out: number[] = []
+  for (; n >= 0x80; n = Math.floor(n / 0x80)) out.push((n % 0x80) | 0x80)
+  out.push(n)
+  return Buffer.from(out)
+}
+
+/** A leveldb put record: tag, key length, `_` + origin + NUL + string flag +
+ *  key name, then the value's frame length, string flag and bytes. */
+function journalEntry(key: string, value: string, encoding: 'latin1' | 'utf16le' = 'latin1'): Buffer {
+  const flag = Buffer.from([encoding === 'latin1' ? 0x01 : 0x00])
+  const dbKey = Buffer.concat([Buffer.from('_https://zcode.z.ai\0', 'latin1'), flag, Buffer.from(key, encoding)])
+  const bytes = Buffer.from(value, encoding)
+  return Buffer.concat([Buffer.from([0x01]), varint(dbKey.length), dbKey, varint(bytes.length + 1), flag, bytes])
 }
 
 function deps(files: Record<string, Buffer | null>, dir = '/mock/leveldb'): ZcodeDeps {
@@ -50,12 +57,18 @@ describe('ZCode journal credential', () => {
   })
 
   it('reads a UTF-16LE encoded entry as well', async () => {
-    const entry = Buffer.concat([
-      Buffer.from(STORAGE_KEY, 'utf16le'),
-      Buffer.from([0x01, 0x00]), // Chromium string marker as UTF-16LE \u0001
-      Buffer.from(TOKEN, 'utf16le'),
-    ])
+    const entry = journalEntry(STORAGE_KEY, TOKEN, 'utf16le')
     await expect(zcodeAccessToken(deps({ '000003.log': entry }))).resolves.toBe(TOKEN)
+  })
+
+  it('ends the token at its frame length, not at the next record\'s checksum bytes', async () => {
+    const journal = Buffer.concat([journalEntry(STORAGE_KEY, TOKEN), Buffer.from([0x41, 0x7a, 0x33, 0x9c, 0x20, 0x00, 0x01])])
+    await expect(zcodeAccessToken(deps({ '000003.log': journal }))).resolves.toBe(TOKEN)
+  })
+
+  it('reads past the key name inside a later entry\'s value, which is not a write of the key', async () => {
+    const journal = Buffer.concat([journalEntry(STORAGE_KEY, TOKEN), journalEntry('zcode:settings', `{"tokenKey":"${STORAGE_KEY}"}`)])
+    await expect(zcodeAccessToken(deps({ '000003.log': journal }))).resolves.toBe(TOKEN)
   })
 
   it('keeps the most recent write when the key was rotated in place', async () => {

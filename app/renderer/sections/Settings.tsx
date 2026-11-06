@@ -536,7 +536,7 @@ function DetectedRow({ quota, enabled, onToggle, onReconnect }: { quota: QuotaPr
       : quota.connection === 'keychainUnchecked'
       ? <span className="r set-status"><span className="set-dot" />{t('plans.quota.notChecked.line', { name: PROVIDER_NAMES[quota.provider] })} {t('plans.quota.notChecked.keychainNote')}<button type="button" className="btnp" onClick={onReconnect}>{t('plans.quota.notChecked.action')}</button></span>
       : quota.connection === 'disconnected' || quota.connection === 'accessDenied'
-      ? <div className="r set-status"><ConnectAffordance provider={quota.provider} connection={quota.connection} onRefresh={onReconnect} /></div>
+      ? <div className="r set-status"><ConnectAffordance provider={quota.provider} connection={quota.connection} onRefresh={onReconnect} message={quota.connection === 'accessDenied' ? quota.footerLines[0] : undefined} /></div>
       : quota.rateLimited
       ? <span className="r set-status"><span className="set-dot" />{rateLimitedNote(quota.provider)}</span>
       : quota.connection === 'terminalFailure'

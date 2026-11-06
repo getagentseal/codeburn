@@ -90,25 +90,73 @@ function num(value: unknown): number | null {
 
 /** Each Local Storage string carries a one-byte flag: 0x01 marks one-byte
  *  (Latin-1) characters, 0x00 marks UTF-16LE — recorded journals show the
- *  z.ai login stored the first way, other entries the other way. The whole
- *  file is read in both byte views so a key can be found in either. */
-function journalText(data: Buffer): string[] {
-  const readings = [data.toString('latin1')]
-  if (data.length % 2 === 0) readings.push(data.toString('utf16le'))
-  return readings
+ *  z.ai login stored the first way, other entries the other way, so the key is
+ *  looked for in both encodings. */
+const KEY_ENCODINGS: [Buffer, number][] = [[Buffer.from(STORAGE_KEY, 'latin1'), 0x01], [Buffer.from(STORAGE_KEY, 'utf16le'), 0x00]]
+const TOKEN_PATTERN = /^[A-Za-z0-9_\-.=+/]{24,}$/
+const UNREADABLE = 'the newest ZCode login entry could not be read'
+
+/** A leveldb varint32: the value and the offset just past it. */
+function varint(data: Buffer, at: number): [number, number] | null {
+  let value = 0
+  for (let i = 0; i < 5 && at + i < data.length; i++) {
+    const byte = data[at + i]!
+    value += (byte & 0x7f) * 2 ** (7 * i)
+    if (byte < 0x80) return [value, at + i + 1]
+  }
+  return null
 }
 
-/** The last write of the key wins, matching how the journal replays. The gap
- *  after the key is a leveldb varint length plus Chromium's string marker —
- *  control or high-bit bytes, never token characters. */
-function tokenAfterKey(text: string): string | null {
-  const pattern = new RegExp(`${STORAGE_KEY}[\\x00-\\x20\\x7f-\\xff]{0,16}([A-Za-z0-9_\\-.=+/]{24,})`, 'g')
-  let token: string | null = null
-  for (const match of text.matchAll(pattern)) token = match[1] ?? token
-  return token
+/** The key the app's coding-plan page writes under: `_`, its origin, a NUL,
+ *  then the string flag and the key name (recorded journal in #1347). */
+const ORIGIN_PREFIX = Buffer.from('_https://zcode.z.ai\0', 'latin1')
+
+/** The tag (1 put, 0 delete) of the leveldb record whose key is ZCode's origin
+ *  plus the name at `at`, or null when those bytes are not such a record key:
+ *  the name can also sit under another origin or inside some other value. A
+ *  record is the tag, a varint key length, then the key. */
+function recordTag(data: Buffer, at: number, name: Buffer, flag: number): number | null {
+  const keyStart = at - 1 - ORIGIN_PREFIX.length
+  if (keyStart < 2 || data[at - 1] !== flag || !data.subarray(keyStart, at - 1).equals(ORIGIN_PREFIX)) return null
+  const keyLength = at + name.length - keyStart
+  for (let n = 1; n <= 3 && keyStart - n >= 1; n++) {
+    const length = varint(data, keyStart - n)
+    const tag = data[keyStart - n - 1]
+    if (length && length[1] === keyStart && length[0] === keyLength && (tag === 0x00 || tag === 0x01)) return tag
+  }
+  return null
 }
 
-/** `null` when no journal holds the login — the same state as never signed in. */
+/** Only the last write of the key counts, matching how the journal replays; a
+ *  delete or an empty value (`''`) means the app cleared the login. After the
+ *  key comes the value's varint length, then the string flag and the string
+ *  itself; the length, not the token alphabet, ends the token, because the next
+ *  record's checksum can be token characters too. A last write that does not
+ *  parse throws rather than falling back to an older, replaced token. */
+function tokenAfterKey(data: Buffer): string | null {
+  const hits: { at: number; name: Buffer; flag: number }[] = []
+  for (const [name, flag] of KEY_ENCODINGS) {
+    for (let at = data.indexOf(name); at !== -1; at = data.indexOf(name, at + 1)) hits.push({ at, name, flag })
+  }
+  hits.sort((a, b) => b.at - a.at)
+  for (const { at, name, flag: keyFlag } of hits) {
+    const tag = recordTag(data, at, name, keyFlag)
+    if (tag === null) continue
+    if (tag === 0x00) return ''
+    const frame = varint(data, at + name.length)
+    const [length, start] = frame ?? [0, 0]
+    const flag = data[start]
+    if (length < 1 || start + length > data.length || (flag !== 0x00 && flag !== 0x01)) throw new Error(UNREADABLE)
+    if (flag === 0x00 && (length - 1) % 2 !== 0) throw new Error(UNREADABLE)
+    const value = data.toString(flag === 0x01 ? 'latin1' : 'utf16le', start + 1, start + length)
+    if (value !== '' && !TOKEN_PATTERN.test(value)) throw new Error(UNREADABLE)
+    return value
+  }
+  return null
+}
+
+/** `null` when no journal holds the login — the same state as never signed in;
+ *  `''` when the newest write cleared it. Throws when that write is unreadable. */
 export async function zcodeAccessToken(deps: ZcodeDeps): Promise<string | null> {
   let names: string[]
   try { names = await deps.readDir(deps.storageDir) } catch { return null }
@@ -119,10 +167,8 @@ export async function zcodeAccessToken(deps: ZcodeDeps): Promise<string | null> 
   for (const name of journals) {
     const data = await deps.readJournal(path.join(deps.storageDir, name))
     if (data === null) continue
-    for (const text of journalText(data)) {
-      const token = tokenAfterKey(text)
-      if (token !== null) return token
-    }
+    const token = tokenAfterKey(data)
+    if (token !== null) return token
   }
   return null
 }
@@ -213,6 +259,7 @@ export async function fetchZcodeQuota(options: Partial<ZcodeDeps> & { signal?: A
   try {
     const token = await zcodeAccessToken(deps)
     if (token === null) return { quota: empty('disconnected') }
+    if (token === '') return { quota: empty('terminalFailure', EXPIRED_FOOTER) }
 
     const response = await deps.fetch(USAGE_ENDPOINT, {
       method: 'GET', signal: quotaRequestSignal(options.signal),

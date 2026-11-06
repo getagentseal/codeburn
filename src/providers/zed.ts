@@ -4,7 +4,7 @@ import { homedir } from 'os'
 import zlib from 'zlib'
 
 import { calculateCost } from '../models.js'
-import { getSqliteLoadError, isSqliteAvailable, openDatabase, type SqliteDatabase } from '../sqlite.js'
+import { getSqliteLoadError, isSqliteAvailable, isSqliteBusyError, openDatabase, type SqliteDatabase } from '../sqlite.js'
 import type { ParsedProviderCall, ProbeRoot, Provider, SessionParser, SessionSource } from './types.js'
 
 // Zed's built-in agent stores one row per thread in a single SQLite database;
@@ -102,7 +102,9 @@ function parseThreads(db: SqliteDatabase, seenKeys: Set<string>): ParsedProvider
   let rows: ThreadRow[]
   try {
     rows = db.query<ThreadRow>(THREADS_QUERY)
-  } catch {
+  } catch (err) {
+    // The whole store is one source: a locked read must defer, not cache as empty.
+    if (isSqliteBusyError(err)) throw err
     return calls
   }
 
@@ -178,6 +180,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
       try {
         db = openDatabase(source.path)
       } catch (err) {
+        if (isSqliteBusyError(err)) throw err
         process.stderr.write(`codeburn: cannot open Zed database: ${err instanceof Error ? err.message : err}\n`)
         return
       }

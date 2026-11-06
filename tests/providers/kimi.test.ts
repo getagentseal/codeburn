@@ -125,6 +125,23 @@ describe('Kimi provider', () => {
     expect(calls[0]!.costUSD).toBeGreaterThan(0)
   })
 
+  it('keeps same-named subagents of different sessions apart', async () => {
+    const seen = new Set<string>()
+    const calls: ParsedProviderCall[] = []
+    for (const session of ['sess-A', 'sess-B']) {
+      const wirePath = await writeSession('/Users/test/work/app', join(session, 'subagents', 'agent-1'), [
+        record(1776162400, 'TurnBegin', { user_input: `go ${session}` }),
+        record(1776162401, 'StatusUpdate', { token_usage: { input_other: 1000, output: 100 } }),
+      ])
+      calls.push(...await collect(createKimiProvider(tmpDir), wirePath, seen))
+    }
+
+    expect(calls.map(c => [c.sessionId, c.deduplicationKey])).toEqual([
+      ['sess-A/agent-1', 'kimi:sess-A/agent-1:0'],
+      ['sess-B/agent-1', 'kimi:sess-B/agent-1:0'],
+    ])
+  })
+
   it('prices kimi-for-coding by call date', async () => {
     const wirePath = await writeSession('/Users/test/work/app', 'sess-k28', [
       record(1789084799, 'StatusUpdate', {
