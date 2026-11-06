@@ -887,6 +887,26 @@ describe('codex provider - JSONL parsing', () => {
     expect(calls.map(c => [c.inputTokens, c.outputTokens])).toEqual([[8_000, 800], [3_000, 0], [3_000, 300]])
   })
 
+  it('keys an omitted cumulative field like the same value written out', async () => {
+    const total = (timestamp: string, usage: Record<string, number>) => JSON.stringify({
+      type: 'event_msg', timestamp, payload: { type: 'token_count', info: { total_token_usage: usage } },
+    })
+    const keys: string[][] = []
+    for (const [name, second] of [['omitted', { input_tokens: 150, total_tokens: 160 }], ['explicit', { input_tokens: 150, output_tokens: 10, total_tokens: 160 }]] as const) {
+      const filePath = await writeSession(tmpDir, '2026-04-14', `rollout-key-${name}.jsonl`, [
+        sessionMeta({ session_id: 'sess-key-form', model: 'gpt-5.5' }),
+        total('2026-04-14T10:00:10Z', { input_tokens: 100, output_tokens: 10, total_tokens: 110 }),
+        total('2026-04-14T10:00:20Z', second),
+      ])
+      const calls: ParsedProviderCall[] = []
+      for await (const call of createCodexProvider(tmpDir).createSessionParser({ path: filePath, project: 'test', provider: 'codex' }, new Set()).parse()) calls.push(call)
+      keys.push(calls.map(c => c.deduplicationKey))
+    }
+
+    expect(keys[0]).toHaveLength(2)
+    expect(keys[0]).toEqual(keys[1])
+  })
+
   it('reads a small drop in every field as a correction, not a restart', async () => {
     const filePath = await writeSession(tmpDir, '2026-04-14', 'rollout-cumulative-downward.jsonl', [
       sessionMeta({ session_id: 'sess-downward', model: 'gpt-5.5' }),

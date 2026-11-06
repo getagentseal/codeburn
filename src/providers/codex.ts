@@ -1704,8 +1704,10 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
           // Two rollouts of one thread at identical cumulative totals are the
           // same calls replayed (resume), so sharing this key is intended. After
           // a counter restart the same totals are new calls: the epoch tells.
+          // The prev counters hold the resolved totals (an omitted field reads
+          // as unchanged), so omitted and explicit forms share one key.
           const dedupKey = reportsCumulative
-            ? `codex:${forkedFromId || threadId}:${cumulativeTotal}:${total?.input_tokens ?? 0}:${total?.cached_input_tokens ?? 0}:${total?.output_tokens ?? 0}:${total?.reasoning_output_tokens ?? 0}${restartEpoch ? `:r${restartEpoch}` : ''}`
+            ? `codex:${forkedFromId || threadId}:${cumulativeTotal}:${prevInput}:${prevCached}:${prevOutput}:${prevReasoning}${restartEpoch ? `:r${restartEpoch}` : ''}`
             : `codex:record:${JSON.stringify([source.path, tracker.lastCompleteLineOffset])}`
 
           accountUsage(entry, {
