@@ -256,7 +256,7 @@ it('holds the reported-cost provider set to its documented membership', async ()
   ])
 })
 
-it('keeps a Cline request cost cold and warm, and re-prices requests without one', async () => {
+it('keeps a Cline request cost, including a recorded zero, cold and warm, and re-prices requests without one', async () => {
   const tasks = join(HOME, '.cline', 'data', 'tasks')
   const writeTask = async (id: string, usage: Record<string, number>) => {
     await mkdir(join(tasks, id), { recursive: true })
@@ -269,6 +269,7 @@ it('keeps a Cline request cost cold and warm, and re-prices requests without one
   }
   await writeTask('reported', { tokensIn: 1000, tokensOut: 200, cost: 0.5 })
   await writeTask('unreported', { tokensIn: 1000, tokensOut: 200 })
+  await writeTask('free', { tokensIn: 1000, tokensOut: 200, cost: 0 })
 
   const { clearSessionCache, parseAllSessions } = await import('../src/parser.js')
   clearSessionCache()
@@ -276,6 +277,7 @@ it('keeps a Cline request cost cold and warm, and re-prices requests without one
   clearSessionCache()
   const warm = (await parseAllSessions(undefined, 'cline')).reduce((s, p) => s + p.totalCostUSD, 0)
 
+  // The free request's recorded $0 stays $0; only the one without a cost is priced.
   const floor = 1000 * 3e-6 + 200 * 15e-6
   expect(cold).toBeCloseTo(0.5 + floor, 10)
   expect(warm).toBeCloseTo(cold, 10)

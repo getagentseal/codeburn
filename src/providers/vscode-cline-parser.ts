@@ -207,9 +207,10 @@ export function createClineParser(source: SessionSource, seenKeys: Set<string>, 
         const tsDate = entry.ts ? new Date(entry.ts) : null
         const timestamp = tsDate && !Number.isNaN(tsDate.getTime()) ? tsDate.toISOString() : ''
         // Cline's `cost` is what the request was billed on its real route
-        // (cache writes and gateway prices included); a token re-price would
-        // replace it with a list price for a model the task may not even name.
-        const isReported = typeof cost === 'number' && Number.isFinite(cost) && cost > 0
+        // (cache writes and gateway prices included, 0 for a free model); a
+        // token re-price would replace it with a list price for a model the
+        // task may not even name. Only a missing cost is priced from tokens.
+        const isReported = typeof cost === 'number' && Number.isFinite(cost) && cost >= 0
         const costUSD = isReported ? cost! : calculateCost(model, tokensIn, tokensOut, cacheWrites, cacheReads, 0)
 
         yield {
