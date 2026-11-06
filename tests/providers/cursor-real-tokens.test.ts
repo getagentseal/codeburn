@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mkdtemp, rm } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { readFileSync, rmSync, utimesSync } from 'fs'
+import { mkdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'fs'
 import { createRequire } from 'node:module'
 
 import {
@@ -464,6 +464,20 @@ describe.skipIf(skipReason !== null)('cursor real context tokens (#575)', () => 
     expect(firstStamps).toEqual([recorded])
     expect(Date.parse(recorded)).toBeLessThan(Date.now() - 864e5)
     expect(second.filter(c => c.deduplicationKey === key).map(c => c.timestamp)).toEqual([recorded])
+  })
+
+  it('stamps an agent-only session at the DB mtime when its recorded first-seen value is garbage', async () => {
+    const requestId = 'req-headless-3'
+    const dbPath = buildDb((db) => {
+      insertAgentKv(db, { blobId: 'akv-1', role: 'user', content: 'run the export', requestId })
+    })
+    mkdirSync(getCodeburnCacheDir(), { recursive: true })
+    writeFileSync(join(getCodeburnCacheDir(), 'cursor-first-seen.json'), JSON.stringify({ [requestId]: 'garbage' }))
+
+    const calls = await collectCalls(createCursorProvider(dbPath), dbPath)
+
+    const stamp = calls.find(c => c.deduplicationKey === `cursor:agentKv:${requestId}`)!.timestamp
+    expect(stamp).toBe(new Date(statSync(dbPath).mtimeMs).toISOString())
   })
 
   it('pairs each assistant reply with its own turn\'s user question', async () => {

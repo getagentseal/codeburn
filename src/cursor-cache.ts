@@ -120,13 +120,20 @@ export async function readCachedResults(
 const FIRST_SEEN_FILE = 'cursor-first-seen.json'
 const FIRST_SEEN_LOCK = 'cursor-first-seen.lock'
 
+// Anything but the ISO string a parse wrote falls back to the mtime rule.
+function isIsoTimestamp(value: unknown): value is string {
+  if (typeof value !== 'string') return false
+  const ms = Date.parse(value)
+  return Number.isFinite(ms) && new Date(ms).toISOString() === value
+}
+
 export async function readFirstSeen(): Promise<Map<string, string>> {
   const file = await readExistingTextFile(join(getCodeburnCacheDir(), FIRST_SEEN_FILE))
   if (file.status !== 'ok') return new Map()
   try {
     const parsed = JSON.parse(file.text) as unknown
     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      return new Map(Object.entries(parsed).filter((e): e is [string, string] => typeof e[1] === 'string'))
+      return new Map(Object.entries(parsed).filter((e): e is [string, string] => isIsoTimestamp(e[1])))
     }
   } catch {}
   return new Map()

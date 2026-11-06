@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest'
+import { mkdirSync, writeFileSync } from 'fs'
+import { join } from 'path'
 
+import { getCodeburnCacheDir } from '../src/cache-dir.js'
 import { readFirstSeen, writeFirstSeen } from '../src/cursor-cache.js'
 
 describe('cursor first-seen sidecar', () => {
@@ -31,5 +34,18 @@ describe('cursor first-seen sidecar', () => {
       'req-d': '2026-10-04T00:00:00.000Z',
       'req-e': '2026-10-05T00:00:00.000Z',
     })
+  })
+
+  it('drops values that are not ISO timestamps', async () => {
+    mkdirSync(getCodeburnCacheDir(), { recursive: true })
+    writeFileSync(join(getCodeburnCacheDir(), 'cursor-first-seen.json'), JSON.stringify({
+      good: '2026-10-01T00:00:00.000Z',
+      garbage: 'not a date',
+      loose: '2026-10-01',
+      number: 1759276800000,
+      empty: '',
+    }))
+
+    expect(Object.fromEntries(await readFirstSeen())).toEqual({ good: '2026-10-01T00:00:00.000Z' })
   })
 })
