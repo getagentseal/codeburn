@@ -93,4 +93,18 @@ describe('cursor first-seen sidecar', () => {
       'req-h': '2026-10-08T00:00:00.000Z',
     })
   })
+
+  it('keeps both entries from concurrent writes in one process that cannot take the lock', async () => {
+    lockState.unavailable = true
+
+    await Promise.all([
+      writeFirstSeen(new Map([['req-i', '2026-10-09T00:00:00.000Z']])),
+      writeFirstSeen(new Map([['req-j', '2026-10-10T00:00:00.000Z']])),
+    ])
+
+    expect(Object.fromEntries(await readFirstSeen())).toMatchObject({
+      'req-i': '2026-10-09T00:00:00.000Z',
+      'req-j': '2026-10-10T00:00:00.000Z',
+    })
+  })
 })

@@ -168,7 +168,16 @@ export async function readFirstSeen(): Promise<Map<string, string>> {
   return (await readFirstSeenFiles(getCodeburnCacheDir())).merged
 }
 
-export async function writeFirstSeen(firstSeen: Map<string, string>): Promise<void> {
+// Writes in one process share its fragment, so they run one at a time.
+let firstSeenWrites: Promise<void> = Promise.resolve()
+
+export function writeFirstSeen(firstSeen: Map<string, string>): Promise<void> {
+  const next = firstSeenWrites.then(() => writeFirstSeenNow(firstSeen))
+  firstSeenWrites = next.catch(() => {})
+  return next
+}
+
+async function writeFirstSeenNow(firstSeen: Map<string, string>): Promise<void> {
   if (process.env['CODEBURN_SUPPRESS_CACHE_WRITES']) return
   const dir = getCodeburnCacheDir()
   await mkdir(dir, { recursive: true }).catch(() => {})
