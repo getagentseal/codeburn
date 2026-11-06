@@ -1249,20 +1249,23 @@ function readString(raw: unknown): string {
   return typeof raw === 'string' ? raw : ''
 }
 
-// An Auto request without resolvedModel names no priceable model; infer one the
-// way the legacy JSON path does and report the cost as estimated.
+// An Auto request without resolvedModel names no priceable model. Unless
+// copilotCredits price it (then its label stays), infer one the way the legacy
+// JSON path does and report the cost as estimated; with nothing to infer from
+// it is 'unknown', which reports as unpriced rather than as a $0 estimate.
 function modelFromChatSessionRequest(
   req: ChatSessionRequest,
   metadata: Record<string, unknown>,
   session: Record<string, unknown>,
+  billed: boolean,
 ): { model: string; inferred: boolean } {
   const resolved = readString(metadata['resolvedModel'])
   if (resolved) return { model: resolved, inferred: false }
 
   const modelId = readString(req['modelId']).replace(/^copilot\//, '')
-  if (modelId !== 'auto' && modelId !== 'copilot-auto') return { model: modelId || 'unknown', inferred: false }
+  if (billed || (modelId !== 'auto' && modelId !== 'copilot-auto')) return { model: modelId || 'unknown', inferred: false }
   const inferred = extractModelFromRequest(req as unknown as LegacyChatRequest, session as LegacyChatSession)
-  return { model: inferred === 'unknown' ? modelId : inferred, inferred: true }
+  return { model: inferred, inferred: inferred !== 'unknown' }
 }
 
 function parseStructuredArguments(raw: unknown): Record<string, unknown> | null {
@@ -1860,7 +1863,7 @@ function createChatSessionParser(
         if (seenKeys.has(dedupKey)) continue
         seenKeys.add(dedupKey)
 
-        const { model, inferred } = modelFromChatSessionRequest(rawReq, metadata, root)
+        const { model, inferred } = modelFromChatSessionRequest(rawReq, metadata, root, nanoAiu !== undefined)
         const costUSD = nanoAiu !== undefined
           ? creditsToUsd(nanoAiuToCredits(nanoAiu))
           : calculateCost(model, inputTokens, outputTokens, 0, cacheReadTokens, 0)
@@ -1882,7 +1885,7 @@ function createChatSessionParser(
           reasoningTokens: 0,
           webSearchRequests: 0,
           costUSD,
-          ...(inferred && nanoAiu === undefined ? { costIsEstimated: true } : {}),
+          ...(inferred ? { costIsEstimated: true } : {}),
           tools: extracted.tools,
           bashCommands: extracted.bashCommands,
           skills: extracted.skills.length > 0 ? extracted.skills : undefined,

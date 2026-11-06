@@ -1314,10 +1314,23 @@ describe('copilot provider - chatSessions parsing', () => {
 
     expect(calls.map(c => [c.model, c.costIsEstimated])).toEqual([
       ['copilot-openai-auto', true],
-      ['copilot-openai-auto', undefined],
+      ['auto', undefined],
     ])
     expect(calls[0]!.costUSD).toBe(calculateCost('copilot-openai-auto', 80000, 2000, 0, 0, 0))
     expect(calls[0]!.costUSD).toBeGreaterThan(0)
+  })
+
+  it('reports an Auto-mode journal request with nothing to infer from as unknown, not estimated', async () => {
+    const filePath = join(tmpDir, 'auto-bare.jsonl')
+    await createChatSessionFile(filePath, [
+      { kind: 0, v: { version: 3, creationDate: 1780157113020, sessionId: 'chat-auto-bare', requests: [
+        { requestId: 'r1', modelId: 'copilot/auto', promptTokens: 80000, completionTokens: 2000 },
+      ] } },
+    ])
+
+    const calls = await collectCalls({ path: filePath, project: 'myproject', provider: 'copilot', sourceType: 'chatsession' })
+
+    expect(calls.map(c => [c.model, c.costIsEstimated, c.costUSD])).toEqual([['unknown', undefined, 0]])
   })
 
   it('returns no calls for an empty reconstructed requests array', async () => {

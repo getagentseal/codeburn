@@ -177,3 +177,17 @@ describe('copilot agent-traces.db durability', () => {
     expect(await servedKeys()).toEqual(['copilot-otel:new', 'copilot-otel:old'])
   })
 })
+
+describe('copilot Auto-mode journal requests at serve time', () => {
+  it('serves a request with no inferable model as unpriced', async () => {
+    const dir = join(tmp, 'global', 'emptyWindowChatSessions')
+    await mkdir(dir, { recursive: true })
+    await writeFile(join(dir, 'bare.jsonl'), JSON.stringify({ kind: 0, v: { sessionId: 'bare', creationDate: Date.parse('2026-08-05T12:00:00Z'), requests: [{
+      requestId: 'r1', modelId: 'copilot/auto', timestamp: Date.parse('2026-08-05T12:00:00Z'), promptTokens: 80000, completionTokens: 2000,
+    }] } }) + '\n')
+
+    clearSessionCache()
+    const calls = (await parseAllSessions(undefined, 'copilot')).flatMap(p => p.sessions).flatMap(s => s.turns).flatMap(t => t.assistantCalls)
+    expect(calls.map(c => [c.model, c.costBasis])).toEqual([['unknown', 'unpriced']])
+  })
+})
