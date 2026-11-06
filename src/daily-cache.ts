@@ -419,7 +419,9 @@ const PENDING_REDERIVE_PROVIDER_VERSIONS: Readonly<Record<string, number>> = {
   copilot: 79,
   // Codex response records replace stale/zero token_count twins and can
   // legitimately reduce counts as well as recover missing usage. 79: a
-  // turn-start rate-limit ping is no longer an estimated call.
+  // turn-start rate-limit ping is no longer an estimated call. A day whose
+  // only Codex calls were pings has no fresh slice and stays carried: a day
+  // slice records no estimated share to tell it from pruned history.
   codex: 79,
   // 31: a v30 file may have been written by #1132's accounting, which never
   // carried the Hermes cost contract. 33: day.models is keyed by route, and a
@@ -1940,32 +1942,18 @@ export async function ensureCacheHydrated(
         }
       }
       const pendingRederive = c.pendingRederive?.length ? new Set(c.pendingRederive) : undefined
-      const freshProviders = new Map(freshDays.map(d => [d.date, d.providers]))
-      // A baseline slice the fresh parse has no slice for is carried as pruned
-      // history, so a pending provider whose new accounting empties a day needs
-      // evidence that the day was emptied, not pruned.
-      const dropStaleSlices = (provider: string, isStale: (slice: ProviderDaySlice, fresh: DailyEntry['providers'] | undefined) => boolean) => {
-        carriedBaseline = carriedBaseline.flatMap(day => {
-          const slice = day.providers[provider]
-          const fresh = freshProviders.get(day.date)
-          if (!slice || fresh?.[provider] || !isStale(slice, fresh)) return [day]
-          const copy = structuredClone(day)
-          subtractSliceFromDay(copy, provider, copy.providers[provider])
-          return hasPositiveDayContent(copy) ? [copy] : []
-        })
-      }
       // v73 moved Cursor IDE chat transcripts from cursor-agent to cursor. A day
       // the fresh parse explains with a cursor slice and no cursor-agent slice
       // is that move, not pruned history, so the old cursor-agent slice goes.
       if (parseWasComplete && pendingRederive?.has('cursor-agent')) {
-        dropStaleSlices('cursor-agent', (_, fresh) => !!fresh?.['cursor'] && hasSliceData(fresh['cursor']))
-      }
-      // v79: a Codex turn-start rate-limit ping is no longer a call. A day whose
-      // only Codex calls were such pings re-derives to nothing, and a slice
-      // with no output and no cache reads is that ping: any answered turn
-      // records output.
-      if (parseWasComplete && pendingRederive?.has('codex')) {
-        dropStaleSlices('codex', slice => slice.outputTokens === 0 && slice.cacheReadTokens === 0)
+        const freshProviders = new Map(freshDays.map(d => [d.date, d.providers]))
+        carriedBaseline = carriedBaseline.flatMap(day => {
+          const fresh = freshProviders.get(day.date)
+          if (!day.providers['cursor-agent'] || !fresh || fresh['cursor-agent'] || !fresh['cursor'] || !hasSliceData(fresh['cursor'])) return [day]
+          const copy = structuredClone(day)
+          subtractSliceFromDay(copy, 'cursor-agent', copy.providers['cursor-agent'])
+          return hasPositiveDayContent(copy) ? [copy] : []
+        })
       }
       // Without the subtraction an old-zone slice is never a partial survivor
       // of the fresh one, so the guard would swap a shifted day back in.

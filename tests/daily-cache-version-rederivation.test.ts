@@ -234,9 +234,8 @@ describe('copilot re-derive after chat-session twins moved to the agent host (v7
 
 describe('re-derive after the November provider fixes (v79)', () => {
   const settled = toDateString(new Date(Date.now() - 10 * 24 * 60 * 60 * 1000))
-  const pruned = toDateString(new Date(Date.now() - 11 * 24 * 60 * 60 * 1000))
   const yesterday = toDateString(new Date(Date.now() - 24 * 60 * 60 * 1000))
-  const slice = (calls: number, outputTokens = 20, cacheReadTokens = 30) => ({ ...day(settled, calls).providers.grok!, calls, outputTokens, cacheReadTokens })
+  const slice = (calls: number) => ({ ...day(settled, calls).providers.grok!, calls })
   const entry = (date: string, providers: DailyEntry['providers']): DailyEntry => ({
     ...day(date, 0),
     cost: Object.values(providers).reduce((sum, s) => sum + s.cost, 0),
@@ -269,23 +268,5 @@ describe('re-derive after the November provider fixes (v79)', () => {
     for (const p of providers) expect(settledDay.providers[p]?.calls, p).toBe(3)
     expect(settledDay.providers.claude?.calls).toBe(5)
     expect(hydrated.pendingRederive).toBeUndefined()
-  })
-
-  it('drops a codex day made only of rate-limit pings and carries one whose rollouts are gone', async () => {
-    await seedV78([
-      entry(pruned, { codex: slice(4), claude: slice(1) }),
-      entry(settled, { codex: slice(2, 0, 0), claude: slice(1) }),
-    ])
-
-    const hydrated = await ensureCacheHydrated(
-      async () => [],
-      () => [entry(pruned, { claude: slice(1) }), entry(settled, { claude: slice(1) })],
-      'cfg',
-      () => true,
-    )
-
-    expect(hydrated.days.find(d => d.date === settled)!.providers.codex).toBeUndefined()
-    expect(hydrated.days.find(d => d.date === settled)!.calls).toBe(1)
-    expect(hydrated.days.find(d => d.date === pruned)!.providers.codex?.calls).toBe(4)
   })
 })
