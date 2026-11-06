@@ -133,6 +133,33 @@ describe('cursor provider — per-project breakdown (#196)', () => {
     expect(projects).toContain('cursor')
   })
 
+  it('picks up workspaces and chats created after an earlier discovery in the same process', async () => {
+    if (!isSqliteAvailable()) return
+
+    const dbPath = createGlobalDb(['composer-alpha', 'composer-alpha-2', 'composer-beta'])
+    createWorkspaceDir('hash-alpha', 'file:///Users/me/alpha', ['composer-alpha'])
+
+    const provider = createCursorProvider(dbPath)
+    await provider.discoverSessions()
+    const { DatabaseSync: Database } = requireForTest('node:sqlite')
+    const alphaDb = new Database(join(userDir, 'workspaceStorage', 'hash-alpha', 'state.vscdb'))
+    alphaDb.prepare(`UPDATE ItemTable SET value = ? WHERE key = 'composer.composerData'`).run(
+      JSON.stringify({ allComposers: [{ composerId: 'composer-alpha' }, { composerId: 'composer-alpha-2' }] }),
+    )
+    alphaDb.close()
+    createWorkspaceDir('hash-beta', 'file:///Users/me/beta', ['composer-beta'])
+    const sources = await provider.discoverSessions()
+
+    const byProject = new Map<string, Set<string>>()
+    for (const source of sources) {
+      const calls = await collect(provider.createSessionParser(source, new Set()))
+      byProject.set(source.project, new Set(calls.map(c => c.sessionId)))
+    }
+    expect(byProject.get('-Users-me-alpha')).toEqual(new Set(['composer-alpha', 'composer-alpha-2']))
+    expect(byProject.get('-Users-me-beta')).toEqual(new Set(['composer-beta']))
+    expect(byProject.get('cursor')).toEqual(new Set())
+  })
+
   it('routes calls to the right workspace and excludes others', async () => {
     if (!isSqliteAvailable()) return
 

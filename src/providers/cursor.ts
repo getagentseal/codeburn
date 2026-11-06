@@ -1087,6 +1087,9 @@ export function createCursorProvider(dbPathOverride?: string): Provider {
       const dbPath = dbPathOverride ?? getCursorDbPath()
       if (!existsSync(dbPath)) return imported
 
+      // Rebuilt per discovery so a resident process sees chats and workspaces
+      // created since the last one; parsers of this scan reuse it.
+      clearCursorWorkspaceMapCache()
       const wsMap = loadWorkspaceMap(getCursorWorkspaceStorageDir(dbPath))
       const sources: SessionSource[] = []
       for (const [folder, project] of wsMap.workspaceProjectName) {
