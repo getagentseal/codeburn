@@ -627,6 +627,27 @@ describe.skipIf(skipReason !== null)('cursor real context tokens (#575)', () => 
     expect(calls.find(c => c.deduplicationKey.endsWith(':a2'))!.userMessage).toBe('second prompt second reply')
   })
 
+  it('gives a user bubble with null or missing text an empty prompt and leaves later turns alone', async () => {
+    const composerId = '99991111-1111-2222-3333-444455556666'
+    const t = (m: number) => new Date(Date.now() - 864e5 + m * 1000).toISOString()
+    const dbPath = buildDb((db) => {
+      const insert = db.prepare('INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)')
+      insert.run(`bubbleId:${composerId}:u1`, JSON.stringify({ type: 1, createdAt: t(1), text: null }))
+      insertBubble(db, { composerId, bubbleUuid: 'a1', type: 2, text: 'reply one', model: 'gpt-5', createdAt: t(2) })
+      insert.run(`bubbleId:${composerId}:u2`, JSON.stringify({ type: 1, createdAt: t(3) }))
+      insertBubble(db, { composerId, bubbleUuid: 'a2', type: 2, text: 'reply two', model: 'gpt-5', createdAt: t(4) })
+      insertBubble(db, { composerId, bubbleUuid: 'u3', type: 1, text: 'third prompt', createdAt: t(5) })
+      insertBubble(db, { composerId, bubbleUuid: 'a3', type: 2, text: 'reply three', model: 'gpt-5', createdAt: t(6) })
+    })
+
+    const calls = await collectCalls(createCursorProvider(dbPath), dbPath)
+
+    const prompt = (id: string) => calls.find(c => c.deduplicationKey.endsWith(`:${id}`))!.userMessage
+    expect(prompt('a1')).toBe('reply one')
+    expect(prompt('a2')).toBe('reply two')
+    expect(prompt('a3')).toBe('third prompt reply three')
+  })
+
   it('does not fabricate input when an empty-text turn has no agent stream', async () => {
     const composerId = '88880000-1111-2222-3333-444455556666'
     const dbPath = buildDb((db) => {
