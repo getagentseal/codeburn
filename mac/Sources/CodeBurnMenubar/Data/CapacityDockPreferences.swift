@@ -1,5 +1,35 @@
 import Foundation
 
+struct CapacityDockClaudeProfile: Equatable, Hashable, Sendable, Identifiable {
+    let id: String
+    let label: String
+    let path: String?
+    let orgUuid: String?
+
+    init(id: String, label: String, path: String? = nil, orgUuid: String? = nil) {
+        self.id = id
+        self.label = label
+        self.path = path
+        self.orgUuid = orgUuid
+    }
+
+    var caption: String {
+        label == "Default Claude" ? L("Default") : label
+    }
+}
+
+enum CapacityDockClaudeProfilesMode: String, CaseIterable, Sendable {
+    case combined
+    case separate
+
+    var displayName: String {
+        switch self {
+        case .combined: L("Combined")
+        case .separate: L("Separate rings")
+        }
+    }
+}
+
 /// Stable Capacity Dock identity backed by the audited provider catalog.
 ///
 /// This is a value type rather than a 69-case enum so the provider inventory has
@@ -7,6 +37,7 @@ import Foundation
 /// `ProviderFilter` bridge; the remaining providers are fetched through the
 /// CodeBurn-owned provider adapter at runtime.
 struct CapacityDockProvider: RawRepresentable, CaseIterable, Identifiable, Hashable, Sendable {
+    private static let claudeProfilePrefix = "claude-profile:"
     let rawValue: String
 
     init?(rawValue: String) {
@@ -18,6 +49,23 @@ struct CapacityDockProvider: RawRepresentable, CaseIterable, Identifiable, Hasha
 
     private init(known rawValue: String) {
         self.rawValue = rawValue
+    }
+
+    static func claudeProfile(id: String) -> CapacityDockProvider {
+        CapacityDockProvider(known: "\(claudeProfilePrefix)\(id)")
+    }
+
+    var isClaudeProfile: Bool {
+        rawValue.hasPrefix(Self.claudeProfilePrefix)
+    }
+
+    var claudeProfileID: String? {
+        guard isClaudeProfile else { return nil }
+        return String(rawValue.dropFirst(Self.claudeProfilePrefix.count))
+    }
+
+    var baseProvider: CapacityDockProvider {
+        isClaudeProfile ? .claude : self
     }
 
     var id: String { rawValue }
@@ -34,11 +82,12 @@ struct CapacityDockProvider: RawRepresentable, CaseIterable, Identifiable, Hasha
     static let antigravity = CapacityDockProvider(known: "antigravity")
 
     var catalogEntry: ProviderConnectionCatalogEntry {
-        ProviderConnectionCatalog.providers.first { $0.id == rawValue }!
+        let lookup = baseProvider.rawValue
+        return ProviderConnectionCatalog.providers.first { $0.id == lookup }!
     }
 
     var legacyFilter: ProviderFilter? {
-        switch rawValue {
+        switch baseProvider.rawValue {
         case Self.claude.rawValue: .claude
         case Self.codex.rawValue: .codex
         case Self.gemini.rawValue: .gemini
@@ -56,7 +105,7 @@ struct CapacityDockProvider: RawRepresentable, CaseIterable, Identifiable, Hasha
     /// dock has no legacy bridge; where it has one the bridge is the authority,
     /// because the dock's `kimi` entry is Kimi Code, which the CLI calls
     /// `kimicode` (its `kimi` is a different provider).
-    var payloadProviderID: String { legacyFilter?.cliArg ?? rawValue }
+    var payloadProviderID: String { legacyFilter?.cliArg ?? baseProvider.rawValue }
 
     /// Every payload provider this one tile stands for. A tile is an account the
     /// user recognises; the CLI splits some accounts across more than one provider
@@ -79,13 +128,13 @@ struct CapacityDockProvider: RawRepresentable, CaseIterable, Identifiable, Hasha
     }
 
     var iconName: String {
-        switch rawValue {
+        switch baseProvider.rawValue {
         case Self.codex.rawValue, "openai", "azureopenai": "codex"
         case Self.gemini.rawValue: "gemini"
         case Self.copilot.rawValue: "copilot"
         case "alibabatokenplan": "alibaba"
         case "moonshot": "kimi"
-        default: rawValue
+        default: baseProvider.rawValue
         }
     }
 }
@@ -184,6 +233,7 @@ enum CapacityDockPreferences {
     static let gaugeShapeKey = "CodeBurnCapacityDockGaugeShape"
     static let glanceWindowsKey = "CodeBurnCapacityDockGlanceWindows"
     static let manualSelectionKey = "CodeBurnCapacityDockManualSelection"
+    static let claudeProfilesKey = "CodeBurnCapacityDockClaudeProfiles"
 
     static let defaultProvider: CapacityDockProvider = .codex
     static let supportedProviders = CapacityDockProvider.allCases
@@ -206,9 +256,13 @@ enum CapacityDockPreferences {
         /// id. Sparse: an absent provider uses the billing horizon, which is
         /// what the dock has always shown.
         let glanceWindows: [String: CapacityDockGlanceWindowKind]
+        /// How Claude is drawn when more than one account/profile is present.
+        var claudeProfiles: CapacityDockClaudeProfilesMode = .combined
 
         func glanceWindow(for provider: CapacityDockProvider) -> CapacityDockGlanceWindowKind {
-            glanceWindows[provider.rawValue] ?? .billing
+            glanceWindows[provider.rawValue]
+                ?? glanceWindows[provider.baseProvider.rawValue]
+                ?? .billing
         }
     }
 
@@ -270,7 +324,9 @@ enum CapacityDockPreferences {
                 .flatMap(CapacityDockGaugeShape.init(rawValue:)) ?? .squircle,
             glanceWindows: normalizedGlanceWindows(
                 defaults.dictionary(forKey: glanceWindowsKey)
-            )
+            ),
+            claudeProfiles: defaults.string(forKey: claudeProfilesKey)
+                .flatMap(CapacityDockClaudeProfilesMode.init(rawValue:)) ?? .combined
         )
     }
 
@@ -428,6 +484,14 @@ enum CapacityDockPreferences {
         notifyChanged()
     }
 
+    static func setClaudeProfiles(
+        _ mode: CapacityDockClaudeProfilesMode,
+        defaults: UserDefaults = .standard
+    ) {
+        defaults.set(mode.rawValue, forKey: claudeProfilesKey)
+        notifyChanged()
+    }
+
     /// Records which horizon one provider's gauge reports. Stored per provider
     /// rather than as one dock-wide switch because the providers are
     /// independent questions: a user can watch Claude's 5-hour window while
@@ -462,7 +526,9 @@ enum CapacityDockPreferences {
         guard let stored else { return [:] }
         var normalized: [String: CapacityDockGlanceWindowKind] = [:]
         for (identifier, value) in stored {
-            guard CapacityDockProvider(rawValue: identifier) != nil,
+            let validID = CapacityDockProvider(rawValue: identifier) != nil
+                || identifier.hasPrefix("claude-profile:")
+            guard validID,
                   let rawValue = value as? String,
                   let kind = CapacityDockGlanceWindowKind(rawValue: rawValue) else { continue }
             normalized[identifier] = kind
