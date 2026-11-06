@@ -128,30 +128,42 @@ describe('identical-call loop', () => {
 })
 
 describe('failing-command retry', () => {
-  it('warns after 3 failures and blocks after 5; successes reset nothing', async () => {
-    const env = await setup()
+  it('warns after 3 failures in a row and blocks after 5', async () => {
+    const env = await setup({ loopWarnAfter: null, loopStopAfter: null })
     const test = { command: 'npm test -- --run tests/a-very-long-path/that-goes-on-and-on/and-on.test.ts', description: 'Run tests' }
     const outs: string[] = []
-    let edit = 0
-    const run = async (fails: boolean) => {
-      outs.push(await call(env, 'Bash', test, { fails }))
-      await call(env, 'Edit', { file_path: '/a.ts', old_string: String(edit), new_string: String(++edit) })
-    }
-    await run(true)
-    await run(true)
-    await run(false)
-    await run(true)
+    for (let i = 0; i < 5; i++) outs.push(await call(env, 'Bash', test, { fails: true }))
     const shown = test.command.slice(0, 60)
-    expect(outs).toEqual(['', '', '', ''])
-    await run(true)
-    expect(outs[4]).toBe(warnJson(`codeburn guard: the command "${shown}" already failed 3 times.`))
-    await run(true)
-    expect(outs[5]).toBe('')
+    expect(outs.slice(0, 3)).toEqual(['', '', ''])
+    expect(outs[3]).toBe(warnJson(`codeburn guard: the command "${shown}" already failed 3 times.`))
+    expect(outs[4]).toBe('')
     const out = await call(env, 'Bash', test)
     const cost = (await readCache(SID, env.base)).costUSD
     expect(out).toBe(denyJson(
       `The command "${shown}" already failed 5 times; this session is $${cost.toFixed(2)} (codeburn guard). Change approach or ask the user. Run 'codeburn guard allow' to lift this for the session, or raise retryStopAfter in guard.json.`,
     ))
+  })
+
+  it('an edit between runs resets the count, so a red-green loop is never stopped', async () => {
+    const env = await setup()
+    const test = { command: 'npm test', description: 'Run tests' }
+    const outs: string[] = []
+    for (let i = 0; i < 5; i++) {
+      outs.push(await call(env, 'Bash', test, { fails: true }))
+      await call(env, 'Edit', { file_path: '/a.ts', old_string: String(i), new_string: String(i + 1) })
+    }
+    outs.push(await call(env, 'Bash', test))
+    expect(outs.every(o => o === '')).toBe(true)
+  })
+
+  it('a passing run resets that command only', async () => {
+    const env = await setup({ loopWarnAfter: null, loopStopAfter: null })
+    for (let i = 0; i < 2; i++) await call(env, 'Bash', { command: 'npm test' }, { fails: true })
+    for (let i = 0; i < 2; i++) await call(env, 'Bash', { command: 'npm run lint' }, { fails: true })
+    await call(env, 'Bash', { command: 'npm test' })
+    await call(env, 'Bash', { command: 'npm test' }, { fails: true })
+    await call(env, 'Read', { file_path: '/a' })
+    expect(Object.values((await readCache(SID, env.base)).failedCommands).sort()).toEqual([1, 2])
   })
 
   it('only counts shell tools', async () => {

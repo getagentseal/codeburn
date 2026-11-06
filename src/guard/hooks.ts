@@ -191,7 +191,7 @@ async function handleStop(input: unknown, opts: HookOpts): Promise<string> {
     cache.signalStopNotified = true
     const what: string[] = []
     if (cache.loopWarned) what.push(`${cache.loopRun} identical tool calls in a row`)
-    if (cache.retryWarned) what.push(`${Math.max(0, ...Object.values(cache.failedCommands))} failed runs of one command`)
+    if (cache.retryWarned) what.push(`${cache.retryRun} failed runs of one command`)
     lines.push(
       `codeburn guard: ${what.join(' and ')}; the calls after the first warning cost ${usd(Math.max(0, cache.costUSD - cache.signalWarnCostUSD))}.`,
     )
