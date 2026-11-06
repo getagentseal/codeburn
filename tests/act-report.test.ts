@@ -224,6 +224,15 @@ describe('mcp realized delta', () => {
     expect(row.note).toMatch(/reverted by user/)
     expect(report.totalRealizedTokens).toBe(0)
   })
+
+  it('matches a server by its tool namespace, so a re-added "docs.local" reads as reverted', async () => {
+    const rec = mcpRecord({ baseline: { windowDays: 14, capturedAt: daysAgo(10), estimatedTokens: 56_000, sessions: 28, metrics: { 'docs.local': 2000 } } })
+    const actionsDir = await writeJournal([rec])
+    const back = sessionsAt(20, daysAgo(5), { mcpInventory: ['mcp__docs_local__search'] })
+    const report = await computeActReport({ actionsDir, now: NOW, loadProjects: load([projectOf(back)]) })
+
+    expect(report.rows[0]!.status).toBe('reverted')
+  })
 })
 
 describe('realized dollars', () => {

@@ -20,6 +20,7 @@ import {
   mcpLowCoverageSchemaPerSession,
   mcpProjectScopeSchemaPerSession,
   findingPricing,
+  mcpNamespace,
   sessionTokensUSD,
   type FindingPricing,
   type McpServerCoverage,
@@ -188,12 +189,13 @@ function countBashCalls(sessions: SessionSummary[]): number {
 }
 
 function sessionLoadsAny(s: SessionSummary, servers: string[]): boolean {
+  const names = servers.map(mcpNamespace)
   for (const fqn of s.mcpInventory ?? []) {
     const seg = fqn.split('__')[1]
-    if (seg && servers.includes(seg)) return true
+    if (seg && names.includes(seg)) return true
   }
   for (const server of Object.keys(s.mcpBreakdown)) {
-    if (servers.includes(server)) return true
+    if (names.includes(server)) return true
   }
   return false
 }
