@@ -416,6 +416,45 @@ describe.skipIf(skipReason !== null)('cursor real context tokens (#575)', () => 
     expect(session!.outputTokens).toBe(Math.ceil(reply.length / 4))
   })
 
+  it('keeps the agent stream when another agentKv value is not valid JSON, and reports the skipped row', async () => {
+    const composerId = '44443333-1111-2222-3333-444455556666'
+    const dbPath = buildDb((db) => {
+      insertBubble(db, { composerId, bubbleUuid: 'b1', type: 1, text: 'do stuff', requestId: 'req-joined' })
+      insertBubble(db, { composerId, bubbleUuid: 'b2', type: 2, text: 'done', model: 'gpt-5' })
+      insertAgentKv(db, { blobId: 'akv-1', role: 'user', content: 'do stuff', requestId: 'req-joined' })
+      insertAgentKv(db, { blobId: 'akv-2', role: 'assistant', content: [{ type: 'tool-call', toolName: 'Shell', args: { command: 'npm test' } }] })
+      db.prepare('INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)').run('agentKv:blob:jsonl', '{"kind":"a"}\n{"kind":"b"}\n')
+      insertAgentKv(db, { blobId: 'akv-3', role: 'user', content: 'run the export', requestId: 'req-alone' })
+    })
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true)
+
+    const calls = await collectCalls(createCursorProvider(dbPath), dbPath)
+
+    expect(calls.flatMap(c => c.bashCommands)).toEqual(['npm'])
+    expect(calls.some(c => c.deduplicationKey === 'cursor:agentKv:req-alone')).toBe(true)
+    expect(stderr.mock.calls.map(c => String(c[0]))).toContain('codeburn: skipped 1 unreadable Cursor entries\n')
+    stderr.mockRestore()
+  })
+
+  it('keeps the other conversations when a bubble or composer value is not valid JSON', async () => {
+    const composerId = '44444444-1111-2222-3333-444455556666'
+    const dbPath = buildDb((db) => {
+      insertComposerData(db, { composerId, totalUsedTokens: 10000 })
+      insertBubble(db, { composerId, bubbleUuid: 'b1', type: 1, text: 'prompt' })
+      insertBubble(db, { composerId, bubbleUuid: 'b2', type: 2, text: 'reply', model: 'gpt-5' })
+      const insert = db.prepare('INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)')
+      insert.run(`bubbleId:${composerId}:broken`, '{"type":2,')
+      insert.run('composerData:44445555-1111-2222-3333-444455556666', '{"createdAt":')
+      insertAgentKv(db, { blobId: 'akv-1', role: 'user', content: 'run the export', requestId: 'req-alone' })
+    })
+
+    const calls = await collectCalls(createCursorProvider(dbPath), dbPath)
+
+    expect(calls.find(c => c.deduplicationKey === `cursor:composer-input:${composerId}`)?.inputTokens).toBe(10000)
+    expect(calls.some(c => c.deduplicationKey.endsWith(':b2'))).toBe(true)
+    expect(calls.some(c => c.deduplicationKey === 'cursor:agentKv:req-alone')).toBe(true)
+  })
+
   it('does not bill the stream of a conversation older than the lookback as a new session', async () => {
     const composerId = '44440000-1111-2222-3333-444455556666'
     const requestId = 'req-old'

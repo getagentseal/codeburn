@@ -354,26 +354,33 @@ const BUBBLE_QUERY_BASE = `
     json_extract(value, '$.type') as bubble_type,
     CAST(json_extract(value, '$.codeBlocks') AS BLOB) as code_blocks
   FROM cursorDiskKV
-  WHERE key LIKE 'bubbleId:%'
+  WHERE key LIKE 'bubbleId:%' AND json_valid(value)
 `
 
+// agentKv blobs are content-addressed and also hold JSONL logs and files that
+// start with '{'; one of them makes json_extract throw for the whole query.
+const AGENTKV_WHERE = `
+  FROM cursorDiskKV
+  WHERE key LIKE 'agentKv:blob:%'
+    AND hex(substr(value, 1, 1)) = '7B'`
 const AGENTKV_QUERY = `
   SELECT
     json_extract(value, '$.role') as role,
     CAST(json_extract(value, '$.content') AS BLOB) as content,
     json_extract(value, '$.providerOptions.cursor.requestId') as request_id,
     json_extract(value, '$.providerOptions.cursor.modelName') as model
-  FROM cursorDiskKV
-  WHERE key LIKE 'agentKv:blob:%'
-    AND hex(substr(value, 1, 1)) = '7B'
+  ${AGENTKV_WHERE}
+    AND json_valid(value)
   ORDER BY ROWID ASC
 `
+const AGENTKV_MALFORMED_QUERY = `SELECT COUNT(*) as cnt ${AGENTKV_WHERE} AND NOT json_valid(value)`
 
 const BUBBLE_REQUEST_IDS_QUERY = `
   SELECT json_extract(value, '$.requestId') as request_id,
     json_extract(value, '$.createdAt') as created_at
   FROM cursorDiskKV
   WHERE key LIKE 'bubbleId:%'
+    AND json_valid(value)
     AND json_extract(value, '$.requestId') IN`
 // Under the 999 bound-parameter limit of older SQLite builds. Each chunk is
 // one table scan, so many unjoined streams on a huge DB cost several scans.
@@ -416,7 +423,7 @@ const BUBBLE_QUERY_PAGE = `
     json_extract(value, '$.type') as bubble_type,
     CAST(json_extract(value, '$.codeBlocks') AS BLOB) as code_blocks
   FROM cursorDiskKV
-  WHERE key LIKE 'bubbleId:%' AND ROWID < ?
+  WHERE key LIKE 'bubbleId:%' AND ROWID < ? AND json_valid(value)
   ORDER BY ROWID DESC
   LIMIT ?
 `
@@ -492,7 +499,7 @@ const COMPOSER_META_QUERY = `
     json_extract(value, '$.contextTokensUsed') as ctx,
     json_extract(value, '$.createdAt') as created_at
   FROM cursorDiskKV
-  WHERE key >= 'composerData:' AND key < 'composerData;'
+  WHERE key >= 'composerData:' AND key < 'composerData;' AND json_valid(value)
 `
 
 type ComposerMeta = { tokens: number; createdAt: number | null }
@@ -560,16 +567,18 @@ function contentTextLength(raw: string): number {
 function loadAgentStreams(
   db: SqliteDatabase,
   requestToComposer: Map<string, string>,
-): { byComposer: Map<string, AgentStream>; unjoined: Map<string, AgentStream> } {
+): { byComposer: Map<string, AgentStream>; unjoined: Map<string, AgentStream>; malformed: number } {
   const byComposer = new Map<string, AgentStream>()
   const unjoined = new Map<string, AgentStream>()
 
   let rows: AgentKvRow[]
+  let malformed = 0
   try {
     rows = db.query<AgentKvRow>(AGENTKV_QUERY)
+    malformed = db.query<{ cnt: number }>(AGENTKV_MALFORMED_QUERY)[0]?.cnt ?? 0
   } catch (err) {
     rethrowBusy(err)
-    return { byComposer, unjoined }
+    return { byComposer, unjoined, malformed }
   }
 
   const bucketFor = (requestId: string): AgentStream => {
@@ -645,7 +654,7 @@ function loadAgentStreams(
       }
     }
   }
-  return { byComposer, unjoined }
+  return { byComposer, unjoined, malformed }
 }
 
 // What drives a conversation's input figure, decided once per conversation so
@@ -739,7 +748,8 @@ function parseBubbles(
     if (!scan.model && row.model) scan.model = row.model
   }
 
-  const { byComposer: agentStreams, unjoined } = loadAgentStreams(db, requestToComposer)
+  const { byComposer: agentStreams, unjoined, malformed } = loadAgentStreams(db, requestToComposer)
+  skipped += malformed
   const lastUserMsg = new Map<string, string>()
 
   const inputSource = (cid: string): InputSource => {
