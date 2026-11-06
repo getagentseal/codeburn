@@ -74,11 +74,10 @@ function markSignal(cache: GuardCache, signal: 'loop' | 'retry'): void {
   cache.signalWarnCostUSD ??= cache.costUSD
 }
 
-// The reason goes to the model; how to lift the stop goes only to the user, so
-// the agent is never told how to lift its own stop.
-// Hook contract (code.claude.com/docs/en/hooks): systemMessage is a warning shown to the user; on a PreToolUse deny, permissionDecisionReason is what Claude sees.
 // The shared read list leaves gh out (it has mutating subcommands); these only inspect.
-const GH_READ = /^gh\s+[\w-]+\s+(?:view|list|checks|status|diff|watch)\b[^;&|]*$/
+const GH_READ = /^gh\s+[\w-]+\s+(?:view|list|checks|status|diff|watch)\b[^;&|\n]*$/
+// A bare echo after a sleep is a blind timer wait: no redirection, chaining or substitution.
+const BARE_ECHO = /^echo(?:[^\S\n]+(?:[^;&|<>`$\n]|\$(?!\())*)?$/
 
 // `sleep 30 && gh run view 1` waits on something; it is not a loop as long as
 // what runs after the sleep only reads. `sleep 0; npm test` still counts.
@@ -88,9 +87,12 @@ function isWaitingCheck(command: string): boolean {
   const m = /^\s*sleep\s+\S+\s*(?:(?:&&|;|\|\|)([\s\S]*))?$/.exec(command)
   if (!m) return false
   const rest = m[1]?.trim() ?? ''
-  return !rest || isReadShapedBashCommand(rest) || GH_READ.test(rest)
+  return !rest || isReadShapedBashCommand(rest) || GH_READ.test(rest) || BARE_ECHO.test(rest)
 }
 
+// The reason goes to the model; how to lift the stop goes only to the user, so
+// the agent is never told how to lift its own stop.
+// Hook contract (code.claude.com/docs/en/hooks): systemMessage is a warning shown to the user; on a PreToolUse deny, permissionDecisionReason is what Claude sees.
 function deny(reason: string, userNote: string): string {
   return JSON.stringify({
     systemMessage: userNote,

@@ -136,7 +136,19 @@ describe('identical-call loop', () => {
     for (let i = 0; i < 8; i++) outs.push(await call(env, 'Bash', { command: '  sleep 150; gh pr view 1895 --json state' }))
     for (let i = 0; i < 8; i++) outs.push(await call(env, 'Bash', { command: 'sleep 5; git status' }))
     for (let i = 0; i < 8; i++) outs.push(await call(env, 'Bash', { command: 'sleep 5' }))
+    for (let i = 0; i < 12; i++) outs.push(await call(env, 'Bash', { command: 'sleep 150 && echo waiting' }, { output: 'waiting' }))
     expect(outs.every(o => o === '')).toBe(true)
+  })
+
+  it('still counts a sleep followed by an echo that writes a file', async () => {
+    const env = await setup()
+    const outs: string[] = []
+    for (let i = 0; i < 8; i++) outs.push(await call(env, 'Bash', { command: 'sleep 1 && echo x > file' }))
+    const multi: string[] = []
+    for (let i = 0; i < 8; i++) multi.push(await call(env, 'Bash', { command: 'sleep 1 && echo x\nnpm test' }))
+    expect(multi[7]).toContain('"permissionDecision":"deny"')
+    expect(outs[3]).toContain('called 4 times in a row')
+    expect(outs[7]).toContain('"permissionDecision":"deny"')
   })
 
   it('still counts a sleep followed by a command that does work', async () => {
