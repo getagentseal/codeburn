@@ -432,6 +432,25 @@ describe.skipIf(skipReason !== null)('cursor real context tokens (#575)', () => 
     expect(secondReply!.userMessage).toContain('second question')
   })
 
+  it('does not pair a reply with a user bubble that has no createdAt', async () => {
+    const composerId = '33330000-1111-2222-3333-444455556666'
+    const dbPath = buildDb((db) => {
+      db.prepare('INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)').run(
+        `bubbleId:${composerId}:u0`,
+        JSON.stringify({ type: 1, text: 'stale draft' }),
+      )
+      insertBubble(db, { composerId, bubbleUuid: 'u1', type: 1, text: 'fix the failing login test' })
+      insertBubble(db, { composerId, bubbleUuid: 'a1', type: 2, text: 'patched auth.ts', model: 'gpt-5' })
+      insertBubble(db, { composerId, bubbleUuid: 'u2', type: 1, text: 'now run it' })
+      insertBubble(db, { composerId, bubbleUuid: 'a2', type: 2, text: 'tests pass', model: 'gpt-5' })
+    })
+
+    const calls = await collectCalls(createCursorProvider(dbPath), dbPath)
+
+    expect(calls.find(c => c.deduplicationKey.endsWith(':a1'))!.userMessage).toBe('fix the failing login test patched auth.ts')
+    expect(calls.find(c => c.deduplicationKey.endsWith(':a2'))!.userMessage).toBe('now run it tests pass')
+  })
+
   it('does not fabricate input when an empty-text turn has no agent stream', async () => {
     const composerId = '88880000-1111-2222-3333-444455556666'
     const dbPath = buildDb((db) => {

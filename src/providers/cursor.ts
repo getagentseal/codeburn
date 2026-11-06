@@ -349,18 +349,6 @@ const BUBBLE_REQUEST_IDS_QUERY = `
   WHERE key LIKE 'bubbleId:%'
 `
 
-const USER_MESSAGES_QUERY = `
-  SELECT
-    key as bubble_key,
-    json_extract(value, '$.createdAt') as created_at,
-    CAST(substr(json_extract(value, '$.text'), 1, 500) AS BLOB) as text
-  FROM cursorDiskKV
-  WHERE key LIKE 'bubbleId:%'
-    AND json_extract(value, '$.type') = 1
-    AND (json_extract(value, '$.createdAt') > ? OR json_extract(value, '$.createdAt') IS NULL)
-  ORDER BY ROWID ASC
-`
-
 // Split into HEAD (predicates we always emit) and TAIL (ORDER BY) so the
 // caller can splice in an optional `ROWID >= ?` cutoff without rewriting
 // the whole template. The original combined string is preserved as
@@ -407,48 +395,6 @@ function validateSchema(db: SqliteDatabase): boolean {
     rethrowBusy(err)
     return false
   }
-}
-
-type UserMsgRow = { bubble_key: string; created_at: string; text: Uint8Array | string }
-
-/// Per-conversation user-message buffer. We pop messages in arrival order via
-/// the `pos` cursor — a previous implementation called Array.shift() which is
-/// O(n) per call on large conversations and pinned multi-GB Cursor DBs at
-/// minutes-of-parse for power users. The cursor walk is O(1).
-type UserMessageQueue = {
-  messages: string[]
-  pos: number
-}
-
-function buildUserMessageMap(db: SqliteDatabase, timeFloor: string): Map<string, UserMessageQueue> {
-  const map = new Map<string, UserMessageQueue>()
-  try {
-    const rows = db.query<UserMsgRow>(USER_MESSAGES_QUERY, [timeFloor])
-    for (const row of rows) {
-      // Extract the composerId from the bubble key, matching parseBubbles().
-      // The JSON `conversationId` field is empty in current Cursor builds.
-      const composerId = parseComposerIdFromKey(row.bubble_key)
-      if (!composerId || !row.text) continue
-      const text = blobToText(row.text)
-      const existing = map.get(composerId)
-      if (existing) {
-        existing.messages.push(text)
-      } else {
-        map.set(composerId, { messages: [text], pos: 0 })
-      }
-    }
-  } catch (err) {
-    rethrowBusy(err)
-  }
-  return map
-}
-
-function takeUserMessage(queues: Map<string, UserMessageQueue>, conversationId: string): string {
-  const queue = queues.get(conversationId)
-  if (!queue || queue.pos >= queue.messages.length) return ''
-  const msg = queue.messages[queue.pos]
-  queue.pos += 1
-  return msg
 }
 
 /// Scans bubbles for very large DBs by paging ROWID-descending (newest first),
@@ -758,7 +704,6 @@ function parseBubbles(
   }
 
   const { byComposer: agentStreams, unjoined } = loadAgentStreams(db, requestToComposer)
-  const userMessages = buildUserMessageMap(db, timeFloor)
   const lastUserMsg = new Map<string, string>()
 
   const inputSource = (cid: string): InputSource => {
@@ -804,7 +749,7 @@ function parseBubbles(
       // emits nothing) so the assistant reply that follows classifies against
       // the right question.
       if (row.bubble_type === 1) {
-        lastUserMsg.set(conversationId, takeUserMessage(userMessages, conversationId))
+        lastUserMsg.set(conversationId, blobToText(row.user_text))
       }
 
       let inputTokens = row.input_tokens ?? 0
