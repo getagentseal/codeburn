@@ -25,8 +25,11 @@ struct AntigravityUsage: Sendable, Equatable {
 /// Live Antigravity quota from LOCAL surfaces only — the Antigravity app's own
 /// language server or a signed-in `agy` CLI's embedded server, derived from
 /// observed Antigravity client traffic. This protocol is internal
-/// and experimental). No Google OAuth fallback: when no local server answers,
-/// the provider reports disconnected and the UI shows its Connect affordance.
+/// and experimental). When no local server answers, a user-initiated refresh
+/// may also spawn `agy -p /usage` once — the CLI boots a throwaway server and
+/// prints the same groups — but the refresh cadence never spawns it. No
+/// Google OAuth fallback: when no local server answers, the provider reports
+/// disconnected and the UI shows its Connect affordance.
 ///
 /// Endpoints (loopback only, Connect-RPC JSON):
 /// - POST https://127.0.0.1:<port>/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary
@@ -71,6 +74,16 @@ enum AntigravitySubscriptionService {
         /// POSTs the Connect-RPC probe to 127.0.0.1:<port>. Nil means
         /// timeout / transport error — the probe simply moves on.
         var request: @Sendable (_ port: Int, _ tls: Bool, _ path: String, _ body: String, _ csrf: String?) async -> (status: Int, text: String)?
+        /// Finds an executable `agy` on the well-known install paths; nil
+        /// means the CLI is not installed and the fallback is skipped.
+        var findAgyExecutable: @Sendable () -> String? = { agyBinaryPath() }
+        /// Runs `agy -p /usage --output-format json` for the CLI fallback.
+        /// Long timeout: the CLI boots a throwaway language server (~20-60s
+        /// cold). Only a user-initiated refresh may call this; the throwing
+        /// default keeps fixture-built Deps compiling.
+        var execAgy: @Sendable (_ executable: String) async throws -> String = { _ in
+            throw FetchError.disconnected
+        }
         var now: @Sendable () -> Date
         /// Log sink for sanitized diagnostics; tests capture it.
         var log: @Sendable (String) -> Void
@@ -105,6 +118,17 @@ enum AntigravitySubscriptionService {
                 } catch {
                     return nil
                 }
+            },
+            execAgy: { executable in
+                let process = Process()
+                process.executableURL = URL(fileURLWithPath: executable)
+                process.arguments = ["-p", "/usage", "--output-format", "json", "--print-timeout", "60s"]
+                let result = try await DataClient.runProcess(
+                    process,
+                    timeoutSeconds: 75,
+                    label: "antigravity agy"
+                )
+                return String(decoding: result.stdout, as: UTF8.self)
             },
             now: { Date() },
             log: { NSLog("%@", $0) }
@@ -250,6 +274,34 @@ enum AntigravitySubscriptionService {
         return windows
     }
 
+    /// `agy -p /usage --output-format json` payload: command.data.groups carry
+    /// buckets with snake_case fields (name / remaining_fraction / reset_time).
+    static func decodeAgyOutput(_ text: String) -> [AntigravityUsage.Window] {
+        guard let root = parseJson(text) as? [String: Any],
+              let command = root["command"] as? [String: Any],
+              let data = command["data"] as? [String: Any] else { return [] }
+        var windows: [AntigravityUsage.Window] = []
+        for group in data["groups"] as? [Any] ?? [] {
+            guard let group = group as? [String: Any] else { continue }
+            let groupName = group["name"] as? String ?? ""
+            for bucket in group["buckets"] as? [Any] ?? [] {
+                guard let bucket = bucket as? [String: Any] else { continue }
+                let name = [groupName, bucket["name"] as? String ?? ""]
+                    .filter { !$0.isEmpty }
+                    .joined(separator: " · ")
+                if name.isEmpty { continue }
+                if let window = makeWindow(
+                    label: name,
+                    remainingFraction: bucket["remaining_fraction"],
+                    resetTime: bucket["reset_time"])
+                {
+                    windows.append(window)
+                }
+            }
+        }
+        return windows
+    }
+
     /// Legacy payload: flat per-model quota rows under GetUserStatus.
     static func decodeStatus(_ body: Any?) -> [AntigravityUsage.Window] {
         guard let data = body as? [String: Any],
@@ -374,10 +426,13 @@ enum AntigravitySubscriptionService {
         return nil
     }
 
-    static func refresh(deps: Deps = .live) async throws -> AntigravityUsage {
+    /// `allowCLIFallback` marks a user-initiated refresh (Reconnect, Try
+    /// Again, manual refresh): only then may the `agy` CLI fallback spawn —
+    /// it boots a throwaway server (~20-60s cold), far too heavy for the
+    /// two-minute cadence.
+    static func refresh(deps: Deps = .live, allowCLIFallback: Bool = false) async throws -> AntigravityUsage {
         do {
             let candidates = try await discoverCandidates(deps: deps)
-            if candidates.isEmpty { throw FetchError.disconnected }
             for candidate in candidates {
                 var ports = await listeningPorts(deps: deps, pid: candidate.pid)
                 if let extPort = candidate.extPort, !ports.contains(extPort) {
@@ -390,6 +445,7 @@ enum AntigravitySubscriptionService {
                     }
                 }
             }
+            if allowCLIFallback, let usage = await refreshViaAgyCLI(deps: deps) { return usage }
             throw FetchError.disconnected
         } catch let error as FetchError {
             throw error
@@ -397,6 +453,38 @@ enum AntigravitySubscriptionService {
             deps.log("Antigravity quota unavailable: \(sanitizeForLog(error.localizedDescription))")
             throw FetchError.network(error)
         }
+    }
+
+    private static func agyBinaryPath() -> String? {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        for path in [
+            "\(home)/.local/bin/agy",
+            "/opt/homebrew/bin/agy",
+            "/usr/local/bin/agy",
+        ] where FileManager.default.isExecutableFile(atPath: path) {
+            return path
+        }
+        return nil
+    }
+
+    private static func refreshViaAgyCLI(deps: Deps) async -> AntigravityUsage? {
+        guard let agy = deps.findAgyExecutable() else { return nil }
+        let output: String
+        do {
+            output = try await deps.execAgy(agy)
+        } catch {
+            deps.log("Antigravity agy quota fallback failed: \(sanitizeForLog(error.localizedDescription))")
+            return nil
+        }
+        let windows = decodeAgyOutput(output).sorted { $0.usedPercent > $1.usedPercent }
+        guard !windows.isEmpty else {
+            // Concurrent pollers make the CLI's throwaway server answer 503
+            // before it is ready — that error JSON carries no groups, so the
+            // user can simply click again. The response body is never logged.
+            deps.log("Antigravity agy quota fallback produced no quota buckets")
+            return nil
+        }
+        return AntigravityUsage(details: windows, plan: nil, fetchedAt: deps.now())
     }
 
     /// Strip control characters and any token-shaped substrings from error

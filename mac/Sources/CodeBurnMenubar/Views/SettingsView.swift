@@ -1813,13 +1813,13 @@ private struct AntigravityConnectionRow: View {
                     Text(L("CodeBurn will stop tracking Antigravity quota. Nothing is read from or written to disk. The Antigravity app keeps working."))
                 }
         case .terminalFailure, .noCredentials, .failed:
-            Button(L("Reconnect")) { Task { await store.bootstrapAntigravity() } }
+            Button(L("Reconnect")) { Task { await store.bootstrapAntigravity(userInitiated: true) } }
                 .buttonStyle(.borderedProminent)
         case .dormant:
-            Button(L("Load Quota")) { Task { await store.bootstrapAntigravity() } }
+            Button(L("Load Quota")) { Task { await store.bootstrapAntigravity(userInitiated: true) } }
                 .buttonStyle(.borderedProminent)
         case .notBootstrapped:
-            Button(L("Connect")) { Task { await store.bootstrapAntigravity() } }
+            Button(L("Connect")) { Task { await store.bootstrapAntigravity(userInitiated: true) } }
                 .buttonStyle(.borderedProminent)
         case .bootstrapping:
             ProgressView().controlSize(.small)
