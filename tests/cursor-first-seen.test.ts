@@ -1,9 +1,25 @@
-import { describe, it, expect } from 'vitest'
-import { mkdirSync, writeFileSync } from 'fs'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { mkdirSync, readdirSync, writeFileSync } from 'fs'
 import { join } from 'path'
 
 import { getCodeburnCacheDir } from '../src/cache-dir.js'
 import { readFirstSeen, writeFirstSeen } from '../src/cursor-cache.js'
+
+const lockState = vi.hoisted(() => ({ unavailable: false }))
+vi.mock('../src/cache-refresh-lock.js', async (importOriginal) => {
+  const mod = await importOriginal<typeof import('../src/cache-refresh-lock.js')>()
+  return {
+    ...mod,
+    acquireCacheRefreshLock: (...args: Parameters<typeof mod.acquireCacheRefreshLock>) =>
+      lockState.unavailable ? Promise.resolve({ outcome: 'unavailable' as const }) : mod.acquireCacheRefreshLock(...args),
+  }
+})
+
+const fragments = () => readdirSync(getCodeburnCacheDir()).filter(n => /^cursor-first-seen\.\d+\.json$/.test(n))
+
+beforeEach(() => {
+  lockState.unavailable = false
+})
 
 describe('cursor first-seen sidecar', () => {
   it('keeps both entries when two writers each started from a stale view', async () => {
@@ -47,5 +63,34 @@ describe('cursor first-seen sidecar', () => {
     }))
 
     expect(Object.fromEntries(await readFirstSeen())).toEqual({ good: '2026-10-01T00:00:00.000Z' })
+  })
+
+  it('keeps both entries from writers that could not take the lock, and folds them in later', async () => {
+    lockState.unavailable = true
+    const realPid = process.pid
+    try {
+      Object.defineProperty(process, 'pid', { value: 70001, configurable: true })
+      await writeFirstSeen(new Map([['req-f', '2026-10-06T00:00:00.000Z']]))
+      Object.defineProperty(process, 'pid', { value: 70002, configurable: true })
+      await writeFirstSeen(new Map([['req-g', '2026-10-07T00:00:00.000Z']]))
+    } finally {
+      Object.defineProperty(process, 'pid', { value: realPid, configurable: true })
+    }
+
+    expect(fragments().sort()).toEqual(['cursor-first-seen.70001.json', 'cursor-first-seen.70002.json'])
+    expect(Object.fromEntries(await readFirstSeen())).toMatchObject({
+      'req-f': '2026-10-06T00:00:00.000Z',
+      'req-g': '2026-10-07T00:00:00.000Z',
+    })
+
+    lockState.unavailable = false
+    await writeFirstSeen(new Map([['req-h', '2026-10-08T00:00:00.000Z']]))
+
+    expect(fragments()).toEqual([])
+    expect(Object.fromEntries(await readFirstSeen())).toMatchObject({
+      'req-f': '2026-10-06T00:00:00.000Z',
+      'req-g': '2026-10-07T00:00:00.000Z',
+      'req-h': '2026-10-08T00:00:00.000Z',
+    })
   })
 })

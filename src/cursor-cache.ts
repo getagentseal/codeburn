@@ -1,4 +1,4 @@
-import { readFile, writeFile, mkdir, rename, stat, unlink } from 'fs/promises'
+import { readFile, readdir, writeFile, mkdir, rename, stat, unlink } from 'fs/promises'
 import { join, resolve } from 'path'
 import { randomBytes } from 'crypto'
 
@@ -116,9 +116,13 @@ export async function readCachedResults(
 
 // Agent-only Cursor sessions carry no timestamp of their own. The time a
 // request was first seen is the only stable one, so it is kept outside the
-// versioned result cache and survives its version bumps and clears.
+// versioned result cache and survives its version bumps and clears. Wiping the
+// whole cache dir loses it by design: those sessions take the DB mtime again.
 const FIRST_SEEN_FILE = 'cursor-first-seen.json'
 const FIRST_SEEN_LOCK = 'cursor-first-seen.lock'
+// Written when the lock cannot be taken, so no writer ever replaces the shared
+// file from an unlocked view; the next lock holder folds them in.
+const FIRST_SEEN_FRAGMENT = /^cursor-first-seen\.\d+\.json$/
 
 // Anything but the ISO string a parse wrote falls back to the mtime rule.
 function isIsoTimestamp(value: unknown): value is string {
@@ -127,11 +131,9 @@ function isIsoTimestamp(value: unknown): value is string {
   return Number.isFinite(ms) && new Date(ms).toISOString() === value
 }
 
-export async function readFirstSeen(): Promise<Map<string, string>> {
-  const file = await readExistingTextFile(join(getCodeburnCacheDir(), FIRST_SEEN_FILE))
-  if (file.status !== 'ok') return new Map()
+function parseFirstSeen(text: string | null): Map<string, string> {
   try {
-    const parsed = JSON.parse(file.text) as unknown
+    const parsed = JSON.parse(text ?? '') as unknown
     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
       return new Map(Object.entries(parsed).filter((e): e is [string, string] => isIsoTimestamp(e[1])))
     }
@@ -139,8 +141,33 @@ export async function readFirstSeen(): Promise<Map<string, string>> {
   return new Map()
 }
 
-// Merges into what is on disk now, under a lock, so concurrent parses keep
-// each other's entries and an earlier recorded time always wins.
+// The earliest recorded time wins.
+function mergeFirstSeen(into: Map<string, string>, from: Map<string, string>): void {
+  for (const [key, at] of from) {
+    const current = into.get(key)
+    if (!current || at < current) into.set(key, at)
+  }
+}
+
+const readText = (path: string): Promise<string | null> => readFile(path, 'utf-8').catch(() => null)
+
+async function readFirstSeenFiles(dir: string): Promise<{ merged: Map<string, string>; fragments: Array<{ path: string; text: string }> }> {
+  const merged = parseFirstSeen(await readText(join(dir, FIRST_SEEN_FILE)))
+  const fragments: Array<{ path: string; text: string }> = []
+  const names = await readdir(dir).catch(() => [] as string[])
+  for (const name of names.filter(n => FIRST_SEEN_FRAGMENT.test(n))) {
+    const text = await readText(join(dir, name))
+    if (text === null) continue
+    fragments.push({ path: join(dir, name), text })
+    mergeFirstSeen(merged, parseFirstSeen(text))
+  }
+  return { merged, fragments }
+}
+
+export async function readFirstSeen(): Promise<Map<string, string>> {
+  return (await readFirstSeenFiles(getCodeburnCacheDir())).merged
+}
+
 export async function writeFirstSeen(firstSeen: Map<string, string>): Promise<void> {
   if (process.env['CODEBURN_SUPPRESS_CACHE_WRITES']) return
   const dir = getCodeburnCacheDir()
@@ -150,11 +177,23 @@ export async function writeFirstSeen(firstSeen: Map<string, string>): Promise<vo
     lock = await acquireCacheRefreshLock({ cacheDir: dir, lockFile: FIRST_SEEN_LOCK, waitMs: 2_000, pollMs: 10 })
     if (lock.outcome !== 'completed-by-other') break
   }
+  if (lock.outcome !== 'acquired') {
+    const own = join(dir, `cursor-first-seen.${process.pid}.json`)
+    const merged = new Map(firstSeen)
+    mergeFirstSeen(merged, parseFirstSeen(await readText(own)))
+    await writeAtomic(own, JSON.stringify(Object.fromEntries(merged)))
+    return
+  }
   try {
-    const merged = new Map([...firstSeen, ...await readFirstSeen()])
-    await writeAtomic(join(dir, FIRST_SEEN_FILE), JSON.stringify(Object.fromEntries(merged)))
+    const { merged, fragments } = await readFirstSeenFiles(dir)
+    mergeFirstSeen(merged, firstSeen)
+    if (!await writeAtomic(join(dir, FIRST_SEEN_FILE), JSON.stringify(Object.fromEntries(merged)))) return
+    // A fragment rewritten since it was read keeps its newer entries.
+    for (const fragment of fragments) {
+      if (await readText(fragment.path) === fragment.text) await unlink(fragment.path).catch(() => {})
+    }
   } finally {
-    if (lock.outcome === 'acquired') await lock.handle.release().catch(() => {})
+    await lock.handle.release().catch(() => {})
   }
 }
 
@@ -190,12 +229,14 @@ export async function writeCachedResults(
 // CLI invocations using their own random temp names cannot interleave
 // bytes in the destination file (they only race on the final rename,
 // last-writer-wins, both with valid content).
-async function writeAtomic(target: string, text: string): Promise<void> {
+async function writeAtomic(target: string, text: string): Promise<boolean> {
   const tempPath = `${target}.${randomBytes(8).toString('hex')}.tmp`
   try {
     await writeFile(tempPath, text, 'utf-8')
     await rename(tempPath, target)
+    return true
   } catch {
     await unlink(tempPath).catch(() => {})
+    return false
   }
 }
