@@ -562,7 +562,7 @@ function parseCodexLine(line: string | Buffer): CodexEntry | null {
     timestamp: getRawJsonStringField(head, 'timestamp'),
     payload: {
       type: payloadType,
-      id: compactId,
+      id: compactId ?? (type === 'session_meta' ? payloadString('id') : undefined),
       role,
       cwd: payloadString('cwd'),
       model_provider: payloadString('model_provider'),
@@ -1143,7 +1143,10 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
         if (!entry) continue
 
         if (entry.type === 'session_meta') {
-          sessionId = entry.payload?.session_id ?? rolloutStem(basename(source.path))
+          // Rollouts from before Codex wrote `session_id` carry only `id`, the
+          // same thread UUID a fork names in `forked_from_id`; keying on it lets
+          // a fork's replayed history collide with the parent's own records.
+          sessionId = entry.payload?.session_id ?? entry.payload?.id ?? rolloutStem(basename(source.path))
           // Guarded for the same reason as discoverSessionFile: parseCodexLine
           // hands back an unchecked JSON.parse cast, and a non-string cwd would
           // ride into projectPath/workingDirectory where the parser's path

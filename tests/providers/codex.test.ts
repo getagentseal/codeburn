@@ -1439,6 +1439,30 @@ describe('codex provider - forked session dedupe', () => {
     const { tokens } = await aggregateTokens(tmpDir)
     expect(tokens).toBe(200)
   })
+
+  // Older Codex builds name the thread only as payload.id. Oversized metas take
+  // the compact decoder, so pad one past the large-line threshold too.
+  for (const padded of [false, true]) {
+    it(`drops a fork replay past the burst when the parent meta carries only payload.id${padded ? ' (oversized meta)' : ''}`, async () => {
+      const parentId = '0199aaaa-0000-7000-8000-000000000001'
+      const meta = (id: string, timestamp: string, extra: Record<string, unknown> = {}) => JSON.stringify({
+        type: 'session_meta',
+        timestamp,
+        payload: { id, cwd: '/x', model: 'gpt-5.5', ...extra, ...(padded ? { base_instructions: { text: 'x'.repeat(40_000) } } : {}) },
+      })
+      await writeSession(tmpDir, '2026-10-01', `rollout-2026-10-01T09-00-00-${parentId}.jsonl`, [
+        meta(parentId, '2026-10-01T09:00:00Z'),
+        tokenUsageRecord({ timestamp: '2026-10-01T09:00:10Z', responseId: 'resp_1', usage: { input: 10_000, output: 1_000 } }),
+      ])
+      const forkId = '0199bbbb-0000-7000-8000-000000000002'
+      await writeSession(tmpDir, '2026-10-01', `rollout-2026-10-01T10-00-00-${forkId}.jsonl`, [
+        meta(forkId, '2026-10-01T10:00:00.000Z', { forked_from_id: parentId }),
+        tokenUsageRecord({ timestamp: '2026-10-01T10:00:01.600Z', responseId: 'resp_1', usage: { input: 10_000, output: 1_000 } }),
+      ])
+
+      expect(await aggregateTokens(tmpDir)).toEqual({ tokens: 11_000, calls: 1 })
+    })
+  }
 })
 
 describe('codex provider - fork replay masking against the parent rollout', () => {

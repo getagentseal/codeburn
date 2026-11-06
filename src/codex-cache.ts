@@ -72,7 +72,10 @@ import { isWslUncPath } from './wsl.js'
 // v22 exact entries have no such tool activity, so they must reparse.
 // v24: mcp-cli counts as an MCP call only in command position; v23 entries can
 // hold fake mcp__ tools from commit messages, echoes and comments.
-export const CODEX_CACHE_VERSION = 24
+// v25: rollouts that name the thread only as payload.id key their calls on
+// that UUID, so fork replays collide with them; v24 entries hold stem-keyed
+// calls and double-counted fork replays.
+export const CODEX_CACHE_VERSION = 25
 export const CODEX_LEGACY_CACHE_FILE = 'codex-results.json'
 export function codexCacheFileName(version = CODEX_CACHE_VERSION): string {
   return `codex-results.v${version}.json`
