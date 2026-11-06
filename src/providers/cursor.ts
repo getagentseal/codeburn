@@ -5,7 +5,7 @@ import { getEditorDataDir } from '../editor-data-dir.js'
 
 import { calculateCost, ownValue } from '../models.js'
 import { extractBashCommands } from '../bash-utils.js'
-import { readCachedResults, writeCachedResults } from '../cursor-cache.js'
+import { readCachedResults, readFirstSeen, writeCachedResults, writeFirstSeen } from '../cursor-cache.js'
 import { importSource, importSourceParser } from '../cursor-import.js'
 import {
   isSqliteAvailable,
@@ -144,18 +144,44 @@ function sanitizeWorkspaceUri(uri: string): string {
 
 let workspaceMapCache: WorkspaceMapping | null = null
 let workspaceMapCacheRoot: string | null = null
+let workspaceMapCacheStamp: string | null = null
 
 /// Visible for tests so a fixture can rebuild the map after writing fresh
 /// workspace directories.
 export function clearCursorWorkspaceMapCache(): void {
   workspaceMapCache = null
   workspaceMapCacheRoot = null
+  workspaceMapCacheStamp = null
 }
 
-function loadWorkspaceMap(workspaceStorageDir: string): WorkspaceMapping {
-  if (workspaceMapCache && workspaceMapCacheRoot === workspaceStorageDir) {
-    return workspaceMapCache
-  }
+// The directory's mtime moves when a workspace is added or removed, but a chat
+// started in a known workspace only rewrites that workspace's state.vscdb.
+// The cost is one stat per workspace file per discovery. A same-size rewrite
+// within the same millisecond is not detectable here.
+function workspaceStorageStamp(workspaceStorageDir: string): string {
+  const parts: string[] = []
+  try {
+    parts.push(String(statSync(workspaceStorageDir).mtimeMs))
+    for (const hashDir of readdirSync(workspaceStorageDir)) {
+      for (const file of ['state.vscdb', 'state.vscdb-wal']) {
+        try {
+          const s = statSync(join(workspaceStorageDir, hashDir, file))
+          parts.push(`${hashDir}/${file}:${s.mtimeMs}:${s.size}`)
+        } catch {}
+      }
+    }
+  } catch {}
+  return parts.join('|')
+}
+
+/// Discovery passes `recheck` so a resident process picks up new workspaces
+/// and chats; parsers reuse the map their discovery built.
+function loadWorkspaceMap(workspaceStorageDir: string, recheck = false): WorkspaceMapping {
+  const cached = workspaceMapCache && workspaceMapCacheRoot === workspaceStorageDir ? workspaceMapCache : null
+  if (cached && !recheck) return cached
+  const stamp = workspaceStorageStamp(workspaceStorageDir)
+  if (cached && stamp === workspaceMapCacheStamp) return cached
+  workspaceMapCacheStamp = stamp
   const result: WorkspaceMapping = {
     composerToWorkspace: new Map(),
     workspaceProjectName: new Map(),
@@ -343,17 +369,21 @@ const AGENTKV_QUERY = `
   ORDER BY ROWID ASC
 `
 
-const USER_MESSAGES_QUERY = `
-  SELECT
-    key as bubble_key,
-    json_extract(value, '$.createdAt') as created_at,
-    CAST(substr(json_extract(value, '$.text'), 1, 500) AS BLOB) as text
+const BUBBLE_REQUEST_IDS_QUERY = `
+  SELECT json_extract(value, '$.requestId') as request_id,
+    json_extract(value, '$.createdAt') as created_at
   FROM cursorDiskKV
   WHERE key LIKE 'bubbleId:%'
-    AND json_extract(value, '$.type') = 1
-    AND (json_extract(value, '$.createdAt') > ? OR json_extract(value, '$.createdAt') IS NULL)
-  ORDER BY ROWID ASC
-`
+    AND json_extract(value, '$.requestId') IN`
+// Under the 999 bound-parameter limit of older SQLite builds. Each chunk is
+// one table scan, so many unjoined streams on a huge DB cost several scans.
+// About 0.9 s per chunk on a 3.75 GB, 60k-bubble database, so one parse looks
+// up at most 9,000 ids (near 9 s). Ids past the cap are left for the next
+// parse, which resumes in sorted order because resolved ids are remembered.
+const REQUEST_ID_CHUNK = 900
+const MAX_REQUEST_ID_CHUNKS = 10
+// Sidecar key for a looked-up request's newest bubble time.
+const BUBBLE_TIME_KEY = 'bubble:'
 
 // Split into HEAD (predicates we always emit) and TAIL (ORDER BY) so the
 // caller can splice in an optional `ROWID >= ?` cutoff without rewriting
@@ -401,48 +431,6 @@ function validateSchema(db: SqliteDatabase): boolean {
     rethrowBusy(err)
     return false
   }
-}
-
-type UserMsgRow = { bubble_key: string; created_at: string; text: Uint8Array | string }
-
-/// Per-conversation user-message buffer. We pop messages in arrival order via
-/// the `pos` cursor — a previous implementation called Array.shift() which is
-/// O(n) per call on large conversations and pinned multi-GB Cursor DBs at
-/// minutes-of-parse for power users. The cursor walk is O(1).
-type UserMessageQueue = {
-  messages: string[]
-  pos: number
-}
-
-function buildUserMessageMap(db: SqliteDatabase, timeFloor: string): Map<string, UserMessageQueue> {
-  const map = new Map<string, UserMessageQueue>()
-  try {
-    const rows = db.query<UserMsgRow>(USER_MESSAGES_QUERY, [timeFloor])
-    for (const row of rows) {
-      // Extract the composerId from the bubble key, matching parseBubbles().
-      // The JSON `conversationId` field is empty in current Cursor builds.
-      const composerId = parseComposerIdFromKey(row.bubble_key)
-      if (!composerId || !row.text) continue
-      const text = blobToText(row.text)
-      const existing = map.get(composerId)
-      if (existing) {
-        existing.messages.push(text)
-      } else {
-        map.set(composerId, { messages: [text], pos: 0 })
-      }
-    }
-  } catch (err) {
-    rethrowBusy(err)
-  }
-  return map
-}
-
-function takeUserMessage(queues: Map<string, UserMessageQueue>, conversationId: string): string {
-  const queue = queues.get(conversationId)
-  if (!queue || queue.pos >= queue.messages.length) return ''
-  const msg = queue.messages[queue.pos]
-  queue.pos += 1
-  return msg
 }
 
 /// Scans bubbles for very large DBs by paging ROWID-descending (newest first),
@@ -683,6 +671,7 @@ function parseBubbles(
   seenKeys: Set<string>,
   timeFloor: string,
   agentKvTimestamp: string,
+  firstSeen: Map<string, string>,
 ): { calls: ParsedProviderCall[] } {
   const results: ParsedProviderCall[] = []
   let skipped = 0
@@ -751,7 +740,6 @@ function parseBubbles(
   }
 
   const { byComposer: agentStreams, unjoined } = loadAgentStreams(db, requestToComposer)
-  const userMessages = buildUserMessageMap(db, timeFloor)
   const lastUserMsg = new Map<string, string>()
 
   const inputSource = (cid: string): InputSource => {
@@ -797,7 +785,7 @@ function parseBubbles(
       // emits nothing) so the assistant reply that follows classifies against
       // the right question.
       if (row.bubble_type === 1) {
-        lastUserMsg.set(conversationId, takeUserMessage(userMessages, conversationId))
+        lastUserMsg.set(conversationId, blobToText(row.user_text))
       }
 
       let inputTokens = row.input_tokens ?? 0
@@ -912,10 +900,48 @@ function parseBubbles(
     })
   }
 
-  // Sessions recorded only in the agent stream (no bubble carries their
-  // requestId). agentKv stores no timestamps, so these reuse the DB file's
-  // mtime as a bounded "last write" time, like the pre-composer parser did.
-  for (const [requestId, stream] of unjoined) {
+  // Sessions recorded only in the agent stream (no scanned bubble carries
+  // their requestId). A request whose bubbles predate the window belongs to
+  // that older conversation, not here; one whose bubbles the scan budget cut
+  // takes its newest bubble's time. agentKv stores no timestamps, so a request
+  // with no dated bubble takes the DB file's mtime and keeps it on every later
+  // parse; re-stamping would move it to the latest write each time. Both
+  // outcomes are kept in `firstSeen`, so each id is looked up once.
+  const billable = [...unjoined].filter(([, stream]) => stream.userChars + stream.contextChars + stream.assistantChars > 0)
+  const bubbleTimes = new Map<string, string | null>()
+  const unjoinedIds = billable
+    .map(([requestId]) => requestId)
+    .filter(requestId => !firstSeen.has(requestId) && !firstSeen.has(BUBBLE_TIME_KEY + requestId))
+    .sort()
+    .slice(0, REQUEST_ID_CHUNK * MAX_REQUEST_ID_CHUNKS)
+  const lookedUp = new Set(unjoinedIds)
+  try {
+    for (let i = 0; i < unjoinedIds.length; i += REQUEST_ID_CHUNK) {
+      const chunk = unjoinedIds.slice(i, i + REQUEST_ID_CHUNK)
+      const sql = `${BUBBLE_REQUEST_IDS_QUERY} (${chunk.map(() => '?').join(',')})`
+      // The newest time per request is taken here: GROUP BY with MAX re-reads
+      // every bubble's JSON and ran 3.4x slower on a real database.
+      for (const row of db.query<{ request_id: string | null; created_at: unknown }>(sql, chunk)) {
+        if (!row.request_id) continue
+        // A numeric or unparseable createdAt counts as undated.
+        const ms = typeof row.created_at === 'string' ? Date.parse(row.created_at) : NaN
+        const at = Number.isFinite(ms) ? new Date(ms).toISOString() : null
+        const known = bubbleTimes.get(row.request_id)
+        if (!known || (at && at > known)) bubbleTimes.set(row.request_id, at)
+      }
+    }
+  } catch (err) {
+    rethrowBusy(err)
+  }
+  for (const [requestId, at] of bubbleTimes) {
+    if (at) firstSeen.set(BUBBLE_TIME_KEY + requestId, at)
+  }
+  for (const [requestId, stream] of billable) {
+    // Request ids are UUIDs, so a historic bubble sharing one with a billable
+    // agent-only stream is not expected.
+    const bubbleTime = firstSeen.get(BUBBLE_TIME_KEY + requestId)
+    if (bubbleTime && bubbleTime <= timeFloor) continue
+    if (!bubbleTime && !firstSeen.has(requestId) && !lookedUp.has(requestId)) continue
     const inputTokens = estimateTokensFromChars(stream.userChars + stream.contextChars)
     const outputTokens = estimateTokensFromChars(stream.assistantChars)
     if (inputTokens === 0 && outputTokens === 0) continue
@@ -923,6 +949,7 @@ function parseBubbles(
     const dedupKey = `cursor:agentKv:${requestId}`
     if (seenKeys.has(dedupKey)) continue
     seenKeys.add(dedupKey)
+    if (!bubbleTime && !firstSeen.has(requestId)) firstSeen.set(requestId, agentKvTimestamp)
 
     emit({
       model: modelForDisplay(stream.model),
@@ -931,7 +958,7 @@ function parseBubbles(
       costUSD: calculateCost(resolveModel(stream.model), inputTokens, outputTokens, 0, 0, 0),
       tools: stream.tools,
       bashCommands: stream.bash,
-      timestamp: agentKvTimestamp,
+      timestamp: bubbleTime ?? firstSeen.get(requestId)!,
       deduplicationKey: dedupKey,
       userMessage: '',
       sessionId: requestId,
@@ -1020,7 +1047,10 @@ function createParser(
           } catch {
             agentKvTimestamp = new Date().toISOString()
           }
-          const { calls: bubbleCalls } = parseBubbles(db, localSeen, timeFloor, agentKvTimestamp)
+          const firstSeen = await readFirstSeen()
+          const knownFirstSeen = firstSeen.size
+          const { calls: bubbleCalls } = parseBubbles(db, localSeen, timeFloor, agentKvTimestamp, firstSeen)
+          if (firstSeen.size > knownFirstSeen) await writeFirstSeen(firstSeen)
           allCalls = bubbleCalls
           await writeCachedResults(dbPath, allCalls, timeFloor)
         } finally {
@@ -1066,7 +1096,7 @@ export function createCursorProvider(dbPathOverride?: string): Provider {
       const dbPath = dbPathOverride ?? getCursorDbPath()
       if (!existsSync(dbPath)) return imported
 
-      const wsMap = loadWorkspaceMap(getCursorWorkspaceStorageDir(dbPath))
+      const wsMap = loadWorkspaceMap(getCursorWorkspaceStorageDir(dbPath), true)
       const sources: SessionSource[] = []
       for (const [folder, project] of wsMap.workspaceProjectName) {
         sources.push({

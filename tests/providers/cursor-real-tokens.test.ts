@@ -1,7 +1,8 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mkdtemp, rm } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
+import { mkdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'fs'
 import { createRequire } from 'node:module'
 
 import {
@@ -9,9 +10,30 @@ import {
   clearCursorWorkspaceMapCache,
 } from '../../src/providers/cursor.js'
 import { isSqliteAvailable } from '../../src/sqlite.js'
+import { getCodeburnCacheDir } from '../../src/cache-dir.js'
+import { cursorCacheFileName } from '../../src/cursor-cache.js'
 import type { ParsedProviderCall } from '../../src/providers/types.js'
 
 const requireForTest = createRequire(import.meta.url)
+
+const sqlLog = vi.hoisted(() => [] as Array<{ sql: string; params: unknown[] }>)
+vi.mock('../../src/sqlite.js', async (importOriginal) => {
+  const mod = await importOriginal<typeof import('../../src/sqlite.js')>()
+  return {
+    ...mod,
+    openDatabase: (...args: Parameters<typeof mod.openDatabase>) => {
+      const db = mod.openDatabase(...args)
+      return {
+        query: (sql: string, params: unknown[] = []) => {
+          sqlLog.push({ sql, params })
+          return db.query(sql, params)
+        },
+        close: () => db.close(),
+      } as ReturnType<typeof mod.openDatabase>
+    },
+  }
+})
+const requestIdLookups = () => sqlLog.filter(q => q.sql.includes("json_extract(value, '$.requestId') IN"))
 
 const skipReason = isSqliteAvailable()
   ? null
@@ -22,6 +44,7 @@ let tmpDir: string
 beforeEach(async () => {
   tmpDir = await mkdtemp(join(tmpdir(), 'cursor-tokens-test-'))
   clearCursorWorkspaceMapCache()
+  sqlLog.length = 0
 })
 
 afterEach(async () => {
@@ -112,6 +135,22 @@ function insertAgentKv(db: {
       : undefined,
   })
   db.prepare('INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)').run(key, value)
+}
+
+function insertAgentKvStreams(db: {
+  exec(sql: string): void
+  prepare(sql: string): { run(...params: unknown[]): void }
+}, prefix: string, count: number): void {
+  const insert = db.prepare('INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)')
+  db.exec('BEGIN')
+  for (let i = 0; i < count; i++) {
+    insert.run(`agentKv:blob:${prefix}-${i}`, JSON.stringify({
+      role: 'user',
+      content: 'run the export',
+      providerOptions: { cursor: { requestId: `${prefix}-${i}` } },
+    }))
+  }
+  db.exec('COMMIT')
 }
 
 async function collectCalls(provider: ReturnType<typeof createCursorProvider>, dbPath: string): Promise<ParsedProviderCall[]> {
@@ -377,6 +416,173 @@ describe.skipIf(skipReason !== null)('cursor real context tokens (#575)', () => 
     expect(session!.outputTokens).toBe(Math.ceil(reply.length / 4))
   })
 
+  it('does not bill the stream of a conversation older than the lookback as a new session', async () => {
+    const composerId = '44440000-1111-2222-3333-444455556666'
+    const requestId = 'req-old'
+    const oldAt = new Date(Date.now() - 240 * 864e5).toISOString()
+    const dbPath = buildDb((db) => {
+      insertBubble(db, { composerId, bubbleUuid: 'b1', type: 1, text: 'old prompt', createdAt: oldAt, requestId })
+      insertBubble(db, { composerId, bubbleUuid: 'b2', type: 2, text: 'old reply', model: 'gpt-5', createdAt: oldAt, requestId })
+      insertAgentKv(db, { blobId: 'akv-1', role: 'user', content: 'x'.repeat(40_000), requestId })
+      insertAgentKv(db, { blobId: 'akv-2', role: 'assistant', content: [{ type: 'text', text: 'y'.repeat(4_000) }] })
+    })
+
+    const calls = await collectCalls(createCursorProvider(dbPath), dbPath)
+
+    expect(calls).toEqual([])
+    expect(requestIdLookups().map(q => q.params)).toEqual([[requestId]])
+  })
+
+  it('bills a recent stream whose bubbles the scan budget cut, at its bubble\'s time', async () => {
+    const cutAt = new Date(Date.now() - 2 * 864e5).toISOString()
+    const dbPath = buildDb((db) => {
+      insertBubble(db, { composerId: '44441111-1111-2222-3333-444455556666', bubbleUuid: 'b1', type: 1, text: 'cut prompt', createdAt: cutAt, requestId: 'req-cut' })
+      insertBubble(db, { composerId: '44442222-1111-2222-3333-444455556666', bubbleUuid: 'b2', type: 2, text: 'kept reply', model: 'gpt-5' })
+      insertAgentKv(db, { blobId: 'akv-1', role: 'user', content: 'cut prompt with context', requestId: 'req-cut' })
+    })
+    process.env['CODEBURN_CURSOR_MAX_BUBBLES'] = '1'
+
+    const calls = await collectCalls(createCursorProvider(dbPath), dbPath)
+
+    const cut = calls.filter(c => c.deduplicationKey === 'cursor:agentKv:req-cut')
+    expect(cut.map(c => [c.timestamp, c.inputTokens])).toEqual([[cutAt, Math.ceil('cut prompt with context'.length / 4)]])
+    expect(calls.some(c => c.deduplicationKey.endsWith(':b1'))).toBe(false)
+  })
+
+  it('bills an agent-only stream whose only bubble has no createdAt, at the first-seen time', async () => {
+    const requestId = 'req-undated'
+    const dbPath = buildDb((db) => {
+      db.prepare('INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)').run(
+        'bubbleId:55551111-1111-2222-3333-444455556666:b1',
+        JSON.stringify({ type: 1, text: 'undated prompt', requestId }),
+      )
+      insertAgentKv(db, { blobId: 'akv-1', role: 'user', content: 'undated prompt with context', requestId })
+    })
+
+    const calls = await collectCalls(createCursorProvider(dbPath), dbPath)
+
+    const stream = calls.filter(c => c.deduplicationKey === `cursor:agentKv:${requestId}`)
+    expect(stream.map(c => c.timestamp)).toEqual([new Date(statSync(dbPath).mtimeMs).toISOString()])
+  })
+
+  it('times a budget-cut stream by its newest bubble when the request also has an old one', async () => {
+    const recentAt = new Date(Date.now() - 2 * 864e5).toISOString()
+    const dbPath = buildDb((db) => {
+      insertBubble(db, { composerId: '66661111-1111-2222-3333-444455556666', bubbleUuid: 'b1', type: 1, text: 'recent', createdAt: recentAt, requestId: 'req-x' })
+      insertBubble(db, { composerId: '66661111-1111-2222-3333-444455556666', bubbleUuid: 'b0', type: 1, text: 'old', createdAt: new Date(Date.now() - 240 * 864e5).toISOString(), requestId: 'req-x' })
+      insertBubble(db, { composerId: '66662222-1111-2222-3333-444455556666', bubbleUuid: 'b2', type: 2, text: 'kept reply', model: 'gpt-5' })
+      insertAgentKv(db, { blobId: 'akv-1', role: 'user', content: 'recent prompt with context', requestId: 'req-x' })
+    })
+    process.env['CODEBURN_CURSOR_MAX_BUBBLES'] = '1'
+
+    const calls = await collectCalls(createCursorProvider(dbPath), dbPath)
+
+    expect(calls.filter(c => c.deduplicationKey === 'cursor:agentKv:req-x').map(c => c.timestamp)).toEqual([recentAt])
+  })
+
+  it('treats a numeric or unparseable bubble createdAt as undated', async () => {
+    const dbPath = buildDb((db) => {
+      const insert = db.prepare('INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)')
+      insert.run('bubbleId:88881111-1111-2222-3333-444455556666:b1', JSON.stringify({ type: 1, text: 'numeric', createdAt: 1759276800000, requestId: 'req-num' }))
+      insert.run('bubbleId:88882222-1111-2222-3333-444455556666:b1', JSON.stringify({ type: 1, text: 'garbage', createdAt: '--:--', requestId: 'req-junk' }))
+      insertAgentKv(db, { blobId: 'akv-1', role: 'user', content: 'numeric stream', requestId: 'req-num' })
+      insertAgentKv(db, { blobId: 'akv-2', role: 'user', content: 'garbage stream', requestId: 'req-junk' })
+    })
+
+    const calls = await collectCalls(createCursorProvider(dbPath), dbPath)
+
+    const mtime = new Date(statSync(dbPath).mtimeMs).toISOString()
+    for (const key of ['cursor:agentKv:req-num', 'cursor:agentKv:req-junk']) {
+      expect(calls.filter(c => c.deduplicationKey === key).map(c => c.timestamp)).toEqual([mtime])
+    }
+  })
+
+  it('binds at most 900 request ids per lookup', async () => {
+    const dbPath = buildDb((db) => {
+      insertAgentKvStreams(db, 'req-bg', 901)
+    })
+
+    const calls = await collectCalls(createCursorProvider(dbPath), dbPath)
+
+    expect(calls.length).toBe(901)
+    expect(requestIdLookups().map(q => q.params.length)).toEqual([900, 1])
+  })
+
+  it('caps the lookup at ten chunks and resolves ids past the cap on the next parse', async () => {
+    const dbPath = buildDb((db) => {
+      insertAgentKvStreams(db, 'req-cap', 9000)
+      insertBubble(db, { composerId: '77771111-1111-2222-3333-444455556666', bubbleUuid: 'b1', type: 1, text: 'old', createdAt: new Date(Date.now() - 240 * 864e5).toISOString(), requestId: 'req-over' })
+      insertAgentKv(db, { blobId: 'akv-over', role: 'user', content: 'past the cap', requestId: 'req-over' })
+    })
+
+    const first = await collectCalls(createCursorProvider(dbPath), dbPath)
+
+    expect(requestIdLookups().length).toBe(10)
+    expect(requestIdLookups().some(q => q.params.includes('req-over'))).toBe(false)
+    expect(first.length).toBe(9000)
+    expect(first.some(c => c.deduplicationKey === 'cursor:agentKv:req-over')).toBe(false)
+    expect(readFileSync(join(getCodeburnCacheDir(), 'cursor-first-seen.json'), 'utf-8')).not.toContain('req-over')
+
+    sqlLog.length = 0
+    rmSync(join(getCodeburnCacheDir(), cursorCacheFileName()))
+    const second = await collectCalls(createCursorProvider(dbPath), dbPath)
+
+    expect(requestIdLookups().map(q => q.params)).toEqual([['req-over']])
+    expect(second.length).toBe(9000)
+    expect(second.some(c => c.deduplicationKey === 'cursor:agentKv:req-over')).toBe(false)
+    expect(second.map(c => c.timestamp)).toEqual(first.map(c => c.timestamp))
+  })
+
+  it('skips the request-id lookup when every stream joins a scanned bubble', async () => {
+    const composerId = '22220000-1111-2222-3333-444455556666'
+    const requestId = 'req-joined'
+    const dbPath = buildDb((db) => {
+      insertBubble(db, { composerId, bubbleUuid: 'b1', type: 1, text: 'prompt', requestId })
+      insertAgentKv(db, { blobId: 'akv-1', role: 'user', content: 'prompt', requestId })
+    })
+
+    await collectCalls(createCursorProvider(dbPath), dbPath)
+
+    expect(sqlLog.length).toBeGreaterThan(0)
+    expect(requestIdLookups()).toEqual([])
+  })
+
+  it('keeps an agent-only session on the time it was first seen after the DB changes and the result cache is cleared', async () => {
+    const requestId = 'req-headless-2'
+    const dbPath = buildDb((db) => {
+      insertAgentKv(db, { blobId: 'akv-1', role: 'user', content: 'run the export', requestId })
+      insertAgentKv(db, { blobId: 'akv-2', role: 'assistant', content: [{ type: 'text', text: 'done' }] })
+    })
+    const firstSeen = new Date(Date.now() - 3 * 864e5)
+    utimesSync(dbPath, firstSeen, firstSeen)
+
+    const first = await collectCalls(createCursorProvider(dbPath), dbPath)
+    utimesSync(dbPath, new Date(), new Date())
+    rmSync(join(getCodeburnCacheDir(), cursorCacheFileName()))
+    const second = await collectCalls(createCursorProvider(dbPath), dbPath)
+
+    const key = `cursor:agentKv:${requestId}`
+    const firstStamps = first.filter(c => c.deduplicationKey === key).map(c => c.timestamp)
+    const recorded = JSON.parse(readFileSync(join(getCodeburnCacheDir(), 'cursor-first-seen.json'), 'utf-8'))[requestId]
+    expect(firstStamps).toEqual([recorded])
+    expect(Date.parse(recorded)).toBeLessThan(Date.now() - 864e5)
+    expect(second.filter(c => c.deduplicationKey === key).map(c => c.timestamp)).toEqual([recorded])
+  })
+
+  it('stamps an agent-only session at the DB mtime when its recorded first-seen value is garbage', async () => {
+    const requestId = 'req-headless-3'
+    const dbPath = buildDb((db) => {
+      insertAgentKv(db, { blobId: 'akv-1', role: 'user', content: 'run the export', requestId })
+    })
+    mkdirSync(getCodeburnCacheDir(), { recursive: true })
+    writeFileSync(join(getCodeburnCacheDir(), 'cursor-first-seen.json'), JSON.stringify({ [requestId]: 'garbage' }))
+
+    const calls = await collectCalls(createCursorProvider(dbPath), dbPath)
+
+    const stamp = calls.find(c => c.deduplicationKey === `cursor:agentKv:${requestId}`)!.timestamp
+    expect(stamp).toBe(new Date(statSync(dbPath).mtimeMs).toISOString())
+  })
+
   it('pairs each assistant reply with its own turn\'s user question', async () => {
     const composerId = '55550000-1111-2222-3333-444455556666'
     const dbPath = buildDb((db) => {
@@ -395,6 +601,63 @@ describe.skipIf(skipReason !== null)('cursor real context tokens (#575)', () => 
     expect(secondReply).toBeDefined()
     expect(firstReply!.userMessage).toContain('first question')
     expect(secondReply!.userMessage).toContain('second question')
+  })
+
+  it('does not pair a reply with a user bubble that has no createdAt', async () => {
+    const composerId = '33330000-1111-2222-3333-444455556666'
+    const dbPath = buildDb((db) => {
+      db.prepare('INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)').run(
+        `bubbleId:${composerId}:u0`,
+        JSON.stringify({ type: 1, text: 'stale draft' }),
+      )
+      insertBubble(db, { composerId, bubbleUuid: 'u1', type: 1, text: 'fix the failing login test' })
+      insertBubble(db, { composerId, bubbleUuid: 'a1', type: 2, text: 'patched auth.ts', model: 'gpt-5' })
+      insertBubble(db, { composerId, bubbleUuid: 'u2', type: 1, text: 'now run it' })
+      insertBubble(db, { composerId, bubbleUuid: 'a2', type: 2, text: 'tests pass', model: 'gpt-5' })
+    })
+
+    const calls = await collectCalls(createCursorProvider(dbPath), dbPath)
+
+    expect(calls.find(c => c.deduplicationKey.endsWith(':a1'))!.userMessage).toBe('fix the failing login test patched auth.ts')
+    expect(calls.find(c => c.deduplicationKey.endsWith(':a2'))!.userMessage).toBe('now run it tests pass')
+  })
+
+  it('keeps later turns on their own prompts when the scan budget cuts a turn\'s user bubble', async () => {
+    const composerId = '11110000-1111-2222-3333-444455556666'
+    const dbPath = buildDb((db) => {
+      insertBubble(db, { composerId, bubbleUuid: 'u1', type: 1, text: 'first prompt' })
+      insertBubble(db, { composerId, bubbleUuid: 'a1', type: 2, text: 'first reply', model: 'gpt-5' })
+      insertBubble(db, { composerId, bubbleUuid: 'u2', type: 1, text: 'second prompt' })
+      insertBubble(db, { composerId, bubbleUuid: 'a2', type: 2, text: 'second reply', model: 'gpt-5' })
+    })
+    process.env['CODEBURN_CURSOR_MAX_BUBBLES'] = '3'
+
+    const calls = await collectCalls(createCursorProvider(dbPath), dbPath)
+
+    expect(calls.find(c => c.deduplicationKey.endsWith(':u1'))).toBeUndefined()
+    expect(calls.find(c => c.deduplicationKey.endsWith(':a1'))!.userMessage).toBe('first reply')
+    expect(calls.find(c => c.deduplicationKey.endsWith(':a2'))!.userMessage).toBe('second prompt second reply')
+  })
+
+  it('gives a user bubble with null or missing text an empty prompt and leaves later turns alone', async () => {
+    const composerId = '99991111-1111-2222-3333-444455556666'
+    const t = (m: number) => new Date(Date.now() - 864e5 + m * 1000).toISOString()
+    const dbPath = buildDb((db) => {
+      const insert = db.prepare('INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)')
+      insert.run(`bubbleId:${composerId}:u1`, JSON.stringify({ type: 1, createdAt: t(1), text: null }))
+      insertBubble(db, { composerId, bubbleUuid: 'a1', type: 2, text: 'reply one', model: 'gpt-5', createdAt: t(2) })
+      insert.run(`bubbleId:${composerId}:u2`, JSON.stringify({ type: 1, createdAt: t(3) }))
+      insertBubble(db, { composerId, bubbleUuid: 'a2', type: 2, text: 'reply two', model: 'gpt-5', createdAt: t(4) })
+      insertBubble(db, { composerId, bubbleUuid: 'u3', type: 1, text: 'third prompt', createdAt: t(5) })
+      insertBubble(db, { composerId, bubbleUuid: 'a3', type: 2, text: 'reply three', model: 'gpt-5', createdAt: t(6) })
+    })
+
+    const calls = await collectCalls(createCursorProvider(dbPath), dbPath)
+
+    const prompt = (id: string) => calls.find(c => c.deduplicationKey.endsWith(`:${id}`))!.userMessage
+    expect(prompt('a1')).toBe('reply one')
+    expect(prompt('a2')).toBe('reply two')
+    expect(prompt('a3')).toBe('third prompt reply three')
   })
 
   it('does not fabricate input when an empty-text turn has no agent stream', async () => {
