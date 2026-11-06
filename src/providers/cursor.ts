@@ -156,6 +156,8 @@ export function clearCursorWorkspaceMapCache(): void {
 
 // The directory's mtime moves when a workspace is added or removed, but a chat
 // started in a known workspace only rewrites that workspace's state.vscdb.
+// The cost is one stat per workspace file per discovery. A same-size rewrite
+// within the same millisecond is not detectable here.
 function workspaceStorageStamp(workspaceStorageDir: string): string {
   const parts: string[] = []
   try {
