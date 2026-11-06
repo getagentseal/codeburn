@@ -1171,10 +1171,10 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
 
         if (entry.type === 'session_meta') {
           sessionId = entry.payload?.session_id ?? rolloutStem(basename(source.path))
-          // Rollouts from before Codex wrote `session_id` carry only `id`, the
-          // thread UUID a fork names in `forked_from_id`. Dedup keys use it so a
-          // fork's replayed history collides with the parent's own records.
-          threadId = entry.payload?.session_id ?? entry.payload?.id ?? sessionId
+          // `id` is the thread UUID a fork names in `forked_from_id` (older
+          // rollouts carry only `id`). Dedup keys use it so a fork's replayed
+          // history collides with the parent's own records.
+          threadId = entry.payload?.id ?? entry.payload?.session_id ?? sessionId
           // Guarded for the same reason as discoverSessionFile: parseCodexLine
           // hands back an unchecked JSON.parse cast, and a non-string cwd would
           // ride into projectPath/workingDirectory where the parser's path

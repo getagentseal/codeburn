@@ -1607,10 +1607,11 @@ describe('codex provider - forked session dedupe', () => {
     expect(tokens).toBe(200)
   })
 
-  // Older Codex builds name the thread only as payload.id. Oversized metas take
-  // the compact decoder, so pad one past the large-line threshold too.
-  for (const padded of [false, true]) {
-    it(`drops a fork replay past the burst when the parent meta carries only payload.id${padded ? ' (oversized meta)' : ''}`, async () => {
+  // Older Codex builds name the thread only as payload.id; a parent can also
+  // carry a session_id that differs from the id forks reference. Oversized
+  // metas take the compact decoder, so pad one past the large-line threshold too.
+  for (const [padded, parentSessionId] of [[false, undefined], [true, undefined], [false, 'rollout-A']] as const) {
+    it(`drops a fork replay past the burst when the fork names the parent's payload.id${padded ? ' (oversized meta)' : ''}${parentSessionId ? ' (parent also carries a different session_id)' : ''}`, async () => {
       const parentId = '0199aaaa-0000-7000-8000-000000000001'
       const meta = (id: string, timestamp: string, extra: Record<string, unknown> = {}) => JSON.stringify({
         type: 'session_meta',
@@ -1618,7 +1619,7 @@ describe('codex provider - forked session dedupe', () => {
         payload: { id, cwd: '/x', model: 'gpt-5.5', ...extra, ...(padded ? { base_instructions: { text: 'x'.repeat(40_000) } } : {}) },
       })
       await writeSession(tmpDir, '2026-10-01', `rollout-2026-10-01T09-00-00-${parentId}.jsonl`, [
-        meta(parentId, '2026-10-01T09:00:00Z'),
+        meta(parentId, '2026-10-01T09:00:00Z', parentSessionId ? { session_id: parentSessionId } : {}),
         tokenUsageRecord({ timestamp: '2026-10-01T09:00:10Z', responseId: 'resp_1', usage: { input: 10_000, output: 1_000 } }),
       ])
       const forkId = '0199bbbb-0000-7000-8000-000000000002'
