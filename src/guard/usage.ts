@@ -111,8 +111,13 @@ export function recordToolCall(cache: GuardCache, call: ToolCallKey): void {
   if (cache.recentCalls.length > RECENT_CALLS) cache.recentCalls.shift()
 }
 
+// Waiting on a background shell or task repeats the same input by design.
+const POLL_TOOLS = new Set(['BashOutput', 'TaskOutput', 'Monitor'])
+
 // How many calls in a row, the incoming one included, share its name and input.
+// Polling tools never count as a loop.
 export function identicalRun(cache: GuardCache, call: ToolCallKey): number {
+  if (POLL_TOOLS.has(call.name)) return 0
   let run = 1
   for (let i = cache.recentCalls.length - 1; i >= 0; i--) {
     const c = cache.recentCalls[i]!

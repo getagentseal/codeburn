@@ -116,6 +116,18 @@ describe('identical-call loop', () => {
     expect(await call(env, 'Read', { limit: 5, file_path: '/a' })).toContain('called 4 times in a row')
   })
 
+  it('never counts polling a background task as a loop', async () => {
+    const env = await setup()
+    for (const name of ['BashOutput', 'TaskOutput', 'Monitor']) {
+      const outs: string[] = []
+      for (let i = 0; i < 8; i++) outs.push(await call(env, name, { bash_id: 'bash_1' }))
+      expect(outs.every(o => o === '')).toBe(true)
+    }
+    const edits: string[] = []
+    for (let i = 0; i < 8; i++) edits.push(await call(env, 'Edit', { file_path: '/a.ts', old_string: 'x', new_string: 'y' }))
+    expect(edits[7]).toContain('"permissionDecision":"deny"')
+  })
+
   it('warns once per session', async () => {
     const env = await setup()
     const outs: string[] = []
