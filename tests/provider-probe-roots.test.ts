@@ -9,7 +9,7 @@ import { createCursorProvider } from '../src/providers/cursor.js'
 import { createCursorAgentProvider } from '../src/providers/cursor-agent.js'
 import { createGooseProvider } from '../src/providers/goose.js'
 import { createCrushProvider } from '../src/providers/crush.js'
-import { createWarpProvider } from '../src/providers/warp.js'
+import { createWarpProvider, getDbCandidates } from '../src/providers/warp.js'
 import { createAntigravityProvider } from '../src/providers/antigravity.js'
 import { createQwenProvider } from '../src/providers/qwen.js'
 import { createIBMBobProvider } from '../src/providers/ibm-bob.js'
@@ -56,12 +56,13 @@ describe('probeRoots mirrors discovery resolution', () => {
     ])
   })
 
-  it('warp reports the override db, or both bundle candidates', async () => {
+  it('warp reports the override db, or the platform\'s own candidates', async () => {
     expect(await createWarpProvider('/tmp/warp.db').probeRoots!()).toEqual([
       { path: '/tmp/warp.db', label: 'db' },
     ])
     const defaults = await createWarpProvider().probeRoots!()
-    expect(defaults).toHaveLength(2)
+    expect(defaults.map(root => root.path)).toEqual(getDbCandidates())
+    expect(defaults).toHaveLength(process.platform === 'win32' ? 1 : 2)
     for (const root of defaults) {
       expect(isAbsolute(root.path)).toBe(true)
       expect(root.label).toBe('db')
