@@ -233,6 +233,14 @@ describe('session cost diagnosis: long-context parts', () => {
     }
   })
 
+  it('negative token counts do not move the parts to another tier than the call', () => {
+    const model = 'claude-sonnet-4-5'
+    const usage = { inputTokens: -100_000, outputTokens: 0, cacheCreationInputTokens: 0, cacheReadInputTokens: 250_001, cachedInputTokens: 0, reasoningTokens: 0, webSearchRequests: 0 }
+    const costUSD = calculateCost(model, -100_000, 0, 0, 250_001, 0, 'standard', 0, 'claude')
+    const p = partsOf({ model, provider: 'claude', speed: 'standard', usage, costUSD } as Parameters<typeof partsOf>[0])
+    expect(p.input + p.output + p.cacheRead + p.cacheWrite + p.webSearch).toBeCloseTo(costUSD, 12)
+  })
+
   it('one-hour cache writes count toward the tier the parts are priced at', () => {
     const model = 'claude-haiku-5-5'
     const usage = { inputTokens: 1, outputTokens: 0, cacheCreationInputTokens: 0, cacheReadInputTokens: 0, cachedInputTokens: 0, reasoningTokens: 0, webSearchRequests: 0 }

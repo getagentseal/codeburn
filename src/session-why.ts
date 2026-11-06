@@ -173,7 +173,8 @@ const ZERO_PARTS: WhyParts = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0,
 // Tokens priced on a call's behalf take that call's long-context tier, which
 // its whole prompt decides, so the parts priced one at a time add up to its cost.
 function priceFor(c: ParsedApiCall, input: number, output: number, cacheWrite: number, cacheRead: number, webSearch = 0, oneHour = 0, model = c.model): number {
-  const prompt = c.usage.inputTokens + c.usage.cacheReadInputTokens + Math.max(c.usage.cacheCreationInputTokens, c.cacheCreationOneHourTokens ?? 0)
+  const safe = (n: number | undefined) => (n !== undefined && Number.isFinite(n) && n > 0 ? n : 0)
+  const prompt = safe(c.usage.inputTokens) + safe(c.usage.cacheReadInputTokens) + Math.max(safe(c.usage.cacheCreationInputTokens), safe(c.cacheCreationOneHourTokens))
   return calculateCost(model, input, output, cacheWrite, cacheRead, webSearch, c.speed, oneHour, c.provider, false, prompt)
 }
 
