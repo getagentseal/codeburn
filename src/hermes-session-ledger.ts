@@ -25,8 +25,14 @@ import type { CachedCall, ProviderSection } from './session-cache.js'
 // v3 discards the local-only v2 migration candidate. Seeding v2 from the warm
 // session cache could preserve lifetime totals while assigning historical
 // observations to the migration day, inflating that day's scoped Hermes spend.
-export const HERMES_SESSION_LEDGER_FILENAME = 'hermes-session-ledger.v3.json'
-export const HERMES_SESSION_LEDGER_VERSION = 3 as const
+// v4: the calculated basis stopped adding reasoning tokens on top of an output
+// count that already holds them. A v3 cursor that priced reasoning that way is
+// carried with `rebuild` set, and the next snapshot its source still supplies
+// replaces it with one recomputed observation. A cursor whose source is gone
+// gets no such snapshot and keeps the v3 figure.
+export const HERMES_SESSION_LEDGER_FILENAME = 'hermes-session-ledger.v4.json'
+export const HERMES_SESSION_LEDGER_VERSION = 4 as const
+const HERMES_SESSION_LEDGER_V3_FILENAME = 'hermes-session-ledger.v3.json'
 
 export type HermesCostBasis = 'actual' | 'estimated' | 'calculated' | 'included'
 
@@ -57,6 +63,7 @@ export type HermesSessionCursor = {
   sessionId: string
   lastSeen: HermesLastSeen
   observations: HermesObservation[]
+  rebuild?: true
 }
 
 export type HermesSessionLedger = {
@@ -361,10 +368,10 @@ function validateCursor(v: unknown): v is HermesSessionCursor {
   return true
 }
 
-function validateLedger(raw: unknown): raw is HermesSessionLedger {
+function validateLedger(raw: unknown, version: number = HERMES_SESSION_LEDGER_VERSION): raw is HermesSessionLedger {
   if (!raw || typeof raw !== 'object') return false
   const o = raw as Record<string, unknown>
-  if (o['version'] !== HERMES_SESSION_LEDGER_VERSION) return false
+  if (o['version'] !== version) return false
   if (!o['cursors'] || typeof o['cursors'] !== 'object' || Array.isArray(o['cursors'])) return false
   for (const profileCursors of Object.values(o['cursors'] as Record<string, unknown>)) {
     if (!profileCursors || typeof profileCursors !== 'object' || Array.isArray(profileCursors)) return false
@@ -373,9 +380,31 @@ function validateLedger(raw: unknown): raw is HermesSessionLedger {
   return true
 }
 
+function migrateV3Ledger(): HermesSessionLedger | null {
+  const path = join(getCodeburnCacheDir(), HERMES_SESSION_LEDGER_V3_FILENAME)
+  if (!existsSync(path)) return null
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(path, 'utf-8'))
+    if (!validateLedger(parsed, 3)) return null
+    const cursors: HermesSessionLedger['cursors'] = {}
+    for (const [profile, sessions] of Object.entries(parsed.cursors)) {
+      cursors[profile] = {}
+      for (const [sessionId, cursor] of Object.entries(sessions)) {
+        const reasoningPriced = cursor.observations.some(o => o.costBasis === 'calculated' && o.reasoningTokens > 0)
+        cursors[profile][sessionId] = reasoningPriced ? { ...cursor, rebuild: true } : cursor
+      }
+    }
+    return { version: HERMES_SESSION_LEDGER_VERSION, cursors }
+  } catch {
+    return null
+  }
+}
+
 function readLedgerFromDisk(): HermesSessionLedger {
   const path = hermesSessionLedgerPath()
   if (!existsSync(path)) {
+    const migrated = migrateV3Ledger()
+    if (migrated) return migrated
     // The v1 file is superseded and can never be read again: the parse-version
     // bump forces a cold re-parse that rebuilds every cursor from source.
     // Left behind it is dead bytes that only invite a future reader to trust
@@ -448,7 +477,9 @@ export async function persistHermesSessionLedger(ledger: HermesSessionLedger): P
 
 export async function recordHermesSnapshot(snapshot: HermesSnapshot): Promise<HermesSessionCursor> {
   const ledger = loadHermesSessionLedger()
-  const existing = getHermesCursor(ledger, snapshot.profile, snapshot.sessionId)
+  const stored = getHermesCursor(ledger, snapshot.profile, snapshot.sessionId)
+  // An all-zero snapshot is a reset or a vanished row, not a source to rebuild from.
+  const existing = stored?.rebuild && hasPositiveTokenDelta(snapshot.tokens) ? undefined : stored
   const { cursor, dirty } = applyHermesSnapshot(existing, snapshot)
   if (dirty) await persistHermesSessionLedger(putCursor(ledger, cursor))
   return cursor
