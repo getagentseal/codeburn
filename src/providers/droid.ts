@@ -74,11 +74,12 @@ function getFactoryDir(): string {
 // e.g. "custom:GLM-5.1-[Proxy]-0" -> "GLM-5.1"
 // Cost lookup is handled by codeburn's existing calculateCost/getCanonicalName
 // which normalizes case and strips date suffixes automatically.
+// Only a custom model carries a trailing index; elsewhere `-6` is a version.
 function stripModelPrefix(raw: string): string {
   return raw
     .replace(/^custom:/, '')
     .replace(/\[.*?\]/g, '')
-    .replace(/-\d+$/, '')
+    .replace(raw.startsWith('custom:') ? /-\d+$/ : /-\d{8}$/, '')
     .replace(/-+$/, '')
     .replace(/^-/, '')
 }
