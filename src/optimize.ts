@@ -1443,6 +1443,8 @@ export function mcpNamespace(name: string): string {
 /// The server half of an mcp__<server>__<tool> name. Either half may contain
 /// "__", so the longest known server namespace wins; an unknown server falls
 /// back to the first segment, the way the parser keys its MCP breakdown.
+/// With servers "a" and "a__b" both configured, mcp__a__b__c is ambiguous in
+/// Claude Code's own encoding (it joins with "__" and escapes nothing).
 export function mcpServerOf(toolName: string, known: Iterable<string>): string | undefined {
   const rest = toolName.slice('mcp__'.length)
   let best: string | undefined
