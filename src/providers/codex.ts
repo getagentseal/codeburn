@@ -738,6 +738,8 @@ type CodexResumeState = {
   forkedFromId: string
   forkReplayState?: CodexForkReplayState
   prevCumulativeTotal: number | null
+  /// Counter restarts seen so far; keys a repeated cumulative state after one.
+  restartEpoch?: number
   /// Byte-identity of the last token_count info payload (#257 re-emission
   /// collapse). Optional so resume states written before it still decode.
   prevInfoIdentity?: string | null
@@ -816,6 +818,7 @@ function isResumeState(value: unknown): value is CodexResumeState {
     && typeof v['forkedFromId'] === 'string'
     && (v['forkReplayState'] === undefined || isCodexForkReplayState(v['forkReplayState']))
     && (v['prevCumulativeTotal'] === null || typeof v['prevCumulativeTotal'] === 'number')
+    && (v['restartEpoch'] === undefined || typeof v['restartEpoch'] === 'number')
     && (v['prevInfoIdentity'] === undefined || v['prevInfoIdentity'] === null || typeof v['prevInfoIdentity'] === 'string')
     && (v['hasTokenUsageRecord'] === undefined || typeof v['hasTokenUsageRecord'] === 'boolean')
     && (v['serviceTier'] === undefined || typeof v['serviceTier'] === 'string')
@@ -913,6 +916,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
       // total and dedup on equality regardless of whether it is zero.
       let prevCumulativeTotal: number | null = resume?.state.prevCumulativeTotal ?? null
       let prevInfoIdentity: string | null = resume?.state.prevInfoIdentity ?? null
+      let restartEpoch = resume?.state.restartEpoch ?? 0
       let hasTokenUsageRecord = resume?.state.hasTokenUsageRecord ?? false
       // #1616: the service tier `thread_settings_applied` last set. Everything
       // the loop reads from a PRIOR line must ride CodexResumeState, and this
@@ -1288,6 +1292,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
             forkedFromId,
             ...(forkReplayState ? { forkReplayState: { ...forkReplayState } } : {}),
             prevCumulativeTotal,
+            restartEpoch,
             prevInfoIdentity,
             hasTokenUsageRecord,
             serviceTier,
@@ -1622,7 +1627,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
             const restart = prevTotal !== null
               ? cumulativeTotal < prevTotal
               : present.length > 0 && present.every(([now, prev]) => now < prev)
-            if (restart) { prevInput = 0; prevCached = 0; prevCacheWrite = 0; prevOutput = 0; prevReasoning = 0 }
+            if (restart) { restartEpoch++; prevInput = 0; prevCached = 0; prevCacheWrite = 0; prevOutput = 0; prevReasoning = 0 }
             const since = (now: number | undefined, prev: number) => now === undefined ? 0 : Math.max(0, now - prev)
             inputTokens = since(total.input_tokens, prevInput)
             cachedInputTokens = since(total.cached_input_tokens, prevCached)
@@ -1673,9 +1678,10 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
           // burst (accepted trade-off: the alternative collapsed
           // distinct requests wholesale).
           // Two rollouts of one thread at identical cumulative totals are the
-          // same calls replayed (resume), so sharing this key is intended.
+          // same calls replayed (resume), so sharing this key is intended. After
+          // a counter restart the same totals are new calls: the epoch tells.
           const dedupKey = reportsCumulative
-            ? `codex:${forkedFromId || threadId}:${cumulativeTotal}:${total?.input_tokens ?? 0}:${total?.cached_input_tokens ?? 0}:${total?.output_tokens ?? 0}:${total?.reasoning_output_tokens ?? 0}`
+            ? `codex:${forkedFromId || threadId}:${cumulativeTotal}:${total?.input_tokens ?? 0}:${total?.cached_input_tokens ?? 0}:${total?.output_tokens ?? 0}:${total?.reasoning_output_tokens ?? 0}${restartEpoch ? `:r${restartEpoch}` : ''}`
             : `codex:record:${JSON.stringify([source.path, tracker.lastCompleteLineOffset])}`
 
           accountUsage(entry, {

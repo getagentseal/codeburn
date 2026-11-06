@@ -857,6 +857,21 @@ describe('codex provider - JSONL parsing', () => {
     expect(calls.map(c => [c.inputTokens, c.outputTokens])).toEqual([[8_000, 800], [3_000, 300], [3_000, 300]])
   })
 
+  it('counts a cumulative state repeated after a restart as a new call', async () => {
+    const filePath = await writeSession(tmpDir, '2026-04-14', 'rollout-cumulative-restart-repeat.jsonl', [
+      sessionMeta({ session_id: 'sess-restart-repeat', model: 'gpt-5.5' }),
+      tokenCount({ timestamp: '2026-04-14T10:00:10Z', total: { input: 100, output: 10 } }),
+      tokenCount({ timestamp: '2026-04-14T10:00:20Z', total: { input: 50, output: 5 } }),
+      tokenCount({ timestamp: '2026-04-14T10:00:30Z', total: { input: 100, output: 10 } }),
+    ])
+
+    const provider = createCodexProvider(tmpDir)
+    const calls: ParsedProviderCall[] = []
+    for await (const call of provider.createSessionParser({ path: filePath, project: 'test', provider: 'codex' }, new Set()).parse()) calls.push(call)
+
+    expect(calls.map(c => [c.inputTokens, c.outputTokens])).toEqual([[100, 10], [50, 5], [50, 5]])
+  })
+
   it('restarts every counter on a restart, including one the restart record omits', async () => {
     const filePath = await writeSession(tmpDir, '2026-04-14', 'rollout-cumulative-restart-omitted.jsonl', [
       sessionMeta({ session_id: 'sess-restart-omitted', model: 'gpt-5.5' }),
