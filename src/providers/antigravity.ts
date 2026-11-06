@@ -1014,7 +1014,8 @@ function decodePackedVarints(data: Uint8Array): number[] {
 // split when it is present: an absent split (proto3 omits unset fields) takes
 // the total as response, and a split that disagrees, even one whose thinking
 // alone exceeds the total or one beside an explicit 0, is cut back to it. An
-// absent total (undefined) keeps the split. Returns [response, thinking].
+// absent or unreadable total (undefined) keeps the split. Returns
+// [response, thinking].
 function reconcileOutputSplit(total: number | undefined, thinking: number, response: number): [number, number] {
   if (total === undefined || response + thinking === total) return [response, thinking]
   const kept = Math.min(thinking, total)
@@ -1041,7 +1042,7 @@ function buildCallFromSqliteGenMetadataRow(
   const cacheWriteTokens = protoFieldPositiveInteger(firstProtoField(usageFields, 4))
   const cacheReadTokens = protoFieldPositiveInteger(firstProtoField(usageFields, 5))
   const [responseTokens, thinkingTokens] = reconcileOutputSplit(
-    firstProtoField(usageFields, 3) ? totalOutputTokens : undefined,
+    firstProtoField(usageFields, 3)?.value !== undefined ? totalOutputTokens : undefined,
     protoFieldPositiveInteger(firstProtoField(usageFields, 9)),
     protoFieldPositiveInteger(firstProtoField(usageFields, 10)),
   )
@@ -1333,7 +1334,7 @@ export function buildCallsFromGeneratorMetadata(
     const inputTokens = parseInt(usage.inputTokens ?? '0', 10)
     const outputTokens = parseInt(usage.outputTokens ?? '0', 10)
     const [responseTokens, thinkingTokens] = reconcileOutputSplit(
-      usage.outputTokens === undefined ? undefined : outputTokens,
+      usage.outputTokens !== undefined && Number.isFinite(outputTokens) ? outputTokens : undefined,
       parseInt(usage.thinkingOutputTokens ?? '0', 10),
       parseInt(usage.responseOutputTokens ?? '0', 10),
     )

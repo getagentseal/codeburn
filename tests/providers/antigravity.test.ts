@@ -883,11 +883,12 @@ describe('antigravity provider helpers', () => {
       { chatModel: { model: 'gemini-3-pro', usage: { model: 'gemini-3-pro', inputTokens: '1000', outputTokens: '100', thinkingOutputTokens: '200', responseOutputTokens: '50', responseId: 'r3' } } },
       { chatModel: { model: 'gemini-3-pro', usage: { model: 'gemini-3-pro', inputTokens: '1000', outputTokens: '0', thinkingOutputTokens: '100', responseOutputTokens: '50', responseId: 'r4' } } },
       { chatModel: { model: 'gemini-3-pro', usage: { model: 'gemini-3-pro', inputTokens: '1000', thinkingOutputTokens: '100', responseOutputTokens: '50', responseId: 'r5' } } },
+      { chatModel: { model: 'gemini-3-pro', usage: { model: 'gemini-3-pro', inputTokens: '1000', outputTokens: '', thinkingOutputTokens: '100', responseOutputTokens: '50', responseId: 'r6' } } },
     ], {})
     // The output total wins over a split that disagrees, even when thinking
     // alone is larger than the total, or the total is an explicit 0. With no
-    // total at all the split stands.
-    expect(calls.map(c => [c.outputTokens, c.reasoningTokens])).toEqual([[4000, 0], [3000, 1000], [0, 100], [0, 0], [50, 100]])
+    // total at all, or one that is not a number, the split stands.
+    expect(calls.map(c => [c.outputTokens, c.reasoningTokens])).toEqual([[4000, 0], [3000, 1000], [0, 100], [0, 0], [50, 100], [50, 100]])
     expect(calls[0]!.costUSD).toBeCloseTo(calls[1]!.costUSD, 12)
     expect(calls[0]!.costUSD).toBeGreaterThan(0.04)
   })
