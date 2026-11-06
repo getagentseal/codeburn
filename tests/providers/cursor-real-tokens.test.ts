@@ -489,6 +489,23 @@ describe.skipIf(skipReason !== null)('cursor real context tokens (#575)', () => 
     expect(calls.find(c => c.deduplicationKey.endsWith(':a2'))!.userMessage).toBe('now run it tests pass')
   })
 
+  it('keeps later turns on their own prompts when the scan budget cuts a turn\'s user bubble', async () => {
+    const composerId = '11110000-1111-2222-3333-444455556666'
+    const dbPath = buildDb((db) => {
+      insertBubble(db, { composerId, bubbleUuid: 'u1', type: 1, text: 'first prompt' })
+      insertBubble(db, { composerId, bubbleUuid: 'a1', type: 2, text: 'first reply', model: 'gpt-5' })
+      insertBubble(db, { composerId, bubbleUuid: 'u2', type: 1, text: 'second prompt' })
+      insertBubble(db, { composerId, bubbleUuid: 'a2', type: 2, text: 'second reply', model: 'gpt-5' })
+    })
+    process.env['CODEBURN_CURSOR_MAX_BUBBLES'] = '3'
+
+    const calls = await collectCalls(createCursorProvider(dbPath), dbPath)
+
+    expect(calls.find(c => c.deduplicationKey.endsWith(':u1'))).toBeUndefined()
+    expect(calls.find(c => c.deduplicationKey.endsWith(':a1'))!.userMessage).toBe('first reply')
+    expect(calls.find(c => c.deduplicationKey.endsWith(':a2'))!.userMessage).toBe('second prompt second reply')
+  })
+
   it('does not fabricate input when an empty-text turn has no agent stream', async () => {
     const composerId = '88880000-1111-2222-3333-444455556666'
     const dbPath = buildDb((db) => {
