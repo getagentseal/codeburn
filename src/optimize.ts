@@ -3599,22 +3599,9 @@ export async function detectGhostCommands(names: string[]): Promise<WasteFinding
   }
 }
 
-function readShellProfileLimit(): number | null {
-  for (const profile of SHELL_PROFILES) {
-    const path = join(homedir(), profile)
-    if (!existsSync(path)) continue
-    const content = readSessionFileSync(path)
-    if (content === null) continue
-    const match = content.match(/^\s*export\s+BASH_MAX_OUTPUT_LENGTH\s*=\s*['"]?(\d+)['"]?/m)
-    if (match) return parseInt(match[1], 10)
-  }
-  return null
-}
-
-export function detectBashBloat(): WasteFinding | null {
-  const profileLimit = readShellProfileLimit()
-  const envLimit = process.env['BASH_MAX_OUTPUT_LENGTH']
-  const configured = profileLimit ?? (envLimit ? parseInt(envLimit, 10) : null)
+export function detectBashBloat(projectCwds: Iterable<string> = []): WasteFinding | null {
+  const setting = findDeferralEnvSetting('BASH_MAX_OUTPUT_LENGTH', projectCwds)?.value ?? process.env['BASH_MAX_OUTPUT_LENGTH']
+  const configured = setting ? parseInt(setting, 10) : null
 
   if (configured !== null && configured <= BASH_RECOMMENDED_LIMIT) return null
 
@@ -4574,7 +4561,7 @@ export async function scanAndDetect(
     () => detectLongContextPremium(projects),
     () => detectOneHourCacheUnused(projects),
     claudeOnly(() => detectBloatedClaudeMd(projectCwds)),
-    claudeOnly(() => detectBashBloat()),
+    claudeOnly(() => detectBashBloat(projectCwds)),
     claudeOnly(() => detectRecurringContext(openers)),
   ]
   for (const detect of syncDetectors) {

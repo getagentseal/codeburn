@@ -343,6 +343,13 @@ describe('detectBashBloat', () => {
     expect(detectBashBloat()).toBeNull()
   })
 
+  it('does not flag when the settings env block sets the cap', () => {
+    delete process.env['BASH_MAX_OUTPUT_LENGTH']
+    const cwd = makeFixtureRoot()
+    writeFile(join(cwd, '.claude', 'settings.json'), JSON.stringify({ env: { BASH_MAX_OUTPUT_LENGTH: '10000' } }))
+    expect(detectBashBloat([cwd])).toBeNull()
+  })
+
   it('flags when env var is above 15K', () => {
     process.env['BASH_MAX_OUTPUT_LENGTH'] = '50000'
     const finding = detectBashBloat()
