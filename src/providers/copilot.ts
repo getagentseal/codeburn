@@ -2581,6 +2581,8 @@ function createOtelParser(
           // Query all 'chat' spans for this conversation.
           // -----------------------------------------------------------
 
+          const chatStorage = source.chatStorageBySessionId?.get(conversationId)
+
           const spanIdRows = db.query<{ span_id: string; trace_id: string }>(
             `SELECT DISTINCT s.span_id, s.trace_id
              FROM spans s
@@ -2806,6 +2808,7 @@ function createOtelParser(
               speed: 'standard' as const,
               deduplicationKey: dedupKey,
               userMessage: '', // Not available in OTel spans by default
+              ...(chatStorage ? { chatStorage } : {}),
             }
           }
         }
@@ -3130,6 +3133,8 @@ interface OTelSessionSource extends SessionSource {
   // VS Code chat session id -> workspace name, for spans that carry no
   // repository attribute (see mapChatSessionWorkspaces).
   workspaceBySessionId?: Map<string, string>
+  // VS Code chat session id -> copilotChatStorageKey of its journal/transcript.
+  chatStorageBySessionId?: Map<string, string>
 }
 
 interface JsonlSessionSource extends SessionSource {
@@ -3534,6 +3539,32 @@ async function mapChatSessionWorkspaces(workspaceStorageDirs: string[]): Promise
   return new Map([...found].map(([id, v]) => [id, v.project]))
 }
 
+// The VS Code storage a chat session file lives in: the workspaceStorage hash
+// dir for chatSessions journals and transcripts, the directory itself for
+// empty-window journals. Serve time drops a journal or transcript only when an
+// OTel call of the same session names the same storage.
+export function copilotChatStorageKey(path: string): string {
+  const dir = dirname(path)
+  const name = basename(dir)
+  if (name === 'transcripts') return dirname(dirname(dir))
+  return name === 'chatSessions' ? dirname(dir) : dir
+}
+
+// Session id -> storage of its most recently written journal or transcript,
+// the same newest-copy rule as mapChatSessionWorkspaces.
+async function mapChatSessionStorage(sources: SessionSource[]): Promise<Map<string, string>> {
+  const found = new Map<string, { storage: string; mtimeMs: number }>()
+  for (const src of sources) {
+    if (!isChatSessionSource(src) && !isTranscriptSource(src)) continue
+    const s = await stat(src.path).catch(() => null)
+    if (!s) continue
+    const id = basename(src.path).replace(/\.jsonl?$/, '')
+    const prev = found.get(id)
+    if (!prev || s.mtimeMs > prev.mtimeMs) found.set(id, { storage: copilotChatStorageKey(src.path), mtimeMs: s.mtimeMs })
+  }
+  return new Map([...found].map(([id, v]) => [id, v.storage]))
+}
+
 async function hasChatSessionFiles(chatSessionsDir: string): Promise<boolean> {
   let files: string[]
   try {
@@ -3851,6 +3882,12 @@ export function createCopilotProvider(
         sources.push(...jetbrainsSources)
       } catch {
         // JetBrains discovery failed
+      }
+
+      const otelSources = sources.filter(isOtelSource)
+      if (otelSources.length > 0) {
+        const chatStorageBySessionId = await mapChatSessionStorage(sources)
+        for (const src of otelSources) src.chatStorageBySessionId = chatStorageBySessionId
       }
 
       return sources

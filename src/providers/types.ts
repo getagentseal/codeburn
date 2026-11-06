@@ -85,6 +85,10 @@ export type ParsedProviderCall = {
   // starts the leg's store-row subtraction interval here instead of at the
   // previous leg. Omitted when the leg contains no compaction.
   compactedAt?: string
+  // Copilot OTel calls only: copilotChatStorageKey of the VS Code journal or
+  // transcript of the same session, when one was discovered. Serve time drops
+  // only that storage's copy of the session.
+  chatStorage?: string
   // Copilot session-store billing metadata. total_nano_aiu is the request's
   // charged AI-credit amount in nano-AIU (1e9 nano-AIU = 1 credit = $0.01);
   // plan math sums finite nanoAiu. request_multiplier stays capture-only

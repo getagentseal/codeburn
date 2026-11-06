@@ -76,6 +76,8 @@ export type CachedCall = {
   // Copilot session-store rows only: the store's `initiator` label when
   // present. See ParsedProviderCall.initiator.
   initiator?: string
+  // Copilot OTel calls only. See ParsedProviderCall.chatStorage.
+  chatStorage?: string
   // Hermes observation-time deltas persist this so a warm read does not
   // depend on the `:obs:` key regex alone. Copilot still assigns the flag
   // at serve time and does not persist it.
@@ -519,7 +521,9 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // journal-auto-model-v1: chatSessions journal requests in Auto mode with no
   // resolvedModel take the legacy path's inferred model and an estimated cost
   // instead of model 'auto' at $0.
-  copilot: 'cli-shutdown-cost-v1-skills-source-provenance-v1-session-store-v3-chatsession-otel-skills-v1-otel-trace-metadata-once-v1-transcript-unknown-usage-v1-otel-workspace-project-v1-journal-request-input-v1-tokenless-turns-v1-store-row-output-v1-jetbrains-opus-4-7-v1-chatsession-agent-totals-v1-otel-cache-inclusive-input-v1-legacy-estimated-reasoning-in-output-v1-journal-auto-model-v1',
+  // otel-chat-storage-v1: OTel calls record the VS Code storage of their
+  // session's journal or transcript, so serve time drops only that copy.
+  copilot: 'cli-shutdown-cost-v1-skills-source-provenance-v1-session-store-v3-chatsession-otel-skills-v1-otel-trace-metadata-once-v1-transcript-unknown-usage-v1-otel-workspace-project-v1-journal-request-input-v1-tokenless-turns-v1-store-row-output-v1-jetbrains-opus-4-7-v1-chatsession-agent-totals-v1-otel-cache-inclusive-input-v1-legacy-estimated-reasoning-in-output-v1-journal-auto-model-v1-otel-chat-storage-v1',
   // authoritative-usage-v4: persist one Grok session call from top-level
   // authoritative totals, use modelUsage only for priced attribution, clamp
   // reasoning per record, and label mixed sessions estimated.
@@ -1229,6 +1233,7 @@ function validateCall(c: unknown): c is CachedCall {
     && isOptionalNum(o['requestMultiplier'])
     && isOptionalString(o['compactedAt'])
     && isOptionalString(o['initiator'])
+    && isOptionalString(o['chatStorage'])
     && isStringArray(o['tools'])
     && isStringArray(o['bashCommands'])
     && isStringArray(o['skills'])

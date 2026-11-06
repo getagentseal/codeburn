@@ -12,6 +12,7 @@ import { applyClaudeIdentities, identityLogPath, observeClaudeIdentities } from 
 import { normalizeContentBlocks, flatSlice, flatString } from './content-utils.js'
 import { estimateTokensFromChars } from './token-estimate.js'
 import { discoverAllSessions, discoverAllSessionsWithFailures, getProvider } from './providers/index.js'
+import { copilotChatStorageKey } from './providers/copilot.js'
 import { evictCachedCodexResults, flushCodexCache, readCachedCodexResults, withCodexCacheDirectory, writeCachedCodexResults } from './codex-cache.js'
 import { antigravityCascadeIdFromPath, flushAntigravityCache, preloadAntigravityCache, shouldReparseAntigravitySource } from './providers/antigravity.js'
 import { getClaudeConfigDirs, getDesktopSessionsDirs } from './providers/claude.js'
@@ -2948,6 +2949,7 @@ function providerCallToCachedCall(call: ParsedProviderCall): CachedCall {
     ...(call.requestMultiplier != null ? { requestMultiplier: call.requestMultiplier } : {}),
     ...(call.compactedAt ? { compactedAt: call.compactedAt } : {}),
     ...(call.initiator ? { initiator: call.initiator } : {}),
+    ...(call.chatStorage ? { chatStorage: call.chatStorage } : {}),
     ...(call.supplementaryAccounting ? { supplementaryAccounting: true } : {}),
     activeDurationMs: call.activeDurationMs,
     activeGeneratedTokens: call.activeGeneratedTokens,
@@ -4332,11 +4334,17 @@ export async function parseProviderSources(
     const agentHostUsageSessions = new Set<string>()
     // A chat-session journal or VS Code transcript of a session
     // agent-traces.db recorded holds the same requests under other keys; OTel
-    // wins for that session only.
-    const otelSessions = new Set<string>()
+    // wins for that session in that VS Code storage. '' (an OTel call cached
+    // before chatStorage, or with no journal found) matches any storage.
+    const otelStorages = new Map<string, Set<string>>()
     for (const cachedFile of Object.values(section.files)) {
       for (const turn of cachedFile.turns) {
-        if (turn.calls.some(c => c.deduplicationKey.startsWith('copilot-otel:'))) otelSessions.add(turn.sessionId)
+        for (const c of turn.calls) {
+          if (!c.deduplicationKey.startsWith('copilot-otel:')) continue
+          const set = otelStorages.get(turn.sessionId) ?? new Set<string>()
+          set.add(c.chatStorage ?? '')
+          otelStorages.set(turn.sessionId, set)
+        }
       }
     }
     const otelTwinKeys = new Set<string>()
@@ -4352,7 +4360,8 @@ export async function parseProviderSources(
         for (const c of turn.calls) {
           if (seenAggKeys.has(c.deduplicationKey)) continue
           seenAggKeys.add(c.deduplicationKey)
-          if (otelSessions.has(turn.sessionId) &&
+          const storages = otelStorages.get(turn.sessionId)
+          if (storages && (storages.has('') || storages.has(copilotChatStorageKey(cachedPath))) &&
             (c.deduplicationKey.startsWith('copilot-chatsession:') || basename(dirname(cachedPath)) === 'transcripts')) {
             otelTwinKeys.add(c.deduplicationKey)
             continue

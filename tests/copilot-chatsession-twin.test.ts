@@ -144,6 +144,23 @@ describe('copilot chat-session twins of agent-host sessions', () => {
     expect(keys).toEqual(['copilot-chatsession:untraced:r1', 'copilot-otel:s1'])
   })
 
+  it.skipIf(!isSqliteAvailable())('drops only the copy in the storage OTel matched when two workspaces share a session id', async () => {
+    for (const [hash, requestId, mtime] of [['wsA', 'ra', 1_000_000], ['wsB', 'rb', 2_000_000]] as const) {
+      const dir = join(tmp, 'ws', hash, 'chatSessions')
+      await mkdir(dir, { recursive: true })
+      await writeFile(join(tmp, 'ws', hash, 'workspace.json'), JSON.stringify({ folder: `file:///tmp/${hash}` }))
+      const file = join(dir, 'shared.jsonl')
+      await writeFile(file, JSON.stringify({ kind: 0, v: { sessionId: 'shared', creationDate: Date.parse('2026-08-05T12:00:00Z'), requests: [{
+        requestId, modelId: 'copilot/gpt-4o', timestamp: Date.parse('2026-08-05T12:00:00Z'), promptTokens: 1000, completionTokens: 50,
+      }] } }) + '\n')
+      await utimes(file, new Date(), new Date(Date.now() - mtime))
+    }
+    process.env['CODEBURN_COPILOT_WS_STORAGE_DIR'] = join(tmp, 'ws')
+    writeOtel('shared')
+
+    expect(await servedKeys()).toEqual(['copilot-chatsession:shared:rb', 'copilot-otel:s1'])
+  })
+
   it.skipIf(!isSqliteAvailable())('drops the transcript of a session agent-traces.db recorded', async () => {
     writeOtel('traced')
     const ws = join(tmp, 'ws', 'hash1')
