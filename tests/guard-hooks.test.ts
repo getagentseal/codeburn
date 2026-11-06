@@ -9,12 +9,12 @@ import { sessionsDir, writeGuardConfig, DEFAULT_GUARD_CONFIG } from '../src/guar
 import { buildFlags, matchFlag, writeFlags, type GuardFlags } from '../src/guard/flags.js'
 import type { ProjectSummary } from '../src/types.js'
 
-const renameFails = vi.hoisted(() => ({ on: false }))
+const renameFails = vi.hoisted(() => ({ on: false, calls: 0 }))
 vi.mock('fs/promises', async (importOriginal) => {
   const fs = await importOriginal<typeof import('fs/promises')>()
   return {
     ...fs,
-    rename: (...args: Parameters<typeof fs.rename>) => renameFails.on
+    rename: (...args: Parameters<typeof fs.rename>) => ++renameFails.calls && renameFails.on
       ? Promise.reject(Object.assign(new Error('EPERM: operation not permitted, rename'), { code: 'EPERM' }))
       : fs.rename(...args),
   }
@@ -455,11 +455,11 @@ describe('concurrent cache writes', () => {
   it('replaces the cache by rename, so parallel writes always leave a parseable file', async () => {
     const base = await tmp()
     await writeCache(emptyCache(SID), base)
-    const path = join(sessionsDir(base), `${SID}.json`)
-    const before = (await stat(path)).ino
     const big = Object.fromEntries(Array.from({ length: 5_000 }, (_, i) => [`msg-${i}`, i]))
+    const renamesBefore = renameFails.calls
     for (let i = 0; i < 20; i++) await writeCache({ ...emptyCache(SID), costUSD: i, perMessage: big }, base)
-    expect((await stat(path)).ino).not.toBe(before)
+    expect(renameFails.calls - renamesBefore).toBe(20)
+    expect((await readCache(SID, base)).costUSD).toBe(19)
     await Promise.all(Array.from({ length: 20 }, (_, i) =>
       writeCache({ ...emptyCache(SID), costUSD: i, perMessage: big }, base)))
     expect((await readCache(SID, base)).perMessage['msg-4999']).toBe(4999)
