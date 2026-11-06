@@ -1,11 +1,11 @@
 import { afterAll, describe, expect, it } from 'vitest'
-import { appendFile, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { appendFile, mkdir, mkdtemp, readdir, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { dedupeStreamingMessageIds, parseApiCall, parseJsonlLine } from '../src/parser.js'
 import { computeSessionUsage, emptyCache, readCache, writeAllow, writeCache } from '../src/guard/usage.js'
 import { runGuardHook, runGuardStatusline } from '../src/guard/hooks.js'
-import { writeGuardConfig, DEFAULT_GUARD_CONFIG } from '../src/guard/store.js'
+import { sessionsDir, writeGuardConfig, DEFAULT_GUARD_CONFIG } from '../src/guard/store.js'
 import { buildFlags, matchFlag, writeFlags, type GuardFlags } from '../src/guard/flags.js'
 import type { ProjectSummary } from '../src/types.js'
 
@@ -415,3 +415,27 @@ function lowWorthProject(): Record<string, unknown> {
     totalCostUSD: 40, totalSavingsUSD: 0, totalApiCalls: 1, totalProxiedCostUSD: 0,
   }
 }
+
+describe('session state pruning', () => {
+  it('drops caches and allow markers untouched for 30 days, once a day', async () => {
+    const base = await tmp()
+    const dir = sessionsDir(base)
+    await mkdir(dir, { recursive: true })
+    const age = async (name: string, days: number) => {
+      await writeFile(join(dir, name), '{}', 'utf-8')
+      const at = new Date(Date.now() - days * 86_400_000)
+      await utimes(join(dir, name), at, at)
+    }
+    await age('old.json', 40)
+    await age('old.allow', 40)
+    await age('recent.json', 2)
+    await age('live.json', 0)
+    await age('live.allow', 40)
+    await writeCache(emptyCache('new'), base)
+    expect((await readdir(dir)).sort()).toEqual(['.pruned', 'live.allow', 'live.json', 'new.json', 'recent.json'])
+
+    await age('later.json', 40)
+    await writeCache(emptyCache('new'), base)
+    expect(await readdir(dir)).toContain('later.json')
+  })
+})

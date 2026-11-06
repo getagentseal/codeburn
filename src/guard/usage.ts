@@ -1,5 +1,6 @@
 import { createHash } from 'crypto'
-import { mkdir, readFile, stat, writeFile } from 'fs/promises'
+import { mkdir, readdir, readFile, rm, stat, writeFile } from 'fs/promises'
+import { join } from 'path'
 import { readSessionLines } from '../fs-utils.js'
 import { collectToolResultMeta, parseApiCall, parseAdvisorCalls, parseJsonlLine, type ToolResultMeta } from '../parser.js'
 import { BASH_TOOLS, EDIT_TOOLS } from '../classifier.js'
@@ -183,6 +184,26 @@ export async function readCache(sessionId: string, base?: string): Promise<Guard
 export async function writeCache(cache: GuardCache, base?: string): Promise<void> {
   await mkdir(sessionsDir(base), { recursive: true })
   await writeFile(sessionCachePath(cache.sessionId, base), JSON.stringify(cache), 'utf-8')
+  await pruneSessions(sessionsDir(base)).catch(() => {})
+}
+
+const DAY_MS = 86_400_000
+const PRUNE_AFTER_MS = 30 * DAY_MS
+
+// At most once a day, drop caches and allow markers untouched for 30 days. An
+// allow marker stays while its session's cache is still being written.
+async function pruneSessions(dir: string): Promise<void> {
+  const stamp = join(dir, '.pruned')
+  const last = await stat(stamp).then(s => s.mtimeMs, () => 0)
+  if (Date.now() - last < DAY_MS) return
+  await writeFile(stamp, '', 'utf-8')
+  const stale = async (name: string) =>
+    Date.now() - (await stat(join(dir, name)).then(s => s.mtimeMs, () => 0)) > PRUNE_AFTER_MS
+  for (const name of await readdir(dir)) {
+    const json = name.endsWith('.allow') ? name.slice(0, -'.allow'.length) + '.json' : name
+    if (!json.endsWith('.json')) continue
+    if (await stale(name) && await stale(json)) await rm(join(dir, name), { force: true })
+  }
 }
 
 // Fold the transcript tail into the totals. Reuses the streaming line reader
