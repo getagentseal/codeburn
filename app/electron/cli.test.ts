@@ -503,6 +503,16 @@ describe('spawnCli', () => {
     fakeBin('flood.js', "const s='x'.repeat(1024*1024); for(let i=0;i<20;i++) process.stdout.write(s); setInterval(()=>{},1000)")
     await expect(spawnCli(['status'])).rejects.toMatchObject({ kind: 'too-large' } satisfies Partial<CliError>)
   })
+
+  it('keeps a multi-byte character intact when it straddles a pipe chunk boundary', async () => {
+    fakeBin(
+      'utf8-split.js',
+      `const prefix = '{"project":"';
+       process.stdout.write(prefix + 'a'.repeat(65535 - prefix.length) + 'üsseldorf"}');`,
+    )
+    const out = await spawnCli(['devices']) as { project: string }
+    expect(out.project.endsWith('aüsseldorf')).toBe(true)
+  })
 })
 
 describe('no-output watchdog (timeoutMs bounds SILENCE, not total runtime)', { timeout: 30_000 }, () => {

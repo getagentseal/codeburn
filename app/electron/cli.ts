@@ -662,13 +662,17 @@ function runCli(spec: SpawnSpec, cmdLabel: string, timeoutMs: number, onStderr?:
       }
     }
 
-    child.stdout.on('data', chunk => { stdout += chunk; bump(chunk.length) })
-    child.stderr.on('data', chunk => {
+    // Decode across chunk boundaries: a multi-byte character split between two
+    // pipe reads would otherwise become two U+FFFD.
+    child.stdout.setEncoding('utf8')
+    child.stderr.setEncoding('utf8')
+    child.stdout.on('data', (chunk: string) => { stdout += chunk; bump(Buffer.byteLength(chunk)) })
+    child.stderr.on('data', (chunk: string) => {
       stderr += chunk
-      bump(chunk.length)
+      bump(Buffer.byteLength(chunk))
       // Live stderr for the cold-start warmup: forwards CLI scan-progress lines
       // to the splash. Never fires for ordinary reads (onStderr unset).
-      if (onStderr) { try { onStderr(chunk.toString()) } catch { /* forwarder must not kill the read */ } }
+      if (onStderr) { try { onStderr(chunk) } catch { /* forwarder must not kill the read */ } }
     })
 
     child.on('error', err => {
@@ -1270,8 +1274,10 @@ function runAction(spec: SpawnSpec, args: string[], timeoutMs: number, onStdout?
       finish({ ok: false, stdout, stderr: `codeburn ${args[0] ?? ''} timed out after ${timeoutMs}ms`, code: null })
     }, timeoutMs)
 
-    child.stdout.on('data', chunk => { stdout += chunk; onStdout?.(String(chunk)) })
-    child.stderr.on('data', chunk => { stderr += chunk })
+    child.stdout.setEncoding('utf8')
+    child.stderr.setEncoding('utf8')
+    child.stdout.on('data', (chunk: string) => { stdout += chunk; onStdout?.(chunk) })
+    child.stderr.on('data', (chunk: string) => { stderr += chunk })
     child.on('error', err => finish({ ok: false, stdout, stderr: err.message, code: null }))
     child.on('close', code => finish({ ok: code === 0, stdout, stderr, code }))
   })
