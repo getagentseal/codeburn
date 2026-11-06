@@ -1606,11 +1606,14 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
           } else if (cumulativeTotal > 0) {
             const total = info.total_token_usage
             if (!total) continue
-            inputTokens = (total.input_tokens ?? 0) - prevInput
-            cachedInputTokens = (total.cached_input_tokens ?? 0) - prevCached
-            cacheWriteTokens = (total.cache_write_input_tokens ?? 0) - prevCacheWrite
-            outputTokens = (total.output_tokens ?? 0) - prevOutput
-            reasoningTokens = (total.reasoning_output_tokens ?? 0) - prevReasoning
+            // A running counter below its previous value restarted (resume,
+            // compaction): what it holds now is the usage since the restart.
+            const since = (now: number | undefined, prev: number) => (now ?? 0) >= prev ? (now ?? 0) - prev : now ?? 0
+            inputTokens = since(total.input_tokens, prevInput)
+            cachedInputTokens = since(total.cached_input_tokens, prevCached)
+            cacheWriteTokens = since(total.cache_write_input_tokens, prevCacheWrite)
+            outputTokens = since(total.output_tokens, prevOutput)
+            reasoningTokens = since(total.reasoning_output_tokens, prevReasoning)
           }
 
           // Always advance the prev counters to track the cumulative state.

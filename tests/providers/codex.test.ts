@@ -842,6 +842,21 @@ describe('codex provider - JSONL parsing', () => {
     expect(calls[0]!.outputTokens).toBeGreaterThan(0)
   })
 
+  it('reads a cumulative-only total that drops as a counter restart, never as negative usage', async () => {
+    const filePath = await writeSession(tmpDir, '2026-04-14', 'rollout-cumulative-reset.jsonl', [
+      sessionMeta({ session_id: 'sess-reset', model: 'gpt-5.5' }),
+      tokenCount({ timestamp: '2026-04-14T10:00:10Z', total: { input: 8_000, output: 800 } }),
+      tokenCount({ timestamp: '2026-04-14T10:10:10Z', total: { input: 3_000, output: 300 } }),
+      tokenCount({ timestamp: '2026-04-14T10:10:20Z', total: { input: 6_000, output: 600 } }),
+    ])
+
+    const provider = createCodexProvider(tmpDir)
+    const calls: ParsedProviderCall[] = []
+    for await (const call of provider.createSessionParser({ path: filePath, project: 'test', provider: 'codex' }, new Set()).parse()) calls.push(call)
+
+    expect(calls.map(c => [c.inputTokens, c.outputTokens])).toEqual([[8_000, 800], [3_000, 300], [3_000, 300]])
+  })
+
   it('treats a turn-start rate-limit ping with no usage info as no call and keeps the prompt', async () => {
     const filePath = await writeSession(tmpDir, '2026-04-14', 'rollout-rate-limit-ping.jsonl', [
       sessionMeta({ session_id: 'sess-ping', model: 'gpt-5.5' }),
