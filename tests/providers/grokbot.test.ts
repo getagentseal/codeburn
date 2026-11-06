@@ -306,3 +306,30 @@ describe('grokbot sliding mirror', () => {
     }
   })
 })
+
+describe('grokbot durable mirror beside an import', () => {
+  it('evicts a removed import\'s rows while the mirror\'s rows stay', async () => {
+    const originalCacheDir = process.env['CODEBURN_CACHE_DIR']
+    process.env['CODEBURN_CACHE_DIR'] = join(dir, 'cb-cache')
+    try {
+      const { CURSOR_CSV_HEADER, importCursorCsvText, removeCursorImport } = await import('../../src/cursor-import.js')
+      const { clearSessionCache, parseAllSessions } = await import('../../src/parser.js')
+      await writeTranscript(BOT_A, [userMessage('u1', 'r1', 'question', T0), botMessage('b1', 'r1', 'answer'.repeat(20), T0 + 1000)])
+      // Ten days after the mirror's request, so the import's coverage never
+      // replaces it.
+      const row = [new Date(T0 + 10 * 86_400_000).toISOString(), '', '', 'Included', 'grok-bot-automation', 'No', 0, 40, 70000, 7, 70047, 'Included']
+      await importCursorCsvText([CURSOR_CSV_HEADER.join(','), row.map(v => `"${v}"`).join(',')].join('\n') + '\n', T0 + 11 * 86_400_000)
+      const projects = async () => {
+        clearSessionCache()
+        return (await parseAllSessions(undefined, 'grokbot')).map(p => [p.project, p.totalApiCalls]).sort()
+      }
+      expect(await projects()).toEqual([[BOT_A, 1], ['Grok Bot (imported)', 1]])
+
+      await removeCursorImport()
+      expect(await projects()).toEqual([[BOT_A, 1]])
+    } finally {
+      if (originalCacheDir === undefined) delete process.env['CODEBURN_CACHE_DIR']
+      else process.env['CODEBURN_CACHE_DIR'] = originalCacheDir
+    }
+  })
+})
