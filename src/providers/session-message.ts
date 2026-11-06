@@ -1,4 +1,4 @@
-import { billableOutputTokens, calculateCost, recordedCostFallback, routeFromProviderField } from '../models.js'
+import { billableOutputTokens, calculateCost, ownValue, recordedCostFallback, routeFromProviderField } from '../models.js'
 import { extractBashCommands } from '../bash-utils.js'
 import type { ParsedProviderCall } from './types.js'
 
@@ -50,7 +50,7 @@ const toolNameMap: Record<string, string> = {
 export function normalizeToolName(rawTool?: string): string {
   if (!rawTool) return ''
   if (rawTool.startsWith('mcp__')) return rawTool
-  const builtIn = toolNameMap[rawTool]
+  const builtIn = ownValue(toolNameMap, rawTool)
   if (builtIn) return builtIn
   const serverSeparator = rawTool.indexOf('_')
   if (serverSeparator > 0 && serverSeparator < rawTool.length - 1) {

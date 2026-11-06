@@ -2,7 +2,7 @@ import { readdir, readFile, stat } from 'fs/promises'
 import { basename, dirname, join } from 'path'
 import { homedir } from 'os'
 
-import { calculateCost } from '../models.js'
+import { calculateCost, ownValue } from '../models.js'
 import { extractBashCommands } from '../bash-utils.js'
 import type { ProbeRoot, Provider, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
 
@@ -200,7 +200,7 @@ function collectBlockTools(blocks: CodebuffBlock[] | undefined, acc: { tools: st
     if (block.type === 'tool' && typeof block.toolName === 'string') {
       const raw = block.toolName
       if (!IGNORED_TOOLS.has(raw)) {
-        acc.tools.push(toolNameMap[raw] ?? raw)
+        acc.tools.push(ownValue(toolNameMap, raw) ?? raw)
       }
       if ((raw === 'run_terminal_command' || raw === 'terminal') && block.input) {
         const cmd = block.input['command']
@@ -430,11 +430,11 @@ export function createCodebuffProvider(baseDir?: string): Provider {
     displayName: 'Codebuff',
 
     modelDisplayName(model: string): string {
-      return modelDisplayNames[model] ?? model
+      return ownValue(modelDisplayNames, model) ?? model
     },
 
     toolDisplayName(rawTool: string): string {
-      return toolNameMap[rawTool] ?? rawTool
+      return ownValue(toolNameMap, rawTool) ?? rawTool
     },
 
     async probeRoots(): Promise<ProbeRoot[]> {

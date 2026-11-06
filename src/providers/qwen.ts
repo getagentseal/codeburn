@@ -3,7 +3,7 @@ import { basename, join } from 'path'
 import { homedir } from 'os'
 
 import { readSessionFile } from '../fs-utils.js'
-import { calculateCost } from '../models.js'
+import { calculateCost, ownValue } from '../models.js'
 import { extractBashCommands } from '../bash-utils.js'
 import type { ProbeRoot, Provider, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
 
@@ -75,7 +75,7 @@ function extractTools(parts: QwenPart[]): { tools: string[]; bashCommands: strin
 
   for (const part of parts) {
     if (part.functionCall?.name) {
-      const mapped = toolNameMap[part.functionCall.name] ?? part.functionCall.name
+      const mapped = ownValue(toolNameMap, part.functionCall.name) ?? part.functionCall.name
       tools.push(mapped)
       if (mapped === 'Bash' && part.functionCall.args && typeof part.functionCall.args['command'] === 'string') {
         bashCommands.push(...extractBashCommands(part.functionCall.args['command'] as string))
@@ -173,7 +173,7 @@ export function createQwenProvider(overrideDir?: string): Provider {
     },
 
     toolDisplayName(rawTool: string): string {
-      return toolNameMap[rawTool] ?? rawTool
+      return ownValue(toolNameMap, rawTool) ?? rawTool
     },
 
     async probeRoots(): Promise<ProbeRoot[]> {

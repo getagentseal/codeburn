@@ -3,7 +3,7 @@ import { Command, Option } from 'commander'
 import { installMenubarApp, uninstallMenubarApp } from './menubar-installer.js'
 import { COMPONENTS, defaultUpdateDeps, runUpdate, type Component } from './update.js'
 import { exportCsv, exportJson, type PeriodExport } from './export.js'
-import { findUnpricedModels, modelRowKey, loadPricing, sanitizeModelForDisplay, setModelAliases, setPriceOverrides, setPriceDiscounts, isValidDiscountPercent, DISCOUNT_KINDS, getModelCosts, setLocalModelSavings, setFlatRateModels, setFlatRateRemoved, setProxyPaths, normalizeProxyPath, unpricedModelHint, isBuiltInFlatRateModel, isSameFlatRateModel, getProxyPathsConfigHash, getModelAliasesConfigHash, getPriceOverridesConfigHash, getLocalModelSavingsConfigHash, getFlatRateModelsConfigHash, getPricingGenerationKey } from './models.js'
+import { findUnpricedModels, modelRowKey, loadPricing, ownValue, sanitizeModelForDisplay, setModelAliases, setPriceOverrides, setPriceDiscounts, isValidDiscountPercent, DISCOUNT_KINDS, getModelCosts, setLocalModelSavings, setFlatRateModels, setFlatRateRemoved, setProxyPaths, normalizeProxyPath, unpricedModelHint, isBuiltInFlatRateModel, isSameFlatRateModel, getProxyPathsConfigHash, getModelAliasesConfigHash, getPriceOverridesConfigHash, getLocalModelSavingsConfigHash, getFlatRateModelsConfigHash, getPricingGenerationKey } from './models.js'
 import { cachedProjectIdentitiesForRange } from './daily-cache.js'
 import { reportUnmatchedProjectPatterns } from './project-filter-warnings.js'
 import { getVercelGatewayApiKey } from './providers/vercel-gateway.js'
@@ -700,7 +700,7 @@ function buildJsonReport(projects: ProjectSummary[], period: string, periodKey: 
     // to the display name the same way buildTopModels does, so ids that
     // collapse to one model land in one row.
     const name = modelRowKey(m.name)
-    const acc = modelMap[name] ??= { calls: 0, cost: 0, savings: 0, estimatedCost: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, baselineModel: '' }
+    const acc = ownValue(modelMap, name) ?? (modelMap[name] = { calls: 0, cost: 0, savings: 0, estimatedCost: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, baselineModel: '' })
     acc.calls += m.calls
     acc.cost += m.cost
     acc.savings += m.savingsUSD ?? 0
@@ -787,22 +787,22 @@ function buildJsonReport(projects: ProjectSummary[], period: string, periodKey: 
   const agentTypeMap: Record<string, { calls: number; cost: number; savings: number }> = {}
   for (const sess of sessions) {
     for (const [tool, d] of Object.entries(sess.toolBreakdown)) {
-      toolMap[tool] = (toolMap[tool] ?? 0) + d.calls
+      toolMap[tool] = (ownValue(toolMap, tool) ?? 0) + d.calls
     }
     for (const [server, d] of Object.entries(sess.mcpBreakdown)) {
-      mcpMap[server] = (mcpMap[server] ?? 0) + d.calls
+      mcpMap[server] = (ownValue(mcpMap, server) ?? 0) + d.calls
     }
     for (const [cmd, d] of Object.entries(sess.bashBreakdown)) {
-      bashMap[cmd] = (bashMap[cmd] ?? 0) + d.calls
+      bashMap[cmd] = (ownValue(bashMap, cmd) ?? 0) + d.calls
     }
     for (const [skill, d] of Object.entries(sess.skillBreakdown)) {
-      if (!skillMap[skill]) skillMap[skill] = { turns: 0, cost: 0, savings: 0 }
+      if (!Object.hasOwn(skillMap, skill)) skillMap[skill] = { turns: 0, cost: 0, savings: 0 }
       skillMap[skill].turns += d.turns
       skillMap[skill].cost += d.costUSD
       skillMap[skill].savings += d.savingsUSD
     }
     for (const [sat, d] of Object.entries(sess.subagentBreakdown)) {
-      if (!subagentMap[sat]) subagentMap[sat] = { calls: 0, cost: 0, savings: 0 }
+      if (!Object.hasOwn(subagentMap, sat)) subagentMap[sat] = { calls: 0, cost: 0, savings: 0 }
       subagentMap[sat].calls += d.calls
       subagentMap[sat].cost += d.costUSD
       subagentMap[sat].savings += d.savingsUSD

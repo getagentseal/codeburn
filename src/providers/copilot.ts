@@ -65,7 +65,7 @@ import { existsSync } from 'fs'
 import { getEditorDataDir } from '../editor-data-dir.js'
 import { createHash } from 'crypto'
 import { readSessionFile } from '../fs-utils.js'
-import { calculateCost, modelKeyMatches } from '../models.js'
+import { calculateCost, modelKeyMatches, ownValue } from '../models.js'
 import { NANO_AIU_PER_CREDIT, creditsToUsd, nanoAiuToCredits } from '../copilot-aiu.js'
 import { extractBashCommands } from '../bash-utils.js'
 import { estimateTokens } from '../context-tree.js'
@@ -826,7 +826,7 @@ const toolNameMap: Record<string, string> = {
  * - Everything else is returned unchanged.
  */
 function normalizeTool(rawTool: string): string {
-  const mapped = toolNameMap[rawTool]
+  const mapped = ownValue(toolNameMap, rawTool)
   if (mapped) return mapped
   // MCP tool names follow the pattern: server-name-tool_operand
   // e.g. github-mcp-server-list_issues → mcp__github_mcp_server__list_issues

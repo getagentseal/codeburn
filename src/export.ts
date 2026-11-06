@@ -210,7 +210,7 @@ function buildModelRows(projects: ProjectSummary[], period: string): Row[] {
   const modelTotals: Record<string, { calls: number; cost: number; savings: number; input: number; output: number; cacheRead: number; cacheWrite: number }> = {}
   const modelEfficiency = aggregateModelEfficiency(projects)
   const ensure = (model: string) => {
-    if (!modelTotals[model]) modelTotals[model] = { calls: 0, cost: 0, savings: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
+    if (!Object.hasOwn(modelTotals, model)) modelTotals[model] = { calls: 0, cost: 0, savings: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
     return modelTotals[model]
   }
   for (const project of projects) {

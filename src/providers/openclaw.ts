@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto'
 import zlib from 'zlib'
 
 import { readSessionFile } from '../fs-utils.js'
-import { calculateCost } from '../models.js'
+import { calculateCost, ownValue } from '../models.js'
 import { extractBashCommands } from '../bash-utils.js'
 import { getSqliteLoadError, isSqliteAvailable, isSqliteBusyError, openDatabase, type SqliteDatabase } from '../sqlite.js'
 import type { Provider, SessionSource, SessionParser, ParsedProviderCall, ProbeRoot } from './types.js'
@@ -238,7 +238,7 @@ function extractTools(content: Array<{ type?: string; name?: string; arguments?:
 
   for (const block of content) {
     if ((block.type === 'tool_use' || block.type === 'toolCall') && block.name) {
-      const mapped = toolNameMap[block.name] ?? block.name
+      const mapped = ownValue(toolNameMap, block.name) ?? block.name
       tools.push(mapped)
       if (mapped === 'Bash' && block.arguments && typeof block.arguments.command === 'string') {
         bashCommands.push(...extractBashCommands(block.arguments.command))
@@ -510,7 +510,7 @@ export function createOpenClawProvider(overrideDir?: string): Provider {
     },
 
     toolDisplayName(rawTool: string): string {
-      return toolNameMap[rawTool] ?? rawTool
+      return ownValue(toolNameMap, rawTool) ?? rawTool
     },
 
     async probeRoots(): Promise<ProbeRoot[]> {

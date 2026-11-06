@@ -10,7 +10,7 @@ import https from 'https'
 
 import { extractBashCommands } from '../bash-utils.js'
 import { getCodeburnCacheDir, readExistingTextFile } from '../cache-dir.js'
-import { calculateCost } from '../models.js'
+import { calculateCost, ownValue } from '../models.js'
 import { isSqliteAvailable, isSqliteBusyError, openDatabase } from '../sqlite.js'
 import type { ProbeRoot, Provider, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
 
@@ -694,7 +694,7 @@ const PRICING_ALIASES: Record<string, string> = {
 export function normalizePricingModel(model: string | undefined): string {
   if (!model) return 'unknown'
   const stripped = model.replace(/-(high|medium|low|agent)$/, '')
-  return PRICING_ALIASES[stripped] ?? stripped
+  return ownValue(PRICING_ALIASES, stripped) ?? stripped
 }
 
 function readProtoVarint(data: Uint8Array, startOffset: number): ProtoVarint | null {
@@ -835,7 +835,7 @@ const PLACEHOLDER_MODELS: Record<string, string> = {
 function antigravitySqliteModel(chatFields: readonly ProtoField[]): { model: string; estimated: boolean } {
   const attributes = antigravitySqliteMetadataAttributes(chatFields)
   const displayName = protoFieldText(firstProtoField(chatFields, 21))
-  const placeholderModel = PLACEHOLDER_MODELS[attributes.get('model_enum') ?? '']
+  const placeholderModel = ownValue(PLACEHOLDER_MODELS, attributes.get('model_enum') ?? '')
   if (!displayName && placeholderModel) return { model: placeholderModel, estimated: true }
   const rawModel = protoFieldText(firstProtoField(chatFields, 19))
     ?? attributes.get('model_enum')
@@ -994,7 +994,7 @@ function extractAntigravityToolFromStep(metadataBytes: Uint8Array, turn: TurnToo
       continue
     }
 
-    turn.tools.push(toolNameMap[toolName] ?? normalizeAntigravityToolCall(toolName, args))
+    turn.tools.push(ownValue(toolNameMap, toolName) ?? normalizeAntigravityToolCall(toolName, args))
   }
 }
 
@@ -1336,7 +1336,7 @@ export function buildCallsFromGeneratorMetadata(
     const dedupKey = `antigravity:${cascadeId}:${responseId}`
 
     const rawModel = usage.model || entry.chatModel?.model || ''
-    const model = dropPlaceholderModelId(modelMap[rawModel] ?? rawModel)
+    const model = dropPlaceholderModelId(ownValue(modelMap, rawModel) ?? rawModel)
     const pricingModel = normalizePricingModel(model)
     const timestamp = entry.chatModel?.chatStartMetadata?.createdAt ?? ''
     const costUSD = calculateCost(pricingModel, inputTokens, responseTokens + thinkingTokens, cacheWriteTokens, cacheReadTokens, 0, 'standard', 0, 'antigravity')
@@ -1878,7 +1878,7 @@ export function createAntigravityProvider(): Provider {
     displayName: 'Antigravity',
 
     modelDisplayName(model: string): string {
-      return modelDisplayNames[model] ?? model
+      return ownValue(modelDisplayNames, model) ?? model
     },
 
     toolDisplayName(rawTool: string): string {

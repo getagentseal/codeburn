@@ -6,7 +6,7 @@ import { type SessionCountBasis } from './session-count-label.js'
 import { parseAllSessions, filterProjectsByName, mergeProjectSplits, filterProjectsByDays, filterProjectsByClaudeConfigSource, filterProjectsByIdentity, filterProjectsByDateRange, isSessionHydrationComplete, makeProjectFilter, type ProjectFilterTarget, sessionHydrationSnapshot } from './parser.js'
 type ProjectFilter = (entry: ProjectFilterTarget) => boolean
 
-import { findUnpricedModels, getFlatRateModelsConfigHash, getLocalModelSavingsConfigHash, getPriceOverridesConfigHash, getShortModelName, isExpectedFreeModel, billableOutputTokens, modelRowKey } from './models.js'
+import { findUnpricedModels, getFlatRateModelsConfigHash, getLocalModelSavingsConfigHash, getPriceOverridesConfigHash, getShortModelName, isExpectedFreeModel, billableOutputTokens, modelRowKey, ownValue } from './models.js'
 import { getAllProviders, safeDiscoverSessions } from './providers/index.js'
 import { loadPlugins, pluginPayloadSections } from './plugins/loader.js'
 import { collectLiveSessions } from './live-sessions.js'
@@ -160,7 +160,7 @@ export function buildPeriodData(label: string, projects: ProjectSummary[]): Peri
       catTotals[cat].oneShotTurns += d.oneShotTurns
     }
     for (const [model, d] of Object.entries(sess.modelBreakdown)) {
-      if (!modelTotals[model]) modelTotals[model] = { calls: 0, cost: 0, savingsUSD: 0, estimatedCostUSD: 0, tokens: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 }
+      if (!Object.hasOwn(modelTotals, model)) modelTotals[model] = { calls: 0, cost: 0, savingsUSD: 0, estimatedCostUSD: 0, tokens: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 }
       const acc = modelTotals[model]
       acc.calls += d.calls
       acc.cost += d.costUSD
@@ -168,7 +168,7 @@ export function buildPeriodData(label: string, projects: ProjectSummary[]): Peri
       acc.estimatedCostUSD += d.estimatedCostUSD ?? 0
       acc.tokens += d.tokens.inputTokens + d.tokens.outputTokens + d.tokens.cacheReadInputTokens + d.tokens.cacheCreationInputTokens
       acc.inputTokens += d.tokens.inputTokens
-      acc.outputTokens += sessionModelOut[model] ?? billableOutputTokens(inferSessionProvider(sess), d.tokens.outputTokens, d.tokens.reasoningTokens)
+      acc.outputTokens += ownValue(sessionModelOut, model) ?? billableOutputTokens(inferSessionProvider(sess), d.tokens.outputTokens, d.tokens.reasoningTokens)
       acc.cacheReadTokens += d.tokens.cacheReadInputTokens
       acc.cacheWriteTokens += d.tokens.cacheCreationInputTokens
     }
@@ -2006,9 +2006,9 @@ export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: 
     let totalSavings = 0
     let totalSavingsCalls = 0
     for (const p of scanProjects) for (const s of p.sessions) {
-      for (const [t, d] of Object.entries(s.toolBreakdown)) { if (!t.startsWith('lang:')) toolMap[t] = (toolMap[t] ?? 0) + d.calls }
-      for (const [sk, d] of Object.entries(s.skillBreakdown)) { const e = skillMap[sk] ?? { turns: 0, cost: 0 }; e.turns += d.turns; e.cost += d.costUSD; skillMap[sk] = e }
-      for (const [sa, d] of Object.entries(s.subagentBreakdown)) { const e = subagentMap[sa] ?? { calls: 0, cost: 0 }; e.calls += d.calls; e.cost += d.costUSD; subagentMap[sa] = e }
+      for (const [t, d] of Object.entries(s.toolBreakdown)) { if (!t.startsWith('lang:')) toolMap[t] = (ownValue(toolMap, t) ?? 0) + d.calls }
+      for (const [sk, d] of Object.entries(s.skillBreakdown)) { const e = ownValue(skillMap, sk) ?? { turns: 0, cost: 0 }; e.turns += d.turns; e.cost += d.costUSD; skillMap[sk] = e }
+      for (const [sa, d] of Object.entries(s.subagentBreakdown)) { const e = ownValue(subagentMap, sa) ?? { calls: 0, cost: 0 }; e.calls += d.calls; e.cost += d.costUSD; subagentMap[sa] = e }
       if (s.agentName && s.turns.some(turn => turn.assistantCalls.some(call => call.provider === 'omp'))) {
         const calls = s.turns.flatMap(turn => turn.assistantCalls)
         const models = Array.from(new Set(calls.map(call => call.model))).sort()
@@ -2034,7 +2034,7 @@ export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: 
         entry.cacheWriteTokens += s.totalCacheWriteTokens
         ompSubagentMap.set(key, entry)
       }
-      for (const [m, d] of Object.entries(s.mcpBreakdown)) { mcpMap[m] = (mcpMap[m] ?? 0) + d.calls }
+      for (const [m, d] of Object.entries(s.mcpBreakdown)) { mcpMap[m] = (ownValue(mcpMap, m) ?? 0) + d.calls }
       for (const turn of s.turns) for (const call of turn.assistantCalls) {
         if (!call.savingsUSD || call.savingsUSD <= 0) continue
         // Saved DOLLARS/tokens keep every call, but the `calls` figures are

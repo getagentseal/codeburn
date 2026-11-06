@@ -4,7 +4,7 @@ import { basename, join } from 'path'
 
 import { extractBashCommands } from '../bash-utils.js'
 import { readSessionFile } from '../fs-utils.js'
-import { calculateCost, getShortModelName } from '../models.js'
+import { calculateCost, getShortModelName, ownValue } from '../models.js'
 import type { ToolCall } from '../types.js'
 import type { ParsedProviderCall, ProbeRoot, Provider, SessionParser, SessionSource } from './types.js'
 
@@ -52,7 +52,7 @@ const toolNameMap: Record<string, string> = {
 }
 
 function mapToolName(rawTool: string): string {
-  return toolNameMap[rawTool] ?? rawTool
+  return ownValue(toolNameMap, rawTool) ?? rawTool
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

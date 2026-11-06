@@ -4,7 +4,7 @@ import { basename, join, resolve } from 'path'
 import { homedir } from 'os'
 
 import { createTextReadStream, FS_SCAN_CONCURRENCY, mapWithConcurrency, readSessionLines } from '../fs-utils.js'
-import { billableOutputTokens, calculateCost, getModelCosts, pricingModelAt } from '../models.js'
+import { billableOutputTokens, calculateCost, getModelCosts, ownValue, pricingModelAt } from '../models.js'
 import { readCachedCodexResults, writeCachedCodexResults, getCachedCodexProject, fingerprintFile, type CodexFileFingerprint } from '../codex-cache.js'
 import { mergeToolIntervals } from '../codex-throughput.js'
 import { codexReplayNativeToolIdentity, codexReplayResponseIdentity, codexReplayUsageIdentity, isCodexForkReplay, isCodexForkReplayState, loadCodexParentReplayIndex, startCodexForkReplay, type CodexForkReplayState } from '../codex-fork-replay.js'
@@ -1317,7 +1317,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
 
         if (entry.type === 'response_item' && (entry.payload?.type === 'function_call' || entry.payload?.type === 'custom_tool_call')) {
           const rawName = entry.payload.name ?? ''
-          const mapped = toolNameMap[rawName] ?? rawName
+          const mapped = ownValue(toolNameMap, rawName) ?? rawName
           pendingTools.push(mapped)
           const call: ToolCall = { tool: mapped }
           const rawArgs = (entry.payload as Record<string, unknown>)['arguments']
@@ -1753,7 +1753,7 @@ export function createCodexProvider(
     },
 
     toolDisplayName(rawTool: string): string {
-      return toolNameMap[rawTool] ?? rawTool
+      return ownValue(toolNameMap, rawTool) ?? rawTool
     },
 
     // Trees discoverSessions actually walks. Honors CODEX_HOME; when the

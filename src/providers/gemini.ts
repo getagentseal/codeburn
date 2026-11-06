@@ -3,7 +3,7 @@ import { join } from 'path'
 import { homedir } from 'os'
 
 import { readSessionFile } from '../fs-utils.js'
-import { calculateCost } from '../models.js'
+import { calculateCost, ownValue } from '../models.js'
 import { extractBashCommands } from '../bash-utils.js'
 import type { ProbeRoot, Provider, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
 
@@ -102,7 +102,7 @@ function parseSession(data: GeminiSession, seenKeys: Set<string>): ParsedProvide
 
     if (msg.toolCalls) {
       for (const tc of msg.toolCalls) {
-        const mapped = toolNameMap[tc.displayName ?? ''] ?? toolNameMap[tc.name] ?? tc.displayName ?? tc.name
+        const mapped = ownValue(toolNameMap, tc.displayName ?? '') ?? ownValue(toolNameMap, tc.name) ?? tc.displayName ?? tc.name
         tools.push(mapped)
         if (mapped === 'Bash' && tc.args && typeof tc.args.command === 'string') {
           bashCommands.push(...extractBashCommands(tc.args.command))
@@ -265,11 +265,11 @@ export function createGeminiProvider(): Provider {
         'gemini-2.5-flash': 'Gemini 2.5 Flash',
         'gemini-2.0-flash': 'Gemini 2.0 Flash',
       }
-      return display[model] ?? model
+      return ownValue(display, model) ?? model
     },
 
     toolDisplayName(rawTool: string): string {
-      return toolNameMap[rawTool] ?? rawTool
+      return ownValue(toolNameMap, rawTool) ?? rawTool
     },
 
     async probeRoots(): Promise<ProbeRoot[]> {

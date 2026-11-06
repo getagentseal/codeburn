@@ -1,7 +1,7 @@
 import { join } from 'path'
 import { homedir, platform } from 'os'
 
-import { calculateCost, getShortModelName } from '../models.js'
+import { calculateCost, getShortModelName, ownValue } from '../models.js'
 import { extractBashCommands } from '../bash-utils.js'
 import { isSqliteAvailable, getSqliteLoadError, openDatabase, blobToText, type SqliteDatabase } from '../sqlite.js'
 import type { ToolCall } from '../types.js'
@@ -105,7 +105,7 @@ function extractToolsFromMessages(db: SqliteDatabase, sessionId: string): { tool
         if (item.type !== 'toolRequest') continue
         const rawName = item.toolCall?.value?.name ?? ''
         if (!rawName) continue
-        const mapped = toolNameMap[rawName] ?? rawName.split('__').pop() ?? rawName
+        const mapped = ownValue(toolNameMap, rawName) ?? rawName.split('__').pop() ?? rawName
         if (!seen.has(mapped)) {
           seen.add(mapped)
           tools.push(mapped)
@@ -274,11 +274,11 @@ export function createGooseProvider(): Provider {
     displayName: 'Goose',
 
     modelDisplayName(model: string): string {
-      return modelDisplayNames[model] ?? getShortModelName(model)
+      return ownValue(modelDisplayNames, model) ?? getShortModelName(model)
     },
 
     toolDisplayName(rawTool: string): string {
-      return toolNameMap[rawTool] ?? rawTool
+      return ownValue(toolNameMap, rawTool) ?? rawTool
     },
 
     async probeRoots(): Promise<ProbeRoot[]> {

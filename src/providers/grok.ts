@@ -3,7 +3,7 @@ import { basename, dirname, join } from 'path'
 import { homedir } from 'os'
 
 import { FS_SCAN_CONCURRENCY, mapWithConcurrency, readSessionFile, readSessionLines } from '../fs-utils.js'
-import { calculateCost, getModelCosts, getShortModelName } from '../models.js'
+import { calculateCost, getModelCosts, getShortModelName, ownValue } from '../models.js'
 import { extractBashCommands } from '../bash-utils.js'
 import type { ProbeRoot, Provider, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
 
@@ -270,7 +270,7 @@ function parseUpdates(updates: string): {
     }
 
     if (update?.sessionUpdate === 'tool_call' && typeof update.title === 'string') {
-      tools.push(toolNameMap[update.title] ?? update.title)
+      tools.push(ownValue(toolNameMap, update.title) ?? update.title)
       if (update.title === 'run_terminal_command' && typeof update.rawInput?.command === 'string') {
         bashCommands.push(...extractBashCommands(update.rawInput.command))
       }
@@ -657,7 +657,7 @@ export function createGrokProvider(sessionsDir?: string): Provider {
     },
 
     toolDisplayName(rawTool: string): string {
-      return toolNameMap[rawTool] ?? rawTool
+      return ownValue(toolNameMap, rawTool) ?? rawTool
     },
 
     async discoverSessions(): Promise<SessionSource[]> {

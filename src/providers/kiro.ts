@@ -6,7 +6,7 @@ import { homedir } from 'os'
 
 import { readSessionFile } from '../fs-utils.js'
 import { flatSlice, flatString } from '../content-utils.js'
-import { calculateCost } from '../models.js'
+import { calculateCost, ownValue } from '../models.js'
 import { estimateTokensFromChars } from '../token-estimate.js'
 import type { ToolCall } from '../types.js'
 import type { ProbeRoot, Provider, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
@@ -102,7 +102,7 @@ function extractToolNames(content: string): string[] {
     // flatString: regex match groups are V8 SlicedStrings that retain the
     // ENTIRE subject string — storing them in the session cache would pin
     // every scanned assistant-content buffer. Mapped names are flat literals.
-    tools.push(toolNameMap[name] ?? flatString(name))
+    tools.push(ownValue(toolNameMap, name) ?? flatString(name))
   }
   return tools
 }
@@ -190,7 +190,7 @@ function extractStructuredToolNames(value: unknown, options: { includeDirectName
 
   if (options.includeDirectName ?? true) {
     const directName = stringField(record, ['toolName', 'name'])
-    if (directName) tools.push(toolNameMap[directName] ?? directName)
+    if (directName) tools.push(ownValue(toolNameMap, directName) ?? directName)
   }
 
   for (const key of ['toolCalls', 'tool_calls', 'tools']) {
@@ -198,7 +198,7 @@ function extractStructuredToolNames(value: unknown, options: { includeDirectName
     if (!Array.isArray(entries)) continue
     for (const entry of entries) {
       const name = stringField(asRecord(entry), ['name', 'toolName', 'tool_name'])
-      if (name) tools.push(toolNameMap[name] ?? name)
+      if (name) tools.push(ownValue(toolNameMap, name) ?? name)
     }
   }
 
@@ -372,7 +372,7 @@ function parseModernExecution(data: KiroModernExecution, sourcePath: string, see
           if (typeof tool === 'string' && tool) {
             // Strip mcp_ prefix for cleaner display (e.g. mcp_aws_sentral_mcp_search_accounts -> aws_sentral_mcp_search_accounts)
             const cleaned = tool.startsWith('mcp_') ? tool.slice(4) : tool
-            allTools.push(toolNameMap[cleaned] ?? cleaned)
+            allTools.push(ownValue(toolNameMap, cleaned) ?? cleaned)
             hasOutputActivity = true
           }
         }
@@ -560,7 +560,7 @@ function parseCliSession(meta: KiroCliSessionMeta, entries: KiroCliEntry[], seen
             const toolData = asRecord(rec['data'])
             if (toolData) {
               const name = typeof toolData['name'] === 'string' ? toolData['name'] : ''
-              if (name) allTools.push(toolNameMap[name] ?? name)
+              if (name) allTools.push(ownValue(toolNameMap, name) ?? name)
             }
           }
         }
@@ -745,7 +745,7 @@ async function parseV2Session(source: SessionSource, seenKeys: Set<string>): Pro
     if (!raw) return
     // Strip mcp_ prefix for cleaner display, matching the modern-execution parser.
     const cleaned = raw.startsWith('mcp_') ? raw.slice(4) : raw
-    tools.push(toolNameMap[cleaned] ?? cleaned)
+    tools.push(ownValue(toolNameMap, cleaned) ?? cleaned)
   }
 
   const flushTurn = () => {
@@ -1178,7 +1178,7 @@ export function createKiroProvider(agentDirOverride?: string, workspaceStorageDi
 
     toolDisplayName(rawTool: string): string {
       if (rawTool.startsWith('mcp__')) return rawTool
-      return toolNameMap[rawTool] ?? rawTool
+      return ownValue(toolNameMap, rawTool) ?? rawTool
     },
 
     async probeRoots(): Promise<ProbeRoot[]> {

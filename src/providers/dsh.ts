@@ -4,7 +4,7 @@ import { homedir } from 'os'
 import zlib from 'zlib'
 
 import { MAX_SESSION_FILE_BYTES, readSessionFile, readSessionLines } from '../fs-utils.js'
-import { billableOutputTokens, calculateCost, getShortModelName } from '../models.js'
+import { billableOutputTokens, calculateCost, getShortModelName, ownValue } from '../models.js'
 import { extractBashCommands } from '../bash-utils.js'
 import type { ProbeRoot, Provider, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
 
@@ -186,7 +186,7 @@ const toolNameMap: Record<string, string> = {
 }
 
 function mapToolName(raw: string): string {
-  return toolNameMap[raw] ?? raw
+  return ownValue(toolNameMap, raw) ?? raw
 }
 
 // Usage fields are whatever the JSON held. A string or array would flow

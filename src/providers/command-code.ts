@@ -4,7 +4,7 @@ import { basename, join } from 'path'
 
 import { extractBashCommands } from '../bash-utils.js'
 import { readSessionFile } from '../fs-utils.js'
-import { calculateCost } from '../models.js'
+import { calculateCost, ownValue } from '../models.js'
 import type { ToolCall } from '../types.js'
 import type { ParsedProviderCall, ProbeRoot, Provider, SessionParser, SessionSource } from './types.js'
 
@@ -125,7 +125,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
         let webSearchRequests = 0
         for (const block of Array.isArray(line.message.content) ? line.message.content : []) {
           if (block.type !== 'tool_use' || !str(block.name)) continue
-          const tool = toolNameMap[block.name!] ?? block.name!
+          const tool = ownValue(toolNameMap, block.name!) ?? block.name!
           const args = block.input ?? {}
           const call: ToolCall = { tool }
           const file = str(args['file_path']) ?? str(args['path'])
@@ -189,7 +189,7 @@ export function createCommandCodeProvider(projectsDir?: string): Provider {
     },
 
     toolDisplayName(rawTool: string): string {
-      return toolNameMap[rawTool] ?? rawTool
+      return ownValue(toolNameMap, rawTool) ?? rawTool
     },
 
     async probeRoots(): Promise<ProbeRoot[]> {
