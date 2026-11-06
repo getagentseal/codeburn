@@ -94,6 +94,7 @@ function num(value: unknown): number | null {
  *  looked for in both encodings. */
 const KEY_ENCODINGS = [Buffer.from(STORAGE_KEY, 'latin1'), Buffer.from(STORAGE_KEY, 'utf16le')]
 const TOKEN_PATTERN = /^[A-Za-z0-9_\-.=+/]{24,}$/
+const UNREADABLE = 'the newest ZCode login entry could not be read'
 
 /** A leveldb varint32: the value and the offset just past it. */
 function varint(data: Buffer, at: number): [number, number] | null {
@@ -106,33 +107,31 @@ function varint(data: Buffer, at: number): [number, number] | null {
   return null
 }
 
-/** The last write of the key wins, matching how the journal replays, and an
- *  empty last write (`''`) means the app cleared the login. The key
- *  is followed by the value's leveldb varint length, then the string flag and
- *  the string itself; the length, not the token alphabet, ends the token,
- *  because the next record's checksum can be token characters too. */
+/** Only the last write of the key counts, matching how the journal replays; an
+ *  empty one (`''`) means the app cleared the login. The key is followed by the
+ *  value's leveldb varint length, then the string flag and the string itself;
+ *  the length, not the token alphabet, ends the token, because the next
+ *  record's checksum can be token characters too. A last write that does not
+ *  parse throws rather than falling back to an older, replaced token. */
 function tokenAfterKey(data: Buffer): string | null {
-  let token: string | null = null
-  let tokenAt = -1
-  for (const key of KEY_ENCODINGS) {
-    for (let at = data.indexOf(key); at !== -1; at = data.indexOf(key, at + 1)) {
-      const frame = varint(data, at + key.length)
-      if (!frame) continue
-      const [length, start] = frame
-      const flag = data[start]
-      if (length < 1 || start + length > data.length || (flag !== 0x00 && flag !== 0x01)) continue
-      const value = data.toString(flag === 0x01 ? 'latin1' : 'utf16le', start + 1, start + length)
-      if (at > tokenAt && (value === '' || TOKEN_PATTERN.test(value))) {
-        token = value
-        tokenAt = at
-      }
-    }
+  let at = -1
+  let key = KEY_ENCODINGS[0]!
+  for (const candidate of KEY_ENCODINGS) {
+    const found = data.lastIndexOf(candidate)
+    if (found > at) [at, key] = [found, candidate]
   }
-  return token
+  if (at === -1) return null
+  const frame = varint(data, at + key.length)
+  const [length, start] = frame ?? [0, 0]
+  const flag = data[start]
+  if (length < 1 || start + length > data.length || (flag !== 0x00 && flag !== 0x01)) throw new Error(UNREADABLE)
+  const value = data.toString(flag === 0x01 ? 'latin1' : 'utf16le', start + 1, start + length)
+  if (value !== '' && !TOKEN_PATTERN.test(value)) throw new Error(UNREADABLE)
+  return value
 }
 
 /** `null` when no journal holds the login — the same state as never signed in;
- *  `''` when the newest write cleared it. */
+ *  `''` when the newest write cleared it. Throws when that write is unreadable. */
 export async function zcodeAccessToken(deps: ZcodeDeps): Promise<string | null> {
   let names: string[]
   try { names = await deps.readDir(deps.storageDir) } catch { return null }

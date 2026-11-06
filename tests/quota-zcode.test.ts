@@ -96,6 +96,22 @@ describe('ZCode credential discovery', () => {
     expect(result.quota.footerLines).toEqual(['Login expired. Open the ZCode app and sign in again, then refresh.'])
   })
 
+  it('reads a malformed newest write as unreadable for this poll, never as the older token', async () => {
+    const older = journalEntry(STORAGE_KEY, TOKEN)
+    const head = Buffer.concat([Buffer.from([0x00, 0x01]), Buffer.from(STORAGE_KEY, 'latin1')])
+    const malformed = [
+      Buffer.concat([older, head, varint(5000), Buffer.from([0x01]), Buffer.from('eyJhbGciOiJIUzU1MiJ9.cut', 'latin1')]),
+      Buffer.concat([older, head, varint(0)]),
+    ]
+    for (const journal of malformed) {
+      const fetchMock = vi.fn()
+      await expect(zcodeAccessToken(deps({ '000003.log': journal }))).rejects.toThrow('could not be read')
+      const result = await fetchZcodeQuota({ ...deps({ '000003.log': journal }), fetch: fetchMock as unknown as typeof fetch })
+      expect(result.quota.connection).toBe('transientFailure')
+      expect(fetchMock).not.toHaveBeenCalled()
+    }
+  })
+
   it('keeps the most recent write when the key was rotated in place', async () => {
     const journal = Buffer.concat([
       journalEntry(STORAGE_KEY, TOKEN),
