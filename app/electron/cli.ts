@@ -97,9 +97,10 @@ const SHUTDOWN_FORCE_WAIT_MS = 250
 export const PROGRESS_LINE_PREFIX = 'CODEBURN_PROGRESS '
 // A runaway CLI (or a compromised binary) must not exhaust main-process memory.
 const MAX_OUTPUT_BYTES = 16 * 1024 * 1024
-// Serve wraps the output as an escaped JSON string (pretty JSON grows ~17%), so
-// the raw frame gets headroom; the decoded output is still held to MAX_OUTPUT_BYTES.
-const MAX_SERVE_FRAME_BYTES = 2 * MAX_OUTPUT_BYTES
+// Serve wraps the output as an escaped JSON string: pretty JSON grows ~17%, and
+// an output of only quotes or backslashes doubles. The raw frame gets room for
+// more than that; the decoded output is still held to MAX_OUTPUT_BYTES.
+const MAX_SERVE_FRAME_BYTES = 4 * MAX_OUTPUT_BYTES
 
 // Serve output over its bound: the same answer would hit the one-shot cap too,
 // so it is never retried cold.

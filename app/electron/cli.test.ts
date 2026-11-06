@@ -1079,6 +1079,33 @@ describe('resident serve single-flight', { timeout: 30_000 }, () => {
     expect(readMaybe(oneShotsFile)).toBe('')
   })
 
+  it('serves a 16 MiB answer whose escaping doubles it on the wire', async () => {
+    const startsFile = join(dir, 'escaped-starts')
+    const oneShotsFile = join(dir, 'escaped-one-shots')
+    fakeBin(
+      'escaped-resident.js',
+      `const fs = require('node:fs'); const readline = require('node:readline');
+       if (process.argv[2] === 'serve') {
+         fs.appendFileSync(${JSON.stringify(startsFile)}, 's');
+         const output = JSON.stringify('\\\\'.repeat(8 * 1024 * 1024 - 1));
+         const rl = readline.createInterface({ input: process.stdin });
+         rl.on('line', line => {
+           const request = JSON.parse(line);
+           process.stdout.write(JSON.stringify({ id: request.id, ok: true, output }) + '\\n');
+         });
+       } else {
+         fs.appendFileSync(${JSON.stringify(oneShotsFile)}, 'o');
+         process.stdout.write('""');
+       }`,
+    )
+    startServe()
+
+    const value = await spawnCli(['status', '--escaped'], { timeoutMs: 10_000 }) as string
+    expect(value.length).toBe(8 * 1024 * 1024 - 1)
+    expect(readMaybe(startsFile)).toBe('s')
+    expect(readMaybe(oneShotsFile)).toBe('')
+  })
+
   it('fails an over-cap answer without a one-shot retry and keeps the warm resident', async () => {
     const startsFile = join(dir, 'over-cap-starts')
     const oneShotsFile = join(dir, 'over-cap-one-shots')
@@ -1115,7 +1142,7 @@ describe('resident serve single-flight', { timeout: 30_000 }, () => {
     fakeBin(
       'huge-frame-resident.js',
       `const fs = require('node:fs'); const readline = require('node:readline');
-       const output = JSON.stringify({ value: 'x'.repeat(40 * 1024 * 1024) });
+       const output = JSON.stringify({ value: 'x'.repeat(64 * 1024 * 1024 + 1024) });
        if (process.argv[2] === 'serve') {
          fs.appendFileSync(${JSON.stringify(startsFile)}, 's');
          const generation = fs.readFileSync(${JSON.stringify(startsFile)}, 'utf8').length;
@@ -1150,7 +1177,7 @@ describe('resident serve single-flight', { timeout: 30_000 }, () => {
        if (process.argv[2] === 'serve') {
          fs.appendFileSync(${JSON.stringify(startsFile)}, 's');
          const rl = readline.createInterface({ input: process.stdin });
-         rl.once('line', () => process.stdout.write('x'.repeat(32 * 1024 * 1024 + 1024)));
+         rl.once('line', () => process.stdout.write('x'.repeat(64 * 1024 * 1024 + 1024)));
          setInterval(() => {}, 1000);
        } else {
          fs.appendFileSync(${JSON.stringify(oneShotsFile)}, 'o');
