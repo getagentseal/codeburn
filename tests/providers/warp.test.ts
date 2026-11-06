@@ -5,7 +5,7 @@ import { tmpdir } from 'os'
 import { createRequire } from 'node:module'
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { createWarpProvider } from '../../src/providers/warp.js'
+import { createWarpProvider, getDbCandidates } from '../../src/providers/warp.js'
 import { isSqliteAvailable } from '../../src/sqlite.js'
 import type { ParsedProviderCall } from '../../src/providers/types.js'
 
@@ -505,5 +505,24 @@ skipUnlessSqlite('warp provider', () => {
     expect(calls).toHaveLength(1)
     expect(calls[0]!.costUSD).toBeCloseTo(expectedUsd, 6)
     expect(calls[0]!.costIsEstimated).toBe(false)
+  })
+})
+
+describe('warp db locations', () => {
+  const saved = { ...process.env }
+  afterEach(() => { process.env = { ...saved } })
+
+  it('looks in the documented Linux and Windows locations', () => {
+    delete process.env['WARP_DB_PATH']
+    process.env['XDG_STATE_HOME'] = '/state'
+    process.env['LOCALAPPDATA'] = 'C:\\Users\\me\\AppData\\Local'
+    expect(getDbCandidates(undefined, 'linux')).toEqual([
+      join('/state', 'warp-terminal', 'warp.sqlite'),
+      join('/state', 'warp-terminal-preview', 'warp.sqlite'),
+    ])
+    expect(getDbCandidates(undefined, 'win32')).toEqual([
+      join('C:\\Users\\me\\AppData\\Local', 'warp', 'Warp', 'data', 'warp.sqlite'),
+    ])
+    expect(getDbCandidates(undefined, 'darwin')[0]).toContain('Group Containers')
   })
 })

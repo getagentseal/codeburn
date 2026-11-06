@@ -125,9 +125,19 @@ function warpDbPath(bundleId: string): string {
   )
 }
 
-function getDbCandidates(dbPathOverride?: string): string[] {
+// Linux and Windows locations from Warp's file-locations docs; Linux Preview
+// appends -preview to the warp-terminal directory.
+export function getDbCandidates(dbPathOverride?: string, platform: string = process.platform): string[] {
   if (dbPathOverride) return [dbPathOverride]
   if (process.env['WARP_DB_PATH']) return [process.env['WARP_DB_PATH']]
+  if (platform === 'win32') {
+    const localAppData = process.env['LOCALAPPDATA'] || join(homedir(), 'AppData', 'Local')
+    return [join(localAppData, 'warp', 'Warp', 'data', 'warp.sqlite')]
+  }
+  if (platform !== 'darwin') {
+    const stateHome = process.env['XDG_STATE_HOME'] || join(homedir(), '.local', 'state')
+    return [join(stateHome, 'warp-terminal', 'warp.sqlite'), join(stateHome, 'warp-terminal-preview', 'warp.sqlite')]
+  }
   return [warpDbPath(WARP_STABLE_BUNDLE_ID), warpDbPath(WARP_PREVIEW_BUNDLE_ID)]
 }
 

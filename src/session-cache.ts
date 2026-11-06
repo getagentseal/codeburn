@@ -323,7 +323,7 @@ export const PROVIDER_ENV_VARS: Record<string, string[]> = {
   grok: ['GROK_HOME'],
   grokbot: ['CODEBURN_GROKBOT_DIR', 'APPDATA'],
   crush: ['XDG_DATA_HOME', 'CRUSH_GLOBAL_DATA', 'LOCALAPPDATA'],
-  warp: ['WARP_DB_PATH'],
+  warp: ['WARP_DB_PATH', 'XDG_STATE_HOME', 'LOCALAPPDATA'],
   antigravity: ['CODEBURN_CACHE_DIR'],
   'kilo-code': ['XDG_DATA_HOME'],
   kimi: ['KIMI_SHARE_DIR', 'KIMI_MODEL_NAME'],
