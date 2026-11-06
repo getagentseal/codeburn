@@ -524,5 +524,6 @@ describe('warp db locations', () => {
       join('C:\\Users\\me\\AppData\\Local', 'warp', 'Warp', 'data', 'warp.sqlite'),
     ])
     expect(getDbCandidates(undefined, 'darwin')[0]).toContain('Group Containers')
+    expect(getDbCandidates(undefined, 'freebsd')).toEqual([])
   })
 })

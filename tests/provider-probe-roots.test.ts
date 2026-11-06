@@ -62,7 +62,7 @@ describe('probeRoots mirrors discovery resolution', () => {
     ])
     const defaults = await createWarpProvider().probeRoots!()
     expect(defaults.map(root => root.path)).toEqual(getDbCandidates())
-    expect(defaults).toHaveLength(process.platform === 'win32' ? 1 : 2)
+    expect(defaults).toHaveLength(process.platform === 'win32' ? 1 : process.platform === 'darwin' || process.platform === 'linux' ? 2 : 0)
     for (const root of defaults) {
       expect(isAbsolute(root.path)).toBe(true)
       expect(root.label).toBe('db')

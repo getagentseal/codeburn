@@ -134,11 +134,12 @@ export function getDbCandidates(dbPathOverride?: string, platform: string = proc
     const localAppData = process.env['LOCALAPPDATA'] || join(homedir(), 'AppData', 'Local')
     return [join(localAppData, 'warp', 'Warp', 'data', 'warp.sqlite')]
   }
-  if (platform !== 'darwin') {
+  if (platform === 'linux') {
     const stateHome = process.env['XDG_STATE_HOME'] || join(homedir(), '.local', 'state')
     return [join(stateHome, 'warp-terminal', 'warp.sqlite'), join(stateHome, 'warp-terminal-preview', 'warp.sqlite')]
   }
-  return [warpDbPath(WARP_STABLE_BUNDLE_ID), warpDbPath(WARP_PREVIEW_BUNDLE_ID)]
+  if (platform === 'darwin') return [warpDbPath(WARP_STABLE_BUNDLE_ID), warpDbPath(WARP_PREVIEW_BUNDLE_ID)]
+  return []
 }
 
 function normalizeModel(rawModel: string): string {
