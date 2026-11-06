@@ -137,6 +137,22 @@ function insertAgentKv(db: {
   db.prepare('INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)').run(key, value)
 }
 
+function insertAgentKvStreams(db: {
+  exec(sql: string): void
+  prepare(sql: string): { run(...params: unknown[]): void }
+}, prefix: string, count: number): void {
+  const insert = db.prepare('INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)')
+  db.exec('BEGIN')
+  for (let i = 0; i < count; i++) {
+    insert.run(`agentKv:blob:${prefix}-${i}`, JSON.stringify({
+      role: 'user',
+      content: 'run the export',
+      providerOptions: { cursor: { requestId: `${prefix}-${i}` } },
+    }))
+  }
+  db.exec('COMMIT')
+}
+
 async function collectCalls(provider: ReturnType<typeof createCursorProvider>, dbPath: string): Promise<ParsedProviderCall[]> {
   const source = { path: dbPath, project: 'test', provider: 'cursor' as const }
   const calls: ParsedProviderCall[] = []
@@ -483,9 +499,7 @@ describe.skipIf(skipReason !== null)('cursor real context tokens (#575)', () => 
 
   it('binds at most 900 request ids per lookup', async () => {
     const dbPath = buildDb((db) => {
-      for (let i = 0; i < 901; i++) {
-        insertAgentKv(db, { blobId: `akv-${i}`, role: 'user', content: 'run the export', requestId: `req-bg-${i}` })
-      }
+      insertAgentKvStreams(db, 'req-bg', 901)
     })
 
     const calls = await collectCalls(createCursorProvider(dbPath), dbPath)
@@ -496,9 +510,7 @@ describe.skipIf(skipReason !== null)('cursor real context tokens (#575)', () => 
 
   it('caps the lookup at ten chunks and resolves ids past the cap on the next parse', async () => {
     const dbPath = buildDb((db) => {
-      for (let i = 0; i < 9000; i++) {
-        insertAgentKv(db, { blobId: `akv-${i}`, role: 'user', content: 'run the export', requestId: `req-cap-${i}` })
-      }
+      insertAgentKvStreams(db, 'req-cap', 9000)
       insertBubble(db, { composerId: '77771111-1111-2222-3333-444455556666', bubbleUuid: 'b1', type: 1, text: 'old', createdAt: new Date(Date.now() - 240 * 864e5).toISOString(), requestId: 'req-over' })
       insertAgentKv(db, { blobId: 'akv-over', role: 'user', content: 'past the cap', requestId: 'req-over' })
     })
