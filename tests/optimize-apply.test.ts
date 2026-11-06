@@ -677,6 +677,22 @@ describe('runOptimizeApply end-to-end', () => {
     expect(existsSync(join(fx.home, '.zshrc'))).toBe(true)
   })
 
+  it('--yes applies two fixes that edit the same config file', async () => {
+    const fx = await makeFixture()
+    const mcpJson = join(fx.project, '.mcp.json')
+    await writeFile(mcpJson, JSON.stringify({ mcpServers: { a: { command: 'a' }, b: { command: 'b', alwaysLoad: true } } }, null, 2))
+    const findings = [
+      makeFinding('unused-mcp', CMD_FIX, { kind: 'mcp-remove', servers: ['a'] }),
+      makeFinding('mcp-alwaysload-hygiene', CMD_FIX, { kind: 'defer-alwaysload', servers: [{ server: 'b', paths: [mcpJson] }] }),
+    ]
+    const io = makeIo()
+    await runOptimizeApply([], undefined, applyOpts(fx, io, { findings, yes: true, ctx: { homeDir: fx.home, cwd: fx.project, claudeVersion: () => '2.1.200' } }))
+
+    expect(io.stderr()).toBe('')
+    expect(await readRecords(fx.actionsDir)).toHaveLength(2)
+    expect(JSON.parse(await readFile(mcpJson, 'utf-8')).mcpServers).toEqual({ b: { command: 'b' } })
+  })
+
   it('does not promise a re-measure when nothing was applied', async () => {
     const { fx, findings } = await threeFindingFixture()
     const io = makeIo('q\n')

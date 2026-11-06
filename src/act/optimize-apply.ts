@@ -213,7 +213,11 @@ export async function runOptimizeApply(
   let applied = 0
   for (const fp of selected) {
     try {
-      const record = await runAction(fp.plan!, opts.actionsDir)
+      // An earlier apply in this loop may have edited the same config file,
+      // so plan against what is on disk now.
+      const plan = planFindings([fp.finding], opts.ctx)[0]!.plan ?? fp.plan!
+      if (fp.plan!.baseline) plan.baseline = fp.plan!.baseline
+      const record = await runAction(plan, opts.actionsDir)
       applied++
       print(`  Applied ${chalk.bold(shortId(record.id))}  ${record.description}`)
       print(chalk.dim(`    Undo anytime: codeburn act undo ${shortId(record.id)}`))
