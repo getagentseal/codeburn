@@ -14,7 +14,7 @@ import { clearSessionCache, parseAllSessions } from '../src/parser.js'
 const requireForTest = createRequire(import.meta.url)
 type TestDb = { exec(sql: string): void; prepare(sql: string): { run(...p: unknown[]): void }; close(): void }
 
-const ENV_KEYS = ['HOME', 'USERPROFILE', 'CODEBURN_CACHE_DIR', 'CODEBURN_COPILOT_SESSION_STORE_DB', 'CODEBURN_COPILOT_DISABLE_OTEL',
+const ENV_KEYS = ['HOME', 'USERPROFILE', 'CODEBURN_CACHE_DIR', 'CODEBURN_COPILOT_SESSION_STORE_DB', 'CODEBURN_COPILOT_DISABLE_OTEL', 'CODEBURN_COPILOT_OTEL_DB',
   'CODEBURN_COPILOT_SESSION_STATE_DIR', 'CODEBURN_COPILOT_WS_STORAGE_DIR', 'CODEBURN_COPILOT_GLOBAL_STORAGE_DIR', 'CODEBURN_COPILOT_JETBRAINS_DIR']
 let saved: Record<string, string | undefined>
 let tmp: string
@@ -51,6 +51,20 @@ function writeStore(sessionId: string) {
   db.prepare(`INSERT INTO assistant_usage_events (session_id, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, reasoning_tokens, total_nano_aiu, created_at)
     VALUES (?, 'gpt-4o', 1000, 50, 0, 0, 0, 2000000000, '2026-08-05T12:00:01.000Z')`).run(sessionId)
   db.close()
+}
+
+function writeOtel(conversationId: string) {
+  const { DatabaseSync } = requireForTest('node:sqlite') as { DatabaseSync: new (path: string) => TestDb }
+  const db = new DatabaseSync(join(tmp, 'agent-traces.db'))
+  db.exec(`CREATE TABLE spans (span_id TEXT PRIMARY KEY, trace_id TEXT, operation_name TEXT, start_time_ms INTEGER, response_model TEXT);
+    CREATE TABLE span_attributes (id INTEGER PRIMARY KEY AUTOINCREMENT, span_id TEXT, key TEXT, value TEXT);`)
+  db.prepare(`INSERT INTO spans VALUES ('s1', 't1', 'chat', ?, 'gpt-4o')`).run(Date.parse('2026-08-05T12:00:00Z'))
+  for (const [k, v] of Object.entries({ 'gen_ai.conversation.id': conversationId, 'gen_ai.usage.input_tokens': '1000', 'gen_ai.usage.output_tokens': '50' })) {
+    db.prepare(`INSERT INTO span_attributes (span_id, key, value) VALUES ('s1', ?, ?)`).run(k, v)
+  }
+  db.close()
+  process.env['CODEBURN_COPILOT_OTEL_DB'] = join(tmp, 'agent-traces.db')
+  delete process.env['CODEBURN_COPILOT_DISABLE_OTEL']
 }
 
 async function servedKeys(): Promise<string[]> {
@@ -116,5 +130,14 @@ describe('copilot chat-session twins of agent-host sessions', () => {
     const keys = await servedKeys()
     expect(keys).not.toContain('copilot-chatsession:stored:r1')
     expect(keys.some(k => k.startsWith('copilot-store:stored:'))).toBe(true)
+  })
+
+  it.skipIf(!isSqliteAvailable())('drops only the journal of a session agent-traces.db recorded', async () => {
+    await writeJournal('traced')
+    await writeJournal('untraced')
+    writeOtel('traced')
+
+    const keys = await servedKeys()
+    expect(keys).toEqual(['copilot-chatsession:untraced:r1', 'copilot-otel:s1'])
   })
 })

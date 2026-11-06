@@ -43,9 +43,9 @@
 //   CODEBURN_COPILOT_SESSION_STORE_DB — Override the ~/.copilot/session-store.db path
 //
 // ARCHITECTURE:
-//   discoverSessions() returns OTel sessions and legacy JSONL sessions. When
-//   OTel is present, VS Code core chatSessions are skipped because they mirror
-//   the same Copilot turns under different IDs. OTel sessions carry the full
+//   discoverSessions() returns OTel sessions and legacy JSONL sessions. A VS
+//   Code chatSessions journal of a session OTel also recorded is dropped at
+//   serve time, so each session counts once. OTel sessions carry the full
 //   token breakdown; JSONL sessions only carry output tokens (the original
 //   behaviour, as a fallback).
 //
@@ -3784,24 +3784,22 @@ export function createCopilotProvider(
         // JSONL discovery failed
       }
 
-      // Prefer OTel over chatSessions: they can mirror the same turns under
-      // incompatible IDs, and OTel carries richer token/cache data.
-      if (!discoveredOtel) {
-        // 3. Discover VS Code core chatSessions journals
-        try {
-          const chatSessionSources = await discoverWorkspaceChatSessions(getWsDirs())
-          sources.push(...chatSessionSources)
-        } catch {
-          // Workspace chatSessions discovery failed
-        }
+      // 3. Discover VS Code core chatSessions journals. A journal of a session
+      // agent-traces.db also holds is left out at serve time (parser.ts,
+      // otelTwinKeys); sessions OTel never recorded count from the journal.
+      try {
+        const chatSessionSources = await discoverWorkspaceChatSessions(getWsDirs())
+        sources.push(...chatSessionSources)
+      } catch {
+        // Workspace chatSessions discovery failed
+      }
 
-        // 4. Discover VS Code empty-window chatSessions journals
-        try {
-          const emptyWindowSources = await discoverEmptyWindowChatSessions(getGlobalDirs())
-          sources.push(...emptyWindowSources)
-        } catch {
-          // Empty-window chatSessions discovery failed
-        }
+      // 4. Discover VS Code empty-window chatSessions journals
+      try {
+        const emptyWindowSources = await discoverEmptyWindowChatSessions(getGlobalDirs())
+        sources.push(...emptyWindowSources)
+      } catch {
+        // Empty-window chatSessions discovery failed
       }
 
       // 5. Discover VS Code workspace transcript sessions

@@ -1334,7 +1334,7 @@ describe('copilot provider - chatSessions parsing', () => {
     expect(calls[0]!.inputTokens).toBe(32543)
   })
 
-  it('skips chatSessions discovery when an OTel source is present', async () => {
+  it('still discovers chatSessions when an OTel source is present', async () => {
     if (!isSqliteAvailable()) return
 
     vi.unstubAllEnvs()
@@ -1376,7 +1376,7 @@ describe('copilot provider - chatSessions parsing', () => {
     const sources = await provider.discoverSessions()
 
     expect(sources.filter(s => (s as { sourceType?: string }).sourceType === 'otel')).toHaveLength(1)
-    expect(sources.filter(s => (s as { sourceType?: string }).sourceType === 'chatsession')).toHaveLength(0)
+    expect(sources.filter(s => (s as { sourceType?: string }).sourceType === 'chatsession')).toHaveLength(2)
   })
 
   it('applies append-then-edit journal updates', async () => {
