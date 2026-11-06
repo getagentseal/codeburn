@@ -101,8 +101,8 @@ const MAX_OUTPUT_BYTES = 16 * 1024 * 1024
 // the raw frame gets headroom; the decoded output is still held to MAX_OUTPUT_BYTES.
 const MAX_SERVE_FRAME_BYTES = 2 * MAX_OUTPUT_BYTES
 
-// An answer over the cap by its decoded size: a one-shot would hit the same cap,
-// so this one is never retried cold.
+// Serve output over its bound: the same answer would hit the one-shot cap too,
+// so it is never retried cold.
 class ServeAnswerTooLarge extends CliError {
   constructor() { super('too-large', `codeburn serve produced more than ${MAX_OUTPUT_BYTES} bytes`) }
 }
@@ -920,7 +920,7 @@ class ServeClient {
 
   private terminateForOverflow(child: ReturnType<typeof spawn>): void {
     if (this.child !== child) return
-    const error = new CliError('too-large', `codeburn serve produced more than ${MAX_OUTPUT_BYTES} bytes`)
+    const error = new ServeAnswerTooLarge()
     // Detach synchronously before SIGKILL. A new request may start the next
     // generation immediately; the old child's eventual exit must not reject it.
     this.child = null

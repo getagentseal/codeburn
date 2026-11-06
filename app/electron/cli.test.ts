@@ -1109,8 +1109,9 @@ describe('resident serve single-flight', { timeout: 30_000 }, () => {
     expect(readMaybe(oneShotsFile)).toBe('')
   })
 
-  it('kills a resident whose frame exceeds the raw bound and still fails the read safely', async () => {
+  it('kills a resident whose frame exceeds the raw bound and fails the read without a one-shot retry', async () => {
     const startsFile = join(dir, 'huge-frame-starts')
+    const oneShotsFile = join(dir, 'huge-frame-one-shots')
     fakeBin(
       'huge-frame-resident.js',
       `const fs = require('node:fs'); const readline = require('node:readline');
@@ -1126,8 +1127,8 @@ describe('resident serve single-flight', { timeout: 30_000 }, () => {
          });
          setInterval(() => {}, 1000);
        } else {
-         process.stdout.write(output);
-         setInterval(() => {}, 1000);
+         fs.appendFileSync(${JSON.stringify(oneShotsFile)}, 'o');
+         process.stdout.write('{}');
        }`,
     )
     startServe()
@@ -1137,6 +1138,7 @@ describe('resident serve single-flight', { timeout: 30_000 }, () => {
     await expect(spawnCli(['status', '--after-huge-frame'], { timeoutMs: 5_000 }))
       .resolves.toEqual({ generation: 2 })
     expect(readMaybe(startsFile)).toBe('ss')
+    expect(readMaybe(oneShotsFile)).toBe('')
   })
 
   it('keeps serve enabled after more frame overflows than the resident death budget', async () => {
@@ -1158,13 +1160,14 @@ describe('resident serve single-flight', { timeout: 30_000 }, () => {
     startServe()
 
     for (let attempt = 0; attempt < 4; attempt += 1) {
-      await expect(spawnCli(['status', '--overflow', String(attempt)], { timeoutMs: 5_000 })).resolves.toEqual({})
+      await expect(spawnCli(['status', '--overflow', String(attempt)], { timeoutMs: 5_000 }))
+        .rejects.toMatchObject({ kind: 'too-large' } satisfies Partial<CliError>)
     }
 
     // An overflow kill is deliberate, so it never spends the unexpected-death
     // budget: the fourth request still reaches a resident.
     expect(readMaybe(startsFile)).toBe('ssss')
-    expect(readMaybe(oneShotsFile)).toBe('oooo')
+    expect(readMaybe(oneShotsFile)).toBe('')
   })
 
   it('parses a large frame fed in small chunks once, without rescanning it per chunk', async () => {
