@@ -1,9 +1,15 @@
 // @vitest-environment node
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { spawn } from 'node:child_process'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { spawn, type ChildProcess } from 'node:child_process'
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, chmodSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter, dirname, join, isAbsolute, relative, win32, posix } from 'node:path'
+
+// Passthrough spy: lets a test reach the resident child's stdout and feed it chunks.
+vi.mock('node:child_process', async importOriginal => {
+  const actual = await importOriginal<typeof import('node:child_process')>()
+  return { ...actual, spawn: vi.fn(actual.spawn) }
+})
 
 import { spawnCli, spawnCliAction, spawnEnvFor, spawnSpecFor, startServe, killAll, serveUsage, shutdownAll, CliError, cmdShimArgs, escapeForCmd, nodeManagerDirs, notFoundStage, reapOrphanServe, resolveCodeburnPath, resolveTarget } from './cli'
 
@@ -502,6 +508,18 @@ describe('spawnCli', () => {
   it('rejects with kind "too-large" and kills a binary that floods stdout', async () => {
     fakeBin('flood.js', "const s='x'.repeat(1024*1024); for(let i=0;i<20;i++) process.stdout.write(s); setInterval(()=>{},1000)")
     await expect(spawnCli(['status'])).rejects.toMatchObject({ kind: 'too-large' } satisfies Partial<CliError>)
+  })
+
+  it('keeps a multi-byte character intact when it straddles a pipe chunk boundary', async () => {
+    fakeBin(
+      'utf8-split.js',
+      `const bytes = Buffer.from('{"project":"aüsseldorf"}');
+       const cut = bytes.indexOf(0xc3) + 1;
+       process.stdout.write(bytes.subarray(0, cut));
+       setTimeout(() => process.stdout.write(bytes.subarray(cut)), 100);`,
+    )
+    const out = await spawnCli(['devices']) as { project: string }
+    expect(out.project.endsWith('aüsseldorf')).toBe(true)
   })
 })
 
@@ -1030,22 +1048,111 @@ describe('resident serve single-flight', { timeout: 30_000 }, () => {
       .resolves.toEqual({ via: 'serve', ticks: 15 })
   })
 
-  it('rejects and terminates a resident that emits an oversized valid JSON frame', async () => {
-    const startsFile = join(dir, 'oversized-frame-starts')
-    const oneShotsFile = join(dir, 'oversized-frame-one-shots')
+  it('serves a 15 MiB pretty-JSON answer whose escaped frame is over 16 MiB', async () => {
+    const startsFile = join(dir, 'pretty-starts')
+    const oneShotsFile = join(dir, 'pretty-one-shots')
     fakeBin(
-      'oversized-frame-resident.js',
+      'pretty-resident.js',
       `const fs = require('node:fs'); const readline = require('node:readline');
+       if (process.argv[2] === 'serve') {
+         fs.appendFileSync(${JSON.stringify(startsFile)}, 's');
+         const rows = [];
+         let output = '';
+         while (Buffer.byteLength(output) < 15 * 1024 * 1024) {
+           for (let i = 0; i < 10000; i++) rows.push({ id: 'sess-' + rows.length, project: '/Users/me/p', cost: 1.5 });
+           output = JSON.stringify(rows, null, 2);
+         }
+         const rl = readline.createInterface({ input: process.stdin });
+         rl.on('line', line => {
+           const request = JSON.parse(line);
+           process.stdout.write(JSON.stringify({ id: request.id, ok: true, output }) + '\\n');
+         });
+       } else {
+         fs.appendFileSync(${JSON.stringify(oneShotsFile)}, 'o');
+         process.stdout.write('[]');
+       }`,
+    )
+    startServe()
+
+    const rows = await spawnCli(['sessions', '--format', 'json'], { timeoutMs: 10_000 }) as unknown[]
+    expect(rows.length).toBeGreaterThan(100_000)
+    await spawnCli(['sessions', '--format', 'json', '--again'], { timeoutMs: 10_000 })
+    expect(readMaybe(startsFile)).toBe('s')
+    expect(readMaybe(oneShotsFile)).toBe('')
+  })
+
+  it('serves a 16 MiB answer whose escaping doubles it on the wire', async () => {
+    const startsFile = join(dir, 'escaped-starts')
+    const oneShotsFile = join(dir, 'escaped-one-shots')
+    fakeBin(
+      'escaped-resident.js',
+      `const fs = require('node:fs'); const readline = require('node:readline');
+       if (process.argv[2] === 'serve') {
+         fs.appendFileSync(${JSON.stringify(startsFile)}, 's');
+         const output = JSON.stringify('\\\\'.repeat(8 * 1024 * 1024 - 1));
+         const rl = readline.createInterface({ input: process.stdin });
+         rl.on('line', line => {
+           const request = JSON.parse(line);
+           process.stdout.write(JSON.stringify({ id: request.id, ok: true, output }) + '\\n');
+         });
+       } else {
+         fs.appendFileSync(${JSON.stringify(oneShotsFile)}, 'o');
+         process.stdout.write('""');
+       }`,
+    )
+    startServe()
+
+    const value = await spawnCli(['status', '--escaped'], { timeoutMs: 10_000 }) as string
+    expect(value.length).toBe(8 * 1024 * 1024 - 1)
+    expect(readMaybe(startsFile)).toBe('s')
+    expect(readMaybe(oneShotsFile)).toBe('')
+  })
+
+  it('fails an over-cap answer without a one-shot retry and keeps the warm resident', async () => {
+    const startsFile = join(dir, 'over-cap-starts')
+    const oneShotsFile = join(dir, 'over-cap-one-shots')
+    fakeBin(
+      'over-cap-resident.js',
+      `const fs = require('node:fs'); const readline = require('node:readline');
+       if (process.argv[2] === 'serve') {
+         fs.appendFileSync(${JSON.stringify(startsFile)}, 's');
+         const rl = readline.createInterface({ input: process.stdin });
+         rl.on('line', line => {
+           const request = JSON.parse(line);
+           const output = request.args.includes('--big')
+             ? JSON.stringify({ value: 'x'.repeat(16 * 1024 * 1024 + 1024) })
+             : JSON.stringify({ via: 'serve' });
+           process.stdout.write(JSON.stringify({ id: request.id, ok: true, output }) + '\\n');
+         });
+       } else {
+         fs.appendFileSync(${JSON.stringify(oneShotsFile)}, 'o');
+         process.stdout.write(JSON.stringify({ via: 'spawn' }));
+       }`,
+    )
+    startServe()
+
+    await expect(spawnCli(['status', '--big'], { timeoutMs: 5_000 }))
+      .rejects.toMatchObject({ kind: 'too-large' } satisfies Partial<CliError>)
+    await expect(spawnCli(['status', '--small'], { timeoutMs: 5_000 })).resolves.toEqual({ via: 'serve' })
+    expect(readMaybe(startsFile)).toBe('s')
+    expect(readMaybe(oneShotsFile)).toBe('')
+  })
+
+  it('kills a resident whose frame exceeds the raw bound and fails the read without a one-shot retry', async () => {
+    const startsFile = join(dir, 'huge-frame-starts')
+    const oneShotsFile = join(dir, 'huge-frame-one-shots')
+    fakeBin(
+      'huge-frame-resident.js',
+      `const fs = require('node:fs'); const readline = require('node:readline');
+       const output = JSON.stringify({ value: 'x'.repeat(64 * 1024 * 1024 + 1024) });
        if (process.argv[2] === 'serve') {
          fs.appendFileSync(${JSON.stringify(startsFile)}, 's');
          const generation = fs.readFileSync(${JSON.stringify(startsFile)}, 'utf8').length;
          const rl = readline.createInterface({ input: process.stdin });
-         rl.once('line', line => {
+         rl.on('line', line => {
            const request = JSON.parse(line);
-           const output = generation === 1
-             ? JSON.stringify({ value: 'x'.repeat(16 * 1024 * 1024 + 1024) })
-             : JSON.stringify({ generation });
-           process.stdout.write(JSON.stringify({ id: request.id, ok: true, output }) + '\\n');
+           const answer = generation === 1 ? output : JSON.stringify({ generation });
+           process.stdout.write(JSON.stringify({ id: request.id, ok: true, output: answer }) + '\\n');
          });
          setInterval(() => {}, 1000);
        } else {
@@ -1055,15 +1162,15 @@ describe('resident serve single-flight', { timeout: 30_000 }, () => {
     )
     startServe()
 
-    await expect(spawnCli(['status', '--oversized-frame'], { timeoutMs: 5_000 }))
+    await expect(spawnCli(['status', '--huge-frame'], { timeoutMs: 5_000 }))
       .rejects.toMatchObject({ kind: 'too-large' } satisfies Partial<CliError>)
-    await expect(spawnCli(['status', '--after-oversized-frame'], { timeoutMs: 5_000 }))
+    await expect(spawnCli(['status', '--after-huge-frame'], { timeoutMs: 5_000 }))
       .resolves.toEqual({ generation: 2 })
     expect(readMaybe(startsFile)).toBe('ss')
     expect(readMaybe(oneShotsFile)).toBe('')
   })
 
-  it('keeps serve enabled after more overflows than the resident death budget', async () => {
+  it('keeps serve enabled after more frame overflows than the resident death budget', async () => {
     const startsFile = join(dir, 'overflow-budget-starts')
     const oneShotsFile = join(dir, 'overflow-budget-one-shots')
     fakeBin(
@@ -1072,11 +1179,7 @@ describe('resident serve single-flight', { timeout: 30_000 }, () => {
        if (process.argv[2] === 'serve') {
          fs.appendFileSync(${JSON.stringify(startsFile)}, 's');
          const rl = readline.createInterface({ input: process.stdin });
-         rl.once('line', line => {
-           const request = JSON.parse(line);
-           const output = JSON.stringify({ value: 'x'.repeat(16 * 1024 * 1024 + 1024) });
-           process.stdout.write(JSON.stringify({ id: request.id, ok: true, output }) + '\\n');
-         });
+         rl.once('line', () => process.stdout.write('x'.repeat(64 * 1024 * 1024 + 1024)));
          setInterval(() => {}, 1000);
        } else {
          fs.appendFileSync(${JSON.stringify(oneShotsFile)}, 'o');
@@ -1091,33 +1194,70 @@ describe('resident serve single-flight', { timeout: 30_000 }, () => {
     }
 
     // An overflow kill is deliberate, so it never spends the unexpected-death
-    // budget: the fourth request still reaches a resident, not a one-shot.
+    // budget: the fourth request still reaches a resident.
     expect(readMaybe(startsFile)).toBe('ssss')
     expect(readMaybe(oneShotsFile)).toBe('')
   })
 
-  it('rejects and terminates a resident whose protocol line never terminates', async () => {
-    const startsFile = join(dir, 'unterminated-line-starts')
-    const oneShotsFile = join(dir, 'unterminated-line-one-shots')
-    fakeBin(
-      'unterminated-line-resident.js',
-      `const fs = require('node:fs'); const readline = require('node:readline');
-       if (process.argv[2] === 'serve') {
-         fs.appendFileSync(${JSON.stringify(startsFile)}, 's');
-         const rl = readline.createInterface({ input: process.stdin });
-         rl.once('line', () => process.stdout.write('x'.repeat(16 * 1024 * 1024 + 1024)));
-         setInterval(() => {}, 1000);
-       } else {
-         fs.appendFileSync(${JSON.stringify(oneShotsFile)}, 'o');
-         process.stdout.write('{}');
-       }`,
-    )
+  it('parses a large frame fed in small chunks once, without rescanning it per chunk', async () => {
+    fakeBin('silent-resident.js', 'process.stdin.resume(); setInterval(() => {}, 1000)')
     startServe()
+    const child = vi.mocked(spawn).mock.results.at(-1)!.value as ChildProcess
+    const read = spawnCli(['status', '--big'], { timeoutMs: 10_000 })
+    await new Promise(resolve => setTimeout(resolve, 50))
 
-    await expect(spawnCli(['status', '--unterminated-line'], { timeoutMs: 5_000 }))
-      .rejects.toMatchObject({ kind: 'too-large' } satisfies Partial<CliError>)
-    expect(readMaybe(startsFile)).toBe('s')
-    expect(readMaybe(oneShotsFile)).toBe('')
+    const rows: unknown[] = []
+    let frame = ''
+    while (frame.length < 10_000_000) {
+      for (let i = 0; i < 10_000; i++) rows.push({ id: 'sess-' + rows.length, project: '/Users/me/p', cost: 1.5 })
+      frame = JSON.stringify({ id: 1, ok: true, output: JSON.stringify(rows, null, 2) }) + '\n'
+    }
+    const parse = vi.spyOn(JSON, 'parse')
+    const indexOf = String.prototype.indexOf
+    let scanned = 0
+    const search = vi.spyOn(String.prototype, 'indexOf').mockImplementation(function (this: string, needle: string, from?: number) {
+      if (needle === '\n') {
+        scanned += this.length - (from ?? 0)
+        // Fail fast: the old rescan reaches gigabytes of scanning and exhausts the heap.
+        if (scanned > frame.length) throw new Error('newline search rescanned the buffered frame')
+      }
+      return indexOf.call(this, needle, from)
+    } as typeof String.prototype.indexOf)
+    let frameParses: number
+    try {
+      for (let off = 0; off < frame.length; off += 8192) child.stdout!.emit('data', frame.slice(off, off + 8192))
+    } finally {
+      search.mockRestore()
+      frameParses = parse.mock.calls.filter(([text]) => String(text).startsWith('{"id":1')).length
+      parse.mockRestore()
+    }
+
+    expect(((await read) as unknown[]).length).toBe(rows.length)
+    expect(frameParses).toBe(1)
+    expect(scanned).toBeLessThanOrEqual(frame.length)
+  })
+
+  describe('frame boundaries fed as explicit chunks', () => {
+    const progress = JSON.stringify({ id: 1, progress: 'CODEBURN_PROGRESS tick\n' }) + '\n'
+    const answer = JSON.stringify({ id: 1, ok: true, output: JSON.stringify({ framed: true }) }) + '\n'
+    it.each([
+      ['a chunk ending exactly on a newline', [progress, answer]],
+      ['a newline followed by the next frame start', [progress + answer.slice(0, 7), answer.slice(7)]],
+      ['an empty chunk', [progress, '', answer.slice(0, 5), '', answer.slice(5)]],
+      ['a frame over three chunks', [progress, answer.slice(0, 4), answer.slice(4, 20), answer.slice(20)]],
+    ])('%s', async (_name, chunks) => {
+      fakeBin('silent-resident.js', 'process.stdin.resume(); setInterval(() => {}, 1000)')
+      startServe()
+      const child = vi.mocked(spawn).mock.results.at(-1)!.value as ChildProcess
+      const seen: string[] = []
+      const read = spawnCli(['status'], { timeoutMs: 5_000, onStderr: chunk => seen.push(chunk) })
+      await new Promise(resolve => setTimeout(resolve, 50))
+
+      for (const chunk of chunks) child.stdout!.emit('data', chunk)
+
+      await expect(read).resolves.toEqual({ framed: true })
+      expect(seen).toEqual(['CODEBURN_PROGRESS tick\n'])
+    })
   })
 
   it('keeps requests with any non-progress env override on the one-shot path', async () => {

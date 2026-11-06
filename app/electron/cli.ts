@@ -97,6 +97,16 @@ const SHUTDOWN_FORCE_WAIT_MS = 250
 export const PROGRESS_LINE_PREFIX = 'CODEBURN_PROGRESS '
 // A runaway CLI (or a compromised binary) must not exhaust main-process memory.
 const MAX_OUTPUT_BYTES = 16 * 1024 * 1024
+// Serve wraps the output as an escaped JSON string: pretty JSON grows ~17%, and
+// an output of only quotes or backslashes doubles. The raw frame gets room for
+// more than that; the decoded output is still held to MAX_OUTPUT_BYTES.
+const MAX_SERVE_FRAME_BYTES = 4 * MAX_OUTPUT_BYTES
+
+// Serve output over its bound: the same answer would hit the one-shot cap too,
+// so it is never retried cold.
+class ServeAnswerTooLarge extends CliError {
+  constructor() { super('too-large', `codeburn serve produced more than ${MAX_OUTPUT_BYTES} bytes`) }
+}
 // A cold-cache CLI spawn costs seconds at ~120% CPU; letting every poll +
 // prefetch launch at once saturates the machine. Cap how many children run
 // concurrently — the rest queue and drain as slots free (interactive first).
@@ -662,13 +672,17 @@ function runCli(spec: SpawnSpec, cmdLabel: string, timeoutMs: number, onStderr?:
       }
     }
 
-    child.stdout.on('data', chunk => { stdout += chunk; bump(chunk.length) })
-    child.stderr.on('data', chunk => {
+    // Decode across chunk boundaries: a multi-byte character split between two
+    // pipe reads would otherwise become two U+FFFD.
+    child.stdout.setEncoding('utf8')
+    child.stderr.setEncoding('utf8')
+    child.stdout.on('data', (chunk: string) => { stdout += chunk; bump(Buffer.byteLength(chunk)) })
+    child.stderr.on('data', (chunk: string) => {
       stderr += chunk
-      bump(chunk.length)
+      bump(Buffer.byteLength(chunk))
       // Live stderr for the cold-start warmup: forwards CLI scan-progress lines
       // to the splash. Never fires for ordinary reads (onStderr unset).
-      if (onStderr) { try { onStderr(chunk.toString()) } catch { /* forwarder must not kill the read */ } }
+      if (onStderr) { try { onStderr(chunk) } catch { /* forwarder must not kill the read */ } }
     })
 
     child.on('error', err => {
@@ -759,7 +773,9 @@ class ServeClient {
   private pending = new Map<number, PendingServeRequest>()
   private nextId = 1
   private deaths = 0
-  private buffer = ''
+  // Pieces of the current partial line; only a newline joins them, so a large
+  // frame is never rescanned from its start on every chunk.
+  private parts: string[] = []
   private bufferBytes = 0
   private warmed = false
   private destroyed = false
@@ -832,15 +848,17 @@ class ServeClient {
   }
 
   private onData(child: ReturnType<typeof spawn>, chunk: string): void {
-    this.buffer += chunk
     this.bufferBytes += Buffer.byteLength(chunk)
+    let start = 0
     let idx: number
-    while ((idx = this.buffer.indexOf('\n')) >= 0) {
-      const rawLine = this.buffer.slice(0, idx)
-      this.buffer = this.buffer.slice(idx + 1)
+    while ((idx = chunk.indexOf('\n', start)) >= 0) {
+      this.parts.push(chunk.slice(start, idx))
+      const rawLine = this.parts.join('')
+      this.parts = []
+      start = idx + 1
       const rawLineBytes = Buffer.byteLength(rawLine)
       this.bufferBytes = Math.max(0, this.bufferBytes - rawLineBytes - 1)
-      if (rawLineBytes > MAX_OUTPUT_BYTES) {
+      if (rawLineBytes > MAX_SERVE_FRAME_BYTES) {
         this.terminateForOverflow(child)
         return
       }
@@ -863,14 +881,14 @@ class ServeClient {
       // long cold parse that heartbeats progress is never killed mid-flight.
       waiter.arm()
       if (typeof msg.progress === 'string') {
-        if (!this.consumeDecodedOutput(child, waiter, msg.progress)) return
+        if (!this.consumeDecodedOutput(msg.id, waiter, msg.progress)) continue
         if (waiter.onStderr) {
           try { waiter.onStderr(msg.progress) } catch { /* progress consumers never own the request */ }
         }
         continue
       }
       const terminalOutput = typeof msg.output === 'string' ? msg.output : typeof msg.error === 'string' ? msg.error : ''
-      if (!this.consumeDecodedOutput(child, waiter, terminalOutput)) return
+      if (!this.consumeDecodedOutput(msg.id, waiter, terminalOutput)) continue
       this.pending.delete(msg.id)
       waiter.clear()
       if (msg.ok && typeof msg.output === 'string') {
@@ -883,29 +901,31 @@ class ServeClient {
       }
       this.armIdle()
     }
+    if (start < chunk.length) this.parts.push(chunk.slice(start))
     // Complete lines are bounded above before parsing. Bound the partial frame
     // too, otherwise a child that never emits '\n' can grow this buffer forever.
-    if (this.bufferBytes > MAX_OUTPUT_BYTES) this.terminateForOverflow(child)
+    if (this.bufferBytes > MAX_SERVE_FRAME_BYTES) this.terminateForOverflow(child)
   }
 
-  private consumeDecodedOutput(
-    child: ReturnType<typeof spawn>,
-    waiter: { decodedBytes: number },
-    output: string,
-  ): boolean {
+  /** An answer over the cap fails only its own request; the frame is already
+   *  bounded, so the warm child stays. */
+  private consumeDecodedOutput(id: number, waiter: PendingServeRequest, output: string): boolean {
     waiter.decodedBytes += Buffer.byteLength(output)
     if (waiter.decodedBytes <= MAX_OUTPUT_BYTES) return true
-    this.terminateForOverflow(child)
+    this.pending.delete(id)
+    waiter.clear()
+    waiter.reject(new ServeAnswerTooLarge())
+    this.armIdle()
     return false
   }
 
   private terminateForOverflow(child: ReturnType<typeof spawn>): void {
     if (this.child !== child) return
-    const error = new CliError('too-large', `codeburn serve produced more than ${MAX_OUTPUT_BYTES} bytes`)
+    const error = new ServeAnswerTooLarge()
     // Detach synchronously before SIGKILL. A new request may start the next
     // generation immediately; the old child's eventual exit must not reject it.
     this.child = null
-    this.buffer = ''
+    this.parts = []
     this.bufferBytes = 0
     this.warmed = false
     // Deliberate termination, not a crash: it must not spend the unexpected-death
@@ -925,7 +945,7 @@ class ServeClient {
     // this client or reject its pending requests.
     if (this.child !== child) return
     this.child = null
-    this.buffer = ''
+    this.parts = []
     this.bufferBytes = 0
     this.warmed = false
     if (countsTowardBudget) this.deaths += 1
@@ -1183,7 +1203,7 @@ export function spawnCli(
         .catch(err => {
           // App shutdown is terminal: never turn rejected resident requests
           // into brand-new one-shot children after killAll() has reaped them.
-          if (serve.isDestroyed() || (err instanceof CliError && err.kind === 'too-large')) throw err
+          if (serve.isDestroyed() || err instanceof ServeAnswerTooLarge) throw err
           return runScheduledCli(
             spec,
             args[0] ?? '',
@@ -1270,8 +1290,10 @@ function runAction(spec: SpawnSpec, args: string[], timeoutMs: number, onStdout?
       finish({ ok: false, stdout, stderr: `codeburn ${args[0] ?? ''} timed out after ${timeoutMs}ms`, code: null })
     }, timeoutMs)
 
-    child.stdout.on('data', chunk => { stdout += chunk; onStdout?.(String(chunk)) })
-    child.stderr.on('data', chunk => { stderr += chunk })
+    child.stdout.setEncoding('utf8')
+    child.stderr.setEncoding('utf8')
+    child.stdout.on('data', (chunk: string) => { stdout += chunk; onStdout?.(chunk) })
+    child.stderr.on('data', (chunk: string) => { stderr += chunk })
     child.on('error', err => finish({ ok: false, stdout, stderr: err.message, code: null }))
     child.on('close', code => finish({ ok: code === 0, stdout, stderr, code }))
   })
