@@ -70,4 +70,10 @@ describe('qwen provider', () => {
     expect(unknown!.costUSD).toBeCloseTo(calculateCost(model, 1_000, 200, 0, 0, 0), 12)
   })
 
+  it('never bills more cached tokens than the prompt held', async () => {
+    const [call] = await parseUsage({ promptTokenCount: 1_000, candidatesTokenCount: 100, thoughtsTokenCount: 0, totalTokenCount: 1_100, cachedContentTokenCount: 5_000 })
+    expect(call!.inputTokens).toBe(0)
+    expect(call!.cacheReadInputTokens).toBe(1_000)
+    expect(call!.costUSD).toBeCloseTo(calculateCost(model, 0, 100, 0, 1_000, 0), 12)
+  })
 })

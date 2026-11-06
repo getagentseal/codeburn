@@ -150,8 +150,8 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
         const prompt = usage.promptTokenCount ?? 0
         const candidates = usage.candidatesTokenCount ?? 0
         const thoughts = usage.thoughtsTokenCount ?? 0
-        const cachedTokens = usage.cachedContentTokenCount ?? 0
-        const inputTokens = Math.max(0, prompt - cachedTokens)
+        const cachedTokens = Math.min(usage.cachedContentTokenCount ?? 0, prompt)
+        const inputTokens = prompt - cachedTokens
         const billedOutput = billedOutputTokens(candidates, thoughts, usage.totalTokenCount ?? 0, prompt, authType)
         const reasoningTokens = Math.min(thoughts, billedOutput)
         const outputTokens = billedOutput - reasoningTokens
