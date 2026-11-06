@@ -1,5 +1,6 @@
-import { createHash } from 'crypto'
-import { mkdir, readFile, stat, writeFile } from 'fs/promises'
+import { createHash, randomBytes } from 'crypto'
+import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'fs/promises'
+import { join } from 'path'
 import { readSessionLines } from '../fs-utils.js'
 import { collectToolResultMeta, parseApiCall, parseAdvisorCalls, parseJsonlLine, type ToolResultMeta } from '../parser.js'
 import { BASH_TOOLS, EDIT_TOOLS } from '../classifier.js'
@@ -24,13 +25,16 @@ import { allowPath, sessionCachePath, sessionsDir } from './store.js'
 // rolling window of the last tool calls (keyed by tool_use id so a call the
 // PreToolUse hook recorded itself is not counted again when the lagging
 // transcript catches up), `shellPending` maps a shell tool_use id to its command
-// hash until its tool_result arrives, and `failedCommands` counts is_error
-// results per command hash.
-export type ToolCallKey = { id: string; name: string; hash: string }
+// hash (or an edit's id to EDIT_PENDING) until its tool_result arrives, and
+// `failedCommands` counts consecutive is_error results per command hash: a
+// passing run resets that command, and a successful edit resets every command,
+// since a rerun after a code change is a new attempt.
+export type ToolCallKey = { id: string; name: string; hash: string; result?: string }
 
 export type GuardCache = {
   version: number
   sessionId: string
+  cwd: string | null
   byteOffset: number
   costUSD: number
   perMessage: Record<string, number>
@@ -46,6 +50,7 @@ export type GuardCache = {
   loopWarned: boolean
   retryWarned: boolean
   loopRun: number
+  retryRun: number
   signalWarnCostUSD: number | null
   signalStopNotified: boolean
 }
@@ -73,6 +78,7 @@ export function emptyCache(sessionId: string): GuardCache {
   return {
     version: GUARD_CACHE_VERSION,
     sessionId,
+    cwd: null,
     byteOffset: 0,
     costUSD: 0,
     perMessage: {},
@@ -88,6 +94,7 @@ export function emptyCache(sessionId: string): GuardCache {
     loopWarned: false,
     retryWarned: false,
     loopRun: 0,
+    retryRun: 0,
     signalWarnCostUSD: null,
     signalStopNotified: false,
   }
@@ -108,26 +115,54 @@ export function recordToolCall(cache: GuardCache, call: ToolCallKey): void {
   if (cache.recentCalls.length > RECENT_CALLS) cache.recentCalls.shift()
 }
 
-// How many calls in a row, the incoming one included, share its name and input.
+// Waiting on a background shell or task repeats the same input by design.
+const POLL_TOOLS = new Set(['BashOutput', 'TaskOutput', 'Monitor'])
+
+// How many calls in a row, the incoming one included, share its name and input
+// and got the same answer; a changing result is progress, not a loop. A call
+// whose result has not landed yet matches any. Polling tools never count.
 export function identicalRun(cache: GuardCache, call: ToolCallKey): number {
+  if (POLL_TOOLS.has(call.name)) return 0
   let run = 1
+  let result: string | undefined
   for (let i = cache.recentCalls.length - 1; i >= 0; i--) {
     const c = cache.recentCalls[i]!
     if (call.id && c.id === call.id) continue
     if (c.name !== call.name || c.hash !== call.hash) break
+    if (c.result !== undefined) {
+      if (result !== undefined && c.result !== result) break
+      result = c.result
+    }
     run++
   }
   return run
 }
 
+// Never a command hash (those are 16 hex chars).
+const EDIT_PENDING = 'edit'
+
 function foldToolResults(cache: GuardCache, entry: JournalEntry): void {
   const results = new Map<string, ToolResultMeta>()
   collectToolResultMeta(entry, results)
+  if (results.size === 0) return
+  const content = (entry.message as { content?: unknown } | undefined)?.content
+  for (const b of Array.isArray(content) ? content as { type?: unknown; tool_use_id?: unknown; content?: unknown }[] : []) {
+    if (b?.type !== 'tool_result') continue
+    const recent = cache.recentCalls.find(c => c.id === b.tool_use_id)
+    if (recent) recent.result = inputHash(b.content ?? null)
+  }
   for (const [id, meta] of results) {
     const cmd = cache.shellPending[id]
     if (cmd === undefined) continue
     delete cache.shellPending[id]
-    if (meta.isError) cache.failedCommands[cmd] = (cache.failedCommands[cmd] ?? 0) + 1
+    if (cmd === EDIT_PENDING) {
+      if (!meta.isError) cache.failedCommands = {}
+    } else if (meta.isError) {
+      cache.failedCommands[cmd] = (cache.failedCommands[cmd] ?? 0) + 1
+      cache.retryRun = Math.max(cache.retryRun, cache.failedCommands[cmd])
+    } else {
+      delete cache.failedCommands[cmd]
+    }
   }
 }
 
@@ -138,19 +173,30 @@ function foldToolUses(cache: GuardCache, entry: JournalEntry): void {
     if (b?.type !== 'tool_use' || typeof b.id !== 'string' || typeof b.name !== 'string') continue
     const command = (b.input as { command?: unknown } | undefined)?.command
     if (BASH_TOOLS.has(b.name) && typeof command === 'string') cache.shellPending[b.id] = inputHash(command)
+    if (EDIT_TOOLS.has(b.name)) cache.shellPending[b.id] = EDIT_PENDING
     recordToolCall(cache, { id: b.id, name: b.name, hash: inputHash(b.input ?? {}) })
   }
 }
 
 export async function readCache(sessionId: string, base?: string): Promise<GuardCache> {
-  let raw: string
-  try {
-    raw = await readFile(sessionCachePath(sessionId, base), 'utf-8')
-  } catch {
-    return emptyCache(sessionId)
-  }
-  try {
-    const parsed = JSON.parse(raw) as Partial<GuardCache>
+  for (let attempt = 0; ; attempt++) {
+    let raw: string
+    try {
+      raw = await readFile(sessionCachePath(sessionId, base), 'utf-8')
+    } catch {
+      return emptyCache(sessionId)
+    }
+    let parsed: Partial<GuardCache>
+    try {
+      parsed = JSON.parse(raw) as Partial<GuardCache>
+    } catch {
+      // A concurrent hook may be mid-write; one short retry before starting over.
+      if (attempt === 0) {
+        await new Promise(resolve => { setTimeout(resolve, 10) })
+        continue
+      }
+      return emptyCache(sessionId)
+    }
     if (
       parsed.version !== GUARD_CACHE_VERSION
       || typeof parsed.byteOffset !== 'number'
@@ -159,14 +205,57 @@ export async function readCache(sessionId: string, base?: string): Promise<Guard
       return emptyCache(sessionId)
     }
     return { ...emptyCache(sessionId), ...parsed, sessionId }
-  } catch {
-    return emptyCache(sessionId)
   }
 }
 
 export async function writeCache(cache: GuardCache, base?: string): Promise<void> {
   await mkdir(sessionsDir(base), { recursive: true })
-  await writeFile(sessionCachePath(cache.sessionId, base), JSON.stringify(cache), 'utf-8')
+  // Parallel tool calls run hooks concurrently; a rename never leaves a torn file.
+  const target = sessionCachePath(cache.sessionId, base)
+  const tmp = `${target}.${randomBytes(6).toString('hex')}.tmp`
+  try {
+    await writeFile(tmp, JSON.stringify(cache), 'utf-8')
+    await renameRetrying(tmp, target)
+  } finally {
+    await rm(tmp, { force: true })
+  }
+  await pruneSessions(sessionsDir(base)).catch(() => {})
+}
+
+// Windows refuses a rename over a file another hook has open (EPERM/EBUSY/
+// EACCES), so retry briefly, then keep the previous cache: an in-place write
+// could be read torn and reset the warned flags.
+async function renameRetrying(tmp: string, target: string): Promise<void> {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      await rename(tmp, target)
+      return
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code
+      if (code !== 'EPERM' && code !== 'EBUSY' && code !== 'EACCES') throw err
+      await new Promise(resolve => { setTimeout(resolve, 10 * (attempt + 1)) })
+    }
+  }
+  // Skipping is safe: the next hook re-folds the transcript from the old cache, so a dropped write costs at most one repeated warning.
+}
+
+const DAY_MS = 86_400_000
+const PRUNE_AFTER_MS = 30 * DAY_MS
+
+// At most once a day, drop caches and allow markers untouched for 30 days. An
+// allow marker stays while its session's cache is still being written.
+async function pruneSessions(dir: string): Promise<void> {
+  const stamp = join(dir, '.pruned')
+  const last = await stat(stamp).then(s => s.mtimeMs, () => 0)
+  if (Date.now() - last < DAY_MS) return
+  await writeFile(stamp, '', 'utf-8')
+  const stale = async (name: string) =>
+    Date.now() - (await stat(join(dir, name)).then(s => s.mtimeMs, () => 0)) > PRUNE_AFTER_MS
+  for (const name of await readdir(dir)) {
+    const json = name.endsWith('.allow') ? name.slice(0, -'.allow'.length) + '.json' : name
+    if (!json.endsWith('.json')) continue
+    if (await stale(name) && await stale(json)) await rm(join(dir, name), { force: true })
+  }
 }
 
 // Fold the transcript tail into the totals. Reuses the streaming line reader
@@ -191,11 +280,13 @@ export async function computeSessionUsage(
   const cache: GuardCache = size < prev.byteOffset
     ? {
         ...emptyCache(prev.sessionId),
+        cwd: prev.cwd,
         softWarned: prev.softWarned,
         stopNotified: prev.stopNotified,
         loopWarned: prev.loopWarned,
         retryWarned: prev.retryWarned,
         loopRun: prev.loopRun,
+        retryRun: prev.retryRun,
         signalStopNotified: prev.signalStopNotified,
       }
     : {

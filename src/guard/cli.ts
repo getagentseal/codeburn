@@ -131,6 +131,10 @@ async function doStatus(): Promise<void> {
   console.log()
 }
 
+// The statusline rewrites every open session's cache, so with two sessions
+// live the newest cache is not necessarily the blocked one.
+const ALLOW_AMBIGUOUS_MS = 5 * 60 * 1000
+
 async function doAllow(sessionId: string | undefined): Promise<void> {
   const { sessionsDir } = await import('./store.js')
   const { writeAllow } = await import('./usage.js')
@@ -138,18 +142,26 @@ async function doAllow(sessionId: string | undefined): Promise<void> {
   if (!id) {
     const dir = sessionsDir()
     const names = (await readdir(dir).catch(() => [])).filter(f => f.endsWith('.json'))
-    let newest = { at: -1, id: '' }
+    const found: { at: number; id: string; cwd: string; cost: string }[] = []
     for (const name of names) {
-      const st = await stat(join(dir, name)).catch(() => null)
-      if (!st) continue
-      if (st.mtimeMs > newest.at) {
-        try {
-          const cache = JSON.parse(await readFile(join(dir, name), 'utf-8')) as { sessionId?: string }
-          if (cache.sessionId) newest = { at: st.mtimeMs, id: cache.sessionId }
-        } catch { /* skip unreadable cache */ }
-      }
+      try {
+        const st = await stat(join(dir, name))
+        const cache = JSON.parse(await readFile(join(dir, name), 'utf-8')) as { sessionId?: string; cwd?: string | null; costUSD?: number }
+        if (cache.sessionId) found.push({ at: st.mtimeMs, id: cache.sessionId, cwd: cache.cwd ?? 'unknown dir', cost: `$${(cache.costUSD ?? 0).toFixed(2)}` })
+      } catch { /* skip unreadable cache */ }
     }
-    id = newest.id
+    found.sort((a, b) => b.at - a.at)
+    const recent = found.filter(f => Date.now() - f.at < ALLOW_AMBIGUOUS_MS)
+    if (recent.length > 1) {
+      console.error('  More than one guard session was active in the last few minutes. Pass the session id: codeburn guard allow <session-id>.')
+      for (const f of recent) console.error(`    ${f.id}  ${f.cwd}  ${f.cost}`)
+      process.exitCode = 1
+      return
+    }
+    if (found[0]) {
+      id = found[0].id
+      console.log(`  Session ${id}  ${found[0].cwd}  ${found[0].cost}`)
+    }
   }
   if (!id) {
     console.error('  No active guard session found. Pass the session id: codeburn guard allow <session-id>.')

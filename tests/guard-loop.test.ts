@@ -1,12 +1,12 @@
 import { afterAll, describe, expect, it, vi } from 'vitest'
-import { appendFile, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { appendFile, mkdtemp, rm, stat, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Command } from 'commander'
 import { parseApiCall, parseJsonlLine } from '../src/parser.js'
-import { readCache, writeAllow } from '../src/guard/usage.js'
+import { emptyCache, readCache, writeAllow, writeCache } from '../src/guard/usage.js'
 import { runGuardHook } from '../src/guard/hooks.js'
-import { writeGuardConfig, DEFAULT_GUARD_CONFIG, type GuardConfig } from '../src/guard/store.js'
+import { allowPath, sessionCachePath, writeGuardConfig, DEFAULT_GUARD_CONFIG, type GuardConfig } from '../src/guard/store.js'
 import { setHome } from './setup/home.js'
 
 const roots: string[] = []
@@ -35,11 +35,11 @@ function useLine(id: string, name: string, input: Record<string, unknown>, outTo
   }) + '\n'
 }
 
-function resultLine(id: string, isError: boolean): string {
+function resultLine(id: string, isError: boolean, output?: string): string {
   return JSON.stringify({
     type: 'user',
     timestamp: '2026-07-01T00:00:01.000Z',
-    message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: isError ? 'exit 1' : 'ok', is_error: isError }] },
+    message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: output ?? (isError ? 'exit 1' : 'ok'), is_error: isError }] },
   }) + '\n'
 }
 
@@ -57,13 +57,13 @@ async function call(
   env: { base: string; path: string },
   name: string,
   input: Record<string, unknown>,
-  o: { fails?: boolean; outTok?: number } = {},
+  o: { fails?: boolean; outTok?: number; output?: string } = {},
 ): Promise<string> {
   const id = `toolu_${++seq}`
   const out = await runGuardHook('pretooluse', JSON.stringify({
     session_id: SID, transcript_path: env.path, hook_event_name: 'PreToolUse', tool_name: name, tool_input: input, tool_use_id: id,
   }), { base: env.base })
-  await appendFile(env.path, useLine(id, name, input, o.outTok) + resultLine(id, o.fails ?? false))
+  await appendFile(env.path, useLine(id, name, input, o.outTok) + resultLine(id, o.fails ?? false, o.output))
   return out
 }
 
@@ -74,8 +74,8 @@ function warnJson(sentence: string): string {
   })
 }
 
-function denyJson(reason: string): string {
-  return JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: reason } })
+function denyJson(reason: string, userNote: string): string {
+  return JSON.stringify({ systemMessage: userNote, hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: reason } })
 }
 
 describe('identical-call loop', () => {
@@ -88,7 +88,8 @@ describe('identical-call loop', () => {
     expect(outs.slice(4, 7)).toEqual(['', '', ''])
     const cost = (await readCache(SID, env.base)).costUSD
     expect(outs[7]).toBe(denyJson(
-      `Read was called 8 times in a row with the same input; this session is $${cost.toFixed(2)} (codeburn guard). Change approach or ask the user. Run 'codeburn guard allow' to lift this for the session, or raise loopStopAfter in guard.json.`,
+      `Read was called 8 times in a row with the same input; this session is $${cost.toFixed(2)} (codeburn guard). Change approach or ask the user.`,
+      `codeburn guard: stopped Read after 8 identical calls in a row. Run 'codeburn guard allow' to lift this for the session, or raise loopStopAfter in guard.json.`,
     ))
   })
 
@@ -116,6 +117,62 @@ describe('identical-call loop', () => {
     expect(await call(env, 'Read', { limit: 5, file_path: '/a' })).toContain('called 4 times in a row')
   })
 
+  it('never counts polling a background task as a loop', async () => {
+    const env = await setup()
+    for (const name of ['BashOutput', 'TaskOutput', 'Monitor']) {
+      const outs: string[] = []
+      for (let i = 0; i < 8; i++) outs.push(await call(env, name, { bash_id: 'bash_1' }))
+      expect(outs.every(o => o === '')).toBe(true)
+    }
+    const edits: string[] = []
+    for (let i = 0; i < 8; i++) edits.push(await call(env, 'Edit', { file_path: '/a.ts', old_string: 'x', new_string: 'y' }))
+    expect(edits[7]).toContain('"permissionDecision":"deny"')
+  })
+
+  it('never counts a sleep followed by a read-only check as a loop', async () => {
+    const env = await setup()
+    const outs: string[] = []
+    for (let i = 0; i < 8; i++) outs.push(await call(env, 'Bash', { command: 'sleep 30 && gh run view 123' }))
+    for (let i = 0; i < 8; i++) outs.push(await call(env, 'Bash', { command: '  sleep 150; gh pr view 1895 --json state' }))
+    for (let i = 0; i < 8; i++) outs.push(await call(env, 'Bash', { command: 'sleep 5; git status' }))
+    for (let i = 0; i < 8; i++) outs.push(await call(env, 'Bash', { command: 'sleep 5' }))
+    for (let i = 0; i < 12; i++) outs.push(await call(env, 'Bash', { command: 'sleep 150 && echo waiting' }, { output: 'waiting' }))
+    expect(outs.every(o => o === '')).toBe(true)
+  })
+
+  it('still counts a sleep followed by an echo that writes a file', async () => {
+    const env = await setup()
+    const outs: string[] = []
+    for (let i = 0; i < 8; i++) outs.push(await call(env, 'Bash', { command: 'sleep 1 && echo x > file' }))
+    const multi: string[] = []
+    for (let i = 0; i < 8; i++) multi.push(await call(env, 'Bash', { command: 'sleep 1 && echo x\nnpm test' }))
+    expect(multi[7]).toContain('"permissionDecision":"deny"')
+    expect(outs[3]).toContain('called 4 times in a row')
+    expect(outs[7]).toContain('"permissionDecision":"deny"')
+  })
+
+  it('still counts a sleep followed by a command that does work', async () => {
+    const env = await setup()
+    const outs: string[] = []
+    for (let i = 0; i < 8; i++) outs.push(await call(env, 'Bash', { command: 'sleep 0; npm test' }, { output: '3 passing' }))
+    expect(outs.slice(0, 3)).toEqual(['', '', ''])
+    expect(outs[3]).toBe(warnJson('codeburn guard: Bash was called 4 times in a row with the same input.'))
+    expect(outs[7]).toContain('"permissionDecision":"deny"')
+  })
+
+  it('counts identical calls only while they keep getting the same result', async () => {
+    const env = await setup()
+    const changing: string[] = []
+    for (let i = 0; i < 8; i++) changing.push(await call(env, 'Bash', { command: 'cat x' }, { output: `line ${i}` }))
+    expect(changing.every(o => o === '')).toBe(true)
+
+    const same: string[] = []
+    for (let i = 0; i < 8; i++) same.push(await call(env, 'Bash', { command: 'ls' }, { output: 'a.ts b.ts' }))
+    expect(same.slice(0, 3)).toEqual(['', '', ''])
+    expect(same[3]).toBe(warnJson('codeburn guard: Bash was called 4 times in a row with the same input.'))
+    expect(same[7]).toContain('"permissionDecision":"deny"')
+  })
+
   it('warns once per session', async () => {
     const env = await setup()
     const outs: string[] = []
@@ -128,30 +185,55 @@ describe('identical-call loop', () => {
 })
 
 describe('failing-command retry', () => {
-  it('warns after 3 failures and blocks after 5; successes reset nothing', async () => {
-    const env = await setup()
+  it('warns after 3 failures in a row and blocks after 5', async () => {
+    const env = await setup({ loopWarnAfter: null, loopStopAfter: null })
     const test = { command: 'npm test -- --run tests/a-very-long-path/that-goes-on-and-on/and-on.test.ts', description: 'Run tests' }
     const outs: string[] = []
-    let edit = 0
-    const run = async (fails: boolean) => {
-      outs.push(await call(env, 'Bash', test, { fails }))
-      await call(env, 'Edit', { file_path: '/a.ts', old_string: String(edit), new_string: String(++edit) })
-    }
-    await run(true)
-    await run(true)
-    await run(false)
-    await run(true)
+    for (let i = 0; i < 5; i++) outs.push(await call(env, 'Bash', test, { fails: true }))
     const shown = test.command.slice(0, 60)
-    expect(outs).toEqual(['', '', '', ''])
-    await run(true)
-    expect(outs[4]).toBe(warnJson(`codeburn guard: the command "${shown}" already failed 3 times.`))
-    await run(true)
-    expect(outs[5]).toBe('')
+    expect(outs.slice(0, 3)).toEqual(['', '', ''])
+    expect(outs[3]).toBe(warnJson(`codeburn guard: the command "${shown}" already failed 3 times.`))
+    expect(outs[4]).toBe('')
     const out = await call(env, 'Bash', test)
     const cost = (await readCache(SID, env.base)).costUSD
     expect(out).toBe(denyJson(
-      `The command "${shown}" already failed 5 times; this session is $${cost.toFixed(2)} (codeburn guard). Change approach or ask the user. Run 'codeburn guard allow' to lift this for the session, or raise retryStopAfter in guard.json.`,
+      `The command "${shown}" already failed 5 times; this session is $${cost.toFixed(2)} (codeburn guard). Change approach or ask the user.`,
+      `codeburn guard: stopped "${shown}" after 5 failures in a row. Run 'codeburn guard allow' to lift this for the session, or raise retryStopAfter in guard.json.`,
     ))
+  })
+
+  it('an edit between runs resets the count, so a red-green loop is never stopped', async () => {
+    const env = await setup()
+    const test = { command: 'npm test', description: 'Run tests' }
+    const outs: string[] = []
+    for (let i = 0; i < 5; i++) {
+      outs.push(await call(env, 'Bash', test, { fails: true }))
+      await call(env, 'Edit', { file_path: '/a.ts', old_string: String(i), new_string: String(i + 1) })
+    }
+    outs.push(await call(env, 'Bash', test))
+    expect(outs.every(o => o === '')).toBe(true)
+  })
+
+  it('only a successful edit resets the count', async () => {
+    const run = async (editFails: boolean) => {
+      const env = await setup({ loopWarnAfter: null, loopStopAfter: null })
+      for (let i = 0; i < 2; i++) await call(env, 'Bash', { command: 'npm test' }, { fails: true })
+      await call(env, 'Edit', { file_path: '/a.ts', old_string: 'a', new_string: 'b' }, { fails: editFails })
+      for (let i = 0; i < 3; i++) await call(env, 'Bash', { command: 'npm test' }, { fails: true })
+      return call(env, 'Bash', { command: 'npm test' })
+    }
+    expect(await run(true)).toContain('"permissionDecision":"deny"')
+    expect(await run(false)).not.toContain('deny')
+  })
+
+  it('a passing run resets that command only', async () => {
+    const env = await setup({ loopWarnAfter: null, loopStopAfter: null })
+    for (let i = 0; i < 2; i++) await call(env, 'Bash', { command: 'npm test' }, { fails: true })
+    for (let i = 0; i < 2; i++) await call(env, 'Bash', { command: 'npm run lint' }, { fails: true })
+    await call(env, 'Bash', { command: 'npm test' })
+    await call(env, 'Bash', { command: 'npm test' }, { fails: true })
+    await call(env, 'Read', { file_path: '/a' })
+    expect(Object.values((await readCache(SID, env.base)).failedCommands).sort()).toEqual([1, 2])
   })
 
   it('only counts shell tools', async () => {
@@ -178,6 +260,53 @@ describe('guard allow', () => {
     const outs: string[] = []
     for (let i = 0; i < 3; i++) outs.push(await runGuardHook('pretooluse', input(`toolu_o${i}`), { base: other.base }))
     expect(outs[2]).toContain('"permissionDecision":"deny"')
+  })
+})
+
+describe('guard allow without an id', () => {
+  async function allowCli(): Promise<{ out: string; err: string; code: typeof process.exitCode }> {
+    const out: string[] = []
+    const err: string[] = []
+    const log = vi.spyOn(console, 'log').mockImplementation((...a: unknown[]) => { out.push(a.join(' ')) })
+    const error = vi.spyOn(console, 'error').mockImplementation((...a: unknown[]) => { err.push(a.join(' ')) })
+    try {
+      const { registerGuardCommands } = await import('../src/guard/cli.js')
+      const program = new Command()
+      registerGuardCommands(program)
+      await program.parseAsync(['node', 'codeburn', 'guard', 'allow'])
+      return { out: out.join('\n'), err: err.join('\n'), code: process.exitCode }
+    } finally {
+      log.mockRestore()
+      error.mockRestore()
+      process.exitCode = undefined
+    }
+  }
+  async function session(id: string, cwd: string, ageMs: number): Promise<void> {
+    await writeCache({ ...emptyCache(id), cwd, costUSD: 12.5 })
+    const at = new Date(Date.now() - ageMs)
+    await utimes(sessionCachePath(id), at, at)
+  }
+
+  it('refuses when two sessions wrote their cache in the last few minutes', async () => {
+    setHome(await tmp())
+    await session('sess-a', '/repo/a', 30_000)
+    await session('sess-b', '/repo/b', 10_000)
+    const r = await allowCli()
+    expect(r.code).toBe(1)
+    expect(r.err).toContain('Pass the session id')
+    expect(r.err).toContain('sess-a  /repo/a  $12.50')
+    expect(r.err).toContain('sess-b  /repo/b  $12.50')
+    await expect(stat(allowPath('sess-b'))).rejects.toThrow()
+  })
+
+  it('names the session it lifts when only one is recent', async () => {
+    setHome(await tmp())
+    await session('sess-old', '/repo/old', 60 * 60_000)
+    await session('sess-new', '/repo/new', 10_000)
+    const r = await allowCli()
+    expect(r.code).toBeUndefined()
+    expect(r.out).toContain('Session sess-new  /repo/new  $12.50')
+    await stat(allowPath('sess-new'))
   })
 })
 
@@ -232,6 +361,18 @@ describe('Stop nudge after a loop', () => {
     }))
     expect(burned).toBeGreaterThan(1)
     expect(await runGuardHook('stop', stop, { base: env.base })).toBe('')
+  })
+})
+
+describe('Stop nudge after failed runs', () => {
+  it('names the longest streak, even after an edit broke it', async () => {
+    const env = await setup({ checkpointUSD: null, loopWarnAfter: null, loopStopAfter: null, retryStopAfter: null })
+    for (let i = 0; i < 4; i++) await call(env, 'Bash', { command: 'npm test' }, { fails: true })
+    await call(env, 'Edit', { file_path: '/a.ts', old_string: 'a', new_string: 'b' })
+    await call(env, 'Bash', { command: 'npm test' }, { fails: true })
+    const stop = JSON.stringify({ session_id: SID, transcript_path: env.path, hook_event_name: 'Stop' })
+    expect(JSON.parse(await runGuardHook('stop', stop, { base: env.base })).systemMessage)
+      .toContain('codeburn guard: a longest streak of 4 failed runs of one command;')
   })
 })
 

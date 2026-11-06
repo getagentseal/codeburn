@@ -1,13 +1,24 @@
-import { afterAll, describe, expect, it } from 'vitest'
-import { appendFile, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { afterAll, describe, expect, it, vi } from 'vitest'
+import { appendFile, mkdir, mkdtemp, readdir, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { dedupeStreamingMessageIds, parseApiCall, parseJsonlLine } from '../src/parser.js'
 import { computeSessionUsage, emptyCache, readCache, writeAllow, writeCache } from '../src/guard/usage.js'
 import { runGuardHook, runGuardStatusline } from '../src/guard/hooks.js'
-import { writeGuardConfig, DEFAULT_GUARD_CONFIG } from '../src/guard/store.js'
+import { sessionsDir, writeGuardConfig, DEFAULT_GUARD_CONFIG } from '../src/guard/store.js'
 import { buildFlags, matchFlag, writeFlags, type GuardFlags } from '../src/guard/flags.js'
 import type { ProjectSummary } from '../src/types.js'
+
+const renameFails = vi.hoisted(() => ({ on: false, calls: 0 }))
+vi.mock('fs/promises', async (importOriginal) => {
+  const fs = await importOriginal<typeof import('fs/promises')>()
+  return {
+    ...fs,
+    rename: (...args: Parameters<typeof fs.rename>) => ++renameFails.calls && renameFails.on
+      ? Promise.reject(Object.assign(new Error('EPERM: operation not permitted, rename'), { code: 'EPERM' }))
+      : fs.rename(...args),
+  }
+})
 
 const roots: string[] = []
 async function tmp(): Promise<string> {
@@ -243,7 +254,8 @@ describe('budget hook (PreToolUse)', () => {
     const blocked = JSON.parse(await runGuardHook('pretooluse', hookInput(path), { base }))
     expect(blocked.hookSpecificOutput.hookEventName).toBe('PreToolUse')
     expect(blocked.hookSpecificOutput.permissionDecision).toBe('deny')
-    expect(blocked.hookSpecificOutput.permissionDecisionReason).toContain('guard allow')
+    expect(blocked.hookSpecificOutput.permissionDecisionReason).not.toContain('guard allow')
+    expect(blocked.systemMessage).toContain('codeburn guard allow')
 
     await writeAllow(SID, base)
     expect(await runGuardHook('pretooluse', hookInput(path), { base })).toBe('')
@@ -414,3 +426,58 @@ function lowWorthProject(): Record<string, unknown> {
     totalCostUSD: 40, totalSavingsUSD: 0, totalApiCalls: 1, totalProxiedCostUSD: 0,
   }
 }
+
+describe('session state pruning', () => {
+  it('drops caches and allow markers untouched for 30 days, once a day', async () => {
+    const base = await tmp()
+    const dir = sessionsDir(base)
+    await mkdir(dir, { recursive: true })
+    const age = async (name: string, days: number) => {
+      await writeFile(join(dir, name), '{}', 'utf-8')
+      const at = new Date(Date.now() - days * 86_400_000)
+      await utimes(join(dir, name), at, at)
+    }
+    await age('old.json', 40)
+    await age('old.allow', 40)
+    await age('recent.json', 2)
+    await age('live.json', 0)
+    await age('live.allow', 40)
+    await writeCache(emptyCache('new'), base)
+    expect((await readdir(dir)).sort()).toEqual(['.pruned', 'live.allow', 'live.json', 'new.json', 'recent.json'])
+
+    await age('later.json', 40)
+    await writeCache(emptyCache('new'), base)
+    expect(await readdir(dir)).toContain('later.json')
+  })
+})
+
+describe('concurrent cache writes', () => {
+  it('replaces the cache by rename, so parallel writes always leave a parseable file', async () => {
+    const base = await tmp()
+    await writeCache(emptyCache(SID), base)
+    const big = Object.fromEntries(Array.from({ length: 5_000 }, (_, i) => [`msg-${i}`, i]))
+    const renamesBefore = renameFails.calls
+    for (let i = 0; i < 20; i++) await writeCache({ ...emptyCache(SID), costUSD: i, perMessage: big }, base)
+    expect(renameFails.calls - renamesBefore).toBe(20)
+    expect((await readCache(SID, base)).costUSD).toBe(19)
+    await Promise.all(Array.from({ length: 20 }, (_, i) =>
+      writeCache({ ...emptyCache(SID), costUSD: i, perMessage: big }, base)))
+    expect((await readCache(SID, base)).perMessage['msg-4999']).toBe(4999)
+    expect((await readdir(sessionsDir(base))).filter(n => n.endsWith('.tmp'))).toEqual([])
+  })
+
+  it('keeps the previous cache intact when every rename attempt fails', async () => {
+    const base = await tmp()
+    await writeCache({ ...emptyCache(SID), costUSD: 1, softWarned: true }, base)
+    renameFails.on = true
+    try {
+      await writeCache({ ...emptyCache(SID), costUSD: 2 }, base)
+    } finally {
+      renameFails.on = false
+    }
+    const raw = await readFile(join(sessionsDir(base), `${SID}.json`), 'utf-8')
+    expect(JSON.parse(raw).costUSD).toBe(1)
+    expect((await readCache(SID, base)).softWarned).toBe(true)
+    expect((await readdir(sessionsDir(base))).filter(n => n.endsWith('.tmp'))).toEqual([])
+  })
+})
