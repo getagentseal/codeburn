@@ -90,6 +90,7 @@ async function handlePreToolUse(input: unknown, opts: HookOpts): Promise<string>
   const config = await readGuardConfig(opts.base)
   const prev = await readCache(sessionId, opts.base)
   const { cache } = await computeSessionUsage(prev, transcript)
+  cache.cwd = str(input, 'cwd') ?? cache.cwd
 
   const toolName = str(input, 'tool_name')
   const toolInput = (input as { tool_input?: unknown }).tool_input
@@ -237,6 +238,7 @@ export async function runGuardStatusline(raw: string, opts: HookOpts = {}): Prom
     if (!sessionId || !transcript) return ''
     const prev = await readCache(sessionId, opts.base)
     const { cache } = await computeSessionUsage(prev, transcript)
+    cache.cwd = str((input as { workspace?: unknown }).workspace, 'current_dir') ?? str(input, 'cwd') ?? cache.cwd
     await writeCache(cache, opts.base)
     return `codeburn guard ${usd(cache.costUSD)} · ${freshness(cache.lastTurnAt)}`
   } catch {

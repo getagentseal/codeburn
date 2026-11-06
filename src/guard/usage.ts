@@ -32,6 +32,7 @@ export type ToolCallKey = { id: string; name: string; hash: string }
 export type GuardCache = {
   version: number
   sessionId: string
+  cwd: string | null
   byteOffset: number
   costUSD: number
   perMessage: Record<string, number>
@@ -75,6 +76,7 @@ export function emptyCache(sessionId: string): GuardCache {
   return {
     version: GUARD_CACHE_VERSION,
     sessionId,
+    cwd: null,
     byteOffset: 0,
     costUSD: 0,
     perMessage: {},
@@ -205,6 +207,7 @@ export async function computeSessionUsage(
   const cache: GuardCache = size < prev.byteOffset
     ? {
         ...emptyCache(prev.sessionId),
+        cwd: prev.cwd,
         softWarned: prev.softWarned,
         stopNotified: prev.stopNotified,
         loopWarned: prev.loopWarned,

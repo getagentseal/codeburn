@@ -1,12 +1,12 @@
 import { afterAll, describe, expect, it, vi } from 'vitest'
-import { appendFile, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { appendFile, mkdtemp, rm, stat, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Command } from 'commander'
 import { parseApiCall, parseJsonlLine } from '../src/parser.js'
-import { readCache, writeAllow } from '../src/guard/usage.js'
+import { emptyCache, readCache, writeAllow, writeCache } from '../src/guard/usage.js'
 import { runGuardHook } from '../src/guard/hooks.js'
-import { writeGuardConfig, DEFAULT_GUARD_CONFIG, type GuardConfig } from '../src/guard/store.js'
+import { allowPath, sessionCachePath, writeGuardConfig, DEFAULT_GUARD_CONFIG, type GuardConfig } from '../src/guard/store.js'
 import { setHome } from './setup/home.js'
 
 const roots: string[] = []
@@ -204,6 +204,53 @@ describe('guard allow', () => {
     const outs: string[] = []
     for (let i = 0; i < 3; i++) outs.push(await runGuardHook('pretooluse', input(`toolu_o${i}`), { base: other.base }))
     expect(outs[2]).toContain('"permissionDecision":"deny"')
+  })
+})
+
+describe('guard allow without an id', () => {
+  async function allowCli(): Promise<{ out: string; err: string; code: typeof process.exitCode }> {
+    const out: string[] = []
+    const err: string[] = []
+    const log = vi.spyOn(console, 'log').mockImplementation((...a: unknown[]) => { out.push(a.join(' ')) })
+    const error = vi.spyOn(console, 'error').mockImplementation((...a: unknown[]) => { err.push(a.join(' ')) })
+    try {
+      const { registerGuardCommands } = await import('../src/guard/cli.js')
+      const program = new Command()
+      registerGuardCommands(program)
+      await program.parseAsync(['node', 'codeburn', 'guard', 'allow'])
+      return { out: out.join('\n'), err: err.join('\n'), code: process.exitCode }
+    } finally {
+      log.mockRestore()
+      error.mockRestore()
+      process.exitCode = undefined
+    }
+  }
+  async function session(id: string, cwd: string, ageMs: number): Promise<void> {
+    await writeCache({ ...emptyCache(id), cwd, costUSD: 12.5 })
+    const at = new Date(Date.now() - ageMs)
+    await utimes(sessionCachePath(id), at, at)
+  }
+
+  it('refuses when two sessions wrote their cache in the last few minutes', async () => {
+    setHome(await tmp())
+    await session('sess-a', '/repo/a', 30_000)
+    await session('sess-b', '/repo/b', 10_000)
+    const r = await allowCli()
+    expect(r.code).toBe(1)
+    expect(r.err).toContain('Pass the session id')
+    expect(r.err).toContain('sess-a  /repo/a  $12.50')
+    expect(r.err).toContain('sess-b  /repo/b  $12.50')
+    await expect(stat(allowPath('sess-b'))).rejects.toThrow()
+  })
+
+  it('names the session it lifts when only one is recent', async () => {
+    setHome(await tmp())
+    await session('sess-old', '/repo/old', 60 * 60_000)
+    await session('sess-new', '/repo/new', 10_000)
+    const r = await allowCli()
+    expect(r.code).toBeUndefined()
+    expect(r.out).toContain('Session sess-new  /repo/new  $12.50')
+    await stat(allowPath('sess-new'))
   })
 })
 
