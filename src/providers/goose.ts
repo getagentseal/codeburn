@@ -196,8 +196,9 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
         const userMessage = getFirstUserMessage(db, sessionId)
 
         const raw = session.updated_at || session.created_at || ''
-        let ts = new Date(raw)
-        if (isNaN(ts.getTime())) ts = new Date(raw + 'Z')
+        // SQLite's CURRENT_TIMESTAMP text is UTC without a zone; Date reads
+        // that shape as local time.
+        let ts = new Date(/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(\.\d+)?$/.test(raw) ? raw.replace(' ', 'T') + 'Z' : raw)
         if (isNaN(ts.getTime())) ts = new Date()
 
         yield {

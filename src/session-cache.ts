@@ -529,6 +529,9 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // Estimated from message text: Grok Bot's local mirror records no tokens.
   // import-guess-est-v1: synced Grok Bot rows with no dollar amount are estimated.
   grokbot: 'estimated-usage-v1-import-guess-est-v1',
+  // sqlite-utc-timestamp-v1: zoneless SQLite timestamps are UTC, so cached
+  // sessions stamped as local time re-parse.
+  goose: 'sqlite-utc-timestamp-v1',
   // v0-v4 generations, embedded attempt streams, retry accounting, and the
   // version-specific inherited-prefix rules all change cached DSH calls.
   dsh: 'session-formats-v0-v4-attempts-v6',
