@@ -97,6 +97,9 @@ const SHUTDOWN_FORCE_WAIT_MS = 250
 export const PROGRESS_LINE_PREFIX = 'CODEBURN_PROGRESS '
 // A runaway CLI (or a compromised binary) must not exhaust main-process memory.
 const MAX_OUTPUT_BYTES = 16 * 1024 * 1024
+// Serve wraps the output as an escaped JSON string (pretty JSON grows ~17%), so
+// the raw frame gets headroom; the decoded output is still held to MAX_OUTPUT_BYTES.
+const MAX_SERVE_FRAME_BYTES = 2 * MAX_OUTPUT_BYTES
 // A cold-cache CLI spawn costs seconds at ~120% CPU; letting every poll +
 // prefetch launch at once saturates the machine. Cap how many children run
 // concurrently — the rest queue and drain as slots free (interactive first).
@@ -844,7 +847,7 @@ class ServeClient {
       this.buffer = this.buffer.slice(idx + 1)
       const rawLineBytes = Buffer.byteLength(rawLine)
       this.bufferBytes = Math.max(0, this.bufferBytes - rawLineBytes - 1)
-      if (rawLineBytes > MAX_OUTPUT_BYTES) {
+      if (rawLineBytes > MAX_SERVE_FRAME_BYTES) {
         this.terminateForOverflow(child)
         return
       }
@@ -867,14 +870,14 @@ class ServeClient {
       // long cold parse that heartbeats progress is never killed mid-flight.
       waiter.arm()
       if (typeof msg.progress === 'string') {
-        if (!this.consumeDecodedOutput(child, waiter, msg.progress)) return
+        if (!this.consumeDecodedOutput(msg.id, waiter, msg.progress)) continue
         if (waiter.onStderr) {
           try { waiter.onStderr(msg.progress) } catch { /* progress consumers never own the request */ }
         }
         continue
       }
       const terminalOutput = typeof msg.output === 'string' ? msg.output : typeof msg.error === 'string' ? msg.error : ''
-      if (!this.consumeDecodedOutput(child, waiter, terminalOutput)) return
+      if (!this.consumeDecodedOutput(msg.id, waiter, terminalOutput)) continue
       this.pending.delete(msg.id)
       waiter.clear()
       if (msg.ok && typeof msg.output === 'string') {
@@ -889,17 +892,18 @@ class ServeClient {
     }
     // Complete lines are bounded above before parsing. Bound the partial frame
     // too, otherwise a child that never emits '\n' can grow this buffer forever.
-    if (this.bufferBytes > MAX_OUTPUT_BYTES) this.terminateForOverflow(child)
+    if (this.bufferBytes > MAX_SERVE_FRAME_BYTES) this.terminateForOverflow(child)
   }
 
-  private consumeDecodedOutput(
-    child: ReturnType<typeof spawn>,
-    waiter: { decodedBytes: number },
-    output: string,
-  ): boolean {
+  /** An answer over the cap fails only its own request; the frame is already
+   *  bounded, so the warm child stays. */
+  private consumeDecodedOutput(id: number, waiter: PendingServeRequest, output: string): boolean {
     waiter.decodedBytes += Buffer.byteLength(output)
     if (waiter.decodedBytes <= MAX_OUTPUT_BYTES) return true
-    this.terminateForOverflow(child)
+    this.pending.delete(id)
+    waiter.clear()
+    waiter.reject(new CliError('too-large', `codeburn serve produced more than ${MAX_OUTPUT_BYTES} bytes`))
+    this.armIdle()
     return false
   }
 
@@ -1187,7 +1191,7 @@ export function spawnCli(
         .catch(err => {
           // App shutdown is terminal: never turn rejected resident requests
           // into brand-new one-shot children after killAll() has reaped them.
-          if (serve.isDestroyed() || (err instanceof CliError && err.kind === 'too-large')) throw err
+          if (serve.isDestroyed()) throw err
           return runScheduledCli(
             spec,
             args[0] ?? '',

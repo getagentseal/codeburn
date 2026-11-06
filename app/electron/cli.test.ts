@@ -1040,40 +1040,99 @@ describe('resident serve single-flight', { timeout: 30_000 }, () => {
       .resolves.toEqual({ via: 'serve', ticks: 15 })
   })
 
-  it('rejects and terminates a resident that emits an oversized valid JSON frame', async () => {
-    const startsFile = join(dir, 'oversized-frame-starts')
-    const oneShotsFile = join(dir, 'oversized-frame-one-shots')
+  it('serves a 15 MiB pretty-JSON answer whose escaped frame is over 16 MiB', async () => {
+    const startsFile = join(dir, 'pretty-starts')
+    const oneShotsFile = join(dir, 'pretty-one-shots')
     fakeBin(
-      'oversized-frame-resident.js',
+      'pretty-resident.js',
       `const fs = require('node:fs'); const readline = require('node:readline');
        if (process.argv[2] === 'serve') {
          fs.appendFileSync(${JSON.stringify(startsFile)}, 's');
-         const generation = fs.readFileSync(${JSON.stringify(startsFile)}, 'utf8').length;
+         const rows = [];
+         let output = '';
+         while (Buffer.byteLength(output) < 15 * 1024 * 1024) {
+           for (let i = 0; i < 10000; i++) rows.push({ id: 'sess-' + rows.length, project: '/Users/me/p', cost: 1.5 });
+           output = JSON.stringify(rows, null, 2);
+         }
          const rl = readline.createInterface({ input: process.stdin });
-         rl.once('line', line => {
+         rl.on('line', line => {
            const request = JSON.parse(line);
-           const output = generation === 1
-             ? JSON.stringify({ value: 'x'.repeat(16 * 1024 * 1024 + 1024) })
-             : JSON.stringify({ generation });
            process.stdout.write(JSON.stringify({ id: request.id, ok: true, output }) + '\\n');
          });
-         setInterval(() => {}, 1000);
        } else {
          fs.appendFileSync(${JSON.stringify(oneShotsFile)}, 'o');
-         process.stdout.write('{}');
+         process.stdout.write('[]');
        }`,
     )
     startServe()
 
-    await expect(spawnCli(['status', '--oversized-frame'], { timeoutMs: 5_000 }))
-      .rejects.toMatchObject({ kind: 'too-large' } satisfies Partial<CliError>)
-    await expect(spawnCli(['status', '--after-oversized-frame'], { timeoutMs: 5_000 }))
-      .resolves.toEqual({ generation: 2 })
-    expect(readMaybe(startsFile)).toBe('ss')
+    const rows = await spawnCli(['sessions', '--format', 'json'], { timeoutMs: 10_000 }) as unknown[]
+    expect(rows.length).toBeGreaterThan(100_000)
+    await spawnCli(['sessions', '--format', 'json', '--again'], { timeoutMs: 10_000 })
+    expect(readMaybe(startsFile)).toBe('s')
     expect(readMaybe(oneShotsFile)).toBe('')
   })
 
-  it('keeps serve enabled after more overflows than the resident death budget', async () => {
+  it('falls back to a one-shot for an over-cap answer and keeps the warm resident', async () => {
+    const startsFile = join(dir, 'over-cap-starts')
+    const oneShotsFile = join(dir, 'over-cap-one-shots')
+    fakeBin(
+      'over-cap-resident.js',
+      `const fs = require('node:fs'); const readline = require('node:readline');
+       if (process.argv[2] === 'serve') {
+         fs.appendFileSync(${JSON.stringify(startsFile)}, 's');
+         const rl = readline.createInterface({ input: process.stdin });
+         rl.on('line', line => {
+           const request = JSON.parse(line);
+           const output = request.args.includes('--big')
+             ? JSON.stringify({ value: 'x'.repeat(16 * 1024 * 1024 + 1024) })
+             : JSON.stringify({ via: 'serve' });
+           process.stdout.write(JSON.stringify({ id: request.id, ok: true, output }) + '\\n');
+         });
+       } else {
+         fs.appendFileSync(${JSON.stringify(oneShotsFile)}, 'o');
+         process.stdout.write(JSON.stringify({ via: 'spawn' }));
+       }`,
+    )
+    startServe()
+
+    await expect(spawnCli(['status', '--big'], { timeoutMs: 5_000 })).resolves.toEqual({ via: 'spawn' })
+    await expect(spawnCli(['status', '--small'], { timeoutMs: 5_000 })).resolves.toEqual({ via: 'serve' })
+    expect(readMaybe(startsFile)).toBe('s')
+    expect(readMaybe(oneShotsFile)).toBe('o')
+  })
+
+  it('kills a resident whose frame exceeds the raw bound and still fails the read safely', async () => {
+    const startsFile = join(dir, 'huge-frame-starts')
+    fakeBin(
+      'huge-frame-resident.js',
+      `const fs = require('node:fs'); const readline = require('node:readline');
+       const output = JSON.stringify({ value: 'x'.repeat(40 * 1024 * 1024) });
+       if (process.argv[2] === 'serve') {
+         fs.appendFileSync(${JSON.stringify(startsFile)}, 's');
+         const generation = fs.readFileSync(${JSON.stringify(startsFile)}, 'utf8').length;
+         const rl = readline.createInterface({ input: process.stdin });
+         rl.on('line', line => {
+           const request = JSON.parse(line);
+           const answer = generation === 1 ? output : JSON.stringify({ generation });
+           process.stdout.write(JSON.stringify({ id: request.id, ok: true, output: answer }) + '\\n');
+         });
+         setInterval(() => {}, 1000);
+       } else {
+         process.stdout.write(output);
+         setInterval(() => {}, 1000);
+       }`,
+    )
+    startServe()
+
+    await expect(spawnCli(['status', '--huge-frame'], { timeoutMs: 5_000 }))
+      .rejects.toMatchObject({ kind: 'too-large' } satisfies Partial<CliError>)
+    await expect(spawnCli(['status', '--after-huge-frame'], { timeoutMs: 5_000 }))
+      .resolves.toEqual({ generation: 2 })
+    expect(readMaybe(startsFile)).toBe('ss')
+  })
+
+  it('keeps serve enabled after more frame overflows than the resident death budget', async () => {
     const startsFile = join(dir, 'overflow-budget-starts')
     const oneShotsFile = join(dir, 'overflow-budget-one-shots')
     fakeBin(
@@ -1082,11 +1141,7 @@ describe('resident serve single-flight', { timeout: 30_000 }, () => {
        if (process.argv[2] === 'serve') {
          fs.appendFileSync(${JSON.stringify(startsFile)}, 's');
          const rl = readline.createInterface({ input: process.stdin });
-         rl.once('line', line => {
-           const request = JSON.parse(line);
-           const output = JSON.stringify({ value: 'x'.repeat(16 * 1024 * 1024 + 1024) });
-           process.stdout.write(JSON.stringify({ id: request.id, ok: true, output }) + '\\n');
-         });
+         rl.once('line', () => process.stdout.write('x'.repeat(32 * 1024 * 1024 + 1024)));
          setInterval(() => {}, 1000);
        } else {
          fs.appendFileSync(${JSON.stringify(oneShotsFile)}, 'o');
@@ -1096,38 +1151,13 @@ describe('resident serve single-flight', { timeout: 30_000 }, () => {
     startServe()
 
     for (let attempt = 0; attempt < 4; attempt += 1) {
-      await expect(spawnCli(['status', '--overflow', String(attempt)], { timeoutMs: 5_000 }))
-        .rejects.toMatchObject({ kind: 'too-large' } satisfies Partial<CliError>)
+      await expect(spawnCli(['status', '--overflow', String(attempt)], { timeoutMs: 5_000 })).resolves.toEqual({})
     }
 
     // An overflow kill is deliberate, so it never spends the unexpected-death
-    // budget: the fourth request still reaches a resident, not a one-shot.
+    // budget: the fourth request still reaches a resident.
     expect(readMaybe(startsFile)).toBe('ssss')
-    expect(readMaybe(oneShotsFile)).toBe('')
-  })
-
-  it('rejects and terminates a resident whose protocol line never terminates', async () => {
-    const startsFile = join(dir, 'unterminated-line-starts')
-    const oneShotsFile = join(dir, 'unterminated-line-one-shots')
-    fakeBin(
-      'unterminated-line-resident.js',
-      `const fs = require('node:fs'); const readline = require('node:readline');
-       if (process.argv[2] === 'serve') {
-         fs.appendFileSync(${JSON.stringify(startsFile)}, 's');
-         const rl = readline.createInterface({ input: process.stdin });
-         rl.once('line', () => process.stdout.write('x'.repeat(16 * 1024 * 1024 + 1024)));
-         setInterval(() => {}, 1000);
-       } else {
-         fs.appendFileSync(${JSON.stringify(oneShotsFile)}, 'o');
-         process.stdout.write('{}');
-       }`,
-    )
-    startServe()
-
-    await expect(spawnCli(['status', '--unterminated-line'], { timeoutMs: 5_000 }))
-      .rejects.toMatchObject({ kind: 'too-large' } satisfies Partial<CliError>)
-    expect(readMaybe(startsFile)).toBe('s')
-    expect(readMaybe(oneShotsFile)).toBe('')
+    expect(readMaybe(oneShotsFile)).toBe('oooo')
   })
 
   it('keeps requests with any non-progress env override on the one-shot path', async () => {
