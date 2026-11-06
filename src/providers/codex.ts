@@ -1509,7 +1509,10 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
           if (hasTokenUsageRecord) continue
           const info = entry.payload.info
           if (!info) {
-            if (pendingOutputChars === 0 && pendingUserMessage.length === 0) continue
+            // Codex writes a null-info token_count (a rate-limit snapshot) at
+            // turn start, before any output. That is not a request: leave the
+            // prompt pending for the measured call that follows.
+            if (pendingOutputChars === 0) continue
             const estInput = estimateTokensFromChars(pendingUserMessage.length)
             const estOutput = estimateTokensFromChars(pendingOutputChars)
             if (estInput === 0 && estOutput === 0) continue

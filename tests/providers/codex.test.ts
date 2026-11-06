@@ -842,6 +842,23 @@ describe('codex provider - JSONL parsing', () => {
     expect(calls[0]!.outputTokens).toBeGreaterThan(0)
   })
 
+  it('treats a turn-start rate-limit ping with no usage info as no call and keeps the prompt', async () => {
+    const filePath = await writeSession(tmpDir, '2026-04-14', 'rollout-rate-limit-ping.jsonl', [
+      sessionMeta({ session_id: 'sess-ping', model: 'gpt-5.5' }),
+      userMessage('fix the failing test in src/foo.ts please, and run the suite after'),
+      JSON.stringify({ type: 'event_msg', timestamp: '2026-04-14T10:00:02Z', payload: { type: 'token_count', info: null, rate_limits: { primary: { used_percent: 3 } } } }),
+      tokenCount({ timestamp: '2026-04-14T10:00:05Z', last: { input: 5_000, output: 200 }, total: { input: 5_000, output: 200 } }),
+    ])
+
+    const provider = createCodexProvider(tmpDir)
+    const calls: ParsedProviderCall[] = []
+    for await (const call of provider.createSessionParser({ path: filePath, project: 'test', provider: 'codex' }, new Set()).parse()) calls.push(call)
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]).toMatchObject({ inputTokens: 5_000, outputTokens: 200, userMessage: 'fix the failing test in src/foo.ts please, and run the suite after' })
+    expect(calls[0]!.costIsEstimated).toBeUndefined()
+  })
+
   it('attributes MCP calls emitted as event_msg/mcp_tool_call_end', async () => {
     const filePath = await writeSession(tmpDir, '2026-04-14', 'rollout-mcp.jsonl', [
       sessionMeta({ session_id: 'sess-mcp', model: 'gpt-5.5' }),

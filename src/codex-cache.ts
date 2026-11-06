@@ -74,7 +74,8 @@ import { isWslUncPath } from './wsl.js'
 // hold fake mcp__ tools from commit messages, echoes and comments.
 // v25: rollouts that name the thread only as payload.id key their calls on
 // that UUID, so fork replays collide with them; v24 entries hold stem-keyed
-// calls and double-counted fork replays.
+// calls and double-counted fork replays. Same version: a turn-start
+// rate-limit ping (null info, no output yet) is no longer an estimated call.
 export const CODEX_CACHE_VERSION = 25
 export const CODEX_LEGACY_CACHE_FILE = 'codex-results.json'
 export function codexCacheFileName(version = CODEX_CACHE_VERSION): string {
