@@ -876,6 +876,16 @@ describe('antigravity provider helpers', () => {
     expect(calls[1]!.model).toBe('unknown')
   })
 
+  it('keeps outputTokens as output when an RPC entry has no response/thinking split', () => {
+    const calls = buildCallsFromGeneratorMetadata('split-less', [
+      { chatModel: { model: 'gemini-3-pro', usage: { model: 'gemini-3-pro', inputTokens: '1000', outputTokens: '4000', responseId: 'r1' } } },
+      { chatModel: { model: 'gemini-3-pro', usage: { model: 'gemini-3-pro', inputTokens: '1000', outputTokens: '4000', thinkingOutputTokens: '1000', responseId: 'r2' } } },
+    ], {})
+    expect(calls.map(c => [c.outputTokens, c.reasoningTokens])).toEqual([[4000, 0], [3000, 1000]])
+    expect(calls[0]!.costUSD).toBeCloseTo(calls[1]!.costUSD, 12)
+    expect(calls[0]!.costUSD).toBeGreaterThan(0.04)
+  })
+
   it('stamps file mtime as fallback timestamp for SQLite-parsed calls', async () => {
     if (!isSqliteAvailable()) return
 

@@ -52,7 +52,7 @@ function conversationRoots(): readonly AntigravityConversationRoot[] {
     },
   ]
 }
-const CACHE_VERSION = 10
+const CACHE_VERSION = 11
 export const ANTIGRAVITY_CACHE_VERSION = CACHE_VERSION
 export const ANTIGRAVITY_LEGACY_CACHE_FILE = 'antigravity-results.json'
 export function antigravityCacheFileName(version = CACHE_VERSION): string {
@@ -1326,11 +1326,19 @@ export function buildCallsFromGeneratorMetadata(
     const inputTokens = parseInt(usage.inputTokens ?? '0', 10)
     const outputTokens = parseInt(usage.outputTokens ?? '0', 10)
     const thinkingTokens = parseInt(usage.thinkingOutputTokens ?? '0', 10)
-    const responseTokens = parseInt(usage.responseOutputTokens ?? '0', 10)
+    let responseTokens = parseInt(usage.responseOutputTokens ?? '0', 10)
     const cacheReadTokens = parseInt(usage.cacheReadTokens ?? '0', 10)
     const cacheWriteTokens = parseInt(usage.cacheWriteTokens ?? '0', 10)
 
     if (inputTokens === 0 && outputTokens === 0) continue
+
+    // Proto3 JSON omits unset fields, so the response/thinking split can be
+    // missing while outputTokens holds the total. Same rule as the SQLite path.
+    if (responseTokens === 0 && thinkingTokens === 0) {
+      responseTokens = outputTokens
+    } else if (outputTokens > 0 && responseTokens + thinkingTokens !== outputTokens && outputTokens - thinkingTokens >= 0) {
+      responseTokens = outputTokens - thinkingTokens
+    }
 
     const responseId = usage.responseId || String(i)
     const dedupKey = `antigravity:${cascadeId}:${responseId}`
