@@ -766,7 +766,9 @@ class ServeClient {
   private pending = new Map<number, PendingServeRequest>()
   private nextId = 1
   private deaths = 0
-  private buffer = ''
+  // Pieces of the current partial line; only a newline joins them, so a large
+  // frame is never rescanned from its start on every chunk.
+  private parts: string[] = []
   private bufferBytes = 0
   private warmed = false
   private destroyed = false
@@ -839,12 +841,14 @@ class ServeClient {
   }
 
   private onData(child: ReturnType<typeof spawn>, chunk: string): void {
-    this.buffer += chunk
     this.bufferBytes += Buffer.byteLength(chunk)
+    let start = 0
     let idx: number
-    while ((idx = this.buffer.indexOf('\n')) >= 0) {
-      const rawLine = this.buffer.slice(0, idx)
-      this.buffer = this.buffer.slice(idx + 1)
+    while ((idx = chunk.indexOf('\n', start)) >= 0) {
+      this.parts.push(chunk.slice(start, idx))
+      const rawLine = this.parts.join('')
+      this.parts = []
+      start = idx + 1
       const rawLineBytes = Buffer.byteLength(rawLine)
       this.bufferBytes = Math.max(0, this.bufferBytes - rawLineBytes - 1)
       if (rawLineBytes > MAX_SERVE_FRAME_BYTES) {
@@ -890,6 +894,7 @@ class ServeClient {
       }
       this.armIdle()
     }
+    if (start < chunk.length) this.parts.push(chunk.slice(start))
     // Complete lines are bounded above before parsing. Bound the partial frame
     // too, otherwise a child that never emits '\n' can grow this buffer forever.
     if (this.bufferBytes > MAX_SERVE_FRAME_BYTES) this.terminateForOverflow(child)
@@ -913,7 +918,7 @@ class ServeClient {
     // Detach synchronously before SIGKILL. A new request may start the next
     // generation immediately; the old child's eventual exit must not reject it.
     this.child = null
-    this.buffer = ''
+    this.parts = []
     this.bufferBytes = 0
     this.warmed = false
     // Deliberate termination, not a crash: it must not spend the unexpected-death
@@ -933,7 +938,7 @@ class ServeClient {
     // this client or reject its pending requests.
     if (this.child !== child) return
     this.child = null
-    this.buffer = ''
+    this.parts = []
     this.bufferBytes = 0
     this.warmed = false
     if (countsTowardBudget) this.deaths += 1

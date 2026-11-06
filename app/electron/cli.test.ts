@@ -1,9 +1,15 @@
 // @vitest-environment node
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { spawn } from 'node:child_process'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { spawn, type ChildProcess } from 'node:child_process'
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, chmodSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter, dirname, join, isAbsolute, relative, win32, posix } from 'node:path'
+
+// Passthrough spy: lets a test reach the resident child's stdout and feed it chunks.
+vi.mock('node:child_process', async importOriginal => {
+  const actual = await importOriginal<typeof import('node:child_process')>()
+  return { ...actual, spawn: vi.fn(actual.spawn) }
+})
 
 import { spawnCli, spawnCliAction, spawnEnvFor, spawnSpecFor, startServe, killAll, serveUsage, shutdownAll, CliError, cmdShimArgs, escapeForCmd, nodeManagerDirs, notFoundStage, reapOrphanServe, resolveCodeburnPath, resolveTarget } from './cli'
 
@@ -1158,6 +1164,35 @@ describe('resident serve single-flight', { timeout: 30_000 }, () => {
     // budget: the fourth request still reaches a resident.
     expect(readMaybe(startsFile)).toBe('ssss')
     expect(readMaybe(oneShotsFile)).toBe('oooo')
+  })
+
+  it('parses a large frame fed in small chunks once, without rescanning it per chunk', async () => {
+    fakeBin('silent-resident.js', 'process.stdin.resume(); setInterval(() => {}, 1000)')
+    startServe()
+    const child = vi.mocked(spawn).mock.results.at(-1)!.value as ChildProcess
+    const read = spawnCli(['status', '--big'], { timeoutMs: 10_000 })
+    await new Promise(resolve => setTimeout(resolve, 50))
+
+    const rows: unknown[] = []
+    let frame = ''
+    while (frame.length < 10_000_000) {
+      for (let i = 0; i < 10_000; i++) rows.push({ id: 'sess-' + rows.length, project: '/Users/me/p', cost: 1.5 })
+      frame = JSON.stringify({ id: 1, ok: true, output: JSON.stringify(rows, null, 2) }) + '\n'
+    }
+    const parse = vi.spyOn(JSON, 'parse')
+    const t0 = performance.now()
+    let frameParses: number
+    try {
+      for (let off = 0; off < frame.length; off += 8192) child.stdout!.emit('data', frame.slice(off, off + 8192))
+    } finally {
+      frameParses = parse.mock.calls.filter(([text]) => String(text).startsWith('{"id":1')).length
+      parse.mockRestore()
+    }
+    const elapsed = performance.now() - t0
+
+    expect(((await read) as unknown[]).length).toBe(rows.length)
+    expect(frameParses).toBe(1)
+    expect(elapsed).toBeLessThan(150)
   })
 
   it('keeps requests with any non-progress env override on the one-shot path', async () => {
