@@ -443,3 +443,41 @@ skipUnlessSqlite('quickdesk provider', () => {
     expect(quickdesk.toolDisplayName('future_tool')).toBe('future_tool')
   })
 })
+
+describe.skipIf(!isSqliteAvailable())('quickdesk estimate superseded by metrics', () => {
+  it('drops a cached sessions.db estimate once the session has metered calls', async () => {
+    const originalCacheDir = process.env['CODEBURN_CACHE_DIR']
+    process.env['CODEBURN_CACHE_DIR'] = join(quickworkHome, 'cb-cache')
+    try {
+      const dbPath = await createSessionsDb(quickworkHome)
+      withDb(dbPath, db => {
+        db.prepare('INSERT INTO sessions (id, title, created_at, updated_at, message_count, agent_mode, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+          .run('S', 'T', 1783900800, 1783900900, 2, 'agent', null)
+        const insertMessage = db.prepare('INSERT INTO session_messages (session_id, role, content, timestamp, tool_names) VALUES (?, ?, ?, ?, ?)')
+        insertMessage.run('S', 'user', 'x'.repeat(4000), 1783900801, null)
+        insertMessage.run('S', 'assistant', 'y'.repeat(4000), 1783900802, null)
+      })
+
+      const { clearSessionCache, parseAllSessions } = await import('../../src/parser.js')
+      const servedKeys = async () => (await parseAllSessions(undefined, 'quickdesk'))
+        .flatMap(p => p.sessions).flatMap(s => s.turns).flatMap(t => t.assistantCalls).map(c => c.deduplicationKey)
+      clearSessionCache()
+      expect(await servedKeys()).toEqual(['quickdesk-est:S'])
+
+      await writeMetrics(quickworkHome, '2026-07-13', [
+        { session_id: 'S', Model: 'claude-sonnet-4-5', InputTokens: 1000, OutputTokens: 1000, CostUSD: 0.018, _aws: { Timestamp: 1783900802000 } },
+      ])
+      withDb(dbPath, db => {
+        db.prepare('INSERT INTO session_messages (session_id, role, content, timestamp, tool_names) VALUES (?, ?, ?, ?, ?)')
+          .run('S', 'user', 'thanks', 1783900803, null)
+      })
+      clearSessionCache()
+      const keys = await servedKeys()
+      expect(keys).toHaveLength(1)
+      expect(keys[0]).toMatch(/^quickdesk:S:/)
+    } finally {
+      if (originalCacheDir === undefined) delete process.env['CODEBURN_CACHE_DIR']
+      else process.env['CODEBURN_CACHE_DIR'] = originalCacheDir
+    }
+  })
+})

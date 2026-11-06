@@ -611,7 +611,9 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // rollup uses the bare model id, and `google-vertex`/`google-vertex-anthropic`
   // ride as the `vertex` route. Cached calls hold none of these.
   opencode: 'session-model-v1-archived-subtree-v1-billing-routes-v2-v2-legacy-union-v1-unknown-usage-v1-vertex-fallback-cost-v1',
-  quickdesk: 'emf-sqlite-v2-est-cost',
+  // snapshot-db-v1: sessions.db estimates are replaced on re-parse, so an
+  // estimate superseded by metrics no longer stays cached beside them.
+  quickdesk: 'emf-sqlite-v2-est-cost-snapshot-db-v1',
   // session-lineage-capture-v1: SessionLineage (CB-1, slice 1) is now carried
   // on the cached file for every kimicode wire. Child evidence is the
   // provider-recorded `state.json` `agents[<id>].parentAgentId === 'main'`

@@ -3982,7 +3982,7 @@ export async function parseProviderSources(
       // Durable providers (e.g. copilot OTel) never clear existing entries so
       // that pruned-away data is preserved for monotonic monthly totals.
       const priorEntry = section.files[source.path]
-      if (!provider.durableSources && !clearedPaths.has(source.path)) {
+      if ((!provider.durableSources || source.snapshot) && !clearedPaths.has(source.path)) {
         delete section.files[source.path]
         markCacheDirty(diskCache, providerName, source.path)
         clearedPaths.add(source.path)
@@ -4056,7 +4056,7 @@ export async function parseProviderSources(
         // migrated cache with an anchor the virgin cache had - dropping the
         // post-compaction residual (#946 validation round 6, see (c6)).
         // Non-durable providers keep the original overwrite-or-append behaviour.
-        if (provider.durableSources) {
+        if (provider.durableSources && !source.snapshot) {
           const existingEntry = section.files[source.path]
           if (existingEntry) {
             const freshByKey = new Map(turns.flatMap(t => t.calls).map(c => [c.deduplicationKey, c]))

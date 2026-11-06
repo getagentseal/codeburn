@@ -4,7 +4,7 @@ import { basename, isAbsolute, join, resolve } from 'node:path'
 
 import { calculateCost, ownValue } from '../models.js'
 import { estimateTokensFromChars } from '../token-estimate.js'
-import { blobToText, isSqliteAvailable, openDatabase } from '../sqlite.js'
+import { blobToText, isSqliteAvailable, isSqliteBusyError, openDatabase } from '../sqlite.js'
 import type { SqliteDatabase } from '../sqlite.js'
 import type { ParsedProviderCall, ProbeRoot, Provider, SessionParser, SessionSource } from './types.js'
 
@@ -176,6 +176,7 @@ async function discoverSources(): Promise<SessionSource[]> {
         provider: 'quickdesk',
         sourceId: 'sessions-db',
         sourcePath: base.path,
+        snapshot: true,
       })
     }
   }
@@ -238,7 +239,9 @@ function loadDatabaseSnapshot(basePath: string): DatabaseSnapshot {
   let db: SqliteDatabase
   try {
     db = openDatabase(join(basePath, 'sessions', 'sessions.db'))
-  } catch {
+  } catch (err) {
+    // A locked store must defer the parse, not read as a store with no sessions.
+    if (isSqliteBusyError(err)) throw err
     return empty
   }
 
@@ -307,13 +310,15 @@ function loadDatabaseSnapshot(basePath: string): DatabaseSnapshot {
         }
         session.tools.push(...toolNames(row.tool_names))
       }
-    } catch {
+    } catch (err) {
+      if (isSqliteBusyError(err)) throw err
       return { sessions, canEstimate: false }
     }
     for (const session of sessions.values()) session.tools = uniqueMappedTools(session.tools)
 
     return { sessions, canEstimate: true }
-  } catch {
+  } catch (err) {
+    if (isSqliteBusyError(err)) throw err
     return empty
   } finally {
     db.close()

@@ -23,6 +23,10 @@ export type SessionSource = {
   //     #992 that exemption is redundant (only ORPHANS age out) — kept as the
   //     explicit statement of intent, not as the thing enforcing it.
   retainWhilePresent?: boolean
+  // This source is a projection of a store's current state, not a record, so
+  // a re-parse replaces its cached calls even under a durableSources provider
+  // (Quick Desktop's sessions.db estimates, superseded once metrics land).
+  snapshot?: boolean
 }
 
 export type SessionParser = {
