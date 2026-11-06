@@ -464,6 +464,23 @@ describe.skipIf(skipReason !== null)('cursor real context tokens (#575)', () => 
     expect(calls.filter(c => c.deduplicationKey === 'cursor:agentKv:req-x').map(c => c.timestamp)).toEqual([recentAt])
   })
 
+  it('treats a numeric or unparseable bubble createdAt as undated', async () => {
+    const dbPath = buildDb((db) => {
+      const insert = db.prepare('INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)')
+      insert.run('bubbleId:88881111-1111-2222-3333-444455556666:b1', JSON.stringify({ type: 1, text: 'numeric', createdAt: 1759276800000, requestId: 'req-num' }))
+      insert.run('bubbleId:88882222-1111-2222-3333-444455556666:b1', JSON.stringify({ type: 1, text: 'garbage', createdAt: '--:--', requestId: 'req-junk' }))
+      insertAgentKv(db, { blobId: 'akv-1', role: 'user', content: 'numeric stream', requestId: 'req-num' })
+      insertAgentKv(db, { blobId: 'akv-2', role: 'user', content: 'garbage stream', requestId: 'req-junk' })
+    })
+
+    const calls = await collectCalls(createCursorProvider(dbPath), dbPath)
+
+    const mtime = new Date(statSync(dbPath).mtimeMs).toISOString()
+    for (const key of ['cursor:agentKv:req-num', 'cursor:agentKv:req-junk']) {
+      expect(calls.filter(c => c.deduplicationKey === key).map(c => c.timestamp)).toEqual([mtime])
+    }
+  })
+
   it('binds at most 900 request ids per lookup', async () => {
     const dbPath = buildDb((db) => {
       for (let i = 0; i < 901; i++) {

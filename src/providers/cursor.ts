@@ -921,10 +921,13 @@ function parseBubbles(
       const sql = `${BUBBLE_REQUEST_IDS_QUERY} (${chunk.map(() => '?').join(',')})`
       // The newest time per request is taken here: GROUP BY with MAX re-reads
       // every bubble's JSON and ran 3.4x slower on a real database.
-      for (const row of db.query<{ request_id: string | null; created_at: string | null }>(sql, chunk)) {
+      for (const row of db.query<{ request_id: string | null; created_at: unknown }>(sql, chunk)) {
         if (!row.request_id) continue
+        // A numeric or unparseable createdAt counts as undated.
+        const ms = typeof row.created_at === 'string' ? Date.parse(row.created_at) : NaN
+        const at = Number.isFinite(ms) ? new Date(ms).toISOString() : null
         const known = bubbleTimes.get(row.request_id)
-        if (!known || (row.created_at && row.created_at > known)) bubbleTimes.set(row.request_id, row.created_at)
+        if (!known || (at && at > known)) bubbleTimes.set(row.request_id, at)
       }
     }
   } catch (err) {
