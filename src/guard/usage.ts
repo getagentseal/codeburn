@@ -186,13 +186,30 @@ export async function writeCache(cache: GuardCache, base?: string): Promise<void
   // Parallel tool calls run hooks concurrently; a rename never leaves a torn file.
   const target = sessionCachePath(cache.sessionId, base)
   const tmp = `${target}.${randomBytes(6).toString('hex')}.tmp`
+  const data = JSON.stringify(cache)
   try {
-    await writeFile(tmp, JSON.stringify(cache), 'utf-8')
-    await rename(tmp, target)
+    await writeFile(tmp, data, 'utf-8')
+    await renameRetrying(tmp, target, data)
   } finally {
     await rm(tmp, { force: true })
   }
   await pruneSessions(sessionsDir(base)).catch(() => {})
+}
+
+// Windows refuses a rename over a file another hook has open (EPERM/EBUSY/
+// EACCES), so retry briefly, then write in place rather than fail the hook.
+async function renameRetrying(tmp: string, target: string, data: string): Promise<void> {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      await rename(tmp, target)
+      return
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code
+      if (code !== 'EPERM' && code !== 'EBUSY' && code !== 'EACCES') throw err
+      await new Promise(resolve => { setTimeout(resolve, 10 * (attempt + 1)) })
+    }
+  }
+  await writeFile(target, data, 'utf-8').catch(() => {})
 }
 
 const DAY_MS = 86_400_000

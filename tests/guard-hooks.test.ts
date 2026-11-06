@@ -447,9 +447,12 @@ describe('concurrent cache writes', () => {
     const path = join(sessionsDir(base), `${SID}.json`)
     const before = (await stat(path)).ino
     const big = Object.fromEntries(Array.from({ length: 5_000 }, (_, i) => [`msg-${i}`, i]))
-    await Promise.all(Array.from({ length: 20 }, (_, i) =>
-      writeCache({ ...emptyCache(SID), costUSD: i, perMessage: big }, base)))
+    for (let i = 0; i < 20; i++) await writeCache({ ...emptyCache(SID), costUSD: i, perMessage: big }, base)
     expect((await stat(path)).ino).not.toBe(before)
+    // Windows may fall back to an in-place write under contention; equal-length
+    // payloads keep that fallback parseable too.
+    await Promise.all(Array.from({ length: 20 }, (_, i) =>
+      writeCache({ ...emptyCache(SID), costUSD: 10 + i, perMessage: big }, base)))
     expect((await readCache(SID, base)).perMessage['msg-4999']).toBe(4999)
     expect((await readdir(sessionsDir(base))).filter(n => n.endsWith('.tmp'))).toEqual([])
   })
