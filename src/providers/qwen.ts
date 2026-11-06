@@ -128,10 +128,11 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
         const model = entry.model || 'qwen-auto'
         const { tools, bashCommands } = extractTools(entry.message?.parts ?? [])
 
-        const inputTokens = usage.promptTokenCount
+        // promptTokenCount includes the cached tokens, as in Gemini CLI.
+        const cachedTokens = usage.cachedContentTokenCount ?? 0
+        const inputTokens = Math.max(0, usage.promptTokenCount - cachedTokens)
         const outputTokens = usage.candidatesTokenCount
         const reasoningTokens = usage.thoughtsTokenCount ?? 0
-        const cachedTokens = usage.cachedContentTokenCount ?? 0
 
         const costUSD = calculateCost(model, inputTokens, outputTokens + reasoningTokens, 0, cachedTokens, 0)
 

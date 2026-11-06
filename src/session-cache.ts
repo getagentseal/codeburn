@@ -611,6 +611,9 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // cannot price rides on the cached call as `fallbackCostUSD`, the session-level
   // rollup uses the bare model id, and `google-vertex`/`google-vertex-anthropic`
   // ride as the `vertex` route. Cached calls hold none of these.
+  // cached-prompt-v1: promptTokenCount includes the cached tokens, which
+  // were billed again as fresh input.
+  qwen: 'cached-prompt-v1',
   opencode: 'session-model-v1-archived-subtree-v1-billing-routes-v2-v2-legacy-union-v1-unknown-usage-v1-vertex-fallback-cost-v1',
   quickdesk: 'emf-sqlite-v2-est-cost',
   // session-lineage-capture-v1: SessionLineage (CB-1, slice 1) is now carried
