@@ -2673,7 +2673,9 @@ export function detectUnusedMcp(
 
   if (unused.length === 0) return null
 
-  const totalSessions = countSessions(projects)
+  // The servers come from Claude Code config, so only Claude sessions load them.
+  const claudeProjects = projects.map(p => ({ sessions: p.sessions.filter(isClaudeSession) }))
+  const totalSessions = countSessions(claudeProjects)
   const schemaTokensPerSession = unused.length * TOOLS_PER_MCP_SERVER * TOKENS_PER_MCP_TOOL
   const tokensSaved = schemaTokensPerSession * Math.max(totalSessions, 1)
 
@@ -2683,7 +2685,7 @@ export function detectUnusedMcp(
     explanation: `Never called in this period: ${unused.join(', ')}. Each server loads ~${TOOLS_PER_MCP_SERVER * TOKENS_PER_MCP_TOOL} tokens of tool schema into every session.`,
     impact: unused.length >= UNUSED_MCP_HIGH_THRESHOLD ? 'high' : 'medium',
     tokensSaved,
-    ...(pricing ? { savingsUSD: perSessionSchemaUSD(pricing, projects.flatMap(p => p.sessions), tokensSaved) } : {}),
+    ...(pricing ? { savingsUSD: perSessionSchemaUSD(pricing, claudeProjects.flatMap(p => p.sessions), tokensSaved) } : {}),
     apply: { kind: 'mcp-remove', servers: unused },
     fix: {
       type: 'command',

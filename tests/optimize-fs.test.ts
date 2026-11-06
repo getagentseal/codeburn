@@ -245,7 +245,7 @@ describe('detectUnusedMcp', () => {
     mkdirSync(projectDir, { recursive: true })
     writeFile(join(projectDir, '.mcp.json'), JSON.stringify({ mcpServers: { ghost: { command: 'x' } } }))
     touchOld(join(projectDir, '.mcp.json'), 30)
-    const slice = (primary: boolean) => ({ sessionId: 's1', mcpBreakdown: {}, projectSplit: { primaryProject: 'a', primaryProjectPath: '/a', primary } })
+    const slice = (primary: boolean) => ({ sessionId: 's1', mcpBreakdown: {}, turns: [{ assistantCalls: [{ provider: 'claude' }] }], projectSplit: { primaryProject: 'a', primaryProjectPath: '/a', primary } })
     const projects = [
       { project: 'a', projectPath: '/a', sessions: [slice(true)] },
       { project: 'b', projectPath: '/b', sessions: [slice(false)] },
@@ -253,6 +253,18 @@ describe('detectUnusedMcp', () => {
     const split = detectUnusedMcp([], projects, new Set([projectDir]), [])
     const single = detectUnusedMcp([], projects.slice(0, 1), new Set([projectDir]), [])
     expect(split!.tokensSaved).toBe(single!.tokensSaved)
+  })
+
+  it('charges only Claude sessions', () => {
+    const root = makeFixtureRoot()
+    const projectDir = join(root, 'myapp')
+    mkdirSync(projectDir, { recursive: true })
+    writeFile(join(projectDir, '.mcp.json'), JSON.stringify({ mcpServers: { ghost: { command: 'x' } } }))
+    touchOld(join(projectDir, '.mcp.json'), 30)
+    const session = (sessionId: string, provider: string) => ({ sessionId, mcpBreakdown: {}, turns: [{ assistantCalls: [{ provider }] }] })
+    const sessions = [session('c1', 'claude'), ...Array.from({ length: 9 }, (_, i) => session(`x${i}`, 'codex'))]
+    const projects = [{ project: 'a', projectPath: '/a', sessions }] as unknown as ProjectSummary[]
+    expect(detectUnusedMcp([], projects, new Set([projectDir]), [])!.tokensSaved).toBe(2000)
   })
 
   it('leaves a never-called server to unused-mcp alone, so its schema is charged once', () => {
@@ -287,7 +299,7 @@ describe('detectUnusedMcp', () => {
       mkdirSync(projectDir, { recursive: true })
       writeFile(join(projectDir, '.mcp.json'), JSON.stringify({ mcpServers: { ghost: { command: 'x' } } }))
       touchOld(join(projectDir, '.mcp.json'), 30)
-      const session = (sessionId: string, model: string) => ({ sessionId, mcpBreakdown: {}, turns: [{ assistantCalls: [{ model }] }] })
+      const session = (sessionId: string, model: string) => ({ sessionId, mcpBreakdown: {}, turns: [{ assistantCalls: [{ model, provider: 'claude' }] }] })
       const projects = [
         { project: 'a', projectPath: '/a', sessions: [session('s1', 'measured-test-model'), session('s2', 'unpriced-test-model')] },
       ] as unknown as ProjectSummary[]
