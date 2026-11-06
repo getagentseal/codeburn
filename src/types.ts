@@ -149,6 +149,9 @@ export type ParsedApiCall = {
   /// across the parser/cache boundary. Aggregates roll the estimated portion up
   /// as `estimatedCostUSD`; it is display/metadata only and never changes totals.
   isEstimated?: boolean
+  /// Part of `costUSD` that is estimated when `isEstimated` covers only some
+  /// tokens (Claude subagent placeholder output); absent means all of it.
+  estimatedCostUSD?: number
   costBasis?: CostBasis
   listCostUSD?: number
   /// Lines added/removed by this call's edits, counted from tool-result diffs

@@ -2011,7 +2011,7 @@ function buildSessionSummary(
 
     for (const call of turn.assistantCalls) {
       const callSavings = call.savingsUSD ?? 0
-      const callEstimated = call.isEstimated ? call.costUSD : 0
+      const callEstimated = call.isEstimated ? call.estimatedCostUSD ?? call.costUSD : 0
       totalCost += call.costUSD
       totalSavings += callSavings
       totalEstimated += callEstimated
@@ -3085,14 +3085,16 @@ export function cachedCallToApiCall(call: CachedCall): ParsedApiCall {
   // through billableOutputTokens so a cached read and a cold parse can never
   // disagree about whether reasoning is already inside output (#1075).
   const outputForCost = billableOutputTokens(call.provider, u.outputTokens, u.reasoningTokens)
-  const priceAt = (applyDiscount: boolean) => calculateCost(
-    pricingModelAt(call.model, call.timestamp), u.inputTokens, outputForCost,
+  const priceAt = (applyDiscount: boolean, output = outputForCost) => calculateCost(
+    pricingModelAt(call.model, call.timestamp), u.inputTokens, output,
     u.cacheCreationInputTokens, u.cacheReadInputTokens,
     u.webSearchRequests, call.speed, u.cacheCreationOneHourTokens, call.provider, applyDiscount,
   )
   const listCostUSD = priceAt(false)
   const fallbackCostUSD = call.costUSD === undefined ? recordedCostFallback(call.model, listCostUSD, call.fallbackCostUSD) : undefined
-  const costUSD = call.costUSD === undefined && fallbackCostUSD === undefined && hasPriceDiscounts() ? priceAt(true) : listCostUSD
+  const tokenPriced = call.costUSD === undefined && fallbackCostUSD === undefined
+  const discounted = tokenPriced && hasPriceDiscounts()
+  const costUSD = discounted ? priceAt(true) : listCostUSD
   const apiCall = applyLocalModelSavings({
     provider: call.provider,
     model: call.model,
@@ -3135,6 +3137,11 @@ export function cachedCallToApiCall(call: CachedCall): ParsedApiCall {
     : call.costUSD !== undefined || fallbackCostUSD !== undefined ? 'recorded'
     : apiCall.costUSD === 0 && findUnpricedModels([{ model: call.model, calls: 1, cost: 0 }]).length > 0 ? 'unpriced'
     : 'calculated'
+  // A cached Claude call is flagged only for its estimated placeholder output;
+  // its input and cache tokens are recorded, so only the output share is estimated.
+  if (apiCall.costBasis === 'estimated' && call.provider === 'claude' && call.isEstimated && tokenPriced && !isStandInPricedAt(call.model, call.timestamp)) {
+    apiCall.estimatedCostUSD = Math.min(apiCall.costUSD, Math.max(0, costUSD - priceAt(discounted, 0)))
+  }
   if (costUSD < listCostUSD && !apiCall.isLocalSavings) apiCall.listCostUSD = listCostUSD
   return apiCall
 }

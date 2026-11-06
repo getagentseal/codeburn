@@ -250,7 +250,7 @@ export async function aggregateModels(projects: ProjectSummary[], opts: Aggregat
           bucket.cacheReadTokens += Math.max(call.usage.cacheReadInputTokens, call.usage.cachedInputTokens)
           bucket.costUSD += call.costUSD
           bucket.listCostUSD += call.listCostUSD ?? call.costUSD
-          if (call.isEstimated) bucket.estimatedCostUSD += call.costUSD
+          if (call.isEstimated) bucket.estimatedCostUSD += call.estimatedCostUSD ?? call.costUSD
           bucket.savingsUSD += call.savingsUSD ?? 0
           // outputTokens is the billable output (for Codex that includes
           // reasoning, so nothing is added on top), and inputTokens is
