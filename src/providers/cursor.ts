@@ -373,8 +373,9 @@ const BUBBLE_REQUEST_IDS_QUERY = `
   WHERE key LIKE 'bubbleId:%'
     AND json_extract(value, '$.requestId') IN
 `
-// Well under SQLite's 32766 bound-parameter limit; each chunk is one table scan.
-const REQUEST_ID_CHUNK = 10_000
+// Under the 999 bound-parameter limit of older SQLite builds. Each chunk is
+// one table scan, so many unjoined streams on a huge DB cost several scans.
+const REQUEST_ID_CHUNK = 900
 
 // Split into HEAD (predicates we always emit) and TAIL (ORDER BY) so the
 // caller can splice in an optional `ROWID >= ?` cutoff without rewriting

@@ -417,6 +417,19 @@ describe.skipIf(skipReason !== null)('cursor real context tokens (#575)', () => 
     expect(requestIdLookups().map(q => q.params)).toEqual([[requestId]])
   })
 
+  it('binds at most 900 request ids per lookup', async () => {
+    const dbPath = buildDb((db) => {
+      for (let i = 0; i < 901; i++) {
+        insertAgentKv(db, { blobId: `akv-${i}`, role: 'user', content: 'run the export', requestId: `req-bg-${i}` })
+      }
+    })
+
+    const calls = await collectCalls(createCursorProvider(dbPath), dbPath)
+
+    expect(calls.length).toBe(901)
+    expect(requestIdLookups().map(q => q.params.length)).toEqual([900, 1])
+  })
+
   it('skips the request-id lookup when every stream joins a scanned bubble', async () => {
     const composerId = '22220000-1111-2222-3333-444455556666'
     const requestId = 'req-joined'
