@@ -527,3 +527,20 @@ describe('warp db locations', () => {
     expect(getDbCandidates(undefined, 'freebsd')).toEqual([])
   })
 })
+
+describe('warp cached shares', () => {
+  it('returns no calls, without throwing, when a cached conversation now has no exchanges', async () => {
+    const { keepCachedWarpShares } = await import('../../src/providers/warp.js')
+    const cachedCall = {
+      provider: 'warp', model: 'claude-haiku-4-5',
+      usage: { inputTokens: 100, outputTokens: 0, cacheCreationInputTokens: 0, cacheReadInputTokens: 0, cachedInputTokens: 0, reasoningTokens: 0, webSearchRequests: 0, cacheCreationOneHourTokens: 0 },
+      costUSD: 7.5, speed: 'standard' as const, timestamp: '2026-08-16T10:00:00.000Z',
+      tools: [], bashCommands: [], skills: [], subagentTypes: [], deduplicationKey: 'warp:A:A1',
+    }
+    const prior = {
+      fingerprint: { dev: 0, ino: 0, mtimeMs: 0, sizeBytes: 0 }, mcpInventory: [],
+      turns: [{ timestamp: cachedCall.timestamp, sessionId: 'A', userMessage: '', calls: [cachedCall] }],
+    }
+    expect(keepCachedWarpShares(prior, [])).toEqual([])
+  })
+})
