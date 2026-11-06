@@ -6,8 +6,9 @@ import { findingUSD, scanAndDetect, type WasteFinding } from '../optimize.js'
 import { formatCost } from '../currency.js'
 import { formatTokens } from '../format.js'
 import { runAction } from './apply.js'
+import { sha256File } from './backup.js'
 import { shortId } from './journal.js'
-import { REPORT_MIN_AGE_DAYS } from './types.js'
+import { REPORT_MIN_AGE_DAYS, type ActionPlan } from './types.js'
 import { planFindings, type FindingPlan, type PlanContext } from './plans.js'
 
 export type ApplyOptions = {
@@ -127,6 +128,25 @@ async function ask(question: string, input: NodeJS.ReadableStream, output: NodeJ
   }
 }
 
+// Rebuild a plan only when an earlier fix in this run rewrote one of its files
+// and nothing else changed them; any other change keeps the original plan, so
+// runAction's stale-plan guard rejects it.
+async function planForApply(fp: FindingPlan, written: Map<string, string>, ctx: PlanContext | undefined): Promise<ActionPlan> {
+  const original = fp.plan!
+  let rewritten = false
+  for (const c of original.changes) {
+    if (c.op === 'move' || c.expectedHash === undefined) continue
+    const current = await sha256File(c.path)
+    if (current === c.expectedHash) continue
+    if (current !== null && written.get(c.path) === current) rewritten = true
+    else return original
+  }
+  if (!rewritten) return original
+  const plan = planFindings([fp.finding], ctx)[0]!.plan ?? original
+  if (original.baseline) plan.baseline = original.baseline
+  return plan
+}
+
 export async function runOptimizeApply(
   projects: ProjectSummary[],
   dateRange: DateRange | undefined,
@@ -211,13 +231,11 @@ export async function runOptimizeApply(
 
   print()
   let applied = 0
+  const written = new Map<string, string>()
   for (const fp of selected) {
     try {
-      // An earlier apply in this loop may have edited the same config file,
-      // so plan against what is on disk now.
-      const plan = planFindings([fp.finding], opts.ctx)[0]!.plan ?? fp.plan!
-      if (fp.plan!.baseline) plan.baseline = fp.plan!.baseline
-      const record = await runAction(plan, opts.actionsDir)
+      const record = await runAction(await planForApply(fp, written, opts.ctx), opts.actionsDir)
+      for (const change of record.changes) if (change.op !== 'move') written.set(change.path, change.afterHash)
       applied++
       print(`  Applied ${chalk.bold(shortId(record.id))}  ${record.description}`)
       print(chalk.dim(`    Undo anytime: codeburn act undo ${shortId(record.id)}`))

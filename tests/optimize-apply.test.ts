@@ -693,6 +693,32 @@ describe('runOptimizeApply end-to-end', () => {
     expect(JSON.parse(await readFile(mcpJson, 'utf-8')).mcpServers).toEqual({ b: { command: 'b' } })
   })
 
+  it('rejects a fix whose file was edited outside this run after the plan was built', async () => {
+    const fx = await makeFixture()
+    const mcpJson = join(fx.project, '.mcp.json')
+    await writeFile(mcpJson, JSON.stringify({ mcpServers: { a: { command: 'a' } } }, null, 2))
+    const edited = JSON.stringify({ mcpServers: { a: { command: 'a' }, c: { command: 'c' } } }, null, 2)
+    const input = new PassThrough()
+    const io = makeIo()
+    const output = new Writable({
+      write(c, _e, cb) {
+        io.output.write(c)
+        if (String(c).includes('Apply all')) void writeFile(mcpJson, edited).then(() => input.end('a\n'))
+        cb()
+      },
+    })
+    const findings = [makeFinding('unused-mcp', CMD_FIX, { kind: 'mcp-remove', servers: ['a'] })]
+    const prevExit = process.exitCode
+    try {
+      await runOptimizeApply([], undefined, { ...applyOpts(fx, io, { findings }), input, output })
+
+      expect(io.stderr()).toContain('changed since the plan was built')
+      expect(await readFile(mcpJson, 'utf-8')).toBe(edited)
+    } finally {
+      process.exitCode = prevExit
+    }
+  })
+
   it('does not promise a re-measure when nothing was applied', async () => {
     const { fx, findings } = await threeFindingFixture()
     const io = makeIo('q\n')
