@@ -74,11 +74,20 @@ function getFactoryDir(): string {
 // e.g. "custom:GLM-5.1-[Proxy]-0" -> "GLM-5.1"
 // Cost lookup is handled by codeburn's existing calculateCost/getCanonicalName
 // which normalizes case and strips date suffixes automatically.
+// Only a custom model carries a trailing index; elsewhere `-6` is a version
+// and only a real YYYYMMDD date comes off.
+function stripDateSuffix(name: string): string {
+  const m = /-(\d{4})(\d{2})(\d{2})$/.exec(name)
+  if (!m) return name
+  const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])]
+  const date = new Date(Date.UTC(y, mo - 1, d))
+  const real = y >= 2020 && y <= 2035 && date.getUTCMonth() === mo - 1 && date.getUTCDate() === d
+  return real ? name.slice(0, m.index) : name
+}
+
 function stripModelPrefix(raw: string): string {
-  return raw
-    .replace(/^custom:/, '')
-    .replace(/\[.*?\]/g, '')
-    .replace(/-\d+$/, '')
+  const name = raw.replace(/^custom:/, '').replace(/\[.*?\]/g, '')
+  return (raw.startsWith('custom:') ? name.replace(/-\d+$/, '') : stripDateSuffix(name))
     .replace(/-+$/, '')
     .replace(/^-/, '')
 }

@@ -36,6 +36,7 @@ type QwenEntry = {
   subtype?: string
   cwd?: string
   model?: string
+  executionContext?: { authType?: string }
   message?: {
     role: string
     parts: QwenPart[]
@@ -69,6 +70,21 @@ function isoTimestamp(value: string | undefined, fallback: string): string {
   return fallback
 }
 
+// Qwen Code's outputTokenCount (packages/core/src/telemetry/gen-ai-usage.ts):
+// thoughts sit inside candidates on the OpenAI-compatible, Responses and Qwen
+// OAuth backends and beside them elsewhere; a total in the band both allow
+// decides, else the auth type does. Records older than the auth type on user
+// records leave it unknown, and then thoughts are not added: the converters
+// Qwen Code ships mostly fold them in, and its own cost ledger bills
+// candidates alone without a total.
+const THOUGHTS_IN_CANDIDATES = new Set(['openai', 'openai-responses', 'qwen-oauth'])
+
+function billedOutputTokens(candidates: number, thoughts: number, total: number, prompt: number, authType: string | undefined): number {
+  const derived = total - prompt
+  if (total > 0 && derived >= candidates && derived <= candidates + thoughts) return derived
+  return authType === undefined || THOUGHTS_IN_CANDIDATES.has(authType) ? candidates : candidates + thoughts
+}
+
 function extractTools(parts: QwenPart[]): { tools: string[]; bashCommands: string[] } {
   const tools: string[] = []
   const bashCommands: string[] = []
@@ -97,6 +113,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
 
       const lines = raw.split('\n').filter(l => l.trim())
       let pendingUserMessage = ''
+      let authType: string | undefined
 
       for (const line of lines) {
         let entry: QwenEntry
@@ -105,6 +122,8 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
         } catch {
           continue
         }
+        // Qwen Code stamps each user record with the auth type in force then (it can change mid-session).
+        if (entry.type === 'user') authType = typeof entry.executionContext?.authType === 'string' ? entry.executionContext.authType : undefined
 
         if (entry.type === 'user' && entry.message) {
           const texts = (entry.message.parts ?? [])
@@ -128,12 +147,17 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
         const model = entry.model || 'qwen-auto'
         const { tools, bashCommands } = extractTools(entry.message?.parts ?? [])
 
-        const inputTokens = usage.promptTokenCount
-        const outputTokens = usage.candidatesTokenCount
-        const reasoningTokens = usage.thoughtsTokenCount ?? 0
-        const cachedTokens = usage.cachedContentTokenCount ?? 0
+        // promptTokenCount includes the cached tokens, as in Gemini CLI.
+        const prompt = Math.max(0, usage.promptTokenCount ?? 0)
+        const candidates = usage.candidatesTokenCount ?? 0
+        const thoughts = usage.thoughtsTokenCount ?? 0
+        const cachedTokens = Math.min(Math.max(0, usage.cachedContentTokenCount ?? 0), prompt)
+        const inputTokens = prompt - cachedTokens
+        const billedOutput = billedOutputTokens(candidates, thoughts, usage.totalTokenCount ?? 0, prompt, authType)
+        const reasoningTokens = Math.min(thoughts, billedOutput)
+        const outputTokens = billedOutput - reasoningTokens
 
-        const costUSD = calculateCost(model, inputTokens, outputTokens + reasoningTokens, 0, cachedTokens, 0)
+        const costUSD = calculateCost(model, inputTokens, billedOutput, 0, cachedTokens, 0)
 
         yield {
           provider: 'qwen',

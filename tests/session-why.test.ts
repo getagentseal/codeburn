@@ -5,8 +5,8 @@ import { join } from 'node:path'
 
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 
-import { getModelCosts, loadPricing } from '../src/models.js'
-import { buildSessionWhy, errorCause, findingText, fitWhyJson, redact, renderSessionWhyText, type SessionWhy, type WhyFinding } from '../src/session-why.js'
+import { calculateCost, getModelCosts, loadPricing } from '../src/models.js'
+import { buildSessionWhy, partsOf, errorCause, findingText, fitWhyJson, redact, renderSessionWhyText, type SessionWhy, type WhyFinding } from '../src/session-why.js'
 import { CLEARED, REDIRECTED } from './setup/env-isolation-vars.js'
 
 const SID = '0c4f6c1e-5a7b-4e43-9d0e-2b1f7a6c9e10'
@@ -219,6 +219,34 @@ describe('session cost diagnosis: independent recomputation', () => {
     expect(f!.share).toBeCloseTo(cost / (why.cost + cost), 12)
     expect(f!.alt!.model).toBe('Haiku 4.5')
     expect(f!.alt!.cost).toBeCloseTo(haiku, 12)
+  })
+})
+
+describe('session cost diagnosis: long-context parts', () => {
+  it('a call above the long-context threshold splits into parts that add up to its cost', () => {
+    for (const model of ['claude-haiku-5-5', 'claude-sonnet-4-5']) {
+      expect(getModelCosts(model)!.longContextTier).toBeDefined()
+      const usage = { inputTokens: 2000, outputTokens: 1000, cacheCreationInputTokens: 3000, cacheReadInputTokens: 250_000, cachedInputTokens: 0, reasoningTokens: 0, webSearchRequests: 0 }
+      const costUSD = calculateCost(model, 2000, 1000, 3000, 250_000, 0, 'standard', 0, 'claude')
+      const p = partsOf({ model, provider: 'claude', speed: 'standard', usage, costUSD } as Parameters<typeof partsOf>[0])
+      expect(p.input + p.output + p.cacheRead + p.cacheWrite + p.webSearch).toBeCloseTo(costUSD, 12)
+    }
+  })
+
+  it('negative token counts do not move the parts to another tier than the call', () => {
+    const model = 'claude-sonnet-4-5'
+    const usage = { inputTokens: -100_000, outputTokens: 0, cacheCreationInputTokens: 0, cacheReadInputTokens: 250_001, cachedInputTokens: 0, reasoningTokens: 0, webSearchRequests: 0 }
+    const costUSD = calculateCost(model, -100_000, 0, 0, 250_001, 0, 'standard', 0, 'claude')
+    const p = partsOf({ model, provider: 'claude', speed: 'standard', usage, costUSD } as Parameters<typeof partsOf>[0])
+    expect(p.input + p.output + p.cacheRead + p.cacheWrite + p.webSearch).toBeCloseTo(costUSD, 12)
+  })
+
+  it('one-hour cache writes count toward the tier the parts are priced at', () => {
+    const model = 'claude-haiku-5-5'
+    const usage = { inputTokens: 1, outputTokens: 0, cacheCreationInputTokens: 0, cacheReadInputTokens: 0, cachedInputTokens: 0, reasoningTokens: 0, webSearchRequests: 0 }
+    const costUSD = calculateCost(model, 1, 0, 0, 0, 0, 'standard', 250_001, 'claude')
+    const p = partsOf({ model, provider: 'claude', speed: 'standard', usage, cacheCreationOneHourTokens: 250_001, costUSD } as Parameters<typeof partsOf>[0])
+    expect(p.input + p.output + p.cacheRead + p.cacheWrite + p.webSearch).toBeCloseTo(costUSD, 12)
   })
 })
 

@@ -1157,6 +1157,17 @@ describe('existing model names still resolve', () => {
     expect(v48!.outputCostPerToken).toBeCloseTo(0.000025, 12)
     expect(v48!.inputCostPerToken).not.toEqual(getModelCosts('claude-opus-4')!.inputCostPerToken)
   })
+
+  it('an unlisted minor version stays unpriced instead of taking the bare-major row', () => {
+    expect(getModelCosts('claude-opus-4-99')).toBeNull()
+    expect(getModelCosts('claude-opus-4-9')).toBeNull()
+    expect(getModelCosts('claude-sonnet-4-5-20250929')).not.toBeNull()
+    expect(getModelCosts('gpt-4o-2024-08-06')).not.toBeNull()
+    expect(getModelCosts('gpt-5-foo')).toBe(getModelCosts('gpt-5'))
+    setPriceOverrides({ 'zzz-probe-4': { input: 1, output: 2 } })
+    expect(getModelCosts('zzz-probe-4-1')).toBeNull()
+    expect(getModelCosts('zzz-probe-4-fast')!.inputCostPerToken).toBe(1e-6)
+  })
 })
 
 // Issue #159: every model name Cursor emits in its SQLite database must
