@@ -144,18 +144,42 @@ function sanitizeWorkspaceUri(uri: string): string {
 
 let workspaceMapCache: WorkspaceMapping | null = null
 let workspaceMapCacheRoot: string | null = null
+let workspaceMapCacheStamp: string | null = null
 
 /// Visible for tests so a fixture can rebuild the map after writing fresh
 /// workspace directories.
 export function clearCursorWorkspaceMapCache(): void {
   workspaceMapCache = null
   workspaceMapCacheRoot = null
+  workspaceMapCacheStamp = null
 }
 
-function loadWorkspaceMap(workspaceStorageDir: string): WorkspaceMapping {
-  if (workspaceMapCache && workspaceMapCacheRoot === workspaceStorageDir) {
-    return workspaceMapCache
-  }
+// The directory's mtime moves when a workspace is added or removed, but a chat
+// started in a known workspace only rewrites that workspace's state.vscdb.
+function workspaceStorageStamp(workspaceStorageDir: string): string {
+  const parts: string[] = []
+  try {
+    parts.push(String(statSync(workspaceStorageDir).mtimeMs))
+    for (const hashDir of readdirSync(workspaceStorageDir)) {
+      for (const file of ['state.vscdb', 'state.vscdb-wal']) {
+        try {
+          const s = statSync(join(workspaceStorageDir, hashDir, file))
+          parts.push(`${hashDir}/${file}:${s.mtimeMs}:${s.size}`)
+        } catch {}
+      }
+    }
+  } catch {}
+  return parts.join('|')
+}
+
+/// Discovery passes `recheck` so a resident process picks up new workspaces
+/// and chats; parsers reuse the map their discovery built.
+function loadWorkspaceMap(workspaceStorageDir: string, recheck = false): WorkspaceMapping {
+  const cached = workspaceMapCache && workspaceMapCacheRoot === workspaceStorageDir ? workspaceMapCache : null
+  if (cached && !recheck) return cached
+  const stamp = workspaceStorageStamp(workspaceStorageDir)
+  if (cached && stamp === workspaceMapCacheStamp) return cached
+  workspaceMapCacheStamp = stamp
   const result: WorkspaceMapping = {
     composerToWorkspace: new Map(),
     workspaceProjectName: new Map(),
@@ -1043,10 +1067,7 @@ export function createCursorProvider(dbPathOverride?: string): Provider {
       const dbPath = dbPathOverride ?? getCursorDbPath()
       if (!existsSync(dbPath)) return imported
 
-      // Rebuilt per discovery so a resident process sees chats and workspaces
-      // created since the last one; parsers of this scan reuse it.
-      clearCursorWorkspaceMapCache()
-      const wsMap = loadWorkspaceMap(getCursorWorkspaceStorageDir(dbPath))
+      const wsMap = loadWorkspaceMap(getCursorWorkspaceStorageDir(dbPath), true)
       const sources: SessionSource[] = []
       for (const [folder, project] of wsMap.workspaceProjectName) {
         sources.push({

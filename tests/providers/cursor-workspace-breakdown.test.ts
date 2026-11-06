@@ -4,7 +4,7 @@ import { join } from 'path'
 import { tmpdir } from 'os'
 import { createRequire } from 'node:module'
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 
 import {
   createCursorProvider,
@@ -14,6 +14,19 @@ import { isSqliteAvailable } from '../../src/sqlite.js'
 import type { ParsedProviderCall } from '../../src/providers/types.js'
 
 const requireForTest = createRequire(import.meta.url)
+
+const openedPaths = vi.hoisted(() => [] as string[])
+vi.mock('../../src/sqlite.js', async (importOriginal) => {
+  const mod = await importOriginal<typeof import('../../src/sqlite.js')>()
+  return {
+    ...mod,
+    openDatabase: (...args: Parameters<typeof mod.openDatabase>) => {
+      openedPaths.push(args[0])
+      return mod.openDatabase(...args)
+    },
+  }
+})
+const workspaceDbOpens = () => openedPaths.filter(p => p.includes('workspaceStorage')).length
 
 let userDir: string
 
@@ -158,6 +171,32 @@ describe('cursor provider — per-project breakdown (#196)', () => {
     expect(byProject.get('-Users-me-alpha')).toEqual(new Set(['composer-alpha', 'composer-alpha-2']))
     expect(byProject.get('-Users-me-beta')).toEqual(new Set(['composer-beta']))
     expect(byProject.get('cursor')).toEqual(new Set())
+  })
+
+  it('rebuilds the workspace map only when workspace storage changed', async () => {
+    if (!isSqliteAvailable()) return
+
+    const dbPath = createGlobalDb(['composer-alpha', 'composer-alpha-2'])
+    createWorkspaceDir('hash-alpha', 'file:///Users/me/alpha', ['composer-alpha'])
+    const provider = createCursorProvider(dbPath)
+    await provider.discoverSessions()
+
+    openedPaths.length = 0
+    await provider.discoverSessions()
+    expect(workspaceDbOpens()).toBe(0)
+
+    const { DatabaseSync: Database } = requireForTest('node:sqlite')
+    const alphaDb = new Database(join(userDir, 'workspaceStorage', 'hash-alpha', 'state.vscdb'))
+    alphaDb.prepare(`UPDATE ItemTable SET value = ? WHERE key = 'composer.composerData'`).run(
+      JSON.stringify({ allComposers: [{ composerId: 'composer-alpha' }, { composerId: 'composer-alpha-2' }] }),
+    )
+    alphaDb.close()
+    const sources = await provider.discoverSessions()
+    expect(workspaceDbOpens()).toBe(1)
+
+    const alpha = sources.find(s => s.project === '-Users-me-alpha')!
+    const calls = await collect(provider.createSessionParser(alpha, new Set()))
+    expect(new Set(calls.map(c => c.sessionId))).toEqual(new Set(['composer-alpha', 'composer-alpha-2']))
   })
 
   it('routes calls to the right workspace and excludes others', async () => {
