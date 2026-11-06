@@ -2634,6 +2634,19 @@ export async function fingerprintFile(filePath: string): Promise<FileFingerprint
       // keep sizeBytes real because the parser also uses it for workload sizing.
       return { dev: s.dev, ino: parseInt(hash.digest('hex').slice(0, 12), 16), mtimeMs, sizeBytes }
     }
+    // Cline-family tasks key on ui_messages.json, but the model and workspace
+    // come from api_conversation_history.json, which can appear or change
+    // without ui_messages.json moving. A missing sibling hashes as undefined.
+    if (basename(filePath) === 'ui_messages.json') {
+      const sibling = await stat(join(dirname(filePath), 'api_conversation_history.json')).catch(() => null)
+      const hash = createHash('sha256').update(`${s.ino}:${s.mtimeMs}:${s.size}\0${sibling?.ino}:${sibling?.mtimeMs}:${sibling?.size}`)
+      return {
+        dev: s.dev,
+        ino: parseInt(hash.digest('hex').slice(0, 12), 16),
+        mtimeMs: Math.max(s.mtimeMs, sibling?.mtimeMs ?? 0),
+        sizeBytes: s.size + (sibling?.size ?? 0),
+      }
+    }
     // A source path that IS a SQLite database (copilot OTel's agent-traces.db)
     // needs the same WAL fold as the virtual-suffix forms below.
     if (SQLITE_DB_PATH.test(filePath)) return fingerprintSqliteFile(filePath)

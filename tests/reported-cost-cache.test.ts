@@ -335,3 +335,23 @@ it('drops a Cline task cached under its old directory key instead of counting it
   clearSessionCache()
   expect(Object.keys((await loadCache()).providers['cline']!.files)).toEqual([fileKey])
 })
+
+it('re-reads a Cline task when api_conversation_history.json appears after the first parse', async () => {
+  const taskDir = join(HOME, '.cline', 'data', 'tasks', 'late-history')
+  await mkdir(taskDir, { recursive: true })
+  await writeFile(join(taskDir, 'ui_messages.json'), JSON.stringify([
+    { type: 'say', say: 'api_req_started', ts: Date.UTC(2026, 7, 16, 10), text: JSON.stringify({ tokensIn: 1000, tokensOut: 200 }) },
+  ]))
+  const { clearSessionCache, parseAllSessions } = await import('../src/parser.js')
+  const models = async () => {
+    clearSessionCache()
+    return (await parseAllSessions(undefined, 'cline'))
+      .flatMap(p => p.sessions).flatMap(s => s.turns).flatMap(t => t.assistantCalls).map(c => c.model)
+  }
+  expect(await models()).toEqual(['cline-auto'])
+
+  await writeFile(join(taskDir, 'api_conversation_history.json'), JSON.stringify([
+    { role: 'user', content: [{ type: 'text', text: '<model>anthropic/claude-sonnet-4-6</model>' }] },
+  ]))
+  expect(await models()).toEqual(['claude-sonnet-4-6'])
+})
