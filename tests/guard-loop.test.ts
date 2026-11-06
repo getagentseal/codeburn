@@ -202,6 +202,18 @@ describe('failing-command retry', () => {
     expect(outs.every(o => o === '')).toBe(true)
   })
 
+  it('only a successful edit resets the count', async () => {
+    const run = async (editFails: boolean) => {
+      const env = await setup({ loopWarnAfter: null, loopStopAfter: null })
+      for (let i = 0; i < 2; i++) await call(env, 'Bash', { command: 'npm test' }, { fails: true })
+      await call(env, 'Edit', { file_path: '/a.ts', old_string: 'a', new_string: 'b' }, { fails: editFails })
+      for (let i = 0; i < 3; i++) await call(env, 'Bash', { command: 'npm test' }, { fails: true })
+      return call(env, 'Bash', { command: 'npm test' })
+    }
+    expect(await run(true)).toContain('"permissionDecision":"deny"')
+    expect(await run(false)).not.toContain('deny')
+  })
+
   it('a passing run resets that command only', async () => {
     const env = await setup({ loopWarnAfter: null, loopStopAfter: null })
     for (let i = 0; i < 2; i++) await call(env, 'Bash', { command: 'npm test' }, { fails: true })

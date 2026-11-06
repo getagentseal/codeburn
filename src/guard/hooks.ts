@@ -82,6 +82,8 @@ const GH_READ = /^gh\s+[\w-]+\s+(?:view|list|checks|status|diff|watch)\b[^;&|]*$
 
 // `sleep 30 && gh run view 1` waits on something; it is not a loop as long as
 // what runs after the sleep only reads. `sleep 0; npm test` still counts.
+// `sleep 0; git status` on repeat is exempt on purpose: the guard stops runaway
+// cost, and a repeated read-only check is cheap whatever the sleep length.
 function isWaitingCheck(command: string): boolean {
   const m = /^\s*sleep\s+\S+\s*(?:(?:&&|;|\|\|)([\s\S]*))?$/.exec(command)
   if (!m) return false

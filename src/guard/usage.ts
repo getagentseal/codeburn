@@ -25,9 +25,10 @@ import { allowPath, sessionCachePath, sessionsDir } from './store.js'
 // rolling window of the last tool calls (keyed by tool_use id so a call the
 // PreToolUse hook recorded itself is not counted again when the lagging
 // transcript catches up), `shellPending` maps a shell tool_use id to its command
-// hash until its tool_result arrives, and `failedCommands` counts consecutive
-// is_error results per command hash: a passing run resets that command, and an
-// edit resets every command, since a rerun after an edit is a new attempt.
+// hash (or an edit's id to EDIT_PENDING) until its tool_result arrives, and
+// `failedCommands` counts consecutive is_error results per command hash: a
+// passing run resets that command, and a successful edit resets every command,
+// since a rerun after a code change is a new attempt.
 export type ToolCallKey = { id: string; name: string; hash: string; result?: string }
 
 export type GuardCache = {
@@ -137,6 +138,9 @@ export function identicalRun(cache: GuardCache, call: ToolCallKey): number {
   return run
 }
 
+// Never a command hash (those are 16 hex chars).
+const EDIT_PENDING = 'edit'
+
 function foldToolResults(cache: GuardCache, entry: JournalEntry): void {
   const results = new Map<string, ToolResultMeta>()
   collectToolResultMeta(entry, results)
@@ -151,7 +155,9 @@ function foldToolResults(cache: GuardCache, entry: JournalEntry): void {
     const cmd = cache.shellPending[id]
     if (cmd === undefined) continue
     delete cache.shellPending[id]
-    if (meta.isError) {
+    if (cmd === EDIT_PENDING) {
+      if (!meta.isError) cache.failedCommands = {}
+    } else if (meta.isError) {
       cache.failedCommands[cmd] = (cache.failedCommands[cmd] ?? 0) + 1
       cache.retryRun = Math.max(cache.retryRun, cache.failedCommands[cmd])
     } else {
@@ -167,7 +173,7 @@ function foldToolUses(cache: GuardCache, entry: JournalEntry): void {
     if (b?.type !== 'tool_use' || typeof b.id !== 'string' || typeof b.name !== 'string') continue
     const command = (b.input as { command?: unknown } | undefined)?.command
     if (BASH_TOOLS.has(b.name) && typeof command === 'string') cache.shellPending[b.id] = inputHash(command)
-    if (EDIT_TOOLS.has(b.name)) cache.failedCommands = {}
+    if (EDIT_TOOLS.has(b.name)) cache.shellPending[b.id] = EDIT_PENDING
     recordToolCall(cache, { id: b.id, name: b.name, hash: inputHash(b.input ?? {}) })
   }
 }
