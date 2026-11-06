@@ -233,6 +233,15 @@ describe('mcp realized delta', () => {
 
     expect(report.rows[0]!.status).toBe('reverted')
   })
+
+  it('reads a server whose name contains "__" from its inventory entries', async () => {
+    const rec = mcpRecord({ baseline: { windowDays: 14, capturedAt: daysAgo(10), estimatedTokens: 56_000, sessions: 28, metrics: { a__b: 2000 } } })
+    const actionsDir = await writeJournal([rec])
+    const back = sessionsAt(20, daysAgo(5), { mcpInventory: ['mcp__a__b__search'] })
+    const report = await computeActReport({ actionsDir, now: NOW, loadProjects: load([projectOf(back)]) })
+
+    expect(report.rows[0]!.status).toBe('reverted')
+  })
 })
 
 describe('realized dollars', () => {

@@ -188,11 +188,16 @@ function countBashCalls(sessions: SessionSummary[]): number {
   return n
 }
 
+// Inventory names are mcp__<server>__<tool>, and a server name may itself
+// contain "__", so the tool is cut off from the right.
+function inventoryServer(fqn: string): string {
+  return fqn.slice('mcp__'.length, fqn.lastIndexOf('__'))
+}
+
 function sessionLoadsAny(s: SessionSummary, servers: string[]): boolean {
   const names = servers.map(mcpNamespace)
   for (const fqn of s.mcpInventory ?? []) {
-    const seg = fqn.split('__')[1]
-    if (seg && names.includes(seg)) return true
+    if (names.includes(inventoryServer(fqn))) return true
   }
   for (const server of Object.keys(s.mcpBreakdown)) {
     if (names.includes(server)) return true
@@ -217,10 +222,7 @@ function sessionHasDeferralActive(s: SessionSummary): boolean {
 function observedMcpServers(projects: ProjectSummary[]): string[] {
   const servers = new Set<string>()
   for (const s of allSessions(projects)) {
-    for (const fqn of s.mcpInventory ?? []) {
-      const seg = fqn.split('__')[1]
-      if (seg) servers.add(seg)
-    }
+    for (const fqn of s.mcpInventory ?? []) servers.add(inventoryServer(fqn))
     for (const server of Object.keys(s.mcpBreakdown)) servers.add(server)
   }
   return [...servers]
