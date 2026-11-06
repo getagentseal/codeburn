@@ -3,7 +3,7 @@ import { homedir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
 
 import { extractBashCommands } from '../bash-utils.js'
-import { calculateCost, pricingModelAt } from '../models.js'
+import { calculateCost, ownValue, pricingModelAt } from '../models.js'
 import { FS_SCAN_CONCURRENCY, mapWithConcurrency } from '../fs-utils.js'
 import type { ParsedProviderCall, ProbeRoot, Provider, SessionParser, SessionSource } from './types.js'
 import type { ToolCall } from '../types.js'
@@ -255,7 +255,7 @@ function toolDetails(value: unknown): { name: string; bashCommands: string[]; st
   if (!event || stringValue(event['type']) !== 'tool.call') return null
   const rawName = stringValue(event['name'])
   if (!rawName) return null
-  const name = toolNameMap[rawName] ?? rawName
+  const name = ownValue(toolNameMap, rawName) ?? rawName
 
   let args = asObject(event['args'])
   if (!args && typeof event['args'] === 'string') {
@@ -428,7 +428,7 @@ export function createKimicodeProvider(homeOverride?: string): Provider {
     },
 
     toolDisplayName(rawTool: string): string {
-      return toolNameMap[rawTool] ?? rawTool
+      return ownValue(toolNameMap, rawTool) ?? rawTool
     },
 
     async probeRoots(): Promise<ProbeRoot[]> {

@@ -3,7 +3,7 @@ import { basename, dirname, join } from 'path'
 import { homedir } from 'os'
 
 import { readSessionFile, readSessionLines } from '../fs-utils.js'
-import { calculateCost } from '../models.js'
+import { calculateCost, ownValue } from '../models.js'
 import { extractBashCommands } from '../bash-utils.js'
 import type { ProbeRoot, Provider, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
 import { safeNumber } from '../parser.js'
@@ -238,7 +238,7 @@ function extractMessageTools(message: VibeMessage): { tools: string[]; bashComma
     const rawName = toolCall.function?.name
     if (!rawName) continue
 
-    const mappedName = toolNameMap[rawName] ?? rawName
+    const mappedName = ownValue(toolNameMap, rawName) ?? rawName
     tools.push(mappedName)
 
     if (mappedName !== 'Bash') continue
@@ -415,11 +415,11 @@ export function createMistralVibeProvider(sessionsDir?: string): Provider {
     displayName: 'Mistral Vibe',
 
     modelDisplayName(model: string): string {
-      return modelDisplayNames[model] ?? model
+      return ownValue(modelDisplayNames, model) ?? model
     },
 
     toolDisplayName(rawTool: string): string {
-      return toolNameMap[rawTool] ?? rawTool
+      return ownValue(toolNameMap, rawTool) ?? rawTool
     },
 
     async probeRoots(): Promise<ProbeRoot[]> {
@@ -436,7 +436,7 @@ export function createMistralVibeProvider(sessionsDir?: string): Provider {
       if (basename(source.path) === 'CURRENT') {
         return { async *parse() {
           const defaultModel = await configuredModel(dirname(dirname(dirname(source.path))))
-          for (const call of await readUnifiedVibeCalls(source.path, name => toolNameMap[name] ?? name, defaultModel)) {
+          for (const call of await readUnifiedVibeCalls(source.path, name => ownValue(toolNameMap, name) ?? name, defaultModel)) {
             if (seenKeys.has(call.deduplicationKey)) continue
             seenKeys.add(call.deduplicationKey)
             yield call

@@ -600,7 +600,7 @@ function sanitizeModels(raw: unknown): DailyEntry['models'] {
   if (!isRecord(raw)) return {}
   const out: DailyEntry['models'] = {}
   for (const [name, m] of Object.entries(raw)) {
-    if (name in Object.prototype || !isRecord(m)) continue
+    if (!isRecord(m)) continue
     setOwn(out, name, {
       calls: num(m.calls),
       cost: num(m.cost),

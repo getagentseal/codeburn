@@ -2,7 +2,7 @@ import { readdir, readFile, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, isAbsolute, join, resolve } from 'node:path'
 
-import { calculateCost } from '../models.js'
+import { calculateCost, ownValue } from '../models.js'
 import { estimateTokensFromChars } from '../token-estimate.js'
 import { blobToText, isSqliteAvailable, openDatabase } from '../sqlite.js'
 import type { SqliteDatabase } from '../sqlite.js'
@@ -218,7 +218,7 @@ function toolNames(value: unknown): string[] {
 }
 
 function uniqueMappedTools(values: string[]): string[] {
-  return [...new Set(values.map(value => toolNameMap[value] ?? value).filter(Boolean))]
+  return [...new Set(values.map(value => ownValue(toolNameMap, value) ?? value).filter(Boolean))]
 }
 
 function timestampSeconds(value: unknown): number | undefined {
@@ -364,7 +364,7 @@ function collectMetricTools(records: MetricsRecord[]): Map<string, string[]> {
     const tool = stringValue(record['ToolName'])
     if (!key || !tool) continue
     const current = tools.get(key) ?? []
-    current.push(toolNameMap[tool] ?? tool)
+    current.push(ownValue(toolNameMap, tool) ?? tool)
     tools.set(key, current)
   }
   for (const [key, values] of tools) tools.set(key, [...new Set(values)])
@@ -530,11 +530,11 @@ export const quickdesk: Provider = {
 
   modelDisplayName(model: string): string {
     if (model === 'quickdesk-auto') return 'Quick Desktop (auto)'
-    return modelDisplayNames[model] ?? model
+    return ownValue(modelDisplayNames, model) ?? model
   },
 
   toolDisplayName(rawTool: string): string {
-    return toolNameMap[rawTool] ?? rawTool
+    return ownValue(toolNameMap, rawTool) ?? rawTool
   },
 
   async probeRoots(): Promise<ProbeRoot[]> {

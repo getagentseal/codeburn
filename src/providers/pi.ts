@@ -4,7 +4,7 @@ import { basename, join } from 'path'
 import { homedir } from 'os'
 
 import { readSessionFile, readSessionLines } from '../fs-utils.js'
-import { calculateCost } from '../models.js'
+import { calculateCost, ownValue } from '../models.js'
 import { extractBashCommands } from '../bash-utils.js'
 import { normalizeContentBlocks } from '../content-utils.js'
 import type { ProbeRoot, Provider, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
@@ -360,7 +360,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
             tools.push('Skill')
             continue
           }
-          tools.push(toolNameMap[c.name!] ?? c.name!)
+          tools.push(ownValue(toolNameMap, c.name!) ?? c.name!)
         }
 
         const bashCommands = toolCalls
@@ -439,7 +439,7 @@ export function createPiProvider(sessionsDir?: string): Provider {
     },
 
     toolDisplayName(rawTool: string): string {
-      return toolNameMap[rawTool] ?? rawTool
+      return ownValue(toolNameMap, rawTool) ?? rawTool
     },
 
     async discoverSessions(): Promise<SessionSource[]> {
@@ -470,7 +470,7 @@ export function createOmpProvider(sessionsDir?: string): Provider {
     },
 
     toolDisplayName(rawTool: string): string {
-      return toolNameMap[rawTool] ?? rawTool
+      return ownValue(toolNameMap, rawTool) ?? rawTool
     },
 
     async discoverSessions(): Promise<SessionSource[]> {

@@ -3,7 +3,7 @@ import type { PeriodData } from './menubar-json.js'
 import { CATEGORY_LABELS, type ProjectSummary, type SessionSummary, type TaskCategory } from './types.js'
 import { behavioralCallWeight, isBehavioralTurn } from './behavioral-weight.js'
 import { projectOriginKey } from './git-origin.js'
-import { billableOutputTokens, modelRowKey } from './models.js'
+import { billableOutputTokens, modelRowKey, ownValue } from './models.js'
 
 function emptyEntry(date: string): DailyEntry {
   return {
@@ -18,7 +18,7 @@ function emptyEntry(date: string): DailyEntry {
     cacheWriteTokens: 0,
     editTurns: 0,
     oneShotTurns: 0,
-    models: {},
+    models: Object.create(null),
     categories: {},
     providers: {},
   }
@@ -50,7 +50,7 @@ function emptySlice(): ProviderDaySlice {
   return {
     calls: 0, cost: 0, savingsUSD: 0,
     sessions: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0,
-    editTurns: 0, oneShotTurns: 0, models: {}, categories: {},
+    editTurns: 0, oneShotTurns: 0, models: Object.create(null), categories: {},
   }
 }
 
@@ -225,7 +225,7 @@ export function aggregateProjectsIntoDays(projects: ProjectSummary[], dateKeyFn:
           // from a provider column (Hermes `billing_provider`) survives into
           // the finalized day: the raw id alone cannot carry it. v33.
           const dayModelKey = modelRowKey(call.model, call.route)
-          const model = callDay.models[dayModelKey] ?? {
+          const model = ownValue(callDay.models, dayModelKey) ?? {
             calls: 0, cost: 0, savingsUSD: 0,
             inputTokens: 0, outputTokens: 0,
             cacheReadTokens: 0, cacheWriteTokens: 0,
@@ -253,7 +253,7 @@ export function aggregateProjectsIntoDays(projects: ProjectSummary[], dateKeyFn:
           sliceProject.calls += callWeight
           sliceProject.savingsUSD += callSavings
 
-          const sliceModel = slice.models![dayModelKey] ?? {
+          const sliceModel = ownValue(slice.models!, dayModelKey) ?? {
             calls: 0, cost: 0, savingsUSD: 0,
             inputTokens: 0, outputTokens: 0,
             cacheReadTokens: 0, cacheWriteTokens: 0,
@@ -291,7 +291,7 @@ export function buildPeriodDataFromDays(days: DailyEntry[], label: string): Peri
     outputTokens: number
     cacheReadTokens: number
     cacheWriteTokens: number
-  }> = {}
+  }> = Object.create(null)
 
   for (const d of days) {
     cost += d.cost
@@ -304,7 +304,7 @@ export function buildPeriodDataFromDays(days: DailyEntry[], label: string): Peri
     cacheWriteTokens += d.cacheWriteTokens
 
     for (const [name, m] of Object.entries(d.models)) {
-      const acc = modelTotals[name] ?? {
+      const acc = ownValue(modelTotals, name) ?? {
         calls: 0, cost: 0, savingsUSD: 0,
         inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0,
       }

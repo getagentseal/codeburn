@@ -1,4 +1,4 @@
-import { modelRowKey } from './models.js'
+import { modelRowKey, ownValue } from './models.js'
 import type { ProjectSummary } from './types.js'
 
 export interface ModelTotals {
@@ -19,12 +19,12 @@ export interface ModelTotals {
 /// normalized `glm-5p2`/`GLM-5.2` written by a newer one — and keying by the
 /// resolved name merges those into a single row instead of rendering duplicates.
 export function aggregateModelTotals(projects: ProjectSummary[]): Record<string, ModelTotals> {
-  const modelTotals: Record<string, ModelTotals> = {}
+  const modelTotals: Record<string, ModelTotals> = Object.create(null)
   for (const project of projects) {
     for (const session of project.sessions) {
       for (const [model, data] of Object.entries(session.modelBreakdown)) {
         const name = modelRowKey(model)
-        const totals = (modelTotals[name] ??= {
+        const totals = ownValue(modelTotals, name) ?? (modelTotals[name] = {
           calls: 0, costUSD: 0, estimatedCostUSD: 0, freshInput: 0, cacheRead: 0, cacheWrite: 0,
           activeDurationMs: 0, activeGeneratedTokens: 0,
         })

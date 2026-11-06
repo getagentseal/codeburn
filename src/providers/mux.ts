@@ -3,7 +3,7 @@ import { basename, dirname, join, resolve } from 'path'
 import { homedir } from 'os'
 
 import { readSessionLines } from '../fs-utils.js'
-import { calculateCost, getShortModelName } from '../models.js'
+import { calculateCost, getShortModelName, ownValue } from '../models.js'
 import { extractBashCommands } from '../bash-utils.js'
 import type { Provider, SessionSource, SessionParser, ParsedProviderCall, ProbeRoot } from './types.js'
 import { safeNumber } from '../parser.js'
@@ -208,7 +208,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
         const toolParts = (Array.isArray(msg.parts) ? msg.parts : []).filter(
           p => p?.type === 'dynamic-tool' && typeof p.toolName === 'string',
         )
-        const tools = toolParts.map(p => toolNameMap[p.toolName!] ?? p.toolName!)
+        const tools = toolParts.map(p => ownValue(toolNameMap, p.toolName!) ?? p.toolName!)
         const bashCommands = toolParts
           .filter(p => p.toolName === 'bash')
           .flatMap(p => {
@@ -266,7 +266,7 @@ export function createMuxProvider(muxRoot?: string): Provider {
     },
 
     toolDisplayName(rawTool: string): string {
-      return toolNameMap[rawTool] ?? rawTool
+      return ownValue(toolNameMap, rawTool) ?? rawTool
     },
 
     async probeRoots(): Promise<ProbeRoot[]> {

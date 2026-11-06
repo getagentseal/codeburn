@@ -5,7 +5,7 @@ import { homedir } from 'os'
 
 import { extractBashCommands } from '../bash-utils.js'
 import { readSessionLines } from '../fs-utils.js'
-import { calculateCost, getShortModelName, pricingModelAt } from '../models.js'
+import { calculateCost, getShortModelName, ownValue, pricingModelAt } from '../models.js'
 import type { ProbeRoot, ParsedProviderCall, Provider, SessionParser, SessionSource } from './types.js'
 
 type JsonObject = Record<string, unknown>
@@ -232,7 +232,7 @@ function extractTool(payload: JsonObject): { tool: string; bashCommands: string[
   const rawName = stringField(fn, 'name') ?? stringField(payload, 'name')
   if (!rawName) return null
 
-  const tool = toolNameMap[rawName] ?? rawName
+  const tool = ownValue(toolNameMap, rawName) ?? rawName
   const argsText = stringField(fn, 'arguments') ?? stringField(payload, 'arguments')
   const args = parseJsonObject(argsText)
   const command = stringField(args, 'command')
@@ -355,7 +355,7 @@ export function createKimiProvider(overrideDir?: string): Provider {
     },
 
     toolDisplayName(rawTool: string): string {
-      return toolNameMap[rawTool] ?? rawTool
+      return ownValue(toolNameMap, rawTool) ?? rawTool
     },
 
     async discoverSessions(): Promise<SessionSource[]> {

@@ -1603,6 +1603,10 @@ export function calculateCost(
   )
 }
 
+export function ownValue<T>(map: Readonly<Record<string, T>>, key: string): T | undefined {
+  return Object.hasOwn(map, key) ? map[key] : undefined
+}
+
 const autoModelNames: Record<string, string> = {
   'glm-5.2': 'GLM-5.2',
   'GLM-5.2': 'GLM-5.2',
@@ -1996,7 +2000,8 @@ export function fallbackRawModelDisplayName(localLabel: string, rawModel: string
 }
 
 function shortModelName(model: string, seen: Set<string>): string {
-  if (autoModelNames[model]) return autoModelNames[model]
+  const auto = ownValue(autoModelNames, model)
+  if (auto) return auto
   if (seen.has(model)) {
     const leaf = model.includes('/') ? model.slice(model.lastIndexOf('/') + 1) : model
     return lookupShortName(leaf) ?? leaf
@@ -2012,7 +2017,8 @@ function shortModelName(model: string, seen: Set<string>): string {
   const stripped = getCanonicalName(model)
   // Before aliasing: `glm-5.3` prices via the `glm-5p2` sibling, so resolving
   // first would label a namespaced GLM-5.3 as "GLM-5.2".
-  if (autoModelNames[stripped]) return autoModelNames[stripped]
+  const autoStripped = ownValue(autoModelNames, stripped)
+  if (autoStripped) return autoStripped
   if (stripped !== model) {
     if (Object.hasOwn(userAliases, stripped)) {
       return shortModelName(userAliases[stripped]!, seen)

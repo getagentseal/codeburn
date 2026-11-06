@@ -2,7 +2,7 @@ import { join } from 'path'
 import { homedir } from 'os'
 
 import { extractBashCommands } from '../bash-utils.js'
-import { calculateCost, getShortModelName } from '../models.js'
+import { calculateCost, getShortModelName, ownValue } from '../models.js'
 import { blobToText, getSqliteLoadError, isBlockedDatabaseError, isSqliteAvailable, isSqliteBusyError, openDatabase, type SqliteDatabase } from '../sqlite.js'
 import { estimateTokensFromChars } from '../token-estimate.js'
 import type { ProbeRoot, ParsedProviderCall, Provider, SessionParser, SessionSource } from './types.js'
@@ -133,7 +133,7 @@ function getDbCandidates(dbPathOverride?: string): string[] {
 function normalizeModel(rawModel: string): string {
   const model = rawModel.trim()
   if (!model) return model
-  return modelAliases[model] ?? model
+  return ownValue(modelAliases, model) ?? model
 }
 
 function modelDisplayName(model: string): string {

@@ -14,8 +14,10 @@ const DOTTED_KEY = /^[a-z][a-z0-9]*(?:[._][a-z0-9]+)+$/
 
 const SUBCOMMAND = /^[a-z][a-z0-9-]{0,31}$/
 
+export const PLUGIN_NAME = /^[a-z][a-z0-9-]{0,63}$/
+
 export const pluginManifestSchema = z.object({
-  name: z.string().regex(/^[a-z][a-z0-9-]{0,63}$/, 'plugin name: lower-case, digits, dashes'),
+  name: z.string().regex(PLUGIN_NAME, 'plugin name: lower-case, digits, dashes'),
   version: z.string().min(1).max(32),
   /// Space-separated comparators over the CLI version, e.g. ">=0.9.22 <0.11".
   cliCompat: z.string().min(1).max(128),

@@ -220,6 +220,25 @@ describe('plugin CLI: codeburn plugin list|info|verify', () => {
     }
   })
 
+  it('plugin remove refuses a name that leaves the plugins dir', async () => {
+    const parent = await mkdtemp(join(tmpdir(), 'remove-traversal-'))
+    const pluginsDir = join(parent, 'plugins')
+    await mkdir(pluginsDir, { recursive: true })
+    const savedStderr = process.stderr.write
+    const savedExitCode = process.exitCode
+    process.stderr.write = (): boolean => true
+    process.exitCode = undefined
+    try {
+      await makeProgram().parseAsync(['node', 'codeburn', 'plugin', 'remove', '..', '--confirm', '--dir', pluginsDir])
+      expect(process.exitCode).toBe(1)
+      await expect(stat(pluginsDir)).resolves.toBeTruthy()
+    } finally {
+      process.stderr.write = savedStderr
+      process.exitCode = savedExitCode
+      await rm(parent, { recursive: true, force: true })
+    }
+  })
+
   it('plugin verify accepts a well-formed manifest', async () => {
     const pluginDir = join(tmpDir, 'verifiable')
     await mkdir(pluginDir, { recursive: true })

@@ -3,7 +3,7 @@ import { join } from 'path'
 import { homedir } from 'os'
 import { getEditorDataDir } from '../editor-data-dir.js'
 
-import { calculateCost } from '../models.js'
+import { calculateCost, ownValue } from '../models.js'
 import { extractBashCommands } from '../bash-utils.js'
 import { readCachedResults, writeCachedResults } from '../cursor-cache.js'
 import { importSource, importSourceParser } from '../cursor-import.js'
@@ -1048,7 +1048,7 @@ export function createCursorProvider(dbPathOverride?: string): Provider {
     displayName: 'Cursor',
 
     modelDisplayName(model: string): string {
-      return modelDisplayNames[model] ?? model
+      return ownValue(modelDisplayNames, model) ?? model
     },
 
     toolDisplayName(rawTool: string): string {

@@ -4,7 +4,7 @@ import { basename, dirname, join } from 'path'
 import { homedir } from 'os'
 
 import { readGitOriginUrl } from '../git-origin.js'
-import { calculateCost, getShortModelName, routeFromProviderField, type BillingMode } from '../models.js'
+import { calculateCost, getShortModelName, ownValue, routeFromProviderField, type BillingMode } from '../models.js'
 import { isUserHomeRoot } from '../path-privacy.js'
 import { isSqliteAvailable, getSqliteLoadError, openDatabase, isSqliteBusyError, type SqliteDatabase } from '../sqlite.js'
 import type { ProbeRoot, Provider, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
@@ -338,7 +338,7 @@ function mapToolName(raw: string): string {
   if (raw.startsWith('mcp_composio_')) return 'MCP'
   if (raw.startsWith('mcp_') || raw.startsWith('mcp__')) return raw
   if (raw.startsWith('browser_')) return 'Browser'
-  return toolNameMap[raw] ?? raw
+  return ownValue(toolNameMap, raw) ?? raw
 }
 
 function parseToolCalls(raw: string | null): HermesToolCall[] {

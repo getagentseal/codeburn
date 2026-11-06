@@ -3,7 +3,7 @@ import { join } from 'path'
 import { homedir } from 'os'
 
 import { readSessionFile, readSessionLines } from '../fs-utils.js'
-import { calculateCost, getShortModelName } from '../models.js'
+import { calculateCost, getShortModelName, ownValue } from '../models.js'
 import { extractBashCommands } from '../bash-utils.js'
 import { normalizeContentBlocks } from '../content-utils.js'
 import type {
@@ -181,7 +181,7 @@ function createParser(
 
           for (const tu of toolUses) {
             const toolName = tu.name ?? ''
-            pendingTools.push(toolNameMap[toolName] ?? toolName)
+            pendingTools.push(ownValue(toolNameMap, toolName) ?? toolName)
 
             if (toolName === 'Execute' && tu.input && typeof tu.input['command'] === 'string') {
               pendingBashCommands.push(...extractDroidBashCommands(tu.input['command'] as string))
@@ -389,7 +389,7 @@ export function createDroidProvider(factoryDir?: string): Provider {
     },
 
     toolDisplayName(rawTool: string): string {
-      return toolNameMap[rawTool] ?? rawTool
+      return ownValue(toolNameMap, rawTool) ?? rawTool
     },
 
     async probeRoots(): Promise<ProbeRoot[]> {

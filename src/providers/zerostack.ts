@@ -3,7 +3,7 @@ import { basename, join } from 'path'
 import { homedir, platform } from 'os'
 
 import { readSessionFile } from '../fs-utils.js'
-import { calculateCost, getShortModelName } from '../models.js'
+import { calculateCost, getShortModelName, ownValue } from '../models.js'
 import type { Provider, SessionSource, SessionParser, ParsedProviderCall, ProbeRoot } from './types.js'
 
 // zerostack (https://github.com/gi-dellav/zerostack) is a minimal Rust coding
@@ -130,7 +130,7 @@ export function createZerostackProvider(sessionsDir?: string): Provider {
     },
 
     toolDisplayName(rawTool: string): string {
-      return toolNameMap[rawTool] ?? rawTool
+      return ownValue(toolNameMap, rawTool) ?? rawTool
     },
 
     async probeRoots(): Promise<ProbeRoot[]> {

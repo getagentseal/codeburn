@@ -1,4 +1,4 @@
-import { billableOutputTokens, modelRowKey } from './models.js'
+import { billableOutputTokens, modelRowKey, ownValue } from './models.js'
 import type { CostBasis, SessionSummary } from './types.js'
 
 type UsageLike = {
@@ -46,7 +46,7 @@ export function resolveModelBreakdownKey(
  */
 export function sessionBillableOutput(session: SessionSummary): { total: number, byModel: Record<string, number> } {
   const breakdown = session.modelBreakdown ?? {}
-  const byModel: Record<string, number> = {}
+  const byModel: Record<string, number> = Object.create(null)
   let total = 0
   let sawUsage = false
   for (const turn of session.turns ?? []) {
@@ -60,7 +60,7 @@ export function sessionBillableOutput(session: SessionSummary): { total: number,
       // no row to land in, exactly as before.
       const key = resolveModelBreakdownKey(call, breakdown)
       if (!key) continue
-      byModel[key] = (byModel[key] ?? 0) + billable
+      byModel[key] = (ownValue(byModel, key) ?? 0) + billable
     }
   }
   if (sawUsage) return { total, byModel }

@@ -110,11 +110,17 @@ function getConfigPath(): string {
   return join(getConfigDir(), 'config.json')
 }
 
+let warnedUnreadable = false
+
 export async function readConfig(): Promise<CodeburnConfig> {
   try {
     const raw = await readFile(getConfigPath(), 'utf-8')
     return JSON.parse(raw) as CodeburnConfig
-  } catch {
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT' && !warnedUnreadable) {
+      warnedUnreadable = true
+      process.stderr.write(`codeburn: ignoring ${getConfigPath()} (${(err as Error).message}); using defaults\n`)
+    }
     return {}
   }
 }
@@ -122,6 +128,27 @@ export async function readConfig(): Promise<CodeburnConfig> {
 export async function saveConfig(config: CodeburnConfig): Promise<void> {
   await mkdir(getConfigDir(), { recursive: true })
   const configPath = getConfigPath()
+  // The caller's config came from readConfig, which falls back to {} on an
+  // unreadable file; writing it would erase every setting the file still holds.
+  let existing: string | undefined
+  try {
+    existing = await readFile(configPath, 'utf-8')
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+      process.stderr.write(`codeburn: cannot read ${configPath} (${(err as Error).message}); nothing saved\n`)
+      process.exit(1)
+    }
+  }
+  if (existing !== undefined) {
+    try {
+      JSON.parse(existing)
+    } catch {
+      const moved = `${configPath}.corrupt-${Date.now()}`
+      await rename(configPath, moved)
+      process.stderr.write(`codeburn: ${configPath} is not valid JSON; moved it to ${moved} and saved nothing. Fix it, move it back and run the command again.\n`)
+      process.exit(1)
+    }
+  }
   // Randomize the temp path so two simultaneous saveConfig calls (from
   // overlapping menubar + CLI runs, for example) do not race on the same
   // staging file. The previous fixed `.tmp` suffix could leave one
