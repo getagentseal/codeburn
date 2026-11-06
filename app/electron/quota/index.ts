@@ -8,7 +8,7 @@ import { fetchCopilotQuota } from './copilot'
 import { fetchGeminiQuota } from './gemini'
 import { fetchGrokbotQuota, grokbotInstalled } from './grokbot'
 import { fetchKimiQuota } from './kimi'
-import { atomicWriteSecureFile, readSecureFile, sanitizeError } from './security'
+import { atomicWriteSecureFile, forgetKeychainRefusals, readSecureFile, sanitizeError } from './security'
 import type { ProviderName, QuotaProvider } from './types'
 import { fetchZcodeQuota } from './zcode'
 
@@ -110,6 +110,8 @@ export class QuotaService {
     // keychain prompt.
     if (this.flight && (!allowKeychain || this.flightAllowKeychain)) return this.flight
     if (options.force) this.invalidate()
+    // A keychain-allowed run is the user acting again, so an earlier refusal may ask once more.
+    if (allowKeychain) forgetKeychainRefusals()
     // IPC names are untrusted strings; only known providers may be skipped.
     const disabled = new Set((options.disabled ?? []).filter((p): p is ProviderName => PROVIDERS.includes(p as ProviderName)))
     let flight: Promise<QuotaProvider[]>

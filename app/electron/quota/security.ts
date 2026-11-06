@@ -26,7 +26,7 @@ export type KeychainOutcome =
 export type KeychainExec = (
   file: string,
   args: string[],
-  options: { timeout: number; maxBuffer: number },
+  options: { signal: AbortSignal; maxBuffer: number },
 ) => Promise<{ stdout: string }>
 
 // `security -w` hex-encodes password data it can't hand back as a clean C-string
@@ -42,20 +42,28 @@ function decodeKeychainValue(raw: string): string {
 }
 
 // exit 44 / "could not be found" is a genuine miss. A Deny (exit 128, "User
-// canceled") and our own timeout kill while the dialog waited are the user's
-// answer to a prompt. Anything else (interaction not allowed, I/O, a crash)
-// means access wasn't granted, but showed no prompt, so the next candidate is
-// tried.
-function classifyKeychainError(error: unknown): 'notFound' | 'denied' | 'unanswered' | 'other' {
-  const err = error as { code?: number | string; stderr?: string; message?: string; killed?: boolean; signal?: string | null }
+// canceled") and our own timer firing while the dialog waited are the user's
+// answer to a prompt. Anything else (interaction not allowed, I/O, a kill or
+// crash we did not cause) means access wasn't granted, but showed no prompt,
+// so the next candidate is tried.
+function classifyKeychainError(error: unknown, timedOut: boolean): 'notFound' | 'denied' | 'unanswered' | 'other' {
+  if (timedOut) return 'unanswered'
+  const err = error as { code?: number | string; stderr?: string; message?: string }
   const code = typeof err.code === 'number' || typeof err.code === 'string' ? Number(err.code) : undefined
   const text = `${err.stderr ?? ''} ${err.message ?? ''}`.toLowerCase()
   if (code === 44 || text.includes('could not be found') || text.includes('specified item could not be found')) {
     return 'notFound'
   }
-  if (err.killed === true) return 'unanswered'
   if (code === 128 || text.includes('user canceled')) return 'denied'
   return 'other'
+}
+
+// Items (service plus account) the user refused since the last user-initiated
+// refresh, which clears them: one prompt per item per action, never persisted.
+const refusedThisRun = new Set<string>()
+
+export function forgetKeychainRefusals(): void {
+  refusedThisRun.clear()
 }
 
 /**
@@ -64,8 +72,9 @@ function classifyKeychainError(error: unknown): 'notFound' | 'denied' | 'unanswe
  * prompt on already-consented items). Tries each account candidate in order
  * (`null` = service-only) and stops at a Deny or an unanswered prompt: a later
  * candidate can match the same item, and asking again is a second prompt the
- * user already answered. Never returns or logs the secret to any caller but
- * the direct one.
+ * user already answered. A refused item is skipped (with the service-only
+ * lookup) until {@link forgetKeychainRefusals}. Never returns or logs the
+ * secret to any caller but the direct one.
  */
 export async function readKeychainPassword(
   service: string,
@@ -74,18 +83,31 @@ export async function readKeychainPassword(
 ): Promise<KeychainOutcome> {
   if (process.platform !== 'darwin') return { status: 'notFound' }
   let denied = false
+  let refused = false
   for (const account of accounts) {
+    const item = JSON.stringify([service, account])
+    if (refusedThisRun.has(item)) { refused = true; continue }
+    // A service-only lookup can match the item just refused and ask again.
+    if (account === null && refused) continue
     const args = ['find-generic-password', '-s', service, ...(account ? ['-a', account] : []), '-w']
+    const controller = new AbortController()
+    let timedOut = false
+    const timer = setTimeout(() => { timedOut = true; controller.abort() }, KEYCHAIN_TIMEOUT_MS)
     try {
-      const { stdout } = await exec('/usr/bin/security', args, { timeout: KEYCHAIN_TIMEOUT_MS, maxBuffer: 64 * 1024 })
+      const { stdout } = await exec('/usr/bin/security', args, { signal: controller.signal, maxBuffer: 64 * 1024 })
       if (stdout && stdout.trim()) return { status: 'found', value: decodeKeychainValue(stdout) }
     } catch (error) {
-      const kind = classifyKeychainError(error)
-      if (kind === 'denied' || kind === 'unanswered') return { status: 'accessDenied' }
+      const kind = classifyKeychainError(error, timedOut)
+      if (kind === 'denied' || kind === 'unanswered') {
+        refusedThisRun.add(item)
+        return { status: 'accessDenied' }
+      }
       if (kind === 'other') denied = true
+    } finally {
+      clearTimeout(timer)
     }
   }
-  return denied ? { status: 'accessDenied' } : { status: 'notFound' }
+  return denied || refused ? { status: 'accessDenied' } : { status: 'notFound' }
 }
 
 export function sanitizeError(error: unknown): string {
