@@ -7,7 +7,7 @@ import { StringDecoder } from 'string_decoder'
 import { getCodeburnCacheDir, RETIRED_PROVIDER_NAMES } from './cache-dir.js'
 import { acquireCacheRefreshLock, releaseOwnedRefreshLocksForExit } from './cache-refresh-lock.js'
 import { parseBillingMode, type BillingMode } from './models.js'
-import type { ToolCall } from './types.js'
+import { SPEEDS, type Speed, type ToolCall } from './types.js'
 import { isWslUncPath } from './wsl.js'
 
 // ── Types ──────────────────────────────────────────────────────────────
@@ -33,7 +33,7 @@ export type CachedCall = {
   /// True when `costUSD` (or the tokens it is priced from) is estimated rather
   /// than metered. Persisted so the estimated-cost marker survives the cache.
   isEstimated?: boolean
-  speed: 'standard' | 'fast' | 'flex' | 'ultrafast'
+  speed: Speed
   timestamp: string
   tools: string[]
   bashCommands: string[]
@@ -1212,7 +1212,7 @@ function validateCall(c: unknown): c is CachedCall {
     && typeof o['model'] === 'string'
     && typeof o['deduplicationKey'] === 'string'
     && typeof o['timestamp'] === 'string'
-    && (o['speed'] === 'standard' || o['speed'] === 'fast' || o['speed'] === 'flex')
+    && (SPEEDS as readonly unknown[]).includes(o['speed'])
     && isOptionalNum(o['costUSD'])
     && isOptionalNum(o['fallbackCostUSD'])
     && isOptionalBool(o['isEstimated'])
@@ -2978,25 +2978,6 @@ export async function beginColdHydration(isCold: boolean): Promise<HydrationHand
 // failure just falls back to a full recompute, never to stale or corrupt
 // data.
 
-// Debounce: once the corpus fingerprint moves, keep serving the last SETTLED
-// snapshot until this record's first observed mismatch has aged past the
-// window, instead of recomputing on every single poll of a burst. A streaming
-// assistant turn
-// can touch its transcript many times a second; without this, a menubar
-// polling on a tight interval would pay the full parse+aggregation cost on
-// every one of those ticks. The deferred call deliberately does NOT persist
-// a new snapshot — the pre-churn baseline it's still serving stays on disk —
-// so the first poll after the mismatch clock ages past the window sees a real
-// fingerprint mismatch with no fresh grace period left,
-// recomputes for real, and persists the settled result. No update is ever
-// masked permanently: the window only ever delays picking one up. Mirrors
-// the existing `parseBurstWindowMs`/`CODEBURN_PARSE_BURST_MS` convention:
-// small, capped, env-overridable for tuning/tests.
-function statusSnapshotSettleMs(): number {
-  const raw = Number(process.env['CODEBURN_STATUS_SNAPSHOT_SETTLE_MS'] ?? '2000')
-  return Number.isFinite(raw) && raw >= 0 ? Math.min(raw, 60_000) : 2000
-}
-
 const STATUS_SNAPSHOT_FILE = 'status-snapshot'
 
 // Bump on any incompatible change to the *shape* of the payload this snapshot
@@ -3035,11 +3016,6 @@ type StatusSnapshotRecord = {
   // a (vanishingly unlikely) hash collision between two different queries.
   queryKey: string
   payload: unknown
-  // Wall-clock time (Date.now()) the FIRST mismatch against this record's
-  // corpusFingerprint was observed. Absent = not currently mismatched (a
-  // fresh save, or a record no load has mismatched against yet). This is
-  // what the settle-window decision anchors on — see `loadStatusSnapshot`.
-  mismatchFirstSeenAt?: number
 }
 
 // Each distinct queryKey gets its OWN file (`status-snapshot.<hash>.json`)
@@ -3149,22 +3125,10 @@ async function writeStatusSnapshotRecord(
   return false
 }
 
-/** Returns the previously-saved payload when the query still matches AND
- *  either the corpus fingerprint is an exact match (nothing changed) or this
- *  mismatch was first observed less than `statusSnapshotSettleMs()` of
- *  wall-clock time ago (likely still being written). Null otherwise, so the
- *  caller recomputes for real and should persist a fresh snapshot with the
- *  new fingerprint.
- *
- *  Deliberately does NOT use `newestMtimeMs` (the corpus-wide max mtime) to
- *  decide how long a mismatch has been "recent": that value is the max
- *  across every discovered source, so churn in a file the current query
- *  never reads (a different project, or a network-provider source that
- *  `computeCorpusFingerprint` deliberately re-stamps to "now" every call so
- *  it never drops out of the hash) can keep it perpetually fresh, deferring
- *  forever instead of "at most the window." Anchoring on the wall-clock time
- *  THIS record's fingerprint first stopped matching makes the settle window
- *  a true bound regardless of what else in the corpus is busy. */
+/** Returns the previously-saved payload only when the query and the corpus
+ *  fingerprint both still match. Any fingerprint change is a miss, so the
+ *  caller recomputes and persists a fresh snapshot: serving the old payload
+ *  would replay an answer from before the change, however old it is. */
 export async function loadStatusSnapshot(corpusFingerprint: string, queryKey: string, semanticKey: string): Promise<unknown | null> {
   const stored = await readStatusSnapshotRecord(queryKey)
   if (!stored) return null
@@ -3175,32 +3139,7 @@ export async function loadStatusSnapshot(corpusFingerprint: string, queryKey: st
   // is treated as a miss and recomputed rather than served.
   const candidate = stored.payload as { stale?: unknown; hydration?: unknown } | null | undefined
   if (candidate !== null && typeof candidate === 'object' && (candidate.stale === true || candidate.hydration !== undefined)) return null
-  if (stored.corpusFingerprint === corpusFingerprint) return stored.payload ?? null
-
-  const now = Date.now()
-  const firstSeenAt = stored.mismatchFirstSeenAt ?? now
-  if (now - firstSeenAt >= statusSnapshotSettleMs()) return null
-  if (stored.mismatchFirstSeenAt === undefined) {
-    // Bookkeeping-only write: only proceed if the on-disk record is exactly
-    // what we just read (same corpusFingerprint, still no
-    // mismatchFirstSeenAt). If a concurrent real recompute already replaced
-    // it, this stale payload must not be reintroduced under a
-    // freshly-stamped timestamp.
-    const basisFingerprint = stored.corpusFingerprint
-    const persisted = await writeStatusSnapshotRecord(
-      queryKey,
-      { ...stored, mismatchFirstSeenAt: firstSeenAt },
-      existing => existing !== null
-        && existing.semanticKey === semanticKey
-        && existing.corpusFingerprint === basisFingerprint
-        && existing.observedAtMs === stored.observedAtMs
-        && existing.mismatchFirstSeenAt === undefined,
-    )
-    // Serving stale is safe only when the first-observed timestamp is durable.
-    // Otherwise each short-lived CLI process starts a fresh grace window and a
-    // read-only or broken cache can serve the old payload forever.
-    if (!persisted) return null
-  }
+  if (stored.corpusFingerprint !== corpusFingerprint) return null
   return stored.payload ?? null
 }
 
@@ -3210,9 +3149,7 @@ export async function loadStatusSnapshot(corpusFingerprint: string, queryKey: st
  *  there before — UNLESS a concurrent recompute already published one based
  *  on a strictly fresher corpus observation (`observedAtMs`), in which case
  *  this (slower, now-stale) write is refused rather than clobbering it. Ties
- *  proceed: both reflect a correct recompute of the same corpus state. Always
- *  writes a fresh record with no `mismatchFirstSeenAt`, which is exactly what
- *  clears the settle-window clock once a real recompute lands. */
+ *  proceed: both reflect a correct recompute of the same corpus state. */
 export async function saveStatusSnapshot(
   corpusFingerprint: string,
   newestMtimeMs: number,

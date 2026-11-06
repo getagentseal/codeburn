@@ -1327,10 +1327,8 @@ program
       // session-cache.ts's cacheMemo) ever survives between polls. A cheap
       // stat-only pass (no session-cache.json parse, no transcript content
       // read) over the discoverable corpus tells us whether anything changed
-      // since the last identical query; when it hasn't — or the only thing
-      // that changed is still within loadStatusSnapshot's settle window and
-      // may still be mid-write — skip the full parse + aggregation pipeline
-      // entirely and serve the persisted snapshot instead.
+      // since the last identical query; when it hasn't, skip the full parse +
+      // aggregation pipeline entirely and serve the persisted snapshot instead.
       // Single source of truth for the fields that define the query scope,
       // shared between the cache key below and the payload builder options
       // — a field added to only one of the two would otherwise silently
@@ -1412,13 +1410,8 @@ program
       // Inside the resident `serve` child (SERVE_HYDRATION_ENV is set for the
       // life of that process) the snapshot is pure downside: the process
       // already holds the incremental parse state and an output memo, so the
-      // snapshot buys no work back — it only adds `loadStatusSnapshot`'s
-      // settle window, which hands back the deliberately deferred PRE-change
-      // payload. serve then memoizes that answer, and with the roots quiet
-      // again the memo stays "clean", replaying the stale payload until the
-      // next filesystem event or the 5-minute memo cap. One-shot invocations
-      // (a terminal run, the menubar's spawn fallback) keep the snapshot and
-      // its debounce exactly as before.
+      // snapshot buys no work back. One-shot invocations (a terminal run, the
+      // menubar's spawn fallback) keep the snapshot.
       const useSnapshot = !queryScope.optimize && process.env[SERVE_HYDRATION_ENV] !== '1'
       const corpus = useSnapshot ? await computeCorpusFingerprint(pf) : null
       const snapshot = corpus ? await loadStatusSnapshot(corpus.hash, queryKey, STATUS_SNAPSHOT_SEMANTIC_KEY) : null

@@ -3968,6 +3968,7 @@ export async function parseProviderSources(
       // multiple sources mapping to the same file path can merge their turns.
       // Durable providers (e.g. copilot OTel) never clear existing entries so
       // that pruned-away data is preserved for monotonic monthly totals.
+      const priorEntry = section.files[source.path]
       if (!provider.durableSources && !clearedPaths.has(source.path)) {
         delete section.files[source.path]
         markCacheDirty(diskCache, providerName, source.path)
@@ -4097,6 +4098,7 @@ export async function parseProviderSources(
           // read would have added is MISSING from this parse, so the run is a
           // partial hydration — the daily backfill must not finalize history
           // built on it (the same fence a stale read-only serve raises).
+          if (priorEntry) section.files[source.path] = priorEntry
           deferredRetryableSource = true
           warnProviderReadFailureOnce(providerName, err)
           continue

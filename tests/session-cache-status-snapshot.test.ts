@@ -10,7 +10,7 @@
 // older-corpus write must not clobber a faster, newer one, and two distinct queryKeys
 // must not evict each other.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'fs/promises'
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'fs/promises'
 import { existsSync } from 'fs'
 import { createHash } from 'crypto'
 import { spawn, spawnSync } from 'child_process'
@@ -36,25 +36,6 @@ afterEach(async () => {
 
 function queryKeyHash(queryKey: string): string {
   return createHash('sha256').update(queryKey).digest('hex').slice(0, 16)
-}
-
-/**
- * Make every snapshot write for `queryKey` fail while its record stays
- * readable, until the returned callback runs.
- *
- * The POSIX form drops write permission on the cache dir. Windows ignores that
- * on a directory, so the per-query write lock's path is occupied by a directory
- * instead: the writer can never create its lock there, so it reports the cache
- * unavailable exactly as an unwritable dir does.
- */
-async function blockSnapshotWrites(queryKey: string): Promise<() => Promise<void>> {
-  if (process.platform !== 'win32') {
-    await chmod(TMP_DIR, 0o500)
-    return async () => { await chmod(TMP_DIR, 0o700) }
-  }
-  const lockPath = join(TMP_DIR, `status-snapshot.${queryKeyHash(queryKey)}.write.lock`)
-  await mkdir(lockPath)
-  return async () => { await rm(lockPath, { recursive: true, force: true }) }
 }
 
 async function readRawRecord(queryKey: string): Promise<Record<string, unknown> | null> {
@@ -109,59 +90,24 @@ describe('concurrent writers (status snapshot)', () => {
     expect(served).toEqual({ p: 'B-fresh' })
   })
 
-  it('does not let a delayed mismatch-bookkeeping write reintroduce a payload a real recompute already superseded', async () => {
+  it('misses on the first call after the corpus fingerprint changes and serves an unchanged one', async () => {
     const queryKey = 'q1'
     await saveStatusSnapshot('f1', 1_000, 1_000, queryKey, SEMANTIC_KEY, { p: 'v1' })
 
-    // A load observes the corpus moved to f2 (within the settle window) and
-    // would normally persist a bookkeeping mismatchFirstSeenAt timestamp —
-    // but a real recompute for f2 lands first.
-    const stale = await loadStatusSnapshot('f2', queryKey, SEMANTIC_KEY)
-    expect(stale).toEqual({ p: 'v1' }) // served from the settle window
-
-    await saveStatusSnapshot('f2', 1_500, 2_000, queryKey, SEMANTIC_KEY, { p: 'v2-real' })
-
-    const record = await readRawRecord(queryKey)
-    // The real recompute's record must be exactly what's on disk — no
-    // mismatchFirstSeenAt bookkeeping should have overwritten it with the
-    // stale v1 payload.
-    expect(record).toMatchObject({ corpusFingerprint: 'f2', payload: { p: 'v2-real' } })
-    expect((record as { mismatchFirstSeenAt?: number }).mismatchFirstSeenAt).toBeUndefined()
-  })
-
-  it('recomputes instead of extending stale forever when mismatch bookkeeping cannot be persisted', async () => {
-    const queryKey = 'read-only-cache'
-    process.env['CODEBURN_STATUS_SNAPSHOT_SETTLE_MS'] = '20'
-    await saveStatusSnapshot('before', 1_000, 1_000, queryKey, SEMANTIC_KEY, { p: 'stale' })
-
-    const unblock = await blockSnapshotWrites(queryKey)
-    try {
-      expect(await loadStatusSnapshot('after', queryKey, SEMANTIC_KEY)).toBeNull()
-      await new Promise(resolve => { setTimeout(resolve, 40) })
-      // The first mismatch timestamp could not land. Treat that as a miss;
-      // resetting the settle clock on every poll serves stale indefinitely.
-      expect(await loadStatusSnapshot('after', queryKey, SEMANTIC_KEY)).toBeNull()
-    } finally {
-      await unblock()
-      delete process.env['CODEBURN_STATUS_SNAPSHOT_SETTLE_MS']
-    }
+    expect(await loadStatusSnapshot('f2', queryKey, SEMANTIC_KEY)).toBeNull()
+    expect(await loadStatusSnapshot('f1', queryKey, SEMANTIC_KEY)).toEqual({ p: 'v1' })
   })
 
   it('publishes a later corpus observation even when deleting the newest file lowers max mtime', async () => {
     const queryKey = 'deletion-lowers-max-mtime'
-    process.env['CODEBURN_STATUS_SNAPSHOT_SETTLE_MS'] = '0'
-    try {
-      await saveStatusSnapshot('before-delete', 3_000, 1_000, queryKey, SEMANTIC_KEY, { p: 'old' })
-      expect(await loadStatusSnapshot('after-delete', queryKey, SEMANTIC_KEY)).toBeNull()
+    await saveStatusSnapshot('before-delete', 3_000, 1_000, queryKey, SEMANTIC_KEY, { p: 'old' })
+    expect(await loadStatusSnapshot('after-delete', queryKey, SEMANTIC_KEY)).toBeNull()
 
-      // max(mtime) is not an ordering relation: deleting the former maximum
-      // legitimately makes it go backwards even though this observation is
-      // newer and must replace the old snapshot.
-      await saveStatusSnapshot('after-delete', 2_000, 2_000, queryKey, SEMANTIC_KEY, { p: 'new' })
-      expect(await loadStatusSnapshot('after-delete', queryKey, SEMANTIC_KEY)).toEqual({ p: 'new' })
-    } finally {
-      delete process.env['CODEBURN_STATUS_SNAPSHOT_SETTLE_MS']
-    }
+    // max(mtime) is not an ordering relation: deleting the former maximum
+    // legitimately makes it go backwards even though this observation is
+    // newer and must replace the old snapshot.
+    await saveStatusSnapshot('after-delete', 2_000, 2_000, queryKey, SEMANTIC_KEY, { p: 'new' })
+    expect(await loadStatusSnapshot('after-delete', queryKey, SEMANTIC_KEY)).toEqual({ p: 'new' })
   })
 
   it('never publishes a torn write and always leaves a subsequent read intact, even racing two distinct queryKeys', async () => {

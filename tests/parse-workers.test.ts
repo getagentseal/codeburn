@@ -379,15 +379,7 @@ describe('parallel cold parse', () => {
     expect(cold.stderr).toContain(`codeburn: codex parse workers=${WORKERS}`)
 
     await appendFile(path, codexTaskLines([{ n: 4, at: '2026-05-04T09:40:00.000Z' }]).join('\n') + '\n')
-    // `status --format menubar-json` now persists a corpus-fingerprint-keyed
-    // snapshot of its rendered payload (see src/session-cache.ts's
-    // loadStatusSnapshot/saveStatusSnapshot) and defers a fingerprint
-    // mismatch for up to CODEBURN_STATUS_SNAPSHOT_SETTLE_MS before doing a
-    // real recompute, so the appended line above would otherwise just be
-    // served from the (correctly!) settling snapshot with no parse at all.
-    // Force the window to 0 so this "warm" run actually reaches the parse
-    // pipeline this test is exercising.
-    const warm = runCli(args, home, { CODEBURN_PARSE_WORKERS: String(WORKERS), CODEBURN_CACHE_DIR: cache, CODEBURN_VERBOSE: '1', CODEBURN_STATUS_SNAPSHOT_SETTLE_MS: '0' })
+    const warm = runCli(args, home, { CODEBURN_PARSE_WORKERS: String(WORKERS), CODEBURN_CACHE_DIR: cache, CODEBURN_VERBOSE: '1' })
     expect(warm.status, warm.stderr).toBe(0)
     expect(warm.stderr).toContain('codeburn: codex parse workers=0 (no full parses pending)')
   })
