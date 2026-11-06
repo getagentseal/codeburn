@@ -243,7 +243,8 @@ describe('budget hook (PreToolUse)', () => {
     const blocked = JSON.parse(await runGuardHook('pretooluse', hookInput(path), { base }))
     expect(blocked.hookSpecificOutput.hookEventName).toBe('PreToolUse')
     expect(blocked.hookSpecificOutput.permissionDecision).toBe('deny')
-    expect(blocked.hookSpecificOutput.permissionDecisionReason).toContain('guard allow')
+    expect(blocked.hookSpecificOutput.permissionDecisionReason).not.toContain('guard allow')
+    expect(blocked.systemMessage).toContain('codeburn guard allow')
 
     await writeAllow(SID, base)
     expect(await runGuardHook('pretooluse', hookInput(path), { base })).toBe('')

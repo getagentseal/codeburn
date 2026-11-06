@@ -73,8 +73,11 @@ function markSignal(cache: GuardCache, signal: 'loop' | 'retry'): void {
   cache.signalWarnCostUSD ??= cache.costUSD
 }
 
-function deny(reason: string): string {
+// The reason goes to the model; how to lift the stop goes only to the user, so
+// the agent is never told how to lift its own stop.
+function deny(reason: string, userNote: string): string {
   return JSON.stringify({
+    systemMessage: userNote,
     hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: reason },
   })
 }
@@ -109,17 +112,20 @@ async function handlePreToolUse(input: unknown, opts: HookOpts): Promise<string>
     // fire a soft warning on the next (e.g. post-`allow`) tool call.
     cache.softWarned = true
     output = deny(
-      `Session cost passed ${usd(config.hardUSD)} (codeburn guard). Run 'codeburn guard allow' to lift the cap for this session, or raise hardUSD in guard.json.`,
+      `Session cost passed ${usd(config.hardUSD)} (codeburn guard). Stop and ask the user how to continue.`,
+      `codeburn guard: session cost passed ${usd(config.hardUSD)}. Run 'codeburn guard allow' to lift the cap for this session, or raise hardUSD in guard.json.`,
     )
   } else if (reached(run, config.loopStopAfter) && !allowed) {
     markSignal(cache, 'loop')
     output = deny(
-      `${toolName} was called ${run} times in a row with the same input; this session is ${usd(cache.costUSD)} (codeburn guard). Change approach or ask the user. Run 'codeburn guard allow' to lift this for the session, or raise loopStopAfter in guard.json.`,
+      `${toolName} was called ${run} times in a row with the same input; this session is ${usd(cache.costUSD)} (codeburn guard). Change approach or ask the user.`,
+      `codeburn guard: stopped ${toolName} after ${run} identical calls in a row. Run 'codeburn guard allow' to lift this for the session, or raise loopStopAfter in guard.json.`,
     )
   } else if (reached(failures, config.retryStopAfter) && !allowed) {
     markSignal(cache, 'retry')
     output = deny(
-      `The command "${shown}" already failed ${failures} times; this session is ${usd(cache.costUSD)} (codeburn guard). Change approach or ask the user. Run 'codeburn guard allow' to lift this for the session, or raise retryStopAfter in guard.json.`,
+      `The command "${shown}" already failed ${failures} times; this session is ${usd(cache.costUSD)} (codeburn guard). Change approach or ask the user.`,
+      `codeburn guard: stopped "${shown}" after ${failures} failures in a row. Run 'codeburn guard allow' to lift this for the session, or raise retryStopAfter in guard.json.`,
     )
   } else {
     if (config.softUSD !== null && cache.costUSD >= config.softUSD && !cache.softWarned) {

@@ -74,8 +74,8 @@ function warnJson(sentence: string): string {
   })
 }
 
-function denyJson(reason: string): string {
-  return JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: reason } })
+function denyJson(reason: string, userNote: string): string {
+  return JSON.stringify({ systemMessage: userNote, hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: reason } })
 }
 
 describe('identical-call loop', () => {
@@ -88,7 +88,8 @@ describe('identical-call loop', () => {
     expect(outs.slice(4, 7)).toEqual(['', '', ''])
     const cost = (await readCache(SID, env.base)).costUSD
     expect(outs[7]).toBe(denyJson(
-      `Read was called 8 times in a row with the same input; this session is $${cost.toFixed(2)} (codeburn guard). Change approach or ask the user. Run 'codeburn guard allow' to lift this for the session, or raise loopStopAfter in guard.json.`,
+      `Read was called 8 times in a row with the same input; this session is $${cost.toFixed(2)} (codeburn guard). Change approach or ask the user.`,
+      `codeburn guard: stopped Read after 8 identical calls in a row. Run 'codeburn guard allow' to lift this for the session, or raise loopStopAfter in guard.json.`,
     ))
   })
 
@@ -152,7 +153,8 @@ describe('failing-command retry', () => {
     const out = await call(env, 'Bash', test)
     const cost = (await readCache(SID, env.base)).costUSD
     expect(out).toBe(denyJson(
-      `The command "${shown}" already failed 5 times; this session is $${cost.toFixed(2)} (codeburn guard). Change approach or ask the user. Run 'codeburn guard allow' to lift this for the session, or raise retryStopAfter in guard.json.`,
+      `The command "${shown}" already failed 5 times; this session is $${cost.toFixed(2)} (codeburn guard). Change approach or ask the user.`,
+      `codeburn guard: stopped "${shown}" after 5 failures in a row. Run 'codeburn guard allow' to lift this for the session, or raise retryStopAfter in guard.json.`,
     ))
   })
 
