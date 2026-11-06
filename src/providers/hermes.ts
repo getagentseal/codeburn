@@ -450,7 +450,7 @@ function resolveHermesCost(
   const calculatedCost = calculateCost(
     model,
     tokens.inputTokens,
-    tokens.outputTokens + tokens.reasoningTokens,
+    tokens.outputTokens,
     tokens.cacheWriteTokens,
     tokens.cacheReadTokens,
     0,
