@@ -60,7 +60,8 @@ export type LongContextTier = {
 /// top bills it twice.
 /// DSH TokenUsage includes reasoning in output too; see the pinned contract:
 /// https://github.com/deepseek-ai/deepseek-harness/blob/c291e7961a515f6d7af9304e7fd1d257929aef26/docs/subsystems/llm-streaming.md#tokenusage
-const REASONING_INCLUDED_IN_OUTPUT = new Set(['claude', 'codex', 'copilot', 'dsh'])
+/// Hermes stores completion/output tokens as the API reports them, reasoning inside.
+const REASONING_INCLUDED_IN_OUTPUT = new Set(['claude', 'codex', 'copilot', 'dsh', 'hermes'])
 
 /// Output tokens to bill and display for one call. Single source of truth so
 /// the pricing sites and the display sums can never disagree about whether a
@@ -846,13 +847,22 @@ function getPriceOverrideExact(...keys: string[]): ModelCosts | null {
   return null
 }
 
-function getPriceOverridePrefix(canonical: string): ModelCosts | null {
-  for (const key of getSortedPriceOverrideKeys()) {
-    if (canonical.startsWith(key + '-') || canonical === key) {
-      return userPriceOverrides.get(key)!
+// Keys run longest first. A 1-2 digit segment after the longest dash prefix is
+// a minor version (claude-opus-4-9 is not claude-opus-4), the boundary
+// modelKeyMatches applies to display names; every shorter key crosses it too.
+function longestPricingPrefix(canonical: string, keys: string[]): string | null {
+  for (const key of keys) {
+    if (canonical === key) return key
+    if (canonical.startsWith(key + '-')) {
+      return /^\d{1,2}(?:$|[-.])/.test(canonical.slice(key.length + 1)) ? null : key
     }
   }
   return null
+}
+
+function getPriceOverridePrefix(canonical: string): ModelCosts | null {
+  const key = longestPricingPrefix(canonical, getSortedPriceOverrideKeys())
+  return key === null ? null : userPriceOverrides.get(key)!
 }
 
 function getPriceOverrideCaseInsensitive(canonical: string, withPrefix: string): ModelCosts | null {
@@ -1367,11 +1377,8 @@ export function getModelCosts(model: string): ModelCosts | null {
   // Iterate keys longest-first so a model id like `gpt-5-mini` matches the
   // `gpt-5-mini` entry rather than collapsing to the shorter `gpt-5` entry
   // due to dictionary insertion order.
-  for (const key of getSortedPricingKeys()) {
-    if (canonical.startsWith(key + '-') || canonical === key) {
-      return pricingCache.get(key)!
-    }
-  }
+  const prefixKey = longestPricingPrefix(canonical, getSortedPricingKeys())
+  if (prefixKey !== null) return pricingCache.get(prefixKey)!
 
   const caseInsensitiveOverride = getPriceOverrideCaseInsensitive(canonical, withPrefix)
   if (caseInsensitiveOverride) return caseInsensitiveOverride
@@ -1562,6 +1569,8 @@ export function calculateCost(
   oneHourCacheCreationTokens = 0,
   provider?: string,
   applyDiscount = false,
+  // A slice of a call (one token class) is priced at the whole call's tier.
+  tierPromptTokens?: number,
 ): number {
   const costs = getModelCosts(model)
   if (!costs) {
@@ -1583,7 +1592,7 @@ export function calculateCost(
   const safeOneHourCacheCreation = safe(oneHourCacheCreationTokens)
   const safeCacheCreation = Math.max(safe(cacheCreationTokens), safeOneHourCacheCreation)
   const safeFiveMinuteCacheCreation = Math.max(0, safeCacheCreation - safeOneHourCacheCreation)
-  const promptTokens = safe(inputTokens) + safe(cacheReadTokens) + safeCacheCreation
+  const promptTokens = tierPromptTokens ?? safe(inputTokens) + safe(cacheReadTokens) + safeCacheCreation
   const tieredCosts = tieredCostsFor(model, speed === 'flex' ? costs.flex ?? costs : costs, promptTokens, provider)
   const multiplier = speed === 'fast' ? tieredCosts.fastMultiplier : speed === 'ultrafast' ? tieredCosts.ultrafastMultiplier ?? 1 : 1
 

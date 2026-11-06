@@ -537,6 +537,9 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // v0-v4 generations, embedded attempt streams, retry accounting, and the
   // version-specific inherited-prefix rules all change cached DSH calls.
   dsh: 'session-formats-v0-v4-attempts-v6',
+  // model-minor-version-v1: undated ids keep their minor version
+  // (claude-opus-4-6 no longer stored and priced as claude-opus-4).
+  droid: 'model-minor-version-v1',
   // cost-provenance-v3: preserve Hermes included/estimated/actual status and
   // rebuild the provider section alongside the v3 lifetime ledger. The parse
   // bump is required with the ledger bump: seeding a new ledger from a section
@@ -547,7 +550,9 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // `billing` (`included` -> subscription, `actual` -> metered). Cached calls
   // hold none, so they must re-parse.
   // helper-usage-v1: auxiliary-model rows in session_model_usage now become calls.
-  hermes: 'reasoning-output-accounting-v1-est-cost-routed-ids-workspace-pr-v5-cost-provenance-v3-billing-route-v1-billing-mode-v1-helper-usage-v1',
+  // ledger-v4: sessions re-parse so v4 can rebuild the cursors whose calculated
+  // cost added reasoning on top of output.
+  hermes: 'reasoning-output-accounting-v1-est-cost-routed-ids-workspace-pr-v5-cost-provenance-v3-billing-route-v1-billing-mode-v1-helper-usage-v1-ledger-v4',
   // reported-cost-v1: OpenClaw's per-message `usage.cost.total` is now
   // preserved through the cache via `costFromBilling`. This is OpenClaw's
   // first parse version; adding it moves the provider's env fingerprint,
@@ -619,6 +624,10 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // cannot price rides on the cached call as `fallbackCostUSD`, the session-level
   // rollup uses the bare model id, and `google-vertex`/`google-vertex-anthropic`
   // ride as the `vertex` route. Cached calls hold none of these.
+  // cached-prompt-v1: promptTokenCount includes the cached tokens, which
+  // were billed again as fresh input.
+  // output-thoughts-v1: thoughts already inside candidates are not added again.
+  qwen: 'cached-prompt-v1-output-thoughts-v1',
   opencode: 'session-model-v1-archived-subtree-v1-billing-routes-v2-v2-legacy-union-v1-unknown-usage-v1-vertex-fallback-cost-v1',
   quickdesk: 'emf-sqlite-v2-est-cost',
   // session-lineage-capture-v1: SessionLineage (CB-1, slice 1) is now carried
