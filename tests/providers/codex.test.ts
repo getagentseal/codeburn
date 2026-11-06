@@ -857,6 +857,21 @@ describe('codex provider - JSONL parsing', () => {
     expect(calls.map(c => [c.inputTokens, c.outputTokens])).toEqual([[8_000, 800], [3_000, 300], [3_000, 300]])
   })
 
+  it('restarts every counter on a restart, including one the restart record omits', async () => {
+    const filePath = await writeSession(tmpDir, '2026-04-14', 'rollout-cumulative-restart-omitted.jsonl', [
+      sessionMeta({ session_id: 'sess-restart-omitted', model: 'gpt-5.5' }),
+      tokenCount({ timestamp: '2026-04-14T10:00:10Z', total: { input: 8_000, output: 800 } }),
+      JSON.stringify({ type: 'event_msg', timestamp: '2026-04-14T10:00:20Z', payload: { type: 'token_count', info: { total_token_usage: { input_tokens: 3_000, total_tokens: 3_000 } } } }),
+      tokenCount({ timestamp: '2026-04-14T10:00:30Z', total: { input: 6_000, output: 300 } }),
+    ])
+
+    const provider = createCodexProvider(tmpDir)
+    const calls: ParsedProviderCall[] = []
+    for await (const call of provider.createSessionParser({ path: filePath, project: 'test', provider: 'codex' }, new Set()).parse()) calls.push(call)
+
+    expect(calls.map(c => [c.inputTokens, c.outputTokens])).toEqual([[8_000, 800], [3_000, 0], [3_000, 300]])
+  })
+
   it('reads one falling field under a rising total as a correction, not a restart', async () => {
     const filePath = await writeSession(tmpDir, '2026-04-14', 'rollout-cumulative-correction.jsonl', [
       sessionMeta({ session_id: 'sess-correction', model: 'gpt-5.5' }),

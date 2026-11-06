@@ -1610,9 +1610,9 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
             if (!total) continue
             // A total below the previous one (or, without a previous total,
             // every reported field falling) is a counter restart (resume,
-            // compaction): each field holds the usage since then. Otherwise a
-            // single falling field is a correction and adds nothing. An
-            // omitted field is unchanged.
+            // compaction): every counter, reported or not, starts again from
+            // zero. Otherwise a single falling field is a correction and adds
+            // nothing. An omitted field is unchanged.
             const counters: Array<[number | undefined, number]> = [
               [total.input_tokens, prevInput], [total.cached_input_tokens, prevCached],
               [total.cache_write_input_tokens, prevCacheWrite], [total.output_tokens, prevOutput],
@@ -1622,8 +1622,8 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
             const restart = prevTotal !== null
               ? cumulativeTotal < prevTotal
               : present.length > 0 && present.every(([now, prev]) => now < prev)
-            const since = (now: number | undefined, prev: number) =>
-              now === undefined ? 0 : restart ? now : Math.max(0, now - prev)
+            if (restart) { prevInput = 0; prevCached = 0; prevCacheWrite = 0; prevOutput = 0; prevReasoning = 0 }
+            const since = (now: number | undefined, prev: number) => now === undefined ? 0 : Math.max(0, now - prev)
             inputTokens = since(total.input_tokens, prevInput)
             cachedInputTokens = since(total.cached_input_tokens, prevCached)
             cacheWriteTokens = since(total.cache_write_input_tokens, prevCacheWrite)
