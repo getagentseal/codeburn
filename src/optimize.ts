@@ -1432,6 +1432,12 @@ type McpConfigEntry = {
   alwaysLoadPaths: string[]
 }
 
+/// A server's name as Claude Code writes it into tool names (mcp__<name>__tool):
+/// every character outside letters, digits, "_" and "-" becomes "_".
+export function mcpNamespace(name: string): string {
+  return name.replace(/[^A-Za-z0-9_-]/g, '_')
+}
+
 // `homeDir` is injectable for tests (mirrors src/act/plans.ts PlanContext);
 // production callers omit it.
 export function loadMcpConfigs(projectCwds: Iterable<string>, homeDir = homedir()): Map<string, McpConfigEntry> {
@@ -1454,7 +1460,7 @@ export function loadMcpConfigs(projectCwds: Iterable<string>, homeDir = homedir(
     try { mtime = statSync(p).mtimeMs } catch {}
     const serversObj = (config.mcpServers ?? {}) as Record<string, unknown>
     for (const [name, rawEntry] of Object.entries(serversObj)) {
-      const normalized = name.replace(/:/g, '_')
+      const normalized = mcpNamespace(name)
       const existing = servers.get(normalized)
       if (!existing || existing.mtime < mtime) {
         servers.set(normalized, {
@@ -1474,7 +1480,7 @@ export function loadMcpConfigs(projectCwds: Iterable<string>, homeDir = homedir(
 }
 
 /// Server names owned by readable local MCP config, normalized the way
-/// transcript namespaces are (":" -> "_"). `loadMcpConfigs` covers
+/// transcript namespaces are (mcpNamespace). `loadMcpConfigs` covers
 /// settings.json and .mcp.json; `~/.claude.json` adds the top-level and
 /// per-project `mcpServers` containers the remove plan also edits.
 ///
@@ -1489,7 +1495,7 @@ export function localMcpServerNames(projectCwds: Iterable<string>, homeDir = hom
   const containers = [userJson?.['mcpServers'], ...Object.values(projects).map(entry => entry?.mcpServers)]
   for (const container of containers) {
     if (!container || typeof container !== 'object') continue
-    for (const name of Object.keys(container)) names.add(name.replace(/:/g, '_'))
+    for (const name of Object.keys(container)) names.add(mcpNamespace(name))
   }
   return names
 }

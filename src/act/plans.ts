@@ -8,6 +8,7 @@ import {
   ALWAYSLOAD_MIN_VERSION,
   ALWAYSLOAD_STARTUP_CAP_SECONDS,
   ENABLE_TOOL_SEARCH_VAR,
+  mcpNamespace,
   parseVersion,
   SHELL_PROFILE_SCOPE,
   versionPredates,
@@ -137,11 +138,11 @@ function shortPath(p: string, homeDir: string): string {
 }
 
 // Config keys are the server's original name; coverage findings carry the
-// runtime-normalized form (":" -> "_"). Match either.
+// runtime-normalized form (mcpNamespace). Match either.
 function findServerKey(container: Record<string, unknown> | undefined, server: string): string | null {
   if (!container) return null
   for (const k of Object.keys(container)) {
-    if (k === server || k.replace(/:/g, '_') === server) return k
+    if (k === server || mcpNamespace(k) === server) return k
   }
   return null
 }

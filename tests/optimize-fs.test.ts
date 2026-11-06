@@ -174,6 +174,17 @@ describe('loadMcpConfigs', () => {
     expect(servers.get('plugin_context7_context7')!.original).toBe('plugin:context7:context7')
   })
 
+  it('normalizes every character outside letters, digits, _ and - the way tool names do', () => {
+    const root = makeFixtureRoot()
+    const projectDir = join(root, 'myapp')
+    mkdirSync(projectDir, { recursive: true })
+    writeFile(join(projectDir, '.mcp.json'), JSON.stringify({ mcpServers: { 'docs.local': { command: 'x' } } }))
+    touchOld(join(projectDir, '.mcp.json'), 30)
+    expect([...loadMcpConfigs([projectDir]).keys()]).toEqual(['docs_local'])
+    const calls = [{ name: 'mcp__docs_local__search', input: {}, sessionId: 's1', project: 'p' }] as unknown as ToolCall[]
+    expect(detectUnusedMcp(calls, [], new Set([projectDir]), [])).toBeNull()
+  })
+
   it('handles malformed JSON without crashing', () => {
     const root = makeFixtureRoot()
     const projectDir = join(root, 'myapp')
