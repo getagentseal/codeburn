@@ -524,13 +524,38 @@ describe.skipIf(skipReason !== null)('cursor real context tokens (#575)', () => 
     expect(readFileSync(join(getCodeburnCacheDir(), 'cursor-first-seen.json'), 'utf-8')).not.toContain('req-over')
 
     sqlLog.length = 0
-    rmSync(join(getCodeburnCacheDir(), cursorCacheFileName()))
     const second = await collectCalls(createCursorProvider(dbPath), dbPath)
 
     expect(requestIdLookups().map(q => q.params)).toEqual([['req-over']])
     expect(second.length).toBe(9000)
     expect(second.some(c => c.deduplicationKey === 'cursor:agentKv:req-over')).toBe(false)
     expect(second.map(c => c.timestamp)).toEqual(first.map(c => c.timestamp))
+  })
+
+  it('bills an agent-only stream past the lookup cap on the next parse of an unchanged DB', async () => {
+    const dbPath = buildDb((db) => {
+      insertAgentKvStreams(db, 'req-unbilled', 9000)
+      insertAgentKv(db, { blobId: 'akv-late', role: 'user', content: 'a real agent-only request', requestId: 'req-zz-late' })
+    })
+    const mtime = new Date(statSync(dbPath).mtimeMs).toISOString()
+    const parser = () => createCursorProvider(dbPath).createSessionParser({ path: dbPath, project: 'test', provider: 'cursor' }, new Set())
+
+    const first = parser()
+    const firstCalls: ParsedProviderCall[] = []
+    for await (const call of first.parse()) firstCalls.push(call)
+    expect(firstCalls.some(c => c.deduplicationKey === 'cursor:agentKv:req-zz-late')).toBe(false)
+    expect(first.incomplete?.()).toBe(true)
+
+    const second = parser()
+    const secondCalls: ParsedProviderCall[] = []
+    for await (const call of second.parse()) secondCalls.push(call)
+    expect(secondCalls.length).toBe(9001)
+    expect(secondCalls.filter(c => c.deduplicationKey === 'cursor:agentKv:req-zz-late').map(c => c.timestamp)).toEqual([mtime])
+    expect(second.incomplete?.()).toBe(false)
+
+    sqlLog.length = 0
+    expect((await collectCalls(createCursorProvider(dbPath), dbPath)).length).toBe(9001)
+    expect(sqlLog).toEqual([])
   })
 
   it('skips the request-id lookup when every stream joins a scanned bubble', async () => {

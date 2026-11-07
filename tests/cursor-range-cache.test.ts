@@ -71,4 +71,23 @@ describe.skipIf(!isSqliteAvailable())('cursor parse cached across ranges', () =>
     expect((await parse(lastDays(7), warm)).calls).toBe(1)
     expect(await parse(lastDays(30), warm)).toEqual(cold)
   })
+
+  it('re-reads an unchanged DB until the agent-stream lookup past its cap is done', async () => {
+    await createCursorDb([])
+    const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite') as typeof import('node:sqlite')
+    const db = new DatabaseSync(join(getEditorDataDir('Cursor', root, process.platform), 'User', 'globalStorage', 'state.vscdb'))
+    const stmt = db.prepare('INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)')
+    db.exec('BEGIN')
+    for (let i = 0; i <= 9000; i++) {
+      const requestId = i < 9000 ? `req-cap-${i}` : 'req-zz-late'
+      stmt.run(`agentKv:blob:${requestId}`, JSON.stringify({ role: 'user', content: 'run the export', providerOptions: { cursor: { requestId } } }))
+    }
+    db.exec('COMMIT')
+    db.close()
+    const cache = join(root, 'cap')
+
+    expect((await parse(lastDays(30), cache)).calls).toBe(9000)
+    expect((await parse(lastDays(30), cache)).calls).toBe(9001)
+    expect((await parse(lastDays(30), cache)).calls).toBe(9001)
+  })
 })

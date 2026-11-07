@@ -4036,12 +4036,14 @@ export async function parseProviderSources(
       }
 
       try {
+        let incomplete = false
         if (!providerCalls) {
           const parser = provider.createSessionParser(source, parserDedup, dateRange)
           providerCalls = []
           for await (const call of parser.parse()) {
             providerCalls.push(call)
           }
+          incomplete = parser.incomplete?.() ?? false
           if (providerName === 'warp' && priorEntry) providerCalls = keepCachedWarpShares(priorEntry, providerCalls)
         }
         const canonicalCalls = await Promise.all(providerCalls.map(canonicalizeProviderCallProject))
@@ -4136,6 +4138,12 @@ export async function parseProviderSources(
           } else {
             section.files[source.path] = { fingerprint: fp, mcpInventory: [], turns, ...sourceAgentMetadata, ...(prLinks.length ? { prLinks } : {}), ...(sourceLineage ? { lineage: sourceLineage } : {}) }
           }
+        }
+        if (incomplete) {
+          // A fingerprint no file can match re-reads it on the next refresh;
+          // until then the pass is partial, so no day is sealed without it.
+          section.files[source.path]!.fingerprint = { ...fp, sizeBytes: -1 }
+          deferredRetryableSource = true
         }
         didParse = true
         markCacheDirty(diskCache, providerName, source.path)
