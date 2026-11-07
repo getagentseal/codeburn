@@ -13,7 +13,8 @@
 // every comparison this corpus feeds happens inside a single run.
 
 import { mkdirSync, writeFileSync, rmSync, existsSync } from 'node:fs'
-import { join, resolve, sep } from 'node:path'
+import { join } from 'node:path'
+import { copilotOtelDbPath, assertInside } from './lib.mjs'
 import { createRequire } from 'node:module'
 
 const require_ = createRequire(import.meta.url)
@@ -373,20 +374,10 @@ function genCursor() {
 
 const COPILOT_MODELS = ['gpt-4.1', 'claude-sonnet-4-5']
 
-function copilotOtelDbPath() {
-  if (process.platform === 'darwin') {
-    return join(HOME, 'Library', 'Application Support', 'Code', 'User', 'globalStorage', 'github.copilot-chat', 'agent-traces.db')
-  }
-  if (process.platform === 'win32') {
-    return join(HOME, 'AppData', 'Roaming', 'Code', 'User', 'globalStorage', 'github.copilot-chat', 'agent-traces.db')
-  }
-  return join(HOME, '.config', 'Code', 'User', 'globalStorage', 'github.copilot-chat', 'agent-traces.db')
-}
-
 function genCopilot() {
   const { DatabaseSync } = require_('node:sqlite')
-  const dbPath = copilotOtelDbPath()
-  if (!resolve(dbPath).startsWith(resolve(HOME) + sep)) throw new Error(`refusing to touch ${dbPath}: outside corpus home ${HOME}`)
+  const dbPath = copilotOtelDbPath(HOME, process.platform)
+  assertInside(HOME, dbPath, process.platform)
   mkdirSync(join(dbPath, '..'), { recursive: true })
   for (const suffix of ['', '-wal', '-shm']) rmSync(dbPath + suffix, { force: true })
 

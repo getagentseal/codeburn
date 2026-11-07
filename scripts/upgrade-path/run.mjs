@@ -22,6 +22,7 @@ import { mkdirSync, rmSync, existsSync, readdirSync, statSync, readFileSync, wri
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { tmpdir } from 'node:os'
+import { treeStats, changedFiles, warmReparseProblems } from './lib.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const REPO = join(HERE, '..', '..')
@@ -343,6 +344,7 @@ else check(decision.some(l => /parse workers=[1-9]/.test(l)), `worker pool engag
 step('second run is warm')
 const beforeBodies = shardSnapshot(upgradeCache)
 const beforeMtimes = shardMtimes(upgradeCache)
+const beforeTree = treeStats(upgradeCache)
 const warm = capture(newBin, upgradeCache, join(PAYLOADS, 'warm'))
 
 // The direct no-re-parse signal: the worker gate prints how many whole-file
@@ -352,9 +354,8 @@ const warmVerbose = run(newBin.cmd, [...newBin.args, 'status', '--format', 'menu
   env: cliEnv(upgradeCache, { CODEBURN_VERBOSE: '1' }), cwd: WORK,
 })
 const pending = (warmVerbose.stderr || '').split('\n').filter(l => l.includes('parse workers='))
-if (pending.length === 0) ok('nothing re-parsed on the warm run: no "parse workers=" line printed (no pending work)')
-else check(pending.every(l => /0 pending files|no full parses pending/.test(l)),
-  `nothing re-parsed on the warm run: ${pending.map(l => l.replace(/^codeburn: /, '').trim()).join(' | ')}`)
+const warmProblems = warmReparseProblems(pending, changedFiles(beforeTree, treeStats(upgradeCache)))
+check(warmProblems.length === 0, `nothing re-parsed on the warm run: no cache file changed${pending.length ? `; ${pending.map(l => l.replace(/^codeburn: /, '').trim()).join(' | ')}` : ''}${warmProblems.length ? ` -- ${warmProblems.join('; ')}` : ''}`)
 
 check(JSON.stringify(shardSnapshot(upgradeCache)) === JSON.stringify(beforeBodies), 'warm run left every piece, key file and index unchanged')
 check(JSON.stringify(stripGenerated(warm.menubar)) === JSON.stringify(stripGenerated(upgraded.menubar)),
