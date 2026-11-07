@@ -38,8 +38,8 @@ const HEADERS = {
 
 type HostRecord = Record<string, any> & { oauth_token?: unknown }
 
-/** A discovered token together with the GitHub host it belongs to. */
-type CopilotCredential = { token: string; host: string | null }
+/** A discovered token together with the GitHub host it belongs to and the map key it was read from. */
+type CopilotCredential = { token: string; host: string | null; key: string }
 
 /**
  * Bare lowercased hostname: tolerates whitespace, a scheme, a path, userinfo
@@ -107,9 +107,12 @@ const CREDENTIAL_FILES = ['hosts.json', 'apps.json'] as const
  * former carries a host.
  */
 function hostFromAppsKey(key: string): string | null {
-  const separator = key.indexOf(':')
-  if (separator === -1) return null
-  const candidate = key.slice(0, separator)
+  // A scheme ("https://acme.ghe.com:Iv1.x") would otherwise split at its own colon.
+  const scheme = /^[a-z]+:\/\//i.exec(key)
+  const rest = scheme ? key.slice(scheme[0].length) : key
+  const separator = rest.search(/[:/]/)
+  if (separator === -1 && !scheme) return null
+  const candidate = separator === -1 ? rest : rest.slice(0, separator)
   return candidate.includes('.') ? candidate : null
 }
 
@@ -148,40 +151,37 @@ function empty(connection: QuotaProvider['connection'], footerLines: string[] = 
   return { provider: 'copilot', connection, primary: null, details: [], planLabel: null, footerLines }
 }
 
+const hostKey = (credential: CopilotCredential): string => normalizeCopilotHost(credential.host) ?? COPILOT_DEFAULT_HOST
+
 /**
- * Reads the `oauth_token` entries out of a credential map and picks one with
- * `preferredCopilotHost`, so the token sent and the host it is sent to always
- * come from the same entry. Keys are visited in sorted order, making the pick
- * stable when several entries qualify.
+ * Reads the `oauth_token` entries out of a credential map, the one
+ * `preferredCopilotHost` picks first and the rest after it, so a refused token
+ * does not hide another host's login. Each token stays paired with the host of
+ * its own entry. Keys are visited in sorted order, making the order stable.
  */
-function credentialFromMap(raw: string, hostForKey: (key: string) => string | null): CopilotCredential | null {
+function credentialsFromMap(raw: string, hostForKey: (key: string) => string | null): CopilotCredential[] {
   const map = JSON.parse(raw) as Record<string, HostRecord>
   const entries: CopilotCredential[] = []
   for (const key of Object.keys(map).sort()) {
     const token = map[key]?.oauth_token
     if (typeof token !== 'string' || !token) continue
-    entries.push({ token, host: hostForKey(key) })
+    entries.push({ token, host: hostForKey(key), key })
   }
   const preferred = preferredCopilotHost(entries.map(entry => entry.host))
-  if (!preferred) return null
-  return entries.find(entry => (normalizeCopilotHost(entry.host) ?? COPILOT_DEFAULT_HOST) === preferred) ?? null
+  const first = entries.find(entry => hostKey(entry) === preferred)
+  return first ? [first, ...entries.filter(entry => entry !== first)] : entries
 }
 
-async function credentialFromFiles(deps: CopilotDeps): Promise<CopilotCredential | null> {
-  for (const dir of deps.configDirs) {
-    for (const name of CREDENTIAL_FILES) {
-      try {
-        const raw = await deps.readFile(path.join(dir, name), 64 * 1024)
-        if (!raw) continue
-        // hosts.json is keyed by GitHub host, apps.json by "<host>:<app id>".
-        const credential = credentialFromMap(raw, name === 'hosts.json' ? key => key : hostFromAppsKey)
-        if (credential) return credential
-      } catch {
-        // A malformed or unreadable file falls through to the next candidate.
-      }
-    }
+async function credentialsFromFile(dir: string, name: typeof CREDENTIAL_FILES[number], deps: CopilotDeps): Promise<CopilotCredential[]> {
+  try {
+    const raw = await deps.readFile(path.join(dir, name), 64 * 1024)
+    if (!raw) return []
+    // hosts.json is keyed by GitHub host, apps.json by "<host>:<app id>".
+    return credentialsFromMap(raw, name === 'hosts.json' ? key => key : hostFromAppsKey)
+  } catch {
+    // A malformed or unreadable file falls through to the next candidate.
+    return []
   }
-  return null
 }
 
 function windowOf(label: string, snapshot: unknown): QuotaWindow | null {
@@ -246,32 +246,55 @@ export async function fetchCopilotQuota(options: Partial<CopilotDeps> & { signal
   // host was tried instead of a bare "Temporarily unavailable".
   let apiHost = COPILOT_DEFAULT_API_HOST
   try {
-    let credential = await credentialFromFiles(deps)
-    if (!credential) return { quota: empty('disconnected') }
-    const endpointFor = (value: CopilotCredential): string | null => copilotUsageEndpoint(value.host)
-    let endpoint = endpointFor(credential)
-    if (!endpoint) {
+    const found: { dir: string; name: typeof CREDENTIAL_FILES[number]; credential: CopilotCredential; endpoint: string | null }[] = []
+    for (const dir of deps.configDirs) {
+      for (const name of CREDENTIAL_FILES) {
+        for (const credential of await credentialsFromFile(dir, name, deps)) {
+          found.push({ dir, name, credential, endpoint: copilotUsageEndpoint(credential.host) })
+        }
+      }
+    }
+    if (found.length === 0) return { quota: empty('disconnected') }
+    // A host we cannot address, or a token the API refuses, must not hide a
+    // working login in the next entry, file or folder.
+    const usable = found.filter(entry => entry.endpoint !== null)
+    if (usable.length === 0) {
       // Never retried against api.github.com: that endpoint does not honour an
       // enterprise credential and must not receive it.
-      return { quota: empty('terminalFailure', [unsupportedHostFooter(normalizeCopilotHost(credential.host) ?? COPILOT_DEFAULT_HOST)]) }
+      return { quota: empty('terminalFailure', [unsupportedHostFooter(hostKey(found[0]!.credential))]) }
     }
-    apiHost = copilotAPIHost(credential.host) ?? apiHost
 
-    let response = await request(credential, endpoint, deps, options.signal)
-    if (response.status === 401) {
+    const refused = (value: Response): boolean => value.status === 401 || value.status === 403
+    const reread = async (entry: typeof found[number]): Promise<CopilotCredential | undefined> =>
+      (await credentialsFromFile(entry.dir, entry.name, deps)).find(value => value.key === entry.credential.key)
+    // The same login copied into several entries is sent once per run.
+    const tried = new Set<string>()
+    const attempt = (credential: CopilotCredential): string => `${hostKey(credential)} ${credential.token}`
+    // null: the last token got a 401 and the disk held no newer one.
+    let response: Response | null = null
+    for (const entry of usable) {
+      let credential: CopilotCredential | undefined = entry.credential
+      if (tried.has(attempt(credential))) {
+        // Already refused this run; only a rotation since the read makes it worth a request.
+        credential = await reread(entry)
+        if (!credential || tried.has(attempt(credential))) continue
+      }
+      apiHost = copilotAPIHost(credential.host) ?? apiHost
+      tried.add(attempt(credential))
+      response = await request(credential, entry.endpoint!, deps, options.signal)
+      if (!refused(response)) break
       // An active editor session rotates this token; re-read once before
       // giving up so we don't report a failure the disk already fixed.
-      const reread = await credentialFromFiles(deps)
-      if (!reread || reread.token === credential.token) return { quota: empty('transientFailure') }
-      credential = reread
-      const rereadEndpoint = endpointFor(credential)
-      if (!rereadEndpoint) {
-        return { quota: empty('terminalFailure', [unsupportedHostFooter(normalizeCopilotHost(credential.host) ?? COPILOT_DEFAULT_HOST)]) }
+      const rotated = await reread(entry)
+      if (!rotated || tried.has(attempt(rotated))) {
+        if (response.status === 401) response = null
+        continue
       }
-      endpoint = rereadEndpoint
-      apiHost = copilotAPIHost(credential.host) ?? apiHost
-      response = await request(credential, endpoint, deps, options.signal)
+      tried.add(attempt(rotated))
+      response = await request(rotated, entry.endpoint!, deps, options.signal)
+      if (!refused(response)) break
     }
+    if (!response) return { quota: empty('transientFailure') }
     if (response.status === 429) {
       const raw = response.headers.get('Retry-After')
       const seconds = raw === null ? NaN : Number(raw)

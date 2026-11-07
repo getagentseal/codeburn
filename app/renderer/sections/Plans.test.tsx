@@ -240,7 +240,7 @@ describe('Plans', () => {
     expect(screen.getByText('€8.20 · 41%')).toBeInTheDocument()
   })
 
-  it('forces a quota refresh only when refreshToken changes, not on the steady poll', async () => {
+  it('forces a quota refresh only from Refresh or ⌘R, never from a refreshToken bump', async () => {
     getPlans.mockResolvedValue(statusWithPlans)
 
     const { rerender } = render(<Plans period="30days" refreshToken={0} />)
@@ -248,11 +248,24 @@ describe('Plans', () => {
     expect(getQuota).toHaveBeenCalledWith(false, []) // mount is a steady poll
     getQuota.mockClear()
 
-    rerender(<Plans period="30days" refreshToken={1} />) // manual refresh bumps the token
+    // Config mutations, project picks and ⌘R all arrive as a refreshToken bump.
+    rerender(<Plans period="30days" refreshToken={1} />)
+    await waitFor(() => expect(getQuota).toHaveBeenCalled())
+    rerender(<Plans period="30days" refreshToken={2} />)
+    await waitFor(() => expect(getQuota).toHaveBeenCalledTimes(2))
+    for (const call of getQuota.mock.calls) expect(call[0]).toBe(false)
+
+    getQuota.mockClear()
+    fireEvent.click(screen.getByRole('button', { name: 'How to connect' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
     await waitFor(() => expect(getQuota).toHaveBeenCalledWith(true, []))
 
     getQuota.mockClear()
-    rerender(<Plans period="30days" refreshToken={1} />) // unchanged token must not re-force
+    rerender(<Plans period="30days" refreshToken={3} userRefreshToken={1} />) // ⌘R
+    await waitFor(() => expect(getQuota).toHaveBeenCalledWith(true, []))
+    getQuota.mockClear()
+    rerender(<Plans period="30days" refreshToken={4} userRefreshToken={1} />)
+    await waitFor(() => expect(getQuota).toHaveBeenCalled())
     for (const call of getQuota.mock.calls) expect(call[0]).toBe(false)
   })
 

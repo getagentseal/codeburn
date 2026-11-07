@@ -1,6 +1,8 @@
+import path from 'node:path'
+
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { decodeCopilotUsage, fetchCopilotQuota } from './copilot'
+import { copilotConfigDirs, decodeCopilotUsage, fetchCopilotQuota } from './copilot'
 
 const hosts = JSON.stringify({ 'github.com': { user: 'octocat', oauth_token: 'gho_test-secret' } })
 const usageBody = {
@@ -147,6 +149,31 @@ describe('Copilot quota fetch', () => {
     expect(result.quota.primary).toBeNull()
   })
 
+  it('sends a GitHub Enterprise Cloud token only to its own API host, never api.github.com', async () => {
+    const fetchMock = vi.fn(async () => okJson(usageBody))
+    const tenant = JSON.stringify({ 'acme.ghe.com': { oauth_token: 'gho_tenant' } })
+    const result = await fetchCopilotQuota({ fetch: fetchMock, readFile: vi.fn(async (path: string) => path.endsWith('hosts.json') ? tenant : null) })
+    expect(result.quota.connection).toBe('connected')
+    expect(fetchMock.mock.calls.map(call => String((call as unknown[])[0]))).toEqual(['https://api.acme.ghe.com/copilot_internal/user'])
+    expect(result.quota.footerLines).toEqual(['Source: api.acme.ghe.com'])
+  })
+
+  it('reads the host of an apps.json "<host>:<app id>" key', async () => {
+    const fetchMock = vi.fn(async () => okJson(usageBody))
+    const apps = JSON.stringify({ 'acme.ghe.com:Iv1.b507a08c87ecfe98': { oauth_token: 'gho_apps' } })
+    await fetchCopilotQuota({ fetch: fetchMock, readFile: vi.fn(async (path: string) => path.endsWith('apps.json') ? apps : null) })
+    expect(fetchMock.mock.calls.map(call => String((call as unknown[])[0]))).toEqual(['https://api.acme.ghe.com/copilot_internal/user'])
+  })
+
+  it('fails naming an unsupported host and sends its token nowhere', async () => {
+    const fetchMock = vi.fn(async () => okJson(usageBody))
+    const server = JSON.stringify({ 'github.acme-corp.net': { oauth_token: 'gho_server' } })
+    const result = await fetchCopilotQuota({ fetch: fetchMock, readFile: vi.fn(async (path: string) => path.endsWith('hosts.json') ? server : null) })
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(result.quota.connection).toBe('terminalFailure')
+    expect(result.quota.footerLines[0]).toContain('github.acme-corp.net')
+  })
+
   it('redacts tokens and NUL from diagnostics without surfacing them', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
     const fetchMock = vi.fn(async () => { throw new Error('token gho_leak-secret eyJabc.def.ghi\0tail') })
@@ -155,5 +182,179 @@ describe('Copilot quota fetch', () => {
     expect(result.quota).not.toHaveProperty('error')
     expect(logged).not.toMatch(/gho_leak|eyJabc|\0/)
     expect(logged).toContain('[REDACTED]')
+  })
+})
+
+describe('Copilot credential directories', () => {
+  it('prefers %LOCALAPPDATA% on Windows and keeps the XDG path as a fallback', () => {
+    expect(copilotConfigDirs('win32', { LOCALAPPDATA: 'C:\\Users\\dev\\AppData\\Local' }, 'C:\\Users\\dev')).toEqual([
+      path.join('C:\\Users\\dev\\AppData\\Local', 'github-copilot'),
+      path.join('C:\\Users\\dev', '.config', 'github-copilot'),
+    ])
+    expect(copilotConfigDirs('win32', {}, 'C:\\Users\\dev')[0]).toBe(path.join('C:\\Users\\dev', 'AppData', 'Local', 'github-copilot'))
+  })
+
+  it('reads only the XDG path off Windows', () => {
+    expect(copilotConfigDirs('darwin', { LOCALAPPDATA: 'C:\\ignored' }, '/Users/dev')).toEqual([path.join('/Users/dev', '.config', 'github-copilot')])
+  })
+
+  it('finds the plugin token under %LOCALAPPDATA% on Windows with no explicit directory', async () => {
+    const realPlatform = process.platform
+    const realLocal = process.env.LOCALAPPDATA
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true })
+    process.env.LOCALAPPDATA = '/win/local'
+    try {
+      const readFile = vi.fn(async (file: string) => file === path.join('/win/local', 'github-copilot', 'hosts.json') ? hosts : null)
+      const result = await fetchCopilotQuota({ fetch: vi.fn(async () => okJson(usageBody)), readFile })
+      expect(result.quota.connection).toBe('connected')
+    } finally {
+      Object.defineProperty(process, 'platform', { value: realPlatform, configurable: true })
+      if (realLocal === undefined) delete process.env.LOCALAPPDATA
+      else process.env.LOCALAPPDATA = realLocal
+    }
+  })
+})
+
+describe('Copilot credential folders', () => {
+  const twoFolders = (win: Record<string, unknown>, xdg: Record<string, unknown>) => {
+    const files: Record<string, string> = {
+      [path.join('/win', 'github-copilot', 'hosts.json')]: JSON.stringify(win),
+      [path.join('/home', '.config', 'github-copilot', 'hosts.json')]: JSON.stringify(xdg),
+    }
+    return { configDirs: [path.join('/win', 'github-copilot'), path.join('/home', '.config', 'github-copilot')], readFile: vi.fn(async (file: string) => files[file] ?? null) }
+  }
+  const seen = (fetchMock: ReturnType<typeof vi.fn>) => fetchMock.mock.calls.map(call => {
+    const [url, init] = call as unknown as [string, RequestInit]
+    return `${url} ${(init.headers as Record<string, string>).Authorization}`
+  })
+
+  it('moves on to the next folder when the first one holds a refused token', async () => {
+    const fetchMock = vi.fn(async (_url: string | URL | RequestInfo, init?: RequestInit) => (init?.headers as Record<string, string>).Authorization === 'token gho_valid'
+      ? okJson(usageBody)
+      : new Response('', { status: 401 }))
+    const result = await fetchCopilotQuota({ fetch: fetchMock, ...twoFolders({ 'github.com': { oauth_token: 'gho_stale' } }, { 'github.com': { oauth_token: 'gho_valid' } }) })
+    expect(result.quota.connection).toBe('connected')
+    expect(seen(fetchMock)).toEqual([
+      'https://api.github.com/copilot_internal/user token gho_stale',
+      'https://api.github.com/copilot_internal/user token gho_valid',
+    ])
+  })
+
+  it('moves on to the next folder when the first one holds a host it cannot address', async () => {
+    const fetchMock = vi.fn(async () => okJson(usageBody))
+    const result = await fetchCopilotQuota({ fetch: fetchMock, ...twoFolders({ 'github.acme-corp.net': { oauth_token: 'gho_server' } }, { 'github.com': { oauth_token: 'gho_valid' } }) })
+    expect(result.quota.connection).toBe('connected')
+    expect(seen(fetchMock)).toEqual(['https://api.github.com/copilot_internal/user token gho_valid'])
+  })
+
+  it('tries apps.json in the same folder after an unaddressable hosts.json entry', async () => {
+    const fetchMock = vi.fn(async () => okJson(usageBody))
+    const files: Record<string, string> = {
+      'hosts.json': JSON.stringify({ 'github.acme.net': { oauth_token: 'bad' } }),
+      'apps.json': JSON.stringify({ 'github.com:Iv1.x': { oauth_token: 'good' } }),
+    }
+    const result = await fetchCopilotQuota({ fetch: fetchMock, configDirs: ['/copilot'], readFile: vi.fn(async (file: string) => files[path.basename(file)] ?? null) })
+    expect(result.quota.connection).toBe('connected')
+    expect(seen(fetchMock)).toEqual(['https://api.github.com/copilot_internal/user token good'])
+  })
+
+  it('tries apps.json in the same folder after a refused hosts.json token', async () => {
+    const fetchMock = vi.fn(async (_url: string | URL | RequestInfo, init?: RequestInit) => (init?.headers as Record<string, string>).Authorization === 'token good'
+      ? okJson(usageBody)
+      : new Response('', { status: 401 }))
+    const files: Record<string, string> = {
+      'hosts.json': JSON.stringify({ 'github.com': { oauth_token: 'stale' } }),
+      'apps.json': JSON.stringify({ 'github.com:Iv1.x': { oauth_token: 'good' } }),
+    }
+    const result = await fetchCopilotQuota({ fetch: fetchMock, configDirs: ['/copilot'], readFile: vi.fn(async (file: string) => files[path.basename(file)] ?? null) })
+    expect(result.quota.connection).toBe('connected')
+    expect(seen(fetchMock)).toEqual([
+      'https://api.github.com/copilot_internal/user token stale',
+      'https://api.github.com/copilot_internal/user token good',
+    ])
+  })
+
+  it('tries every supported host in one file, preferred first', async () => {
+    const fetchMock = vi.fn(async (_url: string | URL | RequestInfo, init?: RequestInit) => (init?.headers as Record<string, string>).Authorization === 'token valid'
+      ? okJson(usageBody)
+      : new Response('', { status: 401 }))
+    const files: Record<string, string> = {
+      'hosts.json': JSON.stringify({ 'acme.ghe.com': { oauth_token: 'valid' }, 'github.com': { oauth_token: 'stale' } }),
+    }
+    const result = await fetchCopilotQuota({ fetch: fetchMock, configDirs: ['/copilot'], readFile: vi.fn(async (file: string) => files[path.basename(file)] ?? null) })
+    expect(result.quota.connection).toBe('connected')
+    expect(seen(fetchMock)).toEqual([
+      'https://api.github.com/copilot_internal/user token stale',
+      'https://api.acme.ghe.com/copilot_internal/user token valid',
+    ])
+  })
+
+  it('moves on after a 403 the same way as after a 401', async () => {
+    const fetchMock = vi.fn(async (_url: string | URL | RequestInfo, init?: RequestInit) => (init?.headers as Record<string, string>).Authorization === 'token good'
+      ? okJson(usageBody)
+      : new Response('', { status: 403 }))
+    const files: Record<string, string> = {
+      'hosts.json': JSON.stringify({ 'github.com': { oauth_token: 'forbidden' } }),
+      'apps.json': JSON.stringify({ 'github.com:Iv1.x': { oauth_token: 'good' } }),
+    }
+    const result = await fetchCopilotQuota({ fetch: fetchMock, configDirs: ['/copilot'], readFile: vi.fn(async (file: string) => files[path.basename(file)] ?? null) })
+    expect(result.quota.connection).toBe('connected')
+    expect(seen(fetchMock)).toEqual([
+      'https://api.github.com/copilot_internal/user token forbidden',
+      'https://api.github.com/copilot_internal/user token good',
+    ])
+  })
+
+  it('keeps a supported host whose token an unsupported entry shares', async () => {
+    const fetchMock = vi.fn(async () => okJson(usageBody))
+    const files: Record<string, string> = {
+      'hosts.json': JSON.stringify({ 'github.acme.net': { oauth_token: 'same' } }),
+      'apps.json': JSON.stringify({ 'github.com:Iv1.x': { oauth_token: 'same' } }),
+    }
+    const result = await fetchCopilotQuota({ fetch: fetchMock, configDirs: ['/copilot'], readFile: vi.fn(async (file: string) => files[path.basename(file)] ?? null) })
+    expect(result.quota.connection).toBe('connected')
+    expect(seen(fetchMock)).toEqual(['https://api.github.com/copilot_internal/user token same'])
+  })
+
+  it('re-reads the refused entry itself when two entries share a host', async () => {
+    const fetchMock = vi.fn(async (_url: string | URL | RequestInfo, init?: RequestInit) => (init?.headers as Record<string, string>).Authorization === 'token fresh'
+      ? okJson(usageBody)
+      : new Response('', { status: 401 }))
+    let reads = 0
+    const readFile = async () => {
+      reads += 1
+      return JSON.stringify({ 'github.com:Iv1.a': { oauth_token: 'stale1' }, 'github.com:Iv1.b': { oauth_token: reads === 1 ? 'stale2' : 'fresh' } })
+    }
+    const result = await fetchCopilotQuota({ fetch: fetchMock, configDirs: ['/copilot'], readFile: async (file: string) => path.basename(file) === 'apps.json' ? readFile() : null })
+    expect(result.quota.connection).toBe('connected')
+    expect(seen(fetchMock)).toEqual([
+      'https://api.github.com/copilot_internal/user token stale1',
+      'https://api.github.com/copilot_internal/user token stale2',
+      'https://api.github.com/copilot_internal/user token fresh',
+    ])
+  })
+
+  it('reads the host after a scheme in an apps.json key', async () => {
+    const fetchMock = vi.fn(async () => okJson(usageBody))
+    const files: Record<string, string> = { 'apps.json': JSON.stringify({ 'https://acme.ghe.com:Iv1.x': { oauth_token: 'tenant' } }) }
+    await fetchCopilotQuota({ fetch: fetchMock, configDirs: ['/copilot'], readFile: async (file: string) => files[path.basename(file)] ?? null })
+    expect(seen(fetchMock)).toEqual(['https://api.acme.ghe.com/copilot_internal/user token tenant'])
+  })
+
+  it('re-reads an entry that duplicated a refused one when it was read', async () => {
+    const fetchMock = vi.fn(async (_url: string | URL | RequestInfo, init?: RequestInit) => (init?.headers as Record<string, string>).Authorization === 'token fresh'
+      ? okJson(usageBody)
+      : new Response('', { status: 401 }))
+    let reads = 0
+    const apps = () => {
+      reads += 1
+      return JSON.stringify({ 'github.com:Iv1.a': { oauth_token: 'stale' }, 'github.com:Iv1.b': { oauth_token: reads === 1 ? 'stale' : 'fresh' } })
+    }
+    const result = await fetchCopilotQuota({ fetch: fetchMock, configDirs: ['/copilot'], readFile: async (file: string) => path.basename(file) === 'apps.json' ? apps() : null })
+    expect(result.quota.connection).toBe('connected')
+    expect(seen(fetchMock)).toEqual([
+      'https://api.github.com/copilot_internal/user token stale',
+      'https://api.github.com/copilot_internal/user token fresh',
+    ])
   })
 })

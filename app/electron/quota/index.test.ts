@@ -3,7 +3,7 @@ import path from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 
 import { claudeKeychainService } from './claude'
-import { QuotaService } from './index'
+import { getQuota, QuotaService, quotaService } from './index'
 import { forgetKeychainRefusals, readKeychainPassword } from './security'
 import type { ProviderName, QuotaProvider } from './types'
 
@@ -237,6 +237,58 @@ describe('QuotaService', () => {
     expect(fetchers.claude).toHaveBeenCalledTimes(1)
     expect(fetchers.gemini).toHaveBeenCalledTimes(1)
     expect(fetchers.codex).toHaveBeenCalledTimes(2)
+  })
+
+  it('re-reads a changed provider set without the keychain, keeping the cache for the same set', async () => {
+    const fetchers = noopFetchers()
+    const service = new QuotaService({
+      ...fetchers, grokbotInstalled: () => true, now: () => 1000, refreshMs: 120_000,
+      readFile: vi.fn(async () => null), writeFile: vi.fn(async () => undefined),
+    })
+    vi.mocked(forgetKeychainRefusals).mockClear()
+    await service.getQuota({ disabled: ['codex'] })
+    const enabled = await service.getQuota({ disabled: [] }) // switched back on
+    expect(enabled.map(row => row.provider)).toContain('codex')
+    expect(fetchers.codex).toHaveBeenCalledTimes(1)
+    expect(fetchers.claude).toHaveBeenCalledTimes(2)
+    await service.getQuota({ disabled: [] })
+    expect(fetchers.claude).toHaveBeenCalledTimes(2)
+    for (const call of fetchers.claude.mock.calls) expect(call[0].allowKeychain).toBe(false)
+    expect(forgetKeychainRefusals).not.toHaveBeenCalled()
+  })
+
+  it('grants the keychain and forgets earlier refusals only on a forced IPC call', async () => {
+    // Only the provider fan-out is stubbed, so the real IPC wrapper and service run.
+    const fetchAll = vi.spyOn(quotaService as unknown as { fetchAll: (allowKeychain: boolean, disabled: Set<ProviderName>) => Promise<QuotaProvider[]> }, 'fetchAll').mockResolvedValue([])
+    vi.mocked(forgetKeychainRefusals).mockClear()
+    try {
+      await getQuota({ disabled: ['codex'] })
+      await getQuota({ force: false, disabled: ['gemini'] })
+      expect(forgetKeychainRefusals).not.toHaveBeenCalled()
+      expect(fetchAll.mock.calls.map(call => call[0])).toEqual([false, false])
+      await getQuota({ force: true })
+      expect(forgetKeychainRefusals).toHaveBeenCalledTimes(1)
+      expect(fetchAll.mock.calls.at(-1)![0]).toBe(true)
+    } finally {
+      fetchAll.mockRestore()
+    }
+  })
+
+  it('does not hand a poll for one provider set the in-flight rows of another', async () => {
+    const fetchers = noopFetchers()
+    let release!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    fetchers.claude.mockImplementation(async () => { await gate; return { quota: quota('claude') } })
+    const service = new QuotaService({
+      ...fetchers, grokbotInstalled: () => true, now: () => 1000, refreshMs: 120_000,
+      readFile: vi.fn(async () => null), writeFile: vi.fn(async () => undefined),
+    })
+    const withoutCodex = service.getQuota({ disabled: ['codex'] })
+    const withCodex = service.getQuota({ disabled: [] }) // switched back on mid-flight
+    release()
+    expect((await withoutCodex).map(row => row.provider)).not.toContain('codex')
+    expect((await withCodex).map(row => row.provider)).toContain('codex')
+    expect((await service.getQuota({ disabled: [] })).map(row => row.provider)).toContain('codex')
   })
 
   it('force re-fetches within the cache window by invalidating first', async () => {
