@@ -499,28 +499,40 @@ const COMPOSER_META_QUERY = `
     substr(key, length('composerData:') + 1) as composer_id,
     json_extract(value, '$.promptTokenBreakdown.totalUsedTokens') as used,
     json_extract(value, '$.contextTokensUsed') as ctx,
-    json_extract(value, '$.createdAt') as created_at
+    json_extract(value, '$.createdAt') as created_at,
+    json_extract(value, '$.latestChatGenerationUUID') as latest_request_id,
+    json_extract(value, '$.subagentInfo.parentRequestId') as parent_request_id
   FROM cursorDiskKV
   WHERE key >= 'composerData:' AND key < 'composerData;' AND json_valid(value, 10)
 `
 
 type ComposerMeta = { tokens: number; createdAt: number | null }
 
-function loadComposerMeta(db: SqliteDatabase): Map<string, ComposerMeta> {
+// Also maps each request a conversation names (its latest request, or the
+// request that spawned it as a subagent) to the conversation's start, which
+// dates agent-only requests whose prompt carried no timestamp.
+function loadComposerMeta(db: SqliteDatabase): { meta: Map<string, ComposerMeta>; requestStart: Map<string, number> } {
   const map = new Map<string, ComposerMeta>()
+  const requestStart = new Map<string, number>()
   try {
-    const rows = db.query<{ composer_id: string; used: number | null; ctx: number | null; created_at: number | null }>(COMPOSER_META_QUERY)
+    const rows = db.query<{ composer_id: string; used: number | null; ctx: number | null; created_at: number | null; latest_request_id: string | null; parent_request_id: string | null }>(COMPOSER_META_QUERY)
     for (const r of rows) {
       // `||` rather than `??`: a recorded-but-zero breakdown must fall through
       // to the context meter instead of shadowing it.
       const tokens = (r.used || r.ctx) ?? 0
       if (r.composer_id && tokens > 0) map.set(r.composer_id, { tokens, createdAt: r.created_at ?? null })
+      if (typeof r.created_at !== 'number' || r.created_at <= 0) continue
+      for (const requestId of [r.latest_request_id, r.parent_request_id]) {
+        if (typeof requestId !== 'string' || !requestId) continue
+        const known = requestStart.get(requestId)
+        if (known === undefined || r.created_at < known) requestStart.set(requestId, r.created_at)
+      }
     }
   } catch (err) {
     rethrowBusy(err)
     /* best-effort: callers fall back to the per-bubble text estimate */
   }
-  return map
+  return { meta: map, requestStart }
 }
 
 type AgentStream = {
@@ -728,7 +740,7 @@ function parseBubbles(
   const results: ParsedProviderCall[] = []
   let skipped = 0
 
-  const composerMeta = loadComposerMeta(db)
+  const { meta: composerMeta, requestStart } = loadComposerMeta(db)
 
   // The bubble timestamp lives inside the JSON value (no index), so the date
   // filter forces a full JSON decode per row. Multi-GB Cursor DBs (500k+
@@ -989,17 +1001,20 @@ function parseBubbles(
   for (const [requestId, at] of bubbleTimes) {
     if (at) firstSeen.set(BUBBLE_TIME_KEY + requestId, at)
   }
-  // A request with no bubble is dated from its own prompt when the stream
-  // recorded one; only undated requests fall back to the first-seen stamp.
-  const streamDate = (stream: AgentStream): string | null =>
-    stream.promptAt !== null && Number.isFinite(stream.promptAt) ? new Date(stream.promptAt).toISOString() : null
+  // A request with no bubble is dated from its own prompt, else from the
+  // conversation that names it; only undated requests fall back to the
+  // first-seen stamp.
+  const streamDate = (requestId: string, stream: AgentStream): string | null => {
+    const at = stream.promptAt ?? requestStart.get(requestId) ?? null
+    return at !== null && Number.isFinite(at) ? new Date(at).toISOString() : null
+  }
   for (const [requestId, stream] of billable) {
     // Request ids are UUIDs, so a historic bubble sharing one with a billable
     // agent-only stream is not expected.
     const bubbleTime = firstSeen.get(BUBBLE_TIME_KEY + requestId)
     if (bubbleTime && bubbleTime <= timeFloor) continue
     if (!bubbleTime && !firstSeen.has(requestId) && !lookedUp.has(requestId)) continue
-    const datedAt = bubbleTime ? null : streamDate(stream)
+    const datedAt = bubbleTime ? null : streamDate(requestId, stream)
     if (datedAt && datedAt <= timeFloor) continue
     const inputTokens = estimateTokensFromChars(stream.userChars + stream.contextChars)
     const outputTokens = estimateTokensFromChars(stream.assistantChars)

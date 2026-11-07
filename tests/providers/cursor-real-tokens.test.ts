@@ -573,6 +573,27 @@ describe.skipIf(skipReason !== null)('cursor real context tokens (#575)', () => 
     expect(calls.find(c => c.deduplicationKey === 'cursor:agentKv:req-restamped')?.timestamp).toBe(new Date(at).toISOString())
   })
 
+  it('dates an untagged agent-only stream from the conversation that names it', async () => {
+    const latestAt = minuteAgo(12)
+    const subagentAt = minuteAgo(11)
+    const dbPath = buildDb((db) => {
+      const insert = db.prepare('INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)')
+      insert.run('composerData:4444bbbb-1111-2222-3333-444455556666', JSON.stringify({ createdAt: latestAt, latestChatGenerationUUID: 'req-latest' }))
+      insert.run('composerData:4444cccc-1111-2222-3333-444455556666', JSON.stringify({ createdAt: subagentAt, subagentInfo: { parentRequestId: 'req-parent' } }))
+      insert.run('composerData:4444dddd-1111-2222-3333-444455556666', JSON.stringify({ createdAt: minuteAgo(250), latestChatGenerationUUID: 'req-old-conversation' }))
+      insertAgentKv(db, { blobId: 'akv-1', role: 'user', content: 'run the export', requestId: 'req-latest' })
+      insertAgentKv(db, { blobId: 'akv-2', role: 'user', content: 'review the plan', requestId: 'req-parent' })
+      insertAgentKv(db, { blobId: 'akv-3', role: 'user', content: 'old export', requestId: 'req-old-conversation' })
+    })
+
+    const calls = await collectCalls(createCursorProvider(dbPath), dbPath)
+
+    const stamp = (id: string) => calls.find(c => c.deduplicationKey === `cursor:agentKv:${id}`)?.timestamp
+    expect(stamp('req-latest')).toBe(new Date(latestAt).toISOString())
+    expect(stamp('req-parent')).toBe(new Date(subagentAt).toISOString())
+    expect(stamp('req-old-conversation')).toBeUndefined()
+  })
+
   it('does not bill the stream of a conversation older than the lookback as a new session', async () => {
     const composerId = '44440000-1111-2222-3333-444455556666'
     const requestId = 'req-old'
