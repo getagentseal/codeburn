@@ -163,6 +163,7 @@ function foldToolResults(cache: GuardCache, entry: JournalEntry): void {
     const cmd = cache.shellPending[id]
     if (cmd === undefined) continue
     delete cache.shellPending[id]
+    if (cache.recentCalls.some(c => c.id === id && c.denied)) continue
     if (cmd === EDIT_PENDING) {
       if (!meta.isError) cache.failedCommands = {}
     } else if (meta.isError) {

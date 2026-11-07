@@ -279,6 +279,23 @@ describe('failing-command retry', () => {
     expect((await readCache(SID, base)).failedCommands).toEqual({})
   })
 
+  it('a retry deny does not count its own deny result as another failure', async () => {
+    const env = await setup({ loopWarnAfter: null, loopStopAfter: null })
+    const command = 'npm test'
+    for (let i = 0; i < 5; i++) await call(env, 'Bash', { command }, { fails: true })
+    const reasons: string[] = []
+    for (let i = 0; i < 4; i++) {
+      const id = `toolu_${++seq}`
+      const out = await runGuardHook('pretooluse', JSON.stringify({
+        session_id: SID, transcript_path: env.path, tool_name: 'Bash', tool_input: { command }, tool_use_id: id,
+      }), { base: env.base })
+      const reason = JSON.parse(out).hookSpecificOutput.permissionDecisionReason as string
+      await appendFile(env.path, useLine(id, 'Bash', { command }) + resultLine(id, true, reason))
+      reasons.push(reason)
+    }
+    for (const r of reasons) expect(r).toContain('already failed 5 times')
+  })
+
   it('only counts shell tools', async () => {
     const env = await setup({ loopWarnAfter: null, loopStopAfter: null })
     const outs: string[] = []
