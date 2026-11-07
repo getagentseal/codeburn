@@ -385,6 +385,19 @@ describe('failing-command retry', () => {
     expect(await call(env, 'Bash', { command })).toContain('already failed 5 times')
   })
 
+  it('keeps at most 64 deny marks waiting for a result, dropping the oldest', async () => {
+    const env = await setup({ loopWarnAfter: null, loopStopAfter: 1 })
+    for (let i = 0; i < 70; i++) {
+      await runGuardHook('pretooluse', JSON.stringify({
+        session_id: SID, transcript_path: env.path, tool_name: 'Read', tool_input: { file_path: '/a' }, tool_use_id: `toolu_cap_${i}`,
+      }), { base: env.base })
+    }
+    const pending = (await readCache(SID, env.base)).deniedPending
+    expect(pending).toHaveLength(64)
+    expect(pending[0]).toBe('toolu_cap_6')
+    expect(pending[63]).toBe('toolu_cap_69')
+  })
+
   it('counts a real failure that prints the guard mark', async () => {
     const env = await setup({ loopWarnAfter: null, loopStopAfter: null })
     for (let i = 0; i < 5; i++) await call(env, 'Bash', { command: 'npm test' }, { fails: true, output: '(codeburn guard) hook test failed' })

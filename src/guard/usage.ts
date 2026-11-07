@@ -69,6 +69,8 @@ export type GuardCache = {
 export const GUARD_CACHE_VERSION = 5
 
 export const RECENT_CALLS = 16
+// Results land right after their call, so a deny mark older than this is stale.
+export const DENIED_PENDING_MAX = 64
 
 // `commit` must be the git subcommand: `git`, optionally flag tokens (long
 // flags, or a short flag with an optional separate value like `-c k=v`), then
