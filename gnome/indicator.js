@@ -1124,10 +1124,10 @@ class CodeBurnIndicator extends PanelMenu.Button {
       return;
     }
     const combined = this._scope === 'combined' ? this._payload?.combined?.combined : null;
-    const cost = Number(combined?.cost ?? this._payload.current.cost ?? 0) * this._fxRate;
+    const cost = Number(combined?.cost ?? this._payload.current.cost ?? 0);
     const thresholdConverted = threshold * this._fxRate;
-    if (cost >= thresholdConverted) {
-      this._budgetLabel.set_text(`Budget exceeded: ${this._fmt(cost)} / ${this._fmt(thresholdConverted)}`);
+    if (cost * this._fxRate >= thresholdConverted) {
+      this._budgetLabel.set_text(`Budget exceeded: ${this._fmt(cost)} / ${this._fmt(threshold)}`);
       this._budgetLabel.visible = true;
     } else {
       this._budgetLabel.visible = false;
