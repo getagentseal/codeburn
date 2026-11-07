@@ -106,6 +106,19 @@ describe('optimize scan facts', () => {
     expect(await stored(file)).toEqual(await fresh(file))
   })
 
+  it('a last line that is a bare scalar is re-read whole, since later bytes can extend it', async () => {
+    const file = join(dir, 'live.jsonl')
+    const pad = JSON.stringify({ type: 'system', content: 'x'.repeat(5000) })
+    await writeFile(file, pad + '\n1')
+    await stored(file)
+    const row = async () => JSON.parse(await readFile(join(factsDir(), 'optimize', [...(await factFiles()).keys()][0]!), 'utf-8'))
+    expect((await row()).offset).toBe(Buffer.byteLength(pad) + 1)
+    await new Promise(resolve => setTimeout(resolve, 20))
+    await appendFile(file, '23\n')
+    await stored(file)
+    expect((await row()).offset).toBe((await stat(file)).size)
+  })
+
   it('a rewritten transcript is scanned again in full', async () => {
     const file = join(dir, 's.jsonl')
     await writeFile(file, lines().join('\n') + '\n')

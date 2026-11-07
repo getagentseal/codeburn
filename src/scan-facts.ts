@@ -13,7 +13,8 @@ import { getCodeburnCacheDir } from './cache-dir.js'
 //     commandNames, the opener rules, storeScan/loadScan and their caps
 //     (optimize.ts), isReadShapedBashCommand (bash-utils.ts),
 //     parseJsonlLine/parseLargeJsonl (parser.ts)
-//   both: readSessionLines, which decides the lines and the resume offset (fs-utils.ts)
+//   both: readSessionLines, and for optimize foldParsedLine, which decide the
+//     lines and the resume offset (fs-utils.ts)
 // tests/scan-facts-version.test.ts pins those sources to this number.
 export const FACTS_VERSION = 3
 

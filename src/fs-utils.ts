@@ -274,6 +274,18 @@ export async function* readSessionLines(
   }
 }
 
+/// Whether a line readSessionLines yielded may be folded, given what it parsed
+/// into. A last line still missing its newline is folded only when it parsed
+/// into an object or array, which no later bytes can extend into a different
+/// valid line, and the tracker's resume offset then moves past it. A bare
+/// scalar (`1` can still become `123`) is left to be re-read whole.
+export function foldParsedLine(tracker: { lastCompleteLineOffset: number; unterminatedLineEnd?: number }, parsed: unknown): boolean {
+  if (tracker.unterminatedLineEnd === undefined) return true
+  if (typeof parsed !== 'object' || parsed === null) return false
+  tracker.lastCompleteLineOffset = tracker.unterminatedLineEnd
+  return true
+}
+
 // Metadata syscalls (readdir/stat) issued one-at-a-time leave the OS idle
 // between them: on a 21k-file corpus the discovery sweep spent most of its wall
 // clock waiting rather than working. Results are returned in input order so
