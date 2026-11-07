@@ -378,7 +378,17 @@ import type { DateRange, ProjectSummary } from './types.js'
 // coding and delegation turns and their cost share, edit turns, one-shot
 // counts) of days whose transcripts survive onto the streamed-tool-blocks
 // parse (October 2026), which left settled days on the old split.
-export const DAILY_CACHE_VERSION = 78
+// v79: the November provider fixes reach settled days. Calls leave a day for
+// codex (rate-limit pings are no longer calls), copilot (a chat that both the
+// trace database and a transcript record counts once), cursor (old
+// conversations' streams are no longer billed at the database mtime, cut
+// streams move to their own bubble time), goose (UTC timestamps can move a
+// session across midnight) and quickdesk (an estimate stops counting once its
+// metrics land), so those providers join PENDING_REDERIVE_PROVIDER_VERSIONS at
+// 79. Qwen and Hermes tokens, Droid model ids, Cline-family recorded costs,
+// Antigravity output, Warp exchange shares and version-boundary pricing change
+// with calls unchanged or rising, which the bump alone re-derives.
+export const DAILY_CACHE_VERSION = 79
 const MIN_SUPPORTED_VERSION = 28
 
 /// Providers whose per-day CALL COUNT means something different at
@@ -404,11 +414,15 @@ const MIN_SUPPORTED_VERSION = 28
 const PENDING_REDERIVE_PROVIDER_VERSIONS: Readonly<Record<string, number>> = {
   // 56: a store row now pairs with its tokenless per-turn twin, which can
   // move one call across midnight. 75: chat sessions that also ran on the
-  // agent host are no longer counted from the journal.
-  copilot: 75,
+  // agent host are no longer counted from the journal. 79: the transcript of
+  // a chat the trace database also holds is no longer an extra call.
+  copilot: 79,
   // Codex response records replace stale/zero token_count twins and can
-  // legitimately reduce counts as well as recover missing usage.
-  codex: 43,
+  // legitimately reduce counts as well as recover missing usage. 79: a
+  // turn-start rate-limit ping is no longer an estimated call. A day whose
+  // only Codex calls were pings has no fresh slice and stays carried: a day
+  // slice records no estimated share to tell it from pruned history.
+  codex: 79,
   // 31: a v30 file may have been written by #1132's accounting, which never
   // carried the Hermes cost contract. 33: day.models is keyed by route, and a
   // v32 Hermes day cannot know which of its rows went through
@@ -430,7 +444,13 @@ const PENDING_REDERIVE_PROVIDER_VERSIONS: Readonly<Record<string, number>> = {
   // calls at request time.
   grok: 65,
   // 71: imported Cursor events replace the local estimates with fewer calls.
-  cursor: 71,
+  // 79: streams of conversations older than the window are dropped, and cut
+  // streams move from the database mtime to their newest bubble.
+  cursor: 79,
+  // 79: zoneless timestamps read as UTC, not local time.
+  goose: 79,
+  // 79: a sessions.db estimate stops counting once the session's metrics land.
+  quickdesk: 79,
 }
 
 function providersPendingRederiveFrom(fromVersion: number): string[] {
@@ -1922,16 +1942,44 @@ export async function ensureCacheHydrated(
         }
       }
       const pendingRederive = c.pendingRederive?.length ? new Set(c.pendingRederive) : undefined
+      const freshProviders = new Map(freshDays.map(d => [d.date, d.providers]))
       // v73 moved Cursor IDE chat transcripts from cursor-agent to cursor. A day
       // the fresh parse explains with a cursor slice and no cursor-agent slice
       // is that move, not pruned history, so the old cursor-agent slice goes.
       if (parseWasComplete && pendingRederive?.has('cursor-agent')) {
-        const freshProviders = new Map(freshDays.map(d => [d.date, d.providers]))
         carriedBaseline = carriedBaseline.flatMap(day => {
           const fresh = freshProviders.get(day.date)
           if (!day.providers['cursor-agent'] || !fresh || fresh['cursor-agent'] || !fresh['cursor'] || !hasSliceData(fresh['cursor'])) return [day]
           const copy = structuredClone(day)
           subtractSliceFromDay(copy, 'cursor-agent', copy.providers['cursor-agent'])
+          return hasPositiveDayContent(copy) ? [copy] : []
+        })
+      }
+      // A pending provider's new accounting can empty a settled day outright (a
+      // Codex day of rate-limit pings, a Goose session moved across midnight,
+      // a Quick Desktop estimate its metrics replaced), and the merge would
+      // carry that slice as pruned history. Sources are pruned oldest first,
+      // so a day on or after the provider's earliest fresh day still has its
+      // sources: its missing slice goes on this one re-derive. Days before it
+      // stay carried. TRADE-OFF: a user who deleted one mid-history source
+      // file loses that day's carried slice once.
+      if (parseWasComplete && pendingRederive) {
+        const earliestFresh = new Map<string, string>()
+        for (const d of freshDays) {
+          for (const [provider, slice] of Object.entries(d.providers)) {
+            const seen = earliestFresh.get(provider)
+            if (pendingRederive.has(provider) && hasSliceData(slice) && (seen === undefined || d.date < seen)) earliestFresh.set(provider, d.date)
+          }
+        }
+        carriedBaseline = carriedBaseline.flatMap(day => {
+          const fresh = freshProviders.get(day.date)
+          const emptied = Object.keys(day.providers).filter(provider => {
+            const earliest = earliestFresh.get(provider)
+            return earliest !== undefined && day.date >= earliest && !fresh?.[provider]
+          })
+          if (emptied.length === 0) return [day]
+          const copy = structuredClone(day)
+          for (const provider of emptied) subtractSliceFromDay(copy, provider, copy.providers[provider])
           return hasPositiveDayContent(copy) ? [copy] : []
         })
       }

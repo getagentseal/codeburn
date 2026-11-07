@@ -231,3 +231,124 @@ describe('copilot re-derive after chat-session twins moved to the agent host (v7
     expect(hydrated.pendingRederive).toBeUndefined()
   })
 })
+
+describe('re-derive after the November provider fixes (v79)', () => {
+  const settled = toDateString(new Date(Date.now() - 10 * 24 * 60 * 60 * 1000))
+  const yesterday = toDateString(new Date(Date.now() - 24 * 60 * 60 * 1000))
+  const slice = (calls: number) => ({ ...day(settled, calls).providers.grok!, calls })
+  const entry = (date: string, providers: DailyEntry['providers']): DailyEntry => ({
+    ...day(date, 0),
+    cost: Object.values(providers).reduce((sum, s) => sum + s.cost, 0),
+    calls: Object.values(providers).reduce((sum, s) => sum + s.calls, 0),
+    providers,
+    models: {},
+  })
+  const seedV78 = (days: DailyEntry[]) => writeFile(join(cacheRoot, 'daily-cache.v78.json'), JSON.stringify({
+    version: 78,
+    savingsConfigHash: 'cfg',
+    tzKey: currentTzKey(),
+    lastComputedDate: yesterday,
+    days,
+    complete: true,
+    watermarkTrusted: true,
+  }))
+
+  it('lets a settled day shrink for the providers whose calls left it, and guards the rest', async () => {
+    const providers = ['codex', 'copilot', 'cursor', 'goose', 'quickdesk']
+    await seedV78([entry(settled, Object.fromEntries([...providers, 'claude'].map(p => [p, slice(5)])))])
+
+    const hydrated = await ensureCacheHydrated(
+      async () => [],
+      () => [entry(settled, Object.fromEntries([...providers, 'claude'].map(p => [p, slice(3)])))],
+      'cfg',
+      () => true,
+    )
+
+    const settledDay = hydrated.days.find(d => d.date === settled)!
+    for (const p of providers) expect(settledDay.providers[p]?.calls, p).toBe(3)
+    expect(settledDay.providers.claude?.calls).toBe(5)
+    expect(hydrated.pendingRederive).toBeUndefined()
+  })
+
+  const daysAgo = (n: number) => toDateString(new Date(Date.now() - n * 24 * 60 * 60 * 1000))
+  const hydrate = (fresh: DailyEntry[]) => ensureCacheHydrated(async () => [], () => fresh, 'cfg', () => true)
+  const providerOn = (days: DailyEntry[], date: string, provider: string) => days.find(d => d.date === date)?.providers[provider]
+
+  it('drops a codex day the pings emptied inside the fresh span and carries pruned days before it', async () => {
+    await seedV78([
+      entry(daysAgo(14), { codex: slice(4), claude: slice(1) }),
+      entry(daysAgo(12), { codex: slice(6) }),
+      entry(daysAgo(10), { codex: slice(2), claude: slice(1) }),
+    ])
+
+    const hydrated = await hydrate([entry(daysAgo(12), { codex: slice(6) }), entry(daysAgo(10), { claude: slice(1) })])
+
+    expect(providerOn(hydrated.days, daysAgo(14), 'codex')?.calls).toBe(4)
+    expect(providerOn(hydrated.days, daysAgo(10), 'codex')).toBeUndefined()
+    expect(hydrated.days.find(d => d.date === daysAgo(10))!.calls).toBe(1)
+  })
+
+  it('moves a goose session across midnight once and drops a superseded quickdesk estimate', async () => {
+    await seedV78([
+      entry(daysAgo(12), { quickdesk: slice(1) }),
+      entry(daysAgo(10), { goose: slice(1), quickdesk: slice(2), claude: slice(1) }),
+    ])
+
+    const hydrated = await hydrate([
+      entry(daysAgo(12), { quickdesk: slice(1) }),
+      entry(daysAgo(11), { goose: slice(1) }),
+      entry(daysAgo(10), { claude: slice(1) }),
+    ])
+
+    const gooseCalls = hydrated.days.reduce((sum, d) => sum + (d.providers.goose?.calls ?? 0), 0)
+    expect(gooseCalls).toBe(1)
+    expect(providerOn(hydrated.days, daysAgo(11), 'goose')?.calls).toBe(1)
+    expect(providerOn(hydrated.days, daysAgo(10), 'quickdesk')).toBeUndefined()
+    expect(providerOn(hydrated.days, daysAgo(10), 'claude')?.calls).toBe(1)
+  })
+
+  it('still carries a vanished slice of a provider that is not pending', async () => {
+    await seedV78([entry(daysAgo(12), { claude: slice(3) }), entry(daysAgo(10), { claude: slice(2), codex: slice(1) })])
+
+    const hydrated = await hydrate([entry(daysAgo(12), { claude: slice(3) }), entry(daysAgo(10), { codex: slice(1) })])
+
+    expect(providerOn(hydrated.days, daysAgo(10), 'claude')?.calls).toBe(2)
+  })
+
+  it('keeps every carried row of a pending provider the fresh parse has no rows for', async () => {
+    await seedV78([entry(daysAgo(12), { codex: slice(3), claude: slice(1) }), entry(daysAgo(10), { codex: slice(2), claude: slice(1) })])
+
+    const hydrated = await hydrate([entry(daysAgo(12), { claude: slice(1) }), entry(daysAgo(10), { claude: slice(1) })])
+
+    expect(providerOn(hydrated.days, daysAgo(12), 'codex')?.calls).toBe(3)
+    expect(providerOn(hydrated.days, daysAgo(10), 'codex')?.calls).toBe(2)
+  })
+
+  it('changes nothing on a second hydration after the entitlement is spent', async () => {
+    const modelled = (calls: number) => ({
+      ...slice(calls),
+      models: { m: { calls, cost: calls, savingsUSD: 0, inputTokens: 100, outputTokens: 20, cacheReadTokens: 30, cacheWriteTokens: 0 } },
+    })
+    const modelledEntry = (date: string, providers: DailyEntry['providers']): DailyEntry => {
+      const e = entry(date, providers)
+      e.inputTokens = Object.values(providers).reduce((sum, p) => sum + (p.inputTokens ?? 0), 0)
+      e.outputTokens = Object.values(providers).reduce((sum, p) => sum + (p.outputTokens ?? 0), 0)
+      e.cacheReadTokens = Object.values(providers).reduce((sum, p) => sum + (p.cacheReadTokens ?? 0), 0)
+      e.models = { m: { calls: e.calls, cost: e.cost, savingsUSD: 0, inputTokens: e.inputTokens, outputTokens: e.outputTokens, cacheReadTokens: e.cacheReadTokens, cacheWriteTokens: 0 } }
+      return e
+    }
+    await seedV78([
+      modelledEntry(daysAgo(12), { codex: modelled(6) }),
+      modelledEntry(daysAgo(10), { codex: modelled(2), claude: modelled(1) }),
+    ])
+    const fresh = [modelledEntry(daysAgo(12), { codex: modelled(6) }), modelledEntry(daysAgo(10), { claude: modelled(1) })]
+
+    const first = await hydrate(fresh)
+    expect(first.pendingRederive).toBeUndefined()
+    expect(providerOn(first.days, daysAgo(10), 'codex')).toBeUndefined()
+    const second = await ensureCacheHydrated(async () => [], () => fresh, 'cfg', () => true)
+    expect(second.days).toEqual(first.days)
+    expect(second.pendingRederive).toBeUndefined()
+    expect(JSON.parse(await readFile(join(cacheRoot, `daily-cache.v${DAILY_CACHE_VERSION}.json`), 'utf-8')).days).toEqual(first.days)
+  })
+})
