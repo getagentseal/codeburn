@@ -78,11 +78,12 @@ function markSignal(cache: GuardCache, signal: 'loop' | 'retry'): void {
 
 // NAME=value where the value is one bare word or one quoted string with no
 // shell metacharacter that could run or redirect anything.
-const ASSIGN = /[A-Za-z_]\w*=(?:'[^'\n]*'|"[^"\n$`]*"|[^\s;|&<>()`$'"]*)/.source
+const WORD = /'[^'\n]*'|"[^"\n$`]*"|[^\s;|&<>()`$'"]+/.source
+const ASSIGN = `[A-Za-z_]\\w*=(?:${WORD})?`
 const ASSIGN_AT = new RegExp(`^${ASSIGN}(?=\\s|$)`)
 // The shared read list leaves gh out (it has mutating subcommands); these only inspect.
 const GH_READ = new RegExp(`^(?:${ASSIGN}[^\\S\\n]+)*gh\\s+[\\w-]+\\s+(?:view|list|checks|status|diff|watch)\\b[^;&|\\n]*$`)
-const ENV_PREFIX = new RegExp(`(^|[;&|][^\\S\\n]*)env(?:[^\\S\\n]+(?:-i|--ignore-environment|-u[^\\S\\n]*[A-Za-z_]\\w*|--unset=[A-Za-z_]\\w*|-|${ASSIGN}))*[^\\S\\n]+`, 'g')
+const ENV_PREFIX = new RegExp(`(^|[;&|][^\\S\\n]*)env(?:[^\\S\\n]+(?:-i|--ignore-environment|-u[^\\S\\n]*[A-Za-z_]\\w*|--unset=[A-Za-z_]\\w*|-C[^\\S\\n]*(?:${WORD})|--chdir=(?:${WORD})|-|${ASSIGN}))*[^\\S\\n]+`, 'g')
 // A bare echo after a sleep is a blind timer wait: no redirection, chaining or substitution.
 const BARE_ECHO = /^echo(?:[^\S\n]+(?:[^;&|<>`$\n]|\$(?!\())*)?$/
 
@@ -97,8 +98,9 @@ function isWaitingCheck(command: string): boolean {
   // The shared read list counts `env` as a read and does not split lines, so
   // `sleep 5 && env CI=1 npm run build` or a second line would pass as a check.
   // Blank and comment lines are dropped; any other later line is work. An env
-  // that only sets or clears variables (-i, -u) is dropped and what it runs is
-  // checked; any other env (other flags, or bare) is not a check.
+  // that only sets or clears variables or changes directory (-i, -u, -C) is
+  // dropped and what it runs is checked; any other env (other flags, or bare)
+  // is not a check.
   const lines = (m[2] ?? '').split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#'))
   if (lines.length > 1) return false
   const first = lines[0] ?? ''

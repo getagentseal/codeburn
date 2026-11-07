@@ -186,7 +186,7 @@ describe('identical-call loop', () => {
     const outs: string[] = []
     for (let i = 0; i < 12; i++) outs.push(await call(env, 'Bash', { command: 'sleep 5 && env GH_HOST=x gh pr checks 1909' }, { fails: true, output: 'pending' }))
     expect(outs.every(o => o === '')).toBe(true)
-    for (const command of ['sleep 5 && env -i GH_TOKEN=x gh pr checks 1909', 'sleep 5 && env -u GH_HOST gh pr checks 1909']) {
+    for (const command of ['sleep 5 && env -i GH_TOKEN=x gh pr checks 1909', 'sleep 5 && env -u GH_HOST gh pr checks 1909', 'sleep 5 && env --chdir=/tmp gh pr checks 1909', 'sleep 5 && env -C /tmp gh pr checks 1909']) {
       const flagged: string[] = []
       for (let i = 0; i < 12; i++) flagged.push(await call(env, 'Bash', { command }, { fails: true, output: 'pending' }))
       expect(flagged.every(o => o === '')).toBe(true)
