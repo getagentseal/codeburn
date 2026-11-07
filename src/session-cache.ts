@@ -478,7 +478,9 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // agentkv-first-seen-v1: streams of conversations older than the window were
   // billed at the DB mtime, and agent-only sessions moved to each new write.
   // own-bubble-prompt-v1: a reply could carry another turn's prompt.
-  cursor: 'composer-anchored-crediting-v1-est-cost-import-guess-est-v1-full-lookback-v1-bubble-id-dedupe-v1-agentkv-first-seen-v1-own-bubble-prompt-v1',
+  // agentkv-json-valid-v1: one agentKv value that was not valid JSON emptied
+  // the whole agent stream.
+  cursor: 'composer-anchored-crediting-v1-est-cost-import-guess-est-v1-full-lookback-v1-bubble-id-dedupe-v1-agentkv-first-seen-v1-own-bubble-prompt-v1-agentkv-json-valid-v1',
   // full-turn-accounting: every assistant message counts as a turn
   // (previously only the first after each user message survived), tool_use
   // inputs join the output text, and input tokens use the full user text
