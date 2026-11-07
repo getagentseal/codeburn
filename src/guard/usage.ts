@@ -29,9 +29,7 @@ import { allowPath, sessionCachePath, sessionsDir } from './store.js'
 // `failedCommands` counts consecutive is_error results per command hash: a
 // passing run resets that command, and a successful edit resets every command,
 // since a rerun after a code change is a new attempt.
-// `denied`: the hook denied this call, so its tool_result is our deny reason,
-// not an answer, and must never read as a changed result.
-export type ToolCallKey = { id: string; name: string; hash: string; result?: string; denied?: boolean }
+export type ToolCallKey = { id: string; name: string; hash: string; result?: string }
 
 export type GuardCache = {
   version: number
@@ -49,6 +47,9 @@ export type GuardCache = {
   recentCalls: ToolCallKey[]
   shellPending: Record<string, string>
   failedCommands: Record<string, number>
+  // Ids of calls the hook denied whose tool_result (our deny reason, not an
+  // answer) has not been folded yet. Not bounded by the recent-call window.
+  deniedPending: string[]
   loopWarned: boolean
   retryWarned: boolean
   loopRun: number
@@ -95,6 +96,7 @@ export function emptyCache(sessionId: string): GuardCache {
     recentCalls: [],
     shellPending: {},
     failedCommands: {},
+    deniedPending: [],
     loopWarned: false,
     retryWarned: false,
     loopRun: 0,
@@ -114,11 +116,7 @@ export function inputHash(value: unknown): string {
 }
 
 export function recordToolCall(cache: GuardCache, call: ToolCallKey): void {
-  const known = call.id ? cache.recentCalls.find(c => c.id === call.id) : undefined
-  if (known) {
-    if (call.denied) known.denied = true
-    return
-  }
+  if (call.id && cache.recentCalls.some(c => c.id === call.id)) return
   cache.recentCalls.push(call)
   if (cache.recentCalls.length > RECENT_CALLS) cache.recentCalls.shift()
 }
@@ -167,17 +165,22 @@ function foldToolResults(cache: GuardCache, entry: JournalEntry): void {
   collectToolResultMeta(entry, results)
   if (results.size === 0) return
   const content = (entry.message as { content?: unknown } | undefined)?.content
+  const ours = new Set<string>()
   for (const b of Array.isArray(content) ? content as { type?: unknown; tool_use_id?: unknown; content?: unknown; is_error?: unknown }[] : []) {
-    if (b?.type !== 'tool_result') continue
+    if (b?.type !== 'tool_result' || typeof b.tool_use_id !== 'string') continue
+    if (cache.deniedPending.includes(b.tool_use_id) || isGuardDeny(b)) {
+      ours.add(b.tool_use_id)
+      continue
+    }
     const recent = cache.recentCalls.find(c => c.id === b.tool_use_id)
-    if (recent && isGuardDeny(b)) recent.denied = true
-    if (recent && !recent.denied) recent.result = inputHash(b.content ?? null)
+    if (recent) recent.result = inputHash(b.content ?? null)
   }
+  if (ours.size > 0) cache.deniedPending = cache.deniedPending.filter(id => !ours.has(id))
   for (const [id, meta] of results) {
     const cmd = cache.shellPending[id]
     if (cmd === undefined) continue
     delete cache.shellPending[id]
-    if (cache.recentCalls.some(c => c.id === id && c.denied)) continue
+    if (ours.has(id)) continue
     if (cmd === EDIT_PENDING) {
       if (!meta.isError) cache.failedCommands = {}
     } else if (meta.isError) {
@@ -318,6 +321,7 @@ export async function computeSessionUsage(
         recentCalls: [...prev.recentCalls],
         shellPending: { ...prev.shellPending },
         failedCommands: { ...prev.failedCommands },
+        deniedPending: [...prev.deniedPending],
       }
   const resumedFrom = cache.byteOffset
 

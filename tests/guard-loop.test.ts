@@ -350,6 +350,22 @@ describe('failing-command retry', () => {
     expect(await call(env, 'Bash', { command })).toContain('already failed 5 times')
   })
 
+  it('keeps a deny mark until its result lands, however many calls come between', async () => {
+    const env = await setup({ loopWarnAfter: null, loopStopAfter: null })
+    const command = 'npm test'
+    for (let i = 0; i < 5; i++) await call(env, 'Bash', { command }, { fails: true })
+    const id = `toolu_${++seq}`
+    const out = await runGuardHook('pretooluse', JSON.stringify({
+      session_id: SID, transcript_path: env.path, tool_name: 'Bash', tool_input: { command }, tool_use_id: id,
+    }), { base: env.base })
+    expect(out).toContain('"permissionDecision":"deny"')
+    await appendFile(env.path, useLine(id, 'Bash', { command }))
+    for (let i = 0; i < 20; i++) await call(env, 'Read', { file_path: `/f${i}` })
+    // A result text the deny-shape match does not know, so only the kept mark can tell it was ours.
+    await appendFile(env.path, resultLine(id, true, 'blocked by a hook'))
+    expect(await call(env, 'Bash', { command })).toContain('already failed 5 times')
+  })
+
   it('counts a real failure that prints the guard mark', async () => {
     const env = await setup({ loopWarnAfter: null, loopStopAfter: null })
     for (let i = 0; i < 5; i++) await call(env, 'Bash', { command: 'npm test' }, { fails: true, output: '(codeburn guard) hook test failed' })
