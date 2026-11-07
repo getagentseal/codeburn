@@ -226,12 +226,26 @@ describe('identical-call loop', () => {
     }
   })
 
+  it('accepts a variable as the sleep duration', async () => {
+    const env = await setup()
+    const outs: string[] = []
+    for (const d of ['"$POLL_INTERVAL"', '$POLL_INTERVAL', '${POLL_INTERVAL}', '"${POLL_INTERVAL}"']) {
+      for (let i = 0; i < 12; i++) outs.push(await call(env, 'Bash', { command: `sleep ${d} && gh pr checks 1909` }, { fails: true, output: 'pending' }))
+    }
+    expect(outs.every(o => o === '')).toBe(true)
+  })
+
   it('still counts a sleep without a numeric duration', async () => {
     const env = await setup()
     const outs: string[] = []
     for (let i = 0; i < 8; i++) outs.push(await call(env, 'Bash', { command: 'sleep nope' }, { fails: true, output: 'sleep: invalid time interval' }))
     expect(outs[3]).toContain('called 4 times in a row')
     expect(outs[7]).toContain('"permissionDecision":"deny"')
+    const sub = await setup()
+    const subs: string[] = []
+    for (let i = 0; i < 8; i++) subs.push(await call(sub, 'Bash', { command: 'sleep "$(npm test)" && gh pr checks 1909' }, { output: 'same' }))
+    expect(subs[3]).toContain('called 4 times in a row')
+    expect(subs[7]).toContain('"permissionDecision":"deny"')
   })
 
   it('still counts a sleep with a dangling operator', async () => {

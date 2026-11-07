@@ -85,7 +85,8 @@ const BARE_ECHO = /^echo(?:[^\S\n]+(?:[^;&|<>`$\n]|\$(?!\())*)?$/
 // `sleep 0; git status` on repeat is exempt on purpose: the guard stops runaway
 // cost, and a repeated read-only check is cheap whatever the sleep length.
 function isWaitingCheck(command: string): boolean {
-  const m = /^\s*sleep\s+\d+(?:\.\d+)?[smhd]?\s*(?:(&&|;|\|\|)([\s\S]*))?$/.exec(command)
+  // The duration is a number or a plain variable, never a substitution.
+  const m = /^\s*sleep\s+(?:\d+(?:\.\d+)?[smhd]?|\$[A-Za-z_]\w*|\$\{[A-Za-z_]\w*\}|"\$[A-Za-z_]\w*"|"\$\{[A-Za-z_]\w*\}")\s*(?:(&&|;|\|\|)([\s\S]*))?$/.exec(command)
   if (!m) return false
   // The shared read list counts `env` as a read and does not split lines, so
   // `sleep 5 && env CI=1 npm run build` or a second line would pass as a check.
