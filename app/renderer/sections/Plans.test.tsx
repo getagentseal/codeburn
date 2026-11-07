@@ -240,7 +240,7 @@ describe('Plans', () => {
     expect(screen.getByText('€8.20 · 41%')).toBeInTheDocument()
   })
 
-  it('never forces a quota refresh from a refreshToken bump, only from an explicit click', async () => {
+  it('forces a quota refresh only from Refresh or ⌘R, never from a refreshToken bump', async () => {
     getPlans.mockResolvedValue(statusWithPlans)
 
     const { rerender } = render(<Plans period="30days" refreshToken={0} />)
@@ -259,6 +259,14 @@ describe('Plans', () => {
     fireEvent.click(screen.getByRole('button', { name: 'How to connect' }))
     fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
     await waitFor(() => expect(getQuota).toHaveBeenCalledWith(true, []))
+
+    getQuota.mockClear()
+    rerender(<Plans period="30days" refreshToken={3} userRefreshToken={1} />) // ⌘R
+    await waitFor(() => expect(getQuota).toHaveBeenCalledWith(true, []))
+    getQuota.mockClear()
+    rerender(<Plans period="30days" refreshToken={4} userRefreshToken={1} />)
+    await waitFor(() => expect(getQuota).toHaveBeenCalled())
+    for (const call of getQuota.mock.calls) expect(call[0]).toBe(false)
   })
 
   it('renders permission-denied CLI failures as the amber Full Disk Access state', async () => {

@@ -149,7 +149,7 @@ function ConfirmButton({ label, prompt, onConfirm }: { label: string; prompt: st
   )
 }
 
-export function Settings({ period, refreshToken = 0, onNavigate, initialPane, claudeConfigs, claudeConfigSource = null, onConfigMutated, scope = 'local', onScopeChange, projectFiltered = false }: { period: Period; refreshToken?: number; onNavigate?: (section: Section) => void; initialPane?: SettingsPane; claudeConfigs?: ClaudeConfigSelector; claudeConfigSource?: string | null; onConfigMutated?: () => void; scope?: Scope; onScopeChange?: (scope: string) => void; projectFiltered?: boolean }) {
+export function Settings({ period, refreshToken = 0, userRefreshToken = 0, onNavigate, initialPane, claudeConfigs, claudeConfigSource = null, onConfigMutated, scope = 'local', onScopeChange, projectFiltered = false }: { period: Period; refreshToken?: number; userRefreshToken?: number; onNavigate?: (section: Section) => void; initialPane?: SettingsPane; claudeConfigs?: ClaudeConfigSelector; claudeConfigSource?: string | null; onConfigMutated?: () => void; scope?: Scope; onScopeChange?: (scope: string) => void; projectFiltered?: boolean }) {
   const [pane, setPane] = useState<Pane>(initialPane ?? 'general')
   // The tray app's own two panes, Windows only, each shown only while its switch in the
   // sidebar corner is on: there is nothing to configure about a tray app that is not running,
@@ -185,7 +185,7 @@ export function Settings({ period, refreshToken = 0, onNavigate, initialPane, cl
           {pane === 'projects' && <ProjectsPane refreshToken={refreshToken} onConfigMutated={onConfigMutated} />}
           {pane === 'aliases' && <AliasesPane refreshToken={refreshToken} onConfigMutated={onConfigMutated} />}
           {pane === 'pricing' && <PricingPane refreshToken={refreshToken} onConfigMutated={onConfigMutated} />}
-          {pane === 'plans' && <PlansPane period={period} refreshToken={refreshToken} onNavigate={onNavigate} onConfigMutated={onConfigMutated} />}
+          {pane === 'plans' && <PlansPane period={period} refreshToken={refreshToken} userRefreshToken={userRefreshToken} onNavigate={onNavigate} onConfigMutated={onConfigMutated} />}
           {pane === 'devices' && <DevicesPane period={period} refreshToken={refreshToken} />}
           {pane === 'export' && <ExportPane period={period} refreshToken={refreshToken} />}
           {pane === 'sharing' && <SharingPane />}
@@ -546,18 +546,19 @@ function DetectedRow({ quota, enabled, onToggle, onReconnect }: { quota: QuotaPr
   </div>
 }
 
-function PlansPane({ period, refreshToken, onNavigate, onConfigMutated }: { period: Period; refreshToken: number; onNavigate?: (section: Section) => void; onConfigMutated?: () => void }) {
+function PlansPane({ period, refreshToken, userRefreshToken, onNavigate, onConfigMutated }: { period: Period; refreshToken: number; userRefreshToken: number; onNavigate?: (section: Section) => void; onConfigMutated?: () => void }) {
   const [nonce, setNonce] = useState(0)
-  // Steady poll serves cached quota (force=false); the Connect affordance's
-  // Refresh forces a keychain-allowed fetch via the same path as Plans.tsx.
+  // Steady poll serves cached quota (force=false); ⌘R and the Connect
+  // affordance's Refresh force a keychain-allowed fetch, as in Plans.tsx.
   const [reconnectNonce, setReconnectNonce] = useState(0)
   const [disabledProviders, setDisabledProviders] = useState<ProviderName[]>(() => readDisabledProviders())
-  const lastForced = useRef(reconnectNonce)
+  const lastForced = useRef(`${userRefreshToken}:${reconnectNonce}`)
   const quota = usePolled<QuotaProvider[]>(() => {
-    const force = reconnectNonce !== lastForced.current
-    lastForced.current = reconnectNonce
+    const key = `${userRefreshToken}:${reconnectNonce}`
+    const force = key !== lastForced.current
+    lastForced.current = key
     return codeburn.getQuota(force, disabledProviders)
-  }, [refreshToken, reconnectNonce, disabledProviders])
+  }, [refreshToken, userRefreshToken, reconnectNonce, disabledProviders])
   const plans = usePolled<StatusJson>(() => codeburn.getPlans(period), [period, refreshToken, nonce], {
     memoKey: reportMemoKey('plans', period),
   })

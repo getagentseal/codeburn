@@ -381,6 +381,9 @@ function AppMain({ transientProject, onTransientProject }: { transientProject: T
   const [claudeConfigSource, setClaudeConfigSource] = useState<string | null>(initialConfigSource)
   const [requestedScope, setScopeState] = useState<Scope>(initialScope)
   const [refreshToken, setRefreshToken] = useState(0)
+  // Bumped only by an explicit refresh (⌘R, the IDE command): the one refreshToken
+  // source that may count as asking for a keychain read.
+  const [userRefreshToken, setUserRefreshToken] = useState(0)
   const [projectFiltered, setProjectFiltered] = useState(initialProjectFiltered)
   // Combined reports unfiltered paired-device usage, so a project filter would
   // come back inside the aggregate. The filter wins, from the first poll.
@@ -758,6 +761,10 @@ function AppMain({ transientProject, onTransientProject }: { transientProject: T
     refreshOverview()
     setRefreshToken(token => token + 1)
   }, [refreshOverview])
+  const userRefresh = useCallback(() => {
+    setUserRefreshToken(token => token + 1)
+    refreshVisible()
+  }, [refreshVisible])
 
   // A Settings action changed config that alters computed costs/currency
   // (currency/alias/plan/price-override). The electron read-cache is flushed CLI-
@@ -842,17 +849,17 @@ function AppMain({ transientProject, onTransientProject }: { transientProject: T
       else if (key === '9') navigate('periods')
       else if (key === '8') navigate('plans')
       else if (key === ',') navigate('settings')
-      else if (key === 'r') refreshVisible()
+      else if (key === 'r') userRefresh()
       else return
       event.preventDefault()
     }
 
     document.addEventListener('keydown', onKeyDown)
     return () => document.removeEventListener('keydown', onKeyDown)
-  }, [refreshVisible, navigate, goBack, goForward])
+  }, [userRefresh, navigate, goBack, goForward])
 
   useEffect(() => codeburn.onIdeCommand?.(command => {
-    if (command.refresh) refreshVisible()
+    if (command.refresh) userRefresh()
     const patch: Partial<NavState> = {}
     if (command.section && NAV_SECTIONS.has(command.section)) patch.section = command.section as Section
     if (command.period && isPeriod(command.period)) {
@@ -860,7 +867,7 @@ function AppMain({ transientProject, onTransientProject }: { transientProject: T
       Object.assign(patch, { period: command.period, range: null, visibleCount: INITIAL_VISIBLE })
     }
     if (Object.keys(patch).length > 0) commitNav(patch)
-  }), [commitNav, refreshVisible])
+  }), [commitNav, userRefresh])
 
   const onPeriodChange = (value: string) => {
     if (isPeriod(value)) {
@@ -988,9 +995,9 @@ function AppMain({ transientProject, onTransientProject }: { transientProject: T
         <DailyBudgetBanner payload={overview.data ?? null} provider={provider} />
         <ErrorBoundary key={section}>
         {section === 'plans' ? (
-          <Plans period={period} refreshToken={refreshToken} onNavigate={navigate} ready={ready} />
+          <Plans period={period} refreshToken={refreshToken} userRefreshToken={userRefreshToken} onNavigate={navigate} ready={ready} />
         ) : section === 'settings' ? (
-          <Settings period={period} refreshToken={refreshToken} onNavigate={navigate} initialPane={settingsPane} claudeConfigs={claudeConfigs} claudeConfigSource={claudeConfigSource} onConfigMutated={onConfigMutated} scope={scope} onScopeChange={onScopeChange} projectFiltered={projectFiltered} />
+          <Settings period={period} refreshToken={refreshToken} userRefreshToken={userRefreshToken} onNavigate={navigate} initialPane={settingsPane} claudeConfigs={claudeConfigs} claudeConfigSource={claudeConfigSource} onConfigMutated={onConfigMutated} scope={scope} onScopeChange={onScopeChange} projectFiltered={projectFiltered} />
         ) : section === 'plugins' ? (
           <PluginsSection onNavigate={navigate} />
         ) : (

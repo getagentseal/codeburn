@@ -776,6 +776,9 @@ describe('Settings', () => {
     rerender(<Settings period="month" refreshToken={1} onConfigMutated={onConfigMutated} />)
     await waitFor(() => expect(mocks.getQuota.mock.calls.length).toBeGreaterThan(calls))
     for (const call of mocks.getQuota.mock.calls) expect(call[0]).toBe(false)
+    mocks.getQuota.mockClear()
+    rerender(<Settings period="month" refreshToken={2} userRefreshToken={1} onConfigMutated={onConfigMutated} />) // ⌘R
+    await waitFor(() => expect(mocks.getQuota).toHaveBeenCalledWith(true, []))
   })
 
   it('offers to read an unchecked Claude login, with the same keychain note the card shows', async () => {
