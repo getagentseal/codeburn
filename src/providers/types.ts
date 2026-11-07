@@ -38,6 +38,9 @@ export class RetryableSourceError extends Error {}
 
 export type SessionParser = {
   parse(): AsyncGenerator<ParsedProviderCall>
+  // True after parse() when the source holds usage this parse left for a later
+  // one, so the source is read again even while its file is unchanged.
+  incomplete?: () => boolean
 }
 
 export type ParsedProviderCall = {

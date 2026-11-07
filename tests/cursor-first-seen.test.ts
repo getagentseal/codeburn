@@ -108,13 +108,13 @@ describe('cursor first-seen sidecar', () => {
     })
   })
 
-  it('retires v7 results, which billed old agent streams at the database mtime', () => {
+  it('retires v8 results: one agentKv value that was not valid JSON emptied the agent stream, and ids past the lookup cap were stored unresolved', () => {
     expect(CURSOR_CACHE_VERSION).toBe(9)
     expect(cursorCacheFileName()).toBe('cursor-results.v9.json')
   })
 
   it('re-parses session caches whose agent stream was emptied by a value that was not valid JSON', async () => {
     const { PROVIDER_PARSE_VERSIONS } = await import('../src/session-cache.js')
-    expect(PROVIDER_PARSE_VERSIONS['cursor']).toMatch(/-agentkv-json-valid-v1$/)
+    expect(PROVIDER_PARSE_VERSIONS['cursor']).toMatch(/-agentkv-json-valid-v1-cap-resume-v1$/)
   })
 })

@@ -4042,12 +4042,14 @@ export async function parseProviderSources(
       }
 
       try {
+        let incomplete = false
         if (!providerCalls) {
           const parser = provider.createSessionParser(source, parserDedup, dateRange)
           providerCalls = []
           for await (const call of parser.parse()) {
             providerCalls.push(call)
           }
+          incomplete = parser.incomplete?.() ?? false
           if (providerName === 'warp') providerCalls = keepCachedWarpShares(priorEntry, providerCalls)
         }
         const canonicalCalls = await Promise.all(providerCalls.map(canonicalizeProviderCallProject))
@@ -4088,8 +4090,8 @@ export async function parseProviderSources(
             // reply under another conversation (better GUID matching)
             // supersedes the cached copy: same hash, index and stamp under
             // another key. A same-text reply cached at another stamp or index
-            // (a pruned conversation's) stays. A store that changed between
-            // its last parse and the re-read keeps both copies.
+            // (a pruned conversation's) stays. A reply whose store changed
+            // after it was first cached keeps both copies.
             const jbTurn = (c: CachedCall): string | undefined =>
               c.deduplicationKey.startsWith('copilot:jb:') ? `${c.deduplicationKey.split(':').slice(-2).join(':')}\0${c.timestamp}` : undefined
             const freshJbTurns = new Set([...freshByKey.values()].map(jbTurn).filter(id => id !== undefined))
@@ -4112,7 +4114,14 @@ export async function parseProviderSources(
             }
             if (freshByKey.size > 0) {
               existingEntry.turns = existingEntry.turns.map(t => {
-                const calls = t.calls.map(c => { const fresh = freshByKey.get(c.deduplicationKey); return fresh ? replace(c, fresh) : c })
+                // A JetBrains reply has no time of its own, only its store's
+                // mtime. The first stamp is the closest one; taking the fresh
+                // stamp would move it to every later write of that store.
+                const calls = t.calls.map(c => {
+                  const fresh = freshByKey.get(c.deduplicationKey)
+                  if (!fresh) return c
+                  return c.deduplicationKey.startsWith('copilot:jb:') ? { ...fresh, timestamp: c.timestamp } : replace(c, fresh)
+                })
                 return calls.some((c, i) => c !== t.calls[i]) ? { ...t, calls } : t
               })
             }
@@ -4155,6 +4164,16 @@ export async function parseProviderSources(
           } else {
             section.files[source.path] = { fingerprint: fp, mcpInventory: [], turns, ...sourceAgentMetadata, ...(prLinks.length ? { prLinks } : {}), ...(sourceLineage ? { lineage: sourceLineage } : {}) }
           }
+        }
+        if (incomplete) {
+          // A fingerprint no file can match re-reads it on the next refresh;
+          // until then the pass is partial, so no day is sealed without it.
+          // Hydration is one flag for every provider, so this holds sealing
+          // for all of them. It is bounded: Cursor, the only source that sets
+          // it, resolves 9,000 more ids per refresh, so a backlog of n ids
+          // clears in ceil(n / 9000) refreshes.
+          section.files[source.path]!.fingerprint = { ...fp, sizeBytes: -1 }
+          deferredRetryableSource = true
         }
         didParse = true
         markCacheDirty(diskCache, providerName, source.path)

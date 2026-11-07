@@ -26,6 +26,8 @@ import type { ParsedProviderCall } from './providers/types.js'
 // dormant DB never changes, so only a version bump re-parses them.
 // Version 9: one agentKv value that was not valid JSON emptied the whole agent
 // stream, so v8 results lack its tools, estimates and agent-only sessions.
+// Also v9: v8 results were stored while agent-stream ids were still left
+// past the lookup cap, so an unchanged DB never resolved them.
 export const CURSOR_CACHE_VERSION = 9
 export const CURSOR_LEGACY_CACHE_FILE = 'cursor-results.json'
 export function cursorCacheFileName(version = CURSOR_CACHE_VERSION): string {

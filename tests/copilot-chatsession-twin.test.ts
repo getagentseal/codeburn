@@ -10,6 +10,7 @@ import { createRequire } from 'node:module'
 import { isSqliteAvailable } from '../src/sqlite.js'
 import { clearLoadCacheMemo } from '../src/session-cache.js'
 import { clearSessionCache, isSessionHydrationComplete, parseAllSessions } from '../src/parser.js'
+import { buildDurablePeriod } from '../src/usage-aggregator.js'
 import { readCacheOnDisk, writeCacheOnDisk } from './fixtures/session-cache-io.js'
 
 const requireForTest = createRequire(import.meta.url)
@@ -327,5 +328,37 @@ describe('copilot JetBrains cache across a parse-version bump', () => {
     const keys = await servedKeys()
     expect(keys).toHaveLength(2)
     expect(keys.map(k => k.split(':')[2]).sort()).toEqual([a, b])
+  })
+  it('keeps a turn on its first day when its store is written again', async () => {
+    const store = join(tmp, 'jb', 'iu', 'chat-agent-sessions', 'store1')
+    const db = join(store, 'copilot-agent-sessions-nitrite.db')
+    await mkdir(store, { recursive: true })
+    const turn = (text: string) => `{"__first__":{"type":"Subgraph","value":${JSON.stringify(JSON.stringify({ type: 'Markdown', data: JSON.stringify({ text }) }))}}}`
+    const write = (texts: string[]) => writeFile(db, Buffer.from(
+      `$aaaaaaaa-bbbb-cccc-dddd-00000000000a\x00\x00name\x00value\x00\x05Chatt\x00\x06source${texts.map(turn).join('\x00\x06source')}`, 'latin1'))
+    process.env['CODEBURN_COPILOT_JETBRAINS_DIR'] = join(tmp, 'jb')
+    const now = new Date()
+    const range = { start: new Date(now.getFullYear(), now.getMonth(), now.getDate() - 29), end: new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999) }
+    const total = async (provider?: string) => {
+      clearSessionCache()
+      const { data } = await buildDurablePeriod({ range, label: '30 days' }, provider ? { provider } : {})
+      return { calls: data.calls, cost: data.cost }
+    }
+    const servedDays = async () => {
+      clearSessionCache()
+      return (await parseAllSessions(undefined, 'copilot')).flatMap(p => p.sessions).flatMap(s => s.turns).flatMap(t => t.assistantCalls)
+        .map(c => c.timestamp.slice(0, 10)).sort()
+    }
+
+    const old = new Date(Date.now() - 20 * 86400000)
+    await write(['the first answer '.repeat(50)])
+    await utimes(db, old, old)
+    await total()
+    await write(['the first answer '.repeat(50), 'a new answer today'])
+
+    expect(await servedDays()).toEqual([old.toISOString().slice(0, 10), now.toISOString().slice(0, 10)].sort())
+    const all = await total()
+    expect(all.calls).toBe(2)
+    expect(all).toEqual(await total('copilot'))
   })
 })
