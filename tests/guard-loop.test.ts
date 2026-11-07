@@ -186,6 +186,9 @@ describe('identical-call loop', () => {
     const outs: string[] = []
     for (let i = 0; i < 12; i++) outs.push(await call(env, 'Bash', { command: 'sleep 5 && env GH_HOST=x gh pr checks 1909' }, { fails: true, output: 'pending' }))
     expect(outs.every(o => o === '')).toBe(true)
+    const quoted: string[] = []
+    for (let i = 0; i < 12; i++) quoted.push(await call(env, 'Bash', { command: `sleep 5 && env X='a b' Y="c d" gh pr checks 1909` }, { fails: true, output: 'pending' }))
+    expect(quoted.every(o => o === '')).toBe(true)
   })
 
   it('keeps the exemption when only comments or blank lines follow the check', async () => {

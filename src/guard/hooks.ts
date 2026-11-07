@@ -95,8 +95,8 @@ function isWaitingCheck(command: string): boolean {
   const lines = (m[1] ?? '').split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#'))
   if (lines.length > 1) return false
   const rest = (lines[0] ?? '').replace(
-    /(^|[;&|][^\S\n]*)env((?:[^\S\n]+[A-Za-z_]\w*=\S*)*)[^\S\n]+/g,
-    (_, pre: string, vars: string) => `${pre}${vars.trim()}${vars ? ' ' : ''}`,
+    /(^|[;&|][^\S\n]*)env(?:[^\S\n]+[A-Za-z_]\w*=(?:'[^'\n]*'|"[^"\n]*"|[^\s'"])*)*[^\S\n]+/g,
+    '$1',
   )
   if (/(?:^|[\s;&|])env(?=\s|$)/.test(rest)) return false
   return !rest || isReadShapedBashCommand(rest) || GH_READ.test(rest) || BARE_ECHO.test(rest)
