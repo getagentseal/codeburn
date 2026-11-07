@@ -333,7 +333,28 @@ describe('grokbot sliding mirror', () => {
       expect(await served()).toEqual(whole)
 
       await writeTranscript(BOT_A, [r1[2]!, botMessage('b1c', 'r1', 'g'.repeat(10000), T0 + day + 120_000), ...r2])
-      expect(await served()).toEqual([[new Date(T0).toISOString(), 2000, 2600]])
+      expect(await served()).toEqual(whole)
+    } finally {
+      if (originalCacheDir === undefined) delete process.env['CODEBURN_CACHE_DIR']
+      else process.env['CODEBURN_CACHE_DIR'] = originalCacheDir
+    }
+  })
+
+  it('takes a re-read of a request whose first entry is still in the mirror as a correction', async () => {
+    const originalCacheDir = process.env['CODEBURN_CACHE_DIR']
+    process.env['CODEBURN_CACHE_DIR'] = join(dir, 'cb-cache')
+    try {
+      const { clearSessionCache, parseAllSessions } = await import('../../src/parser.js')
+      const served = async () => {
+        clearSessionCache()
+        return (await parseAllSessions(undefined, 'grokbot'))
+          .flatMap(p => p.sessions).flatMap(s => s.turns).flatMap(t => t.assistantCalls)
+          .map(c => [c.timestamp, c.usage.inputTokens, c.usage.outputTokens])
+      }
+      await writeTranscript(BOT_A, [userMessage('u1', 'r1', 'q'.repeat(400), T0), botMessage('b1', 'r1', 'a'.repeat(40), T0 + 1000)])
+      expect(await served()).toEqual([[new Date(T0).toISOString(), 100, 10]])
+      await writeTranscript(BOT_A, [userMessage('u1', 'r1', 'q'.repeat(200), T0), botMessage('b1', 'r1', 'a'.repeat(80), T0 + 1000)])
+      expect(await served()).toEqual([[new Date(T0).toISOString(), 50, 20]])
     } finally {
       if (originalCacheDir === undefined) delete process.env['CODEBURN_CACHE_DIR']
       else process.env['CODEBURN_CACHE_DIR'] = originalCacheDir
