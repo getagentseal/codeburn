@@ -568,12 +568,18 @@ function promptTime(raw: string): number | null {
     const m = PROMPT_TIME.exec(text)
     const month = m ? MONTHS.indexOf(m[1]!) : -1
     if (!m || month < 0) continue
-    const hour = Number(m[4]) % 12 + (m[6] === 'PM' ? 12 : 0)
-    // No zone in the tag: the prompt was written in this machine's zone.
-    if (!m[7]) return new Date(Number(m[3]), month, Number(m[2]), hour, Number(m[5])).getTime()
+    const [year, day, hour12, minute] = [Number(m[3]), Number(m[2]), Number(m[4]), Number(m[5])]
     const offsetHours = Number(m[8] ?? 0)
-    const offsetMinutes = offsetHours * 60 + Math.sign(offsetHours || 1) * Number(m[9] ?? 0)
-    return Date.UTC(Number(m[3]), month, Number(m[2]), hour, Number(m[5])) - offsetMinutes * 60_000
+    const offsetMins = Number(m[9] ?? 0)
+    if (hour12 < 1 || hour12 > 12 || minute > 59 || Math.abs(offsetHours) > 14 || offsetMins > 59) continue
+    const hour = hour12 % 12 + (m[6] === 'PM' ? 12 : 0)
+    // A day past the month's end would roll over into the next month.
+    const calendar = new Date(Date.UTC(year, month, day))
+    if (calendar.getUTCFullYear() !== year || calendar.getUTCMonth() !== month || calendar.getUTCDate() !== day) continue
+    // No zone in the tag: the prompt was written in this machine's zone.
+    if (!m[7]) return new Date(year, month, day, hour, minute).getTime()
+    const offsetMinutes = offsetHours * 60 + Math.sign(offsetHours || 1) * offsetMins
+    return Date.UTC(year, month, day, hour, minute) - offsetMinutes * 60_000
   }
   return null
 }

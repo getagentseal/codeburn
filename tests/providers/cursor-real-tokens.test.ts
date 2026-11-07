@@ -549,6 +549,24 @@ describe.skipIf(skipReason !== null)('cursor real context tokens (#575)', () => 
     expect(stamp('req-local')).toBe(new Date(at).toISOString())
   })
 
+  it('ignores a prompt timestamp with an impossible date or offset and falls through to the next rule', async () => {
+    const conversationAt = minuteAgo(9)
+    const dbPath = buildDb((db) => {
+      db.prepare('INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)').run(
+        'composerData:4444eeee-1111-2222-3333-444455556666',
+        JSON.stringify({ createdAt: conversationAt, latestChatGenerationUUID: 'req-feb-30' }),
+      )
+      insertAgentKv(db, { blobId: 'akv-1', role: 'user', content: [{ type: 'text', text: '<timestamp>Monday, Feb 30, 2026, 9:41 PM (UTC-8)</timestamp>' }, { type: 'text', text: 'run it' }], requestId: 'req-feb-30' })
+      insertAgentKv(db, { blobId: 'akv-2', role: 'user', content: [{ type: 'text', text: '<timestamp>Monday, Feb 2, 2026, 9:41 PM (UTC+99:99)</timestamp>' }, { type: 'text', text: 'run it' }], requestId: 'req-bad-zone' })
+    })
+
+    const calls = await collectCalls(createCursorProvider(dbPath), dbPath)
+
+    const stamp = (id: string) => calls.find(c => c.deduplicationKey === `cursor:agentKv:${id}`)?.timestamp
+    expect(stamp('req-feb-30')).toBe(new Date(conversationAt).toISOString())
+    expect(stamp('req-bad-zone')).toBe(new Date(statSync(dbPath).mtimeMs).toISOString())
+  })
+
   it('drops an agent-only stream whose prompt timestamp predates the lookback', async () => {
     const dbPath = buildDb((db) => {
       insertAgentKv(db, { blobId: 'akv-1', role: 'user', content: [{ type: 'text', text: promptTag(minuteAgo(240), -8) }, { type: 'text', text: 'old export' }], requestId: 'req-feb' })
