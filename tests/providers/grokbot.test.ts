@@ -306,6 +306,40 @@ describe('grokbot sliding mirror', () => {
     }
   })
 
+  it('keeps a request whole while its oldest entries slide out', async () => {
+    const originalCacheDir = process.env['CODEBURN_CACHE_DIR']
+    process.env['CODEBURN_CACHE_DIR'] = join(dir, 'cb-cache')
+    try {
+      const day = 86_400_000
+      const r1 = [
+        userMessage('u1', 'r1', 'q'.repeat(8000), T0),
+        botMessage('b1', 'r1', 'a'.repeat(8000), T0 + 1000),
+        botMessage('b1b', 'r1', 'f'.repeat(400), T0 + day),
+      ]
+      const r2 = [userMessage('u2', 'r2', 'next', T0 + day + 60_000)]
+      const { clearSessionCache, parseAllSessions } = await import('../../src/parser.js')
+      const served = async () => {
+        clearSessionCache()
+        return (await parseAllSessions(undefined, 'grokbot'))
+          .flatMap(p => p.sessions).flatMap(s => s.turns).flatMap(t => t.assistantCalls)
+          .filter(c => c.deduplicationKey.endsWith(':r1'))
+          .map(c => [c.timestamp, c.usage.inputTokens, c.usage.outputTokens])
+      }
+      await writeTranscript(BOT_A, [...r1, ...r2])
+      const whole = await served()
+      expect(whole).toEqual([[new Date(T0).toISOString(), 2000, 2100]])
+
+      await writeTranscript(BOT_A, [r1[2]!, ...r2])
+      expect(await served()).toEqual(whole)
+
+      await writeTranscript(BOT_A, [r1[2]!, botMessage('b1c', 'r1', 'g'.repeat(10000), T0 + day + 120_000), ...r2])
+      expect(await served()).toEqual([[new Date(T0).toISOString(), 2000, 2600]])
+    } finally {
+      if (originalCacheDir === undefined) delete process.env['CODEBURN_CACHE_DIR']
+      else process.env['CODEBURN_CACHE_DIR'] = originalCacheDir
+    }
+  })
+
   it('keeps slid-out requests across an env fingerprint change', async () => {
     const originalCacheDir = process.env['CODEBURN_CACHE_DIR']
     const originalAppData = process.env['APPDATA']
