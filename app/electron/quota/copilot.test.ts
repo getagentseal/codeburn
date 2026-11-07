@@ -214,3 +214,36 @@ describe('Copilot credential directories', () => {
     }
   })
 })
+
+describe('Copilot credential folders', () => {
+  const twoFolders = (win: Record<string, unknown>, xdg: Record<string, unknown>) => {
+    const files: Record<string, string> = {
+      [path.join('/win', 'github-copilot', 'hosts.json')]: JSON.stringify(win),
+      [path.join('/home', '.config', 'github-copilot', 'hosts.json')]: JSON.stringify(xdg),
+    }
+    return { configDirs: [path.join('/win', 'github-copilot'), path.join('/home', '.config', 'github-copilot')], readFile: vi.fn(async (file: string) => files[file] ?? null) }
+  }
+  const seen = (fetchMock: ReturnType<typeof vi.fn>) => fetchMock.mock.calls.map(call => {
+    const [url, init] = call as unknown as [string, RequestInit]
+    return `${url} ${(init.headers as Record<string, string>).Authorization}`
+  })
+
+  it('moves on to the next folder when the first one holds a refused token', async () => {
+    const fetchMock = vi.fn(async (_url: string | URL | RequestInfo, init?: RequestInit) => (init?.headers as Record<string, string>).Authorization === 'token gho_valid'
+      ? okJson(usageBody)
+      : new Response('', { status: 401 }))
+    const result = await fetchCopilotQuota({ fetch: fetchMock, ...twoFolders({ 'github.com': { oauth_token: 'gho_stale' } }, { 'github.com': { oauth_token: 'gho_valid' } }) })
+    expect(result.quota.connection).toBe('connected')
+    expect(seen(fetchMock)).toEqual([
+      'https://api.github.com/copilot_internal/user token gho_stale',
+      'https://api.github.com/copilot_internal/user token gho_valid',
+    ])
+  })
+
+  it('moves on to the next folder when the first one holds a host it cannot address', async () => {
+    const fetchMock = vi.fn(async () => okJson(usageBody))
+    const result = await fetchCopilotQuota({ fetch: fetchMock, ...twoFolders({ 'github.acme-corp.net': { oauth_token: 'gho_server' } }, { 'github.com': { oauth_token: 'gho_valid' } }) })
+    expect(result.quota.connection).toBe('connected')
+    expect(seen(fetchMock)).toEqual(['https://api.github.com/copilot_internal/user token gho_valid'])
+  })
+})

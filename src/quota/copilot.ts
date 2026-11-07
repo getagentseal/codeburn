@@ -167,18 +167,16 @@ function credentialFromMap(raw: string, hostForKey: (key: string) => string | nu
   return entries.find(entry => (normalizeCopilotHost(entry.host) ?? COPILOT_DEFAULT_HOST) === preferred) ?? null
 }
 
-async function credentialFromFiles(deps: CopilotDeps): Promise<CopilotCredential | null> {
-  for (const dir of deps.configDirs) {
-    for (const name of CREDENTIAL_FILES) {
-      try {
-        const raw = await deps.readFile(path.join(dir, name), 64 * 1024)
-        if (!raw) continue
-        // hosts.json is keyed by GitHub host, apps.json by "<host>:<app id>".
-        const credential = credentialFromMap(raw, name === 'hosts.json' ? key => key : hostFromAppsKey)
-        if (credential) return credential
-      } catch {
-        // A malformed or unreadable file falls through to the next candidate.
-      }
+async function credentialFromDir(dir: string, deps: CopilotDeps): Promise<CopilotCredential | null> {
+  for (const name of CREDENTIAL_FILES) {
+    try {
+      const raw = await deps.readFile(path.join(dir, name), 64 * 1024)
+      if (!raw) continue
+      // hosts.json is keyed by GitHub host, apps.json by "<host>:<app id>".
+      const credential = credentialFromMap(raw, name === 'hosts.json' ? key => key : hostFromAppsKey)
+      if (credential) return credential
+    } catch {
+      // A malformed or unreadable file falls through to the next candidate.
     }
   }
   return null
@@ -246,32 +244,43 @@ export async function fetchCopilotQuota(options: Partial<CopilotDeps> & { signal
   // host was tried instead of a bare "Temporarily unavailable".
   let apiHost = COPILOT_DEFAULT_API_HOST
   try {
-    let credential = await credentialFromFiles(deps)
-    if (!credential) return { quota: empty('disconnected') }
-    const endpointFor = (value: CopilotCredential): string | null => copilotUsageEndpoint(value.host)
-    let endpoint = endpointFor(credential)
-    if (!endpoint) {
+    const found: { dir: string; credential: CopilotCredential; endpoint: string | null }[] = []
+    for (const dir of deps.configDirs) {
+      const credential = await credentialFromDir(dir, deps)
+      if (credential) found.push({ dir, credential, endpoint: copilotUsageEndpoint(credential.host) })
+    }
+    if (found.length === 0) return { quota: empty('disconnected') }
+    // A folder holding a host we cannot address, or a token the API refuses,
+    // must not hide a working login in the next folder.
+    const usable = found.filter(entry => entry.endpoint !== null)
+    if (usable.length === 0) {
       // Never retried against api.github.com: that endpoint does not honour an
       // enterprise credential and must not receive it.
-      return { quota: empty('terminalFailure', [unsupportedHostFooter(normalizeCopilotHost(credential.host) ?? COPILOT_DEFAULT_HOST)]) }
+      return { quota: empty('terminalFailure', [unsupportedHostFooter(normalizeCopilotHost(found[0]!.credential.host) ?? COPILOT_DEFAULT_HOST)]) }
     }
-    apiHost = copilotAPIHost(credential.host) ?? apiHost
 
-    let response = await request(credential, endpoint, deps, options.signal)
-    if (response.status === 401) {
+    // null: the last folder's token was refused and the disk held no newer one.
+    let response: Response | null = null
+    for (const entry of usable) {
+      apiHost = copilotAPIHost(entry.credential.host) ?? apiHost
+      response = await request(entry.credential, entry.endpoint!, deps, options.signal)
+      if (response.status !== 401) break
       // An active editor session rotates this token; re-read once before
       // giving up so we don't report a failure the disk already fixed.
-      const reread = await credentialFromFiles(deps)
-      if (!reread || reread.token === credential.token) return { quota: empty('transientFailure') }
-      credential = reread
-      const rereadEndpoint = endpointFor(credential)
-      if (!rereadEndpoint) {
-        return { quota: empty('terminalFailure', [unsupportedHostFooter(normalizeCopilotHost(credential.host) ?? COPILOT_DEFAULT_HOST)]) }
+      const reread = await credentialFromDir(entry.dir, deps)
+      if (!reread || reread.token === entry.credential.token) {
+        response = null
+        continue
       }
-      endpoint = rereadEndpoint
-      apiHost = copilotAPIHost(credential.host) ?? apiHost
-      response = await request(credential, endpoint, deps, options.signal)
+      const rereadEndpoint = copilotUsageEndpoint(reread.host)
+      if (!rereadEndpoint) {
+        return { quota: empty('terminalFailure', [unsupportedHostFooter(normalizeCopilotHost(reread.host) ?? COPILOT_DEFAULT_HOST)]) }
+      }
+      apiHost = copilotAPIHost(reread.host) ?? apiHost
+      response = await request(reread, rereadEndpoint, deps, options.signal)
+      if (response.status !== 401) break
     }
+    if (!response) return { quota: empty('transientFailure') }
     if (response.status === 429) {
       const raw = response.headers.get('Retry-After')
       const seconds = raw === null ? NaN : Number(raw)
