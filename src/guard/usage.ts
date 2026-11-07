@@ -29,7 +29,9 @@ import { allowPath, sessionCachePath, sessionsDir } from './store.js'
 // `failedCommands` counts consecutive is_error results per command hash: a
 // passing run resets that command, and a successful edit resets every command,
 // since a rerun after a code change is a new attempt.
-export type ToolCallKey = { id: string; name: string; hash: string; result?: string }
+// `live`: the PreToolUse hook recorded this call itself, so whether it denied
+// it is known exactly and its result is never guessed from the deny text.
+export type ToolCallKey = { id: string; name: string; hash: string; result?: string; live?: boolean }
 
 export type GuardCache = {
   version: number
@@ -47,6 +49,9 @@ export type GuardCache = {
   recentCalls: ToolCallKey[]
   shellPending: Record<string, string>
   failedCommands: Record<string, number>
+  // Ids of calls the hook denied whose tool_result (our deny reason, not an
+  // answer) has not been folded yet. Not bounded by the recent-call window.
+  deniedPending: string[]
   loopWarned: boolean
   retryWarned: boolean
   loopRun: number
@@ -61,9 +66,13 @@ export type GuardCache = {
 // per-message cost without it, so they must cold-reparse.
 // v4: loop and retry state (recentCalls, shellPending, failedCommands); v3
 // caches never folded tool calls, so they must cold-reparse.
-export const GUARD_CACHE_VERSION = 4
+// v5: failedCommands counts consecutive failures, not every failure in the
+// session; a live v4 count would deny a command that failed long ago.
+export const GUARD_CACHE_VERSION = 5
 
 export const RECENT_CALLS = 16
+// Results land right after their call, so a deny mark older than this is stale.
+export const DENIED_PENDING_MAX = 64
 
 // `commit` must be the git subcommand: `git`, optionally flag tokens (long
 // flags, or a short flag with an optional separate value like `-c k=v`), then
@@ -91,6 +100,7 @@ export function emptyCache(sessionId: string): GuardCache {
     recentCalls: [],
     shellPending: {},
     failedCommands: {},
+    deniedPending: [],
     loopWarned: false,
     retryWarned: false,
     loopRun: 0,
@@ -110,7 +120,11 @@ export function inputHash(value: unknown): string {
 }
 
 export function recordToolCall(cache: GuardCache, call: ToolCallKey): void {
-  if (call.id && cache.recentCalls.some(c => c.id === call.id)) return
+  const known = call.id ? cache.recentCalls.find(c => c.id === call.id) : undefined
+  if (known) {
+    if (call.live) known.live = true
+    return
+  }
   cache.recentCalls.push(call)
   if (cache.recentCalls.length > RECENT_CALLS) cache.recentCalls.shift()
 }
@@ -138,6 +152,19 @@ export function identicalRun(cache: GuardCache, call: ToolCallKey): number {
   return run
 }
 
+// Every deny reason the hook writes starts with this, so a rebuild from the
+// transcript, which has no deny marks, still knows a result was ours. Only the
+// exact reason shapes match, so a real failure that prints the mark still counts.
+export const GUARD_DENY_MARK = '(codeburn guard)'
+const GUARD_DENY = /^\(codeburn guard\) (?:Session cost passed \$\d+\.\d\d\. Stop and ask the user how to continue\.|(?:\S+ was called \d+ times in a row with the same input|The command "[\s\S]{0,60}" already failed \d+ times); this session is \$\d+\.\d\d\. Change approach or ask the user\.)$/
+
+function isGuardDeny(b: { content?: unknown; is_error?: unknown }): boolean {
+  if (b.is_error !== true) return false
+  const c = b.content
+  const text = typeof c === 'string' ? c : Array.isArray(c) && c.length === 1 ? (c[0] as { text?: unknown } | null)?.text : undefined
+  return typeof text === 'string' && text.length < 2_000 && GUARD_DENY.test(text)
+}
+
 // Never a command hash (those are 16 hex chars).
 const EDIT_PENDING = 'edit'
 
@@ -146,15 +173,24 @@ function foldToolResults(cache: GuardCache, entry: JournalEntry): void {
   collectToolResultMeta(entry, results)
   if (results.size === 0) return
   const content = (entry.message as { content?: unknown } | undefined)?.content
-  for (const b of Array.isArray(content) ? content as { type?: unknown; tool_use_id?: unknown; content?: unknown }[] : []) {
-    if (b?.type !== 'tool_result') continue
+  const ours = new Set<string>()
+  for (const b of Array.isArray(content) ? content as { type?: unknown; tool_use_id?: unknown; content?: unknown; is_error?: unknown }[] : []) {
+    if (b?.type !== 'tool_result' || typeof b.tool_use_id !== 'string') continue
     const recent = cache.recentCalls.find(c => c.id === b.tool_use_id)
+    // The deny text only stands in for a mark the cache no longer holds (a
+    // rebuild, or a call out of the window); a live call's result is genuine.
+    if (cache.deniedPending.includes(b.tool_use_id) || (!recent?.live && isGuardDeny(b))) {
+      ours.add(b.tool_use_id)
+      continue
+    }
     if (recent) recent.result = inputHash(b.content ?? null)
   }
+  if (ours.size > 0) cache.deniedPending = cache.deniedPending.filter(id => !ours.has(id))
   for (const [id, meta] of results) {
     const cmd = cache.shellPending[id]
     if (cmd === undefined) continue
     delete cache.shellPending[id]
+    if (ours.has(id)) continue
     if (cmd === EDIT_PENDING) {
       if (!meta.isError) cache.failedCommands = {}
     } else if (meta.isError) {
@@ -295,6 +331,7 @@ export async function computeSessionUsage(
         recentCalls: [...prev.recentCalls],
         shellPending: { ...prev.shellPending },
         failedCommands: { ...prev.failedCommands },
+        deniedPending: [...prev.deniedPending],
       }
   const resumedFrom = cache.byteOffset
 

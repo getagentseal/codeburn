@@ -40,6 +40,8 @@ import { isReadShapedBashCommand } from '../bash-utils.js'
 import { readGuardConfig } from './store.js'
 import {
   computeSessionUsage,
+  DENIED_PENDING_MAX,
+  GUARD_DENY_MARK,
   identicalRun,
   inputHash,
   isAllowed,
@@ -74,20 +76,72 @@ function markSignal(cache: GuardCache, signal: 'loop' | 'retry'): void {
   cache.signalWarnCostUSD ??= cache.costUSD
 }
 
+// A double-quoted string, honouring backslash escapes inside it.
+const DQ = /"(?:[^"\\]|\\[\s\S])*"/.source
+// NAME=value where the value is one bare word or one quoted string with no
+// shell metacharacter that could run or redirect anything; a plain variable
+// ($NAME, ${NAME}) is fine, any other expansion is not.
+const VAR_REF = /\$[A-Za-z_]\w*|\$\{[A-Za-z_]\w*\}/.source
+const WORD = `'[^'\\n]*'|"(?:[^"\\n$\`]|${VAR_REF})*"|(?:[^\\s;|&<>()\`$'"]|${VAR_REF})+`
+const ASSIGN = `[A-Za-z_]\\w*=(?:${WORD})?`
+const ASSIGN_AT = new RegExp(`^${ASSIGN}(?=\\s|$)`)
 // The shared read list leaves gh out (it has mutating subcommands); these only inspect.
-const GH_READ = /^gh\s+[\w-]+\s+(?:view|list|checks|status|diff|watch)\b[^;&|\n]*$/
+const GH_READ = new RegExp(`^(?:${ASSIGN}[^\\S\\n]+)*gh\\s+[\\w-]+\\s+(?:view|list|checks|status|diff|watch)\\b(?:'[^']*'|${DQ}|[^;&|\\n'"]|(?<=>)&|&(?=>))*$`)
+const ENV_PREFIX = new RegExp(`(^|[;&|][^\\S\\n]*)env(?:[^\\S\\n]+(?:-i|--ignore-environment|-u[^\\S\\n]*[A-Za-z_]\\w*|--unset=[A-Za-z_]\\w*|-C[^\\S\\n]*(?:${WORD})|--chdir=(?:${WORD})|-|${ASSIGN}))*[^\\S\\n]+`, 'g')
 // A bare echo after a sleep is a blind timer wait: no redirection, chaining or substitution.
+// Output may go to /dev/null or another stream (2>&1); any other target is a write.
+const WRITE_REDIRECT = /(?<![\d>&])(?:&|\d+)?>>?(?!>)(?![^\S\n]*(?:\/dev\/null|&(?:\d+|-))(?![^\s;&|]))/
+const QUOTED = new RegExp(`'[^']*'|${DQ}`, 'g')
+// Pieces of a command split on any of `seps`, never inside a quoted string.
+function splitOutsideQuotes(command: string, seps: string): string[] {
+  return command.match(new RegExp(`(?:'[^']*'|${DQ}|[^${seps}'"])+`, 'g')) ?? []
+}
 const BARE_ECHO = /^echo(?:[^\S\n]+(?:[^;&|<>`$\n]|\$(?!\())*)?$/
 
-// `sleep 30 && gh run view 1` waits on something; it is not a loop as long as
+// `sleep 30 && gh run view 1` waits on something; it is not a loop or a retry as long as
 // what runs after the sleep only reads. `sleep 0; npm test` still counts.
 // `sleep 0; git status` on repeat is exempt on purpose: the guard stops runaway
 // cost, and a repeated read-only check is cheap whatever the sleep length.
 function isWaitingCheck(command: string): boolean {
-  const m = /^\s*sleep\s+\S+\s*(?:(?:&&|;|\|\|)([\s\S]*))?$/.exec(command)
+  // The duration is a number or a plain variable, never a substitution.
+  const m = /^\s*sleep\s+(?:\d+(?:\.\d+)?[smhd]?|\$[A-Za-z_]\w*|\$\{[A-Za-z_]\w*\}|"\$[A-Za-z_]\w*"|"\$\{[A-Za-z_]\w*\}")\s*(?:(&&|;|\|\|)([\s\S]*))?$/.exec(command)
   if (!m) return false
-  const rest = m[1]?.trim() ?? ''
+  // The shared read list counts `env` as a read and does not split lines, so
+  // `sleep 5 && env CI=1 npm run build` or a second line would pass as a check.
+  // Blank and comment lines are dropped; any other later line is work. An env
+  // that only sets or clears variables or changes directory (-i, -u, -C) is
+  // dropped and what it runs is checked; any other env (other flags, or bare)
+  // is not a check.
+  const lines = splitOutsideQuotes(m[2] ?? '', '\n').map(l => l.trim()).filter(l => l && !l.startsWith('#'))
+  if (lines.length > 1) return false
+  const first = lines[0] ?? ''
+  // `sleep 5 &&` or a check ending in && or | is unfinished, not a check.
+  if ((m[1] && m[1] !== ';' && !first) || /^(?:&&|\|\|?|;)|(?:&&|\|\|?)$/.test(first)) return false
+  // Command and process substitution run work anywhere outside single quotes;
+  // a bare & backgrounds a command, and a write redirect writes a file.
+  const unquoted = first.replace(QUOTED, "''")
+  const expanding = first.replace(QUOTED, q => (q.startsWith("'") ? "''" : q))
+  if (/\$\(|`|[<>]\(/.test(expanding) || /(?<![&>])&(?![&>])/.test(unquoted) || WRITE_REDIRECT.test(unquoted)) return false
+  // Variables that change how the command is found or how the shell behaves
+  // make even a read-only command run something else.
+  if (/(?:^|[\s;&|])(?:PATH|LD_PRELOAD|LD_LIBRARY_PATH|DYLD_\w*|BASH_ENV|ENV|PROMPT_COMMAND|IFS|CDPATH|SHELL)=/.test(unquoted)) return false
+  const rest = first.replace(ENV_PREFIX, '$1')
+  if (/(?:^|[\s;&|])env(?=\s|$)/.test(rest) || hasLooseAssignment(rest)) return false
   return !rest || isReadShapedBashCommand(rest) || GH_READ.test(rest) || BARE_ECHO.test(rest)
+}
+
+// The shared read list skips any NAME=... token before a command, so each
+// leading assignment of every segment must pass the strict shape.
+function hasLooseAssignment(command: string): boolean {
+  for (const segment of splitOutsideQuotes(command, ';&|')) {
+    let s = segment.trim()
+    while (/^[A-Za-z_]\w*=/.test(s)) {
+      const m = ASSIGN_AT.exec(s)
+      if (!m) return true
+      s = s.slice(m[0].length).trimStart()
+    }
+  }
+  return false
 }
 
 // The reason goes to the model; how to lift the stop goes only to the user, so
@@ -116,14 +170,12 @@ async function handlePreToolUse(input: unknown, opts: HookOpts): Promise<string>
   const command = toolName && BASH_TOOLS.has(toolName) ? str(toolInput, 'command') : undefined
   const waiting = command !== undefined && isWaitingCheck(command)
   const run = call && !waiting ? identicalRun(cache, call) : 0
-  // Without a tool_use_id the transcript copy cannot be told apart from ours,
-  // so the call is left for the transcript to record.
-  if (call?.id) recordToolCall(cache, call)
   cache.loopRun = Math.max(cache.loopRun, run)
-  const failures = command !== undefined ? cache.failedCommands[inputHash(command)] ?? 0 : 0
+  const failures = command !== undefined && !waiting ? cache.failedCommands[inputHash(command)] ?? 0 : 0
   const shown = command?.slice(0, 60) ?? ''
 
   let output = ''
+  let denied = false
   const notes: string[] = []
   const agentNotes: string[] = []
   const allowed = await isAllowed(sessionId, opts.base)
@@ -131,20 +183,23 @@ async function handlePreToolUse(input: unknown, opts: HookOpts): Promise<string>
     // A block is a stronger signal than the soft nag; once blocked, don't also
     // fire a soft warning on the next (e.g. post-`allow`) tool call.
     cache.softWarned = true
+    denied = true
     output = deny(
-      `Session cost passed ${usd(config.hardUSD)} (codeburn guard). Stop and ask the user how to continue.`,
+      `${GUARD_DENY_MARK} Session cost passed ${usd(config.hardUSD)}. Stop and ask the user how to continue.`,
       `codeburn guard: session cost passed ${usd(config.hardUSD)}. Run 'codeburn guard allow' to lift the cap for this session, or raise hardUSD in guard.json.`,
     )
   } else if (reached(run, config.loopStopAfter) && !allowed) {
     markSignal(cache, 'loop')
+    denied = true
     output = deny(
-      `${toolName} was called ${run} times in a row with the same input; this session is ${usd(cache.costUSD)} (codeburn guard). Change approach or ask the user.`,
+      `${GUARD_DENY_MARK} ${toolName} was called ${run} times in a row with the same input; this session is ${usd(cache.costUSD)}. Change approach or ask the user.`,
       `codeburn guard: stopped ${toolName} after ${run} identical calls in a row. Run 'codeburn guard allow' to lift this for the session, or raise loopStopAfter in guard.json.`,
     )
   } else if (reached(failures, config.retryStopAfter) && !allowed) {
     markSignal(cache, 'retry')
+    denied = true
     output = deny(
-      `The command "${shown}" already failed ${failures} times; this session is ${usd(cache.costUSD)} (codeburn guard). Change approach or ask the user.`,
+      `${GUARD_DENY_MARK} The command "${shown}" already failed ${failures} times; this session is ${usd(cache.costUSD)}. Change approach or ask the user.`,
       `codeburn guard: stopped "${shown}" after ${failures} failures in a row. Run 'codeburn guard allow' to lift this for the session, or raise retryStopAfter in guard.json.`,
     )
   } else {
@@ -172,6 +227,10 @@ async function handlePreToolUse(input: unknown, opts: HookOpts): Promise<string>
     }
   }
 
+  // Without a tool_use_id the transcript copy cannot be told apart from ours,
+  // so the call is left for the transcript to record.
+  if (call?.id) recordToolCall(cache, { ...call, live: true })
+  if (denied && call?.id) cache.deniedPending = [...cache.deniedPending, call.id].slice(-DENIED_PENDING_MAX)
   await writeCache(cache, opts.base)
   return output
 }
