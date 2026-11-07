@@ -157,6 +157,13 @@ describe('identical-call loop', () => {
     expect(outs.every(o => o === '')).toBe(true)
   })
 
+  it('never counts a waiting check that fails while it waits as a retry', async () => {
+    const env = await setup()
+    const outs: string[] = []
+    for (let i = 0; i < 12; i++) outs.push(await call(env, 'Bash', { command: 'sleep 30 && gh pr checks 1895' }, { fails: true, output: 'pending' }))
+    expect(outs.every(o => o === '')).toBe(true)
+  })
+
   it('still counts a sleep followed by an echo that writes a file', async () => {
     const env = await setup()
     const outs: string[] = []

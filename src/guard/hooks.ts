@@ -79,7 +79,7 @@ const GH_READ = /^gh\s+[\w-]+\s+(?:view|list|checks|status|diff|watch)\b[^;&|\n]
 // A bare echo after a sleep is a blind timer wait: no redirection, chaining or substitution.
 const BARE_ECHO = /^echo(?:[^\S\n]+(?:[^;&|<>`$\n]|\$(?!\())*)?$/
 
-// `sleep 30 && gh run view 1` waits on something; it is not a loop as long as
+// `sleep 30 && gh run view 1` waits on something; it is not a loop or a retry as long as
 // what runs after the sleep only reads. `sleep 0; npm test` still counts.
 // `sleep 0; git status` on repeat is exempt on purpose: the guard stops runaway
 // cost, and a repeated read-only check is cheap whatever the sleep length.
@@ -117,7 +117,7 @@ async function handlePreToolUse(input: unknown, opts: HookOpts): Promise<string>
   const waiting = command !== undefined && isWaitingCheck(command)
   const run = call && !waiting ? identicalRun(cache, call) : 0
   cache.loopRun = Math.max(cache.loopRun, run)
-  const failures = command !== undefined ? cache.failedCommands[inputHash(command)] ?? 0 : 0
+  const failures = command !== undefined && !waiting ? cache.failedCommands[inputHash(command)] ?? 0 : 0
   const shown = command?.slice(0, 60) ?? ''
 
   let output = ''
