@@ -479,21 +479,30 @@ export async function persistHermesSessionLedger(ledger: HermesSessionLedger): P
 // The rebuild reprices a v3 cursor in place: every observation keeps its index
 // and day and is scaled by the snapshot's cost over the stored one. Growth since
 // the v3 write is then left to applyHermesSnapshot as a new observation. A
-// shrunk snapshot cannot be compared, so the v3 figures stay.
+// snapshot smaller than the observations it would reprice cannot price them, so
+// the flag stays for a later snapshot that can.
 function repriceRebuild(cursor: HermesSessionCursor, snapshot: HermesSnapshot): HermesSessionCursor {
+  const held = cursor.observations.reduce<HermesTokenTotals>((sum, o) => ({
+    inputTokens: sum.inputTokens + o.inputTokens,
+    outputTokens: sum.outputTokens + o.outputTokens,
+    cacheReadTokens: sum.cacheReadTokens + o.cacheReadTokens,
+    cacheWriteTokens: sum.cacheWriteTokens + o.cacheWriteTokens,
+    reasoningTokens: sum.reasoningTokens + o.reasoningTokens,
+  }), zeroHermesTokens())
+  if (!tokensGte(snapshot.tokens, held)) return cursor
   const { rebuild: _rebuild, ...rest } = cursor
-  const last = cursor.lastSeen
-  if (!tokensGte(snapshot.tokens, last) || last.costUSD <= 0) return rest
+  const heldCost = cursor.observations.reduce((sum, o) => sum + o.costUSD, 0)
+  if (heldCost <= 0) return rest
   // ponytail: when the session grew, the share of the snapshot cost already
   // held is estimated by token count (reasoning sits inside output). Exact when
   // nothing grew; the snapshot carries no rates to split it any better.
-  const held = (t: HermesTokenTotals) => t.inputTokens + t.outputTokens + t.cacheReadTokens + t.cacheWriteTokens
-  const share = held(snapshot.tokens) > 0 ? held(last) / held(snapshot.tokens) : 1
+  const weight = (t: HermesTokenTotals) => t.inputTokens + t.outputTokens + t.cacheReadTokens + t.cacheWriteTokens
+  const share = weight(snapshot.tokens) > 0 ? weight(held) / weight(snapshot.tokens) : 1
   const costUSD = snapshot.costUSD * share
-  const factor = costUSD / last.costUSD
+  const factor = costUSD / heldCost
   return {
     ...rest,
-    lastSeen: { ...last, costUSD, costBasis: snapshot.costBasis },
+    lastSeen: { ...held, costUSD, costBasis: snapshot.costBasis },
     observations: cursor.observations.map(o => ({ ...o, costUSD: o.costUSD * factor })),
   }
 }

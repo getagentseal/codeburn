@@ -334,6 +334,27 @@ describe('hermes session ledger unit', () => {
     expect(days(grown)).toEqual([[0, '2026-10-01T10:00:00.000Z', 1], [1, '2026-11-05T10:00:00.000Z', 1], [2, '2026-11-06T10:00:00.000Z', 1]])
   })
 
+  it('keeps a v3 reasoning cursor for repricing through a temporarily shrunken snapshot', async () => {
+    const delta = { inputTokens: 1000, outputTokens: 200, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 50 }
+    const obs = (index: number, timestamp: string) => ({ index, timestamp, ...delta, costUSD: 1.5, costBasis: 'calculated', supplementaryAccounting: index > 0 })
+    const lifetime = { inputTokens: 2000, outputTokens: 400, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 100 }
+    await writeFile(join(cacheDir, 'hermes-session-ledger.v3.json'), JSON.stringify({
+      version: 3,
+      cursors: { default: { s1: {
+        profile: 'default', sessionId: 's1',
+        lastSeen: { ...lifetime, costUSD: 3, costBasis: 'calculated' },
+        observations: [obs(0, '2026-10-01T10:00:00.000Z'), obs(1, '2026-11-05T10:00:00.000Z')],
+      } } },
+    }))
+    const shrunk = await recordHermesSnapshot(snap({ costUSD: 0.5, costBasis: 'calculated', tokens: { inputTokens: 500, outputTokens: 100, reasoningTokens: 25 } }))
+    expect(shrunk.rebuild).toBe(true)
+
+    const recovered = await recordHermesSnapshot(snap({ costUSD: 2, costBasis: 'calculated', tokens: lifetime }))
+    expect(recovered.observations.map(o => [o.index, o.timestamp, o.costUSD]))
+      .toEqual([[0, '2026-10-01T10:00:00.000Z', 1], [1, '2026-11-05T10:00:00.000Z', 1]])
+    expect(recovered.rebuild).toBeUndefined()
+  })
+
   it('ignores a superseded v1 ledger and removes it from the cache dir', async () => {
     const v1Path = join(cacheDir, 'hermes-session-ledger.v1.json')
     await writeFile(v1Path, JSON.stringify({
