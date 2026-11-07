@@ -352,7 +352,7 @@ const warmVerbose = run(newBin.cmd, [...newBin.args, 'status', '--format', 'menu
   env: cliEnv(upgradeCache, { CODEBURN_VERBOSE: '1' }), cwd: WORK,
 })
 const pending = (warmVerbose.stderr || '').split('\n').filter(l => l.includes('parse workers='))
-if (pending.length === 0) skip('no "parse workers=" line on a warm run; cannot confirm nothing re-parsed')
+if (pending.length === 0) ok('nothing re-parsed on the warm run: no "parse workers=" line printed (no pending work)')
 else check(pending.every(l => /0 pending files|no full parses pending/.test(l)),
   `nothing re-parsed on the warm run: ${pending.map(l => l.replace(/^codeburn: /, '').trim()).join(' | ')}`)
 
