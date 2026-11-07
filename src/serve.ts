@@ -69,9 +69,11 @@ const SERVE_HEAP_PRESSURE_FRACTION = 0.7
 // reload of the memos, a few seconds against a scan of a minute.
 const SERVE_SCAN_START_FRACTION = 0.4
 
-/// Whether this served request runs the optimize transcript scan.
+/// Whether this served request runs the optimize transcript scan. Of the status
+/// formats only menubar-json does; json and terminal read durable totals.
 export function scansTranscripts(args: string[]): boolean {
-  return args[0] === 'optimize' || (args[0] === 'status' && !args.includes('--no-optimize'))
+  if (args[0] === 'optimize') return true
+  return args[0] === 'status' && readServeOption(args, '--format') === 'menubar-json' && !args.includes('--no-optimize')
 }
 
 export type ServeMemoryReading = { usedHeap: number; heapLimit: number; rss: number }
@@ -88,6 +90,32 @@ export function serveMemoryPressure(
   if (reading.usedHeap > reading.heapLimit * heapFraction) return 'heap'
   if (reading.rss > maxRss && reading.rss > lastRssClear + SERVE_RSS_CLEAR_MARGIN_BYTES) return 'rss'
   return null
+}
+
+/// serveMemoryPressure, with a heap verdict confirmed after a collection: used
+/// heap counts unreachable objects until the next one, and right after a large
+/// request that garbage alone can cross the line and drop a healthy child's
+/// memos. A collection that fails keeps the first verdict, so the memos are
+/// released rather than the request failed. Returns the reading the verdict
+/// rests on.
+export async function serveMemoryPressureAfterCollect(
+  read: () => ServeMemoryReading,
+  lastRssClear: number,
+  heapFraction?: number,
+  collect: () => Promise<void> = collectGarbage,
+): Promise<{ pressure: 'heap' | 'rss' | null; reading: ServeMemoryReading }> {
+  let reading = read()
+  let pressure = serveMemoryPressure(reading, lastRssClear, heapFraction)
+  if (pressure === 'heap') {
+    try {
+      await collect()
+    } catch {
+      return { pressure, reading }
+    }
+    reading = read()
+    pressure = serveMemoryPressure(reading, lastRssClear, heapFraction)
+  }
+  return { pressure, reading }
 }
 
 // V8 exposes gc() only to a process started with --expose-gc, and no codeburn
@@ -773,11 +801,14 @@ export async function runStdioServe(buildProgram: () => Command): Promise<void> 
   // Under pressure, drop them; the next request re-parses once (seconds),
   // which beats an aborted child. The child itself never exits here, so the
   // client's death counter is untouched.
-  const shedIfPressured = async (heapFraction?: number): Promise<void> => {
+  const readMemory = (): ServeMemoryReading => {
     const { used_heap_size, heap_size_limit } = getHeapStatistics()
     const rss = process.memoryUsage().rss
     if (rss > peakRss) peakRss = rss
-    const pressure = serveMemoryPressure({ usedHeap: used_heap_size, heapLimit: heap_size_limit, rss }, lastClearRss, heapFraction)
+    return { usedHeap: used_heap_size, heapLimit: heap_size_limit, rss }
+  }
+  const shedIfPressured = async (heapFraction?: number): Promise<void> => {
+    const { pressure, reading: { rss } } = await serveMemoryPressureAfterCollect(readMemory, lastClearRss, heapFraction)
     if (pressure === 'heap') outputMemo.clear()
     if (pressure) {
       await releaseResidentMemos()
