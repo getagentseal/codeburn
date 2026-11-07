@@ -94,9 +94,13 @@ function isWaitingCheck(command: string): boolean {
   // checked; any other env (other flags, or bare) is not a check.
   const lines = (m[2] ?? '').split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#'))
   if (lines.length > 1) return false
+  const first = lines[0] ?? ''
   // `sleep 5 &&` or a check ending in && or | is unfinished, not a check.
-  if ((m[1] && m[1] !== ';' && lines.length === 0) || /^(?:&&|\|\|?|;)|(?:&&|\|\|?)$/.test(lines[0] ?? '')) return false
-  const rest = (lines[0] ?? '').replace(
+  if ((m[1] && m[1] !== ';' && !first) || /^(?:&&|\|\|?|;)|(?:&&|\|\|?)$/.test(first)) return false
+  // Command substitution runs work wherever it sits, and an assignment value
+  // with an expansion may hide one.
+  if (/\$\(|`/.test(first) || (first.match(/(?:^|\s)[A-Za-z_]\w*=(?:'[^'\n]*'|"[^"\n]*"|[^\s'"])*/g) ?? []).some(a => a.includes('${'))) return false
+  const rest = first.replace(
     /(^|[;&|][^\S\n]*)env(?:[^\S\n]+(?:-i|--ignore-environment|-|-u[^\S\n]*[A-Za-z_]\w*|--unset=[A-Za-z_]\w*|[A-Za-z_]\w*=(?:'[^'\n]*'|"[^"\n]*"|[^\s'"])*))*[^\S\n]+/g,
     '$1',
   )
