@@ -1,9 +1,10 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { spawn, type ChildProcess } from 'child_process'
+import { readFileSync } from 'fs'
 import { appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { classifyRootReuse, createOutputMemoEntry, fileDaySpan, outputMemoKey, scansTranscripts, servedDayRange, serveMemoryPressure } from '../src/serve.js'
+import { classifyRootReuse, createOutputMemoEntry, fileDaySpan, outputMemoKey, scansTranscripts, servedDayRange, serveMemoryPressure, serveMemoryPressureAfterCollect } from '../src/serve.js'
 import { noonTz } from './fixtures/clock.js'
 
 it('timestamps a completed output memo before parsing begins', () => {
@@ -45,6 +46,39 @@ it('sheds on heap pressure while resident size is still under its ceiling', () =
   expect(scansTranscripts(['status', '--format', 'menubar-json', '--period', '30days'])).toBe(true)
   expect(scansTranscripts(['status', '--format', 'menubar-json', '--period', 'all', '--no-optimize'])).toBe(false)
   expect(scansTranscripts(['sessions', '--format', 'json', '--period', 'all'])).toBe(false)
+  // Plans and Settings poll this; it reads two durable totals, never the transcripts.
+  expect(scansTranscripts(['status', '--format', 'json', '--period', 'month'])).toBe(false)
+  expect(scansTranscripts(['status'])).toBe(false)
+  expect(scansTranscripts(['status', '--format=menubar-json'])).toBe(true)
+})
+
+it('collects garbage before a heap reading drops the memos', async () => {
+  const GB = 1024 ** 3
+  const run = async (usedHeaps: number[], rss = 3 * GB) => {
+    const readings = usedHeaps.map(usedHeap => ({ usedHeap, heapLimit: 4.2 * GB, rss }))
+    let collected = 0
+    const result = await serveMemoryPressureAfterCollect(() => readings.shift()!, 0, 0.7, async () => { collected++ })
+    return { pressure: result.pressure, collected }
+  }
+  // Used heap counts unreachable objects until the next collection.
+  expect(await run([3.8 * GB, 0.5 * GB])).toEqual({ pressure: null, collected: 1 })
+  expect(await run([3.8 * GB, 3.5 * GB])).toEqual({ pressure: 'heap', collected: 1 })
+  expect(await run([1 * GB])).toEqual({ pressure: null, collected: 0 })
+  expect(await run([1 * GB], 7 * GB)).toEqual({ pressure: 'rss', collected: 0 })
+  // A collector that fails keeps the first verdict: release, never fail the request.
+  const failing = await serveMemoryPressureAfterCollect(() => ({ usedHeap: 3.8 * GB, heapLimit: 4.2 * GB, rss: 3 * GB }), 0, 0.7, async () => { throw new Error('no gc') })
+  expect(failing.pressure).toBe('heap')
+})
+
+it('the resident pressure check confirms a heap reading after a collection', () => {
+  // Structural pin: the guard inside runStdioServe cannot be driven to a real
+  // near-limit heap in a test, so pin that it goes through the confirming helper.
+  const source = readFileSync(join(__dirname, '..', 'src', 'serve.ts'), 'utf-8')
+  const start = source.indexOf('const shedIfPressured = ')
+  const body = source.slice(start, source.indexOf('\n  }\n', start))
+  expect(start).toBeGreaterThan(-1)
+  expect(body).toContain('serveMemoryPressureAfterCollect(readMemory,')
+  expect(body).not.toMatch(/serveMemoryPressure\(/)
 })
 
 describe('day-scoped invalidation', () => {

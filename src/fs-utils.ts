@@ -123,7 +123,9 @@ type ReadSessionLinesOptions = {
   largeLineAsBuffer?: boolean
   largeLineThresholdBytes?: number
   startByteOffset?: number
-  byteOffsetTracker?: { lastCompleteLineOffset: number }
+  // unterminatedLineEnd is set to the end of a last line that has no newline
+  // yet, just before it is yielded.
+  byteOffsetTracker?: { lastCompleteLineOffset: number; unterminatedLineEnd?: number }
   maxBytes?: number
 }
 
@@ -248,6 +250,7 @@ export async function* readSessionLines(
     }
 
     if (!skipping && len > 0) {
+      if (tracker) tracker.unterminatedLineEnd = chunkBase
       const buf = parts.length === 1 ? parts[0]! : Buffer.concat(parts, len)
       const lineLen = len
       if (shouldSkipHead) {
@@ -269,6 +272,18 @@ export async function* readSessionLines(
   } finally {
     stream.destroy()
   }
+}
+
+/// Whether a line readSessionLines yielded may be folded, given what it parsed
+/// into. A last line still missing its newline is folded only when it parsed
+/// into an object or array, which no later bytes can extend into a different
+/// valid line, and the tracker's resume offset then moves past it. A bare
+/// scalar (`1` can still become `123`) is left to be re-read whole.
+export function foldParsedLine(tracker: { lastCompleteLineOffset: number; unterminatedLineEnd?: number }, parsed: unknown): boolean {
+  if (tracker.unterminatedLineEnd === undefined) return true
+  if (typeof parsed !== 'object' || parsed === null) return false
+  tracker.lastCompleteLineOffset = tracker.unterminatedLineEnd
+  return true
 }
 
 // Metadata syscalls (readdir/stat) issued one-at-a-time leave the OS idle

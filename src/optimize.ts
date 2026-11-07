@@ -9,7 +9,7 @@ import { homedir } from 'os'
 import { isReadShapedBashCommand } from './bash-utils.js'
 import { fileFacts, type FactsPass } from './scan-facts.js'
 import { EDIT_TOOLS } from './classifier.js'
-import { readSessionLines, readSessionFileSync } from './fs-utils.js'
+import { foldParsedLine, readSessionLines, readSessionFileSync } from './fs-utils.js'
 import { discoverAllSessions, providerDisplayName } from './providers/index.js'
 import { parseJsonlLine, shouldSkipLine } from './parser.js'
 import type { DateRange, ParsedApiCall, ProjectSummary, SessionSummary } from './types.js'
@@ -921,9 +921,9 @@ async function scanFileRecord(
   const carry = resume ? { ...resume.carry } : emptyCarry()
   const sessionId = basename(filePath, '.jsonl')
 
-  // Tracks the byte after the last complete line, so a partial line left by a
-  // writer mid-append is never consumed and is re-read whole next time.
-  const tracker = { lastCompleteLineOffset: resume?.fromOffset ?? 0 }
+  // Tracks the byte after the last line folded, where the next read resumes
+  // (see foldParsedLine for a last line still missing its newline).
+  const tracker: { lastCompleteLineOffset: number; unterminatedLineEnd?: number } = { lastCompleteLineOffset: resume?.fromOffset ?? 0 }
   const lines = readSessionLines(filePath, undefined, {
     largeLineAsBuffer: true,
     byteOffsetTracker: tracker,
@@ -933,7 +933,7 @@ async function scanFileRecord(
     if (typeof line === 'string' && !line.trim()) continue
     if (Buffer.isBuffer(line) && line.length === 0) continue
     const parsed = parseJsonlLine(line)
-    if (!parsed) continue
+    if (!parsed || !foldParsedLine(tracker, parsed)) continue
     const entry = parsed as Record<string, unknown>
     const skipTs = skipTimestampOf(entry)
 
