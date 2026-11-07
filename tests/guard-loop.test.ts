@@ -212,7 +212,7 @@ describe('identical-call loop', () => {
   it('keeps the exemption for a quoted argument that spans lines or holds shell characters', async () => {
     const env = await setup()
     const outs: string[] = []
-    for (const command of ["sleep 5 && gh pr checks 1909 --jq '.[]\n| .name'", "sleep 5 && gh pr checks 1909 --jq '.[] | .name'", "sleep 5 && gh pr checks 1 --jq '$(.name)'", "sleep 5 && gh pr checks 1 --jq 'a & b'"]) {
+    for (const command of ["sleep 5 && gh pr checks 1909 --jq '.[]\n| .name'", "sleep 5 && gh pr checks 1909 --jq '.[] | .name'", "sleep 5 && gh pr checks 1 --jq '$(.name)'", "sleep 5 && gh pr checks 1 --jq 'a & b'", 'sleep 5 && gh pr checks 1909 --jq ".[] | select(.name == \\"foo;bar\\")"']) {
       for (let i = 0; i < 12; i++) outs.push(await call(env, 'Bash', { command }, { fails: true, output: 'pending' }))
     }
     expect(outs.every(o => o === '')).toBe(true)
@@ -237,7 +237,7 @@ describe('identical-call loop', () => {
   })
 
   it('still counts a sleep followed by env or a second line that does work', async () => {
-    for (const command of ['sleep 5 && env CI=1 npm run build', 'sleep 5 && cat log\nnpm run build', 'sleep 5 && cat log && env npm run build', 'sleep 5 && env X="$(npm test)" gh pr checks 1909', 'sleep 5 && env X=`npm test` gh pr checks 1909', 'sleep 5 && env X="${Y:-a}" gh pr checks 1909', 'sleep 5 && X=x;npm gh pr checks 1909', 'sleep 5 && env X=x;npm gh pr checks 1909', 'sleep 5 && X=a>b cat log', 'sleep 5 && gh pr checks 1909 > report.txt', 'sleep 5 && gh pr checks 1909 >> report.txt', 'sleep 5 && cat log 2>err.txt', 'sleep 5 && gh pr checks 1909 <(npm test)', 'sleep 5 && cat <(npm test)', 'sleep 5 && gh pr checks 1&npm test', 'sleep 5 && cat log & npm test', 'sleep 5 && gh pr checks 1 --jq "$(npm test)"', `sleep 5 && gh pr checks 1 --jq "it's $(npm test)" 'x'`]) {
+    for (const command of ['sleep 5 && env CI=1 npm run build', 'sleep 5 && cat log\nnpm run build', 'sleep 5 && cat log && env npm run build', 'sleep 5 && env X="$(npm test)" gh pr checks 1909', 'sleep 5 && env X=`npm test` gh pr checks 1909', 'sleep 5 && env X="${Y:-a}" gh pr checks 1909', 'sleep 5 && X=x;npm gh pr checks 1909', 'sleep 5 && env X=x;npm gh pr checks 1909', 'sleep 5 && X=a>b cat log', 'sleep 5 && gh pr checks 1909 > report.txt', 'sleep 5 && gh pr checks 1909 >> report.txt', 'sleep 5 && cat log 2>err.txt', 'sleep 5 && gh pr checks 1909 <(npm test)', 'sleep 5 && cat <(npm test)', 'sleep 5 && gh pr checks 1&npm test', 'sleep 5 && cat log & npm test', 'sleep 5 && gh pr checks 1 --jq "$(npm test)"', `sleep 5 && gh pr checks 1 --jq "it's $(npm test)" 'x'`, 'sleep 5 && PATH=/tmp/x gh pr checks 1909', 'sleep 5 && env LD_PRELOAD=x.so gh pr checks 1909', 'sleep 5 && DYLD_INSERT_LIBRARIES=x cat log', 'sleep 5 && IFS=x BASH_ENV=y cat log']) {
       const env = await setup()
       const outs: string[] = []
       for (let i = 0; i < 12; i++) outs.push(await call(env, 'Bash', { command }, { output: 'Build OK' }))

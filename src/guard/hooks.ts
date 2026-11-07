@@ -76,6 +76,8 @@ function markSignal(cache: GuardCache, signal: 'loop' | 'retry'): void {
   cache.signalWarnCostUSD ??= cache.costUSD
 }
 
+// A double-quoted string, honouring backslash escapes inside it.
+const DQ = /"(?:[^"\\]|\\[\s\S])*"/.source
 // NAME=value where the value is one bare word or one quoted string with no
 // shell metacharacter that could run or redirect anything; a plain variable
 // ($NAME, ${NAME}) is fine, any other expansion is not.
@@ -84,14 +86,15 @@ const WORD = `'[^'\\n]*'|"(?:[^"\\n$\`]|${VAR_REF})*"|(?:[^\\s;|&<>()\`$'"]|${VA
 const ASSIGN = `[A-Za-z_]\\w*=(?:${WORD})?`
 const ASSIGN_AT = new RegExp(`^${ASSIGN}(?=\\s|$)`)
 // The shared read list leaves gh out (it has mutating subcommands); these only inspect.
-const GH_READ = new RegExp(`^(?:${ASSIGN}[^\\S\\n]+)*gh\\s+[\\w-]+\\s+(?:view|list|checks|status|diff|watch)\\b(?:'[^']*'|"[^"]*"|[^;&|\\n'"]|(?<=>)&|&(?=>))*$`)
+const GH_READ = new RegExp(`^(?:${ASSIGN}[^\\S\\n]+)*gh\\s+[\\w-]+\\s+(?:view|list|checks|status|diff|watch)\\b(?:'[^']*'|${DQ}|[^;&|\\n'"]|(?<=>)&|&(?=>))*$`)
 const ENV_PREFIX = new RegExp(`(^|[;&|][^\\S\\n]*)env(?:[^\\S\\n]+(?:-i|--ignore-environment|-u[^\\S\\n]*[A-Za-z_]\\w*|--unset=[A-Za-z_]\\w*|-C[^\\S\\n]*(?:${WORD})|--chdir=(?:${WORD})|-|${ASSIGN}))*[^\\S\\n]+`, 'g')
 // A bare echo after a sleep is a blind timer wait: no redirection, chaining or substitution.
 // Output may go to /dev/null or another stream (2>&1); any other target is a write.
 const WRITE_REDIRECT = /(?<![\d>&])(?:&|\d+)?>>?(?!>)(?![^\S\n]*(?:\/dev\/null|&(?:\d+|-))(?![^\s;&|]))/
+const QUOTED = new RegExp(`'[^']*'|${DQ}`, 'g')
 // Pieces of a command split on any of `seps`, never inside a quoted string.
 function splitOutsideQuotes(command: string, seps: string): string[] {
-  return command.match(new RegExp(`(?:'[^']*'|"[^"]*"|[^${seps}'"])+`, 'g')) ?? []
+  return command.match(new RegExp(`(?:'[^']*'|${DQ}|[^${seps}'"])+`, 'g')) ?? []
 }
 const BARE_ECHO = /^echo(?:[^\S\n]+(?:[^;&|<>`$\n]|\$(?!\())*)?$/
 
@@ -116,9 +119,12 @@ function isWaitingCheck(command: string): boolean {
   if ((m[1] && m[1] !== ';' && !first) || /^(?:&&|\|\|?|;)|(?:&&|\|\|?)$/.test(first)) return false
   // Command and process substitution run work anywhere outside single quotes;
   // a bare & backgrounds a command, and a write redirect writes a file.
-  const unquoted = first.replace(/'[^']*'|"[^"]*"/g, "''")
-  const expanding = first.replace(/"[^"]*"|'[^']*'/g, q => (q.startsWith("'") ? "''" : q))
+  const unquoted = first.replace(QUOTED, "''")
+  const expanding = first.replace(QUOTED, q => (q.startsWith("'") ? "''" : q))
   if (/\$\(|`|[<>]\(/.test(expanding) || /(?<![&>])&(?![&>])/.test(unquoted) || WRITE_REDIRECT.test(unquoted)) return false
+  // Variables that change how the command is found or how the shell behaves
+  // make even a read-only command run something else.
+  if (/(?:^|[\s;&|])(?:PATH|LD_PRELOAD|LD_LIBRARY_PATH|DYLD_\w*|BASH_ENV|ENV|PROMPT_COMMAND|IFS|CDPATH|SHELL)=/.test(unquoted)) return false
   const rest = first.replace(ENV_PREFIX, '$1')
   if (/(?:^|[\s;&|])env(?=\s|$)/.test(rest) || hasLooseAssignment(rest)) return false
   return !rest || isReadShapedBashCommand(rest) || GH_READ.test(rest) || BARE_ECHO.test(rest)
