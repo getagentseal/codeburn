@@ -34,6 +34,10 @@
 const EXACT = ['claude', 'codex', 'gemini', 'kiro', 'cursor']
 const CHANGED_BY_DESIGN = ['grok']
 const COST_CHANGED_BY_DESIGN = ['codex']
+// #1830 f846b630: OTel input_tokens is cache-inclusive, so cache reads are now
+// carved out of inputTokens instead of being billed twice. inputTokens and cost
+// may only drop; every other field and the call count must stay exact.
+const INPUT_CARVED_BY_DESIGN = ['copilot']
 const NEW_IN_THIS_RELEASE = ['dsh']
 
 const COST_TOLERANCE = 0.005 // 0.5% relative
@@ -108,7 +112,12 @@ for (const name of providers) {
   } else {
     const diffs = []
     if (b.calls !== u.calls) diffs.push(`calls ${b.calls} != ${u.calls}`)
-    for (const f of TOKEN_FIELDS) if (b[f] !== u[f]) diffs.push(`${f} ${b[f]} != ${u[f]}`)
+    const carved = INPUT_CARVED_BY_DESIGN.includes(name)
+    for (const f of TOKEN_FIELDS) {
+      if (carved && f === 'inputTokens') {
+        if (u[f] > b[f]) diffs.push(`${f} ${b[f]} -> ${u[f]} rose; #1830 only carves cache reads out of input`)
+      } else if (b[f] !== u[f]) diffs.push(`${f} ${b[f]} != ${u[f]}`)
+    }
     const costDrift = relDiff(b.cost, u.cost)
     let repriced = false
     if (COST_CHANGED_BY_DESIGN.includes(name)) {
@@ -118,16 +127,21 @@ for (const name of providers) {
         repriced = true
         notes.push(`${name}: cost ${fmt(b.cost)} -> ${fmt(u.cost)} (${(costDrift * 100).toFixed(3)}%) — repricing expected (#1075); tokens and calls still asserted exactly`)
       }
+    } else if (carved) {
+      if (u.cost > b.cost && costDrift > COST_TOLERANCE) diffs.push(`cost ${fmt(b.cost)} -> ${fmt(u.cost)} rose; #1830 should only lower copilot cost`)
     } else if (costDrift > COST_TOLERANCE) {
       diffs.push(`cost ${fmt(b.cost)} != ${fmt(u.cost)} (${(costDrift * 100).toFixed(3)}% > ${(COST_TOLERANCE * 100).toFixed(1)}%)`)
     }
-    if (!EXACT.includes(name)) {
+    if (!EXACT.includes(name) && !carved) {
       if (diffs.length) failures.push(`${name}: no expectation declared in compare.mjs; ${diffs.join(', ')}`)
       else notes.push(`${name}: no expectation declared in compare.mjs; identical`)
       verdict = diffs.length ? 'differs (unclassified)' : 'identical'
     } else if (diffs.length) {
       failures.push(`${name}: ${diffs.join(', ')}`)
       verdict = 'DIFFERS'
+    } else if (carved && (u.inputTokens < b.inputTokens || u.cost < b.cost)) {
+      verdict = 'changed by design (#1830)'
+      notes.push(`${name}: inputTokens ${b.inputTokens} -> ${u.inputTokens}, cost ${fmt(b.cost)} -> ${fmt(u.cost)} (#1830 f846b630: OTel input_tokens is cache-inclusive, cache reads carved out of inputTokens)`)
     } else if (repriced) {
       verdict = `repriced (cost ${(costDrift * 100).toFixed(3)}% drift)`
     } else {

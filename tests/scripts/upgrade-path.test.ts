@@ -35,6 +35,17 @@ describe('copilot fixture path', () => {
 })
 
 describe('compare.mjs parity', () => {
+  const runRec = (base: object, up: object) => {
+    const d = mkdtempSync(join(tmpdir(), 'cmp-'))
+    for (const [dir, rec] of [['a', base], ['b', up]] as const) {
+      mkdirSync(join(d, dir))
+      writeFileSync(join(d, dir, 'menubar.json'), '{}')
+      writeFileSync(join(d, dir, 'export.json'), JSON.stringify({ records: [{ provider: 'copilot', ...rec }] }))
+    }
+    const r = spawnSync(process.execPath, ['scripts/upgrade-path/compare.mjs', join(d, 'a'), join(d, 'b')], { encoding: 'utf8' })
+    rmSync(d, { recursive: true, force: true })
+    return r
+  }
   const run = (baseTokens: number, upTokens: number) => {
     const d = mkdtempSync(join(tmpdir(), 'cmp-'))
     for (const [dir, t] of [['a', baseTokens], ['b', upTokens]] as const) {
@@ -50,6 +61,16 @@ describe('compare.mjs parity', () => {
     const r = run(1, 2)
     expect(r.status).toBe(1)
     expect(r.stdout).toContain('FAIL: zzz')
+  })
+  it('copilot: the corpus-shaped input and cost drop passes', () => {
+    const r = runRec({ cost: 3.62203, inputTokens: 875808, outputTokens: 5, cacheReadTokens: 248632 }, { cost: 3.015976, inputTokens: 627176, outputTokens: 5, cacheReadTokens: 248632 })
+    expect(r.status).toBe(0)
+  })
+  it('copilot: a cost rise, an input rise or a changed cache read still fails', () => {
+    const base = { cost: 3, inputTokens: 100, outputTokens: 5, cacheReadTokens: 10 }
+    expect(runRec(base, { ...base, cost: 4 }).status).toBe(1)
+    expect(runRec(base, { ...base, inputTokens: 101 }).status).toBe(1)
+    expect(runRec(base, { ...base, cacheReadTokens: 11 }).status).toBe(1)
   })
   it('passes when an unclassified provider is identical', () => {
     expect(run(1, 1).status).toBe(0)
