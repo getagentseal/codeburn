@@ -4084,8 +4084,8 @@ export async function parseProviderSources(
             // reply under another conversation (better GUID matching)
             // supersedes the cached copy: same hash, index and stamp under
             // another key. A same-text reply cached at another stamp or index
-            // (a pruned conversation's) stays. A store that changed between
-            // its last parse and the re-read keeps both copies.
+            // (a pruned conversation's) stays. A reply whose store changed
+            // after it was first cached keeps both copies.
             const jbTurn = (c: CachedCall): string | undefined =>
               c.deduplicationKey.startsWith('copilot:jb:') ? `${c.deduplicationKey.split(':').slice(-2).join(':')}\0${c.timestamp}` : undefined
             const freshJbTurns = new Set([...freshByKey.values()].map(jbTurn).filter(id => id !== undefined))
@@ -4096,7 +4096,13 @@ export async function parseProviderSources(
             }
             if (freshByKey.size > 0) {
               existingEntry.turns = existingEntry.turns.map(t => {
-                const calls = t.calls.map(c => freshByKey.get(c.deduplicationKey) ?? c)
+                // A JetBrains reply has no time of its own, only its store's
+                // mtime. The first stamp is the closest one; taking the fresh
+                // stamp would move it to every later write of that store.
+                const calls = t.calls.map(c => {
+                  const fresh = freshByKey.get(c.deduplicationKey)
+                  return fresh && c.deduplicationKey.startsWith('copilot:jb:') ? { ...fresh, timestamp: c.timestamp } : fresh ?? c
+                })
                 return calls.some((c, i) => c !== t.calls[i]) ? { ...t, calls } : t
               })
             }
