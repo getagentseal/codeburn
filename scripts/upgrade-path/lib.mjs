@@ -23,7 +23,10 @@ export function treeStats(dir) {
       const f = path.join(d, e.name)
       if (e.isDirectory()) walk(f)
       else if (e.name === 'envelope.json' || /^index\..*\.json$/.test(e.name)) continue
-      else out[path.relative(dir, f)] = createHash('sha1').update(readFileSync(f)).digest('hex')
+      else {
+        try { out[path.relative(dir, f)] = createHash('sha1').update(readFileSync(f)).digest('hex') }
+        catch (err) { console.log(`  note  skipped unreadable cache entry ${f} (${err.code})`) }
+      }
     }
   }
   walk(dir)

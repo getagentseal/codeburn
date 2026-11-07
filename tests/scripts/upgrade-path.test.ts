@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync, readdirSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync, readdirSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 // @ts-expect-error plain ESM script helpers
@@ -63,14 +63,19 @@ describe('compare.mjs parity', () => {
     expect(r.stdout).toContain('FAIL: zzz')
   })
   it('copilot: the corpus-shaped input and cost drop passes', () => {
-    const r = runRec({ cost: 3.62203, inputTokens: 875808, outputTokens: 5, cacheReadTokens: 248632 }, { cost: 3.015976, inputTokens: 627176, outputTokens: 5, cacheReadTokens: 248632 })
+    const r = runRec({ cost: 3.62203, inputTokens: 875808, outputTokens: 5, cacheReadTokens: 248632 }, { cost: 3.0159764, inputTokens: 627176, outputTokens: 5, cacheReadTokens: 248632 })
     expect(r.status).toBe(0)
   })
-  it('copilot: a cost rise, an input rise or a changed cache read still fails', () => {
-    const base = { cost: 3, inputTokens: 100, outputTokens: 5, cacheReadTokens: 10 }
-    expect(runRec(base, { ...base, cost: 4 }).status).toBe(1)
-    expect(runRec(base, { ...base, inputTokens: 101 }).status).toBe(1)
-    expect(runRec(base, { ...base, cacheReadTokens: 11 }).status).toBe(1)
+  it('copilot: any figure off the pin fails', () => {
+    const base = { cost: 3.62203, inputTokens: 875808, outputTokens: 5, cacheReadTokens: 10 }
+    const pinned = { ...base, cost: 3.015976, inputTokens: 627176 }
+    expect(runRec(base, pinned).status).toBe(0)
+    const r = runRec(base, { ...pinned, inputTokens: 627175 })
+    expect(r.status).toBe(1)
+    expect(r.stdout).toContain('#1830')
+    expect(runRec(base, { ...pinned, cost: 3.015977 }).status).toBe(1)
+    expect(runRec(base, { ...pinned, outputTokens: 4 }).status).toBe(1)
+    expect(runRec(base, { ...pinned, cacheReadTokens: 11 }).status).toBe(1)
   })
   it('passes when an unclassified provider is identical', () => {
     expect(run(1, 1).status).toBe(0)
@@ -97,6 +102,13 @@ describe('warm run check', () => {
     expect(Object.keys(before)).toEqual(['piece.json'])
     writeFileSync(join(d, 'envelope.json'), '2'); rmSync(join(d, 'index.codex.aa.json')); writeFileSync(join(d, 'index.codex.bb.json'), '1')
     expect(changedFiles(before, treeStats(d))).toEqual([])
+    rmSync(d, { recursive: true, force: true })
+  })
+  it('treeStats skips a dangling symlink', () => {
+    const d = mkdtempSync(join(tmpdir(), 'ts-'))
+    symlinkSync(join(d, 'missing'), join(d, 'dangling'))
+    writeFileSync(join(d, 'piece.json'), 'p')
+    expect(Object.keys(treeStats(d))).toEqual(['piece.json'])
     rmSync(d, { recursive: true, force: true })
   })
   it('treeStats catches a same-size rewrite', () => {
