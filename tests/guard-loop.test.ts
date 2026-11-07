@@ -188,6 +188,13 @@ describe('identical-call loop', () => {
     expect(outs.every(o => o === '')).toBe(true)
   })
 
+  it('keeps the exemption when only comments or blank lines follow the check', async () => {
+    const env = await setup()
+    const outs: string[] = []
+    for (let i = 0; i < 12; i++) outs.push(await call(env, 'Bash', { command: 'sleep 5 && gh pr checks 1909\n# waiting on CI\n\n' }, { fails: true, output: 'pending' }))
+    expect(outs.every(o => o === '')).toBe(true)
+  })
+
   it('still counts a sleep followed by an echo that writes a file', async () => {
     const env = await setup()
     const outs: string[] = []

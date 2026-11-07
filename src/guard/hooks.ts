@@ -89,13 +89,16 @@ function isWaitingCheck(command: string): boolean {
   if (!m) return false
   // The shared read list counts `env` as a read and does not split lines, so
   // `sleep 5 && env CI=1 npm run build` or a second line would pass as a check.
-  // An env that only sets variables is dropped and what it runs is checked;
-  // any other env (flags, or bare) is not a check.
-  const rest = (m[1]?.trim() ?? '').replace(
+  // Blank and comment lines are dropped; any other later line is work. An env
+  // that only sets variables is dropped and what it runs is checked; any other
+  // env (flags, or bare) is not a check.
+  const lines = (m[1] ?? '').split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#'))
+  if (lines.length > 1) return false
+  const rest = (lines[0] ?? '').replace(
     /(^|[;&|][^\S\n]*)env((?:[^\S\n]+[A-Za-z_]\w*=\S*)*)[^\S\n]+/g,
     (_, pre: string, vars: string) => `${pre}${vars.trim()}${vars ? ' ' : ''}`,
   )
-  if (/\n/.test(rest) || /(?:^|[\s;&|])env(?=\s|$)/.test(rest)) return false
+  if (/(?:^|[\s;&|])env(?=\s|$)/.test(rest)) return false
   return !rest || isReadShapedBashCommand(rest) || GH_READ.test(rest) || BARE_ECHO.test(rest)
 }
 
