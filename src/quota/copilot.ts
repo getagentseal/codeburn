@@ -38,8 +38,8 @@ const HEADERS = {
 
 type HostRecord = Record<string, any> & { oauth_token?: unknown }
 
-/** A discovered token together with the GitHub host it belongs to. */
-type CopilotCredential = { token: string; host: string | null }
+/** A discovered token together with the GitHub host it belongs to and the map key it was read from. */
+type CopilotCredential = { token: string; host: string | null; key: string }
 
 /**
  * Bare lowercased hostname: tolerates whitespace, a scheme, a path, userinfo
@@ -162,7 +162,7 @@ function credentialsFromMap(raw: string, hostForKey: (key: string) => string | n
   for (const key of Object.keys(map).sort()) {
     const token = map[key]?.oauth_token
     if (typeof token !== 'string' || !token) continue
-    entries.push({ token, host: hostForKey(key) })
+    entries.push({ token, host: hostForKey(key), key })
   }
   const preferred = preferredCopilotHost(entries.map(entry => entry.host))
   const first = entries.find(entry => hostKey(entry) === preferred)
@@ -272,7 +272,7 @@ export async function fetchCopilotQuota(options: Partial<CopilotDeps> & { signal
       if (!refused(response)) break
       // An active editor session rotates this token; re-read once before
       // giving up so we don't report a failure the disk already fixed.
-      const reread = (await credentialsFromFile(entry.dir, entry.name, deps)).find(value => hostKey(value) === hostKey(entry.credential))
+      const reread = (await credentialsFromFile(entry.dir, entry.name, deps)).find(value => value.key === entry.credential.key)
       if (!reread || reread.token === entry.credential.token) {
         if (response.status === 401) response = null
         continue

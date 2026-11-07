@@ -315,4 +315,22 @@ describe('Copilot credential folders', () => {
     expect(result.quota.connection).toBe('connected')
     expect(seen(fetchMock)).toEqual(['https://api.github.com/copilot_internal/user token same'])
   })
+
+  it('re-reads the refused entry itself when two entries share a host', async () => {
+    const fetchMock = vi.fn(async (_url: string | URL | RequestInfo, init?: RequestInit) => (init?.headers as Record<string, string>).Authorization === 'token fresh'
+      ? okJson(usageBody)
+      : new Response('', { status: 401 }))
+    let reads = 0
+    const readFile = async () => {
+      reads += 1
+      return JSON.stringify({ 'github.com:Iv1.a': { oauth_token: 'stale1' }, 'github.com:Iv1.b': { oauth_token: reads === 1 ? 'stale2' : 'fresh' } })
+    }
+    const result = await fetchCopilotQuota({ fetch: fetchMock, configDirs: ['/copilot'], readFile: async (file: string) => path.basename(file) === 'apps.json' ? readFile() : null })
+    expect(result.quota.connection).toBe('connected')
+    expect(seen(fetchMock)).toEqual([
+      'https://api.github.com/copilot_internal/user token stale1',
+      'https://api.github.com/copilot_internal/user token stale2',
+      'https://api.github.com/copilot_internal/user token fresh',
+    ])
+  })
 })
