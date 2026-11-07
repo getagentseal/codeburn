@@ -148,13 +148,15 @@ function empty(connection: QuotaProvider['connection'], footerLines: string[] = 
   return { provider: 'copilot', connection, primary: null, details: [], planLabel: null, footerLines }
 }
 
+const hostKey = (credential: CopilotCredential): string => normalizeCopilotHost(credential.host) ?? COPILOT_DEFAULT_HOST
+
 /**
- * Reads the `oauth_token` entries out of a credential map and picks one with
- * `preferredCopilotHost`, so the token sent and the host it is sent to always
- * come from the same entry. Keys are visited in sorted order, making the pick
- * stable when several entries qualify.
+ * Reads the `oauth_token` entries out of a credential map, the one
+ * `preferredCopilotHost` picks first and the rest after it, so a refused token
+ * does not hide another host's login. Each token stays paired with the host of
+ * its own entry. Keys are visited in sorted order, making the order stable.
  */
-function credentialFromMap(raw: string, hostForKey: (key: string) => string | null): CopilotCredential | null {
+function credentialsFromMap(raw: string, hostForKey: (key: string) => string | null): CopilotCredential[] {
   const map = JSON.parse(raw) as Record<string, HostRecord>
   const entries: CopilotCredential[] = []
   for (const key of Object.keys(map).sort()) {
@@ -163,19 +165,19 @@ function credentialFromMap(raw: string, hostForKey: (key: string) => string | nu
     entries.push({ token, host: hostForKey(key) })
   }
   const preferred = preferredCopilotHost(entries.map(entry => entry.host))
-  if (!preferred) return null
-  return entries.find(entry => (normalizeCopilotHost(entry.host) ?? COPILOT_DEFAULT_HOST) === preferred) ?? null
+  const first = entries.find(entry => hostKey(entry) === preferred)
+  return first ? [first, ...entries.filter(entry => entry !== first)] : entries
 }
 
-async function credentialFromFile(dir: string, name: typeof CREDENTIAL_FILES[number], deps: CopilotDeps): Promise<CopilotCredential | null> {
+async function credentialsFromFile(dir: string, name: typeof CREDENTIAL_FILES[number], deps: CopilotDeps): Promise<CopilotCredential[]> {
   try {
     const raw = await deps.readFile(path.join(dir, name), 64 * 1024)
-    if (!raw) return null
+    if (!raw) return []
     // hosts.json is keyed by GitHub host, apps.json by "<host>:<app id>".
-    return credentialFromMap(raw, name === 'hosts.json' ? key => key : hostFromAppsKey)
+    return credentialsFromMap(raw, name === 'hosts.json' ? key => key : hostFromAppsKey)
   } catch {
     // A malformed or unreadable file falls through to the next candidate.
-    return null
+    return []
   }
 }
 
@@ -244,43 +246,39 @@ export async function fetchCopilotQuota(options: Partial<CopilotDeps> & { signal
     const found: { dir: string; name: typeof CREDENTIAL_FILES[number]; credential: CopilotCredential; endpoint: string | null }[] = []
     for (const dir of deps.configDirs) {
       for (const name of CREDENTIAL_FILES) {
-        const credential = await credentialFromFile(dir, name, deps)
-        // The same token copied into several files is one login, tried once.
-        if (credential && !found.some(entry => entry.credential.token === credential.token)) {
+        for (const credential of await credentialsFromFile(dir, name, deps)) {
+          // The same login copied into several files is tried once.
+          if (found.some(entry => entry.credential.token === credential.token && hostKey(entry.credential) === hostKey(credential))) continue
           found.push({ dir, name, credential, endpoint: copilotUsageEndpoint(credential.host) })
         }
       }
     }
     if (found.length === 0) return { quota: empty('disconnected') }
-    // A file holding a host we cannot address, or a token the API refuses,
-    // must not hide a working login in the next file or folder.
+    // A host we cannot address, or a token the API refuses, must not hide a
+    // working login in the next entry, file or folder.
     const usable = found.filter(entry => entry.endpoint !== null)
     if (usable.length === 0) {
       // Never retried against api.github.com: that endpoint does not honour an
       // enterprise credential and must not receive it.
-      return { quota: empty('terminalFailure', [unsupportedHostFooter(normalizeCopilotHost(found[0]!.credential.host) ?? COPILOT_DEFAULT_HOST)]) }
+      return { quota: empty('terminalFailure', [unsupportedHostFooter(hostKey(found[0]!.credential))]) }
     }
 
-    // null: the last file's token was refused and the disk held no newer one.
+    const refused = (value: Response): boolean => value.status === 401 || value.status === 403
+    // null: the last token got a 401 and the disk held no newer one.
     let response: Response | null = null
     for (const entry of usable) {
       apiHost = copilotAPIHost(entry.credential.host) ?? apiHost
       response = await request(entry.credential, entry.endpoint!, deps, options.signal)
-      if (response.status !== 401) break
+      if (!refused(response)) break
       // An active editor session rotates this token; re-read once before
       // giving up so we don't report a failure the disk already fixed.
-      const reread = await credentialFromFile(entry.dir, entry.name, deps)
+      const reread = (await credentialsFromFile(entry.dir, entry.name, deps)).find(value => hostKey(value) === hostKey(entry.credential))
       if (!reread || reread.token === entry.credential.token) {
-        response = null
+        if (response.status === 401) response = null
         continue
       }
-      const rereadEndpoint = copilotUsageEndpoint(reread.host)
-      if (!rereadEndpoint) {
-        return { quota: empty('terminalFailure', [unsupportedHostFooter(normalizeCopilotHost(reread.host) ?? COPILOT_DEFAULT_HOST)]) }
-      }
-      apiHost = copilotAPIHost(reread.host) ?? apiHost
-      response = await request(reread, rereadEndpoint, deps, options.signal)
-      if (response.status !== 401) break
+      response = await request(reread, entry.endpoint!, deps, options.signal)
+      if (!refused(response)) break
     }
     if (!response) return { quota: empty('transientFailure') }
     if (response.status === 429) {
