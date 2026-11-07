@@ -368,3 +368,20 @@ itUnlessNoSqlite('splits fresh when the conversation cost moves to another rung'
   expect(costs.get('warp:conv:a')).toBeCloseTo(5.5, 10)
   expect(costs.get('warp:conv:b')).toBeCloseTo(5.5, 10)
 })
+
+itUnlessNoSqlite('re-splits a held share onto the remaining exchanges when the running exchange is pruned', async () => {
+  const db = writeEmptyWarpSchema()
+  const data = (credits: number) => JSON.stringify({ conversation_usage_metadata: { credits_spent: credits, token_usage: tokenUsage() } })
+  db.prepare('INSERT INTO agent_conversations (conversation_id, conversation_data, last_modified_at) VALUES (?,?,?)').run('conv', data(750), '2026-10-11 10:00:00')
+  const exchange = db.prepare(`INSERT INTO ai_queries (exchange_id, conversation_id, start_ts, input, working_directory, output_status, model_id) VALUES (?,?,?,?,?,?,?)`)
+  exchange.run('a', 'conv', '2026-10-10 10:00:00.000000', JSON.stringify([{ Query: { text: 'x'.repeat(400) } }]), '/tmp/warpproj', '"Completed"', 'auto-efficient')
+  exchange.run('b', 'conv', '2026-10-11 10:00:00.000000', JSON.stringify([{ Query: { text: 'x'.repeat(400) } }]), '/tmp/warpproj', '"InProgress"', 'auto-efficient')
+  expect((await parseWarpCosts()).get('warp:conv:a')).toBeCloseTo(375 * CREDIT_USD_RATE, 10)
+
+  db.prepare(`DELETE FROM ai_queries WHERE exchange_id = 'b'`).run()
+  db.prepare('UPDATE agent_conversations SET conversation_data = ? WHERE conversation_id = ?').run(data(900), 'conv')
+  db.close()
+  const costs = await parseWarpCosts()
+  expect([...costs.keys()]).toEqual(['warp:conv:a'])
+  expect(costs.get('warp:conv:a')).toBeCloseTo(900 * CREDIT_USD_RATE, 10)
+})

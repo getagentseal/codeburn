@@ -289,7 +289,10 @@ function allocateCost(weights: number[], totalUsd: number): number[] {
 // shrank, a removed exchange, or a cost that changed rung falls back to the
 // fresh split. The total also grows while an exchange runs, so a running
 // exchange takes its share of the growth and that share is held back until it
-// finishes, instead of landing on the finished exchange before it.
+// finishes, instead of landing on the finished exchange before it. A running
+// exchange whose row is pruned was never cached, so its time is gone with it;
+// its held share stays in the conversation total and lands on the latest
+// remaining exchange, like any growth with no new exchange.
 export function keepCachedWarpShares(prior: CachedFile | undefined, parsed: ParsedProviderCall[]): ParsedProviderCall[] {
   const calls = parsed.filter(c => !c.inProgress)
   const running = parsed.filter(c => c.inProgress)
