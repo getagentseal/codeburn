@@ -17,19 +17,21 @@ const RULES: Array<{ file: string; names: string[] }> = [
       'function normalizeOpener', 'function isMachineWrittenPrompt', 'function skipTimestampOf', 'type StoredScan',
       'function storeScan', 'function loadScan', 'const COMMAND_PATTERN', 'const OPTIMIZE_TEXT_CAP', 'const OPTIMIZE_FIELD_CAP',
       'const RECURRING_CONTEXT_MIN_CHARS', 'const RECURRING_CONTEXT_NORMALIZE_SLACK', 'const RECURRING_CONTEXT_PREVIEW_CHARS',
+      'function isReadTool', 'const BASH_TOOL_NAMES', 'function cappedString',
     ],
   },
   {
     file: 'src/bash-utils.ts',
     names: ['function isReadShapedBashCommand', 'function stripQuotedStrings', 'const COMMAND_PREFIXES', 'const READ_ONLY_BASH', 'const GIT_READ_SUBCOMMANDS'],
   },
+  { file: 'src/fs-utils.ts', names: ['type ReadSessionLinesOptions', 'function readSessionLines'] },
   { file: 'src/parser.ts', names: ['function parseJsonlLine', 'function parseLargeJsonl', 'const LARGE_JSONL_LINE_BYTES'] },
 ]
 
 const DIGEST_BY_VERSION: Record<number, string> = {
   1: '77acc4ce0a481dd68d44e48d10f51ea91567a9c9898bde727dbaf9e7947ab6b1',
   2: 'f668c0185a1b654b7743d0b7345058e999edb98124271942f48415b2155a8f8c',
-  3: 'bfdba3095f5c68482015a447dfa17df14d0dfc780835d80e1304b5034c1f5d5e',
+  3: '25f1f6fd7a2009aeb121fa9103ec4b663f1309b2c764d9e0bdf80daf004910f2',
 }
 
 /// A top-level declaration, from its name to the column-0 bracket closing it,
