@@ -4148,6 +4148,10 @@ export async function parseProviderSources(
         if (incomplete) {
           // A fingerprint no file can match re-reads it on the next refresh;
           // until then the pass is partial, so no day is sealed without it.
+          // Hydration is one flag for every provider, so this holds sealing
+          // for all of them. It is bounded: Cursor, the only source that sets
+          // it, resolves 9,000 more ids per refresh, so a backlog of n ids
+          // clears in ceil(n / 9000) refreshes.
           section.files[source.path]!.fingerprint = { ...fp, sizeBytes: -1 }
           deferredRetryableSource = true
         }

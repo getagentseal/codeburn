@@ -5,7 +5,8 @@ import { join } from 'path'
 import { tmpdir } from 'os'
 
 import { getEditorDataDir } from '../src/editor-data-dir.js'
-import { clearSessionCache, parseAllSessions } from '../src/parser.js'
+import { clearSessionCache, isSessionHydrationComplete, parseAllSessions } from '../src/parser.js'
+import { PROVIDER_PARSE_VERSIONS } from '../src/session-cache.js'
 import { isSqliteAvailable } from '../src/sqlite.js'
 import type { DateRange, ProjectSummary } from '../src/types.js'
 
@@ -87,7 +88,14 @@ describe.skipIf(!isSqliteAvailable())('cursor parse cached across ranges', () =>
     const cache = join(root, 'cap')
 
     expect((await parse(lastDays(30), cache)).calls).toBe(9000)
+    expect(isSessionHydrationComplete()).toBe(false)
     expect((await parse(lastDays(30), cache)).calls).toBe(9001)
+    expect(isSessionHydrationComplete()).toBe(true)
     expect((await parse(lastDays(30), cache)).calls).toBe(9001)
+    expect(isSessionHydrationComplete()).toBe(true)
+  })
+
+  it('re-parses Cursor sources cached before the lookup-cap fix', () => {
+    expect(PROVIDER_PARSE_VERSIONS['cursor']).toMatch(/-cap-resume-v1$/)
   })
 })
