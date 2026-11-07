@@ -118,7 +118,7 @@ function isWaitingCheck(command: string): boolean {
 // The shared read list skips any NAME=... token before a command, so each
 // leading assignment of every segment must pass the strict shape.
 function hasLooseAssignment(command: string): boolean {
-  for (const segment of command.split(/[;&|]/)) {
+  for (const segment of command.match(/(?:'[^'\n]*'|"[^"\n]*"|[^;&|'"])+/g) ?? []) {
     let s = segment.trim()
     while (/^[A-Za-z_]\w*=/.test(s)) {
       const m = ASSIGN_AT.exec(s)
