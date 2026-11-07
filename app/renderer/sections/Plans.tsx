@@ -165,16 +165,15 @@ function useStableQuota(raw: QuotaProvider[] | null): QuotaProvider[] | null {
 
 export function Plans({ period, refreshToken = 0, onNavigate, ready = true }: { period: Period; refreshToken?: number; onNavigate?: (section: Section, pane?: SettingsPane) => void; ready?: boolean }) {
   // Force a fresh fetch (bypassing QuotaService's 5-min cache, and its keychain
-  // guard) when the user hits ⌘R or clicks Refresh in the Connect affordance;
-  // the steady 30s poll keeps serving cached quota.
+  // guard) only when the user clicks Refresh / Check now on a card. refreshToken
+  // also bumps after config changes and project picks, which are no keychain consent.
   const [reconnectNonce, setReconnectNonce] = useState(0)
-  const lastForced = useRef(`${refreshToken}:${reconnectNonce}`)
+  const lastForced = useRef(reconnectNonce)
   const disabledProviders = readDisabledProviders()
   const quotaMemoKey = `quota|${[...disabledProviders].sort().join(',')}`
   const quota = usePolled<QuotaProvider[]>(() => {
-    const key = `${refreshToken}:${reconnectNonce}`
-    const force = key !== lastForced.current
-    lastForced.current = key
+    const force = reconnectNonce !== lastForced.current
+    lastForced.current = reconnectNonce
     return codeburn.getQuota(force, disabledProviders)
   }, [refreshToken, reconnectNonce, quotaMemoKey], { memoKey: quotaMemoKey })
   const reconnect = () => setReconnectNonce(value => value + 1)

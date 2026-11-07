@@ -552,11 +552,10 @@ function PlansPane({ period, refreshToken, onNavigate, onConfigMutated }: { peri
   // Refresh forces a keychain-allowed fetch via the same path as Plans.tsx.
   const [reconnectNonce, setReconnectNonce] = useState(0)
   const [disabledProviders, setDisabledProviders] = useState<ProviderName[]>(() => readDisabledProviders())
-  const lastForced = useRef(`${refreshToken}:${reconnectNonce}`)
+  const lastForced = useRef(reconnectNonce)
   const quota = usePolled<QuotaProvider[]>(() => {
-    const key = `${refreshToken}:${reconnectNonce}`
-    const force = key !== lastForced.current
-    lastForced.current = key
+    const force = reconnectNonce !== lastForced.current
+    lastForced.current = reconnectNonce
     return codeburn.getQuota(force, disabledProviders)
   }, [refreshToken, reconnectNonce, disabledProviders])
   const plans = usePolled<StatusJson>(() => codeburn.getPlans(period), [period, refreshToken, nonce], {
@@ -573,15 +572,13 @@ function PlansPane({ period, refreshToken, onNavigate, onConfigMutated }: { peri
     void codeburn.resetPlan(plan.provider).then(finish).catch(toastRejection(t('settings.plans.actionFailed')))
   }
   // Toggling a provider off stops polling it entirely (the main process never
-  // contacts its endpoints); toggling on forces a fresh fetch so the row
-  // repopulates immediately.
+  // contacts its endpoints). Not a keychain consent: only Refresh/Check now force.
   const toggleProvider = (provider: ProviderName) => {
     const next = disabledProviders.includes(provider)
       ? disabledProviders.filter(item => item !== provider)
       : [...disabledProviders, provider]
     writeDisabledProviders(next)
     setDisabledProviders(next)
-    setReconnectNonce(value => value + 1)
   }
   const add = () => {
     const preset = MANUAL_PLAN_PRESETS.find(item => item.id === presetId)!

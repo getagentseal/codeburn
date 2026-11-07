@@ -3,7 +3,7 @@ import path from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 
 import { claudeKeychainService } from './claude'
-import { QuotaService } from './index'
+import { getQuota, QuotaService, quotaService } from './index'
 import { forgetKeychainRefusals, readKeychainPassword } from './security'
 import type { ProviderName, QuotaProvider } from './types'
 
@@ -237,6 +237,34 @@ describe('QuotaService', () => {
     expect(fetchers.claude).toHaveBeenCalledTimes(1)
     expect(fetchers.gemini).toHaveBeenCalledTimes(1)
     expect(fetchers.codex).toHaveBeenCalledTimes(2)
+  })
+
+  it('re-reads a changed provider set without the keychain, keeping the cache for the same set', async () => {
+    const fetchers = noopFetchers()
+    const service = new QuotaService({
+      ...fetchers, grokbotInstalled: () => true, now: () => 1000, refreshMs: 120_000,
+      readFile: vi.fn(async () => null), writeFile: vi.fn(async () => undefined),
+    })
+    vi.mocked(forgetKeychainRefusals).mockClear()
+    await service.getQuota({ disabled: ['codex'] })
+    const enabled = await service.getQuota({ disabled: [] }) // switched back on
+    expect(enabled.map(row => row.provider)).toContain('codex')
+    expect(fetchers.codex).toHaveBeenCalledTimes(1)
+    expect(fetchers.claude).toHaveBeenCalledTimes(2)
+    await service.getQuota({ disabled: [] })
+    expect(fetchers.claude).toHaveBeenCalledTimes(2)
+    for (const call of fetchers.claude.mock.calls) expect(call[0].allowKeychain).toBe(false)
+    expect(forgetKeychainRefusals).not.toHaveBeenCalled()
+  })
+
+  it('grants the keychain and forgets earlier refusals only on a forced IPC call', async () => {
+    const spy = vi.spyOn(quotaService, 'getQuota').mockResolvedValue([])
+    await getQuota({ disabled: ['codex'] })
+    await getQuota({ force: false })
+    expect(spy.mock.calls.map(call => call[0]?.allowKeychain)).toEqual([false, false])
+    await getQuota({ force: true })
+    expect(spy.mock.calls[2]![0]).toMatchObject({ force: true, allowKeychain: true })
+    spy.mockRestore()
   })
 
   it('force re-fetches within the cache window by invalidating first', async () => {
