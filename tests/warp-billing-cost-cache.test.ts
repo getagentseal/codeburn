@@ -385,3 +385,26 @@ itUnlessNoSqlite('re-splits a held share onto the remaining exchanges when the r
   expect([...costs.keys()]).toEqual(['warp:conv:a'])
   expect(costs.get('warp:conv:a')).toBeCloseTo(900 * CREDIT_USD_RATE, 10)
 })
+
+itUnlessNoSqlite('splits fresh once when a cache written before the rung was stored meets a rung change', async () => {
+  const db = writeEmptyWarpSchema()
+  db.prepare('INSERT INTO agent_conversations (conversation_id, conversation_data, last_modified_at) VALUES (?,?,?)')
+    .run('conv', JSON.stringify({ conversation_usage_metadata: { credits_spent: 750, token_usage: tokenUsage() } }), '2026-10-10 10:00:00')
+  const exchange = (id: string, startTs: string) => db.prepare(`INSERT INTO ai_queries (exchange_id, conversation_id, start_ts, input, working_directory, output_status, model_id) VALUES (?,?,?,?,?,?,?)`)
+    .run(id, 'conv', startTs, JSON.stringify([{ Query: { text: 'x'.repeat(400) } }]), '/tmp/warpproj', '"Completed"', 'auto-efficient')
+  exchange('a', '2026-10-10 10:00:00.000000')
+  expect((await parseWarpCosts()).get('warp:conv:a')).toBeCloseTo(10, 10)
+
+  const { readCacheOnDisk, writeCacheOnDisk } = await import('./fixtures/session-cache-io.js')
+  const cache = await readCacheOnDisk()
+  for (const file of Object.values(cache.providers['warp']!.files)) for (const turn of file.turns) for (const call of turn.calls) delete call.costRung
+  await writeCacheOnDisk(cache)
+
+  db.prepare('UPDATE agent_conversations SET conversation_data = ? WHERE conversation_id = ?')
+    .run(JSON.stringify({ conversation_usage_metadata: { total_provider_cost_in_cents: 1100, credits_spent: 750, token_usage: tokenUsage() } }), 'conv')
+  exchange('b', '2026-10-11 10:00:00.000000')
+  db.close()
+  const costs = await parseWarpCosts()
+  expect(costs.get('warp:conv:a')).toBeCloseTo(5.5, 10)
+  expect(costs.get('warp:conv:b')).toBeCloseTo(5.5, 10)
+})

@@ -307,8 +307,8 @@ export function keepCachedWarpShares(prior: CachedFile | undefined, parsed: Pars
   const billed = calls[0]!.costFromBilling === true
   if (billed && kept.some(c => {
     const prev = cached.get(c.deduplicationKey)!
-    // A cache written before the rung was stored has none: keep its shares.
-    return prev.costUSD === undefined || (prev.costRung !== undefined && prev.costRung !== c.costRung)
+    // A cache written before the rung was stored has none: it re-splits once.
+    return prev.costUSD === undefined || prev.costRung !== c.costRung
   })) return calls
 
   const sum = (values: number[]) => values.reduce((a, b) => a + b, 0)
