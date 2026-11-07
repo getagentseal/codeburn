@@ -28,7 +28,7 @@ import type { CachedCall, ProviderSection } from './session-cache.js'
 // v4: the calculated basis stopped adding reasoning tokens on top of an output
 // count that already holds them. A v3 cursor that priced reasoning that way is
 // carried with `rebuild` set, and the next snapshot its source still supplies
-// replaces it with one recomputed observation. A cursor whose source is gone
+// reprices its observations in place (repriceRebuild). A cursor whose source is gone
 // gets no such snapshot and keeps the v3 figure: it holds the tokens but not
 // the model, so there is no rate to reprice its output at.
 export const HERMES_SESSION_LEDGER_FILENAME = 'hermes-session-ledger.v4.json'
@@ -476,13 +476,51 @@ export async function persistHermesSessionLedger(ledger: HermesSessionLedger): P
   memoryDir = dir
 }
 
+// The rebuild reprices a v3 cursor in place: every observation keeps its index
+// and day and is scaled by the snapshot's cost over the stored one. Growth since
+// the v3 write is then left to applyHermesSnapshot as a new observation. A
+// snapshot smaller than the observations it would reprice cannot price them, so
+// the flag stays for a later snapshot that can.
+function repriceRebuild(cursor: HermesSessionCursor, snapshot: HermesSnapshot): HermesSessionCursor {
+  const held = cursor.observations.reduce<HermesTokenTotals>((sum, o) => ({
+    inputTokens: sum.inputTokens + o.inputTokens,
+    outputTokens: sum.outputTokens + o.outputTokens,
+    cacheReadTokens: sum.cacheReadTokens + o.cacheReadTokens,
+    cacheWriteTokens: sum.cacheWriteTokens + o.cacheWriteTokens,
+    reasoningTokens: sum.reasoningTokens + o.reasoningTokens,
+  }), zeroHermesTokens())
+  if (!tokensGte(snapshot.tokens, held)) return cursor
+  const { rebuild: _rebuild, ...rest } = cursor
+  const heldCost = cursor.observations.reduce((sum, o) => sum + o.costUSD, 0)
+  // ponytail: when the session grew, the share of the snapshot cost already
+  // held is estimated by token count (reasoning sits inside output). Exact when
+  // nothing grew; the snapshot carries no rates to split it any better.
+  const weight = (t: HermesTokenTotals) => t.inputTokens + t.outputTokens + t.cacheReadTokens + t.cacheWriteTokens
+  const share = weight(snapshot.tokens) > 0 ? weight(held) / weight(snapshot.tokens) : 1
+  const costUSD = snapshot.costUSD * share
+  // Beside observations stored at $0 (no price to scale), the priced ones are
+  // scaled but never up, since the v4 rule only removes reasoning priced twice,
+  // and what the recomputed cost leaves over goes to the $0 ones by token share.
+  const unpricedWeight = cursor.observations.filter(o => o.costUSD <= 0).reduce((sum, o) => sum + weight(o), 0)
+  const factor = heldCost <= 0 ? 0 : unpricedWeight > 0 ? Math.min(1, costUSD / heldCost) : costUSD / heldCost
+  const remainder = Math.max(0, costUSD - heldCost * factor)
+  const repriced = (o: HermesObservation): number => o.costUSD > 0
+    ? o.costUSD * factor
+    : unpricedWeight > 0 ? remainder * weight(o) / unpricedWeight : 0
+  return {
+    ...rest,
+    lastSeen: { ...held, costUSD, costBasis: snapshot.costBasis },
+    observations: cursor.observations.map(o => ({ ...o, costUSD: repriced(o) })),
+  }
+}
+
 export async function recordHermesSnapshot(snapshot: HermesSnapshot): Promise<HermesSessionCursor> {
   const ledger = loadHermesSessionLedger()
   const stored = getHermesCursor(ledger, snapshot.profile, snapshot.sessionId)
   // An all-zero snapshot is a reset or a vanished row, not a source to rebuild from.
-  const existing = stored?.rebuild && hasPositiveTokenDelta(snapshot.tokens) ? undefined : stored
+  const existing = stored?.rebuild && hasPositiveTokenDelta(snapshot.tokens) ? repriceRebuild(stored, snapshot) : stored
   const { cursor, dirty } = applyHermesSnapshot(existing, snapshot)
-  if (dirty) await persistHermesSessionLedger(putCursor(ledger, cursor))
+  if (dirty || existing !== stored) await persistHermesSessionLedger(putCursor(ledger, cursor))
   return cursor
 }
 

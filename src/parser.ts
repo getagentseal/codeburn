@@ -30,6 +30,7 @@ import {
   type CachedCall,
   type CachedFile,
   type CachedTurn,
+  type CachedUsage,
   type FileFingerprint,
   type ProviderSection,
   type SessionCache,
@@ -48,6 +49,7 @@ import {
   isCacheCurrent,
   isCacheDirty,
   isCacheStub,
+  isDurableCachedSource,
   loadCache,
   loadCacheHiddenKeys,
   loadCacheStubs,
@@ -2932,6 +2934,7 @@ function providerCallToCachedCall(call: ParsedProviderCall): CachedCall {
     costUSD: (REPORTED_COST_PROVIDERS.has(call.provider) || call.costFromBilling === true) ? call.costUSD : undefined,
     ...(call.fallbackCostUSD ? { fallbackCostUSD: call.fallbackCostUSD } : {}),
     isEstimated: call.costIsEstimated || undefined,
+    ...(call.costRung ? { costRung: call.costRung } : {}),
     speed: call.speed,
     timestamp: call.timestamp,
     tools: call.tools,
@@ -3453,9 +3456,12 @@ function getOrCreateProviderSection(cache: SessionCache, provider: string): Prov
   // re-read did NOT produce keep the old parser's fields, and those are
   // precisely the ones the source can no longer re-derive — where stale
   // accounting is the only alternative to nothing at all.
-  if (existing && DURABLE_PROVIDER_NAMES.has(provider)) {
-    if (existing.durable) section.durable = true
+  // A source marked durable on its own (CachedFile.durable) is carried the same way.
+  if (existing) {
+    const providerDurable = DURABLE_PROVIDER_NAMES.has(provider)
+    if (providerDurable && existing.durable) section.durable = true
     for (const [path, file] of Object.entries(existing.files)) {
+      if (!providerDurable && !isDurableCachedSource(provider, path, file.durable === true)) continue
       if (!existsSync(path)) {
         section.files[path] = file
         continue
@@ -4042,7 +4048,7 @@ export async function parseProviderSources(
           for await (const call of parser.parse()) {
             providerCalls.push(call)
           }
-          if (providerName === 'warp' && priorEntry) providerCalls = keepCachedWarpShares(priorEntry, providerCalls)
+          if (providerName === 'warp') providerCalls = keepCachedWarpShares(priorEntry, providerCalls)
         }
         const canonicalCalls = await Promise.all(providerCalls.map(canonicalizeProviderCallProject))
         const turns = providerCallsToCachedTurns(canonicalCalls)
@@ -4092,9 +4098,21 @@ export async function parseProviderSources(
                 .map(t => ({ ...t, calls: t.calls.filter(c => freshByKey.has(c.deduplicationKey) || !freshJbTurns.has(jbTurn(c) ?? '')) }))
                 .filter(t => t.calls.length > 0)
             }
+            // A sliding mirror drops a request's oldest entries before the
+            // request itself. A call stamps its first entry, so a fresh call
+            // that starts later than the cached one lost its head to the
+            // window: the cached call stays, taking the larger count of each
+            // token class so a tail that grew adds its growth. One that starts
+            // at the same entry is a re-read of the whole request and replaces it.
+            const replace = (cached: CachedCall, fresh: CachedCall): CachedCall => {
+              if (!source.durable || Date.parse(fresh.timestamp) <= Date.parse(cached.timestamp)) return fresh
+              const usage = { ...cached.usage }
+              for (const k of Object.keys(usage) as Array<keyof CachedUsage>) usage[k] = Math.max(usage[k], fresh.usage[k])
+              return { ...cached, usage }
+            }
             if (freshByKey.size > 0) {
               existingEntry.turns = existingEntry.turns.map(t => {
-                const calls = t.calls.map(c => freshByKey.get(c.deduplicationKey) ?? c)
+                const calls = t.calls.map(c => { const fresh = freshByKey.get(c.deduplicationKey); return fresh ? replace(c, fresh) : c })
                 return calls.some((c, i) => c !== t.calls[i]) ? { ...t, calls } : t
               })
             }
@@ -4111,6 +4129,7 @@ export async function parseProviderSources(
               .filter(t => t.calls.length > 0)
             existingEntry.turns = [...existingEntry.turns, ...newTurns]
             existingEntry.fingerprint = fp
+            if (source.durable) existingEntry.durable = true
             delete existingEntry.failed
             delete existingEntry.failedAt
             if (prLinks.length) existingEntry.prLinks = [...new Set([...(existingEntry.prLinks ?? []), ...prLinks])]
@@ -4121,7 +4140,7 @@ export async function parseProviderSources(
             // role to `root` here, never silently drops the field.
             if (sourceLineage) existingEntry.lineage = sourceLineage
           } else {
-            section.files[source.path] = { fingerprint: fp, mcpInventory: [], turns, ...sourceAgentMetadata, ...(prLinks.length ? { prLinks } : {}), ...(sourceLineage ? { lineage: sourceLineage } : {}) }
+            section.files[source.path] = { fingerprint: fp, mcpInventory: [], turns, ...sourceAgentMetadata, ...(prLinks.length ? { prLinks } : {}), ...(sourceLineage ? { lineage: sourceLineage } : {}), ...(source.durable ? { durable: true } : {}) }
           }
         } else {
           // Non-durable: overwrite (clearedPaths already deleted stale entry above)
@@ -4175,7 +4194,7 @@ export async function parseProviderSources(
         // rows its source has pruned, so they stay; the marker still stops
         // retries until the file changes and shows the failure in doctor.
         const failedAt = new Date().toISOString()
-        section.files[source.path] = provider.durableSources && priorEntry
+        section.files[source.path] = (source.durable ?? provider.durableSources) && priorEntry
           ? { ...priorEntry, fingerprint: fp, failed: true, failedAt }
           : { fingerprint: fp, mcpInventory: [], turns: [], failed: true, failedAt }
         markCacheDirty(diskCache, providerName, source.path)
@@ -4633,7 +4652,21 @@ export async function parseProviderSources(
   const importCoverage = replacedProviders().includes(providerName)
     ? await loadCursorImport().then(store => store && coverageFor(store), () => null)
     : null
+  // A metered Quick Desktop call supersedes its session's sessions.db estimate
+  // here, whatever was parsed when: metrics can land without sessions.db
+  // changing, and the metered call outlives its metrics file in the cache.
+  // Not scoped to a day: the estimate is one call for the whole session, keyed
+  // by the sessions table id that metrics rows link to, and a session's metered
+  // calls can fall on later days. Not scoped to a store either: a migrated
+  // legacy store and its profile store hold one session under one id, which is
+  // why the parse-time suppression also matches by id alone across stores.
+  const quickdeskMetered = providerName === 'quickdesk'
+    ? new Set(Object.values(section.files).flatMap(f => f.turns
+      .filter(t => t.calls.some(c => c.deduplicationKey.startsWith('quickdesk:')))
+      .map(t => t.sessionId)))
+    : null
   const serveTurn = (rawTurn: CachedTurn): CachedTurn | null => {
+    if (quickdeskMetered?.has(rawTurn.sessionId) && rawTurn.calls.every(c => c.deduplicationKey.startsWith('quickdesk-est:'))) return null
     const turn = reconcileCopilotCalls(rawTurn)
     return turn && dropImportCoveredCalls(providerName, turn, importCoverage)
   }

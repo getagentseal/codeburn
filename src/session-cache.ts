@@ -7,6 +7,7 @@ import { StringDecoder } from 'string_decoder'
 import { getCodeburnCacheDir, RETIRED_PROVIDER_NAMES } from './cache-dir.js'
 import { acquireCacheRefreshLock, releaseOwnedRefreshLocksForExit } from './cache-refresh-lock.js'
 import { parseBillingMode, type BillingMode } from './models.js'
+import { isGrokbotMirrorPath } from './providers/grokbot.js'
 import { SPEEDS, type Speed, type ToolCall } from './types.js'
 import { isWslUncPath } from './wsl.js'
 
@@ -33,6 +34,8 @@ export type CachedCall = {
   /// True when `costUSD` (or the tokens it is priced from) is estimated rather
   /// than metered. Persisted so the estimated-cost marker survives the cache.
   isEstimated?: boolean
+  /// See ParsedProviderCall.costRung.
+  costRung?: string
   speed: Speed
   timestamp: string
   tools: string[]
@@ -177,6 +180,9 @@ export type CachedFile = {
   // Local date of the first write refresh that kept this entry after its
   // source file was gone. Absent while the source is still present.
   retainedSince?: string
+  // The source was durable on its own (SessionSource.durable) under a
+  // non-durable provider: a fingerprint change keeps it like a durable provider's.
+  durable?: boolean
 }
 
 export type ProviderSection = {
@@ -755,6 +761,14 @@ type IndexRow = {
 // Needed by every range: a failure marker, a turn-less file, a spawn anchor.
 const ROW_ALWAYS = 1
 const ROW_PR = 2
+const ROW_DURABLE = 4
+
+// A cached source that is durable on its own (CachedFile.durable). A file or
+// index row written before that stamp existed falls back to the provider's
+// per-source rule, so the first stale run after an upgrade keeps it too.
+export function isDurableCachedSource(provider: string, path: string, stamped: boolean): boolean {
+  return stamped || (provider === 'grokbot' && isGrokbotMirrorPath(path))
+}
 
 type ProviderBase = {
   index: string | undefined
@@ -835,7 +849,7 @@ function rowFor(path: string, file: CachedFile): IndexRow {
     fingerprint: file.fingerprint,
     lo,
     hi,
-    flags: (file.failed || file.turns.length === 0 || anchor ? ROW_ALWAYS : 0) | (file.prLinks?.length ? ROW_PR : 0),
+    flags: (file.failed || file.turns.length === 0 || anchor ? ROW_ALWAYS : 0) | (file.prLinks?.length ? ROW_PR : 0) | (file.durable ? ROW_DURABLE : 0),
     offset: 0,
     length: 0,
   }
@@ -1292,6 +1306,7 @@ function validateCall(c: unknown): c is CachedCall {
     && isOptionalBool(o['supplementaryAccounting'])
     && isOptionalNum(o['requestCount'])
     && isOptionalString(o['route'])
+    && isOptionalString(o['costRung'])
     && (o['billing'] === undefined || parseBillingMode(o['billing'] as string) !== undefined)
     && validateUsage(o['usage'])
 }
@@ -1332,6 +1347,7 @@ function validateCachedFile(f: unknown): f is CachedFile {
     && (o['ambiguousSpawnAgentIds'] === undefined || isStringArray(o['ambiguousSpawnAgentIds']))
     && isOptionalLineage(o['lineage'])
     && isOptionalString(o['retainedSince'])
+    && isOptionalBool(o['durable'])
     && Array.isArray(o['turns'])
     && (o['turns'] as unknown[]).every(validateTurn)
 }
@@ -1978,8 +1994,9 @@ async function loadProvider(state: CacheState, provider: string, section: Provid
   const asStubs = new Map<string, Array<[string, IndexRow]>>()
   for (const [path, row] of base.rows) {
     // The parser replaces a stale section on first use, keeping only entries
-    // whose source is gone (getOrCreateProviderSection), so present ones stay on disk.
-    if ((visible && !visible.has(row.month)) || (stale && existsSync(path))) hidden.set(path, row)
+    // whose source is gone or that are durable (getOrCreateProviderSection), so
+    // other present ones stay on disk.
+    if ((visible && !visible.has(row.month)) || (stale && !isDurableCachedSource(provider, path, (row.flags & ROW_DURABLE) !== 0) && existsSync(path))) hidden.set(path, row)
     else if (!ranged || fileNeeded(path, row, ranged.startMs, ranged.endMs)) pushTo(inFull, row.day, [path, row])
     else pushTo(asStubs, row.day, [path, row])
   }
