@@ -765,6 +765,14 @@ function AppMain({ transientProject, onTransientProject }: { transientProject: T
     setUserRefreshToken(token => token + 1)
     refreshVisible()
   }, [refreshVisible])
+  // A refresh that arrives with a navigation runs after the new section has
+  // mounted, so a quota view it opens sees the bump and forces once.
+  const [refreshAfterNav, setRefreshAfterNav] = useState(false)
+  useEffect(() => {
+    if (!refreshAfterNav) return
+    setRefreshAfterNav(false)
+    userRefresh()
+  }, [refreshAfterNav, userRefresh])
 
   // A Settings action changed config that alters computed costs/currency
   // (currency/alias/plan/price-override). The electron read-cache is flushed CLI-
@@ -859,7 +867,7 @@ function AppMain({ transientProject, onTransientProject }: { transientProject: T
   }, [userRefresh, navigate, goBack, goForward])
 
   useEffect(() => codeburn.onIdeCommand?.(command => {
-    if (command.refresh) userRefresh()
+    if (command.refresh) setRefreshAfterNav(true)
     const patch: Partial<NavState> = {}
     if (command.section && NAV_SECTIONS.has(command.section)) patch.section = command.section as Section
     if (command.period && isPeriod(command.period)) {
@@ -867,7 +875,7 @@ function AppMain({ transientProject, onTransientProject }: { transientProject: T
       Object.assign(patch, { period: command.period, range: null, visibleCount: INITIAL_VISIBLE })
     }
     if (Object.keys(patch).length > 0) commitNav(patch)
-  }), [commitNav, userRefresh])
+  }), [commitNav])
 
   const onPeriodChange = (value: string) => {
     if (isPeriod(value)) {

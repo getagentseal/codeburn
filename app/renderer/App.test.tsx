@@ -473,6 +473,22 @@ describe('App shortcuts', () => {
     await waitFor(() => expect(mocks.getQuota).toHaveBeenCalledWith(true, expect.any(Array)))
   })
 
+  it('forces the quota refresh an IDE command asks for while it opens Plans from Overview', async () => {
+    let send: ((command: { section?: string; refresh?: boolean }) => void) | undefined
+    const bridge = mocks as unknown as { onIdeCommand?: (cb: (command: { section?: string; refresh?: boolean }) => void) => () => void }
+    bridge.onIdeCommand = cb => { send = cb; return () => { send = undefined } }
+    try {
+      render(<App />)
+      expect(await screen.findByText('Most expensive sessions')).toBeInTheDocument()
+      mocks.getQuota.mockClear()
+      act(() => send!({ refresh: true, section: 'plans' }))
+      expect(await screen.findByText('Not connected. Log in with the Claude CLI.')).toBeInTheDocument()
+      await waitFor(() => expect(mocks.getQuota).toHaveBeenCalledWith(true, expect.any(Array)))
+    } finally {
+      delete bridge.onIdeCommand
+    }
+  })
+
   it('ignores Ctrl+2 on mac', async () => {
     render(<App />)
 
