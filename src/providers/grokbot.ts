@@ -1,6 +1,6 @@
 import { readdir } from 'fs/promises'
 import { homedir } from 'os'
-import { join } from 'path'
+import { basename, join } from 'path'
 
 import { FS_SCAN_CONCURRENCY, mapWithConcurrency, readSessionFile } from '../fs-utils.js'
 import { calculateCost, getShortModelName } from '../models.js'
@@ -54,6 +54,14 @@ function decodeBase32(name: string): string | null {
   } catch {
     return null
   }
+}
+
+/** A mirror transcript slice: discovery marks every one durable on its own. */
+export function isGrokbotMirrorPath(path: string): boolean {
+  const name = basename(path)
+  if (!name.endsWith('.blob')) return false
+  const key = decodeBase32(name.slice(0, -'.blob'.length))
+  return key !== null && TRANSCRIPT_SLICE.test(key)
 }
 
 export function grokbotPersistenceDir(

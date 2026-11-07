@@ -49,6 +49,7 @@ import {
   isCacheCurrent,
   isCacheDirty,
   isCacheStub,
+  isDurableCachedSource,
   loadCache,
   loadCacheHiddenKeys,
   loadCacheStubs,
@@ -3460,7 +3461,7 @@ function getOrCreateProviderSection(cache: SessionCache, provider: string): Prov
     const providerDurable = DURABLE_PROVIDER_NAMES.has(provider)
     if (providerDurable && existing.durable) section.durable = true
     for (const [path, file] of Object.entries(existing.files)) {
-      if (!providerDurable && !file.durable) continue
+      if (!providerDurable && !isDurableCachedSource(provider, path, file.durable === true)) continue
       if (!existsSync(path)) {
         section.files[path] = file
         continue

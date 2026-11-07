@@ -369,6 +369,40 @@ describe('grokbot sliding mirror', () => {
       else process.env['APPDATA'] = originalAppData
     }
   })
+  it('keeps slid-out requests across an env change when the cache predates the durable stamp', async () => {
+    const originalCacheDir = process.env['CODEBURN_CACHE_DIR']
+    const originalAppData = process.env['APPDATA']
+    process.env['CODEBURN_CACHE_DIR'] = join(dir, 'cb-cache')
+    try {
+      const request = (n: number) => [
+        userMessage(`u${n}`, `r${n}`, `question ${n}`, T0 + n * 60_000),
+        botMessage(`b${n}`, `r${n}`, `answer ${n}`.repeat(20), T0 + n * 60_000 + 1000),
+      ]
+      const { clearSessionCache, parseAllSessions } = await import('../../src/parser.js')
+      const { readCacheOnDisk, writeCacheOnDisk } = await import('../fixtures/session-cache-io.js')
+      const servedKeys = async () => {
+        clearSessionCache()
+        return (await parseAllSessions(undefined, 'grokbot'))
+          .flatMap(p => p.sessions).flatMap(s => s.turns).flatMap(t => t.assistantCalls).map(c => c.deduplicationKey).sort()
+      }
+      await writeTranscript(BOT_A, [1, 2, 3].flatMap(request))
+      await servedKeys()
+      await writeTranscript(BOT_A, [2, 3, 4].flatMap(request))
+      await servedKeys()
+      // An upgrade's first run: the files and index rows carry no durable stamp yet.
+      const cache = await readCacheOnDisk()
+      for (const file of Object.values(cache.providers['grokbot']!.files)) delete file.durable
+      await writeCacheOnDisk(cache)
+      process.env['APPDATA'] = join(dir, 'other-appdata')
+      expect(await servedKeys()).toEqual([1, 2, 3, 4].map(n => `grokbot:${BOT_A}:r${n}`))
+    } finally {
+      if (originalCacheDir === undefined) delete process.env['CODEBURN_CACHE_DIR']
+      else process.env['CODEBURN_CACHE_DIR'] = originalCacheDir
+      if (originalAppData === undefined) delete process.env['APPDATA']
+      else process.env['APPDATA'] = originalAppData
+    }
+  })
+
   it('keeps slid-out requests when the mirror fails to parse', async () => {
     const originalCacheDir = process.env['CODEBURN_CACHE_DIR']
     process.env['CODEBURN_CACHE_DIR'] = join(dir, 'cb-cache')

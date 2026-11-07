@@ -7,6 +7,7 @@ import { StringDecoder } from 'string_decoder'
 import { getCodeburnCacheDir, RETIRED_PROVIDER_NAMES } from './cache-dir.js'
 import { acquireCacheRefreshLock, releaseOwnedRefreshLocksForExit } from './cache-refresh-lock.js'
 import { parseBillingMode, type BillingMode } from './models.js'
+import { isGrokbotMirrorPath } from './providers/grokbot.js'
 import { SPEEDS, type Speed, type ToolCall } from './types.js'
 import { isWslUncPath } from './wsl.js'
 
@@ -761,6 +762,13 @@ type IndexRow = {
 const ROW_ALWAYS = 1
 const ROW_PR = 2
 const ROW_DURABLE = 4
+
+// A cached source that is durable on its own (CachedFile.durable). A file or
+// index row written before that stamp existed falls back to the provider's
+// per-source rule, so the first stale run after an upgrade keeps it too.
+export function isDurableCachedSource(provider: string, path: string, stamped: boolean): boolean {
+  return stamped || (provider === 'grokbot' && isGrokbotMirrorPath(path))
+}
 
 type ProviderBase = {
   index: string | undefined
@@ -1988,7 +1996,7 @@ async function loadProvider(state: CacheState, provider: string, section: Provid
     // The parser replaces a stale section on first use, keeping only entries
     // whose source is gone or that are durable (getOrCreateProviderSection), so
     // other present ones stay on disk.
-    if ((visible && !visible.has(row.month)) || (stale && (row.flags & ROW_DURABLE) === 0 && existsSync(path))) hidden.set(path, row)
+    if ((visible && !visible.has(row.month)) || (stale && !isDurableCachedSource(provider, path, (row.flags & ROW_DURABLE) !== 0) && existsSync(path))) hidden.set(path, row)
     else if (!ranged || fileNeeded(path, row, ranged.startMs, ranged.endMs)) pushTo(inFull, row.day, [path, row])
     else pushTo(asStubs, row.day, [path, row])
   }
