@@ -196,6 +196,15 @@ describe('identical-call loop', () => {
     expect(quoted.every(o => o === '')).toBe(true)
   })
 
+  it('keeps the exemption for output sent to /dev/null or another stream', async () => {
+    const env = await setup()
+    const outs: string[] = []
+    for (const command of ['sleep 5 && gh pr checks 1909 > /dev/null', 'sleep 5 && gh pr checks 1909 2>&1', 'sleep 5 && cat log 2>/dev/null', 'sleep 5 && cat < log', "sleep 5 && gh pr view 1909 --jq '.a > 1'"]) {
+      for (let i = 0; i < 12; i++) outs.push(await call(env, 'Bash', { command }, { fails: true, output: 'pending' }))
+    }
+    expect(outs.every(o => o === '')).toBe(true)
+  })
+
   it('keeps the exemption when only comments or blank lines follow the check', async () => {
     const env = await setup()
     const outs: string[] = []
@@ -215,7 +224,7 @@ describe('identical-call loop', () => {
   })
 
   it('still counts a sleep followed by env or a second line that does work', async () => {
-    for (const command of ['sleep 5 && env CI=1 npm run build', 'sleep 5 && cat log\nnpm run build', 'sleep 5 && cat log && env npm run build', 'sleep 5 && env X="$(npm test)" gh pr checks 1909', 'sleep 5 && env X=`npm test` gh pr checks 1909', 'sleep 5 && env X="${Y:-a}" gh pr checks 1909', 'sleep 5 && X=x;npm gh pr checks 1909', 'sleep 5 && env X=x;npm gh pr checks 1909', 'sleep 5 && X=a>b cat log']) {
+    for (const command of ['sleep 5 && env CI=1 npm run build', 'sleep 5 && cat log\nnpm run build', 'sleep 5 && cat log && env npm run build', 'sleep 5 && env X="$(npm test)" gh pr checks 1909', 'sleep 5 && env X=`npm test` gh pr checks 1909', 'sleep 5 && env X="${Y:-a}" gh pr checks 1909', 'sleep 5 && X=x;npm gh pr checks 1909', 'sleep 5 && env X=x;npm gh pr checks 1909', 'sleep 5 && X=a>b cat log', 'sleep 5 && gh pr checks 1909 > report.txt', 'sleep 5 && gh pr checks 1909 >> report.txt', 'sleep 5 && cat log 2>err.txt']) {
       const env = await setup()
       const outs: string[] = []
       for (let i = 0; i < 12; i++) outs.push(await call(env, 'Bash', { command }, { output: 'Build OK' }))
