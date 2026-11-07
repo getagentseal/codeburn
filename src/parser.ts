@@ -3453,9 +3453,12 @@ function getOrCreateProviderSection(cache: SessionCache, provider: string): Prov
   // re-read did NOT produce keep the old parser's fields, and those are
   // precisely the ones the source can no longer re-derive — where stale
   // accounting is the only alternative to nothing at all.
-  if (existing && DURABLE_PROVIDER_NAMES.has(provider)) {
-    if (existing.durable) section.durable = true
+  // A source marked durable on its own (CachedFile.durable) is carried the same way.
+  if (existing) {
+    const providerDurable = DURABLE_PROVIDER_NAMES.has(provider)
+    if (providerDurable && existing.durable) section.durable = true
     for (const [path, file] of Object.entries(existing.files)) {
+      if (!providerDurable && !file.durable) continue
       if (!existsSync(path)) {
         section.files[path] = file
         continue
@@ -4111,6 +4114,7 @@ export async function parseProviderSources(
               .filter(t => t.calls.length > 0)
             existingEntry.turns = [...existingEntry.turns, ...newTurns]
             existingEntry.fingerprint = fp
+            if (source.durable) existingEntry.durable = true
             delete existingEntry.failed
             delete existingEntry.failedAt
             if (prLinks.length) existingEntry.prLinks = [...new Set([...(existingEntry.prLinks ?? []), ...prLinks])]
@@ -4121,7 +4125,7 @@ export async function parseProviderSources(
             // role to `root` here, never silently drops the field.
             if (sourceLineage) existingEntry.lineage = sourceLineage
           } else {
-            section.files[source.path] = { fingerprint: fp, mcpInventory: [], turns, ...sourceAgentMetadata, ...(prLinks.length ? { prLinks } : {}), ...(sourceLineage ? { lineage: sourceLineage } : {}) }
+            section.files[source.path] = { fingerprint: fp, mcpInventory: [], turns, ...sourceAgentMetadata, ...(prLinks.length ? { prLinks } : {}), ...(sourceLineage ? { lineage: sourceLineage } : {}), ...(source.durable ? { durable: true } : {}) }
           }
         } else {
           // Non-durable: overwrite (clearedPaths already deleted stale entry above)
@@ -4175,7 +4179,7 @@ export async function parseProviderSources(
         // rows its source has pruned, so they stay; the marker still stops
         // retries until the file changes and shows the failure in doctor.
         const failedAt = new Date().toISOString()
-        section.files[source.path] = provider.durableSources && priorEntry
+        section.files[source.path] = (source.durable ?? provider.durableSources) && priorEntry
           ? { ...priorEntry, fingerprint: fp, failed: true, failedAt }
           : { fingerprint: fp, mcpInventory: [], turns: [], failed: true, failedAt }
         markCacheDirty(diskCache, providerName, source.path)

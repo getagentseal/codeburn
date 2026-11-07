@@ -2,7 +2,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { calculateCost } from '../../src/models.js'
 import { providers } from '../../src/providers/index.js'
@@ -300,6 +300,66 @@ describe('grokbot sliding mirror', () => {
       await writeTranscript(BOT_A, [2, 3, 4].flatMap(request))
       clearSessionCache()
       expect(await servedKeys()).toEqual([1, 2, 3, 4].map(n => `grokbot:${BOT_A}:r${n}`))
+    } finally {
+      if (originalCacheDir === undefined) delete process.env['CODEBURN_CACHE_DIR']
+      else process.env['CODEBURN_CACHE_DIR'] = originalCacheDir
+    }
+  })
+
+  it('keeps slid-out requests across an env fingerprint change', async () => {
+    const originalCacheDir = process.env['CODEBURN_CACHE_DIR']
+    const originalAppData = process.env['APPDATA']
+    process.env['CODEBURN_CACHE_DIR'] = join(dir, 'cb-cache')
+    try {
+      const request = (n: number) => [
+        userMessage(`u${n}`, `r${n}`, `question ${n}`, T0 + n * 60_000),
+        botMessage(`b${n}`, `r${n}`, `answer ${n}`.repeat(20), T0 + n * 60_000 + 1000),
+      ]
+      const { clearSessionCache, parseAllSessions } = await import('../../src/parser.js')
+      const servedKeys = async () => {
+        clearSessionCache()
+        return (await parseAllSessions(undefined, 'grokbot'))
+          .flatMap(p => p.sessions).flatMap(s => s.turns).flatMap(t => t.assistantCalls).map(c => c.deduplicationKey).sort()
+      }
+      await writeTranscript(BOT_A, [1, 2, 3].flatMap(request))
+      await servedKeys()
+      await writeTranscript(BOT_A, [2, 3, 4].flatMap(request))
+      await servedKeys()
+      // APPDATA is in grokbot's env fingerprint: the same stale-section reset a parse-version bump triggers.
+      process.env['APPDATA'] = join(dir, 'other-appdata')
+      expect(await servedKeys()).toEqual([1, 2, 3, 4].map(n => `grokbot:${BOT_A}:r${n}`))
+    } finally {
+      if (originalCacheDir === undefined) delete process.env['CODEBURN_CACHE_DIR']
+      else process.env['CODEBURN_CACHE_DIR'] = originalCacheDir
+      if (originalAppData === undefined) delete process.env['APPDATA']
+      else process.env['APPDATA'] = originalAppData
+    }
+  })
+  it('keeps slid-out requests when the mirror fails to parse', async () => {
+    const originalCacheDir = process.env['CODEBURN_CACHE_DIR']
+    process.env['CODEBURN_CACHE_DIR'] = join(dir, 'cb-cache')
+    try {
+      const request = (n: number) => [
+        userMessage(`u${n}`, `r${n}`, `question ${n}`, T0 + n * 60_000),
+        botMessage(`b${n}`, `r${n}`, `answer ${n}`.repeat(20), T0 + n * 60_000 + 1000),
+      ]
+      const { clearSessionCache, parseAllSessions } = await import('../../src/parser.js')
+      const servedKeys = async () => {
+        clearSessionCache()
+        return (await parseAllSessions(undefined, 'grokbot'))
+          .flatMap(p => p.sessions).flatMap(s => s.turns).flatMap(t => t.assistantCalls).map(c => c.deduplicationKey).sort()
+      }
+      await writeTranscript(BOT_A, [1, 2].flatMap(request))
+      await servedKeys()
+      const parser = vi.spyOn(grokbot, 'createSessionParser').mockImplementation(() => ({
+        async *parse() { throw new Error('unreadable') },
+      }))
+      try {
+        await writeTranscript(BOT_A, [2, 3].flatMap(request))
+        expect(await servedKeys()).toEqual([1, 2].map(n => `grokbot:${BOT_A}:r${n}`))
+      } finally {
+        parser.mockRestore()
+      }
     } finally {
       if (originalCacheDir === undefined) delete process.env['CODEBURN_CACHE_DIR']
       else process.env['CODEBURN_CACHE_DIR'] = originalCacheDir
