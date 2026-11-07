@@ -167,19 +167,16 @@ function credentialFromMap(raw: string, hostForKey: (key: string) => string | nu
   return entries.find(entry => (normalizeCopilotHost(entry.host) ?? COPILOT_DEFAULT_HOST) === preferred) ?? null
 }
 
-async function credentialFromDir(dir: string, deps: CopilotDeps): Promise<CopilotCredential | null> {
-  for (const name of CREDENTIAL_FILES) {
-    try {
-      const raw = await deps.readFile(path.join(dir, name), 64 * 1024)
-      if (!raw) continue
-      // hosts.json is keyed by GitHub host, apps.json by "<host>:<app id>".
-      const credential = credentialFromMap(raw, name === 'hosts.json' ? key => key : hostFromAppsKey)
-      if (credential) return credential
-    } catch {
-      // A malformed or unreadable file falls through to the next candidate.
-    }
+async function credentialFromFile(dir: string, name: typeof CREDENTIAL_FILES[number], deps: CopilotDeps): Promise<CopilotCredential | null> {
+  try {
+    const raw = await deps.readFile(path.join(dir, name), 64 * 1024)
+    if (!raw) return null
+    // hosts.json is keyed by GitHub host, apps.json by "<host>:<app id>".
+    return credentialFromMap(raw, name === 'hosts.json' ? key => key : hostFromAppsKey)
+  } catch {
+    // A malformed or unreadable file falls through to the next candidate.
+    return null
   }
-  return null
 }
 
 function windowOf(label: string, snapshot: unknown): QuotaWindow | null {
@@ -244,14 +241,19 @@ export async function fetchCopilotQuota(options: Partial<CopilotDeps> & { signal
   // host was tried instead of a bare "Temporarily unavailable".
   let apiHost = COPILOT_DEFAULT_API_HOST
   try {
-    const found: { dir: string; credential: CopilotCredential; endpoint: string | null }[] = []
+    const found: { dir: string; name: typeof CREDENTIAL_FILES[number]; credential: CopilotCredential; endpoint: string | null }[] = []
     for (const dir of deps.configDirs) {
-      const credential = await credentialFromDir(dir, deps)
-      if (credential) found.push({ dir, credential, endpoint: copilotUsageEndpoint(credential.host) })
+      for (const name of CREDENTIAL_FILES) {
+        const credential = await credentialFromFile(dir, name, deps)
+        // The same token copied into several files is one login, tried once.
+        if (credential && !found.some(entry => entry.credential.token === credential.token)) {
+          found.push({ dir, name, credential, endpoint: copilotUsageEndpoint(credential.host) })
+        }
+      }
     }
     if (found.length === 0) return { quota: empty('disconnected') }
-    // A folder holding a host we cannot address, or a token the API refuses,
-    // must not hide a working login in the next folder.
+    // A file holding a host we cannot address, or a token the API refuses,
+    // must not hide a working login in the next file or folder.
     const usable = found.filter(entry => entry.endpoint !== null)
     if (usable.length === 0) {
       // Never retried against api.github.com: that endpoint does not honour an
@@ -259,7 +261,7 @@ export async function fetchCopilotQuota(options: Partial<CopilotDeps> & { signal
       return { quota: empty('terminalFailure', [unsupportedHostFooter(normalizeCopilotHost(found[0]!.credential.host) ?? COPILOT_DEFAULT_HOST)]) }
     }
 
-    // null: the last folder's token was refused and the disk held no newer one.
+    // null: the last file's token was refused and the disk held no newer one.
     let response: Response | null = null
     for (const entry of usable) {
       apiHost = copilotAPIHost(entry.credential.host) ?? apiHost
@@ -267,7 +269,7 @@ export async function fetchCopilotQuota(options: Partial<CopilotDeps> & { signal
       if (response.status !== 401) break
       // An active editor session rotates this token; re-read once before
       // giving up so we don't report a failure the disk already fixed.
-      const reread = await credentialFromDir(entry.dir, deps)
+      const reread = await credentialFromFile(entry.dir, entry.name, deps)
       if (!reread || reread.token === entry.credential.token) {
         response = null
         continue
