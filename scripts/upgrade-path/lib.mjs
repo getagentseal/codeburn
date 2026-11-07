@@ -22,6 +22,7 @@ export function treeStats(dir) {
     for (const e of readdirSync(d, { withFileTypes: true })) {
       const f = path.join(d, e.name)
       if (e.isDirectory()) walk(f)
+      else if (e.name === 'envelope.json' || /^index\..*\.json$/.test(e.name)) continue
       else out[path.relative(dir, f)] = createHash('sha1').update(readFileSync(f)).digest('hex')
     }
   }

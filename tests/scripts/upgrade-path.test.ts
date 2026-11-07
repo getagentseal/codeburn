@@ -69,6 +69,15 @@ describe('warm run check', () => {
     expect(warmReparseProblems(['codeburn: parse workers=0 (0 pending files)'], [])).toEqual([])
     expect(warmReparseProblems(['codeburn: parse workers=3 (10 pending files)'], [])).toHaveLength(1)
   })
+  it('treeStats ignores the envelope and index files but hashes pieces', () => {
+    const d = mkdtempSync(join(tmpdir(), 'ts-'))
+    writeFileSync(join(d, 'envelope.json'), '1'); writeFileSync(join(d, 'index.codex.aa.json'), '1'); writeFileSync(join(d, 'piece.json'), 'p')
+    const before = treeStats(d)
+    expect(Object.keys(before)).toEqual(['piece.json'])
+    writeFileSync(join(d, 'envelope.json'), '2'); rmSync(join(d, 'index.codex.aa.json')); writeFileSync(join(d, 'index.codex.bb.json'), '1')
+    expect(changedFiles(before, treeStats(d))).toEqual([])
+    rmSync(d, { recursive: true, force: true })
+  })
   it('treeStats catches a same-size rewrite', () => {
     const d = mkdtempSync(join(tmpdir(), 'ts-'))
     writeFileSync(join(d, 'f'), 'aaaa')
