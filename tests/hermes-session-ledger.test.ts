@@ -305,6 +305,35 @@ describe('hermes session ledger unit', () => {
     expect(isHermesLedgerPublicationError(caught)).toBe(true)
   })
 
+  it('reprices a v3 reasoning cursor in place, keeping each observation\'s day', async () => {
+    const delta = { inputTokens: 1000, outputTokens: 200, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 50 }
+    const obs = (index: number, timestamp: string) => ({ index, timestamp, ...delta, costUSD: 1.5, costBasis: 'calculated', supplementaryAccounting: index > 0 })
+    const lifetime = { inputTokens: 2000, outputTokens: 400, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 100 }
+    await writeFile(join(cacheDir, 'hermes-session-ledger.v3.json'), JSON.stringify({
+      version: 3,
+      cursors: { default: { s1: {
+        profile: 'default', sessionId: 's1',
+        lastSeen: { ...lifetime, costUSD: 3, costBasis: 'calculated' },
+        observations: [obs(0, '2026-10-01T10:00:00.000Z'), obs(1, '2026-11-05T10:00:00.000Z')],
+      } } },
+    }))
+    const days = (c: Awaited<ReturnType<typeof recordHermesSnapshot>>) => c.observations.map(o => [o.index, o.timestamp, o.costUSD])
+
+    const same = await recordHermesSnapshot(snap({ costUSD: 2, costBasis: 'calculated', tokens: lifetime }))
+    expect(days(same)).toEqual([[0, '2026-10-01T10:00:00.000Z', 1], [1, '2026-11-05T10:00:00.000Z', 1]])
+    expect(same.rebuild).toBeUndefined()
+    resetHermesSessionLedgerForTests()
+    expect(loadHermesSessionLedger().cursors['default']!['s1']!.rebuild).toBeUndefined()
+
+    await rm(hermesSessionLedgerPath())
+    resetHermesSessionLedgerForTests()
+    const grown = await recordHermesSnapshot(snap({
+      costUSD: 3, costBasis: 'calculated', observedAt: '2026-11-06T10:00:00.000Z',
+      tokens: { inputTokens: 3000, outputTokens: 600, reasoningTokens: 150 },
+    }))
+    expect(days(grown)).toEqual([[0, '2026-10-01T10:00:00.000Z', 1], [1, '2026-11-05T10:00:00.000Z', 1], [2, '2026-11-06T10:00:00.000Z', 1]])
+  })
+
   it('ignores a superseded v1 ledger and removes it from the cache dir', async () => {
     const v1Path = join(cacheDir, 'hermes-session-ledger.v1.json')
     await writeFile(v1Path, JSON.stringify({
