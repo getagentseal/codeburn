@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { spawn, type ChildProcess } from 'child_process'
+import { readFileSync } from 'fs'
 import { appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
@@ -64,6 +65,20 @@ it('collects garbage before a heap reading drops the memos', async () => {
   expect(await run([3.8 * GB, 3.5 * GB])).toEqual({ pressure: 'heap', collected: 1 })
   expect(await run([1 * GB])).toEqual({ pressure: null, collected: 0 })
   expect(await run([1 * GB], 7 * GB)).toEqual({ pressure: 'rss', collected: 0 })
+  // A collector that fails keeps the first verdict: release, never fail the request.
+  const failing = await serveMemoryPressureAfterCollect(() => ({ usedHeap: 3.8 * GB, heapLimit: 4.2 * GB, rss: 3 * GB }), 0, 0.7, async () => { throw new Error('no gc') })
+  expect(failing.pressure).toBe('heap')
+})
+
+it('the resident pressure check confirms a heap reading after a collection', () => {
+  // Structural pin: the guard inside runStdioServe cannot be driven to a real
+  // near-limit heap in a test, so pin that it goes through the confirming helper.
+  const source = readFileSync(join(__dirname, '..', 'src', 'serve.ts'), 'utf-8')
+  const start = source.indexOf('const shedIfPressured = ')
+  const body = source.slice(start, source.indexOf('\n  }\n', start))
+  expect(start).toBeGreaterThan(-1)
+  expect(body).toContain('serveMemoryPressureAfterCollect(readMemory,')
+  expect(body).not.toMatch(/serveMemoryPressure\(/)
 })
 
 describe('day-scoped invalidation', () => {

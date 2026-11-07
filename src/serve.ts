@@ -95,7 +95,9 @@ export function serveMemoryPressure(
 /// serveMemoryPressure, with a heap verdict confirmed after a collection: used
 /// heap counts unreachable objects until the next one, and right after a large
 /// request that garbage alone can cross the line and drop a healthy child's
-/// memos. Returns the reading the verdict rests on.
+/// memos. A collection that fails keeps the first verdict, so the memos are
+/// released rather than the request failed. Returns the reading the verdict
+/// rests on.
 export async function serveMemoryPressureAfterCollect(
   read: () => ServeMemoryReading,
   lastRssClear: number,
@@ -105,7 +107,11 @@ export async function serveMemoryPressureAfterCollect(
   let reading = read()
   let pressure = serveMemoryPressure(reading, lastRssClear, heapFraction)
   if (pressure === 'heap') {
-    await collect()
+    try {
+      await collect()
+    } catch {
+      return { pressure, reading }
+    }
     reading = read()
     pressure = serveMemoryPressure(reading, lastRssClear, heapFraction)
   }
