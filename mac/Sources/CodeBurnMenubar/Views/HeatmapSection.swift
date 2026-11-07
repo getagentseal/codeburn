@@ -1203,8 +1203,10 @@ private struct CostPerEditCaption: View {
     }
 
     private func formatCPE(_ v: Double) -> String {
-        if v < 0.01 { return String(format: "$%.3f", v) }
-        return String(format: "$%.2f", v)
+        let state = CurrencyState.shared
+        let converted = v * state.rate
+        if converted < 0.01 { return String(format: "\(state.symbol)%.3f", converted) }
+        return String(format: "\(state.symbol)%.2f", converted)
     }
 }
 
@@ -1698,7 +1700,7 @@ private struct RoutingWasteSection: View {
                                     .font(.system(size: 9.5, weight: .medium))
                                     .foregroundStyle(.secondary)
                                 Spacer()
-                                Text(String(format: "$%.2f/edit", model.costPerEdit))
+                                Text("\(model.costPerEdit.asCompactCurrency())/edit")
                                     .font(.system(size: 9))
                                     .foregroundStyle(.quaternary)
                                     .padding(.trailing, 8)
