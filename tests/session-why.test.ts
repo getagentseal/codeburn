@@ -547,3 +547,39 @@ describe('session cost diagnosis: agents', () => {
     expect(t.helperCost).toBeCloseTo(t.helpers.reduce((s, h) => s + h.cost, 0), 12)
   })
 })
+
+describe('session cost diagnosis: many helpers', () => {
+  // Holding every helper's tool output until the steps were built ran a
+  // 1,900-helper session out of heap in the desktop app.
+  // The heap figure is the same on every platform; Windows runners are only too slow
+  // to write 2,000 helper transcripts inside a test budget.
+  it.skipIf(process.platform === 'win32')('explains a session with 2,000 helpers under a small heap', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'codeburn-why-many-'))
+    try {
+      const dir = join(root, '.claude', 'projects', '-work-demo')
+      await mkdir(join(dir, SID, 'subagents'), { recursive: true })
+      const n = 2000
+      const m = transcript('2026-09-10T10:00:00.000Z')
+      m.prompt('Fan out.')
+      m.call(FABLE, { out: 100, cr: 10_000, cw: 1_000 }, Array.from({ length: n }, (_, i) => ({ id: `a${i}`, name: 'Agent', input: { description: `Helper ${i}`, prompt: 'p' } })))
+      for (let i = 0; i < n; i++) m.result(`a${i}`, 'done', 10)
+      await writeFile(join(dir, `${SID}.jsonl`), m.lines.join('\n') + '\n')
+      // The check mark makes each output a two-byte string in memory, so half the
+      // bytes on disk show the same retention.
+      const output = (i: number) => Array.from({ length: 250 }, (_, l) => `✓ helper ${i} line ${l} ${'x'.repeat(80)}`).join('\n')
+      for (let i = 0; i < n; i++) {
+        const h = transcript('2026-09-10T10:00:05.000Z')
+        h.raw({ type: 'user', message: { role: 'user', content: 'go' } })
+        h.call(SONNET, { out: 50, cr: 1_000, cw: 100 }, [{ id: `b${i}`, name: 'Bash', input: { command: 'make' } }])
+        h.result(`b${i}`, output(i), 100)
+        h.call(SONNET, { out: 50, cr: 1_000, cw: 100 })
+        await writeFile(join(dir, SID, 'subagents', `agent-x${i}.jsonl`), h.lines.map(l => l.replace('"sessionId"', '"isSidechain":true,"sessionId"')).join('\n') + '\n')
+        await writeFile(join(dir, SID, 'subagents', `agent-x${i}.meta.json`), JSON.stringify({ agentType: 'general-purpose', description: `Helper ${i}`, toolUseId: `a${i}` }))
+      }
+      const env = { ...cliEnv(), CLAUDE_CONFIG_DIR: join(root, '.claude'), CODEBURN_CACHE_DIR: join(root, '.cache', 'codeburn') }
+      const run = spawnSync(process.execPath, ['--max-old-space-size=128', '--import', 'tsx', 'src/cli.ts', 'sessions', '--id', SID, '--why', '--format', 'json'], { cwd: process.cwd(), env, encoding: 'utf-8', timeout: 300_000, maxBuffer: 64 * 1024 * 1024 })
+      expect(run.status, run.stderr.slice(-2000)).toBe(0)
+      expect((JSON.parse(run.stdout) as SessionWhy).helperCount).toBe(n)
+    } finally { await rm(root, { recursive: true, force: true }) }
+  }, 360_000)
+})

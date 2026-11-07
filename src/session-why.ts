@@ -227,8 +227,8 @@ function repriced(calls: ParsedApiCall[]): WhyAlt | null {
 
 // ── transcript reading ─────────────────────────────────────────────────
 
-type ToolUse = { id: string; name: string; input: Record<string, unknown>; ts: number }
-type Result = { ts: number; isError: boolean; text: string; tur: Record<string, unknown> }
+type ToolUse = { id: string; name: string; input: Record<string, unknown>; ts: number; label?: string; detail?: WhyDetail | null }
+type Result = { ts: number; isError: boolean; text: string; tur: Record<string, unknown>; chars: number; error?: WhyError }
 type Msg = { firstTs: number; lastTs: number; toolUses: ToolUse[] }
 type HandBack = { ts: number; deliveredTs: number | null; status: string; chars: number }
 type Read = {
@@ -325,7 +325,8 @@ async function readTranscript(filePath: string): Promise<Read> {
       const tur = e['toolUseResult']
       for (const b of content as Array<Record<string, unknown>>) {
         if (b?.['type'] !== 'tool_result' || typeof b['tool_use_id'] !== 'string') continue
-        r.results.set(b['tool_use_id'], { ts, isError: b['is_error'] === true, text: blockText(b['content']), tur: tur && typeof tur === 'object' ? tur as Record<string, unknown> : {} })
+        const text = blockText(b['content'])
+        r.results.set(b['tool_use_id'], { ts, isError: b['is_error'] === true, text, tur: tur && typeof tur === 'object' ? tur as Record<string, unknown> : {}, chars: text.length })
       }
     } else {
       const text = blockText(content)
@@ -362,11 +363,12 @@ async function jsonlUnder(dir: string, out: string[] = []): Promise<string[]> {
   return out
 }
 
-async function readHelpers(sessionFile: string, spawnLinks: Record<string, string>): Promise<HelperRun[]> {
+async function readHelpers(sessionFile: string, spawnLinks: Record<string, string>, budget: DetailBudget): Promise<HelperRun[]> {
   const files = await jsonlUnder(join(sessionFile.replace(/\.jsonl$/, ''), 'subagents'))
   const helpers: HelperRun[] = []
   for (const file of files.sort()) {
     const read = await readTranscript(file)
+    decideDetails(read, read.calls, budget)
     let meta: { toolUseId?: unknown; description?: unknown; agentType?: unknown } = {}
     try { meta = JSON.parse(await readFile(file.replace(/\.jsonl$/, '.meta.json'), 'utf8')) } catch { /* no sidecar */ }
     const id = basename(file, '.jsonl')
@@ -386,10 +388,43 @@ async function readHelpers(sessionFile: string, spawnLinks: Record<string, strin
       spawnIds: read.spawnIds,
       opens: prOpens(read),
       mentioned: namedPrNumber(typeof meta.description === 'string' ? meta.description : ''),
-      read,
+      read: slimHelperRead(read),
     })
   }
   return helpers
+}
+
+// A session can have thousands of helpers, so each keeps only what its steps
+// show, worked out now, not its raw tool input and output.
+function slimHelperRead(r: Read): Read {
+  for (const m of r.msgs.values()) for (const tu of m.toolUses) {
+    tu.label = redact(toolLabel(tu.name, tu.input))
+    if (tu.name !== 'Agent' && tu.name !== 'Task') tu.input = {}
+  }
+  for (const res of r.results.values()) {
+    if (res.isError) res.error = errorCause(res.text)
+    res.text = ''
+    res.tur = { isAsync: res.tur['isAsync'], status: res.tur['status'] }
+  }
+  r.turns = []
+  return r
+}
+
+const toolUsesOf = (r: Read, call: ParsedApiCall): ToolUse[] => {
+  const m = r.msgs.get(call.deduplicationKey.split(':advisor:')[0]!)
+  return call.deduplicationKey.includes(':advisor:') || !m ? [] : m.toolUses
+}
+
+type DetailBudget = { left: number; omitted: boolean }
+// Decided per transcript as it is read, in the order steps are built (the
+// session's prompts, then each helper), so a detail past the budget is never held.
+// ponytail: one global budget keeps the payload under the app's 16MB pipe cap; per-turn loading if real sessions hit it.
+function decideDetails(r: Read, calls: ParsedApiCall[], budget: DetailBudget): void {
+  for (const call of calls) for (const tu of toolUsesOf(r, call)) {
+    const detail = toolDetail(tu.name, tu.input, r.results.get(tu.id))
+    const size = JSON.stringify(detail).length
+    if (size > budget.left) { tu.detail = null; budget.omitted = true } else { tu.detail = detail; budget.left -= size }
+  }
 }
 
 // ── steps ───────────────────────────────────────────────────────────────
@@ -490,12 +525,12 @@ function median(values: number[]): number {
 }
 
 export async function buildSessionWhy(filePath: string): Promise<SessionWhy> {
+  const budget: DetailBudget = { left: DETAIL_BUDGET_CHARS, omitted: false }
   const read = await readTranscript(filePath)
-  const helpers = await readHelpers(filePath, read.spawnLinks)
+  decideDetails(read, read.calls, budget)
+  const helpers = await readHelpers(filePath, read.spawnLinks, budget)
   const helperByTool = new Map(helpers.filter(h => h.toolUseId).map(h => [h.toolUseId, h]))
   const stepResult = new Map<WhyStep, Result>()
-  let budget = DETAIL_BUDGET_CHARS
-  let detailsOmitted = false
 
   // Every priced call in time order, for "later calls" math.
   const allCalls: Array<{ call: ParsedApiCall; ts: number; turn: number; toolUse: boolean }> = []
@@ -513,8 +548,7 @@ export async function buildSessionWhy(filePath: string): Promise<SessionWhy> {
       const input = r.inputs.filter(x => x.ts <= firstTs).at(-1)
       const sentAt = input && input.ts >= start ? input.ts : start
       const startedBy = !input || input.ts <= start ? 'prompt' : input.kind
-      const isAdvisor = call.deduplicationKey.includes(':advisor:')
-      const toolUses = isAdvisor || !m ? [] : m.toolUses
+      const toolUses = toolUsesOf(r, call)
       if (turn) allCalls.push({ call, ts: firstTs, turn, toolUse: toolUses.length > 0 })
       const u = call.usage
       const cachedPct = sessionCacheHitPercent(u.inputTokens, u.cacheReadInputTokens, u.cacheCreationInputTokens)
@@ -532,15 +566,12 @@ export async function buildSessionWhy(filePath: string): Promise<SessionWhy> {
         const helper = helperByTool.get(tu.id)
         if (helper) seen.push(helper)
         const doneTs = (tu.name === 'Agent' || tu.name === 'Task' ? r.handBacks.get(tu.id)?.ts : undefined) ?? res?.ts ?? tu.ts
-        let detail: WhyDetail | null = toolDetail(tu.name, tu.input, res)
-        const size = JSON.stringify(detail).length
-        // ponytail: one global budget keeps the payload under the app's 16MB pipe cap; per-turn loading if real sessions hit it.
-        if (size > budget) { detail = null; detailsOmitted = true } else budget -= size
+        const detail = tu.detail ?? null
         if (detail && helper) detail.helper = publicHelper(helper)
         const step: WhyStep = {
-          kind: 'tool', start: tu.ts - start, end: doneTs - start, name: tu.name, label: redact(toolLabel(tu.name, tu.input)),
-          isError: res?.isError === true, ...(res?.isError ? { error: errorCause(res.text) } : {}), ...(helper ? { helperCost: helper.cost } : {}), detail,
-          parent: -1, ...(toolUses.length > 1 ? { parallel: { index: j + 1, of: toolUses.length } } : {}), resultChars: res?.text.length ?? 0,
+          kind: 'tool', start: tu.ts - start, end: doneTs - start, name: tu.name, label: tu.label ?? redact(toolLabel(tu.name, tu.input)),
+          isError: res?.isError === true, ...(res?.isError ? { error: res.error ?? errorCause(res.text) } : {}), ...(helper ? { helperCost: helper.cost } : {}), detail,
+          parent: -1, ...(toolUses.length > 1 ? { parallel: { index: j + 1, of: toolUses.length } } : {}), resultChars: res?.chars ?? 0,
         }
         if (res) stepResult.set(step, res)
         parentOf.set(step, modelStep)
@@ -613,7 +644,7 @@ export async function buildSessionWhy(filePath: string): Promise<SessionWhy> {
     const input = spawn?.tu.input ?? {}
     const background = res?.tur['isAsync'] === true || res?.tur['status'] === 'async_launched' || String(input['run_in_background']) === 'true'
     const back = spawn?.r.handBacks.get(h.toolUseId)
-      ?? (!background && res ? { ts: res.ts, deliveredTs: res.ts, status: res.isError ? 'failed' : 'completed', chars: res.text.length } : undefined)
+      ?? (!background && res ? { ts: res.ts, deliveredTs: res.ts, status: res.isError ? 'failed' : 'completed', chars: res.chars } : undefined)
     const { base, steps } = runs.get(h)!
     const models = steps.filter((s): s is Extract<WhyStep, { kind: 'model' }> => s.kind === 'model')
     const owner = spawn?.owner ? runs.get(spawn.owner)! : spawn ? { base: Date.parse(t.ts), steps: t.steps } : null
@@ -668,7 +699,7 @@ export async function buildSessionWhy(filePath: string): Promise<SessionWhy> {
     turns,
     findings,
     rules: WHY_RULES,
-    detailsOmitted,
+    detailsOmitted: budget.omitted,
     prWork: buildPrWork(read, helpers),
   }
 }
@@ -1045,12 +1076,18 @@ export function renderSessionWhyText(why: SessionWhy): string {
 const WHY_JSON_BUDGET_BYTES = 12 * 1024 * 1024
 
 export function fitWhyJson(why: SessionWhy, budget = WHY_JSON_BUDGET_BYTES): SessionWhy {
-  let over = Buffer.byteLength(JSON.stringify(why)) - budget
   const byCost = <T extends { cost: number }>(xs: T[]) => [...xs].sort((a, b) => a.cost - b.cost)
-  for (const x of [...byCost(why.turns.flatMap(t => t.helpers)), ...byCost(why.turns)]) {
+  const lists = [...byCost(why.turns.flatMap(t => t.helpers)), ...byCost(why.turns)]
+  // Sized one step list at a time: the whole payload as one string can outgrow the heap.
+  const sizes = lists.map(x => Buffer.byteLength(JSON.stringify(x.steps)) - 2)
+  const kept = lists.map(x => x.steps)
+  for (const x of lists) x.steps = []
+  let over = Buffer.byteLength(JSON.stringify(why)) + sizes.reduce((s, n) => s + n, 0) - budget
+  lists.forEach((x, i) => { x.steps = kept[i]! })
+  for (const [i, x] of lists.entries()) {
     if (over <= 0) break
     if (!x.steps.length) continue
-    over -= Buffer.byteLength(JSON.stringify(x.steps)) - 2
+    over -= sizes[i]!
     x.truncatedSteps = x.steps.length
     x.steps = []
   }
