@@ -108,8 +108,8 @@ function isWaitingCheck(command: string): boolean {
   const first = lines[0] ?? ''
   // `sleep 5 &&` or a check ending in && or | is unfinished, not a check.
   if ((m[1] && m[1] !== ';' && !first) || /^(?:&&|\|\|?|;)|(?:&&|\|\|?)$/.test(first)) return false
-  // Command substitution runs work wherever it sits.
-  if (/\$\(|`/.test(first) || WRITE_REDIRECT.test(first.replace(/'[^'\n]*'|"[^"\n]*"/g, "''"))) return false
+  // Command and process substitution run work wherever they sit.
+  if (/\$\(|`|[<>]\(/.test(first) || WRITE_REDIRECT.test(first.replace(/'[^'\n]*'|"[^"\n]*"/g, "''"))) return false
   const rest = first.replace(ENV_PREFIX, '$1')
   if (/(?:^|[\s;&|])env(?=\s|$)/.test(rest) || hasLooseAssignment(rest)) return false
   return !rest || isReadShapedBashCommand(rest) || GH_READ.test(rest) || BARE_ECHO.test(rest)

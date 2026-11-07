@@ -225,7 +225,7 @@ describe('identical-call loop', () => {
   })
 
   it('still counts a sleep followed by env or a second line that does work', async () => {
-    for (const command of ['sleep 5 && env CI=1 npm run build', 'sleep 5 && cat log\nnpm run build', 'sleep 5 && cat log && env npm run build', 'sleep 5 && env X="$(npm test)" gh pr checks 1909', 'sleep 5 && env X=`npm test` gh pr checks 1909', 'sleep 5 && env X="${Y:-a}" gh pr checks 1909', 'sleep 5 && X=x;npm gh pr checks 1909', 'sleep 5 && env X=x;npm gh pr checks 1909', 'sleep 5 && X=a>b cat log', 'sleep 5 && gh pr checks 1909 > report.txt', 'sleep 5 && gh pr checks 1909 >> report.txt', 'sleep 5 && cat log 2>err.txt']) {
+    for (const command of ['sleep 5 && env CI=1 npm run build', 'sleep 5 && cat log\nnpm run build', 'sleep 5 && cat log && env npm run build', 'sleep 5 && env X="$(npm test)" gh pr checks 1909', 'sleep 5 && env X=`npm test` gh pr checks 1909', 'sleep 5 && env X="${Y:-a}" gh pr checks 1909', 'sleep 5 && X=x;npm gh pr checks 1909', 'sleep 5 && env X=x;npm gh pr checks 1909', 'sleep 5 && X=a>b cat log', 'sleep 5 && gh pr checks 1909 > report.txt', 'sleep 5 && gh pr checks 1909 >> report.txt', 'sleep 5 && cat log 2>err.txt', 'sleep 5 && gh pr checks 1909 <(npm test)', 'sleep 5 && cat <(npm test)']) {
       const env = await setup()
       const outs: string[] = []
       for (let i = 0; i < 12; i++) outs.push(await call(env, 'Bash', { command }, { output: 'Build OK' }))
