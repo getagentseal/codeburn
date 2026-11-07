@@ -76,8 +76,13 @@ function markSignal(cache: GuardCache, signal: 'loop' | 'retry'): void {
   cache.signalWarnCostUSD ??= cache.costUSD
 }
 
+// NAME=value where the value is one bare word or one quoted string with no
+// shell metacharacter that could run or redirect anything.
+const ASSIGN = /[A-Za-z_]\w*=(?:'[^'\n]*'|"[^"\n$`]*"|[^\s;|&<>()`$'"]*)/.source
+const ASSIGN_AT = new RegExp(`^${ASSIGN}(?=\\s|$)`)
 // The shared read list leaves gh out (it has mutating subcommands); these only inspect.
-const GH_READ = /^(?:[A-Za-z_]\w*=\S*[^\S\n]+)*gh\s+[\w-]+\s+(?:view|list|checks|status|diff|watch)\b[^;&|\n]*$/
+const GH_READ = new RegExp(`^(?:${ASSIGN}[^\\S\\n]+)*gh\\s+[\\w-]+\\s+(?:view|list|checks|status|diff|watch)\\b[^;&|\\n]*$`)
+const ENV_PREFIX = new RegExp(`(^|[;&|][^\\S\\n]*)env(?:[^\\S\\n]+(?:-i|--ignore-environment|-u[^\\S\\n]*[A-Za-z_]\\w*|--unset=[A-Za-z_]\\w*|-|${ASSIGN}))*[^\\S\\n]+`, 'g')
 // A bare echo after a sleep is a blind timer wait: no redirection, chaining or substitution.
 const BARE_ECHO = /^echo(?:[^\S\n]+(?:[^;&|<>`$\n]|\$(?!\())*)?$/
 
@@ -99,15 +104,25 @@ function isWaitingCheck(command: string): boolean {
   const first = lines[0] ?? ''
   // `sleep 5 &&` or a check ending in && or | is unfinished, not a check.
   if ((m[1] && m[1] !== ';' && !first) || /^(?:&&|\|\|?|;)|(?:&&|\|\|?)$/.test(first)) return false
-  // Command substitution runs work wherever it sits, and an assignment value
-  // with an expansion may hide one.
-  if (/\$\(|`/.test(first) || (first.match(/(?:^|\s)[A-Za-z_]\w*=(?:'[^'\n]*'|"[^"\n]*"|[^\s'"])*/g) ?? []).some(a => a.includes('${'))) return false
-  const rest = first.replace(
-    /(^|[;&|][^\S\n]*)env(?:[^\S\n]+(?:-i|--ignore-environment|-|-u[^\S\n]*[A-Za-z_]\w*|--unset=[A-Za-z_]\w*|[A-Za-z_]\w*=(?:'[^'\n]*'|"[^"\n]*"|[^\s'"])*))*[^\S\n]+/g,
-    '$1',
-  )
-  if (/(?:^|[\s;&|])env(?=\s|$)/.test(rest)) return false
+  // Command substitution runs work wherever it sits.
+  if (/\$\(|`/.test(first)) return false
+  const rest = first.replace(ENV_PREFIX, '$1')
+  if (/(?:^|[\s;&|])env(?=\s|$)/.test(rest) || hasLooseAssignment(rest)) return false
   return !rest || isReadShapedBashCommand(rest) || GH_READ.test(rest) || BARE_ECHO.test(rest)
+}
+
+// The shared read list skips any NAME=... token before a command, so each
+// leading assignment of every segment must pass the strict shape.
+function hasLooseAssignment(command: string): boolean {
+  for (const segment of command.split(/[;&|]/)) {
+    let s = segment.trim()
+    while (/^[A-Za-z_]\w*=/.test(s)) {
+      const m = ASSIGN_AT.exec(s)
+      if (!m) return true
+      s = s.slice(m[0].length).trimStart()
+    }
+  }
+  return false
 }
 
 // The reason goes to the model; how to lift the stop goes only to the user, so
