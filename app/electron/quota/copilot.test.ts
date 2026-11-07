@@ -1,6 +1,8 @@
+import path from 'node:path'
+
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { decodeCopilotUsage, fetchCopilotQuota } from './copilot'
+import { copilotConfigDirs, decodeCopilotUsage, fetchCopilotQuota } from './copilot'
 
 const hosts = JSON.stringify({ 'github.com': { user: 'octocat', oauth_token: 'gho_test-secret' } })
 const usageBody = {
@@ -180,5 +182,35 @@ describe('Copilot quota fetch', () => {
     expect(result.quota).not.toHaveProperty('error')
     expect(logged).not.toMatch(/gho_leak|eyJabc|\0/)
     expect(logged).toContain('[REDACTED]')
+  })
+})
+
+describe('Copilot credential directories', () => {
+  it('prefers %LOCALAPPDATA% on Windows and keeps the XDG path as a fallback', () => {
+    expect(copilotConfigDirs('win32', { LOCALAPPDATA: 'C:\\Users\\dev\\AppData\\Local' }, 'C:\\Users\\dev')).toEqual([
+      path.join('C:\\Users\\dev\\AppData\\Local', 'github-copilot'),
+      path.join('C:\\Users\\dev', '.config', 'github-copilot'),
+    ])
+    expect(copilotConfigDirs('win32', {}, 'C:\\Users\\dev')[0]).toBe(path.join('C:\\Users\\dev', 'AppData', 'Local', 'github-copilot'))
+  })
+
+  it('reads only the XDG path off Windows', () => {
+    expect(copilotConfigDirs('darwin', { LOCALAPPDATA: 'C:\\ignored' }, '/Users/dev')).toEqual([path.join('/Users/dev', '.config', 'github-copilot')])
+  })
+
+  it('finds the plugin token under %LOCALAPPDATA% on Windows with no explicit directory', async () => {
+    const realPlatform = process.platform
+    const realLocal = process.env.LOCALAPPDATA
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true })
+    process.env.LOCALAPPDATA = '/win/local'
+    try {
+      const readFile = vi.fn(async (file: string) => file === path.join('/win/local', 'github-copilot', 'hosts.json') ? hosts : null)
+      const result = await fetchCopilotQuota({ fetch: vi.fn(async () => okJson(usageBody)), readFile })
+      expect(result.quota.connection).toBe('connected')
+    } finally {
+      Object.defineProperty(process, 'platform', { value: realPlatform, configurable: true })
+      if (realLocal === undefined) delete process.env.LOCALAPPDATA
+      else process.env.LOCALAPPDATA = realLocal
+    }
   })
 })

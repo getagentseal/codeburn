@@ -14,8 +14,10 @@
 // (#1286). Self-hosted GitHub Enterprise Server is out of scope.
 //
 // Credential: the GitHub OAuth token already on disk from a signed-in Copilot
-// plugin — ~/.config/github-copilot/hosts.json (keyed by host) falling back to
-// apps.json (keyed by app name). Read-only; no new storage.
+// plugin - hosts.json (keyed by host) falling back to apps.json (keyed by app
+// name). The plugins write those under ~/.config/github-copilot on macOS and
+// Linux but under %LOCALAPPDATA%\github-copilot on Windows, so the directory
+// is resolved per platform. Read-only; no new storage.
 import os from 'node:os'
 import path from 'node:path'
 
@@ -97,6 +99,8 @@ export function preferredCopilotHost(hosts: (string | null)[]): string | null {
   return enterprise[0] ?? normalized.slice().sort()[0] ?? null
 }
 
+const CREDENTIAL_FILES = ['hosts.json', 'apps.json'] as const
+
 /**
  * apps.json keys look like `github.com:Iv1.<app id>` on the newer plugins and
  * like a bare app name ("Visual Studio Code") on the older ones; only the
@@ -111,16 +115,33 @@ function hostFromAppsKey(key: string): string | null {
 
 export type CopilotDeps = {
   fetch: typeof fetch
-  hostsPath: string
-  appsPath: string
+  /** Ordered credential directories; the first file that yields a token wins. */
+  configDirs: string[]
   readFile: typeof readSecureFile
 }
 
-const defaults: CopilotDeps = {
-  fetch: globalThis.fetch,
-  hostsPath: path.join(os.homedir(), '.config', 'github-copilot', 'hosts.json'),
-  appsPath: path.join(os.homedir(), '.config', 'github-copilot', 'apps.json'),
-  readFile: readSecureFile,
+/**
+ * Where the signed-in Copilot plugins keep hosts.json / apps.json. Windows has
+ * no ~/.config: the plugins follow the platform convention and write under
+ * %LOCALAPPDATA%. The XDG path stays as a second candidate there, because a
+ * token copied in from a POSIX-style shell (Git Bash, an MSYS home) lands in
+ * it and is just as valid.
+ */
+export function copilotConfigDirs(
+  platform: string = process.platform,
+  env: NodeJS.ProcessEnv = process.env,
+  home: string = os.homedir(),
+): string[] {
+  const xdg = path.join(home, '.config', 'github-copilot')
+  if (platform !== 'win32') return [xdg]
+  const localAppData = env['LOCALAPPDATA']?.trim() || path.join(home, 'AppData', 'Local')
+  return [path.join(localAppData, 'github-copilot'), xdg]
+}
+
+// Resolved per call rather than once at import so a caller (and the tests) can
+// change the platform or the environment the paths are derived from.
+function defaultDeps(): CopilotDeps {
+  return { fetch: globalThis.fetch, configDirs: copilotConfigDirs(), readFile: readSecureFile }
 }
 
 function empty(connection: QuotaProvider['connection'], footerLines: string[] = []): QuotaProvider {
@@ -147,15 +168,17 @@ function credentialFromMap(raw: string, hostForKey: (key: string) => string | nu
 }
 
 async function credentialFromFiles(deps: CopilotDeps): Promise<CopilotCredential | null> {
-  for (const filePath of [deps.hostsPath, deps.appsPath]) {
-    try {
-      const raw = await deps.readFile(filePath, 64 * 1024)
-      if (!raw) continue
-      // hosts.json is keyed by GitHub host, apps.json by "<host>:<app id>".
-      const credential = credentialFromMap(raw, filePath === deps.hostsPath ? key => key : hostFromAppsKey)
-      if (credential) return credential
-    } catch {
-      // A malformed or unreadable file falls through to the next candidate.
+  for (const dir of deps.configDirs) {
+    for (const name of CREDENTIAL_FILES) {
+      try {
+        const raw = await deps.readFile(path.join(dir, name), 64 * 1024)
+        if (!raw) continue
+        // hosts.json is keyed by GitHub host, apps.json by "<host>:<app id>".
+        const credential = credentialFromMap(raw, name === 'hosts.json' ? key => key : hostFromAppsKey)
+        if (credential) return credential
+      } catch {
+        // A malformed or unreadable file falls through to the next candidate.
+      }
     }
   }
   return null
@@ -218,7 +241,7 @@ async function request(credential: CopilotCredential, endpoint: string, deps: Co
 export type CopilotResult = { quota: QuotaProvider; retryAfterSeconds?: number }
 
 export async function fetchCopilotQuota(options: Partial<CopilotDeps> & { signal?: AbortSignal } = {}): Promise<CopilotResult> {
-  const deps = { ...defaults, ...options }
+  const deps = { ...defaultDeps(), ...options }
   let apiHost = COPILOT_DEFAULT_API_HOST
   try {
     let credential = await credentialFromFiles(deps)
