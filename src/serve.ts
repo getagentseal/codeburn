@@ -92,6 +92,26 @@ export function serveMemoryPressure(
   return null
 }
 
+/// serveMemoryPressure, with a heap verdict confirmed after a collection: used
+/// heap counts unreachable objects until the next one, and right after a large
+/// request that garbage alone can cross the line and drop a healthy child's
+/// memos. Returns the reading the verdict rests on.
+export async function serveMemoryPressureAfterCollect(
+  read: () => ServeMemoryReading,
+  lastRssClear: number,
+  heapFraction?: number,
+  collect: () => Promise<void> = collectGarbage,
+): Promise<{ pressure: 'heap' | 'rss' | null; reading: ServeMemoryReading }> {
+  let reading = read()
+  let pressure = serveMemoryPressure(reading, lastRssClear, heapFraction)
+  if (pressure === 'heap') {
+    await collect()
+    reading = read()
+    pressure = serveMemoryPressure(reading, lastRssClear, heapFraction)
+  }
+  return { pressure, reading }
+}
+
 // V8 exposes gc() only to a process started with --expose-gc, and no codeburn
 // launcher passes it — so `globalThis.gc` was never there for the release below
 // to call. Ask V8 for the function directly instead. It is the difference
@@ -775,11 +795,14 @@ export async function runStdioServe(buildProgram: () => Command): Promise<void> 
   // Under pressure, drop them; the next request re-parses once (seconds),
   // which beats an aborted child. The child itself never exits here, so the
   // client's death counter is untouched.
-  const shedIfPressured = async (heapFraction?: number): Promise<void> => {
+  const readMemory = (): ServeMemoryReading => {
     const { used_heap_size, heap_size_limit } = getHeapStatistics()
     const rss = process.memoryUsage().rss
     if (rss > peakRss) peakRss = rss
-    const pressure = serveMemoryPressure({ usedHeap: used_heap_size, heapLimit: heap_size_limit, rss }, lastClearRss, heapFraction)
+    return { usedHeap: used_heap_size, heapLimit: heap_size_limit, rss }
+  }
+  const shedIfPressured = async (heapFraction?: number): Promise<void> => {
+    const { pressure, reading: { rss } } = await serveMemoryPressureAfterCollect(readMemory, lastClearRss, heapFraction)
     if (pressure === 'heap') outputMemo.clear()
     if (pressure) {
       await releaseResidentMemos()
