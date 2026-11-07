@@ -29,7 +29,9 @@ import { allowPath, sessionCachePath, sessionsDir } from './store.js'
 // `failedCommands` counts consecutive is_error results per command hash: a
 // passing run resets that command, and a successful edit resets every command,
 // since a rerun after a code change is a new attempt.
-export type ToolCallKey = { id: string; name: string; hash: string; result?: string }
+// `live`: the PreToolUse hook recorded this call itself, so whether it denied
+// it is known exactly and its result is never guessed from the deny text.
+export type ToolCallKey = { id: string; name: string; hash: string; result?: string; live?: boolean }
 
 export type GuardCache = {
   version: number
@@ -118,7 +120,11 @@ export function inputHash(value: unknown): string {
 }
 
 export function recordToolCall(cache: GuardCache, call: ToolCallKey): void {
-  if (call.id && cache.recentCalls.some(c => c.id === call.id)) return
+  const known = call.id ? cache.recentCalls.find(c => c.id === call.id) : undefined
+  if (known) {
+    if (call.live) known.live = true
+    return
+  }
   cache.recentCalls.push(call)
   if (cache.recentCalls.length > RECENT_CALLS) cache.recentCalls.shift()
 }
@@ -170,11 +176,13 @@ function foldToolResults(cache: GuardCache, entry: JournalEntry): void {
   const ours = new Set<string>()
   for (const b of Array.isArray(content) ? content as { type?: unknown; tool_use_id?: unknown; content?: unknown; is_error?: unknown }[] : []) {
     if (b?.type !== 'tool_result' || typeof b.tool_use_id !== 'string') continue
-    if (cache.deniedPending.includes(b.tool_use_id) || isGuardDeny(b)) {
+    const recent = cache.recentCalls.find(c => c.id === b.tool_use_id)
+    // The deny text only stands in for a mark the cache no longer holds (a
+    // rebuild, or a call out of the window); a live call's result is genuine.
+    if (cache.deniedPending.includes(b.tool_use_id) || (!recent?.live && isGuardDeny(b))) {
       ours.add(b.tool_use_id)
       continue
     }
-    const recent = cache.recentCalls.find(c => c.id === b.tool_use_id)
     if (recent) recent.result = inputHash(b.content ?? null)
   }
   if (ours.size > 0) cache.deniedPending = cache.deniedPending.filter(id => !ours.has(id))

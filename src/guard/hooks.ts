@@ -214,7 +214,7 @@ async function handlePreToolUse(input: unknown, opts: HookOpts): Promise<string>
 
   // Without a tool_use_id the transcript copy cannot be told apart from ours,
   // so the call is left for the transcript to record.
-  if (call?.id) recordToolCall(cache, call)
+  if (call?.id) recordToolCall(cache, { ...call, live: true })
   if (denied && call?.id) cache.deniedPending = [...cache.deniedPending, call.id].slice(-DENIED_PENDING_MAX)
   await writeCache(cache, opts.base)
   return output

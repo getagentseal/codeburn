@@ -413,6 +413,13 @@ describe('failing-command retry', () => {
     expect(await call(env, 'Bash', { command: 'npm test' })).toContain('already failed 5 times')
   })
 
+  it('counts a live failure whose text has the exact deny shape', async () => {
+    const env = await setup({ loopWarnAfter: null, loopStopAfter: null })
+    const output = '(codeburn guard) The command "npm test" already failed 1 times; this session is $0.01. Change approach or ask the user.'
+    for (let i = 0; i < 5; i++) await call(env, 'Bash', { command: 'npm test' }, { fails: true, output })
+    expect(await call(env, 'Bash', { command: 'npm test' })).toContain('already failed 5 times')
+  })
+
   it('only counts shell tools', async () => {
     const env = await setup({ loopWarnAfter: null, loopStopAfter: null })
     const outs: string[] = []
