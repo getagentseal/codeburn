@@ -80,13 +80,13 @@ describe('warm run check', () => {
 })
 
 describe('script wiring', () => {
-  it('gen-corpus writes the win32 fixture under the corpus home, not APPDATA', () => {
+  it('gen-corpus writes the Copilot fixture under the corpus home, not APPDATA', () => {
     const d = mkdtempSync(join(tmpdir(), 'gc-'))
     const home = join(d, 'home'); const appdata = join(d, 'real-appdata')
     mkdirSync(appdata)
-    const code = `Object.defineProperty(process,'platform',{value:'win32'});process.argv[2]=${JSON.stringify(home)};await import(${JSON.stringify(join(process.cwd(), 'scripts/upgrade-path/gen-corpus.mjs'))})`
+    const code = `process.argv[2]=${JSON.stringify(home)};await import(${JSON.stringify(join(process.cwd(), 'scripts/upgrade-path/gen-corpus.mjs'))})`
     const r = spawnSync(process.execPath, ['--input-type=module', '-e', code], { encoding: 'utf8', env: { ...process.env, APPDATA: appdata } })
-    const fixture = join(home, 'AppData', 'Roaming', 'Code', 'User', 'globalStorage', 'github.copilot-chat', 'agent-traces.db')
+    const fixture = copilotOtelDbPath(home, process.platform)
     const ok = r.status === 0 && existsSync(fixture) && readdirSync(appdata).length === 0
     rmSync(d, { recursive: true, force: true })
     expect(ok).toBe(true)
