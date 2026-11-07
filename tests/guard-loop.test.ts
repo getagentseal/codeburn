@@ -110,6 +110,23 @@ describe('identical-call loop', () => {
     for (const out of outs.slice(7)) expect(out).toContain('"permissionDecision":"deny"')
   })
 
+  it('keeps the stop when the guard state is rebuilt from a transcript holding its denies', async () => {
+    const env = await setup()
+    const input = { file_path: '/repo/a.ts' }
+    const hook = (id: string) => runGuardHook('pretooluse', JSON.stringify({
+      session_id: SID, transcript_path: env.path, tool_name: 'Read', tool_input: input, tool_use_id: id,
+    }), { base: env.base })
+    for (let i = 0; i < 12; i++) {
+      const id = `toolu_${++seq}`
+      const out = await hook(id)
+      const reason = out.includes('"deny"') ? JSON.parse(out).hookSpecificOutput.permissionDecisionReason as string : undefined
+      expect(reason !== undefined).toBe(i >= 7)
+      await appendFile(env.path, useLine(id, 'Read', input) + resultLine(id, reason !== undefined, reason ?? 'same contents'))
+    }
+    await rm(sessionCachePath(SID, env.base))
+    expect(await hook(`toolu_${++seq}`)).toContain('"permissionDecision":"deny"')
+  })
+
   it('counts the same when the transcript already holds the incoming call', async () => {
     const env = await setup()
     const outs: string[] = []

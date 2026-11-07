@@ -146,6 +146,18 @@ export function identicalRun(cache: GuardCache, call: ToolCallKey): number {
   return run
 }
 
+// Every deny reason the hook writes carries this, so a rebuild from the
+// transcript, which has no deny marks, still knows a result was ours.
+export const GUARD_DENY_MARK = '(codeburn guard)'
+
+// The length cap keeps a long failing output that merely quotes the mark (a
+// test run over this file) counted as a real answer.
+function isGuardDeny(b: { content?: unknown; is_error?: unknown }): boolean {
+  if (b.is_error !== true) return false
+  const text = JSON.stringify(b.content ?? null)
+  return text.length < 2_000 && text.includes(GUARD_DENY_MARK)
+}
+
 // Never a command hash (those are 16 hex chars).
 const EDIT_PENDING = 'edit'
 
@@ -154,9 +166,10 @@ function foldToolResults(cache: GuardCache, entry: JournalEntry): void {
   collectToolResultMeta(entry, results)
   if (results.size === 0) return
   const content = (entry.message as { content?: unknown } | undefined)?.content
-  for (const b of Array.isArray(content) ? content as { type?: unknown; tool_use_id?: unknown; content?: unknown }[] : []) {
+  for (const b of Array.isArray(content) ? content as { type?: unknown; tool_use_id?: unknown; content?: unknown; is_error?: unknown }[] : []) {
     if (b?.type !== 'tool_result') continue
     const recent = cache.recentCalls.find(c => c.id === b.tool_use_id)
+    if (recent && isGuardDeny(b)) recent.denied = true
     if (recent && !recent.denied) recent.result = inputHash(b.content ?? null)
   }
   for (const [id, meta] of results) {
