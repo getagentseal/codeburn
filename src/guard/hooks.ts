@@ -76,7 +76,7 @@ function markSignal(cache: GuardCache, signal: 'loop' | 'retry'): void {
 }
 
 // The shared read list leaves gh out (it has mutating subcommands); these only inspect.
-const GH_READ = /^gh\s+[\w-]+\s+(?:view|list|checks|status|diff|watch)\b[^;&|\n]*$/
+const GH_READ = /^(?:[A-Za-z_]\w*=\S*[^\S\n]+)*gh\s+[\w-]+\s+(?:view|list|checks|status|diff|watch)\b[^;&|\n]*$/
 // A bare echo after a sleep is a blind timer wait: no redirection, chaining or substitution.
 const BARE_ECHO = /^echo(?:[^\S\n]+(?:[^;&|<>`$\n]|\$(?!\())*)?$/
 
@@ -87,9 +87,14 @@ const BARE_ECHO = /^echo(?:[^\S\n]+(?:[^;&|<>`$\n]|\$(?!\())*)?$/
 function isWaitingCheck(command: string): boolean {
   const m = /^\s*sleep\s+\S+\s*(?:(?:&&|;|\|\|)([\s\S]*))?$/.exec(command)
   if (!m) return false
-  const rest = m[1]?.trim() ?? ''
   // The shared read list counts `env` as a read and does not split lines, so
   // `sleep 5 && env CI=1 npm run build` or a second line would pass as a check.
+  // An env that only sets variables is dropped and what it runs is checked;
+  // any other env (flags, or bare) is not a check.
+  const rest = (m[1]?.trim() ?? '').replace(
+    /(^|[;&|][^\S\n]*)env((?:[^\S\n]+[A-Za-z_]\w*=\S*)*)[^\S\n]+/g,
+    (_, pre: string, vars: string) => `${pre}${vars.trim()}${vars ? ' ' : ''}`,
+  )
   if (/\n/.test(rest) || /(?:^|[\s;&|])env(?=\s|$)/.test(rest)) return false
   return !rest || isReadShapedBashCommand(rest) || GH_READ.test(rest) || BARE_ECHO.test(rest)
 }
