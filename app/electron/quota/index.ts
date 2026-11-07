@@ -82,6 +82,8 @@ export class QuotaService {
   /** Whether `flight` was allowed to read the keychain, so a later call can tell
    *  whether that run can answer it. */
   private flightAllowKeychain = false
+  /** The disabled-provider set `flight` was started for; a different set never joins it. */
+  private flightDisabledKey = ''
   private generations: Record<ProviderName, number> = Object.fromEntries(PROVIDERS.map(p => [p, 0])) as Record<ProviderName, number>
   private controllers: Partial<Record<ProviderName, AbortController>> = {}
 
@@ -113,7 +115,7 @@ export class QuotaService {
     // without the keychain it asked for ever being read. A second forced click
     // on top of a forced run does join it — same answer, and no second macOS
     // keychain prompt.
-    if (this.flight && (!allowKeychain || this.flightAllowKeychain)) return this.flight
+    if (this.flight && this.flightDisabledKey === disabledKey && (!allowKeychain || this.flightAllowKeychain)) return this.flight
     if (options.force) this.invalidate()
     // A keychain-allowed run is the user acting again, so an earlier refusal may ask once more.
     if (allowKeychain) forgetKeychainRefusals()
@@ -122,10 +124,11 @@ export class QuotaService {
       // Superseded: this run was aborted by the one that replaced it, so its
       // rows are abort artefacts rather than an answer. Hand the caller the
       // replacement instead of a card that falsely reads "not connected".
-      .then(value => (this.flight !== flight && this.flight) ? this.flight : value)
+      .then(value => (this.flight !== flight && this.flight && this.flightDisabledKey === disabledKey) ? this.flight : value)
       .finally(() => { if (this.flight === flight) this.flight = null })
     this.flight = flight
     this.flightAllowKeychain = allowKeychain
+    this.flightDisabledKey = disabledKey
     return flight
   }
 

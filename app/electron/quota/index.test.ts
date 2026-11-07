@@ -258,13 +258,37 @@ describe('QuotaService', () => {
   })
 
   it('grants the keychain and forgets earlier refusals only on a forced IPC call', async () => {
-    const spy = vi.spyOn(quotaService, 'getQuota').mockResolvedValue([])
-    await getQuota({ disabled: ['codex'] })
-    await getQuota({ force: false })
-    expect(spy.mock.calls.map(call => call[0]?.allowKeychain)).toEqual([false, false])
-    await getQuota({ force: true })
-    expect(spy.mock.calls[2]![0]).toMatchObject({ force: true, allowKeychain: true })
-    spy.mockRestore()
+    // Only the provider fan-out is stubbed, so the real IPC wrapper and service run.
+    const fetchAll = vi.spyOn(quotaService as unknown as { fetchAll: (allowKeychain: boolean, disabled: Set<ProviderName>) => Promise<QuotaProvider[]> }, 'fetchAll').mockResolvedValue([])
+    vi.mocked(forgetKeychainRefusals).mockClear()
+    try {
+      await getQuota({ disabled: ['codex'] })
+      await getQuota({ force: false, disabled: ['gemini'] })
+      expect(forgetKeychainRefusals).not.toHaveBeenCalled()
+      expect(fetchAll.mock.calls.map(call => call[0])).toEqual([false, false])
+      await getQuota({ force: true })
+      expect(forgetKeychainRefusals).toHaveBeenCalledTimes(1)
+      expect(fetchAll.mock.calls.at(-1)![0]).toBe(true)
+    } finally {
+      fetchAll.mockRestore()
+    }
+  })
+
+  it('does not hand a poll for one provider set the in-flight rows of another', async () => {
+    const fetchers = noopFetchers()
+    let release!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    fetchers.claude.mockImplementation(async () => { await gate; return { quota: quota('claude') } })
+    const service = new QuotaService({
+      ...fetchers, grokbotInstalled: () => true, now: () => 1000, refreshMs: 120_000,
+      readFile: vi.fn(async () => null), writeFile: vi.fn(async () => undefined),
+    })
+    const withoutCodex = service.getQuota({ disabled: ['codex'] })
+    const withCodex = service.getQuota({ disabled: [] }) // switched back on mid-flight
+    release()
+    expect((await withoutCodex).map(row => row.provider)).not.toContain('codex')
+    expect((await withCodex).map(row => row.provider)).toContain('codex')
+    expect((await service.getQuota({ disabled: [] })).map(row => row.provider)).toContain('codex')
   })
 
   it('force re-fetches within the cache window by invalidating first', async () => {
