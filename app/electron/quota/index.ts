@@ -77,11 +77,13 @@ function codexQuotaSupported(): boolean {
 
 export class QuotaService {
   private readonly deps: QuotaDeps
-  private cache: { at: number; value: QuotaProvider[] } | null = null
+  private cache: { at: number; value: QuotaProvider[]; disabledKey: string } | null = null
   private flight: Promise<QuotaProvider[]> | null = null
   /** Whether `flight` was allowed to read the keychain, so a later call can tell
    *  whether that run can answer it. */
   private flightAllowKeychain = false
+  /** The disabled-provider set `flight` was started for; a different set never joins it. */
+  private flightDisabledKey = ''
   private generations: Record<ProviderName, number> = Object.fromEntries(PROVIDERS.map(p => [p, 0])) as Record<ProviderName, number>
   private controllers: Partial<Record<ProviderName, AbortController>> = {}
 
@@ -99,7 +101,12 @@ export class QuotaService {
 
   async getQuota(options: { force?: boolean; allowKeychain?: boolean; disabled?: string[] } = {}): Promise<QuotaProvider[]> {
     const allowKeychain = Boolean(options.allowKeychain)
-    if (!options.force && this.cache && this.deps.now() - this.cache.at < this.deps.refreshMs) return this.cache.value
+    // IPC names are untrusted strings; only known providers may be skipped.
+    const disabled = new Set((options.disabled ?? []).filter((p): p is ProviderName => PROVIDERS.includes(p as ProviderName)))
+    // A provider switched back on is not in a cache built without it, and the
+    // switch is no keychain consent, so a changed set re-reads unforced.
+    const disabledKey = [...disabled].sort().join(',')
+    if (!options.force && this.cache && this.cache.disabledKey === disabledKey && this.deps.now() - this.cache.at < this.deps.refreshMs) return this.cache.value
     // Join an in-flight run only when it can already answer this call. A
     // keychain-allowed call may not join a keychain-less poll, and must not
     // invalidate its way past one either: invalidate() aborts that poll, every
@@ -108,21 +115,20 @@ export class QuotaService {
     // without the keychain it asked for ever being read. A second forced click
     // on top of a forced run does join it — same answer, and no second macOS
     // keychain prompt.
-    if (this.flight && (!allowKeychain || this.flightAllowKeychain)) return this.flight
+    if (this.flight && this.flightDisabledKey === disabledKey && (!allowKeychain || this.flightAllowKeychain)) return this.flight
     if (options.force) this.invalidate()
     // A keychain-allowed run is the user acting again, so an earlier refusal may ask once more.
     if (allowKeychain) forgetKeychainRefusals()
-    // IPC names are untrusted strings; only known providers may be skipped.
-    const disabled = new Set((options.disabled ?? []).filter((p): p is ProviderName => PROVIDERS.includes(p as ProviderName)))
     let flight: Promise<QuotaProvider[]>
     flight = this.fetchAll(allowKeychain, disabled)
       // Superseded: this run was aborted by the one that replaced it, so its
       // rows are abort artefacts rather than an answer. Hand the caller the
       // replacement instead of a card that falsely reads "not connected".
-      .then(value => (this.flight !== flight && this.flight) ? this.flight : value)
+      .then(value => (this.flight !== flight && this.flight && this.flightDisabledKey === disabledKey) ? this.flight : value)
       .finally(() => { if (this.flight === flight) this.flight = null })
     this.flight = flight
     this.flightAllowKeychain = allowKeychain
+    this.flightDisabledKey = disabledKey
     return flight
   }
 
@@ -193,7 +199,7 @@ export class QuotaService {
         : run(provider),
     ))
     if (PROVIDERS.every(p => startingGenerations[p] === this.generations[p])) {
-      this.cache = { at: this.deps.now(), value }
+      this.cache = { at: this.deps.now(), value, disabledKey: [...disabled].sort().join(',') }
     }
     return value
   }

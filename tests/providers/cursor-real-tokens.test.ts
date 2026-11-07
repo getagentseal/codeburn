@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mkdtemp, rm } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join, resolve } from 'path'
-import { mkdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'fs'
 import { createRequire } from 'node:module'
 
 import {
@@ -152,6 +152,20 @@ function insertAgentKvStreams(db: {
   }
   db.exec('COMMIT')
 }
+
+// Cursor's prompt timestamp tag for the minute `ms` falls in, written at UTC`offsetHours`.
+function promptTag(ms: number, offsetHours: number | null): string {
+  const d = new Date(ms + (offsetHours ?? 0) * 3_600_000)
+  const pick = offsetHours === null
+    ? { wd: new Date(ms).getDay(), mo: new Date(ms).getMonth(), day: new Date(ms).getDate(), y: new Date(ms).getFullYear(), h: new Date(ms).getHours(), mi: new Date(ms).getMinutes() }
+    : { wd: d.getUTCDay(), mo: d.getUTCMonth(), day: d.getUTCDate(), y: d.getUTCFullYear(), h: d.getUTCHours(), mi: d.getUTCMinutes() }
+  const wd = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][pick.wd]
+  const mo = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][pick.mo]
+  const zone = offsetHours === null ? '' : ` (UTC${offsetHours >= 0 ? '+' : ''}${offsetHours})`
+  return `<timestamp>${wd}, ${mo} ${pick.day}, ${pick.y}, ${pick.h % 12 || 12}:${String(pick.mi).padStart(2, '0')} ${pick.h < 12 ? 'AM' : 'PM'}${zone}</timestamp>`
+}
+
+const minuteAgo = (days: number): number => Math.floor((Date.now() - days * 864e5) / 60_000) * 60_000
 
 async function collectCalls(provider: ReturnType<typeof createCursorProvider>, dbPath: string): Promise<ParsedProviderCall[]> {
   const source = { path: dbPath, project: 'test', provider: 'cursor' as const }
@@ -414,6 +428,210 @@ describe.skipIf(skipReason !== null)('cursor real context tokens (#575)', () => 
     expect(session).toBeDefined()
     expect(session!.inputTokens).toBe(Math.ceil(prompt.length / 4))
     expect(session!.outputTokens).toBe(Math.ceil(reply.length / 4))
+  })
+
+  it('keeps the agent stream when another agentKv value is not valid JSON, and reports the skipped row', async () => {
+    const composerId = '44443333-1111-2222-3333-444455556666'
+    const dbPath = buildDb((db) => {
+      insertBubble(db, { composerId, bubbleUuid: 'b1', type: 1, text: 'do stuff', requestId: 'req-joined' })
+      insertBubble(db, { composerId, bubbleUuid: 'b2', type: 2, text: 'done', model: 'gpt-5' })
+      insertAgentKv(db, { blobId: 'akv-1', role: 'user', content: 'do stuff', requestId: 'req-joined' })
+      insertAgentKv(db, { blobId: 'akv-2', role: 'assistant', content: [{ type: 'tool-call', toolName: 'Shell', args: { command: 'npm test' } }] })
+      db.prepare('INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)').run('agentKv:blob:jsonl', '{"kind":"a"}\n{"kind":"b"}\n')
+      insertAgentKv(db, { blobId: 'akv-3', role: 'user', content: 'run the export', requestId: 'req-alone' })
+      db.prepare('INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)').run(
+        'agentKv:blob:json5',
+        "{role: 'user', content: 'run the json5 export', providerOptions: {cursor: {requestId: 'req-json5'}},}",
+      )
+    })
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true)
+
+    const calls = await collectCalls(createCursorProvider(dbPath), dbPath)
+
+    expect(calls.flatMap(c => c.bashCommands)).toEqual(['npm'])
+    expect(calls.some(c => c.deduplicationKey === 'cursor:agentKv:req-alone')).toBe(true)
+    expect(calls.find(c => c.deduplicationKey === 'cursor:agentKv:req-json5')?.inputTokens).toBe(Math.ceil('run the json5 export'.length / 4))
+    expect(stderr.mock.calls.map(c => String(c[0]))).toContain('codeburn: skipped 1 unreadable Cursor entries\n')
+    stderr.mockRestore()
+  })
+
+  it('keeps the other conversations when a bubble or composer value is not valid JSON', async () => {
+    const composerId = '44444444-1111-2222-3333-444455556666'
+    const dbPath = buildDb((db) => {
+      insertComposerData(db, { composerId, totalUsedTokens: 10000 })
+      insertBubble(db, { composerId, bubbleUuid: 'b1', type: 1, text: 'prompt' })
+      insertBubble(db, { composerId, bubbleUuid: 'b2', type: 2, text: 'reply', model: 'gpt-5' })
+      const insert = db.prepare('INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)')
+      insert.run(`bubbleId:${composerId}:broken`, '{"type":2,')
+      insert.run('composerData:44445555-1111-2222-3333-444455556666', '{"createdAt":')
+      insertAgentKv(db, { blobId: 'akv-1', role: 'user', content: 'run the export', requestId: 'req-alone' })
+    })
+
+    const calls = await collectCalls(createCursorProvider(dbPath), dbPath)
+
+    expect(calls.find(c => c.deduplicationKey === `cursor:composer-input:${composerId}`)?.inputTokens).toBe(10000)
+    expect(calls.some(c => c.deduplicationKey.endsWith(':b2'))).toBe(true)
+    expect(calls.some(c => c.deduplicationKey === 'cursor:agentKv:req-alone')).toBe(true)
+  })
+
+  it('skips a structurally malformed JSONB bubble and composer value and keeps the rest', async () => {
+    const composerId = '44449999-1111-2222-3333-444455556666'
+    const malformedJsonb = Buffer.from([0x2c, 0x17, 0x61])
+    const dbPath = buildDb((db) => {
+      insertComposerData(db, { composerId, totalUsedTokens: 10000 })
+      insertBubble(db, { composerId, bubbleUuid: 'b1', type: 1, text: 'prompt' })
+      insertBubble(db, { composerId, bubbleUuid: 'b2', type: 2, text: 'reply', model: 'gpt-5' })
+      const insert = db.prepare('INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)')
+      insert.run(`bubbleId:${composerId}:badjsonb`, malformedJsonb)
+      insert.run('composerData:4444aaaa-1111-2222-3333-444455556666', malformedJsonb)
+    })
+
+    const calls = await collectCalls(createCursorProvider(dbPath), dbPath)
+
+    expect(calls.find(c => c.deduplicationKey === `cursor:composer-input:${composerId}`)?.inputTokens).toBe(10000)
+    expect(calls.some(c => c.deduplicationKey.endsWith(':b2'))).toBe(true)
+    expect(calls.some(c => c.deduplicationKey.endsWith(':badjsonb'))).toBe(false)
+  })
+
+  it('reads a bubble stored as JSONB', async () => {
+    const composerId = '44446666-1111-2222-3333-444455556666'
+    const dbPath = buildDb((db) => {
+      db.prepare('INSERT INTO cursorDiskKV (key, value) VALUES (?, jsonb(?))').run(
+        `bubbleId:${composerId}:jb`,
+        JSON.stringify({ type: 2, createdAt: new Date().toISOString(), text: 'jsonb reply', modelInfo: { modelName: 'gpt-5' } }),
+      )
+    })
+
+    const calls = await collectCalls(createCursorProvider(dbPath), dbPath)
+
+    expect(calls.find(c => c.deduplicationKey.endsWith(':jb'))?.outputTokens).toBe(Math.ceil('jsonb reply'.length / 4))
+  })
+
+  it('still finds an agent-only stream\'s old bubble when another bubble is not valid JSON', async () => {
+    const oldAt = new Date(Date.now() - 240 * 864e5).toISOString()
+    const dbPath = buildDb((db) => {
+      insertBubble(db, { composerId: '44447777-1111-2222-3333-444455556666', bubbleUuid: 'b1', type: 1, text: 'old prompt', createdAt: oldAt, requestId: 'req-old-beside-broken' })
+      db.prepare('INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)').run('bubbleId:44447777-1111-2222-3333-444455556666:broken', '{"type":2,')
+      insertAgentKv(db, { blobId: 'akv-1', role: 'user', content: 'x'.repeat(4_000), requestId: 'req-old-beside-broken' })
+    })
+
+    const calls = await collectCalls(createCursorProvider(dbPath), dbPath)
+
+    expect(requestIdLookups().map(q => q.params)).toEqual([['req-old-beside-broken']])
+    expect(calls).toEqual([])
+  })
+
+  it('pages bubbles past one that is not valid JSON', async () => {
+    const composerId = '44448888-1111-2222-3333-444455556666'
+    const dbPath = buildDb((db) => {
+      insertBubble(db, { composerId, bubbleUuid: 'b1', type: 2, text: 'first reply', model: 'gpt-5' })
+      db.prepare('INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)').run(`bubbleId:${composerId}:broken`, '{"type":2,')
+      insertBubble(db, { composerId, bubbleUuid: 'b2', type: 2, text: 'second reply', model: 'gpt-5' })
+    })
+    process.env['CODEBURN_CURSOR_MAX_BUBBLES'] = '2'
+
+    const calls = await collectCalls(createCursorProvider(dbPath), dbPath)
+
+    expect(calls.map(c => c.deduplicationKey.split(':').pop()).sort()).toEqual(['b1', 'b2'])
+  })
+
+  it('dates an agent-only stream from its prompt timestamp tag, with or without a zone', async () => {
+    const at = minuteAgo(30)
+    const dbPath = buildDb((db) => {
+      insertAgentKv(db, { blobId: 'akv-1', role: 'user', content: [{ type: 'text', text: promptTag(at, -7) }, { type: 'text', text: 'run the export' }], requestId: 'req-tagged' })
+      insertAgentKv(db, { blobId: 'akv-2', role: 'user', content: [{ type: 'text', text: promptTag(at, null) }, { type: 'text', text: 'run it locally' }], requestId: 'req-local' })
+    })
+
+    const calls = await collectCalls(createCursorProvider(dbPath), dbPath)
+
+    const stamp = (id: string) => calls.find(c => c.deduplicationKey === `cursor:agentKv:${id}`)?.timestamp
+    expect(stamp('req-tagged')).toBe(new Date(at).toISOString())
+    expect(stamp('req-local')).toBe(new Date(at).toISOString())
+  })
+
+  it('ignores a prompt timestamp with an impossible date or offset and falls through to the next rule', async () => {
+    const conversationAt = minuteAgo(9)
+    const dbPath = buildDb((db) => {
+      db.prepare('INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)').run(
+        'composerData:4444eeee-1111-2222-3333-444455556666',
+        JSON.stringify({ createdAt: conversationAt, latestChatGenerationUUID: 'req-feb-30' }),
+      )
+      insertAgentKv(db, { blobId: 'akv-1', role: 'user', content: [{ type: 'text', text: '<timestamp>Monday, Feb 30, 2026, 9:41 PM (UTC-8)</timestamp>' }, { type: 'text', text: 'run it' }], requestId: 'req-feb-30' })
+      insertAgentKv(db, { blobId: 'akv-2', role: 'user', content: [{ type: 'text', text: '<timestamp>Monday, Feb 2, 2026, 9:41 PM (UTC+99:99)</timestamp>' }, { type: 'text', text: 'run it' }], requestId: 'req-bad-zone' })
+    })
+
+    const calls = await collectCalls(createCursorProvider(dbPath), dbPath)
+
+    const stamp = (id: string) => calls.find(c => c.deduplicationKey === `cursor:agentKv:${id}`)?.timestamp
+    expect(stamp('req-feb-30')).toBe(new Date(conversationAt).toISOString())
+    expect(stamp('req-bad-zone')).toBe(new Date(statSync(dbPath).mtimeMs).toISOString())
+  })
+
+  it('drops an agent-only stream whose prompt timestamp predates the lookback', async () => {
+    const dbPath = buildDb((db) => {
+      insertAgentKv(db, { blobId: 'akv-1', role: 'user', content: [{ type: 'text', text: promptTag(minuteAgo(240), -8) }, { type: 'text', text: 'old export' }], requestId: 'req-feb' })
+    })
+
+    const calls = await collectCalls(createCursorProvider(dbPath), dbPath)
+
+    expect(calls).toEqual([])
+    const sidecar = join(getCodeburnCacheDir(), 'cursor-first-seen.json')
+    expect(existsSync(sidecar) ? JSON.parse(readFileSync(sidecar, 'utf-8'))['req-feb'] : undefined).toBeUndefined()
+  })
+
+  it('prefers the prompt timestamp over a recorded first-seen stamp', async () => {
+    const at = minuteAgo(20)
+    await writeFirstSeen(new Map([['req-restamped', new Date(minuteAgo(1)).toISOString()]]))
+    const dbPath = buildDb((db) => {
+      insertAgentKv(db, { blobId: 'akv-1', role: 'user', content: [{ type: 'text', text: promptTag(at, 2) }, { type: 'text', text: 'run the export' }], requestId: 'req-restamped' })
+    })
+
+    const calls = await collectCalls(createCursorProvider(dbPath), dbPath)
+
+    expect(calls.find(c => c.deduplicationKey === 'cursor:agentKv:req-restamped')?.timestamp).toBe(new Date(at).toISOString())
+  })
+
+  it('dates an untagged agent-only stream from the conversation that names it', async () => {
+    const latestAt = minuteAgo(12)
+    const subagentAt = minuteAgo(11)
+    const dbPath = buildDb((db) => {
+      const insert = db.prepare('INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)')
+      insert.run('composerData:4444bbbb-1111-2222-3333-444455556666', JSON.stringify({ createdAt: latestAt, latestChatGenerationUUID: 'req-latest' }))
+      insert.run('composerData:4444cccc-1111-2222-3333-444455556666', JSON.stringify({ createdAt: subagentAt, subagentInfo: { parentRequestId: 'req-parent' } }))
+      insert.run('composerData:4444dddd-1111-2222-3333-444455556666', JSON.stringify({ createdAt: minuteAgo(250), latestChatGenerationUUID: 'req-old-conversation' }))
+      insertAgentKv(db, { blobId: 'akv-1', role: 'user', content: 'run the export', requestId: 'req-latest' })
+      insertAgentKv(db, { blobId: 'akv-2', role: 'user', content: 'review the plan', requestId: 'req-parent' })
+      insertAgentKv(db, { blobId: 'akv-3', role: 'user', content: 'old export', requestId: 'req-old-conversation' })
+    })
+
+    const calls = await collectCalls(createCursorProvider(dbPath), dbPath)
+
+    const stamp = (id: string) => calls.find(c => c.deduplicationKey === `cursor:agentKv:${id}`)?.timestamp
+    expect(stamp('req-latest')).toBe(new Date(latestAt).toISOString())
+    expect(stamp('req-parent')).toBe(new Date(subagentAt).toISOString())
+    expect(stamp('req-old-conversation')).toBeUndefined()
+  })
+
+  it('dates an untagged agent-only stream between two dated requests of the same day, and not across days', async () => {
+    const morning = minuteAgo(15)
+    const evening = morning + 3 * 3_600_000
+    const sameDay = new Date(morning).toDateString() === new Date(evening).toDateString()
+    const nextDay = minuteAgo(14)
+    const dbPath = buildDb((db) => {
+      const tagged = (blobId: string, at: number, requestId: string) =>
+        insertAgentKv(db, { blobId, role: 'user', content: [{ type: 'text', text: promptTag(at, 0) }, { type: 'text', text: 'tagged prompt' }], requestId })
+      tagged('akv-1', morning, 'req-before')
+      insertAgentKv(db, { blobId: 'akv-2', role: 'user', content: 'untagged between', requestId: 'req-between' })
+      tagged('akv-3', sameDay ? evening : morning, 'req-after')
+      insertAgentKv(db, { blobId: 'akv-4', role: 'user', content: 'untagged across days', requestId: 'req-across' })
+      tagged('akv-5', nextDay, 'req-next-day')
+    })
+
+    const calls = await collectCalls(createCursorProvider(dbPath), dbPath)
+
+    const stamp = (id: string) => calls.find(c => c.deduplicationKey === `cursor:agentKv:${id}`)?.timestamp
+    expect(stamp('req-between')).toBe(new Date(morning).toISOString())
+    expect(stamp('req-across')).toBe(new Date(statSync(dbPath).mtimeMs).toISOString())
   })
 
   it('does not bill the stream of a conversation older than the lookback as a new session', async () => {

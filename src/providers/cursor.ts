@@ -354,26 +354,35 @@ const BUBBLE_QUERY_BASE = `
     json_extract(value, '$.type') as bubble_type,
     CAST(json_extract(value, '$.codeBlocks') AS BLOB) as code_blocks
   FROM cursorDiskKV
-  WHERE key LIKE 'bubbleId:%'
+  WHERE key LIKE 'bubbleId:%' AND json_valid(value, 10)
 `
 
+// agentKv blobs are content-addressed and also hold JSONL logs and files that
+// start with '{'; one of them makes json_extract throw for the whole query.
+// json_valid flag 10 (JSON5 text or strictly valid JSONB) admits exactly what
+// json_extract reads; flag 6 checks JSONB only superficially.
+const AGENTKV_WHERE = `
+  FROM cursorDiskKV
+  WHERE key LIKE 'agentKv:blob:%'
+    AND hex(substr(value, 1, 1)) = '7B'`
 const AGENTKV_QUERY = `
   SELECT
     json_extract(value, '$.role') as role,
     CAST(json_extract(value, '$.content') AS BLOB) as content,
     json_extract(value, '$.providerOptions.cursor.requestId') as request_id,
     json_extract(value, '$.providerOptions.cursor.modelName') as model
-  FROM cursorDiskKV
-  WHERE key LIKE 'agentKv:blob:%'
-    AND hex(substr(value, 1, 1)) = '7B'
+  ${AGENTKV_WHERE}
+    AND json_valid(value, 10)
   ORDER BY ROWID ASC
 `
+const AGENTKV_MALFORMED_QUERY = `SELECT COUNT(*) as cnt ${AGENTKV_WHERE} AND NOT json_valid(value, 10)`
 
 const BUBBLE_REQUEST_IDS_QUERY = `
   SELECT json_extract(value, '$.requestId') as request_id,
     json_extract(value, '$.createdAt') as created_at
   FROM cursorDiskKV
   WHERE key LIKE 'bubbleId:%'
+    AND json_valid(value, 10)
     AND json_extract(value, '$.requestId') IN`
 // Under the 999 bound-parameter limit of older SQLite builds. Each chunk is
 // one table scan, so many unjoined streams on a huge DB cost several scans.
@@ -416,7 +425,7 @@ const BUBBLE_QUERY_PAGE = `
     json_extract(value, '$.type') as bubble_type,
     CAST(json_extract(value, '$.codeBlocks') AS BLOB) as code_blocks
   FROM cursorDiskKV
-  WHERE key LIKE 'bubbleId:%' AND ROWID < ?
+  WHERE key LIKE 'bubbleId:%' AND ROWID < ? AND json_valid(value, 10)
   ORDER BY ROWID DESC
   LIMIT ?
 `
@@ -490,28 +499,40 @@ const COMPOSER_META_QUERY = `
     substr(key, length('composerData:') + 1) as composer_id,
     json_extract(value, '$.promptTokenBreakdown.totalUsedTokens') as used,
     json_extract(value, '$.contextTokensUsed') as ctx,
-    json_extract(value, '$.createdAt') as created_at
+    json_extract(value, '$.createdAt') as created_at,
+    json_extract(value, '$.latestChatGenerationUUID') as latest_request_id,
+    json_extract(value, '$.subagentInfo.parentRequestId') as parent_request_id
   FROM cursorDiskKV
-  WHERE key >= 'composerData:' AND key < 'composerData;'
+  WHERE key >= 'composerData:' AND key < 'composerData;' AND json_valid(value, 10)
 `
 
 type ComposerMeta = { tokens: number; createdAt: number | null }
 
-function loadComposerMeta(db: SqliteDatabase): Map<string, ComposerMeta> {
+// Also maps each request a conversation names (its latest request, or the
+// request that spawned it as a subagent) to the conversation's start, which
+// dates agent-only requests whose prompt carried no timestamp.
+function loadComposerMeta(db: SqliteDatabase): { meta: Map<string, ComposerMeta>; requestStart: Map<string, number> } {
   const map = new Map<string, ComposerMeta>()
+  const requestStart = new Map<string, number>()
   try {
-    const rows = db.query<{ composer_id: string; used: number | null; ctx: number | null; created_at: number | null }>(COMPOSER_META_QUERY)
+    const rows = db.query<{ composer_id: string; used: number | null; ctx: number | null; created_at: number | null; latest_request_id: string | null; parent_request_id: string | null }>(COMPOSER_META_QUERY)
     for (const r of rows) {
       // `||` rather than `??`: a recorded-but-zero breakdown must fall through
       // to the context meter instead of shadowing it.
       const tokens = (r.used || r.ctx) ?? 0
       if (r.composer_id && tokens > 0) map.set(r.composer_id, { tokens, createdAt: r.created_at ?? null })
+      if (typeof r.created_at !== 'number' || r.created_at <= 0) continue
+      for (const requestId of [r.latest_request_id, r.parent_request_id]) {
+        if (typeof requestId !== 'string' || !requestId) continue
+        const known = requestStart.get(requestId)
+        if (known === undefined || r.created_at < known) requestStart.set(requestId, r.created_at)
+      }
     }
   } catch (err) {
     rethrowBusy(err)
     /* best-effort: callers fall back to the per-bubble text estimate */
   }
-  return map
+  return { meta: map, requestStart }
 }
 
 type AgentStream = {
@@ -521,10 +542,46 @@ type AgentStream = {
   contextChars: number
   assistantChars: number
   model: string | null
+  promptAt: number | null
 }
 
 function newAgentStream(): AgentStream {
-  return { tools: [], bash: [], userChars: 0, contextChars: 0, assistantChars: 0, model: null }
+  return { tools: [], bash: [], userChars: 0, contextChars: 0, assistantChars: 0, model: null, promptAt: null }
+}
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+// Cursor opens a text block of each user turn with the send time, e.g.
+// <timestamp>Friday, Feb 13, 2026, 9:41 PM (UTC-8)</timestamp>.
+const PROMPT_TIME = /^\s*<timestamp>\w+, (\w{3}) (\d{1,2}), (\d{4}), (\d{1,2}):(\d{2}) (AM|PM)( \(UTC(?:([+-]\d{1,2})(?::(\d{2}))?)?\))?<\/timestamp>/
+
+function promptTime(raw: string): number | null {
+  let blocks: unknown[]
+  try {
+    const parsed = JSON.parse(raw) as unknown
+    blocks = Array.isArray(parsed) ? parsed : [parsed]
+  } catch {
+    blocks = [raw]
+  }
+  for (const block of blocks) {
+    const text = typeof block === 'string' ? block : (block as { text?: unknown } | null)?.text
+    if (typeof text !== 'string') continue
+    const m = PROMPT_TIME.exec(text)
+    const month = m ? MONTHS.indexOf(m[1]!) : -1
+    if (!m || month < 0) continue
+    const [year, day, hour12, minute] = [Number(m[3]), Number(m[2]), Number(m[4]), Number(m[5])]
+    const offsetHours = Number(m[8] ?? 0)
+    const offsetMins = Number(m[9] ?? 0)
+    if (hour12 < 1 || hour12 > 12 || minute > 59 || Math.abs(offsetHours) > 14 || offsetMins > 59) continue
+    const hour = hour12 % 12 + (m[6] === 'PM' ? 12 : 0)
+    // A day past the month's end would roll over into the next month.
+    const calendar = new Date(Date.UTC(year, month, day))
+    if (calendar.getUTCFullYear() !== year || calendar.getUTCMonth() !== month || calendar.getUTCDate() !== day) continue
+    // No zone in the tag: the prompt was written in this machine's zone.
+    if (!m[7]) return new Date(year, month, day, hour, minute).getTime()
+    const offsetMinutes = offsetHours * 60 + Math.sign(offsetHours || 1) * offsetMins
+    return Date.UTC(year, month, day, hour, minute) - offsetMinutes * 60_000
+  }
+  return null
 }
 
 // agentKv rows store content as a plain string or a block array; count only
@@ -560,16 +617,18 @@ function contentTextLength(raw: string): number {
 function loadAgentStreams(
   db: SqliteDatabase,
   requestToComposer: Map<string, string>,
-): { byComposer: Map<string, AgentStream>; unjoined: Map<string, AgentStream> } {
+): { byComposer: Map<string, AgentStream>; unjoined: Map<string, AgentStream>; order: string[]; malformed: number } {
   const byComposer = new Map<string, AgentStream>()
   const unjoined = new Map<string, AgentStream>()
 
   let rows: AgentKvRow[]
+  let malformed = 0
   try {
     rows = db.query<AgentKvRow>(AGENTKV_QUERY)
+    malformed = db.query<{ cnt: number }>(AGENTKV_MALFORMED_QUERY)[0]?.cnt ?? 0
   } catch (err) {
     rethrowBusy(err)
-    return { byComposer, unjoined }
+    return { byComposer, unjoined, order: [], malformed }
   }
 
   const bucketFor = (requestId: string): AgentStream => {
@@ -591,15 +650,25 @@ function loadAgentStreams(
   let currentRequestId: string | null = null
   let pendingUserChars = 0
   let pendingContextChars = 0
+  let pendingPromptAt: number | null = null
+  // Request ids in the order the stream first wrote them.
+  const order: string[] = []
+  const ordered = new Set<string>()
   for (const row of rows) {
     if (row.request_id) {
       currentRequestId = row.request_id
-      if (pendingUserChars > 0 || pendingContextChars > 0) {
+      if (!ordered.has(currentRequestId)) {
+        ordered.add(currentRequestId)
+        order.push(currentRequestId)
+      }
+      if (pendingUserChars > 0 || pendingContextChars > 0 || pendingPromptAt !== null) {
         const bucket = bucketFor(currentRequestId)
         bucket.userChars += pendingUserChars
         bucket.contextChars += pendingContextChars
+        bucket.promptAt ??= pendingPromptAt
         pendingUserChars = 0
         pendingContextChars = 0
+        pendingPromptAt = null
       }
     }
     if (row.model && currentRequestId) {
@@ -614,9 +683,17 @@ function loadAgentStreams(
       continue
     }
     if (row.role === 'user') {
-      const len = contentTextLength(blobToText(row.content))
-      if (currentRequestId) bucketFor(currentRequestId).userChars += len
-      else pendingUserChars += len
+      const text = blobToText(row.content)
+      const len = contentTextLength(text)
+      const at = promptTime(text)
+      if (currentRequestId) {
+        const bucket = bucketFor(currentRequestId)
+        bucket.userChars += len
+        bucket.promptAt ??= at
+      } else {
+        pendingUserChars += len
+        pendingPromptAt ??= at
+      }
       continue
     }
     if (row.role === 'tool') {
@@ -645,7 +722,7 @@ function loadAgentStreams(
       }
     }
   }
-  return { byComposer, unjoined }
+  return { byComposer, unjoined, order, malformed }
 }
 
 // What drives a conversation's input figure, decided once per conversation so
@@ -676,7 +753,7 @@ function parseBubbles(
   const results: ParsedProviderCall[] = []
   let skipped = 0
 
-  const composerMeta = loadComposerMeta(db)
+  const { meta: composerMeta, requestStart } = loadComposerMeta(db)
 
   // The bubble timestamp lives inside the JSON value (no index), so the date
   // filter forces a full JSON decode per row. Multi-GB Cursor DBs (500k+
@@ -739,7 +816,8 @@ function parseBubbles(
     if (!scan.model && row.model) scan.model = row.model
   }
 
-  const { byComposer: agentStreams, unjoined } = loadAgentStreams(db, requestToComposer)
+  const { byComposer: agentStreams, unjoined, order: streamOrder, malformed } = loadAgentStreams(db, requestToComposer)
+  skipped += malformed
   const lastUserMsg = new Map<string, string>()
 
   const inputSource = (cid: string): InputSource => {
@@ -936,12 +1014,50 @@ function parseBubbles(
   for (const [requestId, at] of bubbleTimes) {
     if (at) firstSeen.set(BUBBLE_TIME_KEY + requestId, at)
   }
+  // A request with no bubble is dated from its own prompt, else from the
+  // conversation that names it, else from the dated requests written just
+  // before and after it in the stream when both fall on the same day. Only
+  // undated requests fall back to the first-seen stamp.
+  const ownDate = (requestId: string): number | null => {
+    const at = unjoined.get(requestId)?.promptAt ?? requestStart.get(requestId) ?? null
+    return at !== null && Number.isFinite(at) ? at : null
+  }
+  const bubbleAt = new Map<string, number>()
+  for (const row of rows) {
+    const ms = row.request_id && row.created_at ? Date.parse(row.created_at) : NaN
+    if (Number.isFinite(ms) && ms > (bubbleAt.get(row.request_id!) ?? -Infinity)) bubbleAt.set(row.request_id!, ms)
+  }
+  const anchors = streamOrder.map((requestId): number | null => {
+    const scanned = bubbleAt.get(requestId)
+    if (scanned !== undefined) return scanned
+    const lookedUpAt = Date.parse(firstSeen.get(BUBBLE_TIME_KEY + requestId) ?? '')
+    return Number.isFinite(lookedUpAt) ? lookedUpAt : ownDate(requestId)
+  })
+  const nextAnchor: Array<number | null> = []
+  for (let i = anchors.length - 1, after: number | null = null; i >= 0; i--) {
+    nextAnchor[i] = after
+    after = anchors[i] ?? after
+  }
+  const between = new Map<string, number>()
+  for (let i = 0, before: number | null = null; i < anchors.length; i++) {
+    const after = nextAnchor[i] ?? null
+    if (anchors[i] === null && before !== null && after !== null && new Date(before).toDateString() === new Date(after).toDateString()) {
+      between.set(streamOrder[i]!, before)
+    }
+    before = anchors[i] ?? before
+  }
+  const streamDate = (requestId: string): string | null => {
+    const at = ownDate(requestId) ?? between.get(requestId) ?? null
+    return at === null ? null : new Date(at).toISOString()
+  }
   for (const [requestId, stream] of billable) {
     // Request ids are UUIDs, so a historic bubble sharing one with a billable
     // agent-only stream is not expected.
     const bubbleTime = firstSeen.get(BUBBLE_TIME_KEY + requestId)
     if (bubbleTime && bubbleTime <= timeFloor) continue
     if (!bubbleTime && !firstSeen.has(requestId) && !lookedUp.has(requestId)) continue
+    const datedAt = bubbleTime ? null : streamDate(requestId)
+    if (datedAt && datedAt <= timeFloor) continue
     const inputTokens = estimateTokensFromChars(stream.userChars + stream.contextChars)
     const outputTokens = estimateTokensFromChars(stream.assistantChars)
     if (inputTokens === 0 && outputTokens === 0) continue
@@ -949,7 +1065,7 @@ function parseBubbles(
     const dedupKey = `cursor:agentKv:${requestId}`
     if (seenKeys.has(dedupKey)) continue
     seenKeys.add(dedupKey)
-    if (!bubbleTime && !firstSeen.has(requestId)) firstSeen.set(requestId, agentKvTimestamp)
+    if (!bubbleTime && !datedAt && !firstSeen.has(requestId)) firstSeen.set(requestId, agentKvTimestamp)
 
     emit({
       model: modelForDisplay(stream.model),
@@ -958,7 +1074,7 @@ function parseBubbles(
       costUSD: calculateCost(resolveModel(stream.model), inputTokens, outputTokens, 0, 0, 0),
       tools: stream.tools,
       bashCommands: stream.bash,
-      timestamp: bubbleTime ?? firstSeen.get(requestId)!,
+      timestamp: bubbleTime ?? datedAt ?? firstSeen.get(requestId)!,
       deduplicationKey: dedupKey,
       userMessage: '',
       sessionId: requestId,

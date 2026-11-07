@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Command } from 'commander'
 import { parseApiCall, parseJsonlLine } from '../src/parser.js'
-import { emptyCache, readCache, writeAllow, writeCache } from '../src/guard/usage.js'
+import { emptyCache, GUARD_CACHE_VERSION, readCache, writeAllow, writeCache } from '../src/guard/usage.js'
 import { runGuardHook } from '../src/guard/hooks.js'
 import { allowPath, sessionCachePath, writeGuardConfig, DEFAULT_GUARD_CONFIG, type GuardConfig } from '../src/guard/store.js'
 import { setHome } from './setup/home.js'
@@ -88,9 +88,43 @@ describe('identical-call loop', () => {
     expect(outs.slice(4, 7)).toEqual(['', '', ''])
     const cost = (await readCache(SID, env.base)).costUSD
     expect(outs[7]).toBe(denyJson(
-      `Read was called 8 times in a row with the same input; this session is $${cost.toFixed(2)} (codeburn guard). Change approach or ask the user.`,
+      `(codeburn guard) Read was called 8 times in a row with the same input; this session is $${cost.toFixed(2)}. Change approach or ask the user.`,
       `codeburn guard: stopped Read after 8 identical calls in a row. Run 'codeburn guard allow' to lift this for the session, or raise loopStopAfter in guard.json.`,
     ))
+  })
+
+  it('keeps denying after the stop, though each denied call gets the deny reason as its result', async () => {
+    const env = await setup()
+    const input = { file_path: '/repo/a.ts' }
+    const outs: string[] = []
+    for (let i = 0; i < 12; i++) {
+      const id = `toolu_${++seq}`
+      const out = await runGuardHook('pretooluse', JSON.stringify({
+        session_id: SID, transcript_path: env.path, tool_name: 'Read', tool_input: input, tool_use_id: id,
+      }), { base: env.base })
+      const reason = out.includes('"deny"') ? JSON.parse(out).hookSpecificOutput.permissionDecisionReason as string : undefined
+      await appendFile(env.path, useLine(id, 'Read', input) + resultLine(id, reason !== undefined, reason ?? 'same contents'))
+      outs.push(out)
+    }
+    expect(outs.slice(0, 7).filter(o => o.includes('"deny"'))).toHaveLength(0)
+    for (const out of outs.slice(7)) expect(out).toContain('"permissionDecision":"deny"')
+  })
+
+  it('keeps the stop when the guard state is rebuilt from a transcript holding its denies', async () => {
+    const env = await setup()
+    const input = { file_path: '/repo/a.ts' }
+    const hook = (id: string) => runGuardHook('pretooluse', JSON.stringify({
+      session_id: SID, transcript_path: env.path, tool_name: 'Read', tool_input: input, tool_use_id: id,
+    }), { base: env.base })
+    for (let i = 0; i < 12; i++) {
+      const id = `toolu_${++seq}`
+      const out = await hook(id)
+      const reason = out.includes('"deny"') ? JSON.parse(out).hookSpecificOutput.permissionDecisionReason as string : undefined
+      expect(reason !== undefined).toBe(i >= 7)
+      await appendFile(env.path, useLine(id, 'Read', input) + resultLine(id, reason !== undefined, reason ?? 'same contents'))
+    }
+    await rm(sessionCachePath(SID, env.base))
+    expect(await hook(`toolu_${++seq}`)).toContain('"permissionDecision":"deny"')
   })
 
   it('counts the same when the transcript already holds the incoming call', async () => {
@@ -140,6 +174,57 @@ describe('identical-call loop', () => {
     expect(outs.every(o => o === '')).toBe(true)
   })
 
+  it('never counts a waiting check that fails while it waits as a retry', async () => {
+    const env = await setup()
+    const outs: string[] = []
+    for (let i = 0; i < 12; i++) outs.push(await call(env, 'Bash', { command: 'sleep 30 && gh pr checks 1895' }, { fails: true, output: 'pending' }))
+    expect(outs.every(o => o === '')).toBe(true)
+  })
+
+  it('keeps the exemption for a check run under env that only sets or clears variables', async () => {
+    const env = await setup()
+    const outs: string[] = []
+    for (let i = 0; i < 12; i++) outs.push(await call(env, 'Bash', { command: 'sleep 5 && env GH_HOST=x gh pr checks 1909' }, { fails: true, output: 'pending' }))
+    expect(outs.every(o => o === '')).toBe(true)
+    for (const command of ['sleep 5 && env -i GH_TOKEN=x gh pr checks 1909', 'sleep 5 && env -u GH_HOST gh pr checks 1909', 'sleep 5 && env --chdir=/tmp gh pr checks 1909', 'sleep 5 && env -C /tmp gh pr checks 1909']) {
+      const flagged: string[] = []
+      for (let i = 0; i < 12; i++) flagged.push(await call(env, 'Bash', { command }, { fails: true, output: 'pending' }))
+      expect(flagged.every(o => o === '')).toBe(true)
+    }
+    const quoted: string[] = []
+    for (let i = 0; i < 12; i++) quoted.push(await call(env, 'Bash', { command: `sleep 5 && env X='a b' Y="c d" gh pr checks 1909` }, { fails: true, output: 'pending' }))
+    for (let i = 0; i < 12; i++) quoted.push(await call(env, 'Bash', { command: `sleep 5 && X='a;b' gh pr checks 1909` }, { fails: true, output: 'pending' }))
+    for (const command of ['sleep 5 && GH_HOST=$HOST gh pr checks 1909', 'sleep 5 && GH_HOST="${HOST}" gh pr checks 1909', 'sleep 5 && env GH_HOST=${HOST} gh pr checks 1909']) {
+      for (let i = 0; i < 12; i++) quoted.push(await call(env, 'Bash', { command }, { fails: true, output: 'pending' }))
+    }
+    expect(quoted.every(o => o === '')).toBe(true)
+  })
+
+  it('keeps the exemption for output sent to /dev/null or another stream', async () => {
+    const env = await setup()
+    const outs: string[] = []
+    for (const command of ['sleep 5 && gh pr checks 1909 > /dev/null', 'sleep 5 && gh pr checks 1909 2>&1', 'sleep 5 && cat log 2>/dev/null', 'sleep 5 && cat < log', "sleep 5 && gh pr view 1909 --jq '.a > 1'"]) {
+      for (let i = 0; i < 12; i++) outs.push(await call(env, 'Bash', { command }, { fails: true, output: 'pending' }))
+    }
+    expect(outs.every(o => o === '')).toBe(true)
+  })
+
+  it('keeps the exemption for a quoted argument that spans lines or holds shell characters', async () => {
+    const env = await setup()
+    const outs: string[] = []
+    for (const command of ["sleep 5 && gh pr checks 1909 --jq '.[]\n| .name'", "sleep 5 && gh pr checks 1909 --jq '.[] | .name'", "sleep 5 && gh pr checks 1 --jq '$(.name)'", "sleep 5 && gh pr checks 1 --jq 'a & b'", 'sleep 5 && gh pr checks 1909 --jq ".[] | select(.name == \\"foo;bar\\")"']) {
+      for (let i = 0; i < 12; i++) outs.push(await call(env, 'Bash', { command }, { fails: true, output: 'pending' }))
+    }
+    expect(outs.every(o => o === '')).toBe(true)
+  })
+
+  it('keeps the exemption when only comments or blank lines follow the check', async () => {
+    const env = await setup()
+    const outs: string[] = []
+    for (let i = 0; i < 12; i++) outs.push(await call(env, 'Bash', { command: 'sleep 5 && gh pr checks 1909\n# waiting on CI\n\n' }, { fails: true, output: 'pending' }))
+    expect(outs.every(o => o === '')).toBe(true)
+  })
+
   it('still counts a sleep followed by an echo that writes a file', async () => {
     const env = await setup()
     const outs: string[] = []
@@ -149,6 +234,50 @@ describe('identical-call loop', () => {
     expect(multi[7]).toContain('"permissionDecision":"deny"')
     expect(outs[3]).toContain('called 4 times in a row')
     expect(outs[7]).toContain('"permissionDecision":"deny"')
+  })
+
+  it('still counts a sleep followed by env or a second line that does work', async () => {
+    for (const command of ['sleep 5 && env CI=1 npm run build', 'sleep 5 && cat log\nnpm run build', 'sleep 5 && cat log && env npm run build', 'sleep 5 && env X="$(npm test)" gh pr checks 1909', 'sleep 5 && env X=`npm test` gh pr checks 1909', 'sleep 5 && env X="${Y:-a}" gh pr checks 1909', 'sleep 5 && X=x;npm gh pr checks 1909', 'sleep 5 && env X=x;npm gh pr checks 1909', 'sleep 5 && X=a>b cat log', 'sleep 5 && gh pr checks 1909 > report.txt', 'sleep 5 && gh pr checks 1909 >> report.txt', 'sleep 5 && cat log 2>err.txt', 'sleep 5 && gh pr checks 1909 <(npm test)', 'sleep 5 && cat <(npm test)', 'sleep 5 && gh pr checks 1&npm test', 'sleep 5 && cat log & npm test', 'sleep 5 && gh pr checks 1 --jq "$(npm test)"', `sleep 5 && gh pr checks 1 --jq "it's $(npm test)" 'x'`, 'sleep 5 && PATH=/tmp/x gh pr checks 1909', 'sleep 5 && env LD_PRELOAD=x.so gh pr checks 1909', 'sleep 5 && DYLD_INSERT_LIBRARIES=x cat log', 'sleep 5 && IFS=x BASH_ENV=y cat log']) {
+      const env = await setup()
+      const outs: string[] = []
+      for (let i = 0; i < 12; i++) outs.push(await call(env, 'Bash', { command }, { output: 'Build OK' }))
+      expect(outs.slice(0, 3)).toEqual(['', '', ''])
+      expect(outs[3]).toBe(warnJson('codeburn guard: Bash was called 4 times in a row with the same input.'))
+      expect(outs.slice(4, 7)).toEqual(['', '', ''])
+      for (const out of outs.slice(7)) expect(out).toContain('"permissionDecision":"deny"')
+    }
+  })
+
+  it('accepts a variable as the sleep duration', async () => {
+    const env = await setup()
+    const outs: string[] = []
+    for (const d of ['"$POLL_INTERVAL"', '$POLL_INTERVAL', '${POLL_INTERVAL}', '"${POLL_INTERVAL}"']) {
+      for (let i = 0; i < 12; i++) outs.push(await call(env, 'Bash', { command: `sleep ${d} && gh pr checks 1909` }, { fails: true, output: 'pending' }))
+    }
+    expect(outs.every(o => o === '')).toBe(true)
+  })
+
+  it('still counts a sleep without a numeric duration', async () => {
+    const env = await setup()
+    const outs: string[] = []
+    for (let i = 0; i < 8; i++) outs.push(await call(env, 'Bash', { command: 'sleep nope' }, { fails: true, output: 'sleep: invalid time interval' }))
+    expect(outs[3]).toContain('called 4 times in a row')
+    expect(outs[7]).toContain('"permissionDecision":"deny"')
+    const sub = await setup()
+    const subs: string[] = []
+    for (let i = 0; i < 8; i++) subs.push(await call(sub, 'Bash', { command: 'sleep "$(npm test)" && gh pr checks 1909' }, { output: 'same' }))
+    expect(subs[3]).toContain('called 4 times in a row')
+    expect(subs[7]).toContain('"permissionDecision":"deny"')
+  })
+
+  it('still counts a sleep with a dangling operator', async () => {
+    for (const command of ['sleep 5 &&', 'sleep 5 || ', 'sleep 5 && cat log &&']) {
+      const env = await setup()
+      const outs: string[] = []
+      for (let i = 0; i < 8; i++) outs.push(await call(env, 'Bash', { command }, { output: 'same' }))
+      expect(outs[3]).toContain('called 4 times in a row')
+      expect(outs[7]).toContain('"permissionDecision":"deny"')
+    }
   })
 
   it('still counts a sleep followed by a command that does work', async () => {
@@ -197,7 +326,7 @@ describe('failing-command retry', () => {
     const out = await call(env, 'Bash', test)
     const cost = (await readCache(SID, env.base)).costUSD
     expect(out).toBe(denyJson(
-      `The command "${shown}" already failed 5 times; this session is $${cost.toFixed(2)} (codeburn guard). Change approach or ask the user.`,
+      `(codeburn guard) The command "${shown}" already failed 5 times; this session is $${cost.toFixed(2)}. Change approach or ask the user.`,
       `codeburn guard: stopped "${shown}" after 5 failures in a row. Run 'codeburn guard allow' to lift this for the session, or raise retryStopAfter in guard.json.`,
     ))
   })
@@ -234,6 +363,74 @@ describe('failing-command retry', () => {
     await call(env, 'Bash', { command: 'npm test' }, { fails: true })
     await call(env, 'Read', { file_path: '/a' })
     expect(Object.values((await readCache(SID, env.base)).failedCommands).sort()).toEqual([1, 2])
+  })
+
+  it('drops a v4 cache, whose failure counts were cumulative, not consecutive', async () => {
+    expect(GUARD_CACHE_VERSION).toBe(5)
+    const { base } = await setup()
+    await writeCache({ ...emptyCache(SID), version: 4, failedCommands: { '0123456789abcdef': 5 } }, base)
+    expect((await readCache(SID, base)).failedCommands).toEqual({})
+  })
+
+  it('a retry deny does not count its own deny result as another failure', async () => {
+    const env = await setup({ loopWarnAfter: null, loopStopAfter: null })
+    const command = 'npm test'
+    for (let i = 0; i < 5; i++) await call(env, 'Bash', { command }, { fails: true })
+    const reasons: string[] = []
+    for (let i = 0; i < 4; i++) {
+      const id = `toolu_${++seq}`
+      const out = await runGuardHook('pretooluse', JSON.stringify({
+        session_id: SID, transcript_path: env.path, tool_name: 'Bash', tool_input: { command }, tool_use_id: id,
+      }), { base: env.base })
+      const reason = JSON.parse(out).hookSpecificOutput.permissionDecisionReason as string
+      await appendFile(env.path, useLine(id, 'Bash', { command }) + resultLine(id, true, reason))
+      reasons.push(reason)
+    }
+    for (const r of reasons) expect(r).toContain('already failed 5 times')
+    await rm(sessionCachePath(SID, env.base))
+    expect(await call(env, 'Bash', { command })).toContain('already failed 5 times')
+  })
+
+  it('keeps a deny mark until its result lands, however many calls come between', async () => {
+    const env = await setup({ loopWarnAfter: null, loopStopAfter: null })
+    const command = 'npm test'
+    for (let i = 0; i < 5; i++) await call(env, 'Bash', { command }, { fails: true })
+    const id = `toolu_${++seq}`
+    const out = await runGuardHook('pretooluse', JSON.stringify({
+      session_id: SID, transcript_path: env.path, tool_name: 'Bash', tool_input: { command }, tool_use_id: id,
+    }), { base: env.base })
+    expect(out).toContain('"permissionDecision":"deny"')
+    await appendFile(env.path, useLine(id, 'Bash', { command }))
+    for (let i = 0; i < 20; i++) await call(env, 'Read', { file_path: `/f${i}` })
+    // A result text the deny-shape match does not know, so only the kept mark can tell it was ours.
+    await appendFile(env.path, resultLine(id, true, 'blocked by a hook'))
+    expect(await call(env, 'Bash', { command })).toContain('already failed 5 times')
+  })
+
+  it('keeps at most 64 deny marks waiting for a result, dropping the oldest', async () => {
+    const env = await setup({ loopWarnAfter: null, loopStopAfter: 1 })
+    for (let i = 0; i < 70; i++) {
+      await runGuardHook('pretooluse', JSON.stringify({
+        session_id: SID, transcript_path: env.path, tool_name: 'Read', tool_input: { file_path: '/a' }, tool_use_id: `toolu_cap_${i}`,
+      }), { base: env.base })
+    }
+    const pending = (await readCache(SID, env.base)).deniedPending
+    expect(pending).toHaveLength(64)
+    expect(pending[0]).toBe('toolu_cap_6')
+    expect(pending[63]).toBe('toolu_cap_69')
+  })
+
+  it('counts a real failure that prints the guard mark', async () => {
+    const env = await setup({ loopWarnAfter: null, loopStopAfter: null })
+    for (let i = 0; i < 5; i++) await call(env, 'Bash', { command: 'npm test' }, { fails: true, output: '(codeburn guard) hook test failed' })
+    expect(await call(env, 'Bash', { command: 'npm test' })).toContain('already failed 5 times')
+  })
+
+  it('counts a live failure whose text has the exact deny shape', async () => {
+    const env = await setup({ loopWarnAfter: null, loopStopAfter: null })
+    const output = '(codeburn guard) The command "npm test" already failed 1 times; this session is $0.01. Change approach or ask the user.'
+    for (let i = 0; i < 5; i++) await call(env, 'Bash', { command: 'npm test' }, { fails: true, output })
+    expect(await call(env, 'Bash', { command: 'npm test' })).toContain('already failed 5 times')
   })
 
   it('only counts shell tools', async () => {

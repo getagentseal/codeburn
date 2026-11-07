@@ -342,6 +342,7 @@
 "Cache hit" = "缓存命中";
 "Cost / session" = "每会话花费";
 "Cost/edit" = "每次编辑花费";
+"%@/edit" = "%@/edit";
 "Save ~%1$@ / ~%2$@ tokens · 1 finding" = "可省约 %1$@ / 约 %2$@ Token · 1 项建议";
 "Save ~%1$@ / ~%2$@ tokens · %3$lld findings" = "可省约 %1$@ / 约 %2$@ Token · %3$lld 项建议";
 "Favorite model" = "最常用模型";
