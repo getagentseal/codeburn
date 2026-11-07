@@ -33,6 +33,8 @@ export type CachedCall = {
   /// True when `costUSD` (or the tokens it is priced from) is estimated rather
   /// than metered. Persisted so the estimated-cost marker survives the cache.
   isEstimated?: boolean
+  /// See ParsedProviderCall.costRung.
+  costRung?: string
   speed: Speed
   timestamp: string
   tools: string[]
@@ -1296,6 +1298,7 @@ function validateCall(c: unknown): c is CachedCall {
     && isOptionalBool(o['supplementaryAccounting'])
     && isOptionalNum(o['requestCount'])
     && isOptionalString(o['route'])
+    && isOptionalString(o['costRung'])
     && (o['billing'] === undefined || parseBillingMode(o['billing'] as string) !== undefined)
     && validateUsage(o['usage'])
 }

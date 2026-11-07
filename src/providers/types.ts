@@ -60,6 +60,12 @@ export type ParsedProviderCall = {
   // update still reaches it. Orthogonal to `costIsEstimated`: a credit rate is
   // an estimate of dollars, but it is still billing-derived.
   costFromBilling?: boolean
+  // Which record a billing-derived cost came from (Warp's cost ladder rung),
+  // so a cost that moved to another record is not read as growth.
+  costRung?: string
+  // Warp: an exchange still running. It takes its share of the conversation
+  // total but is never cached or reported until it finishes.
+  inProgress?: boolean
   // A cost the tool recorded for this call, used only while CodeBurn prices
   // the call's tokens at $0 (an id the catalog does not know). Kept on the
   // cached call so the fallback survives the cache, while a later catalog row

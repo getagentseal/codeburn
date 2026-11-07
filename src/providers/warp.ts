@@ -97,10 +97,11 @@ type WarpConversationData = {
   }
 }
 
-type WarpCost = { usd: number; estimated: boolean }
+type WarpCost = { usd: number; estimated: boolean; rung: 'a' | 'b' | 'c' | 'd' }
 
 type ParsedExchange = WarpQueryRow & {
   startMs: number
+  running: boolean
 }
 
 type ExchangeToolInfo = {
@@ -246,7 +247,7 @@ function conversationCostUsd(rawConversationData: string): WarpCost | null {
   if (!meta) return null
 
   const providerCents = safeNumber(meta.total_provider_cost_in_cents)
-  if (providerCents > 0) return { usd: providerCents / 100, estimated: false }
+  if (providerCents > 0) return { usd: providerCents / 100, estimated: false, rung: 'a' }
 
   const charged = meta.total_charged_usage
   if (charged) {
@@ -257,14 +258,14 @@ function conversationCostUsd(rawConversationData: string): WarpCost | null {
       safeNumber(charged.input_cache_write_cost_in_cents) +
       safeNumber(charged.platform_cost_in_cents) +
       safeNumber(charged.web_search_cost_in_cents)
-    if (cents > 0) return { usd: cents / 100, estimated: false }
+    if (cents > 0) return { usd: cents / 100, estimated: false, rung: 'b' }
   }
 
   const billedCents = safeNumber(meta.total_billed_cost_in_cents)
-  if (billedCents > 0) return { usd: billedCents / 100, estimated: false }
+  if (billedCents > 0) return { usd: billedCents / 100, estimated: false, rung: 'c' }
 
   const credits = safeNumber(meta.credits_spent)
-  if (credits > 0) return { usd: credits * CREDIT_USD_RATE, estimated: true }
+  if (credits > 0) return { usd: credits * CREDIT_USD_RATE, estimated: true, rung: 'd' }
 
   return null
 }
@@ -286,8 +287,13 @@ function allocateCost(weights: number[], totalUsd: number): number[] {
 // cached keep their share; only the growth since then is split, over the new
 // exchanges (or added to the latest one when there is none). A total that
 // shrank, a removed exchange, or a cost that changed rung falls back to the
-// fresh split.
-export function keepCachedWarpShares(prior: CachedFile, calls: ParsedProviderCall[]): ParsedProviderCall[] {
+// fresh split. The total also grows while an exchange runs, so a running
+// exchange takes its share of the growth and that share is held back until it
+// finishes, instead of landing on the finished exchange before it.
+export function keepCachedWarpShares(prior: CachedFile | undefined, parsed: ParsedProviderCall[]): ParsedProviderCall[] {
+  const calls = parsed.filter(c => !c.inProgress)
+  const running = parsed.filter(c => c.inProgress)
+  if (!prior) return calls
   const cached = new Map(prior.turns.flatMap(t => t.calls).map(c => [c.deduplicationKey, c]))
   const current = new Set(calls.map(c => c.deduplicationKey))
   // An exchange the cache held is gone: the old shares no longer add up to
@@ -296,7 +302,11 @@ export function keepCachedWarpShares(prior: CachedFile, calls: ParsedProviderCal
   const kept = calls.filter(c => cached.has(c.deduplicationKey))
   if (kept.length === 0) return calls
   const billed = calls[0]!.costFromBilling === true
-  if (billed && kept.some(c => cached.get(c.deduplicationKey)!.costUSD === undefined)) return calls
+  if (billed && kept.some(c => {
+    const prev = cached.get(c.deduplicationKey)!
+    // A cache written before the rung was stored has none: keep its shares.
+    return prev.costUSD === undefined || (prev.costRung !== undefined && prev.costRung !== c.costRung)
+  })) return calls
 
   const sum = (values: number[]) => values.reduce((a, b) => a + b, 0)
   const keptTokens = sum(kept.map(c => cached.get(c.deduplicationKey)!.usage.inputTokens))
@@ -306,7 +316,7 @@ export function keepCachedWarpShares(prior: CachedFile, calls: ParsedProviderCal
   if (deltaTokens < 0 || deltaCost < -1e-9) return calls
 
   const fresh = calls.filter(c => !cached.has(c.deduplicationKey))
-  const targets = fresh.length > 0 ? fresh : [calls[calls.length - 1]!]
+  const targets = fresh.length + running.length > 0 ? [...fresh, ...running] : [calls[calls.length - 1]!]
   const tokenShares = allocateTokens(targets.map(c => c.inputTokens), deltaTokens)
   const costShares = allocateCost(targets.map(c => c.costUSD), Math.max(0, deltaCost))
 
@@ -497,13 +507,17 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
         )
 
         const parsedExchanges: ParsedExchange[] = []
-        for (const exchange of exchanges) {
-          if (!isFinalStatus(exchange.output_status)) continue
+        for (const [index, exchange] of exchanges.entries()) {
+          const running = !isFinalStatus(exchange.output_status)
+          // ponytail: only the newest exchange can still be running; an older
+          // unfinished one was abandoned and stays out, as before. A newest one
+          // left unfinished by a crash holds back its share until the next exchange.
+          if (running && index !== exchanges.length - 1) continue
           const startMs = parseTimestamp(exchange.start_ts)
           if (startMs === null) continue
-          parsedExchanges.push({ ...exchange, startMs })
+          parsedExchanges.push({ ...exchange, startMs, running })
         }
-        if (parsedExchanges.length === 0) return
+        if (!parsedExchanges.some(exchange => !exchange.running)) return
 
         const blocks = db.query<WarpBlockRow>(
           `SELECT block_id, start_ts, CAST(stylized_command AS BLOB) AS stylized_command
@@ -536,7 +550,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
           const projectPath = exchange.working_directory?.trim() || undefined
           const project = projectPath ? sanitizeProject(projectPath) : source.project
 
-          seenKeys.add(deduplicationKey)
+          if (!exchange.running) seenKeys.add(deduplicationKey)
           yield {
             provider: 'warp',
             model,
@@ -553,7 +567,8 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
             costIsEstimated: conversationCost ? conversationCost.estimated : true,
             // Rungs (a)-(d) are Warp's own billing record; keep them through
             // the cache. Rung (e) is the token floor, which stays re-priceable.
-            ...(conversationCost ? { costFromBilling: true } : {}),
+            ...(conversationCost ? { costFromBilling: true, costRung: conversationCost.rung } : {}),
+            ...(exchange.running ? { inProgress: true } : {}),
             tools: exchangeTools.tools,
             bashCommands: exchangeTools.bashCommands,
             timestamp,

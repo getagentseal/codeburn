@@ -2933,6 +2933,7 @@ function providerCallToCachedCall(call: ParsedProviderCall): CachedCall {
     costUSD: (REPORTED_COST_PROVIDERS.has(call.provider) || call.costFromBilling === true) ? call.costUSD : undefined,
     ...(call.fallbackCostUSD ? { fallbackCostUSD: call.fallbackCostUSD } : {}),
     isEstimated: call.costIsEstimated || undefined,
+    ...(call.costRung ? { costRung: call.costRung } : {}),
     speed: call.speed,
     timestamp: call.timestamp,
     tools: call.tools,
@@ -4046,7 +4047,7 @@ export async function parseProviderSources(
           for await (const call of parser.parse()) {
             providerCalls.push(call)
           }
-          if (providerName === 'warp' && priorEntry) providerCalls = keepCachedWarpShares(priorEntry, providerCalls)
+          if (providerName === 'warp') providerCalls = keepCachedWarpShares(priorEntry, providerCalls)
         }
         const canonicalCalls = await Promise.all(providerCalls.map(canonicalizeProviderCallProject))
         const turns = providerCallsToCachedTurns(canonicalCalls)
