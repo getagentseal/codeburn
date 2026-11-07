@@ -29,7 +29,9 @@ import { allowPath, sessionCachePath, sessionsDir } from './store.js'
 // `failedCommands` counts consecutive is_error results per command hash: a
 // passing run resets that command, and a successful edit resets every command,
 // since a rerun after a code change is a new attempt.
-export type ToolCallKey = { id: string; name: string; hash: string; result?: string }
+// `denied`: the hook denied this call, so its tool_result is our deny reason,
+// not an answer, and must never read as a changed result.
+export type ToolCallKey = { id: string; name: string; hash: string; result?: string; denied?: boolean }
 
 export type GuardCache = {
   version: number
@@ -110,7 +112,11 @@ export function inputHash(value: unknown): string {
 }
 
 export function recordToolCall(cache: GuardCache, call: ToolCallKey): void {
-  if (call.id && cache.recentCalls.some(c => c.id === call.id)) return
+  const known = call.id ? cache.recentCalls.find(c => c.id === call.id) : undefined
+  if (known) {
+    if (call.denied) known.denied = true
+    return
+  }
   cache.recentCalls.push(call)
   if (cache.recentCalls.length > RECENT_CALLS) cache.recentCalls.shift()
 }
@@ -149,7 +155,7 @@ function foldToolResults(cache: GuardCache, entry: JournalEntry): void {
   for (const b of Array.isArray(content) ? content as { type?: unknown; tool_use_id?: unknown; content?: unknown }[] : []) {
     if (b?.type !== 'tool_result') continue
     const recent = cache.recentCalls.find(c => c.id === b.tool_use_id)
-    if (recent) recent.result = inputHash(b.content ?? null)
+    if (recent && !recent.denied) recent.result = inputHash(b.content ?? null)
   }
   for (const [id, meta] of results) {
     const cmd = cache.shellPending[id]

@@ -93,6 +93,23 @@ describe('identical-call loop', () => {
     ))
   })
 
+  it('keeps denying after the stop, though each denied call gets the deny reason as its result', async () => {
+    const env = await setup()
+    const input = { file_path: '/repo/a.ts' }
+    const outs: string[] = []
+    for (let i = 0; i < 12; i++) {
+      const id = `toolu_${++seq}`
+      const out = await runGuardHook('pretooluse', JSON.stringify({
+        session_id: SID, transcript_path: env.path, tool_name: 'Read', tool_input: input, tool_use_id: id,
+      }), { base: env.base })
+      const reason = out.includes('"deny"') ? JSON.parse(out).hookSpecificOutput.permissionDecisionReason as string : undefined
+      await appendFile(env.path, useLine(id, 'Read', input) + resultLine(id, reason !== undefined, reason ?? 'same contents'))
+      outs.push(out)
+    }
+    expect(outs.slice(0, 7).filter(o => o.includes('"deny"'))).toHaveLength(0)
+    for (const out of outs.slice(7)) expect(out).toContain('"permissionDecision":"deny"')
+  })
+
   it('counts the same when the transcript already holds the incoming call', async () => {
     const env = await setup()
     const outs: string[] = []

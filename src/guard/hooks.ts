@@ -116,14 +116,12 @@ async function handlePreToolUse(input: unknown, opts: HookOpts): Promise<string>
   const command = toolName && BASH_TOOLS.has(toolName) ? str(toolInput, 'command') : undefined
   const waiting = command !== undefined && isWaitingCheck(command)
   const run = call && !waiting ? identicalRun(cache, call) : 0
-  // Without a tool_use_id the transcript copy cannot be told apart from ours,
-  // so the call is left for the transcript to record.
-  if (call?.id) recordToolCall(cache, call)
   cache.loopRun = Math.max(cache.loopRun, run)
   const failures = command !== undefined ? cache.failedCommands[inputHash(command)] ?? 0 : 0
   const shown = command?.slice(0, 60) ?? ''
 
   let output = ''
+  let denied = false
   const notes: string[] = []
   const agentNotes: string[] = []
   const allowed = await isAllowed(sessionId, opts.base)
@@ -131,18 +129,21 @@ async function handlePreToolUse(input: unknown, opts: HookOpts): Promise<string>
     // A block is a stronger signal than the soft nag; once blocked, don't also
     // fire a soft warning on the next (e.g. post-`allow`) tool call.
     cache.softWarned = true
+    denied = true
     output = deny(
       `Session cost passed ${usd(config.hardUSD)} (codeburn guard). Stop and ask the user how to continue.`,
       `codeburn guard: session cost passed ${usd(config.hardUSD)}. Run 'codeburn guard allow' to lift the cap for this session, or raise hardUSD in guard.json.`,
     )
   } else if (reached(run, config.loopStopAfter) && !allowed) {
     markSignal(cache, 'loop')
+    denied = true
     output = deny(
       `${toolName} was called ${run} times in a row with the same input; this session is ${usd(cache.costUSD)} (codeburn guard). Change approach or ask the user.`,
       `codeburn guard: stopped ${toolName} after ${run} identical calls in a row. Run 'codeburn guard allow' to lift this for the session, or raise loopStopAfter in guard.json.`,
     )
   } else if (reached(failures, config.retryStopAfter) && !allowed) {
     markSignal(cache, 'retry')
+    denied = true
     output = deny(
       `The command "${shown}" already failed ${failures} times; this session is ${usd(cache.costUSD)} (codeburn guard). Change approach or ask the user.`,
       `codeburn guard: stopped "${shown}" after ${failures} failures in a row. Run 'codeburn guard allow' to lift this for the session, or raise retryStopAfter in guard.json.`,
@@ -172,6 +173,9 @@ async function handlePreToolUse(input: unknown, opts: HookOpts): Promise<string>
     }
   }
 
+  // Without a tool_use_id the transcript copy cannot be told apart from ours,
+  // so the call is left for the transcript to record.
+  if (call?.id) recordToolCall(cache, denied ? { ...call, denied } : call)
   await writeCache(cache, opts.base)
   return output
 }
