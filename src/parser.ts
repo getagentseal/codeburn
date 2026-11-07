@@ -4649,6 +4649,9 @@ export async function parseProviderSources(
   // A metered Quick Desktop call supersedes its session's sessions.db estimate
   // here, whatever was parsed when: metrics can land without sessions.db
   // changing, and the metered call outlives its metrics file in the cache.
+  // Not scoped to a day: the estimate is one call for the whole session, keyed
+  // by the sessions table id that metrics rows link to, and a session's metered
+  // calls can fall on later days. The parse-time suppression matches by id alone too.
   const quickdeskMetered = providerName === 'quickdesk'
     ? new Set(Object.values(section.files).flatMap(f => f.turns
       .filter(t => t.calls.some(c => c.deduplicationKey.startsWith('quickdesk:')))
