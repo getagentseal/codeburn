@@ -97,6 +97,8 @@ type WarpConversationData = {
   }
 }
 
+const RUNNING_EXCHANGE_TIMEOUT_MS = 24 * 60 * 60 * 1000
+
 type WarpCost = { usd: number; estimated: boolean; rung: 'a' | 'b' | 'c' | 'd' }
 
 type ParsedExchange = WarpQueryRow & {
@@ -509,13 +511,19 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
           [conversationId],
         )
 
+        // Warp writes the conversation as a running exchange streams. A day
+        // with no write means the app quit or crashed mid-exchange and left its
+        // status unfinished for good, so the exchange is released as finished
+        // instead of holding its share back forever.
+        const modifiedMs = parseTimestamp(conversations[0]!.last_modified_at)
+        const abandoned = modifiedMs !== null && Date.now() - modifiedMs > RUNNING_EXCHANGE_TIMEOUT_MS
         const parsedExchanges: ParsedExchange[] = []
         for (const [index, exchange] of exchanges.entries()) {
-          const running = !isFinalStatus(exchange.output_status)
-          // ponytail: only the newest exchange can still be running; an older
-          // unfinished one was abandoned and stays out, as before. A newest one
-          // left unfinished by a crash holds back its share until the next exchange.
-          if (running && index !== exchanges.length - 1) continue
+          const unfinished = !isFinalStatus(exchange.output_status)
+          // Only the newest exchange can still be running; an older unfinished
+          // one was abandoned and stays out, as before.
+          if (unfinished && index !== exchanges.length - 1) continue
+          const running = unfinished && !abandoned
           const startMs = parseTimestamp(exchange.start_ts)
           if (startMs === null) continue
           parsedExchanges.push({ ...exchange, startMs, running })
