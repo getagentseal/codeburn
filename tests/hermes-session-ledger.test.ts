@@ -373,6 +373,30 @@ describe('hermes session ledger unit', () => {
     expect(cursor.rebuild).toBeUndefined()
   })
 
+  it('keeps a priced observation\'s known cost when a $0 observation sits beside it', async () => {
+    const delta = { inputTokens: 1000, outputTokens: 200, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 50 }
+    const obs = (index: number, timestamp: string, costUSD: number) => ({ index, timestamp, ...delta, costUSD, costBasis: 'calculated', supplementaryAccounting: index > 0 })
+    const lifetime = { inputTokens: 2000, outputTokens: 400, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 100 }
+    const write = (obs1Cost: number) => writeFile(join(cacheDir, 'hermes-session-ledger.v3.json'), JSON.stringify({
+      version: 3,
+      cursors: { default: { s1: {
+        profile: 'default', sessionId: 's1',
+        lastSeen: { ...lifetime, costUSD: 10, costBasis: 'calculated' },
+        observations: [obs(0, '2026-10-01T10:00:00.000Z', 10), obs(1, '2026-11-05T10:00:00.000Z', obs1Cost)],
+      } } },
+    }))
+    const costs = async (snapshotCost: number) => {
+      await rm(hermesSessionLedgerPath(), { force: true })
+      resetHermesSessionLedgerForTests()
+      const cursor = await recordHermesSnapshot(snap({ costUSD: snapshotCost, costBasis: 'calculated', tokens: lifetime }))
+      return cursor.observations.map(o => o.costUSD)
+    }
+    await write(0)
+    expect(await costs(10)).toEqual([10, 0])
+    expect(await costs(6)).toEqual([6, 0])
+    expect(await costs(14)).toEqual([10, 4])
+  })
+
   it('ignores a superseded v1 ledger and removes it from the cache dir', async () => {
     const v1Path = join(cacheDir, 'hermes-session-ledger.v1.json')
     await writeFile(v1Path, JSON.stringify({

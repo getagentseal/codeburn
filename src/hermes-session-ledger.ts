@@ -498,12 +498,15 @@ function repriceRebuild(cursor: HermesSessionCursor, snapshot: HermesSnapshot): 
   const weight = (t: HermesTokenTotals) => t.inputTokens + t.outputTokens + t.cacheReadTokens + t.cacheWriteTokens
   const share = weight(snapshot.tokens) > 0 ? weight(held) / weight(snapshot.tokens) : 1
   const costUSD = snapshot.costUSD * share
-  // A stored $0 beside tokens cannot be scaled, so the observations then take
-  // the recomputed cost by token share instead.
-  const byTokens = cursor.observations.some(o => o.costUSD <= 0 && weight(o) > 0)
-  const repriced = (o: HermesObservation): number => byTokens
-    ? (weight(held) > 0 ? costUSD * weight(o) / weight(held) : 0)
-    : heldCost > 0 ? o.costUSD * (costUSD / heldCost) : 0
+  // Beside observations stored at $0 (no price to scale), the priced ones are
+  // scaled but never up, since the v4 rule only removes reasoning priced twice,
+  // and what the recomputed cost leaves over goes to the $0 ones by token share.
+  const unpricedWeight = cursor.observations.filter(o => o.costUSD <= 0).reduce((sum, o) => sum + weight(o), 0)
+  const factor = heldCost <= 0 ? 0 : unpricedWeight > 0 ? Math.min(1, costUSD / heldCost) : costUSD / heldCost
+  const remainder = Math.max(0, costUSD - heldCost * factor)
+  const repriced = (o: HermesObservation): number => o.costUSD > 0
+    ? o.costUSD * factor
+    : unpricedWeight > 0 ? remainder * weight(o) / unpricedWeight : 0
   return {
     ...rest,
     lastSeen: { ...held, costUSD, costBasis: snapshot.costBasis },
