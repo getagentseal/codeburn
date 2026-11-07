@@ -146,16 +146,17 @@ export function identicalRun(cache: GuardCache, call: ToolCallKey): number {
   return run
 }
 
-// Every deny reason the hook writes carries this, so a rebuild from the
-// transcript, which has no deny marks, still knows a result was ours.
+// Every deny reason the hook writes starts with this, so a rebuild from the
+// transcript, which has no deny marks, still knows a result was ours. Only the
+// exact reason shapes match, so a real failure that prints the mark still counts.
 export const GUARD_DENY_MARK = '(codeburn guard)'
+const GUARD_DENY = /^\(codeburn guard\) (?:Session cost passed \$\d+\.\d\d\. Stop and ask the user how to continue\.|(?:\S+ was called \d+ times in a row with the same input|The command "[\s\S]{0,60}" already failed \d+ times); this session is \$\d+\.\d\d\. Change approach or ask the user\.)$/
 
-// The length cap keeps a long failing output that merely quotes the mark (a
-// test run over this file) counted as a real answer.
 function isGuardDeny(b: { content?: unknown; is_error?: unknown }): boolean {
   if (b.is_error !== true) return false
-  const text = JSON.stringify(b.content ?? null)
-  return text.length < 2_000 && text.includes(GUARD_DENY_MARK)
+  const c = b.content
+  const text = typeof c === 'string' ? c : Array.isArray(c) && c.length === 1 ? (c[0] as { text?: unknown } | null)?.text : undefined
+  return typeof text === 'string' && text.length < 2_000 && GUARD_DENY.test(text)
 }
 
 // Never a command hash (those are 16 hex chars).

@@ -88,7 +88,7 @@ describe('identical-call loop', () => {
     expect(outs.slice(4, 7)).toEqual(['', '', ''])
     const cost = (await readCache(SID, env.base)).costUSD
     expect(outs[7]).toBe(denyJson(
-      `Read was called 8 times in a row with the same input; this session is $${cost.toFixed(2)} (codeburn guard). Change approach or ask the user.`,
+      `(codeburn guard) Read was called 8 times in a row with the same input; this session is $${cost.toFixed(2)}. Change approach or ask the user.`,
       `codeburn guard: stopped Read after 8 identical calls in a row. Run 'codeburn guard allow' to lift this for the session, or raise loopStopAfter in guard.json.`,
     ))
   })
@@ -264,7 +264,7 @@ describe('failing-command retry', () => {
     const out = await call(env, 'Bash', test)
     const cost = (await readCache(SID, env.base)).costUSD
     expect(out).toBe(denyJson(
-      `The command "${shown}" already failed 5 times; this session is $${cost.toFixed(2)} (codeburn guard). Change approach or ask the user.`,
+      `(codeburn guard) The command "${shown}" already failed 5 times; this session is $${cost.toFixed(2)}. Change approach or ask the user.`,
       `codeburn guard: stopped "${shown}" after 5 failures in a row. Run 'codeburn guard allow' to lift this for the session, or raise retryStopAfter in guard.json.`,
     ))
   })
@@ -325,6 +325,14 @@ describe('failing-command retry', () => {
       reasons.push(reason)
     }
     for (const r of reasons) expect(r).toContain('already failed 5 times')
+    await rm(sessionCachePath(SID, env.base))
+    expect(await call(env, 'Bash', { command })).toContain('already failed 5 times')
+  })
+
+  it('counts a real failure that prints the guard mark', async () => {
+    const env = await setup({ loopWarnAfter: null, loopStopAfter: null })
+    for (let i = 0; i < 5; i++) await call(env, 'Bash', { command: 'npm test' }, { fails: true, output: '(codeburn guard) hook test failed' })
+    expect(await call(env, 'Bash', { command: 'npm test' })).toContain('already failed 5 times')
   })
 
   it('only counts shell tools', async () => {

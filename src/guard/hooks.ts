@@ -143,21 +143,21 @@ async function handlePreToolUse(input: unknown, opts: HookOpts): Promise<string>
     cache.softWarned = true
     denied = true
     output = deny(
-      `Session cost passed ${usd(config.hardUSD)} ${GUARD_DENY_MARK}. Stop and ask the user how to continue.`,
+      `${GUARD_DENY_MARK} Session cost passed ${usd(config.hardUSD)}. Stop and ask the user how to continue.`,
       `codeburn guard: session cost passed ${usd(config.hardUSD)}. Run 'codeburn guard allow' to lift the cap for this session, or raise hardUSD in guard.json.`,
     )
   } else if (reached(run, config.loopStopAfter) && !allowed) {
     markSignal(cache, 'loop')
     denied = true
     output = deny(
-      `${toolName} was called ${run} times in a row with the same input; this session is ${usd(cache.costUSD)} ${GUARD_DENY_MARK}. Change approach or ask the user.`,
+      `${GUARD_DENY_MARK} ${toolName} was called ${run} times in a row with the same input; this session is ${usd(cache.costUSD)}. Change approach or ask the user.`,
       `codeburn guard: stopped ${toolName} after ${run} identical calls in a row. Run 'codeburn guard allow' to lift this for the session, or raise loopStopAfter in guard.json.`,
     )
   } else if (reached(failures, config.retryStopAfter) && !allowed) {
     markSignal(cache, 'retry')
     denied = true
     output = deny(
-      `The command "${shown}" already failed ${failures} times; this session is ${usd(cache.costUSD)} ${GUARD_DENY_MARK}. Change approach or ask the user.`,
+      `${GUARD_DENY_MARK} The command "${shown}" already failed ${failures} times; this session is ${usd(cache.costUSD)}. Change approach or ask the user.`,
       `codeburn guard: stopped "${shown}" after ${failures} failures in a row. Run 'codeburn guard allow' to lift this for the session, or raise retryStopAfter in guard.json.`,
     )
   } else {
