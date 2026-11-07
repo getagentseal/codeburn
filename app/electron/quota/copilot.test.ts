@@ -147,6 +147,31 @@ describe('Copilot quota fetch', () => {
     expect(result.quota.primary).toBeNull()
   })
 
+  it('sends a GitHub Enterprise Cloud token only to its own API host, never api.github.com', async () => {
+    const fetchMock = vi.fn(async () => okJson(usageBody))
+    const tenant = JSON.stringify({ 'acme.ghe.com': { oauth_token: 'gho_tenant' } })
+    const result = await fetchCopilotQuota({ fetch: fetchMock, readFile: vi.fn(async (path: string) => path.endsWith('hosts.json') ? tenant : null) })
+    expect(result.quota.connection).toBe('connected')
+    expect(fetchMock.mock.calls.map(call => String((call as unknown[])[0]))).toEqual(['https://api.acme.ghe.com/copilot_internal/user'])
+    expect(result.quota.footerLines).toEqual(['Source: api.acme.ghe.com'])
+  })
+
+  it('reads the host of an apps.json "<host>:<app id>" key', async () => {
+    const fetchMock = vi.fn(async () => okJson(usageBody))
+    const apps = JSON.stringify({ 'acme.ghe.com:Iv1.b507a08c87ecfe98': { oauth_token: 'gho_apps' } })
+    await fetchCopilotQuota({ fetch: fetchMock, readFile: vi.fn(async (path: string) => path.endsWith('apps.json') ? apps : null) })
+    expect(fetchMock.mock.calls.map(call => String((call as unknown[])[0]))).toEqual(['https://api.acme.ghe.com/copilot_internal/user'])
+  })
+
+  it('fails naming an unsupported host and sends its token nowhere', async () => {
+    const fetchMock = vi.fn(async () => okJson(usageBody))
+    const server = JSON.stringify({ 'github.acme-corp.net': { oauth_token: 'gho_server' } })
+    const result = await fetchCopilotQuota({ fetch: fetchMock, readFile: vi.fn(async (path: string) => path.endsWith('hosts.json') ? server : null) })
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(result.quota.connection).toBe('terminalFailure')
+    expect(result.quota.footerLines[0]).toContain('github.acme-corp.net')
+  })
+
   it('redacts tokens and NUL from diagnostics without surfacing them', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
     const fetchMock = vi.fn(async () => { throw new Error('token gho_leak-secret eyJabc.def.ghi\0tail') })
