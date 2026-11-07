@@ -594,6 +594,28 @@ describe.skipIf(skipReason !== null)('cursor real context tokens (#575)', () => 
     expect(stamp('req-old-conversation')).toBeUndefined()
   })
 
+  it('dates an untagged agent-only stream between two dated requests of the same day, and not across days', async () => {
+    const morning = minuteAgo(15)
+    const evening = morning + 3 * 3_600_000
+    const sameDay = new Date(morning).toDateString() === new Date(evening).toDateString()
+    const nextDay = minuteAgo(14)
+    const dbPath = buildDb((db) => {
+      const tagged = (blobId: string, at: number, requestId: string) =>
+        insertAgentKv(db, { blobId, role: 'user', content: [{ type: 'text', text: promptTag(at, 0) }, { type: 'text', text: 'tagged prompt' }], requestId })
+      tagged('akv-1', morning, 'req-before')
+      insertAgentKv(db, { blobId: 'akv-2', role: 'user', content: 'untagged between', requestId: 'req-between' })
+      tagged('akv-3', sameDay ? evening : morning, 'req-after')
+      insertAgentKv(db, { blobId: 'akv-4', role: 'user', content: 'untagged across days', requestId: 'req-across' })
+      tagged('akv-5', nextDay, 'req-next-day')
+    })
+
+    const calls = await collectCalls(createCursorProvider(dbPath), dbPath)
+
+    const stamp = (id: string) => calls.find(c => c.deduplicationKey === `cursor:agentKv:${id}`)?.timestamp
+    expect(stamp('req-between')).toBe(new Date(morning).toISOString())
+    expect(stamp('req-across')).toBe(new Date(statSync(dbPath).mtimeMs).toISOString())
+  })
+
   it('does not bill the stream of a conversation older than the lookback as a new session', async () => {
     const composerId = '44440000-1111-2222-3333-444455556666'
     const requestId = 'req-old'

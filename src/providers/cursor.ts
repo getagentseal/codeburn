@@ -611,7 +611,7 @@ function contentTextLength(raw: string): number {
 function loadAgentStreams(
   db: SqliteDatabase,
   requestToComposer: Map<string, string>,
-): { byComposer: Map<string, AgentStream>; unjoined: Map<string, AgentStream>; malformed: number } {
+): { byComposer: Map<string, AgentStream>; unjoined: Map<string, AgentStream>; order: string[]; malformed: number } {
   const byComposer = new Map<string, AgentStream>()
   const unjoined = new Map<string, AgentStream>()
 
@@ -622,7 +622,7 @@ function loadAgentStreams(
     malformed = db.query<{ cnt: number }>(AGENTKV_MALFORMED_QUERY)[0]?.cnt ?? 0
   } catch (err) {
     rethrowBusy(err)
-    return { byComposer, unjoined, malformed }
+    return { byComposer, unjoined, order: [], malformed }
   }
 
   const bucketFor = (requestId: string): AgentStream => {
@@ -645,9 +645,16 @@ function loadAgentStreams(
   let pendingUserChars = 0
   let pendingContextChars = 0
   let pendingPromptAt: number | null = null
+  // Request ids in the order the stream first wrote them.
+  const order: string[] = []
+  const ordered = new Set<string>()
   for (const row of rows) {
     if (row.request_id) {
       currentRequestId = row.request_id
+      if (!ordered.has(currentRequestId)) {
+        ordered.add(currentRequestId)
+        order.push(currentRequestId)
+      }
       if (pendingUserChars > 0 || pendingContextChars > 0 || pendingPromptAt !== null) {
         const bucket = bucketFor(currentRequestId)
         bucket.userChars += pendingUserChars
@@ -709,7 +716,7 @@ function loadAgentStreams(
       }
     }
   }
-  return { byComposer, unjoined, malformed }
+  return { byComposer, unjoined, order, malformed }
 }
 
 // What drives a conversation's input figure, decided once per conversation so
@@ -803,7 +810,7 @@ function parseBubbles(
     if (!scan.model && row.model) scan.model = row.model
   }
 
-  const { byComposer: agentStreams, unjoined, malformed } = loadAgentStreams(db, requestToComposer)
+  const { byComposer: agentStreams, unjoined, order: streamOrder, malformed } = loadAgentStreams(db, requestToComposer)
   skipped += malformed
   const lastUserMsg = new Map<string, string>()
 
@@ -1002,11 +1009,40 @@ function parseBubbles(
     if (at) firstSeen.set(BUBBLE_TIME_KEY + requestId, at)
   }
   // A request with no bubble is dated from its own prompt, else from the
-  // conversation that names it; only undated requests fall back to the
-  // first-seen stamp.
-  const streamDate = (requestId: string, stream: AgentStream): string | null => {
-    const at = stream.promptAt ?? requestStart.get(requestId) ?? null
-    return at !== null && Number.isFinite(at) ? new Date(at).toISOString() : null
+  // conversation that names it, else from the dated requests written just
+  // before and after it in the stream when both fall on the same day. Only
+  // undated requests fall back to the first-seen stamp.
+  const ownDate = (requestId: string): number | null => {
+    const at = unjoined.get(requestId)?.promptAt ?? requestStart.get(requestId) ?? null
+    return at !== null && Number.isFinite(at) ? at : null
+  }
+  const bubbleAt = new Map<string, number>()
+  for (const row of rows) {
+    const ms = row.request_id && row.created_at ? Date.parse(row.created_at) : NaN
+    if (Number.isFinite(ms) && ms > (bubbleAt.get(row.request_id!) ?? -Infinity)) bubbleAt.set(row.request_id!, ms)
+  }
+  const anchors = streamOrder.map((requestId): number | null => {
+    const scanned = bubbleAt.get(requestId)
+    if (scanned !== undefined) return scanned
+    const lookedUpAt = Date.parse(firstSeen.get(BUBBLE_TIME_KEY + requestId) ?? '')
+    return Number.isFinite(lookedUpAt) ? lookedUpAt : ownDate(requestId)
+  })
+  const nextAnchor: Array<number | null> = []
+  for (let i = anchors.length - 1, after: number | null = null; i >= 0; i--) {
+    nextAnchor[i] = after
+    after = anchors[i] ?? after
+  }
+  const between = new Map<string, number>()
+  for (let i = 0, before: number | null = null; i < anchors.length; i++) {
+    const after = nextAnchor[i] ?? null
+    if (anchors[i] === null && before !== null && after !== null && new Date(before).toDateString() === new Date(after).toDateString()) {
+      between.set(streamOrder[i]!, before)
+    }
+    before = anchors[i] ?? before
+  }
+  const streamDate = (requestId: string): string | null => {
+    const at = ownDate(requestId) ?? between.get(requestId) ?? null
+    return at === null ? null : new Date(at).toISOString()
   }
   for (const [requestId, stream] of billable) {
     // Request ids are UUIDs, so a historic bubble sharing one with a billable
@@ -1014,7 +1050,7 @@ function parseBubbles(
     const bubbleTime = firstSeen.get(BUBBLE_TIME_KEY + requestId)
     if (bubbleTime && bubbleTime <= timeFloor) continue
     if (!bubbleTime && !firstSeen.has(requestId) && !lookedUp.has(requestId)) continue
-    const datedAt = bubbleTime ? null : streamDate(requestId, stream)
+    const datedAt = bubbleTime ? null : streamDate(requestId)
     if (datedAt && datedAt <= timeFloor) continue
     const inputTokens = estimateTokensFromChars(stream.userChars + stream.contextChars)
     const outputTokens = estimateTokensFromChars(stream.assistantChars)
