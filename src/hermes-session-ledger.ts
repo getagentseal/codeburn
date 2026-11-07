@@ -492,18 +492,22 @@ function repriceRebuild(cursor: HermesSessionCursor, snapshot: HermesSnapshot): 
   if (!tokensGte(snapshot.tokens, held)) return cursor
   const { rebuild: _rebuild, ...rest } = cursor
   const heldCost = cursor.observations.reduce((sum, o) => sum + o.costUSD, 0)
-  if (heldCost <= 0) return rest
   // ponytail: when the session grew, the share of the snapshot cost already
   // held is estimated by token count (reasoning sits inside output). Exact when
   // nothing grew; the snapshot carries no rates to split it any better.
   const weight = (t: HermesTokenTotals) => t.inputTokens + t.outputTokens + t.cacheReadTokens + t.cacheWriteTokens
   const share = weight(snapshot.tokens) > 0 ? weight(held) / weight(snapshot.tokens) : 1
   const costUSD = snapshot.costUSD * share
-  const factor = costUSD / heldCost
+  // A stored $0 beside tokens cannot be scaled, so the observations then take
+  // the recomputed cost by token share instead.
+  const byTokens = cursor.observations.some(o => o.costUSD <= 0 && weight(o) > 0)
+  const repriced = (o: HermesObservation): number => byTokens
+    ? (weight(held) > 0 ? costUSD * weight(o) / weight(held) : 0)
+    : heldCost > 0 ? o.costUSD * (costUSD / heldCost) : 0
   return {
     ...rest,
     lastSeen: { ...held, costUSD, costBasis: snapshot.costBasis },
-    observations: cursor.observations.map(o => ({ ...o, costUSD: o.costUSD * factor })),
+    observations: cursor.observations.map(o => ({ ...o, costUSD: repriced(o) })),
   }
 }
 
