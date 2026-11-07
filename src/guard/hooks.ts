@@ -85,15 +85,17 @@ const BARE_ECHO = /^echo(?:[^\S\n]+(?:[^;&|<>`$\n]|\$(?!\())*)?$/
 // `sleep 0; git status` on repeat is exempt on purpose: the guard stops runaway
 // cost, and a repeated read-only check is cheap whatever the sleep length.
 function isWaitingCheck(command: string): boolean {
-  const m = /^\s*sleep\s+\d+(?:\.\d+)?[smhd]?\s*(?:(?:&&|;|\|\|)([\s\S]*))?$/.exec(command)
+  const m = /^\s*sleep\s+\d+(?:\.\d+)?[smhd]?\s*(?:(&&|;|\|\|)([\s\S]*))?$/.exec(command)
   if (!m) return false
   // The shared read list counts `env` as a read and does not split lines, so
   // `sleep 5 && env CI=1 npm run build` or a second line would pass as a check.
   // Blank and comment lines are dropped; any other later line is work. An env
   // that only sets variables is dropped and what it runs is checked; any other
   // env (flags, or bare) is not a check.
-  const lines = (m[1] ?? '').split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#'))
+  const lines = (m[2] ?? '').split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#'))
   if (lines.length > 1) return false
+  // `sleep 5 &&` or a check ending in && or | is unfinished, not a check.
+  if ((m[1] && m[1] !== ';' && lines.length === 0) || /^(?:&&|\|\|?|;)|(?:&&|\|\|?)$/.test(lines[0] ?? '')) return false
   const rest = (lines[0] ?? '').replace(
     /(^|[;&|][^\S\n]*)env(?:[^\S\n]+[A-Za-z_]\w*=(?:'[^'\n]*'|"[^"\n]*"|[^\s'"])*)*[^\S\n]+/g,
     '$1',

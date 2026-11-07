@@ -229,6 +229,16 @@ describe('identical-call loop', () => {
     expect(outs[7]).toContain('"permissionDecision":"deny"')
   })
 
+  it('still counts a sleep with a dangling operator', async () => {
+    for (const command of ['sleep 5 &&', 'sleep 5 || ', 'sleep 5 && cat log &&']) {
+      const env = await setup()
+      const outs: string[] = []
+      for (let i = 0; i < 8; i++) outs.push(await call(env, 'Bash', { command }, { output: 'same' }))
+      expect(outs[3]).toContain('called 4 times in a row')
+      expect(outs[7]).toContain('"permissionDecision":"deny"')
+    }
+  })
+
   it('still counts a sleep followed by a command that does work', async () => {
     const env = await setup()
     const outs: string[] = []
