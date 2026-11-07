@@ -181,11 +181,16 @@ describe('identical-call loop', () => {
     expect(outs.every(o => o === '')).toBe(true)
   })
 
-  it('keeps the exemption for a check run under env with only assignments', async () => {
+  it('keeps the exemption for a check run under env that only sets or clears variables', async () => {
     const env = await setup()
     const outs: string[] = []
     for (let i = 0; i < 12; i++) outs.push(await call(env, 'Bash', { command: 'sleep 5 && env GH_HOST=x gh pr checks 1909' }, { fails: true, output: 'pending' }))
     expect(outs.every(o => o === '')).toBe(true)
+    for (const command of ['sleep 5 && env -i GH_TOKEN=x gh pr checks 1909', 'sleep 5 && env -u GH_HOST gh pr checks 1909']) {
+      const flagged: string[] = []
+      for (let i = 0; i < 12; i++) flagged.push(await call(env, 'Bash', { command }, { fails: true, output: 'pending' }))
+      expect(flagged.every(o => o === '')).toBe(true)
+    }
     const quoted: string[] = []
     for (let i = 0; i < 12; i++) quoted.push(await call(env, 'Bash', { command: `sleep 5 && env X='a b' Y="c d" gh pr checks 1909` }, { fails: true, output: 'pending' }))
     expect(quoted.every(o => o === '')).toBe(true)
