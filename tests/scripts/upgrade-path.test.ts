@@ -1,10 +1,10 @@
 import { describe, it, expect } from 'vitest'
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync, readdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 // @ts-expect-error plain ESM script helpers
-import { copilotOtelDbPath, assertInside, changedFiles, warmReparseProblems } from '../../scripts/upgrade-path/lib.mjs'
+import { copilotOtelDbPath, assertInside, changedFiles, treeStats, warmReparseProblems } from '../../scripts/upgrade-path/lib.mjs'
 
 describe('copilot fixture path', () => {
   const cases: [string, string, string][] = [
@@ -28,6 +28,9 @@ describe('copilot fixture path', () => {
     expect(() => assertInside('/tmp/h', '/tmp/other/x.db', 'linux')).toThrow(/outside corpus home/)
     expect(() => assertInside('/tmp/h', '/tmp/h/../x.db', 'linux')).toThrow()
     expect(() => assertInside('C:\\h', 'D:\\x.db', 'win32')).toThrow()
+  })
+  it('accepts a child whose name starts with two dots', () => {
+    expect(() => assertInside('/tmp/h', '/tmp/h/..cache/x.db', 'linux')).not.toThrow()
   })
 })
 
@@ -64,5 +67,33 @@ describe('warm run check', () => {
   it('fails on a worker line reporting pending work', () => {
     expect(warmReparseProblems(['codeburn: parse workers=3 (12 pending files)'], [])).toHaveLength(1)
     expect(warmReparseProblems(['codeburn: parse workers=0 (0 pending files)'], [])).toEqual([])
+    expect(warmReparseProblems(['codeburn: parse workers=3 (10 pending files)'], [])).toHaveLength(1)
+  })
+  it('treeStats catches a same-size rewrite', () => {
+    const d = mkdtempSync(join(tmpdir(), 'ts-'))
+    writeFileSync(join(d, 'f'), 'aaaa')
+    const before = treeStats(d)
+    writeFileSync(join(d, 'f'), 'bbbb')
+    expect(changedFiles(before, treeStats(d))).toEqual(['f'])
+    rmSync(d, { recursive: true, force: true })
+  })
+})
+
+describe('script wiring', () => {
+  it('gen-corpus writes the win32 fixture under the corpus home, not APPDATA', () => {
+    const d = mkdtempSync(join(tmpdir(), 'gc-'))
+    const home = join(d, 'home'); const appdata = join(d, 'real-appdata')
+    mkdirSync(appdata)
+    const code = `Object.defineProperty(process,'platform',{value:'win32'});process.argv[2]=${JSON.stringify(home)};await import(${JSON.stringify(join(process.cwd(), 'scripts/upgrade-path/gen-corpus.mjs'))})`
+    const r = spawnSync(process.execPath, ['--input-type=module', '-e', code], { encoding: 'utf8', env: { ...process.env, APPDATA: appdata } })
+    const fixture = join(home, 'AppData', 'Roaming', 'Code', 'User', 'globalStorage', 'github.copilot-chat', 'agent-traces.db')
+    const ok = r.status === 0 && existsSync(fixture) && readdirSync(appdata).length === 0
+    rmSync(d, { recursive: true, force: true })
+    expect(ok).toBe(true)
+  })
+  it('run.mjs uses the shared warm helpers', () => {
+    const src = readFileSync('scripts/upgrade-path/run.mjs', 'utf8')
+    expect(src).toMatch(/import \{[^}]*warmReparseProblems[^}]*\} from '\.\/lib\.mjs'/)
+    expect(src).toMatch(/warmReparseProblems\(pending, changedFiles\(beforeTree, treeStats\(upgradeCache\)\)\)/)
   })
 })

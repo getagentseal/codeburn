@@ -1,4 +1,5 @@
-import { readdirSync, statSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import path from 'node:path'
 
 export function copilotOtelDbPath(home, platform) {
@@ -12,7 +13,7 @@ export function copilotOtelDbPath(home, platform) {
 export function assertInside(home, target, platform) {
   const p = platform === 'win32' ? path.win32 : path.posix
   const rel = p.relative(home, target)
-  if (rel === '' || rel.startsWith('..') || p.isAbsolute(rel)) throw new Error(`refusing to touch ${target}: outside corpus home ${home}`)
+  if (rel === '' || rel === '..' || rel.startsWith('..' + p.sep) || p.isAbsolute(rel)) throw new Error(`refusing to touch ${target}: outside corpus home ${home}`)
 }
 
 export function treeStats(dir) {
@@ -21,7 +22,7 @@ export function treeStats(dir) {
     for (const e of readdirSync(d, { withFileTypes: true })) {
       const f = path.join(d, e.name)
       if (e.isDirectory()) walk(f)
-      else { const s = statSync(f); out[path.relative(dir, f)] = `${s.mtimeMs}:${s.size}` }
+      else out[path.relative(dir, f)] = createHash('sha1').update(readFileSync(f)).digest('hex')
     }
   }
   walk(dir)
@@ -34,6 +35,6 @@ export function changedFiles(before, after) {
 
 export function warmReparseProblems(workerLines, changed) {
   const problems = changed.map(f => `cache file changed on warm run: ${f}`)
-  for (const l of workerLines) if (!/0 pending files|no full parses pending/.test(l)) problems.push(`re-parse work reported: ${l.trim()}`)
+  for (const l of workerLines) if (!/\b0 pending files\b|no full parses pending/.test(l)) problems.push(`re-parse work reported: ${l.trim()}`)
   return problems
 }
