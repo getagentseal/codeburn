@@ -218,6 +218,14 @@ describe('identical-call loop', () => {
     }
   })
 
+  it('still counts a sleep without a numeric duration', async () => {
+    const env = await setup()
+    const outs: string[] = []
+    for (let i = 0; i < 8; i++) outs.push(await call(env, 'Bash', { command: 'sleep nope' }, { fails: true, output: 'sleep: invalid time interval' }))
+    expect(outs[3]).toContain('called 4 times in a row')
+    expect(outs[7]).toContain('"permissionDecision":"deny"')
+  })
+
   it('still counts a sleep followed by a command that does work', async () => {
     const env = await setup()
     const outs: string[] = []
