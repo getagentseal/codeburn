@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process'
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync, readdirSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 // @ts-expect-error plain ESM script helpers
 import { copilotOtelDbPath, assertInside, changedFiles, treeStats, warmReparseProblems } from '../../scripts/upgrade-path/lib.mjs'
 
@@ -126,12 +127,12 @@ describe('script wiring', () => {
     const d = mkdtempSync(join(tmpdir(), 'gc-'))
     const home = join(d, 'home'); const appdata = join(d, 'real-appdata')
     mkdirSync(appdata)
-    const code = `process.argv[2]=${JSON.stringify(home)};await import(${JSON.stringify(join(process.cwd(), 'scripts/upgrade-path/gen-corpus.mjs'))})`
+    const code = `process.argv[2]=${JSON.stringify(home)};await import(${JSON.stringify(pathToFileURL(join(process.cwd(), 'scripts/upgrade-path/gen-corpus.mjs')).href)})`
     const r = spawnSync(process.execPath, ['--input-type=module', '-e', code], { encoding: 'utf8', env: { ...process.env, APPDATA: appdata } })
     const fixture = copilotOtelDbPath(home, process.platform)
-    const ok = r.status === 0 && existsSync(fixture) && readdirSync(appdata).length === 0
+    const state = { status: r.status, stderr: r.stderr.slice(0, 500), fixture, fixtureExists: existsSync(fixture), appdata: readdirSync(appdata) }
     rmSync(d, { recursive: true, force: true })
-    expect(ok).toBe(true)
+    expect(state).toMatchObject({ status: 0, fixtureExists: true, appdata: [] })
   })
   it('run.mjs uses the shared warm helpers', () => {
     const src = readFileSync('scripts/upgrade-path/run.mjs', 'utf8')
