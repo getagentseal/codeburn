@@ -69,9 +69,11 @@ const SERVE_HEAP_PRESSURE_FRACTION = 0.7
 // reload of the memos, a few seconds against a scan of a minute.
 const SERVE_SCAN_START_FRACTION = 0.4
 
-/// Whether this served request runs the optimize transcript scan.
+/// Whether this served request runs the optimize transcript scan. Of the status
+/// formats only menubar-json does; json and terminal read durable totals.
 export function scansTranscripts(args: string[]): boolean {
-  return args[0] === 'optimize' || (args[0] === 'status' && !args.includes('--no-optimize'))
+  if (args[0] === 'optimize') return true
+  return args[0] === 'status' && readServeOption(args, '--format') === 'menubar-json' && !args.includes('--no-optimize')
 }
 
 export type ServeMemoryReading = { usedHeap: number; heapLimit: number; rss: number }

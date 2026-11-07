@@ -45,6 +45,10 @@ it('sheds on heap pressure while resident size is still under its ceiling', () =
   expect(scansTranscripts(['status', '--format', 'menubar-json', '--period', '30days'])).toBe(true)
   expect(scansTranscripts(['status', '--format', 'menubar-json', '--period', 'all', '--no-optimize'])).toBe(false)
   expect(scansTranscripts(['sessions', '--format', 'json', '--period', 'all'])).toBe(false)
+  // Plans and Settings poll this; it reads two durable totals, never the transcripts.
+  expect(scansTranscripts(['status', '--format', 'json', '--period', 'month'])).toBe(false)
+  expect(scansTranscripts(['status'])).toBe(false)
+  expect(scansTranscripts(['status', '--format=menubar-json'])).toBe(true)
 })
 
 describe('day-scoped invalidation', () => {
