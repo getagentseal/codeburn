@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Command } from 'commander'
 import { parseApiCall, parseJsonlLine } from '../src/parser.js'
-import { emptyCache, readCache, writeAllow, writeCache } from '../src/guard/usage.js'
+import { emptyCache, GUARD_CACHE_VERSION, readCache, writeAllow, writeCache } from '../src/guard/usage.js'
 import { runGuardHook } from '../src/guard/hooks.js'
 import { allowPath, sessionCachePath, writeGuardConfig, DEFAULT_GUARD_CONFIG, type GuardConfig } from '../src/guard/store.js'
 import { setHome } from './setup/home.js'
@@ -270,6 +270,13 @@ describe('failing-command retry', () => {
     await call(env, 'Bash', { command: 'npm test' }, { fails: true })
     await call(env, 'Read', { file_path: '/a' })
     expect(Object.values((await readCache(SID, env.base)).failedCommands).sort()).toEqual([1, 2])
+  })
+
+  it('drops a v4 cache, whose failure counts were cumulative, not consecutive', async () => {
+    expect(GUARD_CACHE_VERSION).toBe(5)
+    const { base } = await setup()
+    await writeCache({ ...emptyCache(SID), version: 4, failedCommands: { '0123456789abcdef': 5 } }, base)
+    expect((await readCache(SID, base)).failedCommands).toEqual({})
   })
 
   it('only counts shell tools', async () => {

@@ -63,7 +63,9 @@ export type GuardCache = {
 // per-message cost without it, so they must cold-reparse.
 // v4: loop and retry state (recentCalls, shellPending, failedCommands); v3
 // caches never folded tool calls, so they must cold-reparse.
-export const GUARD_CACHE_VERSION = 4
+// v5: failedCommands counts consecutive failures, not every failure in the
+// session; a live v4 count would deny a command that failed long ago.
+export const GUARD_CACHE_VERSION = 5
 
 export const RECENT_CALLS = 16
 
