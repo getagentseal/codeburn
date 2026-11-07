@@ -30,6 +30,7 @@ import {
   type CachedCall,
   type CachedFile,
   type CachedTurn,
+  type CachedUsage,
   type FileFingerprint,
   type ProviderSection,
   type SessionCache,
@@ -4100,10 +4101,15 @@ export async function parseProviderSources(
             // A sliding mirror drops a request's oldest entries before the
             // request itself. A call stamps its first entry, so a fresh call
             // that starts later than the cached one lost its head to the
-            // window: the cached call is the whole request. One that starts at
-            // the same entry is a re-read of the whole request and replaces it.
-            const replace = (cached: CachedCall, fresh: CachedCall): CachedCall =>
-              source.durable && Date.parse(fresh.timestamp) > Date.parse(cached.timestamp) ? cached : fresh
+            // window: the cached call stays, taking the larger count of each
+            // token class so a tail that grew adds its growth. One that starts
+            // at the same entry is a re-read of the whole request and replaces it.
+            const replace = (cached: CachedCall, fresh: CachedCall): CachedCall => {
+              if (!source.durable || Date.parse(fresh.timestamp) <= Date.parse(cached.timestamp)) return fresh
+              const usage = { ...cached.usage }
+              for (const k of Object.keys(usage) as Array<keyof CachedUsage>) usage[k] = Math.max(usage[k], fresh.usage[k])
+              return { ...cached, usage }
+            }
             if (freshByKey.size > 0) {
               existingEntry.turns = existingEntry.turns.map(t => {
                 const calls = t.calls.map(c => { const fresh = freshByKey.get(c.deduplicationKey); return fresh ? replace(c, fresh) : c })

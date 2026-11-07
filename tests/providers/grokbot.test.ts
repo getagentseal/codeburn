@@ -333,7 +333,7 @@ describe('grokbot sliding mirror', () => {
       expect(await served()).toEqual(whole)
 
       await writeTranscript(BOT_A, [r1[2]!, botMessage('b1c', 'r1', 'g'.repeat(10000), T0 + day + 120_000), ...r2])
-      expect(await served()).toEqual(whole)
+      expect(await served()).toEqual([[new Date(T0).toISOString(), 2000, 2600]])
     } finally {
       if (originalCacheDir === undefined) delete process.env['CODEBURN_CACHE_DIR']
       else process.env['CODEBURN_CACHE_DIR'] = originalCacheDir
