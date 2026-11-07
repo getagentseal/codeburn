@@ -122,7 +122,8 @@ for (const name of providers) {
       diffs.push(`cost ${fmt(b.cost)} != ${fmt(u.cost)} (${(costDrift * 100).toFixed(3)}% > ${(COST_TOLERANCE * 100).toFixed(1)}%)`)
     }
     if (!EXACT.includes(name)) {
-      notes.push(`${name}: no expectation declared in compare.mjs; ${diffs.length ? diffs.join(', ') : 'identical'}`)
+      if (diffs.length) failures.push(`${name}: no expectation declared in compare.mjs; ${diffs.join(', ')}`)
+      else notes.push(`${name}: no expectation declared in compare.mjs; identical`)
       verdict = diffs.length ? 'differs (unclassified)' : 'identical'
     } else if (diffs.length) {
       failures.push(`${name}: ${diffs.join(', ')}`)
