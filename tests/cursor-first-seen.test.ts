@@ -108,8 +108,8 @@ describe('cursor first-seen sidecar', () => {
     })
   })
 
-  it('retires v7 results, which billed old agent streams at the database mtime', () => {
-    expect(CURSOR_CACHE_VERSION).toBe(8)
-    expect(cursorCacheFileName()).toBe('cursor-results.v8.json')
+  it('retires v8 results, which were stored with agent-stream ids left past the lookup cap', () => {
+    expect(CURSOR_CACHE_VERSION).toBe(9)
+    expect(cursorCacheFileName()).toBe('cursor-results.v9.json')
   })
 })

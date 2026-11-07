@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mkdtemp, rm } from 'fs/promises'
 import { tmpdir } from 'os'
-import { join } from 'path'
+import { join, resolve } from 'path'
 import { mkdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'fs'
 import { createRequire } from 'node:module'
 
@@ -11,7 +11,7 @@ import {
 } from '../../src/providers/cursor.js'
 import { isSqliteAvailable } from '../../src/sqlite.js'
 import { getCodeburnCacheDir } from '../../src/cache-dir.js'
-import { cursorCacheFileName } from '../../src/cursor-cache.js'
+import { cursorCacheFileName, writeFirstSeen } from '../../src/cursor-cache.js'
 import type { ParsedProviderCall } from '../../src/providers/types.js'
 
 const requireForTest = createRequire(import.meta.url)
@@ -530,6 +530,27 @@ describe.skipIf(skipReason !== null)('cursor real context tokens (#575)', () => 
     expect(second.length).toBe(9000)
     expect(second.some(c => c.deduplicationKey === 'cursor:agentKv:req-over')).toBe(false)
     expect(second.map(c => c.timestamp)).toEqual(first.map(c => c.timestamp))
+  })
+
+  it('re-parses an unchanged DB once when it holds results an older build stored with ids past the cap', async () => {
+    const dbPath = buildDb((db) => {
+      insertAgentKvStreams(db, 'req-legacy', 9000)
+      insertAgentKv(db, { blobId: 'akv-legacy-late', role: 'user', content: 'a real agent-only request', requestId: 'req-zz-legacy' })
+    })
+    const fp = statSync(dbPath)
+    writeFileSync(join(getCodeburnCacheDir(), cursorCacheFileName(8)), JSON.stringify({
+      version: 8, dbPath: resolve(dbPath), dbMtimeMs: fp.mtimeMs, dbSizeBytes: fp.size, lookbackFloor: '1970-01-01T00:00:00.000Z', calls: [],
+    }))
+
+    const stamp = new Date(fp.mtimeMs).toISOString()
+    await writeFirstSeen(new Map(Array.from({ length: 9000 }, (_, i) => [`req-legacy-${i}`, stamp])))
+
+    const reparsed = await collectCalls(createCursorProvider(dbPath), dbPath)
+    expect(requestIdLookups().map(q => q.params)).toEqual([['req-zz-legacy']])
+    expect(reparsed.length).toBe(9001)
+    sqlLog.length = 0
+    expect((await collectCalls(createCursorProvider(dbPath), dbPath)).length).toBe(9001)
+    expect(sqlLog).toEqual([])
   })
 
   it('bills an agent-only stream past the lookup cap on the next parse of an unchanged DB', async () => {
