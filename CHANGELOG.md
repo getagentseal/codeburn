@@ -71,15 +71,14 @@
 - **Copilot enterprise hosts route correctly,** and the Windows path is found.
 - **The macOS Keychain asks once per action.** Reads in the desktop app happen only on an explicit click, the prompt stops at Deny, and unrelated settings changes no longer ask again.
 - **ZCode token windows use the exact boundary,** and an expired Gemini login is reported once instead of on every refresh.
-- **Cline family tools keep their recorded costs,** Antigravity RPC output is counted, and Warp attributes usage to the right day. Zed, Quick Desktop, Grok Bot and Vercel wait out a busy store instead of showing partial data.
+- **Cline family tools keep their recorded costs,** Antigravity RPC output is counted, and Warp attributes usage to the right day. Zed waits out a busy store instead of showing partial data, and Vercel retries transient errors instead of clearing cached spend.
 - **Grok Bot keeps requests that slid out of its window** through resets and partial slides. Hermes rebuilds keep observation days, Quick Desktop drops estimates once usage is metered, and Warp running exchanges and plan changes are handled.
 - **The guard no longer blocks normal test loops or polling,** and the agent cannot lift the stop itself. A loop stop stays in place after a deny, failing polls may wait, and env and multi-line waits are counted.
 - **Ultrafast calls survive cache upgrades,** rows are restored on a busy read, and a stale status snapshot is never replayed.
 - **Day totals fill missing sealed days for every provider,** model aliases are part of the daily-cache hash, and the weekly budget covers seven days.
-- **Sealed days re-derive once for the provider fixes.**
 - **Placeholder calls count only their estimated output as estimated spend.**
 - **A tool or model named `constructor` or `toString` no longer crashes the parse.** A config file with a syntax error is no longer wiped, and plugin names are checked before removal.
-- **Optimize and the server count a last line read before its newline once.**
+- **Optimize counts a transcript line read before its newline once.**
 - **Currency labels follow the selected currency** in the macOS menu bar, and the GNOME budget alert no longer applies the exchange rate twice.
 - **Codex native tool events are attributed to their tools.**
 
