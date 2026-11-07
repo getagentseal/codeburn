@@ -756,6 +756,31 @@ describe('Settings', () => {
     await waitFor(() => expect(mocks.getQuota).toHaveBeenCalledWith(true, []))
   })
 
+  it('keeps provider toggles, plan changes and refreshToken bumps off the keychain', async () => {
+    const user = userEvent.setup()
+    const onConfigMutated = vi.fn()
+    const { rerender } = render(<Settings period="month" refreshToken={0} onConfigMutated={onConfigMutated} />)
+    await user.click(screen.getByRole('button', { name: 'Plans' }))
+    await screen.findByText('Detected subscriptions')
+    mocks.getQuota.mockClear()
+    await user.click(screen.getByRole('switch', { name: 'Codex live quota' }))
+    await waitFor(() => expect(mocks.getQuota).toHaveBeenCalledWith(false, ['codex']))
+    await user.click(screen.getByRole('switch', { name: 'Codex live quota' }))
+    await waitFor(() => expect(mocks.getQuota).toHaveBeenCalledWith(false, []))
+    await user.click(screen.getByLabelText('Add a plan'))
+    await user.click(screen.getByRole('option', { name: 'Cursor Pro' }))
+    await user.click(screen.getByRole('button', { name: 'Add' }))
+    await waitFor(() => expect(onConfigMutated).toHaveBeenCalled())
+    // App answers every config mutation, project pick and ⌘R with a refreshToken bump.
+    const calls = mocks.getQuota.mock.calls.length
+    rerender(<Settings period="month" refreshToken={1} onConfigMutated={onConfigMutated} />)
+    await waitFor(() => expect(mocks.getQuota.mock.calls.length).toBeGreaterThan(calls))
+    for (const call of mocks.getQuota.mock.calls) expect(call[0]).toBe(false)
+    mocks.getQuota.mockClear()
+    rerender(<Settings period="month" refreshToken={2} userRefreshToken={1} onConfigMutated={onConfigMutated} />) // ⌘R
+    await waitFor(() => expect(mocks.getQuota).toHaveBeenCalledWith(true, []))
+  })
+
   it('offers to read an unchecked Claude login, with the same keychain note the card shows', async () => {
     mocks.getQuota.mockResolvedValue([
       { provider: 'claude', connection: 'keychainUnchecked', primary: null, details: [], planLabel: null, footerLines: [] },
