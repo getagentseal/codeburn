@@ -93,6 +93,19 @@ describe('optimize scan facts', () => {
     expect(row.offset).toBe((await stat(file)).size)
   })
 
+  it('a last line read before its newline is counted once when the file grows', async () => {
+    const file = join(dir, 'live.jsonl')
+    // Longer than the head digest, so the grown file resumes from the stored offset.
+    const all = [JSON.stringify({ type: 'system', content: 'x'.repeat(5000) }), ...lines()]
+    await writeFile(file, all.slice(0, 4).join('\n'))
+    await stored(file)
+    await new Promise(resolve => setTimeout(resolve, 20))
+    await appendFile(file, '\n' + all[5] + '\n')
+    const [whole] = await stored(file)
+    expect(whole!.calls).toHaveLength(2)
+    expect(await stored(file)).toEqual(await fresh(file))
+  })
+
   it('a rewritten transcript is scanned again in full', async () => {
     const file = join(dir, 's.jsonl')
     await writeFile(file, lines().join('\n') + '\n')

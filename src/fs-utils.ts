@@ -123,7 +123,9 @@ type ReadSessionLinesOptions = {
   largeLineAsBuffer?: boolean
   largeLineThresholdBytes?: number
   startByteOffset?: number
-  byteOffsetTracker?: { lastCompleteLineOffset: number }
+  // unterminatedLineEnd is set to the end of a last line that has no newline
+  // yet, just before it is yielded.
+  byteOffsetTracker?: { lastCompleteLineOffset: number; unterminatedLineEnd?: number }
   maxBytes?: number
 }
 
@@ -248,6 +250,7 @@ export async function* readSessionLines(
     }
 
     if (!skipping && len > 0) {
+      if (tracker) tracker.unterminatedLineEnd = chunkBase
       const buf = parts.length === 1 ? parts[0]! : Buffer.concat(parts, len)
       const lineLen = len
       if (shouldSkipHead) {

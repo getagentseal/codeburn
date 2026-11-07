@@ -622,7 +622,7 @@ describe('scanJsonlFile', () => {
     // complete line; what this test guards is that the file is streamed.
     expect(readSessionLinesSpy).toHaveBeenCalledWith(filePath, undefined, {
       largeLineAsBuffer: true,
-      byteOffsetTracker: { lastCompleteLineOffset: expect.any(Number) },
+      byteOffsetTracker: expect.objectContaining({ lastCompleteLineOffset: expect.any(Number) }),
     })
     expect(readSessionFileSpy).not.toHaveBeenCalled()
     readSessionLinesSpy.mockRestore()
