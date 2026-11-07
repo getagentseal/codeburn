@@ -84,11 +84,15 @@ const WORD = `'[^'\\n]*'|"(?:[^"\\n$\`]|${VAR_REF})*"|(?:[^\\s;|&<>()\`$'"]|${VA
 const ASSIGN = `[A-Za-z_]\\w*=(?:${WORD})?`
 const ASSIGN_AT = new RegExp(`^${ASSIGN}(?=\\s|$)`)
 // The shared read list leaves gh out (it has mutating subcommands); these only inspect.
-const GH_READ = new RegExp(`^(?:${ASSIGN}[^\\S\\n]+)*gh\\s+[\\w-]+\\s+(?:view|list|checks|status|diff|watch)\\b(?:[^;&|\\n]|(?<=>)&|&(?=>))*$`)
+const GH_READ = new RegExp(`^(?:${ASSIGN}[^\\S\\n]+)*gh\\s+[\\w-]+\\s+(?:view|list|checks|status|diff|watch)\\b(?:'[^']*'|"[^"]*"|[^;&|\\n'"]|(?<=>)&|&(?=>))*$`)
 const ENV_PREFIX = new RegExp(`(^|[;&|][^\\S\\n]*)env(?:[^\\S\\n]+(?:-i|--ignore-environment|-u[^\\S\\n]*[A-Za-z_]\\w*|--unset=[A-Za-z_]\\w*|-C[^\\S\\n]*(?:${WORD})|--chdir=(?:${WORD})|-|${ASSIGN}))*[^\\S\\n]+`, 'g')
 // A bare echo after a sleep is a blind timer wait: no redirection, chaining or substitution.
 // Output may go to /dev/null or another stream (2>&1); any other target is a write.
 const WRITE_REDIRECT = /(?<![\d>&])(?:&|\d+)?>>?(?!>)(?![^\S\n]*(?:\/dev\/null|&(?:\d+|-))(?![^\s;&|]))/
+// Pieces of a command split on any of `seps`, never inside a quoted string.
+function splitOutsideQuotes(command: string, seps: string): string[] {
+  return command.match(new RegExp(`(?:'[^']*'|"[^"]*"|[^${seps}'"])+`, 'g')) ?? []
+}
 const BARE_ECHO = /^echo(?:[^\S\n]+(?:[^;&|<>`$\n]|\$(?!\())*)?$/
 
 // `sleep 30 && gh run view 1` waits on something; it is not a loop or a retry as long as
@@ -105,13 +109,13 @@ function isWaitingCheck(command: string): boolean {
   // that only sets or clears variables or changes directory (-i, -u, -C) is
   // dropped and what it runs is checked; any other env (other flags, or bare)
   // is not a check.
-  const lines = (m[2] ?? '').split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#'))
+  const lines = splitOutsideQuotes(m[2] ?? '', '\n').map(l => l.trim()).filter(l => l && !l.startsWith('#'))
   if (lines.length > 1) return false
   const first = lines[0] ?? ''
   // `sleep 5 &&` or a check ending in && or | is unfinished, not a check.
   if ((m[1] && m[1] !== ';' && !first) || /^(?:&&|\|\|?|;)|(?:&&|\|\|?)$/.test(first)) return false
   // Command and process substitution run work wherever they sit.
-  if (/\$\(|`|[<>]\(/.test(first) || WRITE_REDIRECT.test(first.replace(/'[^'\n]*'|"[^"\n]*"/g, "''"))) return false
+  if (/\$\(|`|[<>]\(/.test(first) || WRITE_REDIRECT.test(first.replace(/'[^']*'|"[^"]*"/g, "''"))) return false
   const rest = first.replace(ENV_PREFIX, '$1')
   if (/(?:^|[\s;&|])env(?=\s|$)/.test(rest) || hasLooseAssignment(rest)) return false
   return !rest || isReadShapedBashCommand(rest) || GH_READ.test(rest) || BARE_ECHO.test(rest)
@@ -120,7 +124,7 @@ function isWaitingCheck(command: string): boolean {
 // The shared read list skips any NAME=... token before a command, so each
 // leading assignment of every segment must pass the strict shape.
 function hasLooseAssignment(command: string): boolean {
-  for (const segment of command.match(/(?:'[^'\n]*'|"[^"\n]*"|[^;&|'"])+/g) ?? []) {
+  for (const segment of splitOutsideQuotes(command, ';&|')) {
     let s = segment.trim()
     while (/^[A-Za-z_]\w*=/.test(s)) {
       const m = ASSIGN_AT.exec(s)

@@ -209,6 +209,15 @@ describe('identical-call loop', () => {
     expect(outs.every(o => o === '')).toBe(true)
   })
 
+  it('keeps the exemption for a quoted argument that spans lines or holds a pipe', async () => {
+    const env = await setup()
+    const outs: string[] = []
+    for (const command of ["sleep 5 && gh pr checks 1909 --jq '.[]\n| .name'", "sleep 5 && gh pr checks 1909 --jq '.[] | .name'"]) {
+      for (let i = 0; i < 12; i++) outs.push(await call(env, 'Bash', { command }, { fails: true, output: 'pending' }))
+    }
+    expect(outs.every(o => o === '')).toBe(true)
+  })
+
   it('keeps the exemption when only comments or blank lines follow the check', async () => {
     const env = await setup()
     const outs: string[] = []
