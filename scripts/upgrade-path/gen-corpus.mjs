@@ -13,7 +13,7 @@
 // every comparison this corpus feeds happens inside a single run.
 
 import { mkdirSync, writeFileSync, rmSync, existsSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, resolve, sep } from 'node:path'
 import { createRequire } from 'node:module'
 
 const require_ = createRequire(import.meta.url)
@@ -378,8 +378,7 @@ function copilotOtelDbPath() {
     return join(HOME, 'Library', 'Application Support', 'Code', 'User', 'globalStorage', 'github.copilot-chat', 'agent-traces.db')
   }
   if (process.platform === 'win32') {
-    const appdata = process.env['APPDATA'] ?? join(HOME, 'AppData', 'Roaming')
-    return join(appdata, 'Code', 'User', 'globalStorage', 'github.copilot-chat', 'agent-traces.db')
+    return join(HOME, 'AppData', 'Roaming', 'Code', 'User', 'globalStorage', 'github.copilot-chat', 'agent-traces.db')
   }
   return join(HOME, '.config', 'Code', 'User', 'globalStorage', 'github.copilot-chat', 'agent-traces.db')
 }
@@ -387,6 +386,7 @@ function copilotOtelDbPath() {
 function genCopilot() {
   const { DatabaseSync } = require_('node:sqlite')
   const dbPath = copilotOtelDbPath()
+  if (!resolve(dbPath).startsWith(resolve(HOME) + sep)) throw new Error(`refusing to touch ${dbPath}: outside corpus home ${HOME}`)
   mkdirSync(join(dbPath, '..'), { recursive: true })
   for (const suffix of ['', '-wal', '-shm']) rmSync(dbPath + suffix, { force: true })
 
