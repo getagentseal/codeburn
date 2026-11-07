@@ -530,10 +530,40 @@ type AgentStream = {
   contextChars: number
   assistantChars: number
   model: string | null
+  promptAt: number | null
 }
 
 function newAgentStream(): AgentStream {
-  return { tools: [], bash: [], userChars: 0, contextChars: 0, assistantChars: 0, model: null }
+  return { tools: [], bash: [], userChars: 0, contextChars: 0, assistantChars: 0, model: null, promptAt: null }
+}
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+// Cursor opens a text block of each user turn with the send time, e.g.
+// <timestamp>Friday, Feb 13, 2026, 9:41 PM (UTC-8)</timestamp>.
+const PROMPT_TIME = /^\s*<timestamp>\w+, (\w{3}) (\d{1,2}), (\d{4}), (\d{1,2}):(\d{2}) (AM|PM)( \(UTC(?:([+-]\d{1,2})(?::(\d{2}))?)?\))?<\/timestamp>/
+
+function promptTime(raw: string): number | null {
+  let blocks: unknown[]
+  try {
+    const parsed = JSON.parse(raw) as unknown
+    blocks = Array.isArray(parsed) ? parsed : [parsed]
+  } catch {
+    blocks = [raw]
+  }
+  for (const block of blocks) {
+    const text = typeof block === 'string' ? block : (block as { text?: unknown } | null)?.text
+    if (typeof text !== 'string') continue
+    const m = PROMPT_TIME.exec(text)
+    const month = m ? MONTHS.indexOf(m[1]!) : -1
+    if (!m || month < 0) continue
+    const hour = Number(m[4]) % 12 + (m[6] === 'PM' ? 12 : 0)
+    // No zone in the tag: the prompt was written in this machine's zone.
+    if (!m[7]) return new Date(Number(m[3]), month, Number(m[2]), hour, Number(m[5])).getTime()
+    const offsetHours = Number(m[8] ?? 0)
+    const offsetMinutes = offsetHours * 60 + Math.sign(offsetHours || 1) * Number(m[9] ?? 0)
+    return Date.UTC(Number(m[3]), month, Number(m[2]), hour, Number(m[5])) - offsetMinutes * 60_000
+  }
+  return null
 }
 
 // agentKv rows store content as a plain string or a block array; count only
@@ -602,15 +632,18 @@ function loadAgentStreams(
   let currentRequestId: string | null = null
   let pendingUserChars = 0
   let pendingContextChars = 0
+  let pendingPromptAt: number | null = null
   for (const row of rows) {
     if (row.request_id) {
       currentRequestId = row.request_id
-      if (pendingUserChars > 0 || pendingContextChars > 0) {
+      if (pendingUserChars > 0 || pendingContextChars > 0 || pendingPromptAt !== null) {
         const bucket = bucketFor(currentRequestId)
         bucket.userChars += pendingUserChars
         bucket.contextChars += pendingContextChars
+        bucket.promptAt ??= pendingPromptAt
         pendingUserChars = 0
         pendingContextChars = 0
+        pendingPromptAt = null
       }
     }
     if (row.model && currentRequestId) {
@@ -625,9 +658,17 @@ function loadAgentStreams(
       continue
     }
     if (row.role === 'user') {
-      const len = contentTextLength(blobToText(row.content))
-      if (currentRequestId) bucketFor(currentRequestId).userChars += len
-      else pendingUserChars += len
+      const text = blobToText(row.content)
+      const len = contentTextLength(text)
+      const at = promptTime(text)
+      if (currentRequestId) {
+        const bucket = bucketFor(currentRequestId)
+        bucket.userChars += len
+        bucket.promptAt ??= at
+      } else {
+        pendingUserChars += len
+        pendingPromptAt ??= at
+      }
       continue
     }
     if (row.role === 'tool') {
@@ -948,12 +989,18 @@ function parseBubbles(
   for (const [requestId, at] of bubbleTimes) {
     if (at) firstSeen.set(BUBBLE_TIME_KEY + requestId, at)
   }
+  // A request with no bubble is dated from its own prompt when the stream
+  // recorded one; only undated requests fall back to the first-seen stamp.
+  const streamDate = (stream: AgentStream): string | null =>
+    stream.promptAt !== null && Number.isFinite(stream.promptAt) ? new Date(stream.promptAt).toISOString() : null
   for (const [requestId, stream] of billable) {
     // Request ids are UUIDs, so a historic bubble sharing one with a billable
     // agent-only stream is not expected.
     const bubbleTime = firstSeen.get(BUBBLE_TIME_KEY + requestId)
     if (bubbleTime && bubbleTime <= timeFloor) continue
     if (!bubbleTime && !firstSeen.has(requestId) && !lookedUp.has(requestId)) continue
+    const datedAt = bubbleTime ? null : streamDate(stream)
+    if (datedAt && datedAt <= timeFloor) continue
     const inputTokens = estimateTokensFromChars(stream.userChars + stream.contextChars)
     const outputTokens = estimateTokensFromChars(stream.assistantChars)
     if (inputTokens === 0 && outputTokens === 0) continue
@@ -961,7 +1008,7 @@ function parseBubbles(
     const dedupKey = `cursor:agentKv:${requestId}`
     if (seenKeys.has(dedupKey)) continue
     seenKeys.add(dedupKey)
-    if (!bubbleTime && !firstSeen.has(requestId)) firstSeen.set(requestId, agentKvTimestamp)
+    if (!bubbleTime && !datedAt && !firstSeen.has(requestId)) firstSeen.set(requestId, agentKvTimestamp)
 
     emit({
       model: modelForDisplay(stream.model),
@@ -970,7 +1017,7 @@ function parseBubbles(
       costUSD: calculateCost(resolveModel(stream.model), inputTokens, outputTokens, 0, 0, 0),
       tools: stream.tools,
       bashCommands: stream.bash,
-      timestamp: bubbleTime ?? firstSeen.get(requestId)!,
+      timestamp: bubbleTime ?? datedAt ?? firstSeen.get(requestId)!,
       deduplicationKey: dedupKey,
       userMessage: '',
       sessionId: requestId,

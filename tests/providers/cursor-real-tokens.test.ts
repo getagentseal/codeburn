@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mkdtemp, rm } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { mkdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'fs'
 import { createRequire } from 'node:module'
 
 import {
@@ -11,7 +11,7 @@ import {
 } from '../../src/providers/cursor.js'
 import { isSqliteAvailable } from '../../src/sqlite.js'
 import { getCodeburnCacheDir } from '../../src/cache-dir.js'
-import { cursorCacheFileName } from '../../src/cursor-cache.js'
+import { cursorCacheFileName, writeFirstSeen } from '../../src/cursor-cache.js'
 import type { ParsedProviderCall } from '../../src/providers/types.js'
 
 const requireForTest = createRequire(import.meta.url)
@@ -152,6 +152,20 @@ function insertAgentKvStreams(db: {
   }
   db.exec('COMMIT')
 }
+
+// Cursor's prompt timestamp tag for the minute `ms` falls in, written at UTC`offsetHours`.
+function promptTag(ms: number, offsetHours: number | null): string {
+  const d = new Date(ms + (offsetHours ?? 0) * 3_600_000)
+  const pick = offsetHours === null
+    ? { wd: new Date(ms).getDay(), mo: new Date(ms).getMonth(), day: new Date(ms).getDate(), y: new Date(ms).getFullYear(), h: new Date(ms).getHours(), mi: new Date(ms).getMinutes() }
+    : { wd: d.getUTCDay(), mo: d.getUTCMonth(), day: d.getUTCDate(), y: d.getUTCFullYear(), h: d.getUTCHours(), mi: d.getUTCMinutes() }
+  const wd = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][pick.wd]
+  const mo = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][pick.mo]
+  const zone = offsetHours === null ? '' : ` (UTC${offsetHours >= 0 ? '+' : ''}${offsetHours})`
+  return `<timestamp>${wd}, ${mo} ${pick.day}, ${pick.y}, ${pick.h % 12 || 12}:${String(pick.mi).padStart(2, '0')} ${pick.h < 12 ? 'AM' : 'PM'}${zone}</timestamp>`
+}
+
+const minuteAgo = (days: number): number => Math.floor((Date.now() - days * 864e5) / 60_000) * 60_000
 
 async function collectCalls(provider: ReturnType<typeof createCursorProvider>, dbPath: string): Promise<ParsedProviderCall[]> {
   const source = { path: dbPath, project: 'test', provider: 'cursor' as const }
@@ -519,6 +533,44 @@ describe.skipIf(skipReason !== null)('cursor real context tokens (#575)', () => 
     const calls = await collectCalls(createCursorProvider(dbPath), dbPath)
 
     expect(calls.map(c => c.deduplicationKey.split(':').pop()).sort()).toEqual(['b1', 'b2'])
+  })
+
+  it('dates an agent-only stream from its prompt timestamp tag, with or without a zone', async () => {
+    const at = minuteAgo(30)
+    const dbPath = buildDb((db) => {
+      insertAgentKv(db, { blobId: 'akv-1', role: 'user', content: [{ type: 'text', text: promptTag(at, -7) }, { type: 'text', text: 'run the export' }], requestId: 'req-tagged' })
+      insertAgentKv(db, { blobId: 'akv-2', role: 'user', content: [{ type: 'text', text: promptTag(at, null) }, { type: 'text', text: 'run it locally' }], requestId: 'req-local' })
+    })
+
+    const calls = await collectCalls(createCursorProvider(dbPath), dbPath)
+
+    const stamp = (id: string) => calls.find(c => c.deduplicationKey === `cursor:agentKv:${id}`)?.timestamp
+    expect(stamp('req-tagged')).toBe(new Date(at).toISOString())
+    expect(stamp('req-local')).toBe(new Date(at).toISOString())
+  })
+
+  it('drops an agent-only stream whose prompt timestamp predates the lookback', async () => {
+    const dbPath = buildDb((db) => {
+      insertAgentKv(db, { blobId: 'akv-1', role: 'user', content: [{ type: 'text', text: promptTag(minuteAgo(240), -8) }, { type: 'text', text: 'old export' }], requestId: 'req-feb' })
+    })
+
+    const calls = await collectCalls(createCursorProvider(dbPath), dbPath)
+
+    expect(calls).toEqual([])
+    const sidecar = join(getCodeburnCacheDir(), 'cursor-first-seen.json')
+    expect(existsSync(sidecar) ? JSON.parse(readFileSync(sidecar, 'utf-8'))['req-feb'] : undefined).toBeUndefined()
+  })
+
+  it('prefers the prompt timestamp over a recorded first-seen stamp', async () => {
+    const at = minuteAgo(20)
+    await writeFirstSeen(new Map([['req-restamped', new Date(minuteAgo(1)).toISOString()]]))
+    const dbPath = buildDb((db) => {
+      insertAgentKv(db, { blobId: 'akv-1', role: 'user', content: [{ type: 'text', text: promptTag(at, 2) }, { type: 'text', text: 'run the export' }], requestId: 'req-restamped' })
+    })
+
+    const calls = await collectCalls(createCursorProvider(dbPath), dbPath)
+
+    expect(calls.find(c => c.deduplicationKey === 'cursor:agentKv:req-restamped')?.timestamp).toBe(new Date(at).toISOString())
   })
 
   it('does not bill the stream of a conversation older than the lookback as a new session', async () => {
