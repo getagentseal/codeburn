@@ -4657,7 +4657,9 @@ export async function parseProviderSources(
   // changing, and the metered call outlives its metrics file in the cache.
   // Not scoped to a day: the estimate is one call for the whole session, keyed
   // by the sessions table id that metrics rows link to, and a session's metered
-  // calls can fall on later days. The parse-time suppression matches by id alone too.
+  // calls can fall on later days. Not scoped to a store either: a migrated
+  // legacy store and its profile store hold one session under one id, which is
+  // why the parse-time suppression also matches by id alone across stores.
   const quickdeskMetered = providerName === 'quickdesk'
     ? new Set(Object.values(section.files).flatMap(f => f.turns
       .filter(t => t.calls.some(c => c.deduplicationKey.startsWith('quickdesk:')))
