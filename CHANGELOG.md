@@ -12,11 +12,25 @@
 - **CodeBurn as a Claude Code plugin.** `/plugin install codeburn --marketplace getagentseal/codeburn` adds the MCP server (`get_usage`, `get_savings`) and a `/codeburn:cost` skill that summarizes today's spend. The plugin pins the CodeBurn version it runs and links the privacy page, which the README now links too. The server is also listed in the official MCP Registry as `io.github.getagentseal/codeburn`.
 - **`codeburn web` works behind an authenticating reverse proxy.** `--host` sets the listen address and `--allowed-host` (repeatable) admits exact hostnames in the `Host` and `Origin` headers. Without the flags nothing changes, and any other host still gets a 403. The dashboard has no login of its own, so keep the port reachable only from the proxy.
 
+- **The desktop session view has three screens.** Inspect shows a prompt as request cards with an insights strip, Agents shows each subagent's lifecycle and cost, and Story tells a prompt in plain sentences. (#1877, #1878, #1879)
+- **Claude usage is split by the account that was active.** A machine that switches between a personal and a team organization stops reading as one blended total, and the macOS menu bar shows one row per account once two have been seen. (#1875, #1876)
+- **Contracted-rate discounts, opt-in.** A `discounts` section in the price config takes a percentage off list price by tool, model or token kind. It applies only to costs calculated from tokens, never to what a tool billed. (#1872)
+- **Sessions kept after their transcript was removed are marked.** The sessions list, the export and the per-PR report say so. (#1868)
+- **New Optimize finding `idle-compaction-blocked`** for an `autoCompactWindow` that stops Claude Code's idle compaction from ever running. (#1870)
+- **The Windows tray forecasts when a quota window runs out** and alerts before it does, like the menu bar. (#1880)
+- **Optimize shows each fix's saving once** and no longer archives slash commands you use. (#1898)
+
 ### Changed
 - Telemetry is on by default in every region, including the EU, EEA, UK and Switzerland, where it was off by default: the Windows tray asks once with Accept and Decline, and the desktop app and the macOS menu bar start with it on. Settings turns it off at any time, a choice already made is kept, and the [README lists what is sent](README.md#telemetry).
 - **CodeBurn needs Node.js 22.15 or newer.** Older Node has no Zstandard support, which Codex history now needs. On Node 22.14 or older the CLI exits with `codeburn requires Node.js >= 22.15.0` and the current version, and the VS Code extension reports its runtime as too old.
 - **The JSON export has fixed keys.** `codeburn export --format json` used the CSV column headers as JSON keys, so a program had to read `API Calls` and a `Cost (USD)` key that changed with the currency setting. The document is now `codeburn.export.v3` with camelCase keys (`apiCalls`, `cost`, `inputTokens`, and so on) and the currency stated once at the top. The CSV files keep their headers. Scripts reading the v2 JSON need their key names renamed once.
 - Dependencies and security: the zip crate (critical advisory) and Tauri 2.12 in the Windows tray, minimatch 11 and msal-node 7 in the VS Code extension, hono 4.13.13 (GHSA-5r4p-p66f-jhc7), @hono/node-server 2.1.6, zod 4, follow-redirects 1.16.2 in the desktop app, and vitest 5 (GHSA-qxg6-89mg-rqv8). Release signing jobs now wait for an approval in a release environment, and every CI action is pinned to a commit.
+- **The first refresh after the update takes longer, once.** Settled days re-derive for the provider fixes below, and the Optimize, Compare and cache stores rebuild once.
+- **Compare and Optimize read history once per transcript.** Each transcript keeps its own facts, so a period view stops re-reading everything, Compare scans self-corrections only inside the compared period, and the app no longer prefetches both pages. (#1885, #1886, #1890, #1891)
+- **The punchcard request no longer runs the Optimize scan,** and the desktop decodes CLI output as UTF-8 with a cap on the answer. (#1884, #1896)
+- **The session view stays under the desktop's 16 MiB limit,** and `sessions --id --why` opens a session with thousands of helpers without running out of memory. (#1881, #1883, #1889, #1915)
+- **`codeburn serve` sheds memory when the heap is under pressure,** not by resident size. (#1888)
+- **The menu bar finds the desktop app's bundled CLI** when none is on PATH. (#1871)
 
 ### Fixed
 - **Codex history stored compressed is counted again.** Codex moves older rollouts to `rollout-*.jsonl.zst`, which CodeBurn skipped, so most Codex history was missing; on one machine reports went from 3 sessions to 1,358. A session in both forms counts once, a damaged file prints a warning, and settled days pick up the recovered usage after the update.
@@ -48,6 +62,26 @@
 - **The Windows Capacity Dock keeps its saved provider** when a quota refresh misses one, instead of replacing it with whichever provider answered.
 - **The terminal dashboard keeps provider totals through the background refresh;** a provider-filtered headline could drop to zero.
 - The session drawer says a turn touching several PRs is split evenly between them, which is what it does.
+- **Pricing no longer crosses a model version boundary.** A model with no price of its own is not priced from a different version. Droid versions are kept, Qwen cached tokens are counted once, and Hermes reasoning tokens are counted once. The long-context tier shows in the session why view. (#1902)
+- **Codex no longer counts a rate-limit ping as a call,** no longer shows negative output when a counter restarts, and counts fork replays once. (#1903)
+- **Goose timestamps are read as UTC, and Kimi subagents are counted per session.** (#1903)
+- **Cursor stops billing old conversations as today.** The workspace map refreshes, each prompt is read from its own row, and a malformed stored value skips one row instead of dropping all of them. (#1900, #1907)
+- **Cursor agent-only requests now appear,** including those past the per-parse lookup limit on a database that stopped changing. JetBrains Copilot turns keep their first day. (#1910)
+- **Copilot chat journals next to a trace database count once per chat,** Auto mode requests are priced, and JetBrains parsing is linear in the session size. (#1901)
+- **Copilot enterprise hosts route correctly,** and the Windows path is found. (#1912)
+- **The macOS Keychain asks once per action.** Reads in the desktop app happen only on an explicit click, the prompt stops at Deny, and unrelated settings changes no longer ask again. (#1904, #1912)
+- **ZCode token windows use the exact boundary,** and an expired Gemini login is reported once instead of on every refresh. (#1904)
+- **Cline family tools keep their recorded costs,** Antigravity RPC output is counted, and Warp attributes usage to the right day. Zed, Quick Desktop, Grok Bot and Vercel wait out a busy store instead of showing partial data. (#1905)
+- **Grok Bot keeps requests that slid out of its window** through resets and partial slides. Hermes rebuilds keep observation days, Quick Desktop drops estimates once usage is metered, and Warp running exchanges and plan changes are handled. (#1913)
+- **The guard no longer blocks normal test loops or polling,** and the agent cannot lift the stop itself. A loop stop stays in place after a deny, failing polls may wait, and env and multi-line waits are counted. (#1895, #1909)
+- **Ultrafast calls survive cache upgrades,** rows are restored on a busy read, and a stale status snapshot is never replayed. (#1893)
+- **Day totals fill missing sealed days for every provider,** model aliases are part of the daily-cache hash, and the weekly budget covers seven days. (#1894)
+- **Sealed days re-derive once for the provider fixes.** (#1908)
+- **Placeholder calls count only their estimated output as estimated spend.** (#1899)
+- **A tool or model named `constructor` or `toString` no longer crashes the parse.** A config file with a syntax error is no longer wiped, and plugin names are checked before removal. (#1897)
+- **Optimize and the server count a last line read before its newline once.** (#1911)
+- **Currency labels follow the selected currency** in the macOS menu bar, and the GNOME budget alert no longer applies the exchange rate twice. (#1914)
+- **Codex native tool events are attributed to their tools.** (#1767)
 
 
 ## 0.9.27 - 2026-10-11
