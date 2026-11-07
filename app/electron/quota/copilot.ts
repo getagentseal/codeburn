@@ -107,9 +107,12 @@ const CREDENTIAL_FILES = ['hosts.json', 'apps.json'] as const
  * former carries a host.
  */
 function hostFromAppsKey(key: string): string | null {
-  const separator = key.indexOf(':')
-  if (separator === -1) return null
-  const candidate = key.slice(0, separator)
+  // A scheme ("https://acme.ghe.com:Iv1.x") would otherwise split at its own colon.
+  const scheme = /^[a-z]+:\/\//i.exec(key)
+  const rest = scheme ? key.slice(scheme[0].length) : key
+  const separator = rest.search(/[:/]/)
+  if (separator === -1 && !scheme) return null
+  const candidate = separator === -1 ? rest : rest.slice(0, separator)
   return candidate.includes('.') ? candidate : null
 }
 
@@ -245,8 +248,6 @@ export async function fetchCopilotQuota(options: Partial<CopilotDeps> & { signal
     for (const dir of deps.configDirs) {
       for (const name of CREDENTIAL_FILES) {
         for (const credential of await credentialsFromFile(dir, name, deps)) {
-          // The same login copied into several files is tried once.
-          if (found.some(entry => entry.credential.token === credential.token && hostKey(entry.credential) === hostKey(credential))) continue
           found.push({ dir, name, credential, endpoint: copilotUsageEndpoint(credential.host) })
         }
       }
@@ -262,20 +263,33 @@ export async function fetchCopilotQuota(options: Partial<CopilotDeps> & { signal
     }
 
     const refused = (value: Response): boolean => value.status === 401 || value.status === 403
+    const reread = async (entry: typeof found[number]): Promise<CopilotCredential | undefined> =>
+      (await credentialsFromFile(entry.dir, entry.name, deps)).find(value => value.key === entry.credential.key)
+    // The same login copied into several entries is sent once per run.
+    const tried = new Set<string>()
+    const attempt = (credential: CopilotCredential): string => `${hostKey(credential)} ${credential.token}`
     // null: the last token got a 401 and the disk held no newer one.
     let response: Response | null = null
     for (const entry of usable) {
-      apiHost = copilotAPIHost(entry.credential.host) ?? apiHost
-      response = await request(entry.credential, entry.endpoint!, deps, options.signal)
+      let credential: CopilotCredential | undefined = entry.credential
+      if (tried.has(attempt(credential))) {
+        // Already refused this run; only a rotation since the read makes it worth a request.
+        credential = await reread(entry)
+        if (!credential || tried.has(attempt(credential))) continue
+      }
+      apiHost = copilotAPIHost(credential.host) ?? apiHost
+      tried.add(attempt(credential))
+      response = await request(credential, entry.endpoint!, deps, options.signal)
       if (!refused(response)) break
       // An active editor session rotates this token; re-read once before
       // giving up so we don't report a failure the disk already fixed.
-      const reread = (await credentialsFromFile(entry.dir, entry.name, deps)).find(value => value.key === entry.credential.key)
-      if (!reread || reread.token === entry.credential.token) {
+      const rotated = await reread(entry)
+      if (!rotated || tried.has(attempt(rotated))) {
         if (response.status === 401) response = null
         continue
       }
-      response = await request(reread, entry.endpoint!, deps, options.signal)
+      tried.add(attempt(rotated))
+      response = await request(rotated, entry.endpoint!, deps, options.signal)
       if (!refused(response)) break
     }
     if (!response) return { quota: empty('transientFailure') }
