@@ -672,7 +672,7 @@ function parseBubbles(
   timeFloor: string,
   agentKvTimestamp: string,
   firstSeen: Map<string, string>,
-): { calls: ParsedProviderCall[] } {
+): { calls: ParsedProviderCall[]; lookupPending?: boolean } {
   const results: ParsedProviderCall[] = []
   let skipped = 0
 
@@ -909,11 +909,11 @@ function parseBubbles(
   // outcomes are kept in `firstSeen`, so each id is looked up once.
   const billable = [...unjoined].filter(([, stream]) => stream.userChars + stream.contextChars + stream.assistantChars > 0)
   const bubbleTimes = new Map<string, string | null>()
-  const unjoinedIds = billable
+  const unresolvedIds = billable
     .map(([requestId]) => requestId)
     .filter(requestId => !firstSeen.has(requestId) && !firstSeen.has(BUBBLE_TIME_KEY + requestId))
     .sort()
-    .slice(0, REQUEST_ID_CHUNK * MAX_REQUEST_ID_CHUNKS)
+  const unjoinedIds = unresolvedIds.slice(0, REQUEST_ID_CHUNK * MAX_REQUEST_ID_CHUNKS)
   const lookedUp = new Set(unjoinedIds)
   try {
     for (let i = 0; i < unjoinedIds.length; i += REQUEST_ID_CHUNK) {
@@ -969,7 +969,7 @@ function parseBubbles(
     process.stderr.write(`codeburn: skipped ${skipped} unreadable Cursor entries\n`)
   }
 
-  return { calls: results }
+  return { calls: results, lookupPending: unresolvedIds.length > unjoinedIds.length }
 }
 
 // Always the full lookback, never the requested range: the session cache keys
@@ -979,8 +979,10 @@ function createParser(
   seenKeys: Set<string>,
 ): SessionParser {
   const timeFloor = getCursorTimeFloor()
+  let lookupPending = false
 
   return {
+    incomplete: () => lookupPending,
     async *parse(): AsyncGenerator<ParsedProviderCall> {
       if (!isSqliteAvailable()) {
         process.stderr.write(getSqliteLoadError() + '\n')
@@ -1049,10 +1051,13 @@ function createParser(
           }
           const firstSeen = await readFirstSeen()
           const knownFirstSeen = firstSeen.size
-          const { calls: bubbleCalls } = parseBubbles(db, localSeen, timeFloor, agentKvTimestamp, firstSeen)
+          const parsed = parseBubbles(db, localSeen, timeFloor, agentKvTimestamp, firstSeen)
           if (firstSeen.size > knownFirstSeen) await writeFirstSeen(firstSeen)
-          allCalls = bubbleCalls
-          await writeCachedResults(dbPath, allCalls, timeFloor)
+          allCalls = parsed.calls
+          lookupPending = parsed.lookupPending === true
+          // Keyed on the DB alone, a stored result would serve this partial
+          // one to an unchanged DB for good; the next parse resumes the lookup.
+          if (!lookupPending) await writeCachedResults(dbPath, allCalls, timeFloor)
         } finally {
           db.close()
         }
