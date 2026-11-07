@@ -766,12 +766,12 @@ describe('token-only slices across migrations', () => {
   const tokens = (inputTokens: number, outputTokens: number) => ({ inputTokens, outputTokens, cacheReadTokens: 0, cacheWriteTokens: 0 })
   const model = (calls: number, cost: number, inputTokens: number, outputTokens: number) => ({ calls, cost, savingsUSD: 0, ...tokens(inputTokens, outputTokens) })
   const tokenOnlyDay = (inputScale = 1) => day('2026-08-28', {
-    claude: slice(650, 3607, { sessions: 4, ...tokens(16569, 2000), models: { 'Opus 4.8': model(3607, 650, 16569, 2000) } }),
-    hermes: slice(0, 0, { sessions: 1, ...tokens(2898477, 16118), models: { 'minimax/MiniMax-M3': model(0, 0, 2898477, 16118) } }),
+    claude: slice(500, 3000, { sessions: 4, ...tokens(10000, 2000), models: { 'Opus 4.8': model(3000, 500, 10000, 2000) } }),
+    hermes: slice(0, 0, { sessions: 1, ...tokens(3000000, 20000), models: { 'minimax/MiniMax-M3': model(0, 0, 3000000, 20000) } }),
   }, {
     sessions: 5,
-    ...tokens(16569 + 2898477 * inputScale, 2000 + 16118 * inputScale),
-    models: { 'Opus 4.8': model(3607, 650, 16569, 2000), 'minimax/MiniMax-M3': model(0, 0, 2898477 * inputScale, 16118 * inputScale) },
+    ...tokens(10000 + 3000000 * inputScale, 2000 + 20000 * inputScale),
+    models: { 'Opus 4.8': model(3000, 500, 10000, 2000), 'minimax/MiniMax-M3': model(0, 0, 3000000 * inputScale, 20000 * inputScale) },
   })
   const fileFor = (version: number, days: DailyEntry[]) => ({ version, savingsConfigHash: '', tzKey: currentTzKey(), lastComputedDate: '2026-08-28', complete: true, days })
   const totals = (d: DailyEntry) => ({ cost: d.cost, calls: d.calls, inputTokens: d.inputTokens, outputTokens: d.outputTokens, minimax: d.models['minimax/MiniMax-M3'], hermes: d.providers['hermes'] })
@@ -803,11 +803,11 @@ describe('token-only slices across migrations', () => {
   })
 
   it('leaves a day alone when its calls exceed its slices too', async () => {
-    const damaged = { ...tokenOnlyDay(10), calls: 4107 }
+    const damaged = { ...tokenOnlyDay(10), calls: 3500 }
     await writeFile(dailyCachePath(), JSON.stringify(fileFor(DAILY_CACHE_VERSION, [damaged])), 'utf-8')
     const loaded = (await loadDailyCache()).days[0]!
-    expect([loaded.calls, loaded.inputTokens, loaded.outputTokens]).toEqual([4107, damaged.inputTokens, damaged.outputTokens])
-    expect(loaded.models['minimax/MiniMax-M3']!.inputTokens).toBe(2898477 * 10)
+    expect([loaded.calls, loaded.inputTokens, loaded.outputTokens]).toEqual([3500, damaged.inputTokens, damaged.outputTokens])
+    expect(loaded.models['minimax/MiniMax-M3']!.inputTokens).toBe(3000000 * 10)
   })
 })
 

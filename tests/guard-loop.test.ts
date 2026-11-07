@@ -594,7 +594,6 @@ describe('hook time', () => {
       times.push(performance.now() - t)
     }
     const warmMs = times.sort((a, b) => a - b)[2]!
-    console.log(`guard hook on 20 MB transcript: cold ${coldMs.toFixed(0)} ms, warm median ${warmMs.toFixed(1)} ms`)
     expect(warmMs).toBeLessThan(200)
   }, 60_000)
 })
