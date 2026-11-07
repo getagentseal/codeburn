@@ -1567,7 +1567,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
                 let credits = formatTokensMenubar((p.codexCredits ?? 0).rounded())
                 valueText = compact ? "\(credits)cr\(suffix)" : " " + L("%@ credits", credits) + suffix
             } else {
-                let fallback = compact ? "$-" : "$—"
+                let fallback = CurrencyState.shared.symbol + (compact ? "-" : "—")
                 valueText = compact
                     ? (cost?.asCompactCurrencyWhole() ?? fallback) + suffix
                     : " " + (cost?.asCompactCurrency() ?? fallback) + suffix
