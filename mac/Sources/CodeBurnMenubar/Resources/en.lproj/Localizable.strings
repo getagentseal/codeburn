@@ -348,6 +348,7 @@
 "Cache hit" = "Cache hit";
 "Cost / session" = "Cost / session";
 "Cost/edit" = "Cost/edit";
+"%@/edit" = "%@/edit";
 "Save ~%1$@ / ~%2$@ tokens · 1 finding" = "Save ~%1$@ / ~%2$@ tokens · 1 finding";
 "Save ~%1$@ / ~%2$@ tokens · %3$lld findings" = "Save ~%1$@ / ~%2$@ tokens · %3$lld findings";
 "Favorite model" = "Favorite model";

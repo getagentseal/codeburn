@@ -1700,7 +1700,7 @@ private struct RoutingWasteSection: View {
                                     .font(.system(size: 9.5, weight: .medium))
                                     .foregroundStyle(.secondary)
                                 Spacer()
-                                Text("\(model.costPerEdit.asCompactCurrency())/edit")
+                                Text(L("%@/edit", model.costPerEdit.asCompactCurrency()))
                                     .font(.system(size: 9))
                                     .foregroundStyle(.quaternary)
                                     .padding(.trailing, 8)
