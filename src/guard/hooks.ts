@@ -87,6 +87,9 @@ function isWaitingCheck(command: string): boolean {
   const m = /^\s*sleep\s+\S+\s*(?:(?:&&|;|\|\|)([\s\S]*))?$/.exec(command)
   if (!m) return false
   const rest = m[1]?.trim() ?? ''
+  // The shared read list counts `env` as a read and does not split lines, so
+  // `sleep 5 && env CI=1 npm run build` or a second line would pass as a check.
+  if (/\n/.test(rest) || /(?:^|[\s;&|])env(?=\s|$)/.test(rest)) return false
   return !rest || isReadShapedBashCommand(rest) || GH_READ.test(rest) || BARE_ECHO.test(rest)
 }
 

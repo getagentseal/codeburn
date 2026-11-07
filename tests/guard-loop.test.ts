@@ -175,6 +175,18 @@ describe('identical-call loop', () => {
     expect(outs[7]).toContain('"permissionDecision":"deny"')
   })
 
+  it('still counts a sleep followed by env or a second line that does work', async () => {
+    for (const command of ['sleep 5 && env CI=1 npm run build', 'sleep 5 && cat log\nnpm run build', 'sleep 5 && cat log && env npm run build']) {
+      const env = await setup()
+      const outs: string[] = []
+      for (let i = 0; i < 12; i++) outs.push(await call(env, 'Bash', { command }, { output: 'Build OK' }))
+      expect(outs.slice(0, 3)).toEqual(['', '', ''])
+      expect(outs[3]).toBe(warnJson('codeburn guard: Bash was called 4 times in a row with the same input.'))
+      expect(outs.slice(4, 7)).toEqual(['', '', ''])
+      for (const out of outs.slice(7)) expect(out).toContain('"permissionDecision":"deny"')
+    }
+  })
+
   it('still counts a sleep followed by a command that does work', async () => {
     const env = await setup()
     const outs: string[] = []
