@@ -480,4 +480,50 @@ describe.skipIf(!isSqliteAvailable())('quickdesk estimate superseded by metrics'
       else process.env['CODEBURN_CACHE_DIR'] = originalCacheDir
     }
   })
+
+  it('drops the estimate when metrics land after the parse and sessions.db never changes again', async () => {
+    const originalCacheDir = process.env['CODEBURN_CACHE_DIR']
+    process.env['CODEBURN_CACHE_DIR'] = join(quickworkHome, 'cb-cache')
+    try {
+      // Recent, so the orphaned metered call is inside the 90-day age-out.
+      const t = Math.floor(Date.now() / 1000) - 2 * 86400
+      const dbPath = await createSessionsDb(quickworkHome)
+      withDb(dbPath, db => {
+        db.prepare('INSERT INTO sessions (id, title, created_at, updated_at, message_count, agent_mode, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+          .run('S', 'T', t, t + 100, 2, 'agent', null)
+        const insertMessage = db.prepare('INSERT INTO session_messages (session_id, role, content, timestamp, tool_names) VALUES (?, ?, ?, ?, ?)')
+        insertMessage.run('S', 'user', 'x'.repeat(4000), t + 1, null)
+        insertMessage.run('S', 'assistant', 'y'.repeat(4000), t + 2, null)
+      })
+
+      const { clearSessionCache, parseAllSessions } = await import('../../src/parser.js')
+      const servedKeys = async () => {
+        clearSessionCache()
+        return (await parseAllSessions(undefined, 'quickdesk'))
+          .flatMap(p => p.sessions).flatMap(s => s.turns).flatMap(t => t.assistantCalls).map(c => c.deduplicationKey)
+      }
+      expect(await servedKeys()).toEqual(['quickdesk-est:S'])
+      // Reading checkpoints the WAL once; settle the store's fingerprint first.
+      expect(await servedKeys()).toEqual(['quickdesk-est:S'])
+
+      const metricsPath = await writeMetrics(quickworkHome, new Date(t * 1000).toISOString().slice(0, 10), [
+        { session_id: 'S', Model: 'claude-sonnet-4-5', InputTokens: 1000, OutputTokens: 1000, CostUSD: 0.018, _aws: { Timestamp: (t + 2) * 1000 } },
+      ])
+      const metered = await servedKeys()
+      expect(metered).toHaveLength(1)
+      expect(metered[0]).toMatch(/^quickdesk:S:/)
+
+      // The metered call outlives its metrics file in the cache, so a later
+      // sessions.db re-parse must not bring the estimate back beside it.
+      await rm(metricsPath)
+      withDb(dbPath, db => {
+        db.prepare('INSERT INTO session_messages (session_id, role, content, timestamp, tool_names) VALUES (?, ?, ?, ?, ?)')
+          .run('S', 'user', 'thanks', t + 3, null)
+      })
+      expect(await servedKeys()).toEqual(metered)
+    } finally {
+      if (originalCacheDir === undefined) delete process.env['CODEBURN_CACHE_DIR']
+      else process.env['CODEBURN_CACHE_DIR'] = originalCacheDir
+    }
+  })
 })

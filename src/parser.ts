@@ -4647,7 +4647,16 @@ export async function parseProviderSources(
   const importCoverage = replacedProviders().includes(providerName)
     ? await loadCursorImport().then(store => store && coverageFor(store), () => null)
     : null
+  // A metered Quick Desktop call supersedes its session's sessions.db estimate
+  // here, whatever was parsed when: metrics can land without sessions.db
+  // changing, and the metered call outlives its metrics file in the cache.
+  const quickdeskMetered = providerName === 'quickdesk'
+    ? new Set(Object.values(section.files).flatMap(f => f.turns
+      .filter(t => t.calls.some(c => c.deduplicationKey.startsWith('quickdesk:')))
+      .map(t => t.sessionId)))
+    : null
   const serveTurn = (rawTurn: CachedTurn): CachedTurn | null => {
+    if (quickdeskMetered?.has(rawTurn.sessionId) && rawTurn.calls.every(c => c.deduplicationKey.startsWith('quickdesk-est:'))) return null
     const turn = reconcileCopilotCalls(rawTurn)
     return turn && dropImportCoveredCalls(providerName, turn, importCoverage)
   }
