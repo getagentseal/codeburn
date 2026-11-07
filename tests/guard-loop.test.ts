@@ -194,6 +194,9 @@ describe('identical-call loop', () => {
     const quoted: string[] = []
     for (let i = 0; i < 12; i++) quoted.push(await call(env, 'Bash', { command: `sleep 5 && env X='a b' Y="c d" gh pr checks 1909` }, { fails: true, output: 'pending' }))
     for (let i = 0; i < 12; i++) quoted.push(await call(env, 'Bash', { command: `sleep 5 && X='a;b' gh pr checks 1909` }, { fails: true, output: 'pending' }))
+    for (const command of ['sleep 5 && GH_HOST=$HOST gh pr checks 1909', 'sleep 5 && GH_HOST="${HOST}" gh pr checks 1909', 'sleep 5 && env GH_HOST=${HOST} gh pr checks 1909']) {
+      for (let i = 0; i < 12; i++) quoted.push(await call(env, 'Bash', { command }, { fails: true, output: 'pending' }))
+    }
     expect(quoted.every(o => o === '')).toBe(true)
   })
 

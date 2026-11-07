@@ -77,8 +77,10 @@ function markSignal(cache: GuardCache, signal: 'loop' | 'retry'): void {
 }
 
 // NAME=value where the value is one bare word or one quoted string with no
-// shell metacharacter that could run or redirect anything.
-const WORD = /'[^'\n]*'|"[^"\n$`]*"|[^\s;|&<>()`$'"]+/.source
+// shell metacharacter that could run or redirect anything; a plain variable
+// ($NAME, ${NAME}) is fine, any other expansion is not.
+const VAR_REF = /\$[A-Za-z_]\w*|\$\{[A-Za-z_]\w*\}/.source
+const WORD = `'[^'\\n]*'|"(?:[^"\\n$\`]|${VAR_REF})*"|(?:[^\\s;|&<>()\`$'"]|${VAR_REF})+`
 const ASSIGN = `[A-Za-z_]\\w*=(?:${WORD})?`
 const ASSIGN_AT = new RegExp(`^${ASSIGN}(?=\\s|$)`)
 // The shared read list leaves gh out (it has mutating subcommands); these only inspect.
