@@ -351,7 +351,7 @@ it('leaves router ids out of the gap-fill', () => {
   expect(Object.keys(fallback).sort()).toEqual(['acme-2', 'morph-v4'])
 })
 
-it('prices a reseller\'s namespaced key at the maker\'s row and holds reseller-only keys unless their own row repriced', () => {
+it('prices a reseller\'s namespaced key at the maker\'s row and holds a reseller-only key only while a reseller still quotes it', () => {
   const source = {
     'perplexity/openai/gpt-x': rate(3.5e-6, 28e-6),
     'gpt-x': rate(1.75e-6, 14e-6, { litellm_provider: 'openai' }),
@@ -380,8 +380,8 @@ it('prices a reseller\'s namespaced key at the maker\'s row and holds reseller-o
   expect(snapshot['openai/gpt-x']).toEqual([1.75e-6, 14e-6, null, null, null, null])
   expect(snapshot['eu/gpt-x']).toEqual([1.925e-6, 15.4e-6, null, null, null, null])
   expect(snapshot['MiniMaxAI/mm-3']).toEqual([0.3e-6, 1.2e-6, null, null, null, null])
-  // Its source row was dropped upstream: held.
-  expect(snapshot['flash-x']).toEqual(primary['flash-x'])
+  // Its source row was dropped and the remaining quote moved: it moves.
+  expect(snapshot['flash-x']).toEqual([0.01e-6, 1.2e-6, null, null, null, null])
   // Another reseller still quotes the previous value: held.
   expect(snapshot['quoted-x']).toEqual(primary['quoted-x'])
   // The row it came from repriced: it moves.
@@ -389,37 +389,46 @@ it('prices a reseller\'s namespaced key at the maker\'s row and holds reseller-o
   expect(snapshot['fresh-x']).toEqual([1e-6, 2e-6, null, null, null, null])
   // A reseller row added since does not top up a slot the id never had.
   expect(snapshot['kimi-x']).toEqual(primary['kimi-x'])
-  expect(meta.held).toEqual(['flash-x', 'quoted-x'])
+  expect(meta.held).toEqual(['quoted-x'])
 })
 
-it('keeps the previous long-context tier when upstream drops it from a row that still exists', () => {
+it('keeps the previous long-context tier when upstream drops it from a row whose base rates did not change', () => {
   const tier = { threshold: 200_000, input: 6e-6, output: 22.5e-6, cacheWrite: 7.5e-6, cacheRead: 0.6e-6 }
   const primary: Record<string, Row> = {
     'sonnet-x': [3e-6, 15e-6, 3.75e-6, 0.3e-6, null, tier],
     'retiered': [1e-6, 2e-6, null, null, null, tier],
+    'repriced': [3e-6, 15e-6, null, null, null, tier],
   }
   const { snapshot, meta } = bundle({
     'sonnet-x': rate(3e-6, 15e-6, { cache_creation_input_token_cost: 3.75e-6, cache_read_input_token_cost: 0.3e-6 }),
     'retiered': rate(1e-6, 2e-6, { input_cost_per_token_above_128k_tokens: 2e-6, output_cost_per_token_above_128k_tokens: 4e-6 }),
+    'repriced': rate(2e-6, 10e-6),
   }, { primary })
+  // Upstream re-priced the row, so its shape is upstream's: no tier.
+  expect(snapshot['repriced']).toEqual([2e-6, 10e-6, null, null, null, null])
   expect(snapshot['sonnet-x']).toEqual(primary['sonnet-x'])
   expect(snapshot['retiered'][5]).toEqual({ threshold: 128_000, input: 2e-6, output: 4e-6, cacheWrite: null, cacheRead: null })
   expect(meta.keptTiers).toEqual(['sonnet-x'])
 })
 
-it('keeps the previous value when the maker row is more than 2x off the resellers quoting the same model', () => {
+it('keeps the previous value only when the maker row is more than 2x above the resellers quoting the same model', () => {
   const source = {
     'mistral/medium-x': rate(1.5e-6, 7.5e-6),
     'vertex_ai/mistralai/medium-x': rate(0.4e-6, 2e-6),
     'nscale/mistralai/medium-x': rate(0.42e-6, 2.1e-6),
     'mistral/small-x': rate(0.1e-6, 0.3e-6),
     'vertex_ai/mistralai/small-x': rate(0.12e-6, 0.36e-6),
+    'deepseek/cheap-x': rate(0.27e-6, 1.1e-6),
+    'replicate/deepseek-ai/cheap-x': rate(1.45e-6, 1.45e-6),
   }
   const primary: Record<string, Row> = {
     'mistralai/medium-x': [0.4e-6, 2e-6, null, null, null, null],
     'mistralai/small-x': [0.12e-6, 0.36e-6, null, null, null, null],
+    'deepseek-ai/cheap-x': [1.45e-6, 1.45e-6, null, null, null, null],
   }
   const { snapshot, meta } = bundle(source, { primary })
+  // A maker row below the resale quote is the maker's own price.
+  expect(snapshot['deepseek-ai/cheap-x']).toEqual([0.27e-6, 1.1e-6, null, null, null, null])
   expect(snapshot['mistralai/medium-x']).toEqual(primary['mistralai/medium-x'])
   expect(snapshot['mistralai/small-x']).toEqual([0.1e-6, 0.3e-6, null, null, null, null])
   expect(meta.outliers).toEqual(['mistralai/medium-x'])
@@ -429,12 +438,36 @@ it('treats a rate that turns exactly $0 on a priced row as missing', () => {
   const primary: Record<string, Row> = {
     'deep-x': [0.27e-6, 1.1e-6, null, 0.07e-6, null, null],
     'free-write': [1e-6, 2e-6, 0, 0.1e-6, null, null],
+    'repriced-zero': [0.27e-6, 1.1e-6, null, 0.07e-6, null, null],
   }
   const { snapshot, meta } = bundle({
+    'repriced-zero': rate(0.28e-6, 1.1e-6, { cache_creation_input_token_cost: 0, cache_read_input_token_cost: 0.07e-6 }),
     'deep-x': rate(0.27e-6, 1.1e-6, { cache_creation_input_token_cost: 0, cache_read_input_token_cost: 0.07e-6 }),
     'free-write': rate(1e-6, 2e-6, { cache_creation_input_token_cost: 0, cache_read_input_token_cost: 0.1e-6 }),
   }, { primary })
   expect(snapshot['deep-x']).toEqual(primary['deep-x'])
   expect(snapshot['free-write']).toEqual(primary['free-write'])
+  // The row's input moved too, so the $0 is upstream's new shape.
+  expect(snapshot['repriced-zero']).toEqual([0.28e-6, 1.1e-6, 0, 0.07e-6, null, null])
   expect(meta.zeroSlots).toEqual(['deep-x'])
+})
+
+it('never carries a router id forward, but keeps a version pointer users already price', () => {
+  const primary: Record<string, Row> = {
+    'openrouter/auto': [0, 0, null, null, null, null],
+    'openrouter/openrouter/auto': [0, 0, null, null, null, null],
+    'openrouter/typesafe/jev-router': [0, 0, null, null, null, null],
+    'openrouter/~acme/acme-latest': [1e-6, 2e-6, null, null, null, null],
+    'openrouter/acme/acme-2': [1e-6, 2e-6, null, null, null, null],
+  }
+  const openrouter = [
+    { id: 'openrouter/auto', architecture: { tokenizer: 'Router' }, pricing: { prompt: '-1', completion: '-1' } },
+    { id: 'typesafe/jev-router', architecture: { tokenizer: 'Router' }, pricing: { prompt: '-1', completion: '-1' } },
+    { id: '~acme/acme-latest', architecture: { tokenizer: 'Router' }, pricing: { prompt: '0.000001', completion: '0.000002' } },
+  ]
+  const { snapshot, meta } = bundle({}, { primary }, {}, openrouter)
+  expect(snapshot['openrouter/acme/acme-2']).toEqual(primary['openrouter/acme/acme-2'])
+  expect(snapshot['openrouter/~acme/acme-latest']).toEqual(primary['openrouter/~acme/acme-latest'])
+  for (const k of ['openrouter/auto', 'openrouter/openrouter/auto', 'openrouter/typesafe/jev-router']) expect(snapshot).not.toHaveProperty([k])
+  expect(meta.droppedRouters).toEqual(['openrouter/auto', 'openrouter/openrouter/auto', 'openrouter/typesafe/jev-router'])
 })

@@ -87,6 +87,26 @@ const readPrevious = (path) => {
 }
 const previousSnapshot = readPrevious(snapshotPath)
 const previousFallback = readPrevious(fallbackPath)
+const fetchJson = (url, label) => fetch(url).then((r) => r.json()).catch((e) => {
+  console.warn(`${label} skipped: ${e.message}`)
+  return null
+})
+const md = await fetchJson(MODELS_DEV_URL, 'models.dev')
+const or = (await fetchJson(OPENROUTER_URL, 'openrouter'))?.data ?? null
+// Routers (`auto`, `fusion`, `*-latest` pointers) have no model of their own:
+// a price on one is whatever it routed to, and its bare key would price every
+// `<gateway>/auto` id. models.dev marks them by family, OpenRouter by its
+// `Router` tokenizer and its own `openrouter/` namespace. They are never
+// gap-filled, and never carried forward unless they are a `~` version pointer
+// (`~anthropic/claude-sonnet-latest`), which bills as the model it names.
+const ROUTER_FAMILIES = new Set(['auto', 'model-router'])
+const isOpenRouterRouter = (m) => m.architecture?.tokenizer === 'Router' || String(m.id).startsWith('openrouter/')
+const routerIds = new Set([
+  ...(or ?? []).filter((m) => isOpenRouterRouter(m) && !String(m.id).startsWith('~')).map((m) => String(m.id).toLowerCase()),
+  ...Object.values(md ?? {}).flatMap((p) => Object.entries(p.models ?? {})
+    .filter(([, m]) => ROUTER_FAMILIES.has(m.family)).map(([mid]) => mid.toLowerCase())),
+])
+const isRouter = (key) => [key, key.replace(/^openrouter\//, '')].some((k) => routerIds.has(k.toLowerCase()))
 
 // --- Pass 1+2: LiteLLM (primary) ---
 const res = await fetch(LITELLM_URL)
@@ -265,12 +285,13 @@ for (const [name, entry] of [...entries.filter(([n]) => isMaker(n)), ...entries.
 // those keys keep their own reseller rate.
 const makerOf = (name) => name.toLowerCase().replace(/[^a-z0-9]/g, '').replace(/ai$/, '')
 const median = (xs) => { const s = [...xs].sort((a, b) => a - b); return s.length % 2 ? s[(s.length - 1) / 2] : (s[s.length / 2 - 1] + s[s.length / 2]) / 2 }
-// A maker row more than 2x off every reseller's quote for the same model is
-// more likely a wrong upstream row than a price change, so the id it would
-// reprice keeps its previous value.
+// A maker row more than 2x above the median reseller quote for the same model
+// is more likely a wrong upstream row than a price change, so the id it would
+// reprice keeps its previous value. A maker row below the resellers is the
+// maker's own price and wins.
 const offMarket = (official, quotes) => [0, 1].some((i) => {
   const m = median(quotes.map((q) => q[i]))
-  return m > 0 && official[i] > 0 && (official[i] / m > 2 || m / official[i] > 2)
+  return m > 0 && official[i] / m > 2
 })
 const outliers = []
 for (const stripped of bareClaims.keys()) {
@@ -294,20 +315,15 @@ for (const stripped of bareClaims.keys()) {
   makerClaimed.add(stripped)
 }
 // A stripped key no maker row claims is a reseller's figure, and which
-// reseller wins is JSON order. It keeps its previous value while a current
-// reseller row still quotes it, or while the row it came from (a previous
-// `<reseller>/<key>` row of that value) is one upstream dropped; only a
-// reseller repricing its own row moves it.
+// reseller wins is JSON order. It keeps its previous value only while some
+// current reseller row still quotes it; once none does, it takes the claim.
 function holdsPrevious(stripped) {
   const previous = previousSnapshot[stripped]
   if (!previous || makerClaimed.has(stripped)) return false
   const p = JSON.stringify(previous)
-  if (p === JSON.stringify(bareClaims.get(stripped))) return false
-  const quoted = claimants.get(stripped).includes(p)
-  const dropped = Object.keys(previousSnapshot).some((k) => k.endsWith(`/${stripped}`)
-    && k.replace(/^[^/]+\//, '') === stripped && !entryNames.has(k) && JSON.stringify(previousSnapshot[k]) === p)
-  if (quoted || dropped) held.push(stripped)
-  return quoted || dropped
+  if (p === JSON.stringify(bareClaims.get(stripped)) || !claimants.get(stripped).includes(p)) return false
+  held.push(stripped)
+  return true
 }
 for (const [name, entry] of entries) {
   if (!name.includes('/')) continue
@@ -359,32 +375,38 @@ for (const k of Object.keys(MANUAL_ENTRIES)) {
 // (`mistral-large` fell to a $0 `mistral` row) and aliases aimed at it would
 // stop resolving.
 const carriedIds = []
+const droppedRouters = []
 for (const [k, v] of Object.entries(previousSnapshot)) {
   if (snapshot[k] !== undefined) continue
+  if (isRouter(k)) {
+    droppedRouters.push(k)
+    continue
+  }
   snapshot[k] = v
   if (!(k in MANUAL_ENTRIES)) carriedIds.push(k)
 }
-// Upstream dropping a long-context tier from a row that still exists would
-// reprice every past request above the threshold at the base rate; the
-// previous tier stays until upstream publishes a new one.
+// Upstream dropping a long-context tier from a row whose base rates did not
+// move would reprice every past request above the threshold at the base rate;
+// the previous tier stays. A row upstream re-priced takes upstream's shape.
+const sameRates = (a, b, slots) => slots.every((i) => (a[i] ?? null) === (b[i] ?? null))
 const keptTiers = []
 for (const [k, v] of Object.entries(snapshot)) {
   const previousTier = previousSnapshot[k]?.[5]
-  if (!previousTier || v[5]) continue
+  if (!previousTier || v[5] || !sameRates(v, previousSnapshot[k], [0, 1, 2, 3])) continue
   const val = [...v]
   val[5] = previousTier
   snapshot[k] = val
   keptTiers.push(k)
 }
-// A rate that turns exactly $0 on a row still priced on input is treated as
-// missing, not free: a $0 cache write bills every cache-creation token at
-// nothing, where the previous slot (or its absence) billed them.
+// A rate that turns exactly $0 on a row whose other rates did not move is
+// treated as missing, not free: a $0 cache write bills every cache-creation
+// token at nothing, where the previous slot (or its absence) billed them.
 const zeroSlots = []
 for (const [k, v] of Object.entries(snapshot)) {
   const before = previousSnapshot[k]
   if (!before || !(v[0] > 0)) continue
   const slots = [1, 2, 3].filter((i) => v[i] === 0 && before[i] !== 0)
-  if (slots.length === 0) continue
+  if (slots.length === 0 || !sameRates(v, before, [0, 1, 2, 3].filter((i) => !slots.includes(i)))) continue
   const val = [...v]
   for (const i of slots) val[i] = before[i] ?? null
   snapshot[k] = val
@@ -418,11 +440,6 @@ const finite = (v) => { const n = Number(v); return Number.isFinite(n) ? n : nul
 const validRates = (inp, out) => inp != null && out != null && inp >= 0 && out >= 0 && !(inp === 0 && out === 0)
 // Drop the same negative sentinel on optional cache fields.
 const nonNeg = (v) => (v != null && v >= 0 ? v : null)
-// Routers (`auto`, `fusion`, `*-latest` pointers) have no model of their own:
-// a price on one is whatever it routed to, and its bare key would price every
-// `<gateway>/auto` id. models.dev marks them by family, OpenRouter by its
-// `Router` tokenizer and its own `openrouter/` namespace.
-const ROUTER_FAMILIES = new Set(['auto', 'model-router'])
 function addGap(key, val) {
   if (!key || !val) return false
   const lk = key.toLowerCase()
@@ -433,8 +450,7 @@ function addGap(key, val) {
 }
 
 // --- Pass 3: models.dev first-party makers (official list prices) ---
-try {
-  const md = await (await fetch(MODELS_DEV_URL)).json()
+if (md) {
   // Surface drift in our hand-maintained maker allowlist: if an id we classify
   // as first-party is gone from the API, it was renamed/removed and the set is
   // stale (its models would silently fall through to OpenRouter resale rates).
@@ -457,16 +473,13 @@ try {
     }
   }
   console.log(`models.dev (first-party): +${added} models`)
-} catch (e) {
-  console.warn(`models.dev skipped: ${e.message}`)
 }
 
 // --- Pass 4: OpenRouter (resale backstop) ---
-try {
-  const or = (await (await fetch(OPENROUTER_URL)).json()).data ?? []
+if (or) {
   let added = 0
   for (const m of or) {
-    if (m.architecture?.tokenizer === 'Router' || String(m.id).startsWith('openrouter/')) continue
+    if (isOpenRouterRouter(m)) continue
     const p = m.pricing ?? {}
     const inp = finite(p.prompt), out = finite(p.completion)
     if (!validRates(inp, out)) continue
@@ -476,8 +489,6 @@ try {
     if (addGap(bareKey(m.id ?? ''), [inp, out, cw, cr, null])) added++
   }
   console.log(`openrouter (backstop): +${added} models`)
-} catch (e) {
-  console.warn(`openrouter skipped: ${e.message}`)
 }
 
 mkdirSync(dataDir, { recursive: true })
@@ -515,5 +526,5 @@ if (carried > 0) console.log(`carried ${carried} previous fallback entries forwa
 console.log(`primary: carried ${carriedIds.length} dropped rows, held ${held.length} reseller keys, kept ${keptTiers.length} tiers, ${outliers.length} off-market maker rows, ${zeroSlots.length} new $0 slots`)
 writeFileSync(snapshotPath, JSON.stringify(snapshot))
 writeFileSync(fallbackPath, JSON.stringify(fallback))
-writeFileSync(metaPath, JSON.stringify({ carried: carriedIds, held, keptTiers, outliers, zeroSlots }, null, 1) + '\n')
+writeFileSync(metaPath, JSON.stringify({ carried: carriedIds, droppedRouters, held, keptTiers, outliers, zeroSlots }, null, 1) + '\n')
 console.log(`Bundled ${Object.keys(snapshot).length} primary + ${Object.keys(fallback).length} fallback models`)
