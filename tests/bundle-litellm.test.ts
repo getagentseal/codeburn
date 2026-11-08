@@ -295,9 +295,11 @@ it('gives a bare id the maker\'s price over a reseller\'s, and a priced reseller
 })
 
 type Row = (number | null | object)[]
+const next = (run: { snapshot: Record<string, Row>, fallback: Record<string, Row>, meta: object }): Previous => ({ primary: run.snapshot, fallback: run.fallback, meta: run.meta })
 const rate = (input: number, output: number, extra = {}) => ({ input_cost_per_token: input, output_cost_per_token: output, ...extra })
 
-function bundle(source: object, previous: { primary?: Record<string, Row>, fallback?: Record<string, Row> } = {}, modelsDev: object = {}, openrouter: object[] = []) {
+type Previous = { primary?: Record<string, Row>, fallback?: Record<string, Row>, meta?: object }
+function bundle(source: object, previous: Previous = {}, modelsDev: object = {}, openrouter: object[] = []) {
   const dir = mkdtempSync(join(tmpdir(), 'codeburn-bundle-rules-'))
   try {
     mkdirSync(join(dir, 'scripts'))
@@ -305,6 +307,7 @@ function bundle(source: object, previous: { primary?: Record<string, Row>, fallb
     copyFileSync(fileURLToPath(new URL('../scripts/bundle-litellm.mjs', import.meta.url)), join(dir, 'scripts/bundle-litellm.mjs'))
     writeFileSync(join(dir, 'src/data/litellm-snapshot.json'), JSON.stringify(previous.primary ?? {}))
     writeFileSync(join(dir, 'src/data/pricing-fallback.json'), JSON.stringify(previous.fallback ?? {}))
+    if (previous.meta) writeFileSync(join(dir, 'src/data/litellm-snapshot.meta.json'), JSON.stringify(previous.meta))
     writeFileSync(join(dir, 'sources.json'), JSON.stringify({ source, modelsDev, openrouter }))
     const run = spawnSync(process.execPath, ['--input-type=module', '-e', `
       import { readFileSync } from 'node:fs';
@@ -389,7 +392,7 @@ it('prices a reseller\'s namespaced key at the maker\'s row and holds a reseller
   expect(snapshot['fresh-x']).toEqual([1e-6, 2e-6, null, null, null, null])
   // A reseller row added since does not top up a slot the id never had.
   expect(snapshot['kimi-x']).toEqual(primary['kimi-x'])
-  expect(meta.held).toEqual(['quoted-x'])
+  expect(Object.keys(meta.held)).toEqual(['quoted-x'])
 })
 
 it('keeps the previous long-context tier when upstream drops it from a row whose base rates did not change', () => {
@@ -431,7 +434,7 @@ it('keeps the previous value only when the maker row is more than 2x above the r
   expect(snapshot['deepseek-ai/cheap-x']).toEqual([0.27e-6, 1.1e-6, null, null, null, null])
   expect(snapshot['mistralai/medium-x']).toEqual(primary['mistralai/medium-x'])
   expect(snapshot['mistralai/small-x']).toEqual([0.1e-6, 0.3e-6, null, null, null, null])
-  expect(meta.outliers).toEqual(['mistralai/medium-x'])
+  expect(Object.keys(meta.outliers)).toEqual(['mistralai/medium-x'])
 })
 
 it('treats a rate that turns exactly $0 on a priced row as missing', () => {
@@ -470,4 +473,62 @@ it('never carries a router id forward, but keeps a version pointer users already
   expect(snapshot['openrouter/~acme/acme-latest']).toEqual(primary['openrouter/~acme/acme-latest'])
   for (const k of ['openrouter/auto', 'openrouter/openrouter/auto', 'openrouter/typesafe/jev-router']) expect(snapshot).not.toHaveProperty([k])
   expect(meta.droppedRouters).toEqual(['openrouter/auto', 'openrouter/openrouter/auto', 'openrouter/typesafe/jev-router'])
+})
+
+it('lets a hold last one refresh: the next refresh with the same stale inputs takes the upstream value', () => {
+  const source = {
+    // (c): the previous value is still quoted by a stale reseller row.
+    'newco/quoted-x': rate(5e-6, 6e-6),
+    'oldco/quoted-x': rate(1e-6, 2e-6),
+    // (e): the maker row is more than 2x above the only reseller quote.
+    'mistral/medium-x': rate(1.5e-6, 7.5e-6),
+    'vertex_ai/mistralai/medium-x': rate(0.4e-6, 2e-6),
+  }
+  const primary: Record<string, Row> = {
+    'quoted-x': [1e-6, 2e-6, null, null, null, null],
+    'mistralai/medium-x': [0.4e-6, 2e-6, null, null, null, null],
+  }
+  const first = bundle(source, { primary })
+  expect(first.snapshot['quoted-x']).toEqual(primary['quoted-x'])
+  expect(first.snapshot['mistralai/medium-x']).toEqual(primary['mistralai/medium-x'])
+  expect(Object.keys(first.meta.held)).toEqual(['quoted-x'])
+  expect(Object.keys(first.meta.outliers)).toEqual(['mistralai/medium-x'])
+  expect(first.meta.held['quoted-x']).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+
+  const second = bundle(source, next(first))
+  expect(second.snapshot['quoted-x']).toEqual([5e-6, 6e-6, null, null, null, null])
+  expect(second.snapshot['mistralai/medium-x']).toEqual([1.5e-6, 7.5e-6, null, null, null, null])
+  expect(second.meta.held).toEqual({})
+  expect(second.meta.outliers).toEqual({})
+  expect(second.meta.expired.sort()).toEqual(['mistralai/medium-x', 'quoted-x'])
+
+  // A third refresh does not re-arm: the released value is now the previous one.
+  const third = bundle(source, next(second))
+  expect(third.snapshot['quoted-x']).toEqual(second.snapshot['quoted-x'])
+  expect(third.meta.held).toEqual({})
+})
+
+it('releases a hold at once when the stale quote disappears', () => {
+  const primary: Record<string, Row> = {
+    'quoted-x': [1e-6, 2e-6, null, null, null, null],
+    'mistralai/medium-x': [0.4e-6, 2e-6, null, null, null, null],
+  }
+  const first = bundle({
+    'newco/quoted-x': rate(5e-6, 6e-6),
+    'oldco/quoted-x': rate(1e-6, 2e-6),
+    'mistral/medium-x': rate(1.5e-6, 7.5e-6),
+    'vertex_ai/mistralai/medium-x': rate(0.4e-6, 2e-6),
+  }, { primary })
+  expect(Object.keys(first.meta.held)).toEqual(['quoted-x'])
+  // The stale reseller quotes are gone; the one left agrees with the maker.
+  const second = bundle({
+    'newco/quoted-x': rate(5e-6, 6e-6),
+    'mistral/medium-x': rate(1.5e-6, 7.5e-6),
+    'vertex_ai/mistralai/medium-x': rate(1.4e-6, 7e-6),
+  }, next(first))
+  expect(second.snapshot['quoted-x']).toEqual([5e-6, 6e-6, null, null, null, null])
+  expect(second.snapshot['mistralai/medium-x']).toEqual([1.5e-6, 7.5e-6, null, null, null, null])
+  expect(second.meta.held).toEqual({})
+  expect(second.meta.outliers).toEqual({})
+  expect(second.meta.expired).toEqual([])
 })

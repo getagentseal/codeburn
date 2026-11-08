@@ -87,6 +87,17 @@ const readPrevious = (path) => {
 }
 const previousSnapshot = readPrevious(snapshotPath)
 const previousFallback = readPrevious(fallbackPath)
+// Holds (rules c and e) last one refresh: an id the previous refresh already
+// held takes the current upstream value now, so a stale quote or a wrong
+// maker row can delay a reprice once, never forever.
+const previousMeta = readPrevious(metaPath)
+const refreshDate = new Date().toISOString().slice(0, 10)
+const expired = []
+const heldBefore = (list, id) => {
+  if (!(id in (previousMeta[list] ?? {}))) return false
+  expired.push(id)
+  return true
+}
 const fetchJson = (url, label) => fetch(url).then((r) => r.json()).catch((e) => {
   console.warn(`${label} skipped: ${e.message}`)
   return null
@@ -263,7 +274,7 @@ const isMaker = (name) => name.split('/').length === 2 && MAKER_PREFIXES.has(nam
 const isFree = (val) => val[0] === 0 && val[1] === 0
 const bareClaims = new Map()
 const makerClaimed = new Set()
-const held = []
+const held = {}
 const claimants = new Map()
 for (const [name, entry] of [...entries.filter(([n]) => isMaker(n)), ...entries.filter(([n]) => !isMaker(n))]) {
   if (!name.includes('/')) continue
@@ -293,7 +304,7 @@ const offMarket = (official, quotes) => [0, 1].some((i) => {
   const m = median(quotes.map((q) => q[i]))
   return m > 0 && official[i] / m > 2
 })
-const outliers = []
+const outliers = {}
 for (const stripped of bareClaims.keys()) {
   const slash = stripped.lastIndexOf('/')
   if (slash < 0) continue
@@ -305,10 +316,10 @@ for (const stripped of bareClaims.keys()) {
     .find(Boolean)
   if (!official) continue
   const previous = previousSnapshot[stripped]
-  if (previous && JSON.stringify(previous) !== JSON.stringify(official) && offMarket(official, claimants.get(stripped).map((q) => JSON.parse(q)))) {
+  if (previous && JSON.stringify(previous) !== JSON.stringify(official) && offMarket(official, claimants.get(stripped).map((q) => JSON.parse(q))) && !heldBefore('outliers', stripped)) {
     bareClaims.set(stripped, previous)
     makerClaimed.add(stripped)
-    outliers.push(stripped)
+    outliers[stripped] = refreshDate
     continue
   }
   bareClaims.set(stripped, official)
@@ -322,7 +333,8 @@ function holdsPrevious(stripped) {
   if (!previous || makerClaimed.has(stripped)) return false
   const p = JSON.stringify(previous)
   if (p === JSON.stringify(bareClaims.get(stripped)) || !claimants.get(stripped).includes(p)) return false
-  held.push(stripped)
+  if (heldBefore('held', stripped)) return false
+  held[stripped] = refreshDate
   return true
 }
 for (const [name, entry] of entries) {
@@ -523,8 +535,8 @@ for (const [k, v] of Object.entries(previousFallback)) {
   carried += 1
 }
 if (carried > 0) console.log(`carried ${carried} previous fallback entries forward`)
-console.log(`primary: carried ${carriedIds.length} dropped rows, held ${held.length} reseller keys, kept ${keptTiers.length} tiers, ${outliers.length} off-market maker rows, ${zeroSlots.length} new $0 slots`)
+console.log(`primary: carried ${carriedIds.length} dropped rows, held ${Object.keys(held).length} reseller keys, kept ${keptTiers.length} tiers, ${Object.keys(outliers).length} off-market maker rows, ${expired.length} holds expired, ${zeroSlots.length} new $0 slots`)
 writeFileSync(snapshotPath, JSON.stringify(snapshot))
 writeFileSync(fallbackPath, JSON.stringify(fallback))
-writeFileSync(metaPath, JSON.stringify({ carried: carriedIds, droppedRouters, held, keptTiers, outliers, zeroSlots }, null, 1) + '\n')
+writeFileSync(metaPath, JSON.stringify({ carried: carriedIds, droppedRouters, held, outliers, expired, keptTiers, zeroSlots }, null, 1) + '\n')
 console.log(`Bundled ${Object.keys(snapshot).length} primary + ${Object.keys(fallback).length} fallback models`)
