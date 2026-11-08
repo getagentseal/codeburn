@@ -8,7 +8,7 @@ import { decodeClaudeUsage, fetchClaudeQuota, planLabel } from '../src/quota/cla
 import { decodeCodexUsage, fetchCodexQuota } from '../src/quota/codex.js'
 import { decodeCopilotUsage, fetchCopilotQuota } from '../src/quota/copilot.js'
 import { decodeGeminiUsage, fetchGeminiQuota } from '../src/quota/gemini.js'
-import { collectQuota, renderQuotaTable } from '../src/quota/index.js'
+import { collectQuota, renderQuotaTable, toCommandProvider } from '../src/quota/index.js'
 import { decodeKimiUsage, fetchKimiQuota } from '../src/quota/kimi.js'
 import { discoverClaudeConfigSources } from '../src/providers/claude.js'
 import type { QuotaProvider } from '../src/quota/types.js'
@@ -94,6 +94,28 @@ describe('Claude quota', () => {
       expect(result.quota.connection).toBe('terminalFailure')
       expect(result.quota.footerLines[0]).toMatch(/expired/i)
       expect(fetchMock).toHaveBeenCalledTimes(1)
+    })
+
+    it('reports an expired login, not a rate limit, when an expired token gets a 429', async () => {
+      const keychain = vi.fn(async () => ({ status: 'found' as const, value: stored('unchanged', now() - HOUR) }))
+      const fetchMock = vi.fn(async () => new Response(JSON.stringify({ retry_after: 2400 }), { status: 429 }))
+
+      const result = await fetchClaudeQuota({ fetch: fetchMock as unknown as typeof fetch, readFile: noFile, keychain, allowKeychain: true, now })
+      const row = toCommandProvider('claude', 'Claude', result.quota)
+
+      expect(row.status).toBe('loginExpired')
+      expect(row.available).toBe(false)
+      expect(row.error).toBe('Claude Code login expired. Run Claude Code once, then refresh.')
+    })
+
+    it('keeps the rate limit for a 429 on a login still within its life', async () => {
+      const keychain = vi.fn(async () => ({ status: 'found' as const, value: stored('unchanged', now() + HOUR) }))
+      const fetchMock = vi.fn(async () => new Response(JSON.stringify({ retry_after: 2400 }), { status: 429 }))
+
+      const result = await fetchClaudeQuota({ fetch: fetchMock as unknown as typeof fetch, readFile: noFile, keychain, allowKeychain: true, now })
+
+      expect(result.retryAfterSeconds).toBe(2400)
+      expect(toCommandProvider('claude', 'Claude', result.quota).status).toBeUndefined()
     })
 
     it('keeps a transient failure while the credential is still within its life', async () => {

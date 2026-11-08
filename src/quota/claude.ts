@@ -46,6 +46,14 @@ function empty(connection: QuotaProvider['connection'], footerLines: string[] = 
   return { provider: 'claude', connection, primary: null, details: [], planLabel: null, footerLines }
 }
 
+function expiredLogin(): QuotaProvider {
+  return { ...empty('terminalFailure', EXPIRED_FOOTER), loginExpired: true }
+}
+
+function isExpired(credential: ClaudeCredential, deps: ClaudeDeps): boolean {
+  return credential.expiresAt !== undefined && credential.expiresAt <= deps.now()
+}
+
 function parseCredential(raw: string): ClaudeCredential | null {
   const clean = raw.replace(/\r/g, '').replace(/\n[ \t]*/g, '')
   const oauth = (JSON.parse(clean) as { claudeAiOauth?: Record<string, unknown> }).claudeAiOauth
@@ -226,12 +234,14 @@ export async function fetchClaudeQuota(options: Partial<ClaudeDeps> & { signal?:
         // already over, so it is reported as terminal rather than as the blip its
         // consumers are meant to retry and to keep their last numbers through. A
         // token that has not expired is a real blip and keeps that backoff.
-        const expired = credential.expiresAt !== undefined && credential.expiresAt <= deps.now()
-        return { quota: expired ? empty('terminalFailure', EXPIRED_FOOTER) : empty('transientFailure') }
+        return { quota: isExpired(credential, deps) ? expiredLogin() : empty('transientFailure') }
       }
       credential = reread
       response = await request(credential.accessToken, deps, options.signal)
     }
+    // A 429 or other refusal of an expired token says nothing about the account;
+    // the fix is a fresh login, not waiting.
+    if (!response.ok && isExpired(credential, deps)) return { quota: expiredLogin() }
     if (response.status === 429) {
       let hint: unknown
       try { hint = (await response.json() as Record<string, unknown>).retry_after } catch { hint = undefined }
