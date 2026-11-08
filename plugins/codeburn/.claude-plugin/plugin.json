@@ -1,6 +1,6 @@
 {
   "name": "codeburn",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "See what your AI coding tools cost: a /codeburn:cost summary and CodeBurn's usage tools inside Claude Code",
   "author": {
     "name": "CodeBurn",

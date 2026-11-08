@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.9.28 - 2026-11-07
+
 ### Added
 - **The macOS menu bar forecasts when a quota window runs out.** The forecast uses the pace of the last hour on short windows and the last six hours on long ones, waits for two readings ten minutes apart, and covers the five-hour window too. It shows as "· out 15:40" in the second row and under the heatmap, or "lasts until reset" when the pace reaches the reset first. When the forecast lands before the reset, a second alert fires once per cycle, and the 80% alert threshold is now a picker with 70, 80 and 90.
 - **The guard stops loops while they run.** An identical tool call repeated 4 times in a row gets a warning and the 8th is denied; a shell command that failed 3 times in the session gets a warning and the 5th try is denied. The reason names the call, the count and the session cost so far, and the end-of-session note says what the calls after the first warning cost. The four limits are in the guard settings (`null` turns one off), `codeburn guard status` prints them, and `codeburn guard allow` lifts the stops for the session.

@@ -3,7 +3,7 @@
     "codeburn": {
       "type": "stdio",
       "command": "npx",
-      "args": ["-y", "codeburn@0.9.27", "mcp"]
+      "args": ["-y", "codeburn@0.9.28", "mcp"]
     }
   }
 }
