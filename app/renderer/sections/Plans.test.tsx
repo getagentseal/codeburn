@@ -322,7 +322,7 @@ describe('Plans', () => {
 
     render(<Plans period="30days" />)
 
-    expect(await screen.findByText('Anthropic rate limited the quota endpoint, retrying in a few minutes')).toBeInTheDocument()
+    expect(await screen.findByText('Anthropic rate limited the quota endpoint, retrying in a few minutes. Refresh to retry now')).toBeInTheDocument()
     expect(screen.getByText('OpenAI rate limited the quota endpoint, retrying in a few minutes')).toBeInTheDocument()
     // The rate-limited note replaces the generic waiting copy.
     expect(screen.queryByText('Waiting on the CLI…')).not.toBeInTheDocument()
