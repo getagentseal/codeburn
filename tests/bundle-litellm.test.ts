@@ -134,9 +134,10 @@ it('adds context tiers without repricing base rows or losing exact-key carry-for
     // The base-richer alias (cache-write + cache-read, no tier) wins over the
     // tier-bearing one; no tier is spliced onto its base rates.
     expect(snapshot['alias-model']).toEqual([2e-6, 6e-6, 0.4e-6, 0.2e-6, null, null])
-    // Exact-key-only carry: the fallback is exactly the previously-priced
-    // rows - the prefixed and dated variants did not count as their coverage.
-    expect(fallback).toEqual({ ...oldPrimary, ...oldFallback })
+    // Exact-key-only carry: the prefixed and dated variants did not count as
+    // coverage, so the old rows stay; a dropped primary row stays primary.
+    expect(snapshot['retired-model']).toEqual(oldPrimary['retired-model'])
+    expect(fallback).toEqual(oldFallback)
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
@@ -291,4 +292,149 @@ it('gives a bare id the maker\'s price over a reseller\'s, and a priced reseller
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
+})
+
+type Row = (number | null | object)[]
+const rate = (input: number, output: number, extra = {}) => ({ input_cost_per_token: input, output_cost_per_token: output, ...extra })
+
+function bundle(source: object, previous: { primary?: Record<string, Row>, fallback?: Record<string, Row> } = {}, modelsDev: object = {}, openrouter: object[] = []) {
+  const dir = mkdtempSync(join(tmpdir(), 'codeburn-bundle-rules-'))
+  try {
+    mkdirSync(join(dir, 'scripts'))
+    mkdirSync(join(dir, 'src/data'), { recursive: true })
+    copyFileSync(fileURLToPath(new URL('../scripts/bundle-litellm.mjs', import.meta.url)), join(dir, 'scripts/bundle-litellm.mjs'))
+    writeFileSync(join(dir, 'src/data/litellm-snapshot.json'), JSON.stringify(previous.primary ?? {}))
+    writeFileSync(join(dir, 'src/data/pricing-fallback.json'), JSON.stringify(previous.fallback ?? {}))
+    writeFileSync(join(dir, 'sources.json'), JSON.stringify({ source, modelsDev, openrouter }))
+    const run = spawnSync(process.execPath, ['--input-type=module', '-e', `
+      import { readFileSync } from 'node:fs';
+      const { source, modelsDev, openrouter } = JSON.parse(readFileSync('sources.json', 'utf8'));
+      globalThis.fetch = async (url) => ({ ok: true, json: async () =>
+        url.includes('raw.githubusercontent.com') ? source : url.includes('models.dev') ? modelsDev : { data: openrouter }
+      });
+      await import('./scripts/bundle-litellm.mjs');
+    `], { cwd: dir, encoding: 'utf8', timeout: 10_000 })
+    expect(run.status, run.stderr).toBe(0)
+    const read = (f: string) => JSON.parse(readFileSync(join(dir, 'src/data', f), 'utf8'))
+    return { snapshot: read('litellm-snapshot.json'), fallback: read('pricing-fallback.json'), meta: read('litellm-snapshot.meta.json') }
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+
+it('keeps a primary row upstream dropped in the primary snapshot, not the fallback', () => {
+  const primary: Record<string, Row> = {
+    'mistral': [0, 0, null, null, null, null],
+    'mistral-large': [4e-6, 12e-6, null, null, null, null],
+    'z-ai/glm-x': [0.2e-6, 1e-6, null, null, null, null],
+  }
+  const { snapshot, fallback, meta } = bundle({ 'ollama/mistral': rate(0, 0) }, { primary })
+  expect(snapshot['mistral-large']).toEqual(primary['mistral-large'])
+  expect(snapshot['z-ai/glm-x']).toEqual(primary['z-ai/glm-x'])
+  expect(fallback).toEqual({})
+  expect(meta.carried).toEqual(['mistral-large', 'z-ai/glm-x'])
+})
+
+it('leaves router ids out of the gap-fill', () => {
+  const modelsDev = {
+    morph: { models: {
+      auto: { family: 'auto', cost: { input: 0.85, output: 1.55 } },
+      'morph-v4': { family: 'morph', cost: { input: 0.9, output: 1.9 } },
+    } },
+  }
+  const openrouter = [
+    { id: 'openrouter/fusion', architecture: { tokenizer: 'Other' }, pricing: { prompt: '0.000001', completion: '0.000002' } },
+    { id: '~acme/acme-latest', architecture: { tokenizer: 'Router' }, pricing: { prompt: '0.000001', completion: '0.000002' } },
+    { id: 'acme/acme-2', architecture: { tokenizer: 'Other' }, pricing: { prompt: '0.000001', completion: '0.000002' } },
+  ]
+  const { fallback } = bundle({}, {}, modelsDev, openrouter)
+  expect(Object.keys(fallback).sort()).toEqual(['acme-2', 'morph-v4'])
+})
+
+it('prices a reseller\'s namespaced key at the maker\'s row and holds reseller-only keys unless their own row repriced', () => {
+  const source = {
+    'perplexity/openai/gpt-x': rate(3.5e-6, 28e-6),
+    'gpt-x': rate(1.75e-6, 14e-6, { litellm_provider: 'openai' }),
+    'azure/eu/gpt-x': rate(1.925e-6, 15.4e-6),
+    'inferenceapis/MiniMaxAI/mm-3': rate(0.39e-6, 1.56e-6),
+    'together_ai/MiniMaxAI/mm-3': rate(0.3e-6, 1.2e-6),
+    'minimax/mm-3': rate(0.3e-6, 1.2e-6),
+    'coralbricks/flash-x': rate(0.01e-6, 1.2e-6),
+    'newco/quoted-x': rate(5e-6, 6e-6),
+    'oldco/quoted-x': rate(1e-6, 2e-6),
+    'acme/repriced-x': rate(1.5e-6, 2e-6),
+    'newco/fresh-x': rate(1e-6, 2e-6),
+    'moonshot/kimi-x': rate(0.95e-6, 4e-6, { cache_read_input_token_cost: 0.19e-6 }),
+    'tencent/kimi-x': rate(0.95e-6, 4e-6, { cache_creation_input_token_cost: 0, cache_read_input_token_cost: 0.19e-6 }),
+  }
+  const primary: Record<string, Row> = {
+    'kimi-x': [0.95e-6, 4e-6, null, 0.19e-6, null, null],
+    'openai/gpt-x': [2e-6, 10e-6, null, null, null, null],
+    'flash-x': [0.3e-6, 1.2e-6, null, 0.006e-6, null, null],
+    'gone/flash-x': [0.3e-6, 1.2e-6, null, 0.006e-6, null, null],
+    'quoted-x': [1e-6, 2e-6, null, null, null, null],
+    'repriced-x': [1e-6, 2e-6, null, null, null, null],
+    'acme/repriced-x': [1e-6, 2e-6, null, null, null, null],
+  }
+  const { snapshot, meta } = bundle(source, { primary })
+  expect(snapshot['openai/gpt-x']).toEqual([1.75e-6, 14e-6, null, null, null, null])
+  expect(snapshot['eu/gpt-x']).toEqual([1.925e-6, 15.4e-6, null, null, null, null])
+  expect(snapshot['MiniMaxAI/mm-3']).toEqual([0.3e-6, 1.2e-6, null, null, null, null])
+  // Its source row was dropped upstream: held.
+  expect(snapshot['flash-x']).toEqual(primary['flash-x'])
+  // Another reseller still quotes the previous value: held.
+  expect(snapshot['quoted-x']).toEqual(primary['quoted-x'])
+  // The row it came from repriced: it moves.
+  expect(snapshot['repriced-x']).toEqual([1.5e-6, 2e-6, null, null, null, null])
+  expect(snapshot['fresh-x']).toEqual([1e-6, 2e-6, null, null, null, null])
+  // A reseller row added since does not top up a slot the id never had.
+  expect(snapshot['kimi-x']).toEqual(primary['kimi-x'])
+  expect(meta.held).toEqual(['flash-x', 'quoted-x'])
+})
+
+it('keeps the previous long-context tier when upstream drops it from a row that still exists', () => {
+  const tier = { threshold: 200_000, input: 6e-6, output: 22.5e-6, cacheWrite: 7.5e-6, cacheRead: 0.6e-6 }
+  const primary: Record<string, Row> = {
+    'sonnet-x': [3e-6, 15e-6, 3.75e-6, 0.3e-6, null, tier],
+    'retiered': [1e-6, 2e-6, null, null, null, tier],
+  }
+  const { snapshot, meta } = bundle({
+    'sonnet-x': rate(3e-6, 15e-6, { cache_creation_input_token_cost: 3.75e-6, cache_read_input_token_cost: 0.3e-6 }),
+    'retiered': rate(1e-6, 2e-6, { input_cost_per_token_above_128k_tokens: 2e-6, output_cost_per_token_above_128k_tokens: 4e-6 }),
+  }, { primary })
+  expect(snapshot['sonnet-x']).toEqual(primary['sonnet-x'])
+  expect(snapshot['retiered'][5]).toEqual({ threshold: 128_000, input: 2e-6, output: 4e-6, cacheWrite: null, cacheRead: null })
+  expect(meta.keptTiers).toEqual(['sonnet-x'])
+})
+
+it('keeps the previous value when the maker row is more than 2x off the resellers quoting the same model', () => {
+  const source = {
+    'mistral/medium-x': rate(1.5e-6, 7.5e-6),
+    'vertex_ai/mistralai/medium-x': rate(0.4e-6, 2e-6),
+    'nscale/mistralai/medium-x': rate(0.42e-6, 2.1e-6),
+    'mistral/small-x': rate(0.1e-6, 0.3e-6),
+    'vertex_ai/mistralai/small-x': rate(0.12e-6, 0.36e-6),
+  }
+  const primary: Record<string, Row> = {
+    'mistralai/medium-x': [0.4e-6, 2e-6, null, null, null, null],
+    'mistralai/small-x': [0.12e-6, 0.36e-6, null, null, null, null],
+  }
+  const { snapshot, meta } = bundle(source, { primary })
+  expect(snapshot['mistralai/medium-x']).toEqual(primary['mistralai/medium-x'])
+  expect(snapshot['mistralai/small-x']).toEqual([0.1e-6, 0.3e-6, null, null, null, null])
+  expect(meta.outliers).toEqual(['mistralai/medium-x'])
+})
+
+it('treats a rate that turns exactly $0 on a priced row as missing', () => {
+  const primary: Record<string, Row> = {
+    'deep-x': [0.27e-6, 1.1e-6, null, 0.07e-6, null, null],
+    'free-write': [1e-6, 2e-6, 0, 0.1e-6, null, null],
+  }
+  const { snapshot, meta } = bundle({
+    'deep-x': rate(0.27e-6, 1.1e-6, { cache_creation_input_token_cost: 0, cache_read_input_token_cost: 0.07e-6 }),
+    'free-write': rate(1e-6, 2e-6, { cache_creation_input_token_cost: 0, cache_read_input_token_cost: 0.1e-6 }),
+  }, { primary })
+  expect(snapshot['deep-x']).toEqual(primary['deep-x'])
+  expect(snapshot['free-write']).toEqual(primary['free-write'])
+  expect(meta.zeroSlots).toEqual(['deep-x'])
 })
