@@ -365,6 +365,7 @@ it('prices a reseller\'s namespaced key at the maker\'s row and holds a reseller
     'coralbricks/flash-x': rate(0.01e-6, 1.2e-6),
     'newco/quoted-x': rate(5e-6, 6e-6),
     'oldco/quoted-x': rate(1e-6, 2e-6),
+    'midco/quoted-x': rate(4e-6, 5e-6),
     'acme/repriced-x': rate(1.5e-6, 2e-6),
     'newco/fresh-x': rate(1e-6, 2e-6),
     'moonshot/kimi-x': rate(0.95e-6, 4e-6, { cache_read_input_token_cost: 0.19e-6 }),
@@ -411,7 +412,7 @@ it('keeps the previous long-context tier when upstream drops it from a row whose
   expect(snapshot['repriced']).toEqual([2e-6, 10e-6, null, null, null, null])
   expect(snapshot['sonnet-x']).toEqual(primary['sonnet-x'])
   expect(snapshot['retiered'][5]).toEqual({ threshold: 128_000, input: 2e-6, output: 4e-6, cacheWrite: null, cacheRead: null })
-  expect(meta.keptTiers).toEqual(['sonnet-x'])
+  expect(Object.keys(meta.keptTiers)).toEqual(['sonnet-x'])
 })
 
 it('keeps the previous value only when the maker row is more than 2x above the resellers quoting the same model', () => {
@@ -452,7 +453,7 @@ it('treats a rate that turns exactly $0 on a priced row as missing', () => {
   expect(snapshot['free-write']).toEqual(primary['free-write'])
   // The row's input moved too, so the $0 is upstream's new shape.
   expect(snapshot['repriced-zero']).toEqual([0.28e-6, 1.1e-6, 0, 0.07e-6, null, null])
-  expect(meta.zeroSlots).toEqual(['deep-x'])
+  expect(Object.keys(meta.zeroSlots)).toEqual(['deep-x'])
 })
 
 it('never carries a router id forward, but keeps a version pointer users already price', () => {
@@ -480,6 +481,7 @@ it('lets a hold last one refresh: the next refresh with the same stale inputs ta
     // (c): the previous value is still quoted by a stale reseller row.
     'newco/quoted-x': rate(5e-6, 6e-6),
     'oldco/quoted-x': rate(1e-6, 2e-6),
+    'midco/quoted-x': rate(4e-6, 5e-6),
     // (e): the maker row is more than 2x above the only reseller quote.
     'mistral/medium-x': rate(1.5e-6, 7.5e-6),
     'vertex_ai/mistralai/medium-x': rate(0.4e-6, 2e-6),
@@ -496,7 +498,8 @@ it('lets a hold last one refresh: the next refresh with the same stale inputs ta
   expect(first.meta.held['quoted-x']).toMatch(/^\d{4}-\d{2}-\d{2}$/)
 
   const second = bundle(source, next(first))
-  expect(second.snapshot['quoted-x']).toEqual([5e-6, 6e-6, null, null, null, null])
+  // On expiry the key takes the median of the current quotes (5, 1 and 4 -> 4).
+  expect(second.snapshot['quoted-x']).toEqual([4e-6, 5e-6, null, null, null, null])
   expect(second.snapshot['mistralai/medium-x']).toEqual([1.5e-6, 7.5e-6, null, null, null, null])
   expect(second.meta.held).toEqual({})
   expect(second.meta.outliers).toEqual({})
@@ -516,6 +519,7 @@ it('releases a hold at once when the stale quote disappears', () => {
   const first = bundle({
     'newco/quoted-x': rate(5e-6, 6e-6),
     'oldco/quoted-x': rate(1e-6, 2e-6),
+    'midco/quoted-x': rate(4e-6, 5e-6),
     'mistral/medium-x': rate(1.5e-6, 7.5e-6),
     'vertex_ai/mistralai/medium-x': rate(0.4e-6, 2e-6),
   }, { primary })
@@ -523,12 +527,51 @@ it('releases a hold at once when the stale quote disappears', () => {
   // The stale reseller quotes are gone; the one left agrees with the maker.
   const second = bundle({
     'newco/quoted-x': rate(5e-6, 6e-6),
+    'midco/quoted-x': rate(4e-6, 5e-6),
     'mistral/medium-x': rate(1.5e-6, 7.5e-6),
     'vertex_ai/mistralai/medium-x': rate(1.4e-6, 7e-6),
   }, next(first))
-  expect(second.snapshot['quoted-x']).toEqual([5e-6, 6e-6, null, null, null, null])
+  // Two quotes left: the lower middle one.
+  expect(second.snapshot['quoted-x']).toEqual([4e-6, 5e-6, null, null, null, null])
   expect(second.snapshot['mistralai/medium-x']).toEqual([1.5e-6, 7.5e-6, null, null, null, null])
   expect(second.meta.held).toEqual({})
   expect(second.meta.outliers).toEqual({})
   expect(second.meta.expired).toEqual([])
+})
+
+it('lets a kept tier and a restored $0 slot last one refresh', () => {
+  const tier = { threshold: 200_000, input: 6e-6, output: 22.5e-6, cacheWrite: 7.5e-6, cacheRead: 0.6e-6 }
+  const primary: Record<string, Row> = {
+    'sonnet-x': [3e-6, 15e-6, 3.75e-6, 0.3e-6, null, tier],
+    'deep-x': [0.27e-6, 1.1e-6, null, 0.07e-6, null, null],
+  }
+  const source = {
+    'sonnet-x': rate(3e-6, 15e-6, { cache_creation_input_token_cost: 3.75e-6, cache_read_input_token_cost: 0.3e-6 }),
+    'deep-x': rate(0.27e-6, 1.1e-6, { cache_creation_input_token_cost: 0, cache_read_input_token_cost: 0.07e-6 }),
+  }
+  const first = bundle(source, { primary })
+  expect(first.snapshot['sonnet-x']).toEqual(primary['sonnet-x'])
+  expect(first.snapshot['deep-x']).toEqual(primary['deep-x'])
+  expect(Object.keys(first.meta.keptTiers)).toEqual(['sonnet-x'])
+  expect(Object.keys(first.meta.zeroSlots)).toEqual(['deep-x'])
+  const second = bundle(source, next(first))
+  expect(second.snapshot['sonnet-x']).toEqual([3e-6, 15e-6, 3.75e-6, 0.3e-6, null, null])
+  expect(second.snapshot['deep-x']).toEqual([0.27e-6, 1.1e-6, 0, 0.07e-6, null, null])
+  expect(second.meta.keptTiers).toEqual({})
+  expect(second.meta.zeroSlots).toEqual({})
+  expect(second.meta.expired.sort()).toEqual(['deep-x', 'sonnet-x'])
+})
+
+it('prices a reseller-only key at the median quote, whatever the upstream order', () => {
+  const quotes: [string, number, number][] = [['aco', 3e-6, 4e-6], ['bco', 1e-6, 2e-6], ['cco', 2e-6, 3e-6], ['dco', 0, 0]]
+  const build = (order: typeof quotes) => Object.fromEntries(order.flatMap(([p, i, o]) => [[`${p}/odd-x`, rate(i, o)], [`${p}/even-x`, rate(i * 2, o * 2)]])
+    .concat([['eco/even-x', rate(8e-6, 9e-6)]]))
+  const forward = bundle(build(quotes)).snapshot
+  const reversed = bundle(build([...quotes].reverse())).snapshot
+  // Three priced quotes (the $0 one is skipped): 1, 2, 3 -> 2.
+  expect(forward['odd-x']).toEqual([2e-6, 3e-6, null, null, null, null])
+  // Four priced quotes: 2, 4, 6, 8 -> the lower middle, 4.
+  expect(forward['even-x']).toEqual([4e-6, 6e-6, null, null, null, null])
+  expect(reversed['odd-x']).toEqual(forward['odd-x'])
+  expect(reversed['even-x']).toEqual(forward['even-x'])
 })

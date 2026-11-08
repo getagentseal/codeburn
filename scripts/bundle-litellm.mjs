@@ -87,9 +87,10 @@ const readPrevious = (path) => {
 }
 const previousSnapshot = readPrevious(snapshotPath)
 const previousFallback = readPrevious(fallbackPath)
-// Holds (rules c and e) last one refresh: an id the previous refresh already
-// held takes the current upstream value now, so a stale quote or a wrong
-// maker row can delay a reprice once, never forever.
+// Every hold (a stale reseller quote, an off-market maker row, a dropped tier,
+// a slot turned $0) lasts one refresh: an id the previous refresh already held
+// the same way takes the current upstream value now, so upstream data can be
+// delayed once, never overruled forever.
 const previousMeta = readPrevious(metaPath)
 const refreshDate = new Date().toISOString().slice(0, 10)
 const expired = []
@@ -287,6 +288,19 @@ for (const [name, entry] of [...entries.filter(([n]) => isMaker(n)), ...entries.
   if (!prev || (!makerClaimed.has(stripped) && isFree(prev) && !isFree(val))) bareClaims.set(stripped, val)
   if (isMaker(name)) makerClaimed.add(stripped)
 }
+// Among resellers quoting one key, JSON order is no reason to pick one: the
+// key takes the median quote (by input, then output; the lower middle when
+// even), priced quotes before $0 ones, so reordering upstream changes nothing.
+const lowerMedianQuote = (quotes) => {
+  const vals = quotes.map((q) => JSON.parse(q))
+  const priced = vals.filter((v) => !isFree(v))
+  const pool = (priced.length ? priced : vals).sort((a, b) =>
+    a[0] - b[0] || a[1] - b[1] || completeness(b) - completeness(a) || (JSON.stringify(a) < JSON.stringify(b) ? -1 : 1))
+  return pool[Math.floor((pool.length - 1) / 2)]
+}
+for (const [stripped, quotes] of claimants) {
+  if (!makerClaimed.has(stripped)) bareClaims.set(stripped, lowerMedianQuote(quotes))
+}
 // A namespaced stripped key (`openai/gpt-5.3-codex` from
 // `perplexity/openai/gpt-5.3-codex`) is a reseller quoting a maker's model.
 // When that maker's own row exists - the bare upstream entry or a maker-prefixed
@@ -401,28 +415,28 @@ for (const [k, v] of Object.entries(previousSnapshot)) {
 // move would reprice every past request above the threshold at the base rate;
 // the previous tier stays. A row upstream re-priced takes upstream's shape.
 const sameRates = (a, b, slots) => slots.every((i) => (a[i] ?? null) === (b[i] ?? null))
-const keptTiers = []
+const keptTiers = {}
 for (const [k, v] of Object.entries(snapshot)) {
   const previousTier = previousSnapshot[k]?.[5]
-  if (!previousTier || v[5] || !sameRates(v, previousSnapshot[k], [0, 1, 2, 3])) continue
+  if (!previousTier || v[5] || !sameRates(v, previousSnapshot[k], [0, 1, 2, 3]) || heldBefore('keptTiers', k)) continue
   const val = [...v]
   val[5] = previousTier
   snapshot[k] = val
-  keptTiers.push(k)
+  keptTiers[k] = refreshDate
 }
 // A rate that turns exactly $0 on a row whose other rates did not move is
 // treated as missing, not free: a $0 cache write bills every cache-creation
 // token at nothing, where the previous slot (or its absence) billed them.
-const zeroSlots = []
+const zeroSlots = {}
 for (const [k, v] of Object.entries(snapshot)) {
   const before = previousSnapshot[k]
   if (!before || !(v[0] > 0)) continue
   const slots = [1, 2, 3].filter((i) => v[i] === 0 && before[i] !== 0)
-  if (slots.length === 0 || !sameRates(v, before, [0, 1, 2, 3].filter((i) => !slots.includes(i)))) continue
+  if (slots.length === 0 || !sameRates(v, before, [0, 1, 2, 3].filter((i) => !slots.includes(i))) || heldBefore('zeroSlots', k)) continue
   const val = [...v]
   for (const i of slots) val[i] = before[i] ?? null
   snapshot[k] = val
-  zeroSlots.push(k)
+  zeroSlots[k] = refreshDate
 }
 Object.assign(snapshot, MANUAL_ENTRIES)
 
@@ -535,7 +549,7 @@ for (const [k, v] of Object.entries(previousFallback)) {
   carried += 1
 }
 if (carried > 0) console.log(`carried ${carried} previous fallback entries forward`)
-console.log(`primary: carried ${carriedIds.length} dropped rows, held ${Object.keys(held).length} reseller keys, kept ${keptTiers.length} tiers, ${Object.keys(outliers).length} off-market maker rows, ${expired.length} holds expired, ${zeroSlots.length} new $0 slots`)
+console.log(`primary: carried ${carriedIds.length} dropped rows, held ${Object.keys(held).length} reseller keys, kept ${Object.keys(keptTiers).length} tiers, ${Object.keys(outliers).length} off-market maker rows, ${Object.keys(zeroSlots).length} new $0 slots, ${expired.length} holds expired`)
 writeFileSync(snapshotPath, JSON.stringify(snapshot))
 writeFileSync(fallbackPath, JSON.stringify(fallback))
 writeFileSync(metaPath, JSON.stringify({ carried: carriedIds, droppedRouters, held, outliers, expired, keptTiers, zeroSlots }, null, 1) + '\n')
