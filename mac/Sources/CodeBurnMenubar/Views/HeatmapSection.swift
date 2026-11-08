@@ -1877,6 +1877,7 @@ private struct PlanInsight: View {
     }
 
     private func refreshSubscriptionThroughAppDelegate() {
+        ClaudeSubscriptionService.clearUsageBlock()
         if let delegate = NSApp.delegate as? AppDelegate {
             delegate.refreshSubscriptionNow()
         } else {
