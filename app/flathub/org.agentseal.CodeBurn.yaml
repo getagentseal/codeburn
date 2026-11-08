@@ -43,7 +43,7 @@ modules:
     sources:
       - type: file
         url: https://github.com/getagentseal/codeburn/releases/download/desktop-v0.9.28/codeburn-desktop_0.9.28_amd64.deb
-        sha256: 03cf6bc4bf9379b105ebdf3e77c8ce5c105a453bb99244a65dde552ccc52ddff
+        sha256: 771b6cba6027193cc4dde92cbc283c201decfa7d8b32d8296656d3197f0f4c96
         dest-filename: codeburn-desktop.deb
         only-arches: [x86_64]
       - type: script
