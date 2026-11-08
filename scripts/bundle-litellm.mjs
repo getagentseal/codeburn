@@ -25,6 +25,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 const dataDir = join(__dirname, '..', 'src', 'data')
 const snapshotPath = join(dataDir, 'litellm-snapshot.json')
 const fallbackPath = join(dataDir, 'pricing-fallback.json')
+const metaPath = join(dataDir, 'litellm-snapshot.meta.json')
 
 // models.dev provider ids that are the actual model MAKERS (publish official
 // list prices), as opposed to gateways/resellers (openrouter, nano-gpt, vercel,
@@ -77,6 +78,47 @@ const MANUAL_ENTRIES = {
 }
 
 const snapshot = {}
+const readPrevious = (path) => {
+  try {
+    return JSON.parse(readFileSync(path, 'utf8'))
+  } catch {
+    return {}
+  }
+}
+const previousSnapshot = readPrevious(snapshotPath)
+const previousFallback = readPrevious(fallbackPath)
+// Every hold (a stale reseller quote, an off-market maker row, a dropped tier,
+// a slot turned $0) lasts one refresh: an id the previous refresh already held
+// the same way takes the current upstream value now, so upstream data can be
+// delayed once, never overruled forever.
+const previousMeta = readPrevious(metaPath)
+const refreshDate = new Date().toISOString().slice(0, 10)
+const expired = []
+const heldBefore = (list, id) => {
+  if (!(id in (previousMeta[list] ?? {}))) return false
+  expired.push(id)
+  return true
+}
+const fetchJson = (url, label) => fetch(url).then((r) => r.json()).catch((e) => {
+  console.warn(`${label} skipped: ${e.message}`)
+  return null
+})
+const md = await fetchJson(MODELS_DEV_URL, 'models.dev')
+const or = (await fetchJson(OPENROUTER_URL, 'openrouter'))?.data ?? null
+// Routers (`auto`, `fusion`, `*-latest` pointers) have no model of their own:
+// a price on one is whatever it routed to, and its bare key would price every
+// `<gateway>/auto` id. models.dev marks them by family, OpenRouter by its
+// `Router` tokenizer and its own `openrouter/` namespace. They are never
+// gap-filled, and never carried forward unless they are a `~` version pointer
+// (`~anthropic/claude-sonnet-latest`), which bills as the model it names.
+const ROUTER_FAMILIES = new Set(['auto', 'model-router'])
+const isOpenRouterRouter = (m) => m.architecture?.tokenizer === 'Router' || String(m.id).startsWith('openrouter/')
+const routerIds = new Set([
+  ...(or ?? []).filter((m) => isOpenRouterRouter(m) && !String(m.id).startsWith('~')).map((m) => String(m.id).toLowerCase()),
+  ...Object.values(md ?? {}).flatMap((p) => Object.entries(p.models ?? {})
+    .filter(([, m]) => ROUTER_FAMILIES.has(m.family)).map(([mid]) => mid.toLowerCase())),
+])
+const isRouter = (key) => [key, key.replace(/^openrouter\//, '')].some((k) => routerIds.has(k.toLowerCase()))
 
 // --- Pass 1+2: LiteLLM (primary) ---
 const res = await fetch(LITELLM_URL)
@@ -233,15 +275,81 @@ const isMaker = (name) => name.split('/').length === 2 && MAKER_PREFIXES.has(nam
 const isFree = (val) => val[0] === 0 && val[1] === 0
 const bareClaims = new Map()
 const makerClaimed = new Set()
+const held = {}
+const claimants = new Map()
 for (const [name, entry] of [...entries.filter(([n]) => isMaker(n)), ...entries.filter(([n]) => !isMaker(n))]) {
   if (!name.includes('/')) continue
   const stripped = name.replace(/^[^/]+\//, '')
   if (entryNames.has(stripped)) continue
   const val = toVal(entry)
   if (!val) continue
+  claimants.set(stripped, [...(claimants.get(stripped) ?? []), JSON.stringify(val)])
   const prev = bareClaims.get(stripped)
   if (!prev || (!makerClaimed.has(stripped) && isFree(prev) && !isFree(val))) bareClaims.set(stripped, val)
   if (isMaker(name)) makerClaimed.add(stripped)
+}
+// Among resellers quoting one key, JSON order is no reason to pick one: the
+// key takes the median quote (by input, then output; the lower middle when
+// even), priced quotes before $0 ones, so reordering upstream changes nothing.
+const lowerMedianQuote = (quotes) => {
+  const vals = quotes.map((q) => JSON.parse(q))
+  const priced = vals.filter((v) => !isFree(v))
+  const pool = (priced.length ? priced : vals).sort((a, b) =>
+    a[0] - b[0] || a[1] - b[1] || completeness(b) - completeness(a) || (JSON.stringify(a) < JSON.stringify(b) ? -1 : 1))
+  return pool[Math.floor((pool.length - 1) / 2)]
+}
+for (const [stripped, quotes] of claimants) {
+  if (!makerClaimed.has(stripped)) bareClaims.set(stripped, lowerMedianQuote(quotes))
+}
+// A namespaced stripped key (`openai/gpt-5.3-codex` from
+// `perplexity/openai/gpt-5.3-codex`) is a reseller quoting a maker's model.
+// When that maker's own row exists - the bare upstream entry or a maker-prefixed
+// row whose provider is the namespace (`MiniMaxAI` ~ `minimax`) - it prices
+// the key, whatever reseller row comes first in the JSON. Region and size
+// namespaces (`eu/gpt-5.4`, `1024-x-1024/gpt-image-1`) match no provider, so
+// those keys keep their own reseller rate.
+const makerOf = (name) => name.toLowerCase().replace(/[^a-z0-9]/g, '').replace(/ai$/, '')
+const median = (xs) => { const s = [...xs].sort((a, b) => a - b); return s.length % 2 ? s[(s.length - 1) / 2] : (s[s.length / 2 - 1] + s[s.length / 2]) / 2 }
+// A maker row more than 2x above the median reseller quote for the same model
+// is more likely a wrong upstream row than a price change, so the id it would
+// reprice keeps its previous value. A maker row below the resellers is the
+// maker's own price and wins.
+const offMarket = (official, quotes) => [0, 1].some((i) => {
+  const m = median(quotes.map((q) => q[i]))
+  return m > 0 && official[i] / m > 2
+})
+const outliers = {}
+for (const stripped of bareClaims.keys()) {
+  const slash = stripped.lastIndexOf('/')
+  if (slash < 0) continue
+  const ns = makerOf(stripped.split('/')[0])
+  const model = stripped.slice(slash + 1)
+  const official = [model, ...[...MAKER_PREFIXES].map((p) => `${p}/${model}`)]
+    .filter((c) => data[c] && makerOf(data[c].litellm_provider ?? (c.includes('/') ? c.split('/')[0] : '')) === ns)
+    .map((c) => toVal(data[c]))
+    .find(Boolean)
+  if (!official) continue
+  const previous = previousSnapshot[stripped]
+  if (previous && JSON.stringify(previous) !== JSON.stringify(official) && offMarket(official, claimants.get(stripped).map((q) => JSON.parse(q))) && !heldBefore('outliers', stripped)) {
+    bareClaims.set(stripped, previous)
+    makerClaimed.add(stripped)
+    outliers[stripped] = refreshDate
+    continue
+  }
+  bareClaims.set(stripped, official)
+  makerClaimed.add(stripped)
+}
+// A stripped key no maker row claims is a reseller's figure, and which
+// reseller wins is JSON order. It keeps its previous value only while some
+// current reseller row still quotes it; once none does, it takes the claim.
+function holdsPrevious(stripped) {
+  const previous = previousSnapshot[stripped]
+  if (!previous || makerClaimed.has(stripped)) return false
+  const p = JSON.stringify(previous)
+  if (p === JSON.stringify(bareClaims.get(stripped)) || !claimants.get(stripped).includes(p)) return false
+  if (heldBefore('held', stripped)) return false
+  held[stripped] = refreshDate
+  return true
 }
 for (const [name, entry] of entries) {
   if (!name.includes('/')) continue
@@ -271,16 +379,64 @@ for (const [name, entry] of entries) {
     && (prev[2] == null || cand[2] === prev[2])
     && (prev[3] == null || cand[3] === prev[3])
   if (!existing) {
-    if (bareClaims.has(stripped)) snapshot[stripped] = bareClaims.get(stripped)
+    if (!bareClaims.has(stripped)) continue
+    snapshot[stripped] = holdsPrevious(stripped) ? previousSnapshot[stripped] : bareClaims.get(stripped)
     continue
   }
-  if (completeness(val) > completeness(existing) && fillsOnly(val, existing)) snapshot[stripped] = val
+  // A fill on a key the previous snapshot had may only restore its previous
+  // slots: a reseller row added since never tops up an id users already price.
+  const before = previousSnapshot[stripped]
+  const restores = !before || [2, 3].every((i) => existing[i] != null || val[i] == null || val[i] === before[i])
+  if (restores && completeness(val) > completeness(existing) && fillsOnly(val, existing)) snapshot[stripped] = val
 }
 
 // A MANUAL_ENTRY that LiteLLM now ships is a candidate to delete (the override
 // would otherwise shadow upstream forever with a possibly-stale hand value).
 for (const k of Object.keys(MANUAL_ENTRIES)) {
   if (snapshot[k]) console.log(`note: MANUAL_ENTRIES['${k}'] is now in LiteLLM - candidate to remove`)
+}
+// A previous primary row upstream no longer produces stays in the primary
+// snapshot verbatim. Demoted to the fallback it would only be reached after
+// prefix matching, so a shorter sibling key would price it instead
+// (`mistral-large` fell to a $0 `mistral` row) and aliases aimed at it would
+// stop resolving.
+const carriedIds = []
+const droppedRouters = []
+for (const [k, v] of Object.entries(previousSnapshot)) {
+  if (snapshot[k] !== undefined) continue
+  if (isRouter(k)) {
+    droppedRouters.push(k)
+    continue
+  }
+  snapshot[k] = v
+  if (!(k in MANUAL_ENTRIES)) carriedIds.push(k)
+}
+// Upstream dropping a long-context tier from a row whose base rates did not
+// move would reprice every past request above the threshold at the base rate;
+// the previous tier stays. A row upstream re-priced takes upstream's shape.
+const sameRates = (a, b, slots) => slots.every((i) => (a[i] ?? null) === (b[i] ?? null))
+const keptTiers = {}
+for (const [k, v] of Object.entries(snapshot)) {
+  const previousTier = previousSnapshot[k]?.[5]
+  if (!previousTier || v[5] || !sameRates(v, previousSnapshot[k], [0, 1, 2, 3]) || heldBefore('keptTiers', k)) continue
+  const val = [...v]
+  val[5] = previousTier
+  snapshot[k] = val
+  keptTiers[k] = refreshDate
+}
+// A rate that turns exactly $0 on a row whose other rates did not move is
+// treated as missing, not free: a $0 cache write bills every cache-creation
+// token at nothing, where the previous slot (or its absence) billed them.
+const zeroSlots = {}
+for (const [k, v] of Object.entries(snapshot)) {
+  const before = previousSnapshot[k]
+  if (!before || !(v[0] > 0)) continue
+  const slots = [1, 2, 3].filter((i) => v[i] === 0 && before[i] !== 0)
+  if (slots.length === 0 || !sameRates(v, before, [0, 1, 2, 3].filter((i) => !slots.includes(i))) || heldBefore('zeroSlots', k)) continue
+  const val = [...v]
+  for (const i of slots) val[i] = before[i] ?? null
+  snapshot[k] = val
+  zeroSlots[k] = refreshDate
 }
 Object.assign(snapshot, MANUAL_ENTRIES)
 
@@ -299,30 +455,10 @@ for (const k of Object.keys(snapshot)) {
   seen.add(k.toLowerCase())
   seen.add(bareKey(k).toLowerCase())
 }
-// A refresh must never leave a model that HAD pricing without any: carry the
-// previous files' entries forward verbatim when neither the new primary nor
-// the new gap-fill covers them exactly. That means both the previous
-// fallback's own last-resort entries AND previous PRIMARY rows the new
-// upstream data dropped or renamed (LiteLLM removed e.g.
-// `gpt-image-2-2026-04-21` and the Bedrock marengo embeds between regens) —
-// an id users priced yesterday stays priced at its last known rate in the
-// fallback tier, which is exactly the last-resort tier orphaned ids belong
-// in. Primary rows are consulted before fallback rows so a key present in
-// both keeps its authoritative primary value.
-const previousFallback = (() => {
-  try {
-    return JSON.parse(readFileSync(fallbackPath, 'utf8'))
-  } catch {
-    return {}
-  }
-})()
-const previousSnapshot = (() => {
-  try {
-    return JSON.parse(readFileSync(snapshotPath, 'utf8'))
-  } catch {
-    return {}
-  }
-})()
+// A refresh must never leave a model that HAD pricing without any: the
+// previous fallback's entries carry forward verbatim when neither the new
+// primary nor the new gap-fill covers them exactly (previous primary rows
+// already carried into the primary above).
 const finite = (v) => { const n = Number(v); return Number.isFinite(n) ? n : null }
 // A rate pair is usable only if both sides are non-negative and not both zero.
 // OpenRouter uses -1 as a "variable / BYOK price" sentinel; without this guard a
@@ -340,8 +476,7 @@ function addGap(key, val) {
 }
 
 // --- Pass 3: models.dev first-party makers (official list prices) ---
-try {
-  const md = await (await fetch(MODELS_DEV_URL)).json()
+if (md) {
   // Surface drift in our hand-maintained maker allowlist: if an id we classify
   // as first-party is gone from the API, it was renamed/removed and the set is
   // stale (its models would silently fall through to OpenRouter resale rates).
@@ -354,7 +489,7 @@ try {
     const models = md[pid].models ?? {}
     for (const mid of Object.keys(models).sort()) {
       const c = models[mid].cost
-      if (!c) continue
+      if (!c || ROUTER_FAMILIES.has(models[mid].family)) continue
       const inp = finite(c.input), out = finite(c.output)
       if (!validRates(inp, out)) continue
       // models.dev cost is per MILLION tokens; snapshot is per token.
@@ -364,15 +499,13 @@ try {
     }
   }
   console.log(`models.dev (first-party): +${added} models`)
-} catch (e) {
-  console.warn(`models.dev skipped: ${e.message}`)
 }
 
 // --- Pass 4: OpenRouter (resale backstop) ---
-try {
-  const or = (await (await fetch(OPENROUTER_URL)).json()).data ?? []
+if (or) {
   let added = 0
   for (const m of or) {
+    if (isOpenRouterRouter(m)) continue
     const p = m.pricing ?? {}
     const inp = finite(p.prompt), out = finite(p.completion)
     if (!validRates(inp, out)) continue
@@ -382,8 +515,6 @@ try {
     if (addGap(bareKey(m.id ?? ''), [inp, out, cw, cr, null])) added++
   }
   console.log(`openrouter (backstop): +${added} models`)
-} catch (e) {
-  console.warn(`openrouter skipped: ${e.message}`)
 }
 
 mkdirSync(dataDir, { recursive: true })
@@ -400,7 +531,7 @@ let carried = 0
 const coveredByKey = (key) =>
   snapshot[key] !== undefined
   || fallback[key] !== undefined
-for (const [k, v] of [...Object.entries(previousSnapshot), ...Object.entries(previousFallback)]) {
+for (const [k, v] of Object.entries(previousFallback)) {
   if (coveredByKey(k)) continue
   if (fallback[k] !== undefined) continue
   // Same hygiene the gap-fill passes enforce: a carried row must not be
@@ -417,7 +548,9 @@ for (const [k, v] of [...Object.entries(previousSnapshot), ...Object.entries(pre
   fallback[k] = v
   carried += 1
 }
-if (carried > 0) console.log(`carried ${carried} previously-priced entries forward (dropped primary rows + fallback)`)
+if (carried > 0) console.log(`carried ${carried} previous fallback entries forward`)
+console.log(`primary: carried ${carriedIds.length} dropped rows, held ${Object.keys(held).length} reseller keys, kept ${Object.keys(keptTiers).length} tiers, ${Object.keys(outliers).length} off-market maker rows, ${Object.keys(zeroSlots).length} new $0 slots, ${expired.length} holds expired`)
 writeFileSync(snapshotPath, JSON.stringify(snapshot))
 writeFileSync(fallbackPath, JSON.stringify(fallback))
+writeFileSync(metaPath, JSON.stringify({ carried: carriedIds, droppedRouters, held, outliers, expired, keptTiers, zeroSlots }, null, 1) + '\n')
 console.log(`Bundled ${Object.keys(snapshot).length} primary + ${Object.keys(fallback).length} fallback models`)

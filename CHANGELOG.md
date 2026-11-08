@@ -83,6 +83,7 @@
 - **Optimize counts a transcript line read before its newline once.**
 - **Currency labels follow the selected currency** in the macOS menu bar, and the GNOME budget alert no longer applies the exchange rate twice.
 - **Codex native tool events are attributed to their tools.** Thanks @uttamdeb.
+- **Bundled model prices refreshed from the upstream list** with rules that keep an upstream reshuffle from repricing a model: retired rows keep their last price, a maker's price wins only when it is not an outlier, and a tier upstream dropped stays while the model's base price is unchanged.
 
 
 ## 0.9.27 - 2026-10-11

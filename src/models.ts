@@ -249,9 +249,10 @@ function loadSnapshot(): Map<string, ModelCosts> {
   return map
 }
 
-// Gap-fill pricing from models.dev / OpenRouter, keyed lowercase. Consulted ONLY
-// as the last-resort fallback in getModelCosts (never for exact/canonical/prefix
-// matches), so a reseller variant name can't shadow a real canonical entry.
+// Gap-fill pricing from models.dev / OpenRouter, keyed lowercase. getModelCosts
+// consults it only after every exact, canonical, alias and priced prefix
+// lookup, so a reseller variant name can't shadow a real canonical entry; an
+// exact fallback key only beats a $0 prefix sibling.
 const fallbackCosts: Map<string, ModelCosts> = (() => {
   const map = new Map<string, ModelCosts>()
   for (const [name, raw] of Object.entries(fallbackData as unknown as Record<string, SnapshotEntry>)) {
@@ -1378,7 +1379,17 @@ export function getModelCosts(model: string): ModelCosts | null {
   // `gpt-5-mini` entry rather than collapsing to the shorter `gpt-5` entry
   // due to dictionary insertion order.
   const prefixKey = longestPricingPrefix(canonical, getSortedPricingKeys())
-  if (prefixKey !== null) return pricingCache.get(prefixKey)!
+  if (prefixKey !== null) {
+    const hit = pricingCache.get(prefixKey)!
+    // A $0 sibling (`chat` from a free gateway row) must not price an id that
+    // has its own priced fallback row (`chat-bison`). A priced sibling still
+    // wins: fallback rows are resale or carried figures, often staler than it.
+    if (hit.inputCostPerToken === 0 && hit.outputCostPerToken === 0) {
+      const own = fallbackCosts.get(withPrefix.toLowerCase()) ?? fallbackCosts.get(canonical.toLowerCase())
+      if (own) return own
+    }
+    return hit
+  }
 
   const caseInsensitiveOverride = getPriceOverrideCaseInsensitive(canonical, withPrefix)
   if (caseInsensitiveOverride) return caseInsensitiveOverride
