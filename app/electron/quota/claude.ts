@@ -181,7 +181,25 @@ async function request(token: string, deps: ClaudeDeps, parent?: AbortSignal): P
   })
 }
 
-export type ClaudeResult = { quota: QuotaProvider; retryAfterSeconds?: number }
+export type ClaudeResult = { quota: QuotaProvider; retryAfterSeconds?: number; credentialKey?: string }
+
+/** Identifies a login without storing any part of its token, so a 429 block can
+ *  be dropped once the user logs in again instead of being waited out. */
+export function claudeCredentialKey(accessToken: string): string {
+  return createHash('sha256').update(accessToken).digest('hex').slice(0, 16)
+}
+
+/** The key of the file login, read silently. Null for a Keychain-only login,
+ *  which a background poll may not read; a forced refresh clears the block anyway. */
+export async function currentClaudeCredentialKey(configDir: string): Promise<string | null> {
+  try {
+    const raw = await readSecureFile(path.join(configDir, '.credentials.json'), 64 * 1024)
+    const credential = raw ? parseCredential(raw) : null
+    return credential ? claudeCredentialKey(credential.accessToken) : null
+  } catch {
+    return null
+  }
+}
 
 export async function fetchClaudeQuota(options: Partial<ClaudeDeps> & { signal?: AbortSignal; allowKeychain?: boolean; configDir?: string } = {}): Promise<ClaudeResult> {
   const configDir = options.configDir ?? path.join(os.homedir(), '.claude')
@@ -231,7 +249,7 @@ export async function fetchClaudeQuota(options: Partial<ClaudeDeps> & { signal?:
       let hint: unknown
       try { hint = (await response.json() as Record<string, unknown>).retry_after } catch { hint = undefined }
       const parsed = typeof hint === 'number' ? hint : typeof hint === 'string' ? Number(hint) : NaN
-      return { quota: empty('transientFailure'), retryAfterSeconds: Math.max(Number.isFinite(parsed) ? parsed : 300, 60) }
+      return { quota: empty('transientFailure'), retryAfterSeconds: Math.max(Number.isFinite(parsed) ? parsed : 300, 60), credentialKey: claudeCredentialKey(credential.accessToken) }
     }
     if (!response.ok) return { quota: { ...empty(response.status >= 400 && response.status < 500 ? 'terminalFailure' : 'transientFailure'), ...(response.status === 401 || response.status === 403 ? { connectable: true } : {}) } }
     return { quota: decodeClaudeUsage(await response.json(), credential) }

@@ -3,7 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { claudeConfigDir, claudeKeychainService, decodeClaudeUsage, fetchClaudeQuota, planLabel } from './claude'
+import { claudeConfigDir, claudeCredentialKey, claudeKeychainService, decodeClaudeUsage, fetchClaudeQuota, planLabel } from './claude'
 import { readKeychainPassword } from './security'
 
 // Every Keychain lookup is answered here; no test reaches /usr/bin/security.
@@ -99,6 +99,8 @@ describe('Claude quota', () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ retry_after: '42' }), { status: 429 }))
     const result = await fetchClaudeQuota({ fetch: fetchMock, readFile: vi.fn(async () => credential) })
     expect(result).toMatchObject({ quota: { connection: 'transientFailure' }, retryAfterSeconds: 60 })
+    expect(result.credentialKey).toBe(claudeCredentialKey('sk-ant-test-secret'))
+    expect(result.credentialKey).not.toContain('sk-ant')
   })
 
   it('never calls an Anthropic refresh endpoint when the token is unchanged after 401', async () => {
