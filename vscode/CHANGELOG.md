@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.3
+
+- Bundles CodeBurn CLI 0.9.28.
+- The session view in the dashboard has three screens: Inspect shows a prompt as request cards, Agents shows each subagent's lifecycle and cost, and Story tells a prompt in plain sentences.
+- Copilot agent requests in VS Code chat count every model call, and Copilot OTel spans no longer bill cached tokens twice.
+- Bundled model prices follow new rules: an upstream reshuffle no longer reprices a model, and a model is never priced from a different version.
+
 ## 1.0.2
 
 - Bundles CodeBurn CLI 0.9.27.
