@@ -97,6 +97,29 @@ final class ClaudeRateLimitTests: XCTestCase {
         )
     }
 
+    func testStoredBlockHoldsWithoutACredential() {
+        let (defaults, suiteName) = TestDefaults.make("codeburn.claude.block.\(#function)")
+        defer { TestDefaults.forget(suiteName) }
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let until = ClaudeSubscriptionService.recordUsageRateLimit(
+            retryAfterSeconds: 2400, token: "token", now: now, defaults: defaults
+        )
+
+        XCTAssertEqual(
+            ClaudeSubscriptionService.usageBlockedUntil(
+                token: nil, now: now.addingTimeInterval(60), defaults: defaults
+            ),
+            until
+        )
+        XCTAssertEqual(
+            ClaudeSubscriptionService.usageBlockedUntil(
+                token: "token", now: now.addingTimeInterval(60), defaults: defaults
+            ),
+            until,
+            "a read without a credential must not clear the block"
+        )
+    }
+
     func testRetryClearsStoredBlock() {
         let (defaults, suiteName) = TestDefaults.make("codeburn.claude.block.\(#function)")
         defer { TestDefaults.forget(suiteName) }

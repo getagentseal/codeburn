@@ -65,7 +65,9 @@ enum ClaudeSubscriptionService {
         do {
             record = try ClaudeCredentialStore.bootstrap()
         } catch let err as ClaudeCredentialStore.StoreError {
-            throw FetchError.bootstrapFailed(err)
+            throw blockedOr(FetchError.bootstrapFailed(err))
+        } catch {
+            throw blockedOr(error)
         }
         // Honour the same 429 backoff that refreshIfBootstrapped respects.
         // Without this, a user spamming Reconnect during a sustained
@@ -83,19 +85,24 @@ enum ClaudeSubscriptionService {
             return nil
         }
 
+        let token: String?
         do {
-            let token = try await ClaudeCredentialStore.freshAccessToken()
-            guard let token else { throw FetchError.notBootstrapped }
-            // Honour an outstanding rate-limit window — we recorded a 429 recently
-            // and Anthropic told us when to come back.
-            if let until = usageBlockedUntil(token: token) {
-                throw FetchError.rateLimited(retryAt: until)
-            }
+            token = try await ClaudeCredentialStore.freshAccessToken()
+        } catch let err as ClaudeCredentialStore.StoreError {
+            throw blockedOr(FetchError.credential(err))
+        } catch {
+            throw blockedOr(error)
+        }
+        guard let token else { throw blockedOr(FetchError.notBootstrapped) }
+        // Honour an outstanding rate-limit window — we recorded a 429 recently
+        // and Anthropic told us when to come back.
+        if let until = usageBlockedUntil(token: token) {
+            throw FetchError.rateLimited(retryAt: until)
+        }
+        do {
             return try await fetch(token: token, allowOne401Recovery: true)
         } catch let err as ClaudeCredentialStore.StoreError {
             throw FetchError.credential(err)
-        } catch let err as FetchError {
-            throw err
         }
     }
 
@@ -177,18 +184,27 @@ enum ClaudeSubscriptionService {
 
     /// The outstanding block, or nil. A block taken under a different
     /// credential is about a request that can no longer be reproduced (the
-    /// user re-logged in), so it is dropped rather than waited out.
+    /// user re-logged in), so it is dropped rather than waited out. With no
+    /// credential in hand (Keychain locked, denied, logged out) the block can
+    /// be neither matched nor ruled out, so it holds untouched.
     static func usageBlockedUntil(
-        token: String,
+        token: String?,
         now: Date = Date(),
         defaults: UserDefaults = .standard
     ) -> Date? {
         guard let until = defaults.object(forKey: usageBlockedUntilKey) as? Date else { return nil }
-        guard defaults.string(forKey: usageBlockedCredentialKey) == credentialFingerprint(token) else {
+        if let token, defaults.string(forKey: usageBlockedCredentialKey) != credentialFingerprint(token) {
             clearUsageBlock(defaults: defaults)
             return nil
         }
         return until > now ? until : nil
+    }
+
+    /// A credential read that fails during a block keeps the rate-limit state
+    /// on screen instead of swapping it for a credential error.
+    private static func blockedOr(_ error: Error) -> Error {
+        if let until = usageBlockedUntil(token: nil) { return FetchError.rateLimited(retryAt: until) }
+        return error
     }
 
     /// Also the Plan tab's Retry: a manual retry is the user saying the
