@@ -8,12 +8,12 @@
     "url": "https://github.com/getagentseal/codeburn",
     "source": "github"
   },
-  "version": "0.9.27",
+  "version": "0.9.28",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "codeburn",
-      "version": "0.9.27",
+      "version": "0.9.28",
       "runtimeHint": "npx",
       "transport": {
         "type": "stdio"
