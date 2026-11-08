@@ -932,28 +932,32 @@
   "openrouter/typesafe/jev-router",
   "typesafe/jev-router"
  ],
- "held": [
-  "gpt-oss-120b",
-  "llama-3.1-8b",
-  "deepseek-v4.1-flash",
-  "minimax-m3",
-  "anthropic/claude-opus-4.5",
-  "anthropic/claude-opus-4",
-  "moonshotai/Kimi-K2.5",
-  "deepseek-ai/DeepSeek-V4-Flash",
-  "moonshotai/Kimi-K2.7-Code",
-  "Qwen/Qwen3-VL-235B-A22B-Instruct",
-  "Qwen/Qwen3.8-Flash",
-  "Qwen/Qwen3-30B-A3B-Instruct-2507",
-  "Qwen/Qwen3.5-397B-A17B",
-  "anthropic/claude-3.7-sonnet",
-  "anthropic/claude-3.5-sonnet",
-  "deepseek-v3.1",
-  "qwen3.5-397b-a17b",
-  "qwen3.8-2.4t-a95b",
-  "kimi-k2.7-code-highspeed",
-  "hy4-preview"
- ],
+ "held": {
+  "gpt-oss-120b": "2026-11-08",
+  "llama-3.1-8b": "2026-11-08",
+  "deepseek-v4.1-flash": "2026-11-08",
+  "minimax-m3": "2026-11-08",
+  "anthropic/claude-opus-4.5": "2026-11-08",
+  "anthropic/claude-opus-4": "2026-11-08",
+  "moonshotai/Kimi-K2.5": "2026-11-08",
+  "deepseek-ai/DeepSeek-V4-Flash": "2026-11-08",
+  "moonshotai/Kimi-K2.7-Code": "2026-11-08",
+  "Qwen/Qwen3-VL-235B-A22B-Instruct": "2026-11-08",
+  "Qwen/Qwen3.8-Flash": "2026-11-08",
+  "Qwen/Qwen3-30B-A3B-Instruct-2507": "2026-11-08",
+  "Qwen/Qwen3.5-397B-A17B": "2026-11-08",
+  "anthropic/claude-3.7-sonnet": "2026-11-08",
+  "anthropic/claude-3.5-sonnet": "2026-11-08",
+  "deepseek-v3.1": "2026-11-08",
+  "qwen3.5-397b-a17b": "2026-11-08",
+  "qwen3.8-2.4t-a95b": "2026-11-08",
+  "kimi-k2.7-code-highspeed": "2026-11-08",
+  "hy4-preview": "2026-11-08"
+ },
+ "outliers": {
+  "mistralai/mistral-medium-3": "2026-11-08"
+ },
+ "expired": [],
  "keptTiers": [
   "anthropic.claude-3-5-sonnet-20240620-v1:0",
   "anthropic.claude-3-5-sonnet-20241022-v2:0",
@@ -961,9 +965,6 @@
   "claude-sonnet-4-5-20250929",
   "anthropic/claude-sonnet-4.5",
   "anthropic/claude-sonnet-4"
- ],
- "outliers": [
-  "mistralai/mistral-medium-3"
  ],
  "zeroSlots": []
 }
