@@ -273,7 +273,7 @@ describe('grokbotInstalled', () => {
 })
 
 describe('codeburn quota with a wrapped Cursor session', () => {
-  it.runIf(isSqliteAvailable())('reads the keychain once for both Cursor and Grok Bot', async () => {
+  it.runIf(isSqliteAvailable())('reads the keychain once per run for both Cursor and Grok Bot', async () => {
     const home = mkdtempSync(path.join(os.tmpdir(), 'grokbot-shared-keychain-'))
     const homedir = vi.spyOn(os, 'homedir').mockReturnValue(home)
     try {
@@ -304,6 +304,10 @@ describe('codeburn quota with a wrapped Cursor session', () => {
       expect(report.providers.map(row => [row.id, row.available])).toEqual([['cursor', true], ['grokbot', true]])
       expect(sent.cursor).toBe(`WorkosCursorSessionToken=user_123%3A%3A${jwt}`)
       expect(sent.grokbot).toBe(`Bearer ${jwt}`)
+
+      // Scoped to one run: a later run asks the keychain again.
+      await collectQuota({ readers })
+      expect(keychain.reads).toBe(2)
     } finally {
       vi.unstubAllGlobals()
       homedir.mockRestore()
