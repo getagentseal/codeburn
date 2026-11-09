@@ -4,6 +4,8 @@ import SQLite3
 /// CodeBurn-owned Cursor quota adapter. It reads Cursor.app's existing local
 /// session database in read-only mode, keeps the token in memory for one
 /// request, and never copies it into CodeBurn's Keychain or support directory.
+/// A cursor-agent CLI-only install has no session database; its login-keychain
+/// item is read through CursorCLISession's consent gate instead.
 enum CursorSubscriptionService {
     static let usageURL = URL(string: "https://cursor.com/api/usage-summary")!
     private static let timeoutSeconds: TimeInterval = 15
@@ -12,6 +14,7 @@ enum CursorSubscriptionService {
         case noCredentials
         case expiredSession
         case safeStorageLocked
+        case cliSessionLocked
         case authenticationRejected
         case appDataUnreadable
         case rateLimited
@@ -27,7 +30,8 @@ enum CursorSubscriptionService {
 
         var classification: Classification {
             switch self {
-            case .noCredentials, .expiredSession, .safeStorageLocked, .authenticationRejected:
+            case .noCredentials, .expiredSession, .safeStorageLocked, .cliSessionLocked,
+                 .authenticationRejected:
                 return .terminalAuth
             case .appDataUnreadable, .rateLimited, .providerUnavailable, .network:
                 return .transient
@@ -44,6 +48,8 @@ enum CursorSubscriptionService {
                 return "The Cursor app session is expired or invalid. Sign in again, then click Retry."
             case .safeStorageLocked:
                 return "Cursor encrypted its app session. Click Retry or Reconnect, then allow the Cursor Safe Storage keychain prompt."
+            case .cliSessionLocked:
+                return "The cursor-agent CLI keeps its session in the login keychain. Click Retry or Reconnect, then allow the keychain prompt."
             case .authenticationRejected:
                 return "Cursor rejected the current app session. Sign in again, then click Retry."
             case .appDataUnreadable:
@@ -62,11 +68,18 @@ enum CursorSubscriptionService {
 
     struct Deps: Sendable {
         var loadAccessToken: @Sendable () throws -> String?
+        /// Reads the cursor-agent CLI's keychain session through
+        /// CursorCLISession's consent gate. `allowPrompt` is true only inside
+        /// a user-initiated Retry/Reconnect.
+        var loadCLIAccessToken: @Sendable (_ allowPrompt: Bool) throws -> String?
         var fetch: @Sendable (URLRequest) async throws -> (Data, HTTPURLResponse)
 
         static let live = Deps(
             loadAccessToken: {
                 try CursorAppSessionStore().loadAccessToken()
+            },
+            loadCLIAccessToken: { allowPrompt in
+                try CursorCLISession.loadToken(allowPrompt: allowPrompt)
             },
             fetch: { request in
                 let configuration = URLSessionConfiguration.ephemeral
@@ -83,22 +96,44 @@ enum CursorSubscriptionService {
         )
     }
 
+    /// Where the session token came from — the footer credits the source.
+    enum SessionSource: Sendable {
+        case appDatabase
+        case cliKeychain
+
+        var footerLine: String {
+            switch self {
+            case .appDatabase: return "Source: Cursor app"
+            case .cliKeychain: return "Source: cursor-agent CLI"
+            }
+        }
+    }
+
     @MainActor
     static func refresh(deps: Deps = .live) async throws -> QuotaSummary {
         let accessToken: String
+        let sessionSource: SessionSource
         do {
             // The store read is synchronous SQLite with a 250ms busy timeout;
             // keep it off the main actor so a lock held by Cursor cannot
             // stall the UI.
             let loadAccessToken = deps.loadAccessToken
+            let loadCLIAccessToken = deps.loadCLIAccessToken
             let allowPrompt = CapacityDockProviderRefreshInteraction.isUserInitiated
-            let raw = try await Task.detached {
-                let loaded = try loadAccessToken()?.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard let loaded, !loaded.isEmpty else { return nil as String? }
-                return try CursorSafeStorage.unlock(loaded, allowPrompt: allowPrompt)
+            let raw = try await Task.detached { () throws -> (String, SessionSource)? in
+                if let loaded = try loadAccessToken()?.trimmingCharacters(in: .whitespacesAndNewlines),
+                   !loaded.isEmpty {
+                    return (try CursorSafeStorage.unlock(loaded, allowPrompt: allowPrompt), .appDatabase)
+                }
+                guard let cli = try loadCLIAccessToken(allowPrompt)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines), !cli.isEmpty else {
+                    return nil
+                }
+                return (cli, .cliKeychain)
             }.value
             guard let loaded = raw else { throw FetchError.noCredentials }
-            accessToken = loaded
+            accessToken = loaded.0
+            sessionSource = loaded.1
         } catch let error as FetchError {
             throw error
         } catch {
@@ -135,10 +170,10 @@ enum CursorSubscriptionService {
             throw FetchError.parseFailure
         }
 
-        return try decode(data)
+        return try decode(data, sessionSource: sessionSource)
     }
 
-    static func decode(_ data: Data) throws -> QuotaSummary {
+    static func decode(_ data: Data, sessionSource: SessionSource = .appDatabase) throws -> QuotaSummary {
         let summary: UsageSummary
         do {
             summary = try JSONDecoder().decode(UsageSummary.self, from: data)
@@ -204,7 +239,7 @@ enum CursorSubscriptionService {
             primary: primary,
             details: details,
             planLabel: planLabel(summary.membershipType),
-            footerLines: ["Source: Cursor app"]
+            footerLines: [sessionSource.footerLine]
         )
     }
 
