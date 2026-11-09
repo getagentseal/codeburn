@@ -44,6 +44,9 @@ enum CapacityDockMetrics {
     private static let baseRingLabelSpacing: CGFloat = 6
     private static let baseProviderIconSize: CGFloat = 26
     private static let basePercentageTextSize: CGFloat = 17
+    private static let baseCaptionTextSize: CGFloat = 10
+    private static let baseCaptionLine: CGFloat = 12
+    private static let baseCaptionGap: CGFloat = 2
     private static let baseDetailWidth: CGFloat = 350
 
     /// Every dock dimension lands on a whole point. Fractional sizes (85%
@@ -59,7 +62,9 @@ enum CapacityDockMetrics {
     static func horizontalRailWidth(scale: CGFloat) -> CGFloat { points(baseHorizontalRailWidth, scale) }
     static func edgeFlareWidth(scale: CGFloat) -> CGFloat { points(baseEdgeFlareWidth, scale) }
     static func edgeShoulderDepth(scale: CGFloat) -> CGFloat { points(baseEdgeShoulderDepth, scale) }
-    static func rowHeight(scale: CGFloat) -> CGFloat { points(baseRowHeight, scale) }
+    static func rowHeight(scale: CGFloat, captioned: Bool = false) -> CGFloat {
+        points(baseRowHeight, scale) + (captioned ? captionGap(scale: scale) + captionLine(scale: scale) : 0)
+    }
     static func rowSpacing(scale: CGFloat) -> CGFloat { points(baseRowSpacing, scale) }
     static func railAlongPad(scale: CGFloat) -> CGFloat { points(baseRailAlongPad, scale) }
     static func railCrossPad(scale: CGFloat) -> CGFloat { points(baseRailCrossPad, scale) }
@@ -68,12 +73,15 @@ enum CapacityDockMetrics {
     static func ringLabelSpacing(scale: CGFloat) -> CGFloat { points(baseRingLabelSpacing, scale) }
     static func providerIconSize(scale: CGFloat) -> CGFloat { points(baseProviderIconSize, scale) }
     static func percentageTextSize(scale: CGFloat) -> CGFloat { points(basePercentageTextSize, scale) }
+    static func captionTextSize(scale: CGFloat) -> CGFloat { points(baseCaptionTextSize, scale) }
+    static func captionLine(scale: CGFloat) -> CGFloat { points(baseCaptionLine, scale) }
+    static func captionGap(scale: CGFloat) -> CGFloat { points(baseCaptionGap, scale) }
     static func detailWidth(scale: CGFloat) -> CGFloat { points(baseDetailWidth, scale) }
 
-    static func railHeight(providerCount: Int, alongPad: CGFloat, scale: CGFloat) -> CGFloat {
+    static func railHeight(providerCount: Int, alongPad: CGFloat, scale: CGFloat, captioned: Bool = false) -> CGFloat {
         let count = max(providerCount, 1)
         return alongPad
-            + CGFloat(count) * rowHeight(scale: scale)
+            + CGFloat(count) * rowHeight(scale: scale, captioned: captioned)
             + CGFloat(max(0, count - 1)) * rowSpacing(scale: scale)
             + alongPad
     }
@@ -411,6 +419,7 @@ enum CapacityDockGlance {
 @Observable
 final class CapacityDockViewModel {
     var preferences: CapacityDockPreferences.Snapshot
+    var claudeProfiles: [CapacityDockClaudeProfile] = []
     var interaction = CapacityDockInteractionState()
     var hoveredProvider: CapacityDockProvider?
     var detailHeight: CGFloat = 164
@@ -423,28 +432,74 @@ final class CapacityDockViewModel {
     var detailTailPosition: CGFloat = 0.5
     var expansionAnchor: CapacityDockExpansionAnchor = .start
 
-    init(preferences: CapacityDockPreferences.Snapshot) {
+    init(preferences: CapacityDockPreferences.Snapshot, claudeProfiles: [CapacityDockClaudeProfile] = []) {
         self.preferences = preferences
+        self.claudeProfiles = claudeProfiles
         self.dockedEdge = preferences.dockedEdge
         self.attachmentEdge = preferences.attachmentEdge
         self.attachmentProgress = preferences.dockedEdge == nil ? 0 : 1
     }
 
+    var usesSeparateClaudeProfiles: Bool {
+        preferences.claudeProfiles == .separate
+            && claudeProfiles.count > 1
+            && preferences.selectedProviders.contains(.claude)
+    }
+
+    var effectiveSelectedProviders: [CapacityDockProvider] {
+        guard usesSeparateClaudeProfiles else { return preferences.selectedProviders }
+        let profileRows = claudeProfiles.map { CapacityDockProvider.claudeProfile(id: $0.id) }
+        return preferences.selectedProviders.flatMap { provider in
+            provider == .claude ? profileRows : [provider]
+        }
+    }
+
+    var effectivePreferredProvider: CapacityDockProvider {
+        if usesSeparateClaudeProfiles && preferences.preferredProvider == .claude {
+            if let first = claudeProfiles.first {
+                return .claudeProfile(id: first.id)
+            }
+        }
+        return preferences.preferredProvider
+    }
+
+    func caption(for provider: CapacityDockProvider) -> String? {
+        guard usesSeparateClaudeProfiles,
+              let profileID = provider.claudeProfileID,
+              let profile = claudeProfiles.first(where: { $0.id == profileID })
+        else { return nil }
+        return profile.caption
+    }
+
+    func detailTitle(for provider: CapacityDockProvider) -> String {
+        if let profileID = provider.claudeProfileID,
+           let profile = claudeProfiles.first(where: { $0.id == profileID }) {
+            return "\(provider.displayName) · \(profile.caption)"
+        }
+        return provider.displayName
+    }
+
     var displayedProviders: [CapacityDockProvider] {
-        guard isRailPresentationExpanded else { return [preferences.preferredProvider] }
-        let preferred = preferences.preferredProvider
-        let providers = [preferred] + preferences.selectedProviders.filter { $0 != preferred }
+        let preferred = effectivePreferredProvider
+        guard isRailPresentationExpanded else { return [preferred] }
+        let providers = [preferred] + effectiveSelectedProviders.filter { $0 != preferred }
         return expansionAnchor == .start ? providers : providers.reversed()
     }
 
     var restingBodyLength: CGFloat {
-        CapacityDockMetrics.railHeight(providerCount: 1, alongPad: railAlongPad, scale: scale)
+        CapacityDockMetrics.railHeight(
+            providerCount: 1,
+            alongPad: railAlongPad,
+            scale: scale,
+            captioned: usesSeparateClaudeProfiles
+        )
     }
     var expandedBodyLength: CGFloat {
         CapacityDockMetrics.railHeight(
-            providerCount: preferences.selectedProviders.count,
+            providerCount: effectiveSelectedProviders.count,
             alongPad: railAlongPad,
-            scale: scale
+            scale: scale,
+            captioned: usesSeparateClaudeProfiles
         )
     }
     var targetBodyLength: CGFloat {
@@ -485,7 +540,9 @@ final class CapacityDockViewModel {
             ? CGSize(width: railWidth, height: bodyLength)
             : CGSize(width: bodyLength, height: railWidth)
     }
-    var rowHeight: CGFloat { CapacityDockMetrics.rowHeight(scale: scale) }
+    var rowHeight: CGFloat {
+        CapacityDockMetrics.rowHeight(scale: scale, captioned: usesSeparateClaudeProfiles)
+    }
     var rowSpacing: CGFloat { CapacityDockMetrics.rowSpacing(scale: scale) }
     // Along-axis content padding: small when floating, plus the docked concave
     // flare depth so content never crowds a necked edge. Cross-axis is a small
@@ -509,7 +566,7 @@ final class CapacityDockViewModel {
     var detailWidth: CGFloat { CapacityDockMetrics.detailWidth(scale: detailScale) }
 
     func presentationOpacity(for provider: CapacityDockProvider) -> CGFloat {
-        provider == preferences.preferredProvider ? 1 : railPresentationProgress
+        provider == effectivePreferredProvider ? 1 : railPresentationProgress
     }
 }
 
@@ -539,6 +596,7 @@ struct CapacityDockView: View {
                 CapacityDockProviderRow(
                     provider: provider,
                     quota: quota(provider),
+                    caption: model.caption(for: provider),
                     scale: model.scale,
                     gaugeShape: model.preferences.gaugeShape,
                     glanceWindow: model.preferences.glanceWindow(for: provider),
@@ -551,10 +609,10 @@ struct CapacityDockView: View {
                 )
                 .opacity(model.presentationOpacity(for: provider))
                 .offset(
-                    x: model.isVertical || provider == model.preferences.preferredProvider
+                    x: model.isVertical || provider == model.effectivePreferredProvider
                         ? 0
                         : -8 * model.scale * (1 - model.railPresentationProgress),
-                    y: !model.isVertical || provider == model.preferences.preferredProvider
+                    y: !model.isVertical || provider == model.effectivePreferredProvider
                         ? 0
                         : -8 * model.scale * (1 - model.railPresentationProgress)
                 )
@@ -642,6 +700,7 @@ struct CapacityDockView: View {
 private struct CapacityDockProviderRow: View {
     let provider: CapacityDockProvider
     let quota: QuotaSummary?
+    let caption: String?
     let scale: CGFloat
     let gaugeShape: CapacityDockGaugeShape
     let glanceWindow: CapacityDockGlanceWindowKind
@@ -700,12 +759,24 @@ private struct CapacityDockProviderRow: View {
                     .monospacedDigit()
                     .foregroundStyle(headlinePercentColor)
                     .contentTransition(.numericText())
+
+                if let caption {
+                    Text(caption)
+                        .font(.system(
+                            size: CapacityDockMetrics.captionTextSize(scale: scale),
+                            weight: .medium
+                        ))
+                        .foregroundStyle(Color.capacityDockText.opacity(0.58))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .frame(height: CapacityDockMetrics.captionLine(scale: scale))
+                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(L("%@ usage", provider.displayName))
+        .accessibilityLabel(L("%@ usage", caption.map { "\(provider.displayName) \($0)" } ?? provider.displayName))
         .accessibilityValue(accessibilityValue)
         .accessibilityHint(accessibilityHint)
         // The gauge is the switch, and a click is a pointer gesture. Keyboard
@@ -998,7 +1069,7 @@ struct CapacityDockDetailView: View {
                     // mark reads as its equal rather than as a bullet.
                     .frame(width: 18 * s, height: 18 * s)
             }
-            Text(provider.displayName)
+            Text(model.detailTitle(for: provider))
                 .font(.system(size: 17, weight: .semibold))
                 .foregroundStyle(Color.capacityDockText)
             Spacer(minLength: 6)
