@@ -175,3 +175,129 @@ struct GrokBotSubscriptionServiceTests {
         func record(_ request: URLRequest) { values.append(request) }
     }
 }
+
+private final class KeychainReads: @unchecked Sendable {
+    private let lock = NSLock()
+    private var reads = 0
+    private let password: String?
+
+    init(password: String?) { self.password = password }
+
+    func read() -> String? {
+        lock.withLock { reads += 1 }
+        return password
+    }
+
+    var count: Int { lock.withLock { reads } }
+}
+
+/// Serialized: the one-read window in `CursorSafeStorage` is process-wide.
+/// Fake Keychain and a test-only defaults suite; never the real ones.
+@Suite("Grok Bot with a Cursor safe-storage session", .serialized)
+@MainActor
+struct GrokBotSafeStorageTests {
+    private actor RequestCapture {
+        private(set) var values: [URLRequest] = []
+        func record(_ request: URLRequest) { values.append(request) }
+    }
+
+    nonisolated private static let password = "cursor-key-not-a-secret"
+
+    nonisolated private static func deps(
+        stored: String,
+        suiteName: String,
+        keychain: KeychainReads,
+        record: RequestCapture
+    ) -> GrokBotSubscriptionService.Deps {
+        GrokBotSubscriptionService.Deps(
+            isInstalled: { true },
+            loadAccessToken: { stored },
+            fetch: { request in
+                await record.record(request)
+                let response = HTTPURLResponse(
+                    url: GrokBotSubscriptionService.usageURL, statusCode: 200, httpVersion: nil, headerFields: nil
+                )!
+                return (Data(#"{"usagePercent":30,"hasNonZeroIncludedLimit":true}"#.utf8), response)
+            },
+            unlock: { token, allowPrompt in
+                try CursorSafeStorage.unlock(
+                    token,
+                    allowPrompt: allowPrompt,
+                    defaults: UserDefaults(suiteName: suiteName)!,
+                    keychain: keychain.read
+                )
+            }
+        )
+    }
+
+    @Test("a wrapped Cursor session is unlocked before the request")
+    func unlocksBeforeTheRequest() async throws {
+        let (_, suiteName) = TestDefaults.make("CodeBurnMenubarTests.GrokBot.\(#function)")
+        defer { TestDefaults.forget(suiteName) }
+        let stored = "cursor-safe-storage:v1:djEwWOtCQ9RSqI/bp3Cb+ehqZNzuvUmlpYA4EqgJuLmz/UY="
+        let keychain = KeychainReads(password: Self.password)
+        let requests = RequestCapture()
+
+        let result = try await CapacityDockProviderRefreshInteraction.userInitiated {
+            try await GrokBotSubscriptionService.refresh(deps: Self.deps(
+                stored: stored, suiteName: suiteName, keychain: keychain, record: requests
+            ))
+        }
+        let captured = await requests.values
+
+        #expect(result.connection == .connected)
+        #expect(captured.first?.value(forHTTPHeaderField: "Authorization") == "Bearer grokbot.unlock.signature")
+        #expect(keychain.count == 1)
+    }
+
+    @Test("a locked keychain reports the Cursor locked message without a request")
+    func lockedKeychainSkipsTheRequest() async throws {
+        let (_, suiteName) = TestDefaults.make("CodeBurnMenubarTests.GrokBot.\(#function)")
+        defer { TestDefaults.forget(suiteName) }
+        let stored = "cursor-safe-storage:v1:djEwwcEvTGxG0eQsz8tltHi4nMFhfyawXN57+EQmOx9kp2c="
+        let requests = RequestCapture()
+
+        await #expect(throws: CursorSubscriptionService.FetchError.safeStorageLocked) {
+            try await CapacityDockProviderRefreshInteraction.userInitiated {
+                try await GrokBotSubscriptionService.refresh(deps: Self.deps(
+                    stored: stored, suiteName: suiteName, keychain: KeychainReads(password: nil), record: requests
+                ))
+            }
+        }
+        let captured = await requests.values
+        #expect(captured.isEmpty)
+    }
+
+    @Test("one user refresh reads the keychain once for Cursor and Grok Bot, a Deny included")
+    func cursorAndGrokBotShareOneRead() async throws {
+        let (defaults, suiteName) = TestDefaults.make("CodeBurnMenubarTests.GrokBot.\(#function)")
+        defer { TestDefaults.forget(suiteName) }
+        let requests = RequestCapture()
+
+        let shared = "cursor-safe-storage:v1:djEwkOuI7I/ibOHkoPuEN9h3NuhddBfU0Ks47rbipX7Gl3I="
+        let allowed = KeychainReads(password: Self.password)
+        _ = try CursorSafeStorage.unlock(shared, allowPrompt: true, defaults: defaults, keychain: allowed.read)
+        _ = try await CapacityDockProviderRefreshInteraction.userInitiated {
+            try await GrokBotSubscriptionService.refresh(deps: Self.deps(
+                stored: shared, suiteName: suiteName, keychain: allowed, record: requests
+            ))
+        }
+        let captured = await requests.values
+        #expect(allowed.count == 1)
+        #expect(captured.first?.value(forHTTPHeaderField: "Authorization") == "Bearer grokbot.shared.signature")
+
+        let denied = "cursor-safe-storage:v1:djEwlwr7B7sxKrGwF4YhlPPou9rEvdZQtIIdoejyoaqz+dY="
+        let refused = KeychainReads(password: nil)
+        #expect(throws: CursorSubscriptionService.FetchError.safeStorageLocked) {
+            try CursorSafeStorage.unlock(denied, allowPrompt: true, defaults: defaults, keychain: refused.read)
+        }
+        await #expect(throws: CursorSubscriptionService.FetchError.safeStorageLocked) {
+            try await CapacityDockProviderRefreshInteraction.userInitiated {
+                try await GrokBotSubscriptionService.refresh(deps: Self.deps(
+                    stored: denied, suiteName: suiteName, keychain: refused, record: requests
+                ))
+            }
+        }
+        #expect(refused.count == 1)
+    }
+}
