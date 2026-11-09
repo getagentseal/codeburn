@@ -13,15 +13,28 @@ enum CursorSafeStorage {
     private static let lock = NSLock()
     // The token a stored blob opened to, so a background refresh reads each blob once.
     private nonisolated(unsafe) static var opened: (stored: String, jwt: String)?
+    // One user refresh unlocks for Cursor and Grok Bot: an allowed read inside
+    // this window takes the previous allowed read's answer, a Deny included.
+    static let promptReuseSeconds: TimeInterval = 30
+    private static let promptLock = NSLock()
+    private nonisolated(unsafe) static var prompted: (stored: String, jwt: String?, at: Date)?
 
     /// Keychain consent is user-initiated, as for Claude: `allowPrompt` is a
     /// Retry or Reconnect click. A background refresh reads only after such a
     /// read succeeded, and its first locked read turns that off again.
-    static func unlock(_ stored: String, allowPrompt: Bool, defaults: UserDefaults = .standard) throws -> String {
+    static func unlock(
+        _ stored: String,
+        allowPrompt: Bool,
+        defaults: UserDefaults = .standard,
+        keychain: (() -> String?)? = nil
+    ) throws -> String {
         guard stored.hasPrefix(prefix) else { return stored }
         if !allowPrompt, let last = lock.withLock({ opened }), last.stored == stored { return last.jwt }
+        let password: () -> String? = keychain ?? readPassword
         guard allowPrompt || defaults.bool(forKey: consentKey),
-              let jwt = readPassword().flatMap({ decrypt(stored, password: $0) }) else {
+              let jwt = allowPrompt
+                ? promptedRead(stored, password: password)
+                : password().flatMap({ decrypt(stored, password: $0) }) else {
             defaults.removeObject(forKey: consentKey)
             throw CursorSubscriptionService.FetchError.safeStorageLocked
         }
@@ -33,6 +46,19 @@ enum CursorSafeStorage {
     static func forget(defaults: UserDefaults) {
         defaults.removeObject(forKey: consentKey)
         lock.withLock { opened = nil }
+        promptLock.withLock { prompted = nil }
+    }
+
+    private static func promptedRead(_ stored: String, password: () -> String?) -> String? {
+        promptLock.withLock { () -> String? in
+            if let last = prompted, last.stored == stored,
+               Date().timeIntervalSince(last.at) < promptReuseSeconds {
+                return last.jwt
+            }
+            let jwt = password().flatMap { decrypt(stored, password: $0) }
+            prompted = (stored: stored, jwt: jwt, at: Date())
+            return jwt
+        }
     }
 
     /// PBKDF2-HMAC-SHA1(password, "saltysalt", 1003, 16) + AES-128-CBC, IV 16 spaces.

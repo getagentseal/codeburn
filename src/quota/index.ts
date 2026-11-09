@@ -18,13 +18,13 @@ import { fetchClinePassQuota } from './clinepass.js'
 import { fetchCodexQuota } from './codex.js'
 import { fetchCommandCodeQuota } from './commandcode.js'
 import { fetchCopilotQuota } from './copilot.js'
-import { fetchCursorQuota } from './cursor.js'
+import { fetchCursorQuota, type CursorKeychainReader } from './cursor.js'
 import { fetchDevinQuota } from './devin.js'
 import { fetchGeminiQuota } from './gemini.js'
 import { fetchGrokQuota } from './grok.js'
 import { fetchGrokbotQuota, grokbotInstalled } from './grokbot.js'
 import { fetchKimiQuota } from './kimi.js'
-import { KEYCHAIN_TIMEOUT_MS } from './security.js'
+import { KEYCHAIN_TIMEOUT_MS, readKeychainPassword, type KeychainOutcome } from './security.js'
 import type { ProviderName, QuotaProvider } from './types.js'
 import type { DateRange } from '../types.js'
 import { fetchZaiQuota } from './zai.js'
@@ -75,7 +75,7 @@ export type ClaudeProfileToday = {
 }
 
 export type QuotaReport = { providers: QuotaCommandProvider[]; claudeProfiles?: ClaudeProfileReport[] }
-export type ProviderReader = (signal: AbortSignal) => Promise<QuotaProvider>
+export type ProviderReader = (signal: AbortSignal, readCursorKeychain: CursorKeychainReader) => Promise<QuotaProvider>
 
 const READERS: { id: ProviderName; name: string; read: ProviderReader }[] = [
   { id: 'claude', name: 'Claude', read: async signal => {
@@ -89,11 +89,11 @@ const READERS: { id: ProviderName; name: string; read: ProviderReader }[] = [
   { id: 'copilot', name: 'GitHub Copilot', read: async signal => (await fetchCopilotQuota({ signal })).quota },
   { id: 'antigravity', name: 'Antigravity', read: () => fetchAntigravityQuota() },
   { id: 'kimi', name: 'Kimi', read: async signal => (await fetchKimiQuota({ signal })).quota },
-  { id: 'cursor', name: 'Cursor', read: async signal => (await fetchCursorQuota({ signal, allowKeychain: true })).quota },
+  { id: 'cursor', name: 'Cursor', read: async (signal, readCursorKeychain) => (await fetchCursorQuota({ signal, allowKeychain: true, readKeychain: readCursorKeychain })).quota },
   { id: 'zai', name: 'Z.ai', read: async signal => (await fetchZaiQuota({ signal })).quota },
   { id: 'zcode', name: 'ZCode', read: async signal => (await fetchZcodeQuota({ signal })).quota },
   { id: 'grok', name: 'Grok', read: async signal => (await fetchGrokQuota({ signal })).quota },
-  { id: 'grokbot', name: 'Grok Bot', read: async signal => (await fetchGrokbotQuota({ signal })).quota },
+  { id: 'grokbot', name: 'Grok Bot', read: async (signal, readCursorKeychain) => (await fetchGrokbotQuota({ signal, allowKeychain: true, readKeychain: readCursorKeychain })).quota },
   { id: 'clinepass', name: 'ClinePass', read: async signal => (await fetchClinePassQuota({ signal })).quota },
   { id: 'devin', name: 'Devin', read: async () => (await fetchDevinQuota()).quota },
   { id: 'commandcode', name: 'Command Code', read: async signal => (await fetchCommandCodeQuota({ signal })).quota },
@@ -242,12 +242,16 @@ export async function collectQuota(options: {
   // The claude row reads the first configured directory, so that directory's profile is
   // the claude row itself.
   const claudeRowSource = profileSources.find(source => source === discovered[0])
+  // Cursor and Grok Bot open the same Cursor session in one run: one keychain read, one prompt.
+  let cursorKeychain: Promise<KeychainOutcome> | undefined
+  const readCursorKeychain: CursorKeychainReader = (service, accounts) =>
+    (cursorKeychain ??= readKeychainPassword(service, accounts))
   const providersTask = Promise.all(readers.map(async entry => {
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), timeoutMs)
     const timedOut = new Promise<'timeout'>(resolve => { controller.signal.addEventListener('abort', () => resolve('timeout')) })
     try {
-      const quota = await Promise.race([entry.read(controller.signal), timedOut])
+      const quota = await Promise.race([entry.read(controller.signal, readCursorKeychain), timedOut])
       if (quota === 'timeout') {
         return { id: entry.id, name: entry.name, available: false, windows: [], error: 'Timed out.' }
       }

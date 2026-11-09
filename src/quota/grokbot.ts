@@ -7,9 +7,9 @@
 //     nextResetTimestampUtc, hasNonZeroIncludedLimit,
 //     usesPooledEnterpriseAllowance, and grokPlanLabel on newer builds.
 //
-// Credential: the Cursor IDE's OWN access token, unencrypted in its VS Code
-// state database under `cursorAuth/accessToken` and already read read-only by
-// src/quota/cursor.ts, whose lookup is reused here rather than duplicated.
+// Credential: the Cursor IDE's OWN access token, kept in its VS Code state
+// database under `cursorAuth/accessToken` and already read read-only by
+// src/quota/cursor.ts, whose lookup and safe-storage unlock are reused here.
 // Grok Bot keeps its own copy of the same Cursor session in Electron safe
 // storage, which CodeBurn never decrypts (see src/quota/codex.ts), so this
 // reading is only the app's reading when the IDE is signed into the account
@@ -18,8 +18,15 @@ import { existsSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-import { cursorAccessTokenFromDatabase, cursorDatabasePath } from './cursor.js'
-import { quotaRequestSignal, sanitizeError } from './security.js'
+import {
+  cursorAccessTokenFromDatabase,
+  cursorDatabasePath,
+  cursorLockedMessage,
+  isCursorSafeStorageToken,
+  unwrapCursorStoredToken,
+  type CursorKeychainReader,
+} from './cursor.js'
+import { quotaRequestSignal, readKeychainPassword, sanitizeError } from './security.js'
 import type { QuotaProvider, QuotaWindow } from './types.js'
 
 const USAGE_ENDPOINT = 'https://api2.cursor.sh/aiserver.v1.DashboardService/GetSandUsageStatus'
@@ -54,6 +61,7 @@ export type GrokbotQuotaDeps = {
   databasePath: string
   /** Resolves the Cursor app's access token; `null` when it is not signed in. */
   loadAccessToken: (databasePath: string) => Promise<string | null>
+  readKeychain: CursorKeychainReader
 }
 
 function defaultDeps(): GrokbotQuotaDeps {
@@ -61,6 +69,7 @@ function defaultDeps(): GrokbotQuotaDeps {
     fetch: globalThis.fetch,
     databasePath: cursorDatabasePath(),
     loadAccessToken: cursorAccessTokenFromDatabase,
+    readKeychain: (service, accounts) => readKeychainPassword(service, accounts),
   }
 }
 
@@ -108,7 +117,7 @@ export function decodeGrokbotUsage(body: unknown): QuotaProvider | 'noAllowance'
 export type GrokbotQuotaResult = { quota: QuotaProvider; retryAfterSeconds?: number }
 
 export async function fetchGrokbotQuota(
-  options: Partial<GrokbotQuotaDeps> & { signal?: AbortSignal } = {},
+  options: Partial<GrokbotQuotaDeps> & { signal?: AbortSignal; allowKeychain?: boolean } = {},
 ): Promise<GrokbotQuotaResult> {
   const deps = { ...defaultDeps(), ...options }
   let token: string | null
@@ -121,6 +130,12 @@ export async function fetchGrokbotQuota(
     return { quota: empty('transientFailure', UNREADABLE_FOOTER) }
   }
   if (!token) return { quota: empty('disconnected', SIGNED_OUT_FOOTER) }
+
+  // Same consent rule as the Cursor reader: only a caller that says so may raise the prompt.
+  if (isCursorSafeStorageToken(token) && !options.allowKeychain) return { quota: empty('terminalFailure', [cursorLockedMessage()]) }
+  const unwrapped = await unwrapCursorStoredToken(token, deps.readKeychain)
+  if ('locked' in unwrapped) return { quota: empty('terminalFailure', [cursorLockedMessage()]) }
+  token = unwrapped.token
 
   try {
     const response = await deps.fetch(USAGE_ENDPOINT, {
