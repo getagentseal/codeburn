@@ -223,7 +223,7 @@ struct GrokBotSafeStorageTests {
                 try CursorSafeStorage.unlock(
                     token,
                     allowPrompt: allowPrompt,
-                    defaults: UserDefaults(suiteName: suiteName)!,
+                    defaults: TestDefaults.open(suiteName),
                     keychain: keychain.read
                 )
             }
