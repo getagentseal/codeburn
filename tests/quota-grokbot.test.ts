@@ -1,12 +1,14 @@
 // Fixture-driven coverage for the Grok Bot quota adapter. Every test drives a
 // stub token loader and a mocked fetch; none of them reads the operator's real
 // Cursor session or touches the network.
+import { createCipheriv, pbkdf2Sync } from 'node:crypto'
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
 import { afterAll, describe, expect, it, vi } from 'vitest'
 
+import { cursorLockedMessage } from '../src/quota/cursor.js'
 import { decodeGrokbotUsage, fetchGrokbotQuota, grokbotInstalled } from '../src/quota/grokbot.js'
 import { availableReaders } from '../src/quota/index.js'
 
@@ -161,6 +163,74 @@ describe('fetchGrokbotQuota', () => {
     })
     expect(quota.connection).toBe('transientFailure')
     expect(quota.footerLines[0]).toContain('Quit and reopen Cursor')
+  })
+})
+
+function encryptSafeStorage(jwt: string, password: string): string {
+  const key = pbkdf2Sync(Buffer.from(password, 'utf8'), 'saltysalt', 1003, 16, 'sha1')
+  const cipher = createCipheriv('aes-128-cbc', key, Buffer.alloc(16, 0x20))
+  const blob = Buffer.concat([Buffer.from('v10'), cipher.update(jwt, 'utf8'), cipher.final()])
+  return `cursor-safe-storage:v1:${blob.toString('base64')}`
+}
+
+describe('fetchGrokbotQuota with a Cursor safe-storage session', () => {
+  const password = 'cursor-key-not-a-secret'
+  const jwt = 'header.payload.signature'
+  const wrapped = async () => encryptSafeStorage(jwt, password)
+  const bearer = (fetchMock: ReturnType<typeof vi.fn>) =>
+    ((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].headers as Record<string, string>)['Authorization']
+
+  it('sends the unlocked token, not the stored blob', async () => {
+    const fetchMock = vi.fn(async () => jsonResponse(successBody))
+    const { quota } = await fetchGrokbotQuota({
+      allowKeychain: true,
+      fetch: fetchMock as unknown as typeof fetch,
+      databasePath: '/nowhere/state.vscdb',
+      loadAccessToken: wrapped,
+      readKeychain: async () => ({ status: 'found', value: `${password}\n` }),
+    })
+    expect(quota.connection).toBe('connected')
+    expect(bearer(fetchMock)).toBe(`Bearer ${jwt}`)
+  })
+
+  it('reports a locked keychain as the Cursor locked message without a request', async () => {
+    for (const outcome of [{ status: 'accessDenied' }, { status: 'notFound' }] as const) {
+      const { quota } = await fetchGrokbotQuota({
+        allowKeychain: true,
+        fetch: neverFetch,
+        databasePath: '/nowhere/state.vscdb',
+        loadAccessToken: wrapped,
+        readKeychain: async () => outcome,
+      })
+      expect(quota.connection).toBe('terminalFailure')
+      expect(quota.footerLines).toEqual([cursorLockedMessage()])
+    }
+  })
+
+  it('leaves the keychain alone unless the caller allows it', async () => {
+    let reads = 0
+    const { quota } = await fetchGrokbotQuota({
+      fetch: neverFetch,
+      databasePath: '/nowhere/state.vscdb',
+      loadAccessToken: wrapped,
+      readKeychain: async () => { reads += 1; return { status: 'found', value: password } },
+    })
+    expect(quota.footerLines).toEqual([cursorLockedMessage()])
+    expect(reads).toBe(0)
+  })
+
+  it('sends a plain token unchanged without reading the keychain', async () => {
+    const fetchMock = vi.fn(async () => jsonResponse(successBody))
+    let reads = 0
+    await fetchGrokbotQuota({
+      allowKeychain: true,
+      fetch: fetchMock as unknown as typeof fetch,
+      databasePath: '/nowhere/state.vscdb',
+      loadAccessToken: withToken,
+      readKeychain: async () => { reads += 1; return { status: 'notFound' } },
+    })
+    expect(bearer(fetchMock)).toBe('Bearer cursor-access-token')
+    expect(reads).toBe(0)
   })
 })
 

@@ -119,14 +119,18 @@ enum GrokBotSubscriptionService {
             // Synchronous SQLite with a busy timeout: keep it off the main
             // actor so a lock held by Cursor cannot stall the UI.
             let loadAccessToken = deps.loadAccessToken
-            let raw = try await Task.detached { try loadAccessToken() }.value
-            guard let loaded = raw?.trimmingCharacters(in: .whitespacesAndNewlines),
-                  !loaded.isEmpty else {
-                throw FetchError.noCredentials
-            }
+            let allowPrompt = CapacityDockProviderRefreshInteraction.isUserInitiated
+            let raw = try await Task.detached {
+                let loaded = try loadAccessToken()?.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard let loaded, !loaded.isEmpty else { return nil as String? }
+                return try CursorSafeStorage.unlock(loaded, allowPrompt: allowPrompt)
+            }.value
+            guard let loaded = raw else { throw FetchError.noCredentials }
             accessToken = loaded
         } catch let error as FetchError {
             throw error
+        } catch CursorSubscriptionService.FetchError.safeStorageLocked {
+            throw CursorSubscriptionService.FetchError.safeStorageLocked
         } catch {
             throw FetchError.appDataUnreadable
         }
