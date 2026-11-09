@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 /// Orchestrates "given a credential record, fetch live quota from Anthropic
@@ -9,6 +10,7 @@ enum ClaudeSubscriptionService {
     private static let betaHeader = "oauth-2025-04-20"
     private static let userAgent = "claude-code/2.1.0"
     private static let usageBlockedUntilKey = "codeburn.claude.usage.blockedUntil"
+    private static let usageBlockedCredentialKey = "codeburn.claude.usage.blockedCredential"
 
     enum FetchError: Error, LocalizedError {
         case notBootstrapped
@@ -59,18 +61,20 @@ enum ClaudeSubscriptionService {
     /// User-initiated. Reads Claude's keychain (PROMPTS), copies to our keychain,
     /// then fetches usage. Idempotent — safe to call again to "reconnect".
     static func bootstrap() async throws -> SubscriptionUsage {
-        // Honour the same 429 backoff that refreshIfBootstrapped respects.
-        // Without this, a user spamming Reconnect during a sustained
-        // rate-limit window hammers Anthropic on every click — exactly the
-        // pattern that escalates the backoff.
-        if let until = usageBlockedUntil(), until > Date() {
-            throw FetchError.rateLimited(retryAt: until)
-        }
         let record: ClaudeCredentialStore.CredentialRecord
         do {
             record = try ClaudeCredentialStore.bootstrap()
         } catch let err as ClaudeCredentialStore.StoreError {
-            throw FetchError.bootstrapFailed(err)
+            throw blockedOr(FetchError.bootstrapFailed(err))
+        } catch {
+            throw blockedOr(error)
+        }
+        // Honour the same 429 backoff that refreshIfBootstrapped respects.
+        // Without this, a user spamming Reconnect during a sustained
+        // rate-limit window hammers Anthropic on every click — exactly the
+        // pattern that escalates the backoff.
+        if let until = usageBlockedUntil(token: record.accessToken) {
+            throw FetchError.rateLimited(retryAt: until)
         }
         return try await fetchWithRecord(initial: record)
     }
@@ -81,20 +85,24 @@ enum ClaudeSubscriptionService {
             return nil
         }
 
+        let token: String?
+        do {
+            token = try await ClaudeCredentialStore.freshAccessToken()
+        } catch let err as ClaudeCredentialStore.StoreError {
+            throw blockedOr(FetchError.credential(err))
+        } catch {
+            throw blockedOr(error)
+        }
+        guard let token else { throw blockedOr(FetchError.notBootstrapped) }
         // Honour an outstanding rate-limit window — we recorded a 429 recently
         // and Anthropic told us when to come back.
-        if let until = usageBlockedUntil(), until > Date() {
+        if let until = usageBlockedUntil(token: token) {
             throw FetchError.rateLimited(retryAt: until)
         }
-
         do {
-            let token = try await ClaudeCredentialStore.freshAccessToken()
-            guard let token else { throw FetchError.notBootstrapped }
             return try await fetch(token: token, allowOne401Recovery: true)
         } catch let err as ClaudeCredentialStore.StoreError {
             throw FetchError.credential(err)
-        } catch let err as FetchError {
-            throw err
         }
     }
 
@@ -165,7 +173,7 @@ enum ClaudeSubscriptionService {
                 header: http.value(forHTTPHeaderField: "Retry-After"),
                 body: body
             )
-            let until = recordUsageRateLimit(retryAfterSeconds: retryAfter)
+            let until = recordUsageRateLimit(retryAfterSeconds: retryAfter, token: token)
             throw FetchError.rateLimited(retryAt: until)
         default:
             throw FetchError.usageHTTPError(http.statusCode, String(data: data, encoding: .utf8))
@@ -174,24 +182,57 @@ enum ClaudeSubscriptionService {
 
     // MARK: - 429 backoff
 
-    private static func usageBlockedUntil() -> Date? {
-        UserDefaults.standard.object(forKey: usageBlockedUntilKey) as? Date
+    /// The outstanding block, or nil. A block taken under a different
+    /// credential is about a request that can no longer be reproduced (the
+    /// user re-logged in), so it is dropped rather than waited out. With no
+    /// credential in hand (Keychain locked, denied, logged out) the block can
+    /// be neither matched nor ruled out, so it holds untouched.
+    static func usageBlockedUntil(
+        token: String?,
+        now: Date = Date(),
+        defaults: UserDefaults = .standard
+    ) -> Date? {
+        guard let until = defaults.object(forKey: usageBlockedUntilKey) as? Date else { return nil }
+        if let token, defaults.string(forKey: usageBlockedCredentialKey) != credentialFingerprint(token) {
+            clearUsageBlock(defaults: defaults)
+            return nil
+        }
+        return until > now ? until : nil
     }
 
-    private static func clearUsageBlock() {
-        UserDefaults.standard.removeObject(forKey: usageBlockedUntilKey)
+    /// A credential read that fails during a block keeps the rate-limit state
+    /// on screen instead of swapping it for a credential error.
+    private static func blockedOr(_ error: Error) -> Error {
+        if let until = usageBlockedUntil(token: nil) { return FetchError.rateLimited(retryAt: until) }
+        return error
+    }
+
+    /// Also the Plan tab's Retry: a manual retry is the user saying the
+    /// situation changed, so it must not be a no-op against our own backoff.
+    static func clearUsageBlock(defaults: UserDefaults = .standard) {
+        defaults.removeObject(forKey: usageBlockedUntilKey)
+        defaults.removeObject(forKey: usageBlockedCredentialKey)
     }
 
     @discardableResult
-    private static func recordUsageRateLimit(retryAfterSeconds: Int?) -> Date {
-        let now = Date()
+    static func recordUsageRateLimit(
+        retryAfterSeconds: Int?,
+        token: String,
+        now: Date = Date(),
+        defaults: UserDefaults = .standard
+    ) -> Date {
         let until = rateLimitBlockUntil(
-            existingUntil: usageBlockedUntil(),
+            existingUntil: usageBlockedUntil(token: token, now: now, defaults: defaults),
             now: now,
             retryAfterSeconds: retryAfterSeconds
         )
-        UserDefaults.standard.set(until, forKey: usageBlockedUntilKey)
+        defaults.set(until, forKey: usageBlockedUntilKey)
+        defaults.set(credentialFingerprint(token), forKey: usageBlockedCredentialKey)
         return until
+    }
+
+    private static func credentialFingerprint(_ token: String) -> String {
+        SHA256.hash(data: Data(token.utf8)).prefix(8).map { String(format: "%02x", $0) }.joined()
     }
 
     static func rateLimitBlockUntil(

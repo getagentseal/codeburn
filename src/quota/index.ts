@@ -39,6 +39,8 @@ export type QuotaCommandProvider = {
   plan?: string
   windows: QuotaCommandWindow[]
   error?: string
+  /** Set to 'loginExpired' when the stored login is past its expiry. */
+  status?: 'loginExpired'
   /** Provider facts that are not a window, such as Codex's limit-reset credits.
    *  Printed under the provider's rows and carried in `--format json`. */
   notes?: string[]
@@ -56,6 +58,7 @@ export type ClaudeProfileReport = {
   plan?: string
   windows?: QuotaCommandWindow[]
   error?: string
+  status?: 'loginExpired'
   today?: ClaudeProfileToday
 }
 
@@ -152,6 +155,7 @@ export function toCommandProvider(id: ProviderName, name: string, quota: QuotaPr
     ...(quota.planLabel ? { plan: quota.planLabel } : {}),
     windows: toWindows(quota),
     ...(error ? { error } : {}),
+    ...(quota.loginExpired ? { status: 'loginExpired' as const } : {}),
     ...(notes.length ? { notes } : {}),
   }
 }
@@ -211,6 +215,7 @@ function toProfileRow(source: ClaudeConfigSource, quota: QuotaProvider | 'timeou
     ...(row.plan ? { plan: row.plan } : {}),
     windows: row.windows,
     ...(row.error ? { error: row.error } : {}),
+    ...(row.status ? { status: row.status } : {}),
   }
 }
 

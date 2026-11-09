@@ -41,7 +41,8 @@ function fmtPct(n: number): string {
 /** Honest copy for a 429 backoff window (the upstream quota endpoint rate
  *  limited us), replacing the generic "waiting" note. */
 export function rateLimitedNote(provider: QuotaProvider['provider']): string {
-  return t('plans.quota.rateLimited', { owner: PROVIDER_OWNERS[provider] })
+  // Only Claude's block is lifted by a manual refresh.
+  return t(provider === 'claude' ? 'plans.quota.rateLimitedRetryNow' : 'plans.quota.rateLimited', { owner: PROVIDER_OWNERS[provider] })
 }
 
 function cycleEndDate(plan: JsonPlanSummary): Date | null {

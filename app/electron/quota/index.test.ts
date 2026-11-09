@@ -225,6 +225,7 @@ describe('QuotaService', () => {
     fetchers.gemini.mockImplementation(async () => ({ quota: quota('gemini'), retryAfterSeconds: 120 }))
     const service = new QuotaService({
       ...fetchers, grokbotInstalled: () => true, now: () => Date.parse('2026-07-12T00:00:00Z'),
+      claudeCredentialKey: async () => null,
       readFile: vi.fn(async () => writes.at(-1) ?? null),
       writeFile: vi.fn(async (_path, value) => { writes.push(value) }),
       statePath: '/mock/backoff.json',
@@ -237,6 +238,46 @@ describe('QuotaService', () => {
     expect(fetchers.claude).toHaveBeenCalledTimes(1)
     expect(fetchers.gemini).toHaveBeenCalledTimes(1)
     expect(fetchers.codex).toHaveBeenCalledTimes(2)
+  })
+
+  it('a keychain-allowed refresh clears only the Claude block and probes at once', async () => {
+    const until = '2026-07-12T00:40:00.000Z'
+    const writes: string[] = [JSON.stringify({ claude: until, claudeCredential: 'login-a', gemini: until })]
+    const fetchers = noopFetchers()
+    const service = new QuotaService({
+      ...fetchers, claudeCredentialKey: async () => 'login-a', grokbotInstalled: () => true, now: () => Date.parse('2026-07-12T00:00:00Z'),
+      readFile: vi.fn(async () => writes.at(-1) ?? null),
+      writeFile: vi.fn(async (_path, value) => { writes.push(value) }),
+      statePath: '/mock/backoff.json',
+    })
+    await service.getQuota({ force: true })
+    expect(fetchers.claude).not.toHaveBeenCalled()
+    await service.getQuota({ force: true, allowKeychain: true })
+    expect(fetchers.claude).toHaveBeenCalledTimes(1)
+    expect(fetchers.gemini).not.toHaveBeenCalled()
+    expect(JSON.parse(writes.at(-1)!)).toEqual({ gemini: until })
+  })
+
+  it('drops the Claude block once the login it was taken under changes', async () => {
+    const writes: string[] = []
+    const fetchers = noopFetchers()
+    let login = 'login-a'
+    fetchers.claude.mockImplementation(async () => ({ quota: quota('claude'), retryAfterSeconds: 2400, credentialKey: login }))
+    const service = new QuotaService({
+      ...fetchers, claudeCredentialKey: async () => login,
+      grokbotInstalled: () => true, now: () => Date.parse('2026-07-12T00:00:00Z'),
+      readFile: vi.fn(async () => writes.at(-1) ?? null),
+      writeFile: vi.fn(async (_path, value) => { writes.push(value) }),
+      statePath: '/mock/backoff.json',
+    })
+    await service.getQuota({ force: true })
+    expect(JSON.parse(writes.at(-1)!)).toMatchObject({ claude: '2026-07-12T00:40:00.000Z', claudeCredential: 'login-a' })
+    await service.getQuota({ force: true })
+    expect(fetchers.claude).toHaveBeenCalledTimes(1)
+    login = 'login-b'
+    await service.getQuota({ force: true })
+    expect(fetchers.claude).toHaveBeenCalledTimes(2)
+    expect(JSON.parse(writes.at(-1)!)).toMatchObject({ claudeCredential: 'login-b' })
   })
 
   it('re-reads a changed provider set without the keychain, keeping the cache for the same set', async () => {

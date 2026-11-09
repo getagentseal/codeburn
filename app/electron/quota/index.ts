@@ -2,7 +2,7 @@ import os from 'node:os'
 import path from 'node:path'
 
 import { fetchAntigravityQuota } from './antigravity'
-import { claudeConfigDir, fetchClaudeQuota } from './claude'
+import { claudeConfigDir, currentClaudeCredentialKey, fetchClaudeQuota } from './claude'
 import { fetchCodexQuota } from './codex'
 import { fetchCopilotQuota } from './copilot'
 import { fetchGeminiQuota } from './gemini'
@@ -15,8 +15,8 @@ import { fetchZcodeQuota } from './zcode'
 export type { QuotaProvider, QuotaWindow } from './types'
 export { sanitizeError } from './security'
 
-type Blocked = Partial<Record<ProviderName, string>>
-type FetchResult = { quota: QuotaProvider; retryAfterSeconds?: number }
+type Blocked = Partial<Record<ProviderName, string>> & { claudeCredential?: string }
+type FetchResult = { quota: QuotaProvider; retryAfterSeconds?: number; credentialKey?: string }
 type FetcherOptions = { signal: AbortSignal; allowKeychain: boolean }
 type QuotaDeps = {
   claude: (options: FetcherOptions) => Promise<FetchResult>
@@ -28,6 +28,7 @@ type QuotaDeps = {
   zcode: (options: FetcherOptions) => Promise<FetchResult>
   grokbot: (options: FetcherOptions) => Promise<FetchResult>
   grokbotInstalled: () => boolean
+  claudeCredentialKey: () => Promise<string | null>
   statePath: string
   readFile: typeof readSecureFile
   writeFile: typeof atomicWriteSecureFile
@@ -49,6 +50,7 @@ const defaultDeps: QuotaDeps = {
   zcode: fetchZcodeQuota,
   grokbot: options => fetchGrokbotQuota({ signal: options.signal }),
   grokbotInstalled,
+  claudeCredentialKey: () => currentClaudeCredentialKey(claudeConfigDir()),
   statePath: path.join(os.homedir(), '.codeburn', 'quota-backoff.json'),
   readFile: readSecureFile,
   writeFile: atomicWriteSecureFile,
@@ -151,6 +153,16 @@ export class QuotaService {
     const startingGenerations = { ...this.generations }
     const prior = this.cache?.value ?? []
     const blocked = await this.readBlocked()
+    // A keychain-allowed run is the user retrying, and a block taken under a
+    // since-replaced login is about a request that can no longer be reproduced.
+    if (blocked.claude) {
+      const current = allowKeychain ? null : await this.deps.claudeCredentialKey()
+      if (allowKeychain || (current !== null && current !== blocked.claudeCredential)) {
+        delete blocked.claude
+        delete blocked.claudeCredential
+        await this.writeBlocked(blocked)
+      }
+    }
     const run = async (provider: ProviderName): Promise<QuotaProvider> => {
       const retainOnFailure = (next: QuotaProvider): QuotaProvider => {
         const previous = prior.find(item => item.provider === provider)
@@ -179,6 +191,7 @@ export class QuotaService {
       if (generation !== this.generations[provider] || controller.signal.aborted) return unavailable(provider, 'disconnected')
       if (result.retryAfterSeconds !== undefined) {
         blocked[provider] = new Date(this.deps.now() + result.retryAfterSeconds * 1000).toISOString()
+        if (provider === 'claude') blocked.claudeCredential = result.credentialKey
         await this.writeBlocked(blocked)
         if (this.controllers[provider] === controller) this.controllers[provider] = undefined
         return retainOnFailure({ ...result.quota, rateLimited: true })
