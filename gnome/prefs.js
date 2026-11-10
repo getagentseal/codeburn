@@ -54,7 +54,7 @@ export default class CodeBurnPreferences extends ExtensionPreferences {
 
     const refreshRow = new Adw.SpinRow({
       title: 'Refresh Interval',
-      subtitle: 'Seconds between data refreshes',
+      subtitle: 'Seconds between background ticks. At least 120 on AC, 150 on battery, 300 in power saver.',
       adjustment: new Gtk.Adjustment({
         lower: 5,
         upper: 300,
