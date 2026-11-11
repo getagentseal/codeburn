@@ -112,6 +112,28 @@ describe('extractBashCommands', () => {
     expect(extractBashCommands('npx "@angular/cli" new app')).toEqual(['npx'])
     expect(extractBashCommands("npx 'ts-node' script.ts")).toEqual(['npx'])
   })
+
+  it('treats an unquoted newline as a command separator', () => {
+    expect(extractBashCommands('git status\nnpm test')).toEqual(['git', 'npm'])
+    expect(extractBashCommands('cd /tmp\nnpm test\nls')).toEqual(['npm', 'ls'])
+    expect(extractBashCommands('ls\r\nwc -l')).toEqual(['ls', 'wc'])
+    expect(extractBashCommands('echo a &&\n  echo b')).toEqual(['echo', 'echo'])
+  })
+
+  it('does not split on a newline inside quotes, a continuation or a heredoc body', () => {
+    expect(extractBashCommands('git commit -m "a\nb"\nnpm test')).toEqual(['git', 'npm'])
+    expect(extractBashCommands('ls \\\n -la')).toEqual(['ls'])
+    expect(extractBashCommands('cat <<EOF\nrm -rf x\nEOF\nls')).toEqual(['cat', 'ls'])
+    expect(extractBashCommands("cat <<-'EOF'\n\trm x\n\tEOF\npwd")).toEqual(['cat', 'pwd'])
+    expect(extractBashCommands("cat <<EOF\nit's here\nEOF\nrm 'x'")).toEqual(['cat', 'rm'])
+    expect(extractBashCommands('cat <<A <<B\na\nA\nrm x\nB\nls')).toEqual(['cat', 'ls'])
+    expect(extractBashCommands('ls \\\r\n -la')).toEqual(['ls'])
+  })
+
+  it('splits after an escaped backslash and skips comment lines', () => {
+    expect(extractBashCommands('echo a \\\\\nrm x')).toEqual(['echo', 'rm'])
+    expect(extractBashCommands("# don't skip\ngit status\nnpm test # it's")).toEqual(['git', 'npm'])
+  })
 })
 
 describe('BASH_TOOLS', () => {
@@ -298,5 +320,19 @@ describe('isReadShapedBashCommand (#941)', () => {
 
   it('is not fooled by read-command names inside quoted strings', () => {
     expect(isReadShapedBashCommand('echo "cat file"')).toBe(false)
+  })
+
+  it('sees a mutation on a later line', () => {
+    expect(isReadShapedBashCommand('cat x\nsed -i s/a/b/ f.ts')).toBe(false)
+    expect(isReadShapedBashCommand('ls\nrm -rf dist')).toBe(false)
+    expect(isReadShapedBashCommand('git log\ngit commit -m "x"')).toBe(false)
+  })
+
+  it('accepts several read lines and ignores a heredoc body', () => {
+    expect(isReadShapedBashCommand('ls\npwd\n')).toBe(true)
+    expect(isReadShapedBashCommand('cat <<EOF\nrm -rf x\nEOF')).toBe(true)
+    expect(isReadShapedBashCommand('cat <<< "x"\nrm -rf y')).toBe(false)
+    expect(isReadShapedBashCommand('cat x \\\n  y')).toBe(true)
+    expect(isReadShapedBashCommand('ls\n# then\npwd')).toBe(true)
   })
 })
