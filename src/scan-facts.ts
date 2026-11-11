@@ -11,12 +11,12 @@ import { getCodeburnCacheDir } from './cache-dir.js'
 //   corrections: scanFileCorrections, extractText, SELF_CORRECTION_PATTERNS (compare-stats.ts)
 //   optimize: scanFileRecord, compactOptimizeInput and the tool sets it reads,
 //     commandNames, the opener rules, storeScan/loadScan and their caps
-//     (optimize.ts), isReadShapedBashCommand (bash-utils.ts),
+//     (optimize.ts), isReadShapedBashCommand and maskForSplitting (bash-utils.ts),
 //     parseJsonlLine/parseLargeJsonl (parser.ts)
 //   both: readSessionLines, and for optimize foldParsedLine, which decide the
 //     lines and the resume offset (fs-utils.ts)
 // tests/scan-facts-version.test.ts pins those sources to this number.
-export const FACTS_VERSION = 3
+export const FACTS_VERSION = 4
 
 // The digest of a file's first bytes as of the stored offset: the proof that the
 // bytes already read are still the same bytes before only the new ones are read.
