@@ -33,6 +33,15 @@ import { runWebDashboard } from './web-dashboard.js'
 import { homedir, hostname } from 'os'
 import { runShareServer } from './sharing/share-run.js'
 import { addRemote, linkRemote, pullDevices, renderDevices, summarizeDeviceUsage } from './sharing/host.js'
+
+// Simple host:port parser for error messages (does not need default port logic)
+function parseHostPortForError(input: string, defaultPort: number): { host: string; port: number } {
+  const idx = input.lastIndexOf(':')
+  if (idx > 0 && input.includes('.', idx)) {
+    return { host: input.slice(0, idx), port: Number(input.slice(idx + 1)) }
+  }
+  return { host: input, port: defaultPort }
+}
 import { browse } from './sharing/discovery.js'
 import { promptChoice } from './sharing/prompt.js'
 import { loadOrCreateIdentity } from './sharing/identity.js'
@@ -970,19 +979,20 @@ program
   .command('share [action]')
   .description("Securely share this device's usage with your other devices. Actions: status. Supports --format json for status.")
   .option('--port <number>', 'Port to listen on', parseInteger, 7777)
+  .option('--host <address>', 'Host to listen on', '0.0.0.0')
   .option('--pair', 'Open a pairing window and print a PIN to add a new device')
   .option('--always', 'Keep sharing until stopped (default stops after 10 min idle)')
   .option('--format <format>', 'Output format: text, json', 'text')
   .action(async (action: string | undefined, opts) => {
     assertFormat(opts.format, ['text', 'json'], 'share')
     if (action === 'status') {
-      const share = new ShareController(async () => ({}), opts.port)
+      const share = new ShareController(async () => ({}), opts.port, opts.host)
       const status = await share.status()
       if (opts.format === 'json') {
         console.log(JSON.stringify(status))
         return
       }
-      console.log(`\n  Sharing: ${status.sharing ? 'on' : 'off'}\n  Name: ${status.name}\n  Port: ${status.port}\n  Paired peers: ${status.peers}\n`)
+      console.log(`\n  Sharing: ${status.sharing ? 'on' : 'off'}\n  Name: ${status.name}\n  Host: ${status.host}\n  Port: ${status.port}\n  Paired peers: ${status.peers}\n`)
       return
     }
     if (action !== undefined) {
@@ -993,7 +1003,7 @@ program
       process.stderr.write('codeburn share: --format json is only supported for `share status`.\n')
       process.exit(1)
     }
-    await runShareServer({ port: opts.port, pair: !!opts.pair, always: !!opts.always })
+    await runShareServer({ port: opts.port, host: opts.host, pair: !!opts.pair, always: !!opts.always })
   })
 
 program
@@ -1041,9 +1051,31 @@ program
     }
     if (action === 'add') {
       if (target && opts.pin) {
-        const device = await addRemote(target, opts.pin, { defaultPort: opts.port })
-        console.log(`\n  Paired with "${device.name}" (${device.host}:${device.port}).\n`)
-        return
+        try {
+          const device = await addRemote(target, opts.pin, { defaultPort: opts.port })
+          console.log(`\n  Paired with "${device.name}" (${device.host}:${device.port}).\n`)
+          return
+        } catch (e) {
+          const err = e as NodeJS.ErrnoException
+          const { host, port } = parseHostPortForError(target, opts.port)
+          let msg: string
+          if (err.code === 'EHOSTUNREACH' || err.code === 'ENETUNREACH') {
+            msg = `Could not reach ${host}:${port}. Check that:\n` +
+              `  • Both devices are on the same network (or ZeroTier)\n` +
+              `  • The other device is running \`codeburn share\`\n` +
+              `  • No firewall is blocking port ${port}`
+          } else if (err.code === 'ECONNREFUSED') {
+            msg = `Connection refused at ${host}:${port}. Is \`codeburn share\` running on that device?`
+          } else if (err.code === 'ETIMEDOUT') {
+            msg = `Connection to ${host}:${port} timed out. The device may be offline or a firewall is blocking the connection.`
+          } else if (err.message?.includes('pairing failed')) {
+            msg = err.message + '\n  The PIN may be invalid or expired (PINs expire after 2 minutes).'
+          } else {
+            msg = `Could not connect to ${host}:${port}: ${err.message ?? err}`
+          }
+          console.error(`\n  ${msg}\n`)
+          process.exit(1)
+        }
       }
       process.stdout.write('\n  Looking for devices on your network...\n')
       const found = await browse(3000)
