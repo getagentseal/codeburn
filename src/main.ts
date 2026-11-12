@@ -33,6 +33,15 @@ import { runWebDashboard } from './web-dashboard.js'
 import { homedir, hostname } from 'os'
 import { runShareServer } from './sharing/share-run.js'
 import { addRemote, linkRemote, pullDevices, renderDevices, summarizeDeviceUsage } from './sharing/host.js'
+
+// Simple host:port parser for error messages (does not need default port logic)
+function parseHostPortForError(input: string, defaultPort: number): { host: string; port: number } {
+  const idx = input.lastIndexOf(':')
+  if (idx > 0 && input.includes('.', idx)) {
+    return { host: input.slice(0, idx), port: Number(input.slice(idx + 1)) }
+  }
+  return { host: input, port: defaultPort }
+}
 import { browse } from './sharing/discovery.js'
 import { promptChoice } from './sharing/prompt.js'
 import { loadOrCreateIdentity } from './sharing/identity.js'
@@ -1042,9 +1051,31 @@ program
     }
     if (action === 'add') {
       if (target && opts.pin) {
-        const device = await addRemote(target, opts.pin, { defaultPort: opts.port })
-        console.log(`\n  Paired with "${device.name}" (${device.host}:${device.port}).\n`)
-        return
+        try {
+          const device = await addRemote(target, opts.pin, { defaultPort: opts.port })
+          console.log(`\n  Paired with "${device.name}" (${device.host}:${device.port}).\n`)
+          return
+        } catch (e) {
+          const err = e as NodeJS.ErrnoException
+          const { host, port } = parseHostPortForError(target, opts.port)
+          let msg: string
+          if (err.code === 'EHOSTUNREACH' || err.code === 'ENETUNREACH') {
+            msg = `Could not reach ${host}:${port}. Check that:\n` +
+              `  • Both devices are on the same network (or ZeroTier)\n` +
+              `  • The other device is running \`codeburn share\`\n` +
+              `  • No firewall is blocking port ${port}`
+          } else if (err.code === 'ECONNREFUSED') {
+            msg = `Connection refused at ${host}:${port}. Is \`codeburn share\` running on that device?`
+          } else if (err.code === 'ETIMEDOUT') {
+            msg = `Connection to ${host}:${port} timed out. The device may be offline or a firewall is blocking the connection.`
+          } else if (err.message?.includes('pairing failed')) {
+            msg = err.message + '\n  The PIN may be invalid or expired (PINs expire after 2 minutes).'
+          } else {
+            msg = `Could not connect to ${host}:${port}: ${err.message ?? err}`
+          }
+          console.error(`\n  ${msg}\n`)
+          process.exit(1)
+        }
       }
       process.stdout.write('\n  Looking for devices on your network...\n')
       const found = await browse(3000)

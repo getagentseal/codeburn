@@ -63,8 +63,12 @@ export async function runShareServer(opts: { port: number; host: string; pair: b
   }
   process.on('SIGINT', () => void shutdown())
 
-  process.stdout.write(`\n  Sharing "${identity.name}" - discoverable on your network.\n`)
-  process.stdout.write(`  On your other Mac, run:  codeburn devices add\n`)
+  const displayHost = opts.host === '0.0.0.0' ? 'all interfaces' : opts.host
+  process.stdout.write(`\n  Sharing "${identity.name}" on ${displayHost}:${port}\n`)
+  const addCmd = opts.host === '0.0.0.0'
+    ? 'codeburn devices add'
+    : `codeburn devices add ${opts.host}:${port}`
+  process.stdout.write(`  To pair a device, run:  ${addCmd}\n`)
   if (opts.pair) {
     const pin = server.openPairing(120_000)
     process.stdout.write(`\n  Manual fallback (if discovery is blocked):\n`)
