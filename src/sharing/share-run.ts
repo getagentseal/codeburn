@@ -25,7 +25,7 @@ const IDLE_TIMEOUT_MS = 10 * 60_000
 // Run the secure share server. On-demand by default: it stops after 10 minutes
 // of no requests. `--always` keeps it up until Ctrl+C (the opt-in persistent
 // mode). `--pair` opens a one-time pairing window and prints the PIN + command.
-export async function runShareServer(opts: { port: number; pair: boolean; always: boolean }): Promise<void> {
+export async function runShareServer(opts: { port: number; host: string; pair: boolean; always: boolean }): Promise<void> {
   await loadPricing()
   const dir = getSharingDir()
   const identity = await loadOrCreateIdentity(dir)
@@ -52,7 +52,7 @@ export async function runShareServer(opts: { port: number; pair: boolean; always
     },
   })
 
-  const port = await server.listen(opts.port, '0.0.0.0')
+  const port = await server.listen(opts.port, opts.host)
   const ip = lanAddress() ?? '127.0.0.1'
   const ad = advertise({ name: identity.name, port, fingerprint: identity.fingerprint })
 

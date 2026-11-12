@@ -970,19 +970,20 @@ program
   .command('share [action]')
   .description("Securely share this device's usage with your other devices. Actions: status. Supports --format json for status.")
   .option('--port <number>', 'Port to listen on', parseInteger, 7777)
+  .option('--host <address>', 'Host to listen on', '0.0.0.0')
   .option('--pair', 'Open a pairing window and print a PIN to add a new device')
   .option('--always', 'Keep sharing until stopped (default stops after 10 min idle)')
   .option('--format <format>', 'Output format: text, json', 'text')
   .action(async (action: string | undefined, opts) => {
     assertFormat(opts.format, ['text', 'json'], 'share')
     if (action === 'status') {
-      const share = new ShareController(async () => ({}), opts.port)
+      const share = new ShareController(async () => ({}), opts.port, opts.host)
       const status = await share.status()
       if (opts.format === 'json') {
         console.log(JSON.stringify(status))
         return
       }
-      console.log(`\n  Sharing: ${status.sharing ? 'on' : 'off'}\n  Name: ${status.name}\n  Port: ${status.port}\n  Paired peers: ${status.peers}\n`)
+      console.log(`\n  Sharing: ${status.sharing ? 'on' : 'off'}\n  Name: ${status.name}\n  Host: ${status.host}\n  Port: ${status.port}\n  Paired peers: ${status.peers}\n`)
       return
     }
     if (action !== undefined) {
@@ -993,7 +994,7 @@ program
       process.stderr.write('codeburn share: --format json is only supported for `share status`.\n')
       process.exit(1)
     }
-    await runShareServer({ port: opts.port, pair: !!opts.pair, always: !!opts.always })
+    await runShareServer({ port: opts.port, host: opts.host, pair: !!opts.pair, always: !!opts.always })
   })
 
 program
