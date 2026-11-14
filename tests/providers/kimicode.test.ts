@@ -95,11 +95,12 @@ async function writeSession(
   sessionId: string,
   agents: FixtureAgent[],
   workDir = '/workspace/neutral-project',
+  workspaceId = 'wd_neutral-project_0123456789ab',
 ): Promise<string[]> {
   const sessionDir = join(
     fixtureHome,
     'sessions',
-    'wd_neutral-project_0123456789ab',
+    workspaceId,
     `session_${sessionId}`,
   )
   await mkdir(sessionDir, { recursive: true })
@@ -368,7 +369,10 @@ describe('Kimi Code provider', () => {
     })).resolves.toEqual([])
   })
 
-  it('counts main and subagent usage once each under the same session', async () => {
+  it.each([
+    'wd_neutral-project_0123456789ab',
+    'wm_00000000-0000-4000-8000-000000000001',
+  ])('counts main and subagent usage once each in workspace %s', async workspaceId => {
     await writeSession('subagent', [
       { id: 'main', lines: [
         prompt('Coordinate a neutral task.', 1782900400000),
@@ -379,7 +383,7 @@ describe('Kimi Code provider', () => {
         request('0.1', 'helper-alias', 'glm-5.2', 1782900403000),
         usage('helper-alias', 1782900404000, { input: 15, output: 4 }),
       ] },
-    ])
+    ], '/workspace/neutral-project', workspaceId)
     const provider = createKimicodeProvider(fixtureHome)
     const sources = await provider.discoverSessions()
     const seen = new Set<string>()

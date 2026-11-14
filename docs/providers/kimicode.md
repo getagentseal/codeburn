@@ -18,10 +18,12 @@ By default the provider scans every known Kimi Code runtime store:
 Setting `KIMI_CODE_HOME` (or passing a home override) narrows the scan to that single home. Inside each home it scans:
 
 ```text
-$HOME/sessions/wd_*/<session-dir>/
+$HOME/sessions/<workspace-id>/<session-dir>/
 ├── state.json
 └── agents/<agent-id>/wire.jsonl
 ```
+
+Implicit workspaces use `wd_<slug>_<hash>` and managed workspaces use `wm_<uuid>`.
 
 Session directory naming depends on the host product: the CLI uses `session_*`, embedded runtimes use `conv-*` / `ctitle-*`. Any directory is accepted; the `agents/*/wire.jsonl` probe gates real sessions.
 
