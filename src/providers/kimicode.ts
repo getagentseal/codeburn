@@ -155,7 +155,7 @@ async function discoverSources(root: string): Promise<SessionSource[]> {
   const sessionsDir = join(root, 'sessions')
 
   const workDirs = (await directoryEntries(sessionsDir))
-    .filter(e => e.isDirectory() && e.name.startsWith('wd_'))
+    .filter(e => e.isDirectory() && (e.name.startsWith('wd_') || e.name.startsWith('wm_')))
     .map(e => ({ key: e.name, path: join(sessionsDir, e.name) }))
 
   // Session dir naming differs by host product: the CLI uses session_*,
