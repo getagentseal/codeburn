@@ -15,7 +15,7 @@ Anthropic Claude Code CLI and Claude Desktop's local agent mode.
 | Claude Desktop (macOS, 3p/Cowork) | `~/Library/Application Support/Claude-3p/local-agent-mode-sessions/` |
 | Claude Desktop (Windows, classic) | `%APPDATA%/Claude/local-agent-mode-sessions/` |
 | Claude Desktop (Windows, MSIX) | `%LOCALAPPDATA%/Packages/<Claude package>/LocalCache/Roaming/Claude/local-agent-mode-sessions/` |
-| Claude Desktop (Windows, 3.1623.0 and later) | `%LOCALAPPDATA%/Claude-Data/claude_<hash>/local-agent-mode-sessions/` |
+| Claude Desktop (Windows, 3.1623.0 and later) | `%LOCALAPPDATA%/Claude-Data/claude_<hash>/local-agent-mode-sessions/` or `%LOCALAPPDATA%/Claude-Data/<publisher>.claude_<hash>/local-agent-mode-sessions/` |
 | Claude Desktop (Windows, 3p/Cowork) | `%LOCALAPPDATA%/Claude-3p/local-agent-mode-sessions/`, and `%APPDATA%/Claude-3p/local-agent-mode-sessions/` before 1.5186.0 |
 | Claude Desktop (Linux) | `~/.config/Claude/local-agent-mode-sessions/` |
 
@@ -33,8 +33,8 @@ Desktop session roots are resolved in this order:
    `Claude_` or contain `.Claude_`, sorted by package name, and includes only
    packages whose full MSIX sessions path exists as a directory. Next it scans
    `%LOCALAPPDATA%/Claude-Data` for directories whose names start with
-   `claude_`, sorted by name, where Claude Desktop 3.1623.0 and later keeps its
-   data. Last come the `Claude-3p` roots under `%LOCALAPPDATA%` and then
+   `claude_` or contain `.claude_` (case-insensitive), sorted by name, where
+   Claude Desktop 3.1623.0 and later keeps its data. Last come the `Claude-3p` roots under `%LOCALAPPDATA%` and then
    `%APPDATA%`. Each of these is included only when its
    `local-agent-mode-sessions` directory exists. An unset `APPDATA` or
    `LOCALAPPDATA` falls back to `~/AppData/Roaming` or `~/AppData/Local`.

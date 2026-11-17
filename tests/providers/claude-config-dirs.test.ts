@@ -415,6 +415,41 @@ describe('claude provider — Desktop sessions dir', () => {
     })
   })
 
+  it('discovers a Claude-Data root named after the MSIX package family', async () => {
+    const appData = join(tmpRoot, 'roaming-profile')
+    const localAppData = join(tmpRoot, 'local-profile')
+    const packaged = await makeSessionsDir(localAppData, 'Claude-Data', 'anthropicpbc.claude_abc123xyz')
+    await makeSessionsDir(localAppData, 'Claude-Data', 'someotherapp_x')
+    process.env['APPDATA'] = appData
+    process.env['LOCALAPPDATA'] = localAppData
+
+    withPlatform('win32', () => {
+      expect(getDesktopSessionsDirs()).toEqual([
+        resolve(join(appData, 'Claude', 'local-agent-mode-sessions')),
+        packaged,
+      ])
+    })
+  })
+
+  it('sorts bare and package-family Claude-Data roots together by name', async () => {
+    const appData = join(tmpRoot, 'roaming-profile')
+    const localAppData = join(tmpRoot, 'local-profile')
+    const bare = await makeSessionsDir(localAppData, 'Claude-Data', 'claude_def456uvw')
+    const packaged = await makeSessionsDir(localAppData, 'Claude-Data', 'AnthropicPBC.Claude_abc123xyz')
+    await makeSessionsDir(localAppData, 'Claude-Data', 'someotherapp_x')
+    await makeSessionsDir(localAppData, 'Claude-Data', 'notclaude_x')
+    process.env['APPDATA'] = appData
+    process.env['LOCALAPPDATA'] = localAppData
+
+    withPlatform('win32', () => {
+      expect(getDesktopSessionsDirs()).toEqual([
+        resolve(join(appData, 'Claude', 'local-agent-mode-sessions')),
+        packaged,
+        bare,
+      ])
+    })
+  })
+
   it('returns only the classic root when Claude-Data and Claude-3p are missing', async () => {
     const appData = join(tmpRoot, 'roaming-profile')
     const localAppData = join(tmpRoot, 'local-profile')

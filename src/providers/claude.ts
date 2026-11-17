@@ -217,11 +217,16 @@ export function getDesktopSessionsDirs(): string[] {
     }
 
     // Claude Desktop 3.1623.0 moved its data out of the MSIX LocalCache to
-    // %LOCALAPPDATA%\Claude-Data\claude_<package hash>\ and removed the old path.
+    // %LOCALAPPDATA%\Claude-Data\ and removed the old path. The folder is named
+    // claude_<hash> or, after the MSIX package family, <publisher>.claude_<hash>.
     const claudeDataDir = join(localAppData, 'Claude-Data')
     try {
       const entries = readdirSync(claudeDataDir, { withFileTypes: true })
-        .filter(entry => entry.isDirectory() && entry.name.toLowerCase().startsWith('claude_'))
+        .filter(entry => {
+          if (!entry.isDirectory()) return false
+          const name = entry.name.toLowerCase()
+          return name.startsWith('claude_') || name.includes('.claude_')
+        })
         .sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0)
       for (const entry of entries) {
         pushIfDirectory(join(claudeDataDir, entry.name, 'local-agent-mode-sessions'))
