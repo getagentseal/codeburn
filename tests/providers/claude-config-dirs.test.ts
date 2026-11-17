@@ -372,6 +372,113 @@ describe('claude provider — Desktop sessions dir', () => {
       expect(getDesktopSessionsDirs()).toEqual([sessionsDir])
     })
   })
+
+  async function makeSessionsDir(...segments: string[]): Promise<string> {
+    const sessionsDir = join(...segments, 'local-agent-mode-sessions')
+    await mkdir(sessionsDir, { recursive: true })
+    return resolve(sessionsDir)
+  }
+
+  it('discovers a Claude-Data hash root after the classic and MSIX roots', async () => {
+    const appData = join(tmpRoot, 'roaming-profile')
+    const localAppData = join(tmpRoot, 'local-profile')
+    const msix = await makeMsixSessionsDir(localAppData, 'Claude_abc123xyz')
+    const claudeData = await makeSessionsDir(localAppData, 'Claude-Data', 'claude_abc123xyz')
+    process.env['APPDATA'] = appData
+    process.env['LOCALAPPDATA'] = localAppData
+
+    withPlatform('win32', () => {
+      expect(getDesktopSessionsDirs()).toEqual([
+        resolve(join(appData, 'Claude', 'local-agent-mode-sessions')),
+        msix,
+        claudeData,
+      ])
+    })
+  })
+
+  it('sorts two Claude-Data hash roots and skips non-matching or empty ones', async () => {
+    const appData = join(tmpRoot, 'roaming-profile')
+    const localAppData = join(tmpRoot, 'local-profile')
+    const later = await makeSessionsDir(localAppData, 'Claude-Data', 'claude_zz9')
+    const earlier = await makeSessionsDir(localAppData, 'Claude-Data', 'claude_aa1')
+    await makeSessionsDir(localAppData, 'Claude-Data', 'other_bb2')
+    await mkdir(join(localAppData, 'Claude-Data', 'claude_nosessions'), { recursive: true })
+    process.env['APPDATA'] = appData
+    process.env['LOCALAPPDATA'] = localAppData
+
+    withPlatform('win32', () => {
+      expect(getDesktopSessionsDirs()).toEqual([
+        resolve(join(appData, 'Claude', 'local-agent-mode-sessions')),
+        earlier,
+        later,
+      ])
+    })
+  })
+
+  it('returns only the classic root when Claude-Data and Claude-3p are missing', async () => {
+    const appData = join(tmpRoot, 'roaming-profile')
+    const localAppData = join(tmpRoot, 'local-profile')
+    await mkdir(localAppData, { recursive: true })
+    process.env['APPDATA'] = appData
+    process.env['LOCALAPPDATA'] = localAppData
+
+    withPlatform('win32', () => {
+      expect(() => getDesktopSessionsDirs()).not.toThrow()
+      expect(getDesktopSessionsDirs()).toEqual([
+        resolve(join(appData, 'Claude', 'local-agent-mode-sessions')),
+      ])
+    })
+  })
+
+  it('discovers Claude-3p under LOCALAPPDATA and the older APPDATA location', async () => {
+    const appData = join(tmpRoot, 'roaming-profile')
+    const localAppData = join(tmpRoot, 'local-profile')
+    const local3p = await makeSessionsDir(localAppData, 'Claude-3p')
+    const roaming3p = await makeSessionsDir(appData, 'Claude-3p')
+    process.env['APPDATA'] = appData
+    process.env['LOCALAPPDATA'] = localAppData
+
+    withPlatform('win32', () => {
+      expect(getDesktopSessionsDirs()).toEqual([
+        resolve(join(appData, 'Claude', 'local-agent-mode-sessions')),
+        local3p,
+        roaming3p,
+      ])
+    })
+  })
+
+  it('falls back to ~/AppData/Local for Claude-Data and Claude-3p when LOCALAPPDATA is unset', async () => {
+    const appData = join(tmpRoot, 'roaming-profile')
+    const localRoot = join(homedir(), 'AppData', 'Local')
+    const claudeData = await makeSessionsDir(localRoot, 'Claude-Data', 'claude_abc123xyz')
+    const local3p = await makeSessionsDir(localRoot, 'Claude-3p')
+    process.env['APPDATA'] = appData
+    delete process.env['LOCALAPPDATA']
+
+    withPlatform('win32', () => {
+      expect(getDesktopSessionsDirs()).toEqual([
+        resolve(join(appData, 'Claude', 'local-agent-mode-sessions')),
+        claudeData,
+        local3p,
+      ])
+    })
+  })
+
+  it('lets the override win over Claude-Data and Claude-3p roots', async () => {
+    const override = join(tmpRoot, 'desktop-override')
+    const appData = join(tmpRoot, 'roaming-profile')
+    const localAppData = join(tmpRoot, 'local-profile')
+    await makeSessionsDir(localAppData, 'Claude-Data', 'claude_abc123xyz')
+    await makeSessionsDir(localAppData, 'Claude-3p')
+    await makeSessionsDir(appData, 'Claude-3p')
+    process.env['CODEBURN_DESKTOP_SESSIONS_DIR'] = override
+    process.env['APPDATA'] = appData
+    process.env['LOCALAPPDATA'] = localAppData
+
+    withPlatform('win32', () => {
+      expect(getDesktopSessionsDirs()).toEqual([resolve(override)])
+    })
+  })
 })
 
 describe('claude provider — config.json claudeConfigDirs (menubar-driven)', () => {
