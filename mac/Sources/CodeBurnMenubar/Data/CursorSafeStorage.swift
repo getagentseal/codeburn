@@ -129,6 +129,7 @@ enum CursorSafeStorage {
             case .denied: return nil
             }
         }
+        // No service-only lookup: after a Deny it finds the same item and asks again.
         return nil
     }
 
