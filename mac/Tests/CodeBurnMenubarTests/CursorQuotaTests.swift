@@ -1,4 +1,5 @@
 import Foundation
+import Security
 import SQLite3
 import XCTest
 @testable import CodeBurnMenubar
@@ -31,6 +32,30 @@ final class CursorQuotaTests: XCTestCase {
       }
     }
     """
+
+    func testSafeStorageOnlyTriesLegacyAccountAfterAMiss() {
+        let missing = Int32(UInt8(truncatingIfNeeded: errSecItemNotFound))
+        let refusals = [errSecUserCanceled, errSecAuthFailed, errSecInteractionNotAllowed, errSecInteractionRequired]
+        var cases: [(Int32, String, String?, [String])] = [
+            (0, "current", "current", ["Cursor Key"]),
+            (0, "", "legacy", ["Cursor Key", "Cursor"]),
+            (missing, "", "legacy", ["Cursor Key", "Cursor"]),
+            (1, "", nil, ["Cursor Key"]),
+        ]
+        for refusal in refusals {
+            cases.append((Int32(UInt8(truncatingIfNeeded: refusal)), "", nil, ["Cursor Key"]))
+        }
+        for (status, output, expected, accounts) in cases {
+            var reads: [String] = []
+            let password = CursorSafeStorage.readPassword { account in
+                reads.append(account)
+                return account == "Cursor Key" ? .init(status: status, output: output) : .password("legacy")
+            }
+            XCTAssertEqual(password, expected)
+            XCTAssertEqual(reads, accounts)
+        }
+        XCTAssertNil(CursorSafeStorage.readPassword { _ in .missing })
+    }
 
     func testLocalCursorDatabaseIsReadWithoutWritingACodeBurnCredential() throws {
         let root = FileManager.default.temporaryDirectory

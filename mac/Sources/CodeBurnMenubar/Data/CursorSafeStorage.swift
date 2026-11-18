@@ -1,5 +1,6 @@
 import Foundation
 import CommonCrypto
+import Security
 
 /// Unlocks Cursor 3.27's `cursor-safe-storage:v1:` access token. The blob is
 /// Chromium safe-storage v10, not an expired JWT. The password is the login
@@ -103,15 +104,35 @@ enum CursorSafeStorage {
         return jwt
     }
 
-    private static func readPassword() -> String? {
-        for account in accounts {
-            if let value = securityPassword(account: account) { return value }
+    enum AccountRead {
+        case password(String), missing, denied
+
+        init(status: Int32, output: String) {
+            if status == 0 {
+                let value = output.trimmingCharacters(in: .whitespacesAndNewlines)
+                self = value.isEmpty ? .missing : .password(value)
+            } else {
+                self = status == Int32(UInt8(truncatingIfNeeded: errSecItemNotFound)) ? .missing : .denied
+            }
         }
-        // No service-only lookup: after a Deny it finds the same item and asks again.
+    }
+
+    private static func readPassword() -> String? {
+        readPassword(using: securityPassword)
+    }
+
+    static func readPassword(using read: (String) -> AccountRead) -> String? {
+        for account in accounts {
+            switch read(account) {
+            case .password(let value): return value
+            case .missing: continue
+            case .denied: return nil
+            }
+        }
         return nil
     }
 
-    private static func securityPassword(account: String) -> String? {
+    private static func securityPassword(account: String) -> AccountRead {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/security")
         process.arguments = ["find-generic-password", "-s", service, "-a", account, "-w"]
@@ -121,14 +142,10 @@ enum CursorSafeStorage {
         do {
             try process.run()
             process.waitUntilExit()
-            guard process.terminationStatus == 0 else { return nil }
             let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            let text = String(data: data, encoding: .utf8)?
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            guard let text, !text.isEmpty else { return nil }
-            return text
+            return AccountRead(status: process.terminationStatus, output: String(data: data, encoding: .utf8) ?? "")
         } catch {
-            return nil
+            return .denied
         }
     }
 }
