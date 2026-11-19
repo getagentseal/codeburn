@@ -388,7 +388,9 @@ import type { DateRange, ProjectSummary } from './types.js'
 // 79. Qwen and Hermes tokens, Droid model ids, Cline-family recorded costs,
 // Antigravity output, Warp exchange shares and version-boundary pricing change
 // with calls unchanged or rising, which the bump alone re-derives.
-export const DAILY_CACHE_VERSION = 79
+// v80: settled days pick up Kimi Code managed workspaces (wm_*). Discovery only
+// adds calls, so no PENDING_REDERIVE_PROVIDER_VERSIONS entry is needed.
+export const DAILY_CACHE_VERSION = 80
 const MIN_SUPPORTED_VERSION = 28
 
 /// Providers whose per-day CALL COUNT means something different at
