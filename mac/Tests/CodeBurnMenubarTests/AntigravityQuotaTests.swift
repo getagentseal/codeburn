@@ -40,10 +40,19 @@ final class AntigravityQuotaTests: XCTestCase {
         func record(_ line: String) { lines.append(line) }
     }
 
+    /// Records every `agy` spawn the CLI fallback makes.
+    private final class AgyRecorder: @unchecked Sendable {
+        private(set) var invocations: [String] = []
+        func record(_ executable: String) { invocations.append(executable) }
+    }
+
     private static func makeDeps(
         ps: String,
         lsof: String = "",
         psError: Error? = nil,
+        agy: (@Sendable (String) async throws -> String)? = nil,
+        agyInstalled: Bool = false,
+        agyRecorder: AgyRecorder = AgyRecorder(),
         recorder: CallRecorder,
         log: LogRecorder = LogRecorder(),
         respond: @escaping @Sendable (Int, Bool, String) -> (status: Int, text: String)?
@@ -59,6 +68,12 @@ final class AntigravityQuotaTests: XCTestCase {
             request: { port, tls, path, _, csrf in
                 recorder.record(port: port, tls: tls, path: path, csrf: csrf)
                 return respond(port, tls, path)
+            },
+            findAgyExecutable: { agyInstalled ? "/fixture/bin/agy" : nil },
+            execAgy: { executable in
+                agyRecorder.record(executable)
+                guard let agy else { throw AntigravitySubscriptionService.FetchError.disconnected }
+                return try await agy(executable)
             },
             now: { Self.now },
             log: { log.record($0) }
@@ -346,6 +361,105 @@ final class AntigravityQuotaTests: XCTestCase {
         XCTAssertEqual(recorder.calls.count, 4)
         XCTAssertTrue(recorder.calls.allSatisfy { $0.port == 60555 })
     }
+
+    // MARK: - `agy -p /usage` CLI fallback (user-initiated only)
+
+    /// The cadence path must never spawn the CLI, even when it is installed
+    /// and signed in — booting its throwaway server is far too heavy for a
+    /// two-minute tick.
+    func testCadenceRefreshNeverSpawnsTheAgyCLI() async {
+        let agyRecorder = AgyRecorder()
+        let recorder = CallRecorder()
+        let deps = Self.makeDeps(
+            ps: "",
+            agy: { _ in Self.agyPayload },
+            agyInstalled: true,
+            agyRecorder: agyRecorder,
+            recorder: recorder
+        ) { _, _, _ in nil }
+        do {
+            _ = try await AntigravitySubscriptionService.refresh(deps: deps)
+            XCTFail("expected disconnected")
+        } catch let error as AntigravitySubscriptionService.FetchError {
+            guard case .disconnected = error else {
+                return XCTFail("expected disconnected, got \(error)")
+            }
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
+        XCTAssertEqual(agyRecorder.invocations, [])
+    }
+
+    /// Reconnect / Try Again passes allowCLIFallback, so a signed-in CLI
+    /// answers when no language server is running.
+    func testUserInitiatedRefreshFallsBackToAgyUsage() async throws {
+        let agyRecorder = AgyRecorder()
+        let recorder = CallRecorder()
+        let deps = Self.makeDeps(
+            ps: "",
+            agy: { _ in Self.agyPayload },
+            agyInstalled: true,
+            agyRecorder: agyRecorder,
+            recorder: recorder
+        ) { _, _, _ in nil }
+
+        let usage = try await AntigravitySubscriptionService.refresh(deps: deps, allowCLIFallback: true)
+
+        XCTAssertEqual(agyRecorder.invocations.count, 1)
+        XCTAssertEqual(usage.details.map(\.label), ["Models · Claude", "Models · Gemini"])
+        XCTAssertEqual(usage.details[0].usedPercent, 60, accuracy: 0.001)
+        XCTAssertEqual(usage.details[1].usedPercent, 10, accuracy: 0.001)
+    }
+
+    /// A CLI error body (e.g. the throwaway server's 503) is a diagnostic
+    /// event only — the response text must not land in the log.
+    func testAgyResponseBodyIsNeverLogged() async {
+        let log = LogRecorder()
+        let recorder = CallRecorder()
+        let deps = Self.makeDeps(
+            ps: "",
+            agy: { _ in #"{"command":{"data":{"groups":[]},"marker":"AGY-SECRET-BODY"} }"# },
+            agyInstalled: true,
+            recorder: recorder,
+            log: log
+        ) { _, _, _ in nil }
+        do {
+            _ = try await AntigravitySubscriptionService.refresh(deps: deps, allowCLIFallback: true)
+            XCTFail("expected disconnected")
+        } catch let error as AntigravitySubscriptionService.FetchError {
+            guard case .disconnected = error else {
+                return XCTFail("expected disconnected, got \(error)")
+            }
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
+        XCTAssertFalse(log.lines.joined(separator: " ").contains("AGY-SECRET-BODY"))
+    }
+
+    func testDecodeAgyOutputReadsSnakeCaseGroups() {
+        let windows = AntigravitySubscriptionService.decodeAgyOutput(Self.agyPayload)
+        XCTAssertEqual(windows.map(\.label), ["Models · Claude", "Models · Gemini"])
+        XCTAssertEqual(AntigravitySubscriptionService.decodeAgyOutput("not json"), [])
+        XCTAssertEqual(AntigravitySubscriptionService.decodeAgyOutput(#"{"command":{"data":{}}}"#), [])
+    }
+
+    private static let agyPayload = """
+    {
+      "command": {
+        "data": {
+          "groups": [
+            {
+              "name": "Models",
+              "buckets": [
+                { "name": "Claude", "remaining_fraction": 0.4 },
+                { "name": "Gemini", "remaining_fraction": 0.9, "reset_time": "2026-11-02T00:00:00Z" }
+              ]
+            }
+          ]
+        }
+      }
+    }
+    """
 
     func testUnexpectedPsFailureIsTransientWithSanitizedDiagnostics() async {
         let log = LogRecorder()

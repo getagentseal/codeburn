@@ -2036,14 +2036,15 @@ final class AppStore {
 
     /// No credential dance at all: discovery is `ps` + loopback probes of the
     /// local language server, so the first refresh tick activates dormant
-    /// state, like Kimi/Gemini/Copilot.
-    func bootstrapAntigravity() async {
+    /// state, like Kimi/Gemini/Copilot. `userInitiated` marks a Reconnect /
+    /// Try Again click, which alone may fall back to spawning `agy -p /usage`.
+    func bootstrapAntigravity(userInitiated: Bool) async {
         // Capture the generation before the await so a disconnect that lands
         // mid-fetch cannot be resurrected into .loaded when the fetch returns.
         let gen = antigravityRefreshGen
         antigravityLoadState = .bootstrapping
         do {
-            let usage = try await AntigravitySubscriptionService.refresh()
+            let usage = try await AntigravitySubscriptionService.refresh(allowCLIFallback: userInitiated)
             guard gen == antigravityRefreshGen else { return }
             antigravityUsage = usage
             antigravityError = nil
@@ -2058,14 +2059,16 @@ final class AppStore {
         }
     }
 
+    /// The Refresh/Retry button path: a user click, so the `agy` CLI fallback
+    /// is allowed.
     func refreshAntigravity() async {
-        _ = await refreshAntigravityReportingSuccess()
+        _ = await refreshAntigravityReportingSuccess(userInitiated: true)
     }
 
     @discardableResult
-    func refreshAntigravityReportingSuccess() async -> Bool {
+    func refreshAntigravityReportingSuccess(userInitiated: Bool = false) async -> Bool {
         if case .dormant = antigravityLoadState {
-            await bootstrapAntigravity()
+            await bootstrapAntigravity(userInitiated: userInitiated)
             return antigravityLoadState == .loaded
         }
         // Only an explicit Disconnect stops the cadence probe; there is no
@@ -2074,7 +2077,7 @@ final class AppStore {
         let gen = antigravityRefreshGen
         if antigravityUsage == nil { antigravityLoadState = .loading }
         do {
-            let usage = try await AntigravitySubscriptionService.refresh()
+            let usage = try await AntigravitySubscriptionService.refresh(allowCLIFallback: userInitiated)
             guard gen == antigravityRefreshGen else { return false }
             antigravityUsage = usage
             antigravityError = nil
@@ -2636,7 +2639,7 @@ final class AppStore {
         case .kimiCode: await bootstrapKimi()
         case .gemini: await bootstrapGemini()
         case .copilot: await connectCopilot()
-        case .antigravity: await bootstrapAntigravity()
+        case .antigravity: await bootstrapAntigravity(userInitiated: true)
         default: break
         }
     }

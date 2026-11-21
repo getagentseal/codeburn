@@ -2630,7 +2630,7 @@ private struct AntigravityPlanInsight: View {
                 PlanNoCredentialsView(
                     title: L("No local Antigravity server found"),
                     message: L("Start the Antigravity app, then click Try Again.")
-                ) { Task { await store.bootstrapAntigravity() } }
+                ) { Task { await store.bootstrapAntigravity(userInitiated: true) } }
             case .loading:
                 PlanLoadingView(message: L("Probing the local Antigravity server..."))
             case .failed:
@@ -2646,7 +2646,7 @@ private struct AntigravityPlanInsight: View {
                     title: L("Reconnect Antigravity"),
                     reason: reason,
                     fallback: L("Start the Antigravity app, then click Reconnect.")
-                ) { Task { await store.bootstrapAntigravity() } }
+                ) { Task { await store.bootstrapAntigravity(userInitiated: true) } }
             case let .usage(idle):
                 if let usage = store.antigravityUsage {
                     loadedBody(usage: usage, idle: idle)
