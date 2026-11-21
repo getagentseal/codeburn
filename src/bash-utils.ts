@@ -7,6 +7,75 @@ function stripQuotedStrings(command: string): string {
   return command.replace(/"[^"]*"|'[^']*'/g, match => ' '.repeat(match.length))
 }
 
+const HEREDOC_START = /<<(?!<)-?[ \t]*(?:'([^'\n]+)'|"([^"\n]+)"|\\?(\w+))/y
+
+// A newline separates commands like ';' does. A command with more than one line
+// is scanned once: quoted text, comments and heredoc bodies are blanked, and an
+// unquoted newline becomes ';' unless an odd run of backslashes continues the
+// line. The result keeps the input's length, because callers slice the original
+// string with indices taken from it. A single-line command is masked as before.
+function maskForSplitting(command: string): string {
+  if (!command.includes('\n')) return stripQuotedStrings(command)
+  let out = ''
+  const delimiters: string[] = []
+  let i = 0
+  while (i < command.length) {
+    const ch = command[i]!
+    if (ch === '"' || ch === "'") {
+      const close = command.indexOf(ch, i + 1)
+      if (close !== -1) {
+        out += ' '.repeat(close + 1 - i)
+        i = close + 1
+        continue
+      }
+    } else if (ch === '#' && (i === 0 || /[\s;&|()]/.test(command[i - 1]!))) {
+      let lineEnd = command.indexOf('\n', i)
+      if (lineEnd === -1) lineEnd = command.length
+      out += ' '.repeat(lineEnd - i)
+      i = lineEnd
+      continue
+    } else if (ch === '<' && command[i - 1] !== '<') {
+      HEREDOC_START.lastIndex = i
+      const match = HEREDOC_START.exec(command)
+      if (match) delimiters.push(match[1] ?? match[2] ?? match[3]!)
+    } else if (ch === '\n') {
+      let backslashes = 0
+      let j = command[i - 1] === '\r' ? i - 2 : i - 1
+      while (j >= 0 && command[j] === '\\') { backslashes++; j-- }
+      if (backslashes % 2 === 1) {
+        out += ch
+        i++
+        continue
+      }
+      out += ';'
+      i++
+      // Heredoc bodies start on the next line, one after another, each up to
+      // its closing delimiter line. An unclosed body runs to the end.
+      let end = i
+      for (let d = 0; d < delimiters.length && end < command.length; d++) {
+        let lineStart = d === 0 ? end : end + 1
+        end = command.length
+        while (lineStart < command.length) {
+          let lineEnd = command.indexOf('\n', lineStart)
+          if (lineEnd === -1) lineEnd = command.length
+          if (command.slice(lineStart, lineEnd).trim() === delimiters[d]) {
+            end = lineEnd
+            break
+          }
+          lineStart = lineEnd + 1
+        }
+      }
+      delimiters.length = 0
+      out += ' '.repeat(end - i)
+      i = end
+      continue
+    }
+    out += ch
+    i++
+  }
+  return out
+}
+
 const COMMAND_PREFIXES = new Set([
   'sudo', 'doas',
   'npx', 'bunx',
@@ -19,7 +88,7 @@ export function extractBashCommands(rawCommand: string): string[] {
   if (!rawCommand || !rawCommand.trim()) return []
 
   const command = stripAnsi(rawCommand)
-  const stripped = stripQuotedStrings(command)
+  const stripped = maskForSplitting(command)
 
   // Match the separator alone, then widen over surrounding whitespace by hand.
   // /\s*(?:&&|;|\|)\s*/ retried its leading \s* from every offset, quadratic on
@@ -104,7 +173,7 @@ const GIT_READ_SUBCOMMANDS = new Set([
 /// non-read: the conservative default both call sites want.
 export function isReadShapedBashCommand(rawCommand: string): boolean {
   if (!rawCommand || !rawCommand.trim()) return false
-  const stripped = stripQuotedStrings(stripAnsi(rawCommand))
+  const stripped = maskForSplitting(stripAnsi(rawCommand))
   const segments = stripped.split(/(?:&&|;|\|)/)
   let sawCommand = false
   for (const segment of segments) {
