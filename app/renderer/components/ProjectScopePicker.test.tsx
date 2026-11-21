@@ -19,6 +19,12 @@ const row = (path: string, cost: number, name = path.split('/').pop() ?? path): 
 const NO_FILTER = { project: [], exclude: [] }
 
 describe('projectScopeOptions', () => {
+  it('keeps a repo group and a plain path with the same label apart', () => {
+    const group: ProjectRow = { ...row('/h/Projects/crewroom-app', 5, 'crewroom'), checkouts: [{ path: '/h/Projects/crewroom-app', cost: 5 }] }
+    const options = projectScopeOptions([group, row('/Users/me/crewroom', 3, 'me/crewroom'), row('/w/solo', 1)], NO_FILTER)
+    expect(options.map(option => option.label)).toEqual(['/h/Projects/crewroom-app', '/Users/me/crewroom', 'w/solo'])
+  })
+
   it('lists projects costliest first, keyed by their absolute path', () => {
     const options = projectScopeOptions([row('/w/a', 1), row('/w/b', 5)], NO_FILTER)
     expect(options.map(option => option.value)).toEqual(['/w/b', '/w/a'])
