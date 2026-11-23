@@ -282,6 +282,27 @@ MIT licensed. Development happens in this repo.
  </picture>
 </a>
 
+## Export
+
+`codeburn export` writes your usage to a CSV folder or one JSON file, for a spreadsheet or your own scripts.
+
+```bash
+codeburn export                                  # CSV folder: today, 7 days and 30 days
+codeburn export -f json                          # one JSON file
+codeburn export -f json --from 2026-04-01 --to 2026-04-30 -o april.json
+```
+
+| Section | What it holds |
+|---|---|
+| `summary`, `daily`, `activity`, `models` | Cost, calls and tokens per period, day, kind of work and model |
+| `projects`, `sessions` | Cost per project and per session, last 30 days |
+| `records` | One row per API call, last 30 days |
+| `tools`, `mcp`, `shellCommands` | Call counts per tool, MCP server and shell command, last 30 days |
+
+The export contains counts, costs, timestamps, model names, project names, session ids, and tool, MCP server and shell command names. It never contains prompts, replies, code or file contents.
+
+Every JSON file starts with a `schema` field (`codeburn.export.v3`). Read the [export reference](docs/export.md) for every field, the CSV files and the format versions.
+
 ## The manual
 
 | Page | What is in it |
@@ -296,6 +317,7 @@ MIT licensed. Development happens in this repo.
 | [Web dashboard](docs/web.md) | The browser view, and combining usage across your devices |
 | [Yield](docs/yield.md) | Which spend actually shipped, correlated against git |
 | [MCP](docs/mcp.md) | The local MCP server and its two tools |
+| [Export](docs/export.md) | The CSV and JSON export: every field, period and file |
 | [Configuration](docs/configuration.md) | Currency, model aliases, price overrides, environment variables |
 | [Tools](docs/providers/README.md) | One page per tool: data location, format, known quirks |
 | [All docs](docs/README.md) | The full index |

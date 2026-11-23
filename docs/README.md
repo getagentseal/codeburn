@@ -11,6 +11,7 @@ One line per file in this directory, recursively.
 - [compare-periods.md](compare-periods.md) — Compare two date ranges side by side and see exactly what drove the change in usage and cost.
 - [configuration.md](configuration.md) — Currency, model aliases, local/custom-priced/proxy models, and environment variables.
 - [drill-through.md](drill-through.md) — CodeBurn Desktop can open any aggregate as a session list that explains exactly what composes it, without losing your place.
+- [export.md](export.md) — `codeburn export` writes usage to CSV files or one JSON file: options, output names, which period each section covers, every field, and the format versions.
 - [guard.md](guard.md) — Opt-in Claude Code hooks that watch session cost while you work: soft cap, hard cap, checkpoint nudge, session openers.
 - [how-it-works.md](how-it-works.md) — Pricing, task categories, breakdowns, one-shot rate, per-tool data locations and parsing, and how to read the dashboard.
 - [mcp.md](mcp.md) — `codeburn mcp` runs a local MCP server over stdio so an AI agent can ask about your usage and savings mid-conversation.
