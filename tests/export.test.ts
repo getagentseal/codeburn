@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mkdtemp, readFile, readdir, rm, writeFile } from 'fs/promises'
 import { join } from 'path'
 import { tmpdir } from 'os'
@@ -486,6 +486,25 @@ describe('exportJson', () => {
     expect(data.records.map((r: { costBasis: string }) => r.costBasis)).toEqual(['calculated', 'estimated'])
     expect(data.sessions[0].costBasis).toEqual({ calculated: 0.9375, estimated: 0.0625 })
     expect(data.periods[0].daily[0].costBasis).toEqual({ calculated: 0.9375, estimated: 0.0625 })
+  })
+
+  it('writes the same bytes as one JSON.stringify without building the whole file as one string', async () => {
+    const stringify = JSON.stringify
+    // Stand-in for V8's ~512 MB string limit, scaled down so the test stays small.
+    vi.spyOn(JSON, 'stringify').mockImplementation((...args: Parameters<typeof JSON.stringify>) => {
+      const out = stringify(...args)
+      if (out?.length > 4000) throw new RangeError('Invalid string length')
+      return out
+    })
+    const projects = Array.from({ length: 30 }, (_, i) => makeProject(`app-${i}`))
+    try {
+      const saved = await exportJson([{ label: '30 Days', projects }], join(tmpDir, 'big.json'))
+      const text = await readFile(saved, 'utf-8')
+      expect(text.length).toBeGreaterThan(4000)
+      expect(text).toBe(stringify(JSON.parse(text), null, 2))
+    } finally {
+      vi.restoreAllMocks()
+    }
   })
 
   it('writes a dated file inside the folder when the destination is an existing folder', async () => {
