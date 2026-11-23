@@ -1,5 +1,8 @@
-import { writeFile, mkdir, readdir, open, stat, rm } from 'fs/promises'
+import { createWriteStream } from 'fs'
+import { writeFile, mkdir, readdir, open, stat, rm, rename } from 'fs/promises'
 import { dirname, join, resolve } from 'path'
+import { Readable } from 'stream'
+import { pipeline } from 'stream/promises'
 
 import { CATEGORY_LABELS, type ParsedApiCall, type ProjectSummary, type TaskCategory } from './types.js'
 import { getCurrency, convertCost, roundForActiveCurrency } from './currency.js'
@@ -52,14 +55,45 @@ function csvHeaders(): Record<string, string> {
   }
 }
 
-function rowsToCsv(rows: Row[], names: Record<string, string> = csvHeaders()): string {
-  if (rows.length === 0) return ''
+function* rowsToCsv(rows: Row[], names: Record<string, string> = csvHeaders()): Generator<string> {
+  if (rows.length === 0) return
   const keys = Object.keys(rows[0])
-  const lines = [keys.map(k => escCsv(names[k] ?? k)).join(',')]
+  yield keys.map(k => escCsv(names[k] ?? k)).join(',') + '\n'
   for (const row of rows) {
-    lines.push(keys.map(k => escCsv(csvCell(row[k]))).join(','))
+    yield keys.map(k => escCsv(csvCell(row[k]))).join(',') + '\n'
   }
-  return lines.join('\n') + '\n'
+}
+
+// Same bytes as JSON.stringify(data, null, 2), one top-level array element at a time.
+function* prettyJson(data: Record<string, unknown>): Generator<string> {
+  yield '{'
+  for (const [i, key] of Object.keys(data).entries()) {
+    const value = data[key]
+    yield `${i ? ',' : ''}\n  ${JSON.stringify(key)}: `
+    if (!Array.isArray(value) || value.length === 0) {
+      yield JSON.stringify(value, null, 2).replaceAll('\n', '\n  ')
+      continue
+    }
+    yield '['
+    for (let j = 0; j < value.length; j++) {
+      yield `${j ? ',' : ''}\n    ${(JSON.stringify(value[j], null, 2) ?? 'null').replaceAll('\n', '\n    ')}`
+    }
+    yield '\n  ]'
+  }
+  yield '\n}'
+}
+
+// A whole export as one string passes V8's ~512 MB string limit on long histories.
+// The temp name keeps a failed write from leaving a truncated file under the real name.
+async function writePieces(path: string, pieces: Iterable<string>): Promise<void> {
+  const tmp = `${path}.${process.pid}.tmp`
+  try {
+    await pipeline(Readable.from(pieces), createWriteStream(tmp))
+    await rename(tmp, path)
+  } catch (err) {
+    await rm(tmp, { force: true })
+    throw err
+  }
 }
 
 // Unrounded costs must not reach a spreadsheet as 0.24076000000000003 or 1e-7.
@@ -489,16 +523,16 @@ export async function exportCsv(periods: PeriodExport[], outputPath: string): Pr
   const modelRows = periods.flatMap(p => buildModelRows(p.projects, p.label))
 
   await writeFile(join(folder, 'README.txt'), buildReadme(periods), 'utf-8')
-  await writeFile(join(folder, 'summary.csv'), rowsToCsv(buildSummaryRows(periods)), 'utf-8')
-  await writeFile(join(folder, 'daily.csv'), rowsToCsv(dailyRows), 'utf-8')
-  await writeFile(join(folder, 'activity.csv'), rowsToCsv(activityRows), 'utf-8')
-  await writeFile(join(folder, 'models.csv'), rowsToCsv(modelRows, { ...csvHeaders(), model: 'Model' }), 'utf-8')
-  await writeFile(join(folder, 'records.csv'), rowsToCsv(buildRecordRows(thirtyDayProjects, split), {}), 'utf-8')
-  await writeFile(join(folder, 'projects.csv'), rowsToCsv(buildProjectRows(thirtyDayProjects)), 'utf-8')
-  await writeFile(join(folder, 'sessions.csv'), rowsToCsv(buildSessionRows(thirtyDayProjects, false, split)), 'utf-8')
-  await writeFile(join(folder, 'tools.csv'), rowsToCsv(buildToolRows(thirtyDayProjects)), 'utf-8')
-  await writeFile(join(folder, 'mcp.csv'), rowsToCsv(buildMcpRows(thirtyDayProjects)), 'utf-8')
-  await writeFile(join(folder, 'shell-commands.csv'), rowsToCsv(buildBashRows(thirtyDayProjects)), 'utf-8')
+  await writePieces(join(folder, 'summary.csv'), rowsToCsv(buildSummaryRows(periods)))
+  await writePieces(join(folder, 'daily.csv'), rowsToCsv(dailyRows))
+  await writePieces(join(folder, 'activity.csv'), rowsToCsv(activityRows))
+  await writePieces(join(folder, 'models.csv'), rowsToCsv(modelRows, { ...csvHeaders(), model: 'Model' }))
+  await writePieces(join(folder, 'records.csv'), rowsToCsv(buildRecordRows(thirtyDayProjects, split), {}))
+  await writePieces(join(folder, 'projects.csv'), rowsToCsv(buildProjectRows(thirtyDayProjects)))
+  await writePieces(join(folder, 'sessions.csv'), rowsToCsv(buildSessionRows(thirtyDayProjects, false, split)))
+  await writePieces(join(folder, 'tools.csv'), rowsToCsv(buildToolRows(thirtyDayProjects)))
+  await writePieces(join(folder, 'mcp.csv'), rowsToCsv(buildMcpRows(thirtyDayProjects)))
+  await writePieces(join(folder, 'shell-commands.csv'), rowsToCsv(buildBashRows(thirtyDayProjects)))
 
   return folder
 }
@@ -567,6 +601,6 @@ export async function exportJson(periods: PeriodExport[], outputPath: string): P
     throw new Error(`Refusing to overwrite directory at ${target}. Pass a file path instead.`)
   }
   await mkdir(dirname(target), { recursive: true })
-  await writeFile(target, JSON.stringify(data, null, 2), 'utf-8')
+  await writePieces(target, prettyJson(data))
   return target
 }
