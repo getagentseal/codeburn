@@ -26,6 +26,7 @@ const ORG_A = '22222222-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const ACCOUNT_B = '33333333-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
 const ORG_B = '44444444-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
 const hash = (uuid: string) => createHash('sha256').update(uuid).digest('hex').slice(0, 12)
+const id = (accountUuid: string, orgUuid: string) => hash(orgUuid).slice(0, 6) + hash(accountUuid).slice(0, 6)
 
 let home: string
 let configDir: string
@@ -128,7 +129,7 @@ describe('observeClaudeIdentities', () => {
     await observeClaudeIdentities(new Date('2026-11-01T11:00:00Z'))
     const log = (await readIdentityLog())!
     expect(log.entries.map(e => e.plan)).toEqual(['Pro', 'Max 5x'])
-    expect(identityAt(log, configDir, '2026-11-01T10:30:00.000Z')).toEqual({ hash: hash(ORG_A), label: 'Acme Corp', plan: 'Max 5x' })
+    expect(identityAt(log, configDir, '2026-11-01T10:30:00.000Z')).toEqual({ hash: id(ACCOUNT_A, ORG_A), label: 'Acme Corp', plan: 'Max 5x' })
   })
 
   it('never reads the keychain, and takes the plan from the quota read instead', async () => {
@@ -141,7 +142,7 @@ describe('observeClaudeIdentities', () => {
     await recordClaudePlan(configDir, 'Max 20x', new Date('2026-11-01T12:00:00Z'))
     const log = (await readIdentityLog())!
     expect(log.entries.map(e => [e.plan, e.observedAt])).toEqual([[undefined, '2026-11-01T10:00:00.000Z'], ['Max 20x', '2026-11-01T11:00:00.000Z']])
-    expect(identityAt(log, configDir, '2026-11-01T10:30:00.000Z')).toEqual({ hash: hash(ORG_A), label: 'Acme Corp', plan: 'Max 20x' })
+    expect(identityAt(log, configDir, '2026-11-01T10:30:00.000Z')).toEqual({ hash: id(ACCOUNT_A, ORG_A), label: 'Acme Corp', plan: 'Max 20x' })
   })
 
   it('writes nothing for a config without a signed-in account', async () => {
@@ -163,11 +164,11 @@ describe('identityAt', () => {
   }
   it('takes the last observation at or before the session start, per config dir', () => {
     expect(identityAt(log, '/c', '2026-11-01T09:59:59.000Z').hash).toBe('unattributed')
-    expect(identityAt(log, '/c', '2026-11-01T10:00:00.000Z')).toEqual({ hash: hash(ORG_A), label: 'Acme Corp' })
-    expect(identityAt(log, '/c', '2026-11-01T11:59:00.000Z').hash).toBe(hash(ORG_A))
-    expect(identityAt(log, '/c', '2026-11-01T12:00:00.000Z').hash).toBe(hash(ORG_B))
-    expect(identityAt(log, '/c', '2026-11-02T00:00:00.000Z').hash).toBe(hash(ORG_B))
-    expect(identityAt(log, '/other', '2026-11-01T10:00:00.000Z').hash).toBe(hash(ORG_B))
+    expect(identityAt(log, '/c', '2026-11-01T10:00:00.000Z')).toEqual({ hash: id(ACCOUNT_A, ORG_A), label: 'Acme Corp' })
+    expect(identityAt(log, '/c', '2026-11-01T11:59:00.000Z').hash).toBe(id(ACCOUNT_A, ORG_A))
+    expect(identityAt(log, '/c', '2026-11-01T12:00:00.000Z').hash).toBe(id(ACCOUNT_B, ORG_B))
+    expect(identityAt(log, '/c', '2026-11-02T00:00:00.000Z').hash).toBe(id(ACCOUNT_B, ORG_B))
+    expect(identityAt(log, '/other', '2026-11-01T10:00:00.000Z').hash).toBe(id(ACCOUNT_B, ORG_B))
     expect(identityAt(log, undefined, '2026-11-01T13:00:00.000Z').hash).toBe('unattributed')
   })
 
@@ -181,14 +182,14 @@ describe('identityAt', () => {
         { accountHash: hash(ACCOUNT_B), label: '', observedAt: '2026-11-01T14:00:00.000Z', configDir: '/c' },
       ],
     }
-    expect(identityAt(orgs, '/c', '2026-11-01T11:00:00.000Z')).toEqual({ hash: hash(ORG_A), label: 'Personal' })
-    expect(identityAt(orgs, '/c', '2026-11-01T13:00:00.000Z')).toEqual({ hash: hash(ORG_B), label: 'Team' })
+    expect(identityAt(orgs, '/c', '2026-11-01T11:00:00.000Z')).toEqual({ hash: id(ACCOUNT_A, ORG_A), label: 'Personal' })
+    expect(identityAt(orgs, '/c', '2026-11-01T13:00:00.000Z')).toEqual({ hash: id(ACCOUNT_A, ORG_B), label: 'Team' })
     expect(identityAt(orgs, '/c', '2026-11-01T15:00:00.000Z')).toEqual({ hash: hash(ACCOUNT_B), label: hash(ACCOUNT_B) })
   })
 
   it('prefers a local label override, without touching the entries', async () => {
     await seedLog(log.entries)
-    await setIdentityLabel(hash(ORG_A), 'work')
+    await setIdentityLabel(id(ACCOUNT_A, ORG_A), 'work')
     const saved = (await readIdentityLog())!
     expect(identityAt(saved, '/c', '2026-11-01T11:00:00.000Z').label).toBe('work')
     expect(saved.entries).toEqual(log.entries)
@@ -220,7 +221,29 @@ describe('applyClaudeIdentities on parsed sessions', () => {
     expect((await readIdentityLog())!.entries).toHaveLength(2)
 
     const wire = JSON.stringify(buildOtlpPayload(collectUnsentCalls(projects).allCalls))
-    for (const leak of [hash(ACCOUNT_A), hash(ACCOUNT_B), hash(ORG_A), hash(ORG_B), 'Acme Corp', 'Home', 'unattributed']) expect(wire).not.toContain(leak)
+    for (const leak of [hash(ACCOUNT_A), hash(ACCOUNT_B), hash(ORG_A), hash(ORG_B), id(ACCOUNT_A, ORG_A), id(ACCOUNT_B, ORG_B), 'Acme Corp', 'Home', 'unattributed']) expect(wire).not.toContain(leak)
+  })
+
+  it('credits each call to the account signed in at its time, telling accounts of one organization apart', async () => {
+    await mkdir(join(home, '.config', 'codeburn'), { recursive: true })
+    await writeFile(identityLogPath(), JSON.stringify({
+      version: 1,
+      labels: { [hash(ORG_A)]: 'work' },
+      entries: [entry(ACCOUNT_A, ORG_A, 'Acme Corp', '2026-11-01T10:00:00.000Z', '/c'), entry(ACCOUNT_B, ORG_A, 'Acme Corp', '2026-11-01T11:00:00.000Z', '/c')],
+    }))
+    const session = (sessionId: string, isSidechain: boolean, calls: [string, number][]) => ({
+      sessionId, isSidechain, source: { kind: 'claude-config', path: '/c' }, firstTimestamp: calls[0]![0], modelBreakdown: {},
+      totalCostUSD: calls.reduce((sum, [, cost]) => sum + cost, 0), apiCalls: calls.length,
+      turns: [{ assistantCalls: calls.map(([timestamp, costUSD]) => ({ provider: 'claude', timestamp, costUSD })) }],
+    })
+    const projects = await applyClaudeIdentities([{ project: 'p', sessions: [
+      session('switched', false, [['2026-11-01T10:30:00.000Z', 1], ['2026-11-01T11:30:00.000Z', 2]]),
+      session('subagent', true, [['2026-11-01T11:45:00.000Z', 4]]),
+    ] }] as never, true)
+    expect(identitySplit(projects)!.map(r => [r.label, r.cost, r.calls, r.sessions])).toEqual([
+      [`work (${hash(ACCOUNT_B).slice(0, 4)})`, 6, 2, 1],
+      [`work (${hash(ACCOUNT_A).slice(0, 4)})`, 1, 1, 1],
+    ])
   })
 
   it('leaves non-Claude sessions alone', async () => {
@@ -268,7 +291,7 @@ describe('CLI surfaces', () => {
     const rows = JSON.parse(run(['sessions', '--format', 'json', '-p', 'week']).stdout)
     expect(Object.fromEntries(rows.map((r: { sessionId: string; identity: { label: string } }) => [r.sessionId, r.identity.label])))
       .toEqual({ before: 'unattributed', 'during-a': 'Acme Corp', 'during-b': 'Home' })
-    const home2 = JSON.parse(run(['sessions', '--format', 'json', '-p', 'week', '--identity', hash(ORG_B)]).stdout)
+    const home2 = JSON.parse(run(['sessions', '--format', 'json', '-p', 'week', '--identity', id(ACCOUNT_B, ORG_B)]).stdout)
     expect(home2.map((r: { sessionId: string; identity: { label: string } }) => [r.sessionId, r.identity.label])).toEqual([['during-b', 'Home']])
 
     const out = join(home, 'export')
@@ -281,9 +304,9 @@ describe('CLI surfaces', () => {
     expect(unknown.status).toBe(1)
     expect(unknown.stderr).toContain('unknown Claude identity')
 
-    expect(run(['identity-label', hash(ORG_A), 'work']).status).toBe(0)
+    expect(run(['identity-label', id(ACCOUNT_A, ORG_A), 'work']).status).toBe(0)
     const list = run(['identity', 'list']).stdout
-    expect(list).toContain(hash(ORG_A))
+    expect(list).toContain(id(ACCOUNT_A, ORG_A))
     expect(list).toContain('work')
     expect(list).toContain('Home')
     expect(list).toContain('unattributed')

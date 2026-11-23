@@ -3,6 +3,7 @@ import { mkdir, readFile, rename, stat, writeFile } from 'fs/promises'
 import { homedir } from 'os'
 import { dirname, join, resolve } from 'path'
 
+import { behavioralCallWeight } from './behavioral-weight.js'
 import { readExistingTextFile } from './cache-dir.js'
 import { getConfigDir } from './config.js'
 import { getClaudeConfigDirs } from './providers/claude.js'
@@ -106,9 +107,9 @@ export async function recordClaudePlan(configDir: string, name: string, now = ne
   await writeIdentityLog(log)
 }
 
-/** An identity is the organization, or the account when Claude reports no organization. */
+/** An identity is one account in one organization, or the account when Claude reports no organization. */
 export function identityId(entry: IdentityEntry): string {
-  return entry.orgHash ?? entry.accountHash
+  return entry.orgHash ? entry.orgHash.slice(0, 6) + entry.accountHash.slice(0, 6) : entry.accountHash
 }
 
 function identityIds(log: IdentityLog): string[] {
@@ -120,29 +121,57 @@ export async function multipleIdentities(): Promise<boolean> {
   return !!log && identityIds(log).length >= 2
 }
 
-export function identityLabel(log: IdentityLog, hash: string): string {
-  if (hash === UNATTRIBUTED) return UNATTRIBUTED
-  return log.labels[hash] || log.entries.filter(e => identityId(e) === hash && e.label).at(-1)?.label || hash
+function baseLabel(log: IdentityLog, hash: string): string {
+  const entries = log.entries.filter(e => identityId(e) === hash)
+  const orgHash = entries.at(-1)?.orgHash
+  return log.labels[hash] || (orgHash && log.labels[orgHash]) || entries.filter(e => e.label).at(-1)?.label || hash
 }
 
-export function identityAt(log: IdentityLog, configDir: string | undefined, startedAt: string): { hash: string; label: string; plan?: string } {
-  const start = Date.parse(startedAt)
-  let hash = UNATTRIBUTED
-  for (const entry of log.entries) {
-    if (entry.configDir === configDir && Date.parse(entry.observedAt) <= start) hash = identityId(entry)
-  }
-  const plan = log.entries.filter(e => identityId(e) === hash && e.plan).at(-1)?.plan
-  return { hash, label: identityLabel(log, hash), ...(plan ? { plan } : {}) }
+export function identityLabel(log: IdentityLog, hash: string): string {
+  if (hash === UNATTRIBUTED) return UNATTRIBUTED
+  const label = baseLabel(log, hash)
+  const account = log.entries.find(e => identityId(e) === hash)?.accountHash
+  const shared = identityIds(log).some(id => id !== hash && baseLabel(log, id) === label)
+  return shared && account ? `${label} (${account.slice(0, 4)})` : label
 }
+
+type Identity = { hash: string; label: string; plan?: string }
+
+function identityResolver(log: IdentityLog): (configDir: string | undefined, timestamp: string) => Identity {
+  const marks = log.entries.map(e => ({ configDir: e.configDir, at: Date.parse(e.observedAt), hash: identityId(e) }))
+  const known = new Map<string, Identity>()
+  return (configDir, timestamp) => {
+    const at = Date.parse(timestamp)
+    let hash = UNATTRIBUTED
+    for (const mark of marks) if (mark.configDir === configDir && mark.at <= at) hash = mark.hash
+    let identity = known.get(hash)
+    if (!identity) {
+      const plan = log.entries.filter(e => identityId(e) === hash && e.plan).at(-1)?.plan
+      known.set(hash, identity = { hash, label: identityLabel(log, hash), ...(plan ? { plan } : {}) })
+    }
+    return identity
+  }
+}
+
+export function identityAt(log: IdentityLog, configDir: string | undefined, startedAt: string): Identity {
+  return identityResolver(log)(configDir, startedAt)
+}
+
+function sessionConfigDir(session: SessionSummary): string | undefined {
+  return session.source?.kind === 'claude-config' ? session.source.path : undefined
+}
+
+let appliedResolver: ReturnType<typeof identityResolver> | undefined
 
 /** Observes, then stamps every Claude session with the account active at its start. Without `always`, a log of fewer than two accounts leaves sessions untouched. */
 export async function applyClaudeIdentities(projects: ProjectSummary[], always = false): Promise<ProjectSummary[]> {
   await observeClaudeIdentities().catch(() => {})
   const log = await readIdentityLog().catch(() => null)
   if (!log || (!always && identityIds(log).length < 2)) return projects
+  const resolver = appliedResolver = identityResolver(log)
   const attribute = (session: SessionSummary): SessionSummary => inferSessionProvider(session) !== 'claude' ? session : {
     ...session,
-    identity: identityAt(log, session.source?.kind === 'claude-config' ? session.source.path : undefined, session.firstTimestamp),
+    identity: resolver(sessionConfigDir(session), session.firstTimestamp),
   }
   return projects.map(project => ({
     ...project,
@@ -151,16 +180,21 @@ export async function applyClaudeIdentities(projects: ProjectSummary[], always =
   }))
 }
 
-/** Per-identity totals, or undefined when the sessions carry fewer than `min` identities. */
+/** Per-identity totals, each call credited to the account active at its own time; undefined when fewer than `min` identities. */
 export function identitySplit(projects: ProjectSummary[], min = 2): IdentitySplitRow[] | undefined {
   const rows = new Map<string, IdentitySplitRow & { ids: Set<string> }>()
+  const credit = (session: SessionSummary, identity: Identity, cost: number, calls: number) => {
+    const row = rows.get(identity.hash) ?? { ...identity, cost: 0, calls: 0, sessions: 0, ids: new Set<string>() }
+    row.cost += cost
+    row.calls += calls
+    if (!session.isSidechain) row.ids.add(session.sessionId)
+    rows.set(identity.hash, row)
+  }
   for (const session of projects.flatMap(project => project.sessions)) {
     if (!session.identity) continue
-    const row = rows.get(session.identity.hash) ?? { ...session.identity, cost: 0, calls: 0, sessions: 0, ids: new Set<string>() }
-    row.cost += session.totalCostUSD
-    row.calls += session.apiCalls
-    if (!session.isSidechain) row.ids.add(session.sessionId)
-    rows.set(session.identity.hash, row)
+    const calls = (session.turns ?? []).flatMap(turn => turn.assistantCalls)
+    if (!appliedResolver || calls.length === 0) credit(session, session.identity, session.totalCostUSD, session.apiCalls)
+    else for (const call of calls) credit(session, appliedResolver(sessionConfigDir(session), call.timestamp), call.costUSD, behavioralCallWeight(call))
   }
   if (rows.size < min) return undefined
   return [...rows.values()]

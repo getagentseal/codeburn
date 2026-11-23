@@ -539,7 +539,7 @@ async function runIdentityList(): Promise<void> {
     [{ header: 'Identity' }, { header: 'Label' }, { header: 'Sessions', right: true }, { header: 'Cost', right: true }],
     split.map(row => [row.hash, row.hash === UNATTRIBUTED ? '' : row.label, String(row.sessions), formatCost(row.cost)]),
   )
-  console.log(`\n${observed}\n${attributed}\nSessions go to the identity last observed before they started; ${UNATTRIBUTED} ones started before the first observation.\n`)
+  console.log(`\n${observed}\n${attributed}\nEach call goes to the identity last observed before it; ${UNATTRIBUTED} ones came before the first observation.\n`)
 }
 
 // Wrapped in a factory because commander option state is sticky across
