@@ -227,6 +227,28 @@ describe('antigravity provider helpers', () => {
     )).toBeNull()
   })
 
+  it('takes the port and token of a 2.34 server from the daemon file that names its pid', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'codeburn-agy-daemon-'))
+    try {
+      const line = '  4321 /Applications/Antigravity.app/Contents/Resources/bin/language_server --standalone --subclient_type hub'
+        + ' --override_ide_version 2.34.0 --https_server_port 0 --app_data_dir antigravity --read_host_bridge_token_from_stdin'
+      const token = '0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0'
+      const hub = (pid: number) => JSON.stringify({ pid, httpsPort: 54321, httpPort: 54322, lsVersion: '2.34.0', csrfToken: token })
+      const legacy = '4321 antigravity language_server_macos_arm --app_data_dir antigravity --https_server_port 57101 --csrf_token 01234567-89ab-cdef-0123-456789abcdef'
+
+      expect(parseAntigravityServerInfoFromLine(line, home)).toBeNull()
+      await writeFile(join(home, 'hub_54322.json'), hub(9999))
+      expect(parseAntigravityServerInfoFromLine(line, home)).toBeNull()
+      await writeFile(join(home, 'hub_54322.json'), '{"pid": 4321, "csrfToken":')
+      expect(parseAntigravityServerInfoFromLine(line, home)).toBeNull()
+      await writeFile(join(home, 'hub_54322.json'), hub(4321))
+      expect(parseAntigravityServerInfoFromLine(line, home)).toEqual({ port: 54321, csrfToken: token })
+      expect(parseAntigravityServerInfoFromLine(legacy, home)).toEqual({ port: 57101, csrfToken: '01234567-89ab-cdef-0123-456789abcdef' })
+    } finally {
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
   it('extracts model maps from wrapped and unwrapped RPC responses', () => {
     expect(extractAntigravityModelMap({
       response: { models: { high: { model: 'MODEL_PLACEHOLDER_M7' } } },

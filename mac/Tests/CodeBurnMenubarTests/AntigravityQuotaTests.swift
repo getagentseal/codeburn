@@ -73,12 +73,42 @@ final class AntigravityQuotaTests: XCTestCase {
     }
 
     func testSkipsTokenlessAndIdeServersAcceptsTokenlessCli() {
-        XCTAssertNil(AntigravitySubscriptionService.classifyProcessLine(Self.tokenlessAppLine))
+        let missing = URL(fileURLWithPath: "/nonexistent/codeburn-test-daemon")
+        XCTAssertNil(AntigravitySubscriptionService.classifyProcessLine(Self.tokenlessAppLine, daemonDirectory: missing))
         XCTAssertNil(AntigravitySubscriptionService.classifyProcessLine(Self.ideLine))
         let candidate = AntigravitySubscriptionService.classifyProcessLine(Self.cliLine)
         XCTAssertEqual(candidate?.pid, "1237")
         XCTAssertEqual(candidate?.cli, true)
         XCTAssertNil(candidate?.csrf)
+    }
+
+    func testTakesTokenFromTheDaemonFileWhenTheCommandLineHasNone() throws {
+        let line = "4321 /Applications/Antigravity.app/Contents/Resources/bin/language_server --standalone --subclient_type hub"
+            + " --override_ide_version 2.34.0 --https_server_port 0 --app_data_dir antigravity --read_host_bridge_token_from_stdin"
+        let token = "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0"
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("codeburn-agy-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        func writeHub(_ name: String, _ body: String, modified: TimeInterval = 2_000_000_000) throws {
+            let url = dir.appendingPathComponent(name)
+            try body.write(to: url, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: modified)], ofItemAtPath: url.path)
+        }
+        func hub(_ pid: Int, _ csrf: String = token) -> String {
+            #"{"pid":\#(pid),"httpsPort":54321,"httpPort":54322,"lsVersion":"2.34.0","csrfToken":"\#(csrf)"}"#
+        }
+        let classify = { AntigravitySubscriptionService.classifyProcessLine($0, daemonDirectory: dir) }
+
+        XCTAssertNil(classify(line), "no file")
+        try writeHub("hub_54322.json", hub(9999))
+        XCTAssertNil(classify(line), "pid mismatch")
+        try writeHub("hub_54322.json", #"{"pid": 4321, "csrfToken":"#)
+        XCTAssertNil(classify(line), "malformed")
+        try writeHub("hub_59999.json", hub(4321, "stale-token"), modified: 1_900_000_000)
+        try writeHub("hub_54322.json", hub(4321))
+        XCTAssertEqual(classify(line), .init(pid: "4321", cli: false, csrf: token, extPort: nil))
+        try writeHub("hub_54323.json", hub(1234))
+        XCTAssertEqual(classify(Self.appLine)?.csrf, "tok-123", "command-line token unchanged")
     }
 
     func testIgnoresUnrelatedLanguageServersAndNonMatchingLines() {

@@ -14,8 +14,8 @@ describe('process classification', () => {
     expect(classifyProcessLine(appLine)).toEqual({ pid: '1234', cli: false, csrf: 'tok-123', extPort: 54321 })
   })
 
-  it('skips tokenless app servers and IDE servers, accepts the agy CLI without a token', () => {
-    expect(classifyProcessLine(tokenlessAppLine)).toBeNull()
+  it('skips tokenless app servers with no daemon file and IDE servers, accepts the agy CLI without a token', () => {
+    expect(classifyProcessLine(tokenlessAppLine, '/nonexistent/codeburn-test-daemon')).toBeNull()
     expect(classifyProcessLine(ideLine)).toBeNull()
     const candidate = classifyProcessLine(cliLine)
     expect(candidate).toMatchObject({ pid: '1237', cli: true })
