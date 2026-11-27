@@ -179,6 +179,8 @@ Biggest first.
 | `costBasis` | object | Share of cost by basis. Optional |
 | `retained` | boolean | `true` when the session was kept from the cache after the tool removed its transcript. Optional |
 | `identity` | string | Label of the Claude account that was active when the session started. Only once CodeBurn has seen two or more Claude identities. Optional |
+| `waitingMs` | number | Milliseconds the agent waited for you: the gap before each human prompt, summed over gaps of 30 minutes or less. Claude Code only. Optional |
+| `awayGaps` | number | Number of gaps before a human prompt that were longer than 30 minutes. Claude Code only. Optional |
 
 ### `records`
 
@@ -224,6 +226,10 @@ Biggest first. They share one shape, with a different first field.
 |---|---|---|
 | `calls` | number | Number of calls |
 | `share` | number | Percent of all calls in this section |
+| `durationMs` | number | Milliseconds spent in the timed calls. Claude Code only. Optional |
+| `timedCalls` | number | Number of calls that were timed. Claude Code only. Optional |
+
+Tool time is the gap between a call's record and its result's record, capped at 30 minutes per call. Calls can overlap, so the sum can exceed clock time. A command moved to the background is timed only until it is moved, and time a person spent approving a permission prompt is included. Subagent launches, questions to the user and commands launched in the background are not timed. In `shellCommands` a command's time goes to the first program it runs.
 
 ## CSV
 
@@ -248,6 +254,7 @@ Differences from JSON:
 
 - Most headers are words, for example `API Calls`, `Share (%)` and `Cost (USD)`. The currency code in the money headers follows your currency setting. `records.csv` and the last columns of `sessions.csv` (`subagentType`, `model`, `retained`) use the JSON key names instead. Read columns by header name.
 - `daily.csv` and `sessions.csv` have no `costBasis` column. `records.csv` does.
+- `durationMs`, `timedCalls`, `waitingMs` and `awayGaps` are in the JSON only.
 - A column is written when the first row has the key. The optional `records.csv` columns `supplementary`, `estimated`, `unpriced` and `retained` are always there, empty when false. `listCost` and `identity` appear only in the cases given above.
 - A text value that starts with `=`, `+`, `-`, `@`, a tab or a carriage return gets a `'` in front, so a spreadsheet does not run it as a formula.
 - Numbers have at most 8 decimals and never use an exponent.
