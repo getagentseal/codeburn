@@ -1,5 +1,7 @@
-import { readFileSync } from 'node:fs'
-import { describe, expect, it, vi } from 'vitest'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import * as cli from '../src/quota/antigravity.js'
 import * as desktop from '../app/electron/quota/antigravity.js'
@@ -137,5 +139,74 @@ describe.each([['CLI', cli], ['Electron', desktop]] as const)('%s Antigravity 2.
     expect(quota.connection).toBe('connected')
     expect(quota.details).toEqual(reader.decodeAntigravityStatus(status))
     expect(request).toHaveBeenCalledTimes(2)
+  })
+})
+
+// Process line as Antigravity 2.34 starts it: no --csrf_token on the command line.
+const hubLine = '4321 /Applications/Antigravity.app/Contents/Resources/bin/language_server --standalone'
+  + ' --override_ide_name antigravity --subclient_type hub --override_ide_version 2.34.0'
+  + ' --override_user_agent_name antigravity --https_server_port 0 --app_data_dir antigravity'
+  + ' --api_server_url https://generativelanguage.googleapis.com --cloud_code_endpoint https://daily-cloudcode-pa.googleapis.com'
+  + ' --enable_sidecars --host_bridge_url=http://127.0.0.1:50000 --read_host_bridge_token_from_stdin'
+const hubToken = '0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0'
+
+describe.each([['CLI', cli], ['Electron', desktop]] as const)('%s Antigravity daemon file', (_name, reader) => {
+  let home: string
+  let dir: string
+  const writeHub = (name: string, body: string, mtimeSeconds = 2_000_000_000) => {
+    writeFileSync(join(dir, name), body, { mode: 0o600 })
+    utimesSync(join(dir, name), mtimeSeconds, mtimeSeconds)
+  }
+  const hub = (pid: number, csrfToken = hubToken) => JSON.stringify({ pid, httpsPort: 54321, httpPort: 54322, lsVersion: '2.34.0', csrfToken })
+
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), 'codeburn-agy-'))
+    dir = join(home, '.gemini', 'antigravity', 'daemon')
+    mkdirSync(dir, { recursive: true })
+  })
+  afterEach(() => {
+    vi.unstubAllEnvs()
+    rmSync(home, { recursive: true, force: true })
+  })
+
+  it('takes the token from the newest file naming the server pid', () => {
+    writeHub('hub_59999.json', hub(4321, 'stale-token'), 1_900_000_000)
+    writeHub('hub_54322.json', hub(4321))
+    expect(reader.classifyProcessLine(hubLine, dir)).toEqual({ pid: '4321', cli: false, csrf: hubToken, extPort: undefined })
+  })
+
+  it('skips the server when no file names its pid', () => {
+    writeHub('hub_54322.json', hub(9999))
+    expect(reader.classifyProcessLine(hubLine, dir)).toBeNull()
+  })
+
+  it('skips the server when the file is malformed', () => {
+    writeHub('hub_54322.json', '{"pid": 4321, "csrfToken":')
+    writeHub('hub_54323.json', JSON.stringify({ pid: 4321, csrfToken: 'bad token\r\nX: 1' }))
+    expect(reader.classifyProcessLine(hubLine, dir)).toBeNull()
+  })
+
+  it('skips the server when there is no file', () => {
+    expect(reader.classifyProcessLine(hubLine, dir)).toBeNull()
+    expect(reader.classifyProcessLine(hubLine, join(home, 'missing'))).toBeNull()
+  })
+
+  it('keeps the command-line token of an older server', () => {
+    writeHub('hub_54322.json', hub(1234))
+    expect(reader.classifyProcessLine(appLine, dir)).toMatchObject({ pid: '1234', csrf: 'fixture-token' })
+  })
+
+  it('sends the file token when probing a 2.34 server found in the home folder', async () => {
+    writeHub('hub_54322.json', hub(4321))
+    vi.stubEnv('HOME', home)
+    vi.stubEnv('USERPROFILE', home)
+    const request = vi.fn<cli.LocalRequestFn>(async () => ({ status: 200, text: JSON.stringify(summary) }))
+    const quota = await reader.fetchAntigravityQuota({
+      execFile: async file => ({ stdout: file === 'ps' ? hubLine : 'server 4321 user 12u IPv4 0x1 0t0 TCP 127.0.0.1:54322 (LISTEN)\n' }),
+      request,
+      platform: 'darwin',
+    })
+    expect(quota.connection).toBe('connected')
+    expect(request.mock.calls[0]).toEqual([54322, true, '/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary', '{}', hubToken])
   })
 })

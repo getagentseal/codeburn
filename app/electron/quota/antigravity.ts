@@ -9,14 +9,17 @@
 //     (preferred windows; the tier and fallback windows come from)
 // - POST https://127.0.0.1:<port>/exa.language_server_pb.LanguageServerService/GetUserStatus
 //
-// Discovery lists processes to find candidates (app language
-// servers need their `--csrf_token`; the `agy` CLI needs none), then lists each
+// Discovery lists processes to find candidates (app language servers need a
+// CSRF token, from `--csrf_token` or a daemon file; the `agy` CLI needs none), then lists each
 // pid's listening TCP ports: `ps` and `lsof` on POSIX, Win32_Process and
 // `netstat` on Windows, which has neither. Local HTTPS uses a self-signed cert,
 // so TLS verification is relaxed ONLY for the 127.0.0.1 loopback probes.
 import { execFile } from 'node:child_process'
+import { readdirSync, readFileSync, statSync } from 'node:fs'
 import http from 'node:http'
 import https from 'node:https'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 import { promisify } from 'node:util'
 
 import { fraction, sanitizeError } from './security'
@@ -97,17 +100,39 @@ function flagValue(line: string, flag: string): string | undefined {
   return match?.[1]
 }
 
-export function classifyProcessLine(line: string): Candidate | null {
+/// Newer app servers keep the token off the command line and write it, with their pid, to
+/// `hub_<port>.json` here. Files from exited servers stay behind, so only the newest one
+/// naming this pid counts.
+export function daemonHub(pid: string, dir = join(homedir(), '.gemini', 'antigravity', 'daemon')): { csrfToken: string; httpsPort: number } | undefined {
+  let names: string[]
+  try { names = readdirSync(dir) } catch { return undefined }
+  let found: { csrfToken: string; httpsPort: number } | undefined
+  let newest = -Infinity
+  for (const name of names) {
+    if (!/^hub_\d+\.json$/.test(name)) continue
+    try {
+      const file = join(dir, name)
+      const hub = JSON.parse(readFileSync(file, 'utf8'))
+      const modified = statSync(file).mtimeMs
+      if (hub?.pid !== Number(pid) || typeof hub.csrfToken !== 'string' || !/^[\w-]+$/.test(hub.csrfToken) || modified <= newest) continue
+      found = { csrfToken: hub.csrfToken, httpsPort: Number(hub.httpsPort) }
+      newest = modified
+    } catch { /* unreadable or malformed */ }
+  }
+  return found
+}
+
+export function classifyProcessLine(line: string, daemonDir?: string): Candidate | null {
   const isServer = LANGUAGE_SERVER.test(line)
   const isCli = !isServer && (CLI_MARKER.test(line) || AGY_BINARY.test(line))
   if (!isServer && !isCli) return null
   const pid = line.trim().match(/^(\d+)/)?.[1]
   if (!pid) return null
-  // A tokenless desktop language-server match is skipped so a later, valid
-  // server can be found; the CLI exposes no CSRF flag and needs none. IDE
+  // A desktop language server with no token anywhere is skipped so a later,
+  // valid server can be found; the CLI exposes no CSRF flag and needs none. IDE
   // language servers are excluded too - their payloads lack the weekly groups.
   if (!isCli && (!APP_MARKER.test(line) || IDE_MARKER.test(line))) return null
-  const csrf = flagValue(line, '--csrf_token')
+  const csrf = flagValue(line, '--csrf_token') ?? (isCli ? undefined : daemonHub(pid, daemonDir)?.csrfToken)
   if (!isCli && !csrf) return null
   const extPort = Number(flagValue(line, '--extension_server_port'))
   return { pid, cli: isCli, csrf, extPort: Number.isFinite(extPort) && extPort > 0 ? extPort : undefined }

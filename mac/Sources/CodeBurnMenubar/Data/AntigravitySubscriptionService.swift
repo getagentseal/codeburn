@@ -33,8 +33,8 @@ struct AntigravityUsage: Sendable, Equatable {
 ///     (preferred windows; the tier and fallback windows come from)
 /// - POST https://127.0.0.1:<port>/exa.language_server_pb.LanguageServerService/GetUserStatus
 ///
-/// Discovery uses `ps` to find candidate processes (app language
-/// servers need their `--csrf_token`; the `agy` CLI needs none), then `lsof`
+/// Discovery uses `ps` to find candidate processes (app language servers need
+/// a CSRF token, from `--csrf_token` or a daemon file; the `agy` CLI needs none), then `lsof`
 /// lists each pid's listening TCP ports. Local HTTPS uses a self-signed cert,
 /// so TLS verification is relaxed ONLY for the 127.0.0.1 loopback probes —
 /// see LoopbackTrustDelegate.
@@ -171,19 +171,45 @@ enum AntigravitySubscriptionService {
         return String(line[range])
     }
 
-    static func classifyProcessLine(_ line: String) -> Candidate? {
+    /// Newer app servers keep the token off the command line and write it, with
+    /// their pid, to `hub_<port>.json` here. Files from exited servers stay
+    /// behind, so only the newest one naming this pid counts.
+    private static func daemonToken(pid: String, directory: URL) -> String? {
+        let fm = FileManager.default
+        guard let names = try? fm.contentsOfDirectory(atPath: directory.path) else { return nil }
+        var token: String?
+        var newest = Date.distantPast
+        for name in names where matches(#"^hub_\d+\.json$"#, in: name) {
+            let path = directory.appendingPathComponent(name).path
+            guard let data = fm.contents(atPath: path),
+                  let hub = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  (hub["pid"] as? Int).map(String.init) == pid,
+                  let value = hub["csrfToken"] as? String, matches(#"^[\w-]+$"#, in: value),
+                  let modified = (try? fm.attributesOfItem(atPath: path))?[.modificationDate] as? Date,
+                  modified > newest else { continue }
+            token = value
+            newest = modified
+        }
+        return token
+    }
+
+    static func classifyProcessLine(
+        _ line: String,
+        daemonDirectory: URL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".gemini/antigravity/daemon")
+    ) -> Candidate? {
         let isServer = matches(languageServerPattern, in: line)
         let isCli = !isServer && (matches(cliMarkerPattern, in: line) || matches(agyBinaryPattern, in: line))
         guard isServer || isCli else { return nil }
         let trimmed = line.trimmingCharacters(in: .whitespaces)
         guard let pidRange = trimmed.range(of: #"^\d+"#, options: .regularExpression) else { return nil }
         let pid = String(trimmed[pidRange])
-        // A tokenless desktop language-server match is skipped so a later,
+        // A desktop language server with no token anywhere is skipped so a later,
         // valid server can be found; the CLI exposes no CSRF flag and needs
         // none. IDE language servers are excluded too — their payloads lack
         // the weekly groups.
         if !isCli && (!matches(appMarkerPattern, in: line) || matches(ideMarkerPattern, in: line)) { return nil }
         let csrf = flagValue(line: line, flag: "--csrf_token")
+            ?? (isCli ? nil : daemonToken(pid: pid, directory: daemonDirectory))
         if !isCli && csrf == nil { return nil }
         let extPort = flagValue(line: line, flag: "--extension_server_port").flatMap(Int.init)
         return Candidate(pid: pid, cli: isCli, csrf: csrf, extPort: extPort.flatMap { $0 > 0 ? $0 : nil })

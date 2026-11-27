@@ -11,6 +11,7 @@ import https from 'https'
 import { extractBashCommands } from '../bash-utils.js'
 import { getCodeburnCacheDir, readExistingTextFile } from '../cache-dir.js'
 import { calculateCost, ownValue } from '../models.js'
+import { daemonHub } from '../quota/antigravity.js'
 import { isSqliteAvailable, isSqliteBusyError, openDatabase } from '../sqlite.js'
 import type { ProbeRoot, Provider, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
 
@@ -276,12 +277,16 @@ export function extractAntigravityAppDataDirFromLine(line: string): 'antigravity
   return normalizeAppDataDir(getFlagValue(line, APP_DATA_DIR_FLAGS))
 }
 
-function parseAntigravityServerCandidateFromLine(line: string): ServerCandidate | null {
+function parseAntigravityServerCandidateFromLine(line: string, daemonDir?: string): ServerCandidate | null {
   const lower = line.toLowerCase()
   if (!lower.includes('language_server') || !lower.includes('antigravity')) return null
 
-  const rawPort = getFlagValue(line, SERVER_PORT_FLAGS)
-  const csrfToken = getFlagValue(line, CSRF_TOKEN_FLAGS)
+  const appDataDir = extractAntigravityAppDataDirFromLine(line)
+  const flagToken = getFlagValue(line, CSRF_TOKEN_FLAGS)
+  const pid = line.match(/^\s*(\d+)\s/)?.[1]
+  const hub = !flagToken && pid && appDataDir === 'antigravity' ? daemonHub(pid, daemonDir) : undefined
+  const rawPort = hub ? String(hub.httpsPort) : getFlagValue(line, SERVER_PORT_FLAGS)
+  const csrfToken = flagToken ?? hub?.csrfToken
   if (!rawPort || !csrfToken) return null
   if (!isLikelyCsrfToken(csrfToken)) return null
 
@@ -291,12 +296,12 @@ function parseAntigravityServerCandidateFromLine(line: string): ServerCandidate 
   return {
     port,
     csrfToken,
-    appDataDir: extractAntigravityAppDataDirFromLine(line),
+    appDataDir,
   }
 }
 
-export function parseAntigravityServerInfoFromLine(line: string): ServerInfo | { port: 0; csrfToken: string } | null {
-  const candidate = parseAntigravityServerCandidateFromLine(line)
+export function parseAntigravityServerInfoFromLine(line: string, daemonDir?: string): ServerInfo | { port: 0; csrfToken: string } | null {
+  const candidate = parseAntigravityServerCandidateFromLine(line, daemonDir)
   return candidate ? { port: candidate.port, csrfToken: candidate.csrfToken } : null
 }
 
@@ -310,7 +315,7 @@ export function parseAntigravityServerInfo(lines: string[]): ServerInfo | null {
 
 function parseAntigravityServerCandidates(lines: string[]): ServerCandidate[] {
   return lines
-    .map(parseAntigravityServerCandidateFromLine)
+    .map(line => parseAntigravityServerCandidateFromLine(line))
     .filter((server): server is ServerCandidate => server !== null)
 }
 
@@ -490,13 +495,13 @@ async function readProcessCommandLines(): Promise<string[]> {
     const script = [
       "$ErrorActionPreference = 'SilentlyContinue'",
       '[Console]::OutputEncoding = [System.Text.Encoding]::UTF8',
-      "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and $_.CommandLine -like '*language_server*' -and $_.CommandLine -like '*antigravity*' } | ForEach-Object { $_.CommandLine }",
+      "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and $_.CommandLine -like '*language_server*' -and $_.CommandLine -like '*antigravity*' } | ForEach-Object { \"$($_.ProcessId) $($_.CommandLine)\" }",
     ].join('; ')
     const output = await execFileText('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', script], 5000)
     return output.split(/\r?\n/)
   }
 
-  const output = await execFileText('ps', ['-ww', '-eo', 'args'])
+  const output = await execFileText('ps', ['-ww', '-eo', 'pid=,args='])
   return output.split('\n')
 }
 
