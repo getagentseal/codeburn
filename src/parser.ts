@@ -1548,23 +1548,23 @@ export function collectSessionMeta(entry: JournalEntry, meta: SessionMeta): void
 }
 
 // parseLargeJsonl keeps none of what the timing clock reads, and stored scan
-// facts depend on its exact text, so an oversized user or system line is
-// searched for those keys here instead.
+// facts depend on its exact text, so an oversized user line is searched for
+// those keys here instead. Result ids are read from the message alone: the
+// `toolUseResult` written after it can hold objects of its own.
 // ponytail: substring search assumes the compact JSON Claude Code writes, where
 // a key inside a string value is escaped and cannot match; parse the line
 // structurally if that ever changes.
 function addLargeTimingFields(line: string | Buffer, entry: JournalEntry): void {
-  const text = (from: number, to: number) => typeof line === 'string' ? line.slice(from, to) : line.toString('utf-8', from, to)
-  if (entry.type === 'system') {
-    for (const subtype of ['turn_duration', 'stop_hook_summary']) if (line.includes(`"subtype":"${subtype}"`)) entry['subtype'] = subtype
-    return
-  }
   if (entry.type !== 'user') return
+  const text = (from: number, to: number) => typeof line === 'string' ? line.slice(from, to) : line.toString('utf-8', from, to)
   const ids: string[] = []
   const key = '"tool_use_id":"'
-  for (let i = line.indexOf(key); i !== -1; i = line.indexOf(key, i + key.length)) {
-    const end = line.indexOf('"', i + key.length)
-    if (end !== -1) ids.push(text(i + key.length, end))
+  const start = line.indexOf('"message":{"role":"user"')
+  const resultAt = start === -1 ? -1 : line.indexOf('"toolUseResult":', start)
+  const end = resultAt === -1 ? line.length : resultAt
+  for (let i = start === -1 ? -1 : line.indexOf(key, start); i !== -1 && i < end; i = line.indexOf(key, i + key.length)) {
+    const close = line.indexOf('"', i + key.length)
+    if (close !== -1) ids.push(text(i + key.length, close))
   }
   if (ids.length > 0) {
     entry.toolResultIds = ids
@@ -1650,14 +1650,15 @@ export function noteTiming(raw: JournalEntry, compact: JournalEntry, clock: Timi
   clock.lastMs = ms
 }
 
-// The still-open tool uses of `turn`, which sits at `turnIdx` in the cached
-// turns with its calls starting at `callOffset`.
-function openToolsOf(turn: ParsedTurn | undefined, turnIdx: number, callOffset: number, clock: TimingClock): OpenTool[] {
+// The still-open tool uses of `turns`, the first of which sits at `turnIdx` in
+// the cached turns with its calls starting at `callOffset`.
+function openToolsOf(turns: ParsedTurn[], turnIdx: number, callOffset: number, clock: TimingClock): OpenTool[] {
   const out: OpenTool[] = []
-  turn?.assistantCalls.forEach((call, ci) => call.toolUseIds?.forEach((id, ti) => {
+  if (clock.open.size === 0) return out
+  turns.forEach((turn, i) => turn.assistantCalls.forEach((call, ci) => call.toolUseIds?.forEach((id, k) => {
     const open = clock.open.get(id)
-    if (open) out.push([id, open.startMs, turnIdx, callOffset + ci, ti])
-  }))
+    if (open) out.push([id, open.startMs, turnIdx + i, (i === 0 ? callOffset : 0) + ci, k])
+  })))
   return out
 }
 
@@ -2697,6 +2698,7 @@ async function scanProjectDirs(
             const newTurns = parsedTurnsToCachedTurns(parsedNew)
 
             const mergedTurns: CachedTurn[] = cached.turns.map(t => ({ ...t, calls: [...t.calls] }))
+            let firstNewTurn = mergedTurns.length
             let lastCallOffset = 0
             if (newTurns.length > 0) {
               let startIdx = 0
@@ -2705,6 +2707,7 @@ async function scanProjectDirs(
               // them in that same turn), then append the remaining new turns.
               if (!newTurns[0]!.userMessage.trim() && mergedTurns.length > 0) {
                 const last = mergedTurns[mergedTurns.length - 1]!
+                firstNewTurn = mergedTurns.length - 1
                 lastCallOffset = last.calls.length
                 last.calls = mergeBoundaryCalls(last.calls, newTurns[0]!.calls)
                 const waitMs = (last.waitMs ?? 0) + (newTurns[0]!.waitMs ?? 0)
@@ -2731,10 +2734,8 @@ async function scanProjectDirs(
               if (durationMs === undefined || !call || !step) continue
               mergedTurns[t]!.calls[c] = { ...call, toolSequence: call.toolSequence!.map((s, i) => i === k ? [{ ...step, durationMs }] : s) }
             }
-            const lastIdx = mergedTurns.length - 1
-            const stillOpen = (cached.timing?.open ?? []).filter(o => o[2] === lastIdx && clock.open.has(o[0]))
-            const newOpen = openToolsOf(parsedNew.at(-1), lastIdx, parsedNew.length === 1 ? lastCallOffset : 0, clock)
-            const timing = timingOf(clock, carry, [...stillOpen, ...newOpen])
+            const stillOpen = (cached.timing?.open ?? []).filter(o => clock.open.has(o[0]))
+            const timing = timingOf(clock, carry, [...stillOpen, ...openToolsOf(parsedNew, firstNewTurn, lastCallOffset, clock)])
 
             // The cached region's dedup keys were not added to seenMsgIds (only
             // unchanged files pre-seed it), so add them now — a full re-parse would
@@ -3634,7 +3635,7 @@ export async function parseClaudeFileFull(
 
   const carry = { waitMs: 0, awayGaps: 0 }
   const turns = groupIntoTurns(dedupeStreamingMessageIds(entries), seenMsgIds, toolResultMeta, carry)
-  const timing = timingOf(clock, carry, openToolsOf(turns.at(-1), turns.length - 1, 0, clock))
+  const timing = timingOf(clock, carry, openToolsOf(turns, 0, 0, clock))
   const cwd = extractCanonicalCwd(entries)
   return {
     lastCompleteLineOffset: tracker.lastCompleteLineOffset,

@@ -221,5 +221,43 @@ describe('Claude tool time and waiting on you', () => {
     expect(sessions).toHaveLength(2)
     expect(sessions.reduce((n, s) => n + (s.waitingMs ?? 0), 0)).toBe(60_000)
   })
+
+  it('keeps a tool open across turns until its result arrives in a later append', async () => {
+    const warmCache = await freshCache()
+    await writeFile(sessionPath, [prompt(0, 'start'), asst('m1', 1, [tool('tu1', 'Bash', { command: 'make' })])].join('\n') + '\n')
+    await parse(warmCache)
+    await appendFile(sessionPath, [prompt(5, 'while that runs'), asst('m2', 6)].join('\n') + '\n')
+    await parse(warmCache)
+    await appendFile(sessionPath, results(20, ['tu1']) + '\n')
+    const warm = await parse(warmCache)
+
+    const coldCache = await freshCache()
+    const cold = await parse(coldCache)
+    await rm(coldCache, { recursive: true, force: true })
+    await rm(warmCache, { recursive: true, force: true })
+
+    expect(cold.toolBreakdown['Bash']).toEqual({ calls: 1, durationMs: 19_000, timedCalls: 1 })
+    expect(warm.toolBreakdown['Bash']).toEqual(cold.toolBreakdown['Bash'])
+  })
+
+  it('pairs an oversized result line only with the ids in its message content', async () => {
+    const bigResult = JSON.stringify({
+      type: 'user', ...base, timestamp: at(3),
+      message: { role: 'user', content: [{ tool_use_id: 'tuA', type: 'tool_result', content: 'x'.repeat(40_000) }] },
+      toolUseResult: { nested: { tool_use_id: 'tuB' } },
+    })
+    await writeFile(sessionPath, [
+      prompt(0, 'start'),
+      asst('m1', 1, [tool('tuA', 'Read', { file_path: '/a.ts' }), tool('tuB', 'Bash', { command: 'npm test' })]),
+      bigResult,
+      results(101, ['tuB']),
+    ].join('\n') + '\n')
+    const cache = await freshCache()
+    const s = await parse(cache)
+    await rm(cache, { recursive: true, force: true })
+
+    expect(s.toolBreakdown['Read']).toEqual({ calls: 1, durationMs: 2_000, timedCalls: 1 })
+    expect(s.toolBreakdown['Bash']).toEqual({ calls: 1, durationMs: 100_000, timedCalls: 1 })
+  })
 })
 
