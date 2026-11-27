@@ -174,13 +174,13 @@ export function getDesktopSessionsDirs(): string[] {
     )
   }
   if (platform === 'win32') {
-    const appData = appDataInput?.trim()
+    const appData = appDataInput?.trim() || join(homedir(), 'AppData', 'Roaming')
+    const localAppData = localAppDataInput?.trim() || join(homedir(), 'AppData', 'Local')
     const candidates = [
-      join(appData || join(homedir(), 'AppData', 'Roaming'), 'Claude', 'local-agent-mode-sessions'),
+      join(appData, 'Claude', 'local-agent-mode-sessions'),
     ]
 
-    const localAppData = localAppDataInput?.trim()
-    const packagesDir = join(localAppData || join(homedir(), 'AppData', 'Local'), 'Packages')
+    const packagesDir = join(localAppData, 'Packages')
     try {
       const entries = readdirSync(packagesDir, { withFileTypes: true })
         .filter(entry =>
@@ -207,6 +207,38 @@ export function getDesktopSessionsDirs(): string[] {
     } catch {
       // Missing or unreadable Packages is equivalent to no MSIX candidates.
     }
+
+    const pushIfDirectory = (sessionsDir: string): void => {
+      try {
+        if (statSync(sessionsDir).isDirectory()) candidates.push(sessionsDir)
+      } catch {
+        // Missing or unreadable roots are not candidates.
+      }
+    }
+
+    // Claude Desktop 3.1623.0 moved its data out of the MSIX LocalCache to
+    // %LOCALAPPDATA%\Claude-Data\ and removed the old path. The folder is named
+    // claude_<hash> or, after the MSIX package family, <publisher>.claude_<hash>.
+    const claudeDataDir = join(localAppData, 'Claude-Data')
+    try {
+      const entries = readdirSync(claudeDataDir, { withFileTypes: true })
+        .filter(entry => {
+          if (!entry.isDirectory()) return false
+          const name = entry.name.toLowerCase()
+          return name.startsWith('claude_') || name.includes('.claude_')
+        })
+        .sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0)
+      for (const entry of entries) {
+        pushIfDirectory(join(claudeDataDir, entry.name, 'local-agent-mode-sessions'))
+      }
+    } catch {
+      // Missing or unreadable Claude-Data is equivalent to no candidates.
+    }
+
+    // Third-party (3P) mode keeps its own data directory: %LOCALAPPDATA% since
+    // 1.5186.0, %APPDATA% before that.
+    pushIfDirectory(join(localAppData, 'Claude-3p', 'local-agent-mode-sessions'))
+    pushIfDirectory(join(appData, 'Claude-3p', 'local-agent-mode-sessions'))
 
     return cacheDesktopSessionsDirs(cacheKey, candidates)
   }
