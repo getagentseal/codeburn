@@ -114,7 +114,17 @@ export type CachedTurn = {
   // A spawned sidechain session is folded into the launching turn by matching its
   // resolved spawn id against these. Stored per-turn directly. Optional.
   spawnToolUseIds?: string[]
+  // Claude: see ParsedTurn.waitMs / awayGaps.
+  waitMs?: number
+  awayGaps?: number
 }
+
+/// A tool use still waiting for its result when a parse ended, located in the
+/// cached turns so an appended region can complete it: id, start, turn, call, tool.
+export type OpenTool = [string, number, number, number, number]
+
+/// Claude: what an appended region needs from the parse that came before it.
+export type ClaudeTiming = { lastMs?: number; waitMs?: number; awayGaps?: number; open?: OpenTool[] }
 
 export type FileFingerprint = {
   dev: number
@@ -125,6 +135,7 @@ export type FileFingerprint = {
 
 export type CachedFile = {
   fingerprint: FileFingerprint
+  timing?: ClaudeTiming
   lastCompleteLineOffset?: number
   canonicalCwd?: string
   // Original cwd before linked-worktree canonicalization.
@@ -401,7 +412,9 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // so cached calls regain their thinking share of the output.
   // sidechain-output-estimate-v1: subagent messages from Claude Code before
   // 2.1.307 that never got a final usage row have their output estimated.
-  claude: 'advisor-usage-v1-skills-rich-capture-v1-cross-provider-pr-v1-session-lineage-capture-v1-queued-human-prompts-v1-per-call-cwd-v1-streamed-tool-blocks-v1-powershell-shell-tool-v1-thinking-tokens-v1-sidechain-output-estimate-v1',
+  // tool-time-v1: cached calls gain per-tool durations and cached turns the
+  // wait before each human prompt.
+  claude: 'advisor-usage-v1-skills-rich-capture-v1-cross-provider-pr-v1-session-lineage-capture-v1-queued-human-prompts-v1-per-call-cwd-v1-streamed-tool-blocks-v1-powershell-shell-tool-v1-thinking-tokens-v1-sidechain-output-estimate-v1-tool-time-v1',
   // reported-cost-v1: a request's recorded `cost` is kept through the cache
   // instead of being re-priced from tokens on every read.
   cline: 'worktree-project-grouping-v1-reported-cost-v1',
@@ -1252,6 +1265,16 @@ function isToolCall(v: unknown): boolean {
   return typeof o['tool'] === 'string'
     && isOptionalString(o['file'])
     && isOptionalString(o['command'])
+    && isOptionalNum(o['durationMs'])
+}
+
+function isOptionalTiming(v: unknown): boolean {
+  if (v === undefined) return true
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return false
+  const o = v as Record<string, unknown>
+  return isOptionalNum(o['lastMs']) && isOptionalNum(o['waitMs']) && isOptionalNum(o['awayGaps'])
+    && (o['open'] === undefined || (Array.isArray(o['open']) && (o['open'] as unknown[]).every(t =>
+      Array.isArray(t) && t.length === 5 && typeof t[0] === 'string' && t.slice(1).every(n => typeof n === 'number'))))
 }
 
 function isToolCallArray(v: unknown): boolean {
@@ -1324,6 +1347,8 @@ function validateTurn(t: unknown): t is CachedTurn {
     && isOptionalString(o['gitBranch'])
     && (o['prRefs'] === undefined || isStringArray(o['prRefs']))
     && (o['spawnToolUseIds'] === undefined || isStringArray(o['spawnToolUseIds']))
+    && isOptionalNum(o['waitMs'])
+    && isOptionalNum(o['awayGaps'])
     && Array.isArray(o['calls'])
     && (o['calls'] as unknown[]).every(validateCall)
 }
@@ -1352,6 +1377,7 @@ function validateCachedFile(f: unknown): f is CachedFile {
     && isOptionalLineage(o['lineage'])
     && isOptionalString(o['retainedSince'])
     && isOptionalBool(o['durable'])
+    && isOptionalTiming(o['timing'])
     && Array.isArray(o['turns'])
     && (o['turns'] as unknown[]).every(validateTurn)
 }

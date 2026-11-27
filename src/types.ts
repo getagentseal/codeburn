@@ -18,6 +18,7 @@ export type ToolUseBlock = {
   id: string
   name: string
   input: Record<string, unknown>
+  durationMs?: number
 }
 
 export type ContentBlock =
@@ -89,6 +90,9 @@ export type JournalEntry = {
   promptId?: string
   message?: AssistantMessageContent | { role: 'user'; content: string | ContentBlock[] }
   isSidechain?: boolean
+  waitMs?: number
+  awayGaps?: number
+  toolResultIds?: string[]
   [key: string]: unknown
 }
 
@@ -111,6 +115,11 @@ export type ParsedTurn = {
   // launched it by matching its resolved spawn id against these. Absent when the
   // turn spawned no subagent. Optional; Claude only.
   spawnToolUseIds?: string[]
+  /// Claude Code: time since the agent's previous activity before each human
+  /// prompt of this turn, for gaps of 30 min or less; longer gaps are counted
+  /// in `awayGaps` instead.
+  waitMs?: number
+  awayGaps?: number
 }
 
 export type CostBasis = 'recorded' | 'calculated' | 'estimated' | 'included' | 'unpriced'
@@ -136,6 +145,8 @@ export type ParsedApiCall = {
   /// this call's assistant message. Transient (built at parse time, aggregated
   /// into the turn's `spawnToolUseIds`); never cached per-call.
   spawnToolUseIds?: string[]
+  /// Claude Code: `tool_use` ids in `toolSequence` order. Transient, never cached.
+  toolUseIds?: string[]
   /// Claude Code: the `cwd` recorded on this call's assistant line. Transient
   /// (parse time only); the cache stores it per call only when it changes.
   cwd?: string
@@ -202,6 +213,8 @@ export type ToolCall = {
   tool: string
   file?: string
   command?: string
+  /// Claude Code: result timestamp minus call timestamp, capped at 30 min.
+  durationMs?: number
 }
 
 export type TaskCategory =
@@ -361,9 +374,9 @@ export type SessionSummary = {
   /// back into one row labeled with the primary (highest-cost) project.
   projectSplit?: { primaryProject: string; primaryProjectPath: string; primary: boolean }
   modelBreakdown: Record<string, { calls: number; costUSD: number; tokens: TokenUsage; savingsUSD: number; estimatedCostUSD?: number; activeDurationMs?: number; activeGeneratedTokens?: number; toolWaitMs?: number }>
-  toolBreakdown: Record<string, { calls: number }>
-  mcpBreakdown: Record<string, { calls: number }>
-  bashBreakdown: Record<string, { calls: number }>
+  toolBreakdown: Record<string, ToolTimeRow>
+  mcpBreakdown: Record<string, ToolTimeRow>
+  bashBreakdown: Record<string, ToolTimeRow>
   categoryBreakdown: Record<TaskCategory, { turns: number; costUSD: number; savingsUSD: number; retries: number; editTurns: number; oneShotTurns: number }>
   skillBreakdown: Record<string, { turns: number; costUSD: number; savingsUSD: number; editTurns: number; oneShotTurns: number }>
   subagentBreakdown: Record<string, { calls: number; costUSD: number; savingsUSD: number }>
@@ -384,7 +397,13 @@ export type SessionSummary = {
   /// Claude only, set when sessions are read and the identity log holds two
   /// or more accounts: the account active when the session started.
   identity?: { hash: string; label: string; plan?: string }
+  /// Claude Code: sum of the turns' `waitMs` and `awayGaps`.
+  waitingMs?: number
+  awayGaps?: number
 }
+
+/// `durationMs` sums the timed calls only; `timedCalls` counts them.
+export type ToolTimeRow = { calls: number; durationMs?: number; timedCalls?: number }
 
 export type ProjectSummary = {
   project: string

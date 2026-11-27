@@ -31,7 +31,9 @@ import {
   type CachedFile,
   type CachedTurn,
   type CachedUsage,
+  type ClaudeTiming,
   type FileFingerprint,
+  type OpenTool,
   type ProviderSection,
   type SessionCache,
   beginColdHydration,
@@ -86,6 +88,7 @@ import type {
   SessionSourceMetadata,
   TokenUsage,
   ToolCall,
+  ToolTimeRow,
   ToolUseBlock,
 } from './types.js'
 import { classifyTurn, BASH_TOOLS, EDIT_TOOLS } from './classifier.js'
@@ -533,6 +536,8 @@ function extractLargeToolBlocks(source: JsonSource, contentBounds: JsonValueBoun
         } else if (BASH_TOOLS.has(name)) {
           const command = readJsonString(source, findObjectFieldValue(source, inputBounds.start, inputBounds.end, 'command'), BASH_COMMAND_CAP)
           if (command !== undefined) input['command'] = command
+          const background = findObjectFieldValue(source, inputBounds.start, inputBounds.end, 'run_in_background')
+          if (background?.kind === 'scalar' && source.slice(background.start, background.end) === 'true') input['run_in_background'] = true
         }
       }
       tools.push({ type: 'tool_use', id, name, input })
@@ -542,7 +547,7 @@ function extractLargeToolBlocks(source: JsonSource, contentBounds: JsonValueBoun
   return tools
 }
 
-function extractLargeUserText(source: JsonSource, contentBounds: JsonValueBounds | null): string | undefined {
+function extractLargeUserText(source: JsonSource, contentBounds: JsonValueBounds | null, resultIds: string[]): string | undefined {
   if (!contentBounds) return undefined
   if (contentBounds.kind === 'string') return readJsonString(source, contentBounds, USER_TEXT_CAP)
   if (contentBounds.kind !== 'array') return undefined
@@ -570,6 +575,9 @@ function extractLargeUserText(source: JsonSource, contentBounds: JsonValueBounds
         USER_TEXT_CAP - text.length,
       )
       if (part) text += (text ? ' ' : '') + part
+    } else if (type === 'tool_result') {
+      const id = readJsonString(source, findObjectFieldValue(source, objectBounds.start, objectBounds.end, 'tool_use_id'))
+      if (id) resultIds.push(id)
     }
     i = objectEnd + 1
   }
@@ -678,7 +686,7 @@ function extractObjectFields(
   return captured
 }
 
-const LARGE_ROOT_FIELDS = ['type', 'timestamp', 'sessionId', 'cwd', 'gitBranch', 'attachment', 'message', 'isSidechain', 'promptSource', 'version'] as const
+const LARGE_ROOT_FIELDS = ['type', 'timestamp', 'sessionId', 'cwd', 'gitBranch', 'attachment', 'message', 'isSidechain', 'promptSource', 'version', 'subtype', 'origin', 'turnOrigin', 'isMeta', 'isCompactSummary', 'isVisibleInTranscriptOnly'] as const
 const LARGE_ASSISTANT_MESSAGE_FIELDS = ['model', 'usage', 'id', 'content', 'stop_reason'] as const
 
 // Claude Code before 2.1.307 never wrote the final usage of a subagent message:
@@ -736,9 +744,16 @@ function parseLargeJsonl(line: string | Buffer): JournalEntry | null {
   if (!type) return null
 
   const entry: JournalEntry = { type }
-  if (root['isSidechain']?.kind === 'scalar' && source.slice(root['isSidechain'].start, root['isSidechain'].end) === 'true') {
-    entry.isSidechain = true
+  for (const flag of ['isSidechain', 'isMeta', 'isCompactSummary', 'isVisibleInTranscriptOnly'] as const) {
+    const bounds = root[flag]
+    if (bounds?.kind === 'scalar' && source.slice(bounds.start, bounds.end) === 'true') entry[flag] = true
   }
+  const subtype = readJsonString(source, root['subtype'])
+  const turnOrigin = readJsonString(source, root['turnOrigin'])
+  const origin = root['origin']
+  if (subtype !== undefined) entry['subtype'] = subtype
+  if (turnOrigin !== undefined) entry['turnOrigin'] = turnOrigin
+  if (origin?.kind === 'object') entry['origin'] = { kind: readJsonString(source, findObjectFieldValue(source, origin.start, origin.end, 'kind'), 100) }
   const timestamp = readJsonString(source, root['timestamp'])
   const sessionId = readJsonString(source, root['sessionId'])
   const cwd = readJsonString(source, root['cwd'])
@@ -758,8 +773,10 @@ function parseLargeJsonl(line: string | Buffer): JournalEntry | null {
   if (type === 'user') {
     if (message?.kind === 'object') {
       const content = findObjectFieldValue(source, message.start, message.end, 'content')
-      const text = extractLargeUserText(source, content)
+      const resultIds: string[] = []
+      const text = extractLargeUserText(source, content, resultIds)
       if (text !== undefined) entry.message = { role: 'user', content: text }
+      if (resultIds.length > 0) entry.toolResultIds = resultIds
     }
     return entry
   }
@@ -1209,6 +1226,7 @@ export function compactEntry(raw: JournalEntry): JournalEntry {
       if (typeof ri['command'] === 'string') {
         input['command'] = (ri['command'] as string).slice(0, BASH_COMMAND_CAP)
       }
+      if (ri['run_in_background'] === true) input['run_in_background'] = true
     }
     return { type: 'tool_use' as const, id: tb.id ?? '', name: tb.name, input }
   })
@@ -1541,6 +1559,101 @@ export function collectSessionMeta(entry: JournalEntry, meta: SessionMeta): void
   }
 }
 
+const TIMING_CAP_MS = 30 * 60 * 1000
+// Subagent spawns and human questions measure someone else's work, not the tool.
+const UNTIMED_TOOLS = new Set(['Agent', 'Task', 'AskUserQuestion', 'ExitPlanMode'])
+
+export type TimingClock = {
+  lastMs?: number
+  open: Map<string, { startMs: number; blocks: ToolUseBlock[] }>
+  resolved: Map<string, number>
+}
+
+export function newTimingClock(prior?: ClaudeTiming): TimingClock {
+  const clock: TimingClock = { lastMs: prior?.lastMs, open: new Map(), resolved: new Map() }
+  for (const [id, startMs] of prior?.open ?? []) clock.open.set(id, { startMs, blocks: [] })
+  return clock
+}
+
+function isHumanPrompt(entry: JournalEntry): boolean {
+  if (entry['isMeta'] === true || entry['isCompactSummary'] === true || entry['isVisibleInTranscriptOnly'] === true) return false
+  const origin = entry['origin']
+  if (origin && typeof origin === 'object') return (origin as { kind?: unknown }).kind === 'human'
+  return entry['turnOrigin'] === 'human'
+}
+
+function toolResultIds(entry: JournalEntry): string[] {
+  if (entry.toolResultIds) return entry.toolResultIds
+  const content = (entry.message as { content?: unknown } | undefined)?.content
+  if (!Array.isArray(content)) return []
+  const ids: string[] = []
+  for (const b of content) {
+    const id = b && typeof b === 'object' && (b as { type?: unknown }).type === 'tool_result' ? (b as { tool_use_id?: unknown }).tool_use_id : undefined
+    if (typeof id === 'string' && id) ids.push(id)
+  }
+  return ids
+}
+
+// Runs on each RAW entry in file order, beside its compacted copy: stamps
+// `durationMs` on the compacted tool_use blocks when their result arrives and
+// `waitMs` / `awayGaps` on a compacted human prompt. Activity is any assistant
+// or user record, or the system record that closes a turn.
+export function noteTiming(raw: JournalEntry, compact: JournalEntry, clock: TimingClock): void {
+  const ms = typeof raw.timestamp === 'string' ? Date.parse(raw.timestamp) : Number.NaN
+  if (!Number.isFinite(ms)) return
+  if (raw.type === 'assistant') {
+    const content = (compact.message as AssistantMessageContent | undefined)?.content
+    for (const b of Array.isArray(content) ? content : []) {
+      if (b.type !== 'tool_use') continue
+      const tb = b as ToolUseBlock
+      if (!tb.id || UNTIMED_TOOLS.has(tb.name) || tb.input['run_in_background'] === true) continue
+      const open = clock.open.get(tb.id)
+      if (open) open.blocks.push(tb)
+      else clock.open.set(tb.id, { startMs: ms, blocks: [tb] })
+    }
+  } else if (raw.type === 'user') {
+    const ids = toolResultIds(raw)
+    for (const id of ids) {
+      const open = clock.open.get(id)
+      if (!open) continue
+      clock.open.delete(id)
+      if (ms < open.startMs) continue
+      const durationMs = Math.min(ms - open.startMs, TIMING_CAP_MS)
+      for (const b of open.blocks) b.durationMs = durationMs
+      if (open.blocks.length === 0) clock.resolved.set(id, durationMs)
+    }
+    if (ids.length === 0 && raw.isSidechain !== true && clock.lastMs !== undefined && ms >= clock.lastMs && isHumanPrompt(raw)) {
+      const gap = ms - clock.lastMs
+      if (gap <= TIMING_CAP_MS) compact.waitMs = gap
+      else compact.awayGaps = 1
+    }
+  } else if (raw.type !== 'system' || (raw['subtype'] !== 'turn_duration' && raw['subtype'] !== 'stop_hook_summary')) {
+    return
+  }
+  clock.lastMs = ms
+}
+
+// The still-open tool uses of `turn`, which sits at `turnIdx` in the cached
+// turns with its calls starting at `callOffset`.
+function openToolsOf(turn: ParsedTurn | undefined, turnIdx: number, callOffset: number, clock: TimingClock): OpenTool[] {
+  const out: OpenTool[] = []
+  turn?.assistantCalls.forEach((call, ci) => call.toolUseIds?.forEach((id, ti) => {
+    const open = clock.open.get(id)
+    if (open) out.push([id, open.startMs, turnIdx, callOffset + ci, ti])
+  }))
+  return out
+}
+
+function timingOf(clock: TimingClock, carry: { waitMs: number; awayGaps: number }, open: OpenTool[]): ClaudeTiming | undefined {
+  const timing: ClaudeTiming = {
+    ...(clock.lastMs !== undefined ? { lastMs: clock.lastMs } : {}),
+    ...(carry.waitMs ? { waitMs: carry.waitMs } : {}),
+    ...(carry.awayGaps ? { awayGaps: carry.awayGaps } : {}),
+    ...(open.length > 0 ? { open } : {}),
+  }
+  return Object.keys(timing).length > 0 ? timing : undefined
+}
+
 export function parseApiCall(entry: JournalEntry, toolResultMeta?: Map<string, ToolResultMeta>): ParsedApiCall | null {
   if (entry.type !== 'assistant') return null
   const msg = entry.message as AssistantMessageContent | undefined
@@ -1589,15 +1702,15 @@ export function parseApiCall(entry: JournalEntry, toolResultMeta?: Map<string, T
     .filter((b): b is ToolUseBlock => b.type === 'tool_use' && (b.name === 'Agent' || b.name === 'Task') && !!b.id)
     .map(b => b.id)
 
-  const toolSeq: ToolCall[][] = contentBlocks
-    .filter((b): b is ToolUseBlock => b.type === 'tool_use')
-    .map(b => {
-      const call: ToolCall = { tool: b.name }
-      const inp = (b.input ?? {}) as Record<string, unknown>
-      if (typeof inp['file_path'] === 'string') call.file = inp['file_path'] as string
-      if (typeof inp['command'] === 'string') call.command = inp['command'] as string
-      return [call]
-    })
+  const toolBlocks = contentBlocks.filter((b): b is ToolUseBlock => b.type === 'tool_use')
+  const toolSeq: ToolCall[][] = toolBlocks.map(b => {
+    const call: ToolCall = { tool: b.name }
+    const inp = (b.input ?? {}) as Record<string, unknown>
+    if (typeof inp['file_path'] === 'string') call.file = inp['file_path'] as string
+    if (typeof inp['command'] === 'string') call.command = inp['command'] as string
+    if (b.durationMs !== undefined) call.durationMs = b.durationMs
+    return [call]
+  })
 
   // Attribute tool-result metadata (edit LOC, interruptions, errors) to this
   // call by summing over the tool_use ids it issued. Omitted entirely when no
@@ -1637,6 +1750,7 @@ export function parseApiCall(entry: JournalEntry, toolResultMeta?: Map<string, T
     deduplicationKey: msg.id ?? `claude:${entry.timestamp}`,
     cacheCreationOneHourTokens: cacheCreation.oneHourTokens || undefined,
     toolSequence: toolSeq.length > 0 ? toolSeq : undefined,
+    ...(toolBlocks.length > 0 ? { toolUseIds: toolBlocks.map(b => b.id) } : {}),
     ...(spawnIds.length > 0 ? { spawnToolUseIds: spawnIds } : {}),
     ...(locAdded ? { locAdded } : {}),
     ...(locRemoved ? { locRemoved } : {}),
@@ -1782,7 +1896,16 @@ function withEarlierToolUses(entries: JournalEntry[], idxs: number[]): Assistant
   return { ...last, content: [...missing, ...lastContent] }
 }
 
-export function groupIntoTurns(entries: JournalEntry[], seenMsgIds: Set<string>, toolResultMeta?: Map<string, ToolResultMeta>): ParsedTurn[] {
+// A prompt that got no reply keeps its wait for the next turn with calls; a
+// turn whose calls were all claimed by an earlier file drops its wait, as that
+// file counts it. `carry` holds the waits still looking for a turn when the
+// entries end, and seeds the next region's leading continuation.
+export function groupIntoTurns(
+  entries: JournalEntry[],
+  seenMsgIds: Set<string>,
+  toolResultMeta?: Map<string, ToolResultMeta>,
+  carry?: { waitMs: number; awayGaps: number },
+): ParsedTurn[] {
   const turns: ParsedTurn[] = []
   let currentUserMessage = ''
   let currentCalls: ParsedApiCall[] = []
@@ -1799,11 +1922,22 @@ export function groupIntoTurns(entries: JournalEntry[], seenMsgIds: Set<string>,
   // Subagent-spawn `tool_use` ids emitted within the current turn (deduped),
   // carried from each call's `spawnToolUseIds`.
   let currentSpawnIds: string[] = []
+  let currentWait = carry?.waitMs ?? 0
+  let currentAway = carry?.awayGaps ?? 0
+  let currentClaimed = false
+  let leftWait = 0
+  let leftAway = 0
 
   const pushCurrentTurn = (): void => {
     // Report turns only when they contain assistant API usage. An ordinary
     // user-only entry and a queued prompt with no response are omitted alike.
-    if (currentCalls.length === 0) return
+    if (currentCalls.length === 0) {
+      if (!currentClaimed) {
+        leftWait += currentWait
+        leftAway += currentAway
+      }
+      return
+    }
     turns.push({
       userMessage: currentUserMessage,
       assistantCalls: currentCalls,
@@ -1812,6 +1946,8 @@ export function groupIntoTurns(entries: JournalEntry[], seenMsgIds: Set<string>,
       ...(currentBranch ? { gitBranch: currentBranch } : {}),
       ...(currentPrRefs.length > 0 ? { prRefs: [...currentPrRefs].sort() } : {}),
       ...(currentSpawnIds.length > 0 ? { spawnToolUseIds: currentSpawnIds } : {}),
+      ...(currentWait ? { waitMs: currentWait } : {}),
+      ...(currentAway ? { awayGaps: currentAway } : {}),
     })
   }
 
@@ -1828,6 +1964,14 @@ export function groupIntoTurns(entries: JournalEntry[], seenMsgIds: Set<string>,
         currentBranch = entryBranch
         currentPrRefs = extractPrUrlsFromText(text)
         currentSpawnIds = []
+        currentWait = leftWait + (entry.waitMs ?? 0)
+        currentAway = leftAway + (entry.awayGaps ?? 0)
+        currentClaimed = false
+        leftWait = 0
+        leftAway = 0
+      } else {
+        currentWait += entry.waitMs ?? 0
+        currentAway += entry.awayGaps ?? 0
       }
     } else if (entry.type === 'attachment') {
       const queuedPrompt = queuedHumanPromptText(entry)
@@ -1840,11 +1984,19 @@ export function groupIntoTurns(entries: JournalEntry[], seenMsgIds: Set<string>,
         currentBranch = entryBranch
         currentPrRefs = extractPrUrlsFromText(queuedPrompt)
         currentSpawnIds = []
+        currentWait = leftWait
+        currentAway = leftAway
+        currentClaimed = false
+        leftWait = 0
+        leftAway = 0
       }
     } else if (entry.type === 'assistant') {
       if (entryBranch && !currentBranch) currentBranch = entryBranch
       const msgId = getMessageId(entry)
-      if (msgId && seenMsgIds.has(msgId)) continue
+      if (msgId && seenMsgIds.has(msgId)) {
+        currentClaimed = true
+        continue
+      }
       if (msgId) seenMsgIds.add(msgId)
       const cwd = typeof entry.cwd === 'string' && entry.cwd.trim() ? entry.cwd.trim() : undefined
       const call = parseApiCall(entry, toolResultMeta)
@@ -1864,6 +2016,10 @@ export function groupIntoTurns(entries: JournalEntry[], seenMsgIds: Set<string>,
   }
 
   pushCurrentTurn()
+  if (carry) {
+    carry.waitMs = leftWait
+    carry.awayGaps = leftAway
+  }
 
   return turns
 }
@@ -1975,8 +2131,12 @@ function buildSessionSummary(
   let apiCalls = 0
   let firstTs = ''
   let lastTs = ''
+  let waitingMs = 0
+  let awayGaps = 0
 
   for (const turn of turns) {
+    waitingMs += turn.waitMs ?? 0
+    awayGaps += turn.awayGaps ?? 0
     const turnCost = turn.assistantCalls.reduce((s, c) => s + c.costUSD, 0)
     const turnSavings = turn.assistantCalls.reduce((s, c) => s + (c.savingsUSD ?? 0), 0)
     // A turn whose calls are all supplementary accounting (copilot rollup /
@@ -2066,6 +2226,16 @@ function buildSessionSummary(
         bashBreakdown[cmd] = bashBreakdown[cmd] ?? { calls: 0 }
         bashBreakdown[cmd].calls++
       }
+      let shellSteps: number | undefined
+      for (const [step] of call.toolSequence ?? []) {
+        if (step?.durationMs === undefined) continue
+        addToolTime(step.tool.startsWith('mcp__') ? mcpBreakdown[step.tool.split('__')[1] ?? step.tool] : toolBreakdown[step.tool], step.durationMs)
+        if (!BASH_TOOLS.has(step.tool)) continue
+        shellSteps ??= call.toolSequence!.filter(([s]) => s && BASH_TOOLS.has(s.tool)).length
+        // A command's time goes to its first program, so program times add up to the shell tool's.
+        const program = shellSteps === 1 ? call.bashCommands[0] : extractBashCommands(step.command ?? '')[0]
+        if (program) addToolTime(bashBreakdown[program], step.durationMs)
+      }
       for (const sat of call.subagentTypes) {
         subagentBreakdown[sat] = subagentBreakdown[sat] ?? { calls: 0, costUSD: 0, savingsUSD: 0 }
         subagentBreakdown[sat].calls++
@@ -2102,7 +2272,15 @@ function buildSessionSummary(
     subagentBreakdown,
     ...(source ? { source } : {}),
     ...(mcpInventory && mcpInventory.length > 0 ? { mcpInventory } : {}),
+    ...(waitingMs ? { waitingMs } : {}),
+    ...(awayGaps ? { awayGaps } : {}),
   }
+}
+
+function addToolTime(row: ToolTimeRow | undefined, durationMs: number): void {
+  if (!row) return
+  row.durationMs = (row.durationMs ?? 0) + durationMs
+  row.timedCalls = (row.timedCalls ?? 0) + 1
 }
 
 async function parseSessionFile(
@@ -2423,6 +2601,7 @@ async function scanProjectDirs(
       ...(Object.keys(parsed.agentSpawnLinks ?? {}).length > 0 ? { agentSpawnLinks: parsed.agentSpawnLinks } : {}),
       ...(parsed.ambiguousSpawnAgentIds?.length ? { ambiguousSpawnAgentIds: parsed.ambiguousSpawnAgentIds } : {}),
       ...(lineage ? { lineage } : {}),
+      ...(parsed.timing ? { timing: parsed.timing } : {}),
     }
     markCacheDirty(diskCache, 'claude', filePath)
   }
@@ -2478,8 +2657,9 @@ async function scanProjectDirs(
           const tracker = { lastCompleteLineOffset: append.readFromOffset }
           const toolResultMeta = new Map<string, ToolResultMeta>()
           const sessionMeta = emptySessionMeta()
-          const newEntries = await parseClaudeEntries(filePath, tracker, append.readFromOffset, { toolResultMeta, sessionMeta })
           const cached = append.cached
+          const clock = newTimingClock(cached.timing)
+          const newEntries = await parseClaudeEntries(filePath, tracker, append.readFromOffset, { toolResultMeta, sessionMeta, clock })
 
           // Straddle guard: a streamed assistant message id that first appeared in
           // the committed prefix can be restated inside the appended region
@@ -2495,11 +2675,12 @@ async function scanProjectDirs(
             return id !== null && cachedIds.has(id)
           })
           if (!straddles) {
-            const newTurns = newEntries
-              ? parsedTurnsToCachedTurns(groupIntoTurns(dedupeStreamingMessageIds(newEntries), seenMsgIds, toolResultMeta))
-              : []
+            const carry = { waitMs: cached.timing?.waitMs ?? 0, awayGaps: cached.timing?.awayGaps ?? 0 }
+            const parsedNew = newEntries ? groupIntoTurns(dedupeStreamingMessageIds(newEntries), seenMsgIds, toolResultMeta, carry) : []
+            const newTurns = parsedTurnsToCachedTurns(parsedNew)
 
             const mergedTurns: CachedTurn[] = cached.turns.map(t => ({ ...t, calls: [...t.calls] }))
+            let lastCallOffset = 0
             if (newTurns.length > 0) {
               let startIdx = 0
               // A first new turn with no leading user message is a continuation of
@@ -2507,7 +2688,12 @@ async function scanProjectDirs(
               // them in that same turn), then append the remaining new turns.
               if (!newTurns[0]!.userMessage.trim() && mergedTurns.length > 0) {
                 const last = mergedTurns[mergedTurns.length - 1]!
+                lastCallOffset = last.calls.length
                 last.calls = mergeBoundaryCalls(last.calls, newTurns[0]!.calls)
+                const waitMs = (last.waitMs ?? 0) + (newTurns[0]!.waitMs ?? 0)
+                const awayGaps = (last.awayGaps ?? 0) + (newTurns[0]!.awayGaps ?? 0)
+                if (waitMs) last.waitMs = waitMs
+                if (awayGaps) last.awayGaps = awayGaps
                 // A PR referenced in the appended continuation belongs to this same
                 // turn: union its refs in so the shortcut matches a full re-parse.
                 const refs = Array.from(new Set([...(last.prRefs ?? []), ...(newTurns[0]!.prRefs ?? [])])).sort()
@@ -2520,6 +2706,18 @@ async function scanProjectDirs(
               }
               for (let i = startIdx; i < newTurns.length; i++) mergedTurns.push(newTurns[i]!)
             }
+
+            for (const [id, , t, c, k] of cached.timing?.open ?? []) {
+              const durationMs = clock.resolved.get(id)
+              const call = mergedTurns[t]?.calls[c]
+              const step = call?.toolSequence?.[k]?.[0]
+              if (durationMs === undefined || !call || !step) continue
+              mergedTurns[t]!.calls[c] = { ...call, toolSequence: call.toolSequence!.map((s, i) => i === k ? [{ ...step, durationMs }] : s) }
+            }
+            const lastIdx = mergedTurns.length - 1
+            const stillOpen = (cached.timing?.open ?? []).filter(o => o[2] === lastIdx && clock.open.has(o[0]))
+            const newOpen = openToolsOf(parsedNew.at(-1), lastIdx, parsedNew.length === 1 ? lastCallOffset : 0, clock)
+            const timing = timingOf(clock, carry, [...stillOpen, ...newOpen])
 
             // The cached region's dedup keys were not added to seenMsgIds (only
             // unchanged files pre-seed it), so add them now — a full re-parse would
@@ -2579,6 +2777,7 @@ async function scanProjectDirs(
               ...(Object.keys(mergedSpawnLinks).length > 0 ? { agentSpawnLinks: mergedSpawnLinks } : {}),
               ...(mergedAmbiguousIds.length > 0 ? { ambiguousSpawnAgentIds: mergedAmbiguousIds } : {}),
               ...(mergedLineage ? { lineage: mergedLineage } : {}),
+              ...(timing ? { timing } : {}),
             }
             markCacheDirty(diskCache, 'claude', filePath)
             filesDone++
@@ -3019,6 +3218,8 @@ function parsedTurnToCachedTurn(turn: ParsedTurn): CachedTurn {
     // gitBranch's change-detection dedup, so each turn's refs are self-contained.
     ...(turn.prRefs?.length ? { prRefs: turn.prRefs } : {}),
     ...(turn.spawnToolUseIds?.length ? { spawnToolUseIds: turn.spawnToolUseIds } : {}),
+    ...(turn.waitMs ? { waitMs: turn.waitMs } : {}),
+    ...(turn.awayGaps ? { awayGaps: turn.awayGaps } : {}),
   }
 }
 
@@ -3185,6 +3386,8 @@ function cachedTurnToClassified(turn: CachedTurn, resolvedBranch?: string): Clas
     ...(branch ? { gitBranch: branch } : {}),
     ...(prRefs.length ? { prRefs } : {}),
     ...(turn.spawnToolUseIds?.length ? { spawnToolUseIds: turn.spawnToolUseIds } : {}),
+    ...(turn.waitMs ? { waitMs: turn.waitMs } : {}),
+    ...(turn.awayGaps ? { awayGaps: turn.awayGaps } : {}),
   }
   return classifyTurn(parsed)
 }
@@ -3337,7 +3540,7 @@ async function parseClaudeEntries(
   startByteOffset?: number,
   // Rich-capture collectors, populated from the RAW entry before compaction
   // strips toolUseResult / ai-title / pr-link / isSidechain.
-  collectors?: { toolResultMeta?: Map<string, ToolResultMeta>; sessionMeta?: SessionMeta },
+  collectors?: { toolResultMeta?: Map<string, ToolResultMeta>; sessionMeta?: SessionMeta; clock?: TimingClock },
 ): Promise<JournalEntry[] | null> {
   const entries: JournalEntry[] = []
   let hasLines = false
@@ -3351,7 +3554,9 @@ async function parseClaudeEntries(
     if (!entry) continue
     if (collectors?.toolResultMeta) collectToolResultMeta(entry, collectors.toolResultMeta)
     if (collectors?.sessionMeta) collectSessionMeta(entry, collectors.sessionMeta)
-    entries.push(compactEntry(entry))
+    const compact = compactEntry(entry)
+    if (collectors?.clock) noteTiming(entry, compact, collectors.clock)
+    entries.push(compact)
   }
   if (!hasLines || entries.length === 0) return null
   return entries
@@ -3376,6 +3581,7 @@ export type ClaudeFileParse = {
   parentSessionId?: string
   agentSpawnLinks?: Record<string, string>
   ambiguousSpawnAgentIds?: string[]
+  timing?: ClaudeTiming
 }
 
 /// Derives the SessionLineage for a Claude file from the same fields the
@@ -3404,10 +3610,13 @@ export async function parseClaudeFileFull(
   const tracker = { lastCompleteLineOffset: 0 }
   const toolResultMeta = new Map<string, ToolResultMeta>()
   const sessionMeta = emptySessionMeta()
-  const entries = await parseClaudeEntries(filePath, tracker, undefined, { toolResultMeta, sessionMeta })
+  const clock = newTimingClock()
+  const entries = await parseClaudeEntries(filePath, tracker, undefined, { toolResultMeta, sessionMeta, clock })
   if (!entries) return null
 
-  const turns = groupIntoTurns(dedupeStreamingMessageIds(entries), seenMsgIds, toolResultMeta)
+  const carry = { waitMs: 0, awayGaps: 0 }
+  const turns = groupIntoTurns(dedupeStreamingMessageIds(entries), seenMsgIds, toolResultMeta, carry)
+  const timing = timingOf(clock, carry, openToolsOf(turns.at(-1), turns.length - 1, 0, clock))
   const cwd = extractCanonicalCwd(entries)
   return {
     lastCompleteLineOffset: tracker.lastCompleteLineOffset,
@@ -3421,6 +3630,7 @@ export async function parseClaudeFileFull(
     ...(sessionMeta.parentSessionId ? { parentSessionId: sessionMeta.parentSessionId } : {}),
     ...(Object.keys(sessionMeta.agentSpawnLinks).length > 0 ? { agentSpawnLinks: sessionMeta.agentSpawnLinks } : {}),
     ...(sessionMeta.ambiguousSpawnAgentIds.length > 0 ? { ambiguousSpawnAgentIds: sessionMeta.ambiguousSpawnAgentIds } : {}),
+    ...(timing ? { timing } : {}),
   }
 }
 
