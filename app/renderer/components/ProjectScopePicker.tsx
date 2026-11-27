@@ -26,16 +26,13 @@ export function projectScopeOptions(projects: ProjectRow[], filter: ProjectFilte
     if (!held || (held.cost ?? 0) < (project.cost ?? 0)) byPath.set(path, project)
   }
   const rows = [...byPath].filter(([, project]) => Math.round((project.cost ?? 0) * 100) > 0).sort((a, b) => (b[1].cost ?? 0) - (a[1].cost ?? 0))
+  const base = rows.map(([path, project]) => project.temporary ? t('shell.project.temporary') : project.checkouts ? project.name : shortenProjectPath(path, 2))
   const labels = new Map<string, number>()
-  for (const [path] of rows) {
-    const label = shortenProjectPath(path, 2)
-    labels.set(label, (labels.get(label) ?? 0) + 1)
-  }
-  return rows.map(([path, project]) => {
-    const label = shortenProjectPath(path, 2)
+  for (const label of base) labels.set(label, (labels.get(label) ?? 0) + 1)
+  return rows.map(([path, project], i) => {
     return {
       value: path,
-      label: project.temporary ? t('shell.project.temporary') : project.checkouts ? project.name : labels.get(label)! > 1 ? path : label,
+      label: !project.temporary && labels.get(base[i])! > 1 ? path : base[i],
       name: project.name,
       ...(project.checkouts?.some(c => c.matchedByFolderName) ? { title: t('shell.project.matchedByFolderName') } : {}),
     }
