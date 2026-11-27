@@ -6,7 +6,7 @@
     <key name="refresh-interval" type="u">
       <default>30</default>
       <summary>Refresh interval</summary>
-      <description>Seconds between automatic data refreshes</description>
+      <description>Seconds between background ticks while the menu is closed. Raised to at least 120 on AC, 150 on battery and 300 in power saver. Ticks reuse a payload younger than 5 minutes.</description>
       <range min="5" max="300"/>
     </key>
 
