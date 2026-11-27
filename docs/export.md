@@ -178,7 +178,7 @@ Biggest first.
 | `model` | string | Raw model id. Only when the session used exactly one model. Optional |
 | `costBasis` | object | Share of cost by basis. Optional |
 | `retained` | boolean | `true` when the session was kept from the cache after the tool removed its transcript. Optional |
-| `identity` | string | Organization or account name that was active when the session started. Only once CodeBurn has seen two or more Claude identities. Optional |
+| `identity` | string | Label of the Claude account that was active when the session started. Only once CodeBurn has seen two or more Claude identities. Optional |
 
 ### `records`
 
