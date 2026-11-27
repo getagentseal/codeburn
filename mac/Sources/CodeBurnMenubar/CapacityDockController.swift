@@ -139,6 +139,13 @@ final class CapacityDockController {
 
     func refreshQuotaPresentation() {
         guard model.preferences.isEnabled else { return }
+        let nextProfiles = store.capacityDockClaudeProfiles.isEmpty
+            ? ClaudeCredentialStore.discoverProfiles()
+            : store.capacityDockClaudeProfiles
+        if model.claudeProfiles != nextProfiles {
+            model.claudeProfiles = nextProfiles
+            layoutRail(animate: false)
+        }
         if let provider = model.hoveredProvider {
             model.detailHeight = glanceDetailHeight(for: provider)
             layoutDetail(for: provider, transaction: .immediate)
@@ -169,13 +176,16 @@ final class CapacityDockController {
     private func preferencesDidChange() {
         let snapshot = CapacityDockPreferences.load(defaults: defaults)
         model.preferences = snapshot
+        model.claudeProfiles = store.capacityDockClaudeProfiles.isEmpty
+            ? ClaudeCredentialStore.discoverProfiles()
+            : store.capacityDockClaudeProfiles
         if !model.interaction.isDragging {
             model.dockedEdge = snapshot.dockedEdge
             model.attachmentEdge = snapshot.attachmentEdge
         }
 
         if let hovered = model.hoveredProvider,
-           !snapshot.selectedProviders.contains(hovered) {
+           !model.effectiveSelectedProviders.contains(hovered) {
             hideDetail(animated: false)
         } else if let hovered = model.hoveredProvider {
             model.detailHeight = glanceDetailHeight(for: hovered)
@@ -581,8 +591,8 @@ final class CapacityDockController {
         expansionWork?.cancel()
         collapseWork?.cancel()
 
-        if provider != model.preferences.preferredProvider {
-            CapacityDockPreferences.setPreferredProvider(provider, defaults: defaults)
+        if provider != model.effectivePreferredProvider {
+            CapacityDockPreferences.setPreferredProvider(provider.baseProvider, defaults: defaults)
             if !model.interaction.isPinned {
                 model.interaction.togglePinned()
             }
@@ -650,7 +660,7 @@ final class CapacityDockController {
 
     private func showDetail(for provider: CapacityDockProvider) {
         guard model.preferences.isEnabled,
-              model.preferences.selectedProviders.contains(provider) else { return }
+              model.effectiveSelectedProviders.contains(provider) else { return }
         let wasShowingDetail = detailPanel?.isVisible == true && model.hoveredProvider != nil
         detailIsDismissing = false
         model.hoveredProvider = provider
