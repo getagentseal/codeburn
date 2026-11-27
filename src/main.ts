@@ -2,7 +2,7 @@ import { isAbsolute, resolve as resolvePath } from 'path'
 import { Command, Option } from 'commander'
 import { installMenubarApp, uninstallMenubarApp } from './menubar-installer.js'
 import { COMPONENTS, defaultUpdateDeps, runUpdate, type Component } from './update.js'
-import { exportCsv, exportJson, type PeriodExport } from './export.js'
+import { addToolTime, exportCsv, exportJson, type PeriodExport, type ToolTime } from './export.js'
 import { findUnpricedModels, modelRowKey, loadPricing, ownValue, sanitizeModelForDisplay, setModelAliases, setPriceOverrides, setPriceDiscounts, isValidDiscountPercent, DISCOUNT_KINDS, getModelCosts, setLocalModelSavings, setFlatRateModels, setFlatRateRemoved, setProxyPaths, normalizeProxyPath, unpricedModelHint, isBuiltInFlatRateModel, isSameFlatRateModel, getProxyPathsConfigHash, getModelAliasesConfigHash, getPriceOverridesConfigHash, getLocalModelSavingsConfigHash, getFlatRateModelsConfigHash, getPricingGenerationKey } from './models.js'
 import { cachedProjectIdentitiesForRange } from './daily-cache.js'
 import { reportUnmatchedProjectPatterns } from './project-filter-warnings.js'
@@ -783,6 +783,11 @@ function buildJsonReport(projects: ProjectSummary[], period: string, periodKey: 
   const toolMap: Record<string, number> = Object.create(null)
   const mcpMap: Record<string, number> = Object.create(null)
   const bashMap: Record<string, number> = Object.create(null)
+  const toolTime: Record<string, ToolTime> = Object.create(null)
+  const mcpTime: Record<string, ToolTime> = Object.create(null)
+  const bashTime: Record<string, ToolTime> = Object.create(null)
+  let waitingMs = 0
+  let awayGaps = 0
   const skillMap: Record<string, { turns: number; cost: number; savings: number }> = Object.create(null)
   const subagentMap: Record<string, { calls: number; cost: number; savings: number }> = Object.create(null)
   // Claude Code only: real subagent-transcript spend grouped by agentType
@@ -790,14 +795,19 @@ function buildJsonReport(projects: ProjectSummary[], period: string, periodKey: 
   // subagentMap, which is Task-tool-input based and never sees workflow agents.
   const agentTypeMap: Record<string, { calls: number; cost: number; savings: number }> = {}
   for (const sess of sessions) {
+    waitingMs += sess.waitingMs ?? 0
+    awayGaps += sess.awayGaps ?? 0
     for (const [tool, d] of Object.entries(sess.toolBreakdown)) {
       toolMap[tool] = (ownValue(toolMap, tool) ?? 0) + d.calls
+      addToolTime(toolTime, tool, d)
     }
     for (const [server, d] of Object.entries(sess.mcpBreakdown)) {
       mcpMap[server] = (ownValue(mcpMap, server) ?? 0) + d.calls
+      addToolTime(mcpTime, server, d)
     }
     for (const [cmd, d] of Object.entries(sess.bashBreakdown)) {
       bashMap[cmd] = (ownValue(bashMap, cmd) ?? 0) + d.calls
+      addToolTime(bashTime, cmd, d)
     }
     for (const [skill, d] of Object.entries(sess.skillBreakdown)) {
       if (!Object.hasOwn(skillMap, skill)) skillMap[skill] = { turns: 0, cost: 0, savings: 0 }
@@ -819,8 +829,11 @@ function buildJsonReport(projects: ProjectSummary[], period: string, periodKey: 
     }
   }
 
-  const sortedMap = (m: Record<string, number>) =>
-    Object.entries(m).sort(([, a], [, b]) => b - a).map(([name, calls]) => ({ name, calls }))
+  const sortedMap = (m: Record<string, number>, time: Record<string, ToolTime> = {}) =>
+    Object.entries(m).sort(([, a], [, b]) => b - a).map(([name, calls]) => {
+      const t = ownValue(time, name)
+      return t ? { name, calls, durationMs: t.durationMs, timedCalls: t.timedCalls } : { name, calls }
+    })
 
   const topSessions = foldedSessionRows(mergeProjectSplits(projects))
     .map(row => ({
@@ -872,6 +885,7 @@ function buildJsonReport(projects: ProjectSummary[], period: string, periodKey: 
       estimatedCost: convertCost(totalEstimatedUSD),
       calls: totalCalls,
       sessions: totalSessions,
+      ...(waitingMs || awayGaps ? { waitingMs, awayGaps } : {}),
       ...(sessionCountBasis ? { sessionCountBasis } : {}),
       cacheHitPercent,
       tokens: {
@@ -896,9 +910,9 @@ function buildJsonReport(projects: ProjectSummary[], period: string, periodKey: 
       tokens: d.inputTokens + d.outputTokens + d.cacheReadTokens + d.cacheWriteTokens,
     }))),
     activities,
-    tools: sortedMap(toolMap),
-    mcpServers: sortedMap(mcpMap),
-    shellCommands: sortedMap(bashMap),
+    tools: sortedMap(toolMap, toolTime),
+    mcpServers: sortedMap(mcpMap, mcpTime),
+    shellCommands: sortedMap(bashMap, bashTime),
     skills: Object.entries(skillMap).sort(([, a], [, b]) => (b.cost + b.savings) - (a.cost + a.savings)).map(([name, d]) => ({ name, turns: d.turns, cost: convertCost(d.cost), savings: convertCost(d.savings) })),
     subagents: Object.entries(subagentMap).sort(([, a], [, b]) => (b.cost + b.savings) - (a.cost + a.savings)).map(([name, d]) => ({ name, calls: d.calls, cost: convertCost(d.cost), savings: convertCost(d.savings) })),
     claudeAgentTypes: Object.entries(agentTypeMap).sort(([, a], [, b]) => (b.cost + b.savings) - (a.cost + a.savings)).map(([name, d]) => ({ name, calls: d.calls, cost: convertCost(d.cost), savings: convertCost(d.savings) })),

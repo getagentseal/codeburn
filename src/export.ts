@@ -4,7 +4,7 @@ import { dirname, join, resolve } from 'path'
 import { Readable } from 'stream'
 import { pipeline } from 'stream/promises'
 
-import { CATEGORY_LABELS, type ParsedApiCall, type ProjectSummary, type TaskCategory } from './types.js'
+import { CATEGORY_LABELS, type ParsedApiCall, type ProjectSummary, type TaskCategory, type ToolTimeRow } from './types.js'
 import { getCurrency, convertCost, roundForActiveCurrency } from './currency.js'
 import { dateKey } from './day-aggregator.js'
 import { behavioralCallWeight, behavioralTurnCount } from './behavioral-weight.js'
@@ -292,12 +292,23 @@ function buildModelRows(projects: ProjectSummary[], period: string): Row[] {
     })
 }
 
+export type ToolTime = { durationMs: number; timedCalls: number }
+
+export function addToolTime(into: Record<string, ToolTime>, name: string, d: ToolTimeRow): void {
+  if (!d.timedCalls) return
+  const row = into[name] ??= { durationMs: 0, timedCalls: 0 }
+  row.durationMs += d.durationMs ?? 0
+  row.timedCalls += d.timedCalls
+}
+
 function buildToolRows(projects: ProjectSummary[]): Row[] {
   const toolTotals: Record<string, number> = Object.create(null)
+  const toolTime: Record<string, ToolTime> = Object.create(null)
   for (const project of projects) {
     for (const session of project.sessions) {
       for (const [tool, d] of Object.entries(session.toolBreakdown)) {
         toolTotals[tool] = (toolTotals[tool] ?? 0) + d.calls
+        addToolTime(toolTime, tool, d)
       }
     }
   }
@@ -308,15 +319,19 @@ function buildToolRows(projects: ProjectSummary[]): Row[] {
       tool,
       calls,
       share: pct(calls, total),
+      durationMs: toolTime[tool]?.durationMs,
+      timedCalls: toolTime[tool]?.timedCalls,
     }))
 }
 
 function buildMcpRows(projects: ProjectSummary[]): Row[] {
   const mcpTotals: Record<string, number> = Object.create(null)
+  const mcpTime: Record<string, ToolTime> = Object.create(null)
   for (const project of projects) {
     for (const session of project.sessions) {
       for (const [server, d] of Object.entries(session.mcpBreakdown)) {
         mcpTotals[server] = (mcpTotals[server] ?? 0) + d.calls
+        addToolTime(mcpTime, server, d)
       }
     }
   }
@@ -327,15 +342,19 @@ function buildMcpRows(projects: ProjectSummary[]): Row[] {
       server,
       calls,
       share: pct(calls, total),
+      durationMs: mcpTime[server]?.durationMs,
+      timedCalls: mcpTime[server]?.timedCalls,
     }))
 }
 
 function buildBashRows(projects: ProjectSummary[]): Row[] {
   const bashTotals: Record<string, number> = Object.create(null)
+  const bashTime: Record<string, ToolTime> = Object.create(null)
   for (const project of projects) {
     for (const session of project.sessions) {
       for (const [cmd, d] of Object.entries(session.bashBreakdown)) {
         bashTotals[cmd] = (bashTotals[cmd] ?? 0) + d.calls
+        addToolTime(bashTime, cmd, d)
       }
     }
   }
@@ -346,6 +365,8 @@ function buildBashRows(projects: ProjectSummary[]): Row[] {
       command: cmd,
       calls,
       share: pct(calls, total),
+      durationMs: bashTime[cmd]?.durationMs,
+      timedCalls: bashTime[cmd]?.timedCalls,
     }))
 }
 
@@ -385,6 +406,8 @@ function buildSessionRows(projects: ProjectSummary[], withCostBasis = false, spl
         ...(withCostBasis ? { costBasis: costBasisShares(s.turns.flatMap(turn => turn.assistantCalls)) } : {}),
         retained: s.retained ? true : undefined,
         ...(split ? { identity: s.identity?.label } : {}),
+        waitingMs: s.waitingMs,
+        awayGaps: s.awayGaps,
       })
     }
   }
