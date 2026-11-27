@@ -10,6 +10,7 @@ export type PendingPairing = { id: string; name: string; code: string }
 export type ShareStatus = {
   sharing: boolean
   name: string
+  host: string
   port: number
   always: boolean
   peers: number
@@ -38,6 +39,7 @@ export class ShareController {
   constructor(
     private readonly getUsage: (q: UsageQuery) => Promise<unknown>,
     private readonly port = 7777,
+    private readonly host = '0.0.0.0',
   ) {}
 
   private async getIdentity(): Promise<Identity> {
@@ -68,7 +70,7 @@ export class ShareController {
     })
     // listen() can reject (e.g. EADDRINUSE); only commit state after it binds,
     // so a failed start never leaves us reporting always/sharing incorrectly.
-    await server.listen(this.port, '0.0.0.0')
+    await server.listen(this.port, this.host)
     this.always = always
     this.server = server
     this.ad = advertise({ name: identity.name, port: this.port, fingerprint: identity.fingerprint })
@@ -142,6 +144,7 @@ export class ShareController {
     return {
       sharing: this.isSharing(),
       name: identity.name,
+      host: this.host,
       port: this.port,
       always: this.always,
       peers,
