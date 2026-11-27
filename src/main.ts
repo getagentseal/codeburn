@@ -513,10 +513,10 @@ function assertBilling(value: string | undefined, command: string): void {
   process.exit(1)
 }
 
-async function resolveIdentityFlag(value: string | undefined, command: string): Promise<string | undefined> {
+async function resolveIdentityFlag(value: string | undefined, command: string): Promise<string[] | undefined> {
   if (value === undefined) return undefined
-  const hash = await resolveIdentity(value)
-  if (hash) return hash
+  const hashes = await resolveIdentity(value)
+  if (hashes) return hashes
   process.stderr.write(`codeburn ${command}: unknown Claude identity "${value}". See \`codeburn identity list\`.\n`)
   process.exit(1)
 }
@@ -548,7 +548,7 @@ async function runIdentityList(): Promise<void> {
 // into the next one's defaults. The normal CLI path builds it exactly once.
 function buildProgram(): Command {
 
-async function runJsonReport(period: Period, provider: string, project: string[], exclude: string[], identity?: string): Promise<void> {
+async function runJsonReport(period: Period, provider: string, project: string[], exclude: string[], identity?: string[]): Promise<void> {
   await loadPricing()
   const { range, label } = getDateRange(period)
   const durable = await buildDurablePeriod({ range, label }, { provider, project, exclude, identity })

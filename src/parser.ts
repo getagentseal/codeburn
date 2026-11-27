@@ -5974,11 +5974,11 @@ export function correlateCrossProviderPrSessions(projects: ProjectSummary[]): vo
   }
 }
 
-export function filterProjectsByIdentity(projects: ProjectSummary[], hash: string): ProjectSummary[] {
+export function filterProjectsByIdentity(projects: ProjectSummary[], hashes: string[]): ProjectSummary[] {
   const filtered: ProjectSummary[] = []
   for (const project of projects) {
-    const sessions = project.sessions.filter(session => session.identity?.hash === hash)
-    const anchors = (project.subagentAnchors ?? []).filter(anchor => anchor.identity?.hash === hash)
+    const sessions = project.sessions.filter(session => hashes.includes(session.identity?.hash ?? ''))
+    const anchors = (project.subagentAnchors ?? []).filter(anchor => hashes.includes(anchor.identity?.hash ?? ''))
     if (sessions.length === 0 && anchors.length === 0) continue
     filtered.push(summarizeProject(project.project, project.projectPath, sessions, anchors))
   }

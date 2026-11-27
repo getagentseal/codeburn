@@ -202,19 +202,23 @@ export function identitySplit(projects: ProjectSummary[], min = 2): IdentitySpli
     .sort((a, b) => b.cost - a.cost)
 }
 
-/** Resolves an identity hash or label (case-insensitive) to its identity hash. */
-export async function resolveIdentity(value: string): Promise<string | null> {
-  if (value === UNATTRIBUTED) return UNATTRIBUTED
+/** Resolves an identity hash or label (case-insensitive) to its identity hash; an organization hash or a shared label resolves to every account it covers. */
+export async function resolveIdentity(value: string): Promise<string[] | null> {
+  if (value === UNATTRIBUTED) return [UNATTRIBUTED]
   const log = await readIdentityLog()
   if (!log) return null
   const hashes = identityIds(log)
-  return hashes.find(h => h === value) ?? hashes.find(h => identityLabel(log, h).toLowerCase() === value.toLowerCase()) ?? null
+  const lower = value.toLowerCase()
+  const one = hashes.find(h => h === value) ?? hashes.find(h => identityLabel(log, h).toLowerCase() === lower)
+  if (one) return [one]
+  const group = hashes.filter(h => log.entries.some(e => e.orgHash === value && identityId(e) === h) || baseLabel(log, h).toLowerCase() === lower)
+  return group.length > 0 ? group : null
 }
 
 export async function setIdentityLabel(hash: string, name: string): Promise<void> {
   const log = await readIdentityLog()
   if (!log) throw new Error(`cannot read ${identityLogPath()}`)
-  if (!identityIds(log).includes(hash)) throw new Error(`no Claude identity ${hash} in the identity log; see \`codeburn identity list\``)
+  if (!identityIds(log).includes(hash) && !log.entries.some(e => e.orgHash === hash)) throw new Error(`no Claude identity ${hash} in the identity log; see \`codeburn identity list\``)
   const label = cleanName(name)
   if (!label) throw new Error('label must be 1-256 printable characters')
   log.labels[hash] = label

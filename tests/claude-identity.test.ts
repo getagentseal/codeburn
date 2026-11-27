@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
   applyClaudeIdentities, identityAt, identityId, identityLogPath, identitySplit, observeClaudeIdentities,
-  readIdentityLog, recordClaudePlan, setIdentityLabel, type IdentityLog,
+  readIdentityLog, recordClaudePlan, resolveIdentity, setIdentityLabel, type IdentityLog,
 } from '../src/claude-identity.js'
 import { readKeychainPassword } from '../src/quota/security.js'
 import { parseAllSessions } from '../src/parser.js'
@@ -194,6 +194,30 @@ describe('identityAt', () => {
     expect(identityAt(saved, '/c', '2026-11-01T11:00:00.000Z').label).toBe('work')
     expect(saved.entries).toEqual(log.entries)
     await expect(setIdentityLabel('ffffffffffff', 'x')).rejects.toThrow(/no Claude identity/)
+  })
+
+  const team = [
+    entry(ACCOUNT_A, ORG_A, 'Acme Corp', '2026-11-01T10:00:00.000Z', '/c'),
+    entry(ACCOUNT_B, ORG_A, 'Acme Corp', '2026-11-01T11:00:00.000Z', '/c'),
+    entry(ACCOUNT_A, ORG_B, 'Home', '2026-11-01T12:00:00.000Z', '/c'),
+  ]
+
+  it('resolves an organization hash from before per-account ids to every account in it, and labels the organization', async () => {
+    await seedLog(team)
+    expect(await resolveIdentity(hash(ORG_A))).toEqual([id(ACCOUNT_A, ORG_A), id(ACCOUNT_B, ORG_A)])
+    expect(await resolveIdentity(id(ACCOUNT_B, ORG_A))).toEqual([id(ACCOUNT_B, ORG_A)])
+    await setIdentityLabel(hash(ORG_A), 'work')
+    const saved = (await readIdentityLog())!
+    expect(identityAt(saved, '/c', '2026-11-01T10:30:00.000Z').label).toBe(`work (${hash(ACCOUNT_A).slice(0, 4)})`)
+    expect(identityAt(saved, '/c', '2026-11-01T12:30:00.000Z').label).toBe('Home')
+  })
+
+  it('resolves a label shared by several accounts to all of them, and a suffixed label to one', async () => {
+    await seedLog(team)
+    expect(await resolveIdentity('acme corp')).toEqual([id(ACCOUNT_A, ORG_A), id(ACCOUNT_B, ORG_A)])
+    expect(await resolveIdentity(`Acme Corp (${hash(ACCOUNT_B).slice(0, 4)})`)).toEqual([id(ACCOUNT_B, ORG_A)])
+    expect(await resolveIdentity('home')).toEqual([id(ACCOUNT_A, ORG_B)])
+    expect(await resolveIdentity('nobody')).toBeNull()
   })
 })
 

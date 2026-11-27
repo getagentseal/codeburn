@@ -299,9 +299,9 @@ export type AggregateOpts = {
   daysSelection?: { range: DateRange; label: string; days: Set<string> } | null
   optimize?: boolean
   claudeConfigSourceId?: string | null
-  /// Resolved Claude account hash. Scopes every figure to that account's
+  /// Resolved Claude account hashes. Scopes every figure to those accounts'
   /// surviving sessions, since the day cache carries no identity.
-  identity?: string
+  identity?: string[]
   /// Build the granular per-bucket timeline (`history.timeline`). Defaults to
   /// true. The desktop app never renders it, so it passes `--no-timeline` to
   /// skip the buildGranularHistory pass on every menubar poll.
