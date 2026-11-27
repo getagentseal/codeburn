@@ -547,7 +547,7 @@ function extractLargeToolBlocks(source: JsonSource, contentBounds: JsonValueBoun
   return tools
 }
 
-function extractLargeUserText(source: JsonSource, contentBounds: JsonValueBounds | null, resultIds: string[]): string | undefined {
+function extractLargeUserText(source: JsonSource, contentBounds: JsonValueBounds | null): string | undefined {
   if (!contentBounds) return undefined
   if (contentBounds.kind === 'string') return readJsonString(source, contentBounds, USER_TEXT_CAP)
   if (contentBounds.kind !== 'array') return undefined
@@ -575,9 +575,6 @@ function extractLargeUserText(source: JsonSource, contentBounds: JsonValueBounds
         USER_TEXT_CAP - text.length,
       )
       if (part) text += (text ? ' ' : '') + part
-    } else if (type === 'tool_result') {
-      const id = readJsonString(source, findObjectFieldValue(source, objectBounds.start, objectBounds.end, 'tool_use_id'))
-      if (id) resultIds.push(id)
     }
     i = objectEnd + 1
   }
@@ -686,7 +683,7 @@ function extractObjectFields(
   return captured
 }
 
-const LARGE_ROOT_FIELDS = ['type', 'timestamp', 'sessionId', 'cwd', 'gitBranch', 'attachment', 'message', 'isSidechain', 'promptSource', 'version', 'subtype', 'origin', 'turnOrigin', 'isMeta', 'isCompactSummary', 'isVisibleInTranscriptOnly'] as const
+const LARGE_ROOT_FIELDS = ['type', 'timestamp', 'sessionId', 'cwd', 'gitBranch', 'attachment', 'message', 'isSidechain', 'promptSource', 'version'] as const
 const LARGE_ASSISTANT_MESSAGE_FIELDS = ['model', 'usage', 'id', 'content', 'stop_reason'] as const
 
 // Claude Code before 2.1.307 never wrote the final usage of a subagent message:
@@ -744,16 +741,9 @@ function parseLargeJsonl(line: string | Buffer): JournalEntry | null {
   if (!type) return null
 
   const entry: JournalEntry = { type }
-  for (const flag of ['isSidechain', 'isMeta', 'isCompactSummary', 'isVisibleInTranscriptOnly'] as const) {
-    const bounds = root[flag]
-    if (bounds?.kind === 'scalar' && source.slice(bounds.start, bounds.end) === 'true') entry[flag] = true
+  if (root['isSidechain']?.kind === 'scalar' && source.slice(root['isSidechain'].start, root['isSidechain'].end) === 'true') {
+    entry.isSidechain = true
   }
-  const subtype = readJsonString(source, root['subtype'])
-  const turnOrigin = readJsonString(source, root['turnOrigin'])
-  const origin = root['origin']
-  if (subtype !== undefined) entry['subtype'] = subtype
-  if (turnOrigin !== undefined) entry['turnOrigin'] = turnOrigin
-  if (origin?.kind === 'object') entry['origin'] = { kind: readJsonString(source, findObjectFieldValue(source, origin.start, origin.end, 'kind'), 100) }
   const timestamp = readJsonString(source, root['timestamp'])
   const sessionId = readJsonString(source, root['sessionId'])
   const cwd = readJsonString(source, root['cwd'])
@@ -773,10 +763,8 @@ function parseLargeJsonl(line: string | Buffer): JournalEntry | null {
   if (type === 'user') {
     if (message?.kind === 'object') {
       const content = findObjectFieldValue(source, message.start, message.end, 'content')
-      const resultIds: string[] = []
-      const text = extractLargeUserText(source, content, resultIds)
+      const text = extractLargeUserText(source, content)
       if (text !== undefined) entry.message = { role: 'user', content: text }
-      if (resultIds.length > 0) entry.toolResultIds = resultIds
     }
     return entry
   }
@@ -1557,6 +1545,35 @@ export function collectSessionMeta(entry: JournalEntry, meta: SessionMeta): void
       }
     }
   }
+}
+
+// parseLargeJsonl keeps none of what the timing clock reads, and stored scan
+// facts depend on its exact text, so an oversized user or system line is
+// searched for those keys here instead.
+// ponytail: substring search assumes the compact JSON Claude Code writes, where
+// a key inside a string value is escaped and cannot match; parse the line
+// structurally if that ever changes.
+function addLargeTimingFields(line: string | Buffer, entry: JournalEntry): void {
+  const text = (from: number, to: number) => typeof line === 'string' ? line.slice(from, to) : line.toString('utf-8', from, to)
+  if (entry.type === 'system') {
+    for (const subtype of ['turn_duration', 'stop_hook_summary']) if (line.includes(`"subtype":"${subtype}"`)) entry['subtype'] = subtype
+    return
+  }
+  if (entry.type !== 'user') return
+  const ids: string[] = []
+  const key = '"tool_use_id":"'
+  for (let i = line.indexOf(key); i !== -1; i = line.indexOf(key, i + key.length)) {
+    const end = line.indexOf('"', i + key.length)
+    if (end !== -1) ids.push(text(i + key.length, end))
+  }
+  if (ids.length > 0) {
+    entry.toolResultIds = ids
+    return
+  }
+  for (const flag of ['isMeta', 'isCompactSummary', 'isVisibleInTranscriptOnly']) if (line.includes(`"${flag}":true`)) entry[flag] = true
+  if (line.includes('"origin":{"kind":"human"')) entry['origin'] = { kind: 'human' }
+  else if (line.includes('"origin":{')) entry['origin'] = {}
+  else if (line.includes('"turnOrigin":"human"')) entry['turnOrigin'] = 'human'
 }
 
 const TIMING_CAP_MS = 30 * 60 * 1000
@@ -3552,6 +3569,7 @@ async function parseClaudeEntries(
     hasLines = true
     const entry = parseJsonlLine(line)
     if (!entry) continue
+    if (collectors?.clock && line.length > LARGE_JSONL_LINE_BYTES) addLargeTimingFields(line, entry)
     if (collectors?.toolResultMeta) collectToolResultMeta(entry, collectors.toolResultMeta)
     if (collectors?.sessionMeta) collectSessionMeta(entry, collectors.sessionMeta)
     const compact = compactEntry(entry)
