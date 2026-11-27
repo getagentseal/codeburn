@@ -1,4 +1,4 @@
-import { readFile, mkdir, stat, open, rename, unlink } from 'fs/promises'
+import { readFile, readdir, mkdir, stat, open, rename, unlink } from 'fs/promises'
 import { existsSync } from 'fs'
 import { randomBytes } from 'crypto'
 import { join, resolve } from 'path'
@@ -149,6 +149,24 @@ function isCurrentCache(cache: ResultCache): boolean {
   return cache.version === CODEX_CACHE_VERSION && !!cache.files && typeof cache.files === 'object'
 }
 
+// Match the session cache's grace period: a different process (including a
+// sandboxed CLI with its own PID namespace) may still be writing a recent temp.
+const TEMP_FILE_MAX_AGE_MS = 5 * 60 * 1000
+
+async function cleanOrphanedTemps(cacheDir: string): Promise<void> {
+  const now = Date.now()
+  try {
+    for (const name of await readdir(cacheDir)) {
+      if (!/^codex-(?:results(?:\.v\d+)?|projects\.v\d+)\.json\.[a-f0-9]{16}\.tmp$/.test(name)) continue
+      try {
+        const path = join(cacheDir, name)
+        const info = await stat(path)
+        if (now - info.mtimeMs > TEMP_FILE_MAX_AGE_MS) await unlink(path)
+      } catch {}
+    }
+  } catch {}
+}
+
 // Embedded consumers can change CODEBURN_CACHE_DIR without reloading this
 // module. Keep each directory's in-memory state separate so a warm cache (or an
 // unflushed update) from A can never be read from or written into B.
@@ -199,12 +217,12 @@ async function writeFileAtomic(finalPath: string, payload: string): Promise<void
   const tempPath = `${finalPath}.${randomBytes(8).toString('hex')}.tmp`
   const handle = await open(tempPath, 'w', 0o600)
   try {
-    await handle.writeFile(payload, { encoding: 'utf-8' })
-    await handle.sync()
-  } finally {
-    await handle.close()
-  }
-  try {
+    try {
+      await handle.writeFile(payload, { encoding: 'utf-8' })
+      await handle.sync()
+    } finally {
+      await handle.close()
+    }
     await rename(tempPath, finalPath)
   } catch (err) {
     try { await unlink(tempPath) } catch {}
@@ -228,6 +246,7 @@ function loadCache(cacheDir: string): Promise<ResultCache> {
 }
 
 async function loadCacheFromDisk(cacheDir: string): Promise<ResultCache> {
+  await cleanOrphanedTemps(cacheDir)
   const empty = { version: CODEX_CACHE_VERSION, files: {} }
   const versioned = await readExistingTextFile(getCachePath(cacheDir))
   if (versioned.status === 'ok') {
@@ -399,6 +418,7 @@ export async function flushCodexCache(): Promise<void> {
   const memCache = memCaches.get(cacheDir)
   if (!memCache) return
   try {
+    await cleanOrphanedTemps(cacheDir)
     // Evict entries for files that no longer exist on disk
     const paths = Object.keys(memCache.files)
     for (const p of paths) {
