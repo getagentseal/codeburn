@@ -201,4 +201,25 @@ describe('Claude tool time and waiting on you', () => {
     expect(data.shellCommands.find((r: { command: string }) => r.command === 'git')).toMatchObject({ durationMs: 4_000, timedCalls: 1 })
     expect(data.sessions[0]).toMatchObject({ waitingMs: 10_000 })
   })
+
+  it('counts a wait once when its turn moves to another project mid-turn', async () => {
+    const inDir = (line: string, cwd: string) => JSON.stringify({ ...JSON.parse(line), cwd })
+    await writeFile(sessionPath, [
+      prompt(0, 'start'),
+      asst('m1', 1),
+      turnEnd(2),
+      prompt(62, 'go to app'),
+      asst('m2', 63),
+      inDir(asst('m3', 64), '/work/app'),
+    ].join('\n') + '\n')
+    const cache = await freshCache()
+    process.env['CODEBURN_CACHE_DIR'] = cache
+    clearSessionCache()
+    const sessions = (await parseAllSessions()).flatMap(p => p.sessions)
+    await rm(cache, { recursive: true, force: true })
+
+    expect(sessions).toHaveLength(2)
+    expect(sessions.reduce((n, s) => n + (s.waitingMs ?? 0), 0)).toBe(60_000)
+  })
 })
+

@@ -189,7 +189,7 @@ function splitTurnsByProject(turns: ClassifiedTurn[], projectOf: (call: ParsedAp
     for (const [key, calls] of byKey) {
       groups.get(key)!.turns.push(calls.length === turn.assistantCalls.length
         ? turn
-        : { ...turn, assistantCalls: calls, ...(first ? {} : { projectContinuation: true, hasEdits: false, retries: 0 }) })
+        : { ...turn, assistantCalls: calls, ...(first ? {} : { projectContinuation: true, hasEdits: false, retries: 0, waitMs: undefined, awayGaps: undefined }) })
       first = false
     }
   }
