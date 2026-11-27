@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtemp, mkdir, writeFile, appendFile, rm } from 'fs/promises'
+import { mkdtemp, mkdir, writeFile, appendFile, readFile, rm } from 'fs/promises'
 import { join } from 'path'
 import { tmpdir } from 'os'
 
@@ -17,6 +17,7 @@ vi.mock('../src/fs-utils.js', async (importOriginal) => {
 })
 
 import { parseAllSessions, clearSessionCache } from '../src/parser.js'
+import { exportJson } from '../src/export.js'
 import type { ProjectSummary, SessionSummary } from '../src/types.js'
 
 let tmpDir: string
@@ -177,5 +178,27 @@ describe('Claude tool time and waiting on you', () => {
     expect(warm.toolBreakdown).toEqual(cold.toolBreakdown)
     expect(warm.bashBreakdown).toEqual(cold.bashBreakdown)
     expect(warm.waitingMs).toBe(cold.waitingMs)
+  })
+
+  it('puts tool time and waiting into the JSON export', async () => {
+    await writeFile(sessionPath, [
+      prompt(0, 'start'),
+      asst('m1', 1, [tool('tu1', 'Bash', { command: 'git status' })]),
+      results(5, ['tu1']),
+      turnEnd(6),
+      prompt(16, 'more'),
+      asst('m2', 17),
+    ].join('\n') + '\n')
+    const cache = await freshCache()
+    process.env['CODEBURN_CACHE_DIR'] = cache
+    clearSessionCache()
+    const projects = await parseAllSessions()
+    const out = await exportJson([{ label: '30 Days', projects }], join(tmpDir, 'export.json'))
+    const data = JSON.parse(await readFile(out, 'utf-8'))
+    await rm(cache, { recursive: true, force: true })
+
+    expect(data.tools.find((r: { tool: string }) => r.tool === 'Bash')).toMatchObject({ calls: 1, durationMs: 4_000, timedCalls: 1 })
+    expect(data.shellCommands.find((r: { command: string }) => r.command === 'git')).toMatchObject({ durationMs: 4_000, timedCalls: 1 })
+    expect(data.sessions[0]).toMatchObject({ waitingMs: 10_000 })
   })
 })

@@ -301,7 +301,7 @@ export function addToolTime(into: Record<string, ToolTime>, name: string, d: Too
   row.timedCalls += d.timedCalls
 }
 
-function buildToolRows(projects: ProjectSummary[]): Row[] {
+function buildToolRows(projects: ProjectSummary[], withTime = false): Row[] {
   const toolTotals: Record<string, number> = Object.create(null)
   const toolTime: Record<string, ToolTime> = Object.create(null)
   for (const project of projects) {
@@ -319,12 +319,11 @@ function buildToolRows(projects: ProjectSummary[]): Row[] {
       tool,
       calls,
       share: pct(calls, total),
-      durationMs: toolTime[tool]?.durationMs,
-      timedCalls: toolTime[tool]?.timedCalls,
+      ...(withTime ? { durationMs: toolTime[tool]?.durationMs, timedCalls: toolTime[tool]?.timedCalls } : {}),
     }))
 }
 
-function buildMcpRows(projects: ProjectSummary[]): Row[] {
+function buildMcpRows(projects: ProjectSummary[], withTime = false): Row[] {
   const mcpTotals: Record<string, number> = Object.create(null)
   const mcpTime: Record<string, ToolTime> = Object.create(null)
   for (const project of projects) {
@@ -342,12 +341,11 @@ function buildMcpRows(projects: ProjectSummary[]): Row[] {
       server,
       calls,
       share: pct(calls, total),
-      durationMs: mcpTime[server]?.durationMs,
-      timedCalls: mcpTime[server]?.timedCalls,
+      ...(withTime ? { durationMs: mcpTime[server]?.durationMs, timedCalls: mcpTime[server]?.timedCalls } : {}),
     }))
 }
 
-function buildBashRows(projects: ProjectSummary[]): Row[] {
+function buildBashRows(projects: ProjectSummary[], withTime = false): Row[] {
   const bashTotals: Record<string, number> = Object.create(null)
   const bashTime: Record<string, ToolTime> = Object.create(null)
   for (const project of projects) {
@@ -365,8 +363,7 @@ function buildBashRows(projects: ProjectSummary[]): Row[] {
       command: cmd,
       calls,
       share: pct(calls, total),
-      durationMs: bashTime[cmd]?.durationMs,
-      timedCalls: bashTime[cmd]?.timedCalls,
+      ...(withTime ? { durationMs: bashTime[cmd]?.durationMs, timedCalls: bashTime[cmd]?.timedCalls } : {}),
     }))
 }
 
@@ -386,7 +383,7 @@ function buildProjectRows(projects: ProjectSummary[]): Row[] {
     }))
 }
 
-function buildSessionRows(projects: ProjectSummary[], withCostBasis = false, split = false): Row[] {
+function buildSessionRows(projects: ProjectSummary[], withCostBasis = false, split = false, withTime = false): Row[] {
   const rows: Row[] = []
   for (const p of projects) {
     for (const s of p.sessions) {
@@ -406,8 +403,7 @@ function buildSessionRows(projects: ProjectSummary[], withCostBasis = false, spl
         ...(withCostBasis ? { costBasis: costBasisShares(s.turns.flatMap(turn => turn.assistantCalls)) } : {}),
         retained: s.retained ? true : undefined,
         ...(split ? { identity: s.identity?.label } : {}),
-        waitingMs: s.waitingMs,
-        awayGaps: s.awayGaps,
+        ...(withTime ? { waitingMs: s.waitingMs, awayGaps: s.awayGaps } : {}),
       })
     }
   }
@@ -578,11 +574,11 @@ export async function exportJson(periods: PeriodExport[], outputPath: string): P
       models: buildModelRows(p.projects, p.label),
     })),
     projects: buildProjectRows(thirtyDayProjects),
-    sessions: buildSessionRows(thirtyDayProjects, true, split),
+    sessions: buildSessionRows(thirtyDayProjects, true, split, true),
     records: buildRecordRows(thirtyDayProjects, split),
-    tools: buildToolRows(thirtyDayProjects),
-    mcp: buildMcpRows(thirtyDayProjects),
-    shellCommands: buildBashRows(thirtyDayProjects),
+    tools: buildToolRows(thirtyDayProjects, true),
+    mcp: buildMcpRows(thirtyDayProjects, true),
+    shellCommands: buildBashRows(thirtyDayProjects, true),
   }
 
   // The desktop app (and any `-o <existing dir>`) hands us a real folder, not a slot to
